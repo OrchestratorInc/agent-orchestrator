@@ -1,5 +1,6 @@
 import {
 	APP_SHORTCUTS,
+	isSplitPaneShortcut,
 	effectiveShortcutBindings,
 	SHORTCUT_CATEGORIES,
 	shortcutBindingKeys,
@@ -31,6 +32,7 @@ import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { ShortcutKeys, shortcutKeysDescription } from "./ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { useSplitPanesEnabled } from "../lib/split-panes";
 
 function shortcutLabel(id: AppShortcutId, t: TFunction): string {
 	return t(shortcutLabelKeys[id]);
@@ -124,11 +126,13 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 	// The dialog's own chord sits in the header, so it is not repeated as a row.
 	// Dictation is in preview behind Developer mode.
 	const developerMode = useUiStore((state) => state.developerMode);
+	const splitPanes = useSplitPanesEnabled();
 	const availableShortcuts = APP_SHORTCUTS.filter(
 		(shortcut) =>
 			shortcut.id !== "keyboard-shortcuts" &&
 			(!paletteShortcuts.includes(shortcut.id) || isCommandPaletteEnabled) &&
-			(shortcut.id !== "dictate" || developerMode),
+			(shortcut.id !== "dictate" || developerMode) &&
+			(!isSplitPaneShortcut(shortcut.id) || splitPanes),
 	);
 	const helpBindings = effectiveShortcutBindings("keyboard-shortcuts", isMac, overrides);
 

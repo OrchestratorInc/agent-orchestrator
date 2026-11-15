@@ -87,13 +87,13 @@ export function sessionLookupSettled(lookup: SessionLookup): boolean {
  */
 export function sessionLookupDue(args: {
 	listed: boolean;
-	configured: boolean | null;
+	paired: boolean | null;
 	connection: ConnStatus;
 	appActive: boolean;
 	machineChanged: boolean;
 	lookup: SessionLookup;
 }): boolean {
-	if (args.listed || args.configured !== true) return false;
+	if (args.listed || args.paired !== true) return false;
 	if (!args.appActive || args.machineChanged || args.connection !== "open") return false;
 	return !sessionLookupSettled(args.lookup);
 }
@@ -119,31 +119,34 @@ export function sessionLookupDue(args: {
  *
  * While the board is not connected, the route does not diagnose the link itself.
  * Telling a rotated tunnel from a rejected password from an unreachable machine
- * is the board's rule: `app/(tabs)/index.tsx` composes `describeConnectionFailure`
+ * is the board's rule: `app/(tabs)/(workers)/index.tsx` composes `describeConnectionFailure`
  * (`connectionError.ts`) with `tunnelMayHaveRotated` (`staleTunnel.ts`) over the
  * store's `errorStatus` and `activeEndpoints`, which this route does not hold, and
  * a second copy would drift. A rejected lookup (401/403/429) goes to that same
  * state instead of offering a retry: retrying a rejected password is what arms
  * the daemon's lockout, and retrying under one cannot succeed (`shouldKeepPolling`).
  *
- * `configured` is `null` until the store has resolved the saved machine's
- * endpoint; it is checked before the lists, which still hold a forgotten machine's
- * sessions. `loading` is the store's: true from each start of its poll until that
- * poll's first tick.
+ * `paired` is the store's: whether a machine is paired at all, `null` only until
+ * the first resolution has said. It is checked before the lists, which still
+ * hold a forgotten machine's sessions. It deliberately does not follow the
+ * verified connection: that drops on every app switch and endpoint race, and a
+ * route that read it as "unknown" swapped a listed chat for this loader and
+ * then remounted it, which was the resume flicker. `loading` is the store's:
+ * true from each start of its poll until that poll's first tick.
  */
 export function sessionRouteView(args: {
 	listed: RouteSession | undefined;
-	configured: boolean | null;
+	paired: boolean | null;
 	connection: ConnStatus;
 	loading: boolean;
 	lookup: SessionLookup;
 	routeHostId: string | undefined;
 	currentHostId: string | undefined;
 }): SessionRouteView {
-	if (args.configured === null && args.loading) return { kind: "loading" };
+	if (args.paired === null && args.loading) return { kind: "loading" };
 	if (!hostRouteMatches(args.routeHostId, args.currentHostId)) return { kind: "wrongHost" };
-	if (args.configured === null) return args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
-	if (!args.configured) return { kind: "unpaired" };
+	if (args.paired === null) return args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
+	if (!args.paired) return { kind: "unpaired" };
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;
 	if (lookup.state === "found") {

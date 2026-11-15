@@ -1,0 +1,65 @@
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { GITHUB_HTML_REHYPE, isDecorativeIcon } from "../lib/github-html";
+import { cn } from "../lib/utils";
+import { AppLink } from "./AppLink";
+import { linksOnlyImages, PRDescriptionImage } from "./PRDescriptionImage";
+
+/**
+ * How GitHub's comment HTML reads in AO's type: `<details>` sections fold
+ * under their summary, `<dl><dd>` indents, keys look like keys. Shared by
+ * the PR's comments and the inspector's reviews so a bot reads the same in both.
+ */
+export const githubHtmlClass = cn(
+	"[&_details]:my-1.5 [&_details]:rounded-md [&_details]:border [&_details]:border-border/70 [&_details]:px-2 [&_details]:py-1",
+	"[&_details_details]:border-border/50 [&_details[open]>summary]:mb-1",
+	"[&_summary]:cursor-pointer [&_summary]:font-medium [&_summary]:text-foreground [&_summary]:select-none",
+	"[&_summary>*]:inline [&_summary_p]:my-0",
+	"[&_dl]:my-1 [&_dd]:ml-0 [&_dt]:font-semibold [&_dt]:text-foreground",
+	"[&_hr]:my-2 [&_hr]:border-border/70",
+	"[&_h4]:mt-2 [&_h4]:mb-1 [&_h4]:font-semibold [&_h5]:mt-2 [&_h5]:mb-1 [&_h5]:font-semibold [&_h6]:my-1 [&_h6]:font-normal",
+	"[&_kbd]:rounded [&_kbd]:border [&_kbd]:border-border [&_kbd]:bg-muted/60 [&_kbd]:px-1 [&_kbd]:font-mono [&_kbd]:text-[0.92em]",
+	"[&_table]:my-1.5 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse",
+	"[&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:font-semibold [&_th]:text-foreground",
+	"[&_input[type=checkbox]]:mr-1.5 [&_input[type=checkbox]]:align-middle [&_li:has(>input[type=checkbox])]:list-none",
+);
+
+// The review summary's typography, for PR comments and their preview.
+const bodyClass = cn(
+	// Comment text reads at full contrast, like a PR page; code stays the size of the words around it.
+	"min-w-0 select-text break-words text-xs leading-[1.6] text-foreground/90",
+	"[&_a]:font-medium [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-2",
+	"[&_code]:rounded [&_code]:bg-muted/70 [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.92em] [&_code]:text-foreground [&_code]:[overflow-wrap:anywhere]",
+	"[&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1 [&_h3]:font-semibold",
+	"[&_li]:my-0.5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-4 [&_p]:my-1.5 [&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md",
+	"[&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/40 [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0",
+	"[&_strong]:font-semibold [&_strong]:text-foreground [&_em]:text-muted-foreground [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-4 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+	"[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-2 [&_blockquote]:text-muted-foreground",
+	githubHtmlClass,
+);
+
+// Outside the component, so a re-render keeps an open image lightbox open.
+const markdownComponents: Components = {
+	a: ({ node, href, children }) => linksOnlyImages(node) ? <>{children}</> : <AppLink href={href} rel="noopener noreferrer" target="_blank">{children}</AppLink>,
+	img: ({ alt, src, width, height }) => isDecorativeIcon(alt, width, height)
+		? null
+		: <PRDescriptionImage alt={alt} src={typeof src === "string" ? src : undefined} />,
+};
+
+/**
+ * A PR comment's or review's markdown with the HTML GitHub allows in it,
+ * sanitized to GitHub's own allowlist (see GITHUB_HTML_REHYPE), without a
+ * wrapper: the caller sets the typography.
+ */
+export function GitHubMarkdown({ body }: { body: string }) {
+	return <ReactMarkdown components={markdownComponents} rehypePlugins={GITHUB_HTML_REHYPE} remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>;
+}
+
+/** A PR comment's markdown, in the comments' typography. */
+export function PRMarkdown({ body, className }: { body: string; className?: string }) {
+	return (
+		<div className={cn(bodyClass, className)}>
+			<GitHubMarkdown body={body} />
+		</div>
+	);
+}

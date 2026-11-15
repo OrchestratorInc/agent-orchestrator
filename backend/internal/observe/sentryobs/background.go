@@ -3,6 +3,7 @@ package sentryobs
 import (
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"time"
 
@@ -26,7 +27,6 @@ var backgroundComponents = map[string]struct{}{
 	"scm":             {},
 	"systeminstall":   {},
 	"trackerintake":   {},
-	"agent_catalog":   {},
 }
 
 var backgroundOperationLabels = map[string]string{
@@ -45,7 +45,6 @@ var backgroundOperationLabels = map[string]string{
 	"scm_persist":          "SCM observer write failed",
 	"agent_install":        "Agent install job failed",
 	"tracker_spawn":        "Tracker auto-spawn failed",
-	"model_discovery":      "Model discovery failed",
 }
 
 // safeAgentID matches AO's fixed harness identifiers (claude-code, codex,
@@ -76,7 +75,7 @@ func isBackgroundComponent(value string) bool {
 // scrubber. The fingerprint groups by component, operation, error type and
 // code, so one failing path is one Sentry issue.
 func CaptureBackground(ctx context.Context, err error, component, operation string, extra map[string]string) {
-	if err == nil || errors.Is(err, context.Canceled) {
+	if err == nil || errors.Is(err, context.Canceled) || IsRepeat(err) {
 		return
 	}
 	if ctx == nil {
@@ -108,7 +107,13 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 		}
 	}
 	fingerprint := telemetrymeta.Fingerprint("background", component, operation, errorType, code, tags["agent"], tags["reason"])
-	if !enterCapture(ctx) {
+	captureAsync(ctx, withErrorTags(tags, err), fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, operation)
+}
+
+// captureAsync shares bounded admission across HTTP and background reports.
+// Admission pins consent; only owned metadata crosses the goroutine boundary.
+func captureAsync(ctx context.Context, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite, operation string) {
+	if ctx.Err() != nil || !sampled.Load() || !enterCapture(ctx) {
 		return
 	}
 	select {
@@ -117,17 +122,17 @@ func CaptureBackground(ctx context.Context, err error, component, operation stri
 		leaveCapture()
 		return
 	}
-	if !allowErrorFingerprintFor(fingerprint, operation, time.Now().UTC()) {
+	ok, dropped := admitErrorFingerprint(fingerprint, operation, time.Now().UTC())
+	if !ok {
 		<-backgroundSends
 		leaveCapture()
 		return
 	}
-	// Admission pins the existing consent gate before scheduling. Opt-out closes
-	// intake and Drain waits for this send, so it cannot replay after opt-in.
+	tags = maps.Clone(withDropped(tags, dropped))
 	go func() {
 		defer leaveCapture()
 		defer func() { <-backgroundSends }()
-		capture(sentry.LevelError, tags, fingerprint, telemetrymeta.SafeRoute{}, telemetrymeta.FailureSite{}, false)
+		capture(sentry.LevelError, tags, fingerprint, route, site, false)
 	}()
 }
 
@@ -141,13 +146,7 @@ var backgroundReasons = map[string]struct{}{
 	"queued_delivery":    {},
 	"wake":               {},
 	"drain":              {},
-	"provision":          {},
-	"workspace":          {},
-	"controller":         {},
-	"prompt":             {},
-	"attachments":        {},
 	"record_failure":     {},
-	"retry":              {},
 	"relaunch":           {},
 	"restore_workspace":  {},
 	"restore_attachment": {},
@@ -155,15 +154,12 @@ var backgroundReasons = map[string]struct{}{
 	"reap":               {},
 	"chat_host":          {},
 	"runtime":            {},
-	"graphql":            {},
 	"db_write":           {},
 	"notify":             {},
 	"verify":             {},
 	"persist":            {},
-	"timeout":            {},
 	"stop":               {},
 	"send":               {},
-	"settle":             {},
 }
 
 func safeBackgroundTag(key, value string) (bool, bool) {
@@ -175,4 +171,26 @@ func safeBackgroundTag(key, value string) (bool, bool) {
 		return ok, true
 	}
 	return false, false
+}
+
+// repeatError marks a failure whose state was already reported (see Repeat).
+type repeatError struct{ err error }
+
+func (e *repeatError) Error() string { return e.err.Error() }
+func (e *repeatError) Unwrap() error { return e.err }
+
+// Repeat marks err as the same failure state its owner already reported, so
+// every capture path skips it. A polled read that keeps failing the same way
+// then reports once per state change instead of once per poll (AO-DAEMON-9).
+func Repeat(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &repeatError{err: err}
+}
+
+// IsRepeat reports whether err was marked with Repeat.
+func IsRepeat(err error) bool {
+	var repeat *repeatError
+	return errors.As(err, &repeat)
 }

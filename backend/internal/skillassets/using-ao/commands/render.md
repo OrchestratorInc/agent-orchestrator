@@ -25,17 +25,17 @@ ao render "$TMPDIR/turns-by-day.html" --title "Turns by day" --height 420
   `url(/abs/bg.webp)`, or a JS string. `ao render` puts the image into the page. PNG, JPEG, GIF,
   WebP, AVIF, SVG, BMP, and ICO files work, each up to 10 MiB. Remote http(s) URLs load as they are.
 - Write the file outside the repository (for example under `$TMPDIR`) so it does
-  not appear in the diff. AO stores its own copy.
-- AO measures the page when you publish it, so the frame opens at the right
+  not appear in the diff. Orchestrator stores its own copy.
+- Orchestrator measures the page when you publish it, so the frame opens at the right
   height. `--height` (80-2000) is used only when the desktop app is not running.
   The frame then fits the page's real height.
 - Chat sessions only. In a terminal session, open the file with `ao preview`.
 - Do not use a built-in visualize skill, for example the Codex visualize skill, or a
-  `visualize{...}` line. AO does not show them. Only `ao render` or the `html_render` tool shows a page in the thread.
+  `visualize{...}` line. Orchestrator does not show them. Only `ao render` or the `html_render` tool shows a page in the thread.
 
 ## Check before you publish
 
-Run `ao render --check <file>` first. It loads the page in the AO desktop app
+Run `ao render --check <file>` first. It loads the page in the Orchestrator desktop app
 the way readers see it and writes a PNG. It prints the page's content height
 and its console messages. Read the PNG. Fix every `console.error` line. Use
 `--width 390` to check a phone layout. The check loads only public addresses. A
@@ -58,13 +58,14 @@ If the user must still read the page after the dev server stops, use `ao render`
 Use `ao render` (or `html_render`) when the page answers a question in the thread.
 Write a session artifact when the user asks for something to keep, for example a
 report, a dashboard, or a document. Write it to the artifact directory that your
-prompt names, and attach it with `ao report --artifact <path>`.
+prompt names, run `ao artifact add <path>` so it is listed, and attach it with
+`ao report --artifact <path>`.
 In a chat session, an HTML file from the artifact directory that you attach
 with `--artifact` also shows in the thread.
 
 To keep a rendered page as an artifact as well, add `--artifact` to `ao render`
 (or set `artifact: true` in `html_render`). Do this only when the user asks to keep
-the page.
+the page. Then run `ao artifact add` on the path it prints so the page is listed.
 
 ## Layout
 
@@ -73,17 +74,17 @@ the page.
 - Use a fluid width with no outer padding, card, border, or banner title. The
   page is part of your reply.
 - When the reader expands the page, it opens in a dialog up to 1024 px wide that fits
-  its height. Use a fluid width so the page can use that width. AO centers a top-level
+  its height. Use a fluid width so the page can use that width. Orchestrator centers a top-level
   block that has a maximum width.
 - Give charts fixed pixel heights. Do not size `html` or `body` with `100vh` or
   `height: 100%`: the frame grows to fit the page, and viewport heights make it
   grow again.
-- Scripts run in a sandbox with no access to AO, cookies, or storage. Links open
+- Scripts run in a sandbox with no access to Orchestrator, cookies, or storage. Links open
   in the user's browser.
 
 ## Theme
 
-AO injects its active theme as CSS custom properties on `:root`. They follow
+Orchestrator injects its active theme as CSS custom properties on `:root`. They follow
 light/dark mode live:
 
 `--background` (identical to the thread), `--foreground`, `--muted`,

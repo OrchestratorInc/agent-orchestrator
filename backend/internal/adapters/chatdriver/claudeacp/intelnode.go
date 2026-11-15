@@ -113,8 +113,8 @@ func resolveJITCapableNode(ctx context.Context, node string) (string, bool, erro
 			return "", false, ctxErr
 		}
 		return "", false, fmt.Errorf("packaged Node at %s crashes when V8 compiles JavaScript on this Intel Mac "+
-			"(its signature lacks com.apple.security.cs.allow-unsigned-executable-memory), and AO could not "+
-			"re-sign a copy: %w. Switch the session to Terminal mode until an updated AO build is installed", node, err)
+			"(its signature lacks com.apple.security.cs.allow-unsigned-executable-memory), and Orchestrator could not "+
+			"re-sign a copy: %w. Switch the session to Terminal mode until an updated Orchestrator build is installed", node, err)
 	}
 	return repaired, true, nil
 }
@@ -288,7 +288,7 @@ func defaultJITRepairRoot() (string, error) {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve AO data dir: %w", err)
+		return "", fmt.Errorf("resolve Orchestrator data dir: %w", err)
 	}
 	return filepath.Join(home, ".ao", "data", "acp-runtime", "node-jit"), nil
 }

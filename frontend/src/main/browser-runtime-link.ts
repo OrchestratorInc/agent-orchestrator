@@ -346,8 +346,8 @@ export function connectBrowserRuntime(
 				// malformed hello are all refusals, with different causes.
 				const reason = error ? `${error.code}: ${error.message}` : "no reason given";
 				log(
-					`browser-runtime-link: the AO daemon refused this app's browser runtime (${reason}); ` +
-						"run `ao stop`, then reopen AO.",
+					`browser-runtime-link: the Orchestrator daemon refused this app's browser runtime (${reason}); ` +
+						"run `ao stop`, then reopen Orchestrator.",
 				);
 				setState({ ...REJECTED, rejectionCode: error?.code });
 				// A refused token cannot be retried into acceptance, so the caller may

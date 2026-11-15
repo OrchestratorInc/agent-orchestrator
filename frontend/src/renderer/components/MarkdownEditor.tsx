@@ -5,7 +5,7 @@ import { indentUnit, syntaxHighlighting, defaultHighlightStyle } from "@codemirr
 import { searchKeymap } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
-import { Bold, Heading1, Heading2, Heading3, Heading4, Heading5, Image, Italic, Link, List, ListChecks, ListOrdered, MoreHorizontal, Pilcrow, Quote, Strikethrough } from "lucide-react";
+import { Bold, Heading1, Heading2, Heading3, Heading4, Heading5, Image, Italic, Link, List, ListChecks, ListOrdered, MoreHorizontal, Pilcrow, Quote, Strikethrough } from "@/components/app-icons";
 import { useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";

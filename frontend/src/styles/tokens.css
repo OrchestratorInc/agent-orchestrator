@@ -34,7 +34,7 @@
 	--muted-foreground: oklch(0.720 0.002 250);
 	--accent: oklch(0.295 0.002 250);
 	--accent-foreground: oklch(0.970 0.002 250);
-	--destructive: oklch(0.704 0.191 22.216);
+	--destructive: #fb4934; /* Shared Gruvbox red across palettes. */
 	/* Hairlines separate, they do not decorate: below the shadcn dark default of
 	 * 10% so column rules and card edges recede behind content. */
 	--border: oklch(1 0 0 / 7%);
@@ -112,12 +112,7 @@
 	/* Board lane signals, matched to the landing hero's board preview. */
 	--color-status-working: #60a5fa;
 	--color-status-needs-you: #f06445;
-	/* Validating is pink with the new sidebar design and yellow without it
-	   (`data-legacy-status-colors`, below). Themes set the two candidates;
-	   only this block and the legacy one pick between them. */
-	--color-status-validating-new: #e58bb5;
-	--color-status-validating-legacy: #facc15;
-	--color-status-validating: var(--color-status-validating-new);
+	--color-status-validating: #e58bb5;
 	--color-status-in-review: #f59e0b;
 	--color-status-ready: #4ade80;
 	--color-status-merged: #c084fc;
@@ -134,6 +129,9 @@
 	--color-success-bright: var(--chart-1);
 	--color-danger: var(--destructive);
 	--color-purple: var(--chart-4);
+
+	--agent-tone-lightness: 0.65;
+	--agent-tone-chroma: 0.15;
 
 	/* Interactive overlays */
 	--color-interactive-hover: color-mix(in oklch, var(--foreground) 4%, transparent);
@@ -382,6 +380,8 @@
 	--size-shell-tab-max: 140px;
 	/* Agent names and their status glyph need more room in Developer Mode. */
 	--size-agent-shell-tab-max: 192px;
+	/* The session's own tab carries its title and an always-visible ⋮, so it reads the most text. */
+	--size-session-tab-max: 260px;
 	--size-dialog-md: 420px;
 	--size-dialog-lg: 440px;
 	--size-dialog-orchestrator: 460px;
@@ -408,6 +408,7 @@
 	--color-border-overlay: color-mix(in oklch, var(--foreground) 2%, transparent);
 	/* Overlay shadow: a barely-there lift. Black, not --background, so it
 	 * reads on a graphite canvas. */
+	--shadow-control-inset: inset 0 1px 0 oklch(100% 0 0 / 6%), inset 0 -1px 0 oklch(0% 0 0 / 10%);
 	--shadow-popover: 0 4px 12px -4px oklch(0 0 0 / 14%);
 	--size-command-palette: 720px;
 	--size-command-palette-top: 14vh;
@@ -498,8 +499,6 @@
 	--size-settings-inline-input-height: 28px;
 	--size-settings-row-value-max: 20rem;
 	--size-settings-row-value-max-percent: 55%;
-	--size-settings-footer-button-padding-x: 20px;
-	--color-settings-footer-button-primary-fg: var(--primary-foreground);
 	--size-settings-dialog: 575px;
 	--size-settings-dialog-wide: 920px;
 	--size-settings-dialog-height: 680px;
@@ -677,11 +676,6 @@
 		"FiraCode Nerd Font Mono", "FiraCode Nerd Font", "MesloLGS NF", Menlo, monospace;
 }
 
-/* The new sidebar design switched off in Developer mode: the old yellow Validating. */
-:root[data-legacy-status-colors] {
-	--color-status-validating: var(--color-status-validating-legacy);
-}
-
 /* Light theme — set via data-theme (apply-initial-theme + Zustand toggle). */
 
 :root[data-theme="light"] {
@@ -701,7 +695,7 @@
 	--muted-foreground: oklch(0.48 0 0);
 	--accent: oklch(0.945 0 0);
 	--accent-foreground: oklch(0.18 0 0);
-	--destructive: oklch(0.577 0.245 27.325);
+	--destructive: #9d0006;
 	/* Translucent like dark: hairlines and input wells are overlays on whatever
 	 * surface they sit on, so a card edge never reads as an opaque gray stroke. */
 	--border: oklch(0 0 0 / 8%);
@@ -764,11 +758,13 @@
 	/* Same lane hues as dark, deepened so they hold contrast on a light canvas. */
 	--color-status-working: #2563eb;
 	--color-status-needs-you: #c2412d;
-	--color-status-validating-new: #9b4871;
-	--color-status-validating-legacy: #ca8a04;
+	--color-status-validating: #9b4871;
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;
+
+	--agent-tone-lightness: 0.6;
+	--agent-tone-chroma: 0.15;
 	--color-status-idle: var(--muted-foreground);
 	--color-status-exited: var(--destructive);
 	--color-status-terminated: var(--color-text-passive);

@@ -141,6 +141,10 @@ func validateUsageLimitSource(ctx context.Context, turns Store, store usageLimit
 	if source.UsageLimit.ResetsAt == nil {
 		return ErrUsageLimitResetUnknown
 	}
+	return validateUsageLimitRetry(ctx, turns, store, source)
+}
+
+func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitStore, source domain.ConversationTurn) error {
 	prompt, err := turns.RetryPrompt(ctx, source.ConversationID, source.ID)
 	if err != nil {
 		return err

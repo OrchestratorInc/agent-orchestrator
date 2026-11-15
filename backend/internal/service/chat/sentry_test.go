@@ -26,7 +26,7 @@ func (transport *chatFaultTransport) SendEvent(event *sentry.Event) {
 func TestCaptureChatFaultExcludesExpectedProviderStates(t *testing.T) {
 	transport := &chatFaultTransport{events: make(chan *sentry.Event, 1)}
 	if err := sentryobs.Init(sentryobs.Config{
-		DSN: "https://public@example.com/1", Release: "1.0.0", Environment: "development", Transport: transport,
+		DSN: "https://public@example.com/1", InstallID: "ins_sampled_5", Release: "1.0.0", Environment: "development", Transport: transport,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -39,6 +39,7 @@ func TestCaptureChatFaultExcludesExpectedProviderStates(t *testing.T) {
 		capture bool
 	}{
 		{"nil", nil, false},
+		{"agent signed out", ports.ErrAgentAuthRequired, false},
 		{"signed out", ports.NewChatProviderFailure("Sign in required", "", ports.ErrChatAuthRequired), false},
 		{"canceled", context.Canceled, false},
 		{"Codex usage limit", ports.NewChatProviderFailure("Usage limit exceeded", "Try again later", errors.New("usageLimitExceeded")), false},

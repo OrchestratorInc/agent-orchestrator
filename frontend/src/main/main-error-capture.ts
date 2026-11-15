@@ -1,3 +1,4 @@
+import type { DaemonFailureCode, DaemonStatus } from "../shared/daemon-status";
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 
 // Electron main's handled failures (daemon start and exit, auto-update, IPC
@@ -16,7 +17,7 @@ export const MAIN_ERROR_REASONS = [
 	// ipc
 	"handler",
 	// window
-	"unresponsive", "did_fail_load", "render_process_gone",
+	"unresponsive", "did_fail_load",
 	// acp_runtime
 	"rebuild",
 	"recovery",
@@ -46,7 +47,9 @@ export class ExpectedIpcError extends Error {}
 let sink: Sink | null = null;
 let pending: MainErrorCapture[] = [];
 let reported = new WeakSet<object>();
-let sideBudget = { minute: 0, day: 0, minuteCount: 0, dayCount: 0 };
+const MAX_BUDGET_KEYS = 1024;
+let budgetDay = -1;
+const budgets = new Map<string, { minute: number; minuteCount: number; dayCount: number }>();
 
 export function isSafeMainErrorDetail(value: unknown): value is string {
 	return typeof value === "string" && SAFE_DETAIL.test(value);
@@ -83,13 +86,19 @@ export function captureMainError(capture: MainErrorCapture): void {
 		if (reported.has(safe.error)) return;
 		reported.add(safe.error);
 	}
-	if (safe.category === "side_chat") {
-		const minute = Math.floor(Date.now() / 60_000), day = Math.floor(Date.now() / 86_400_000);
-		if (sideBudget.day !== day) sideBudget = { minute, day, minuteCount: 0, dayCount: 0 };
-		if (sideBudget.minute !== minute) { sideBudget.minute = minute; sideBudget.minuteCount = 0; }
-		if (sideBudget.minuteCount >= 5 || sideBudget.dayCount >= 200) return;
-		sideBudget.minuteCount++; sideBudget.dayCount++;
+	const now = Date.now();
+	const minute = Math.floor(now / 60_000), day = Math.floor(now / 86_400_000);
+	if (budgetDay !== day) { budgets.clear(); budgetDay = day; }
+	const key = `${safe.category}|${safe.reason}|${safe.detail ?? ""}`;
+	let budget = budgets.get(key);
+	if (!budget) {
+		if (budgets.size >= MAX_BUDGET_KEYS) return;
+		budget = { minute, minuteCount: 0, dayCount: 0 };
+		budgets.set(key, budget);
 	}
+	if (budget.minute !== minute) { budget.minute = minute; budget.minuteCount = 0; }
+	if (budget.minuteCount >= 5 || budget.dayCount >= 200) return;
+	budget.minuteCount++; budget.dayCount++;
 	if (sink) {
 		try { sink(safe); } catch { /* reporting must never break the caller */ }
 		return;
@@ -128,6 +137,20 @@ export function resetMainErrorCaptureForTests(): void {
 	sink = null;
 	pending = [];
 	reported = new WeakSet<object>();
-	sideBudget = { minute: 0, day: 0, minuteCount: 0, dayCount: 0 };
+	budgets.clear();
+	budgetDay = -1;
 	ipcCaptureInstalled = false;
+}
+
+// Daemon failures the user cannot fix by waiting. not_ready, not_configured
+// and daemon_unreachable are transitional and are not reported.
+const REPORTED_DAEMON_FAILURES = new Set<DaemonFailureCode>(["binary_missing", "spawn_failed", "exited", "port_unconfirmed", "identity_mismatch", "datadir_unwritable"]);
+
+export function reportDaemonFailure(previous: DaemonStatus, next: DaemonStatus): void {
+	const code = next.code;
+	if (!code || !REPORTED_DAEMON_FAILURES.has(code)) return;
+	// One report per transition into a failure, not one per status refresh.
+	if (previous.code === code && previous.state === next.state) return;
+	const detail = next.signal ? `signal:${next.signal}` : typeof next.exitCode === "number" ? `code:${next.exitCode}` : undefined;
+	captureMainError({ category: "daemon", reason: code as MainErrorReason, ...(detail ? { detail } : {}) });
 }

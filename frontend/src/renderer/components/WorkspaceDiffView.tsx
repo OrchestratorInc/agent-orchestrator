@@ -12,7 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Check, LoaderCircle, Plus, Send as SendIcon, type LucideIcon } from "lucide-react";
+import { Check, LoaderCircle, Plus, Send as SendIcon, type AppIcon } from "@/components/app-icons";
 import type { FileAnnotationTarget } from "../../shared/file-annotations";
 import {
 	type WorkspaceCompareMode,
@@ -923,7 +923,7 @@ export function PanelMessage({ action, children, compact = false }: { action?: R
  * way out, a little above the middle of the space it fills (where the eye
  * lands), so it reads as a state of the pane rather than a stray line at its top.
  */
-export function EmptyMessage({ icon: Icon, title, action }: { icon: LucideIcon; title: ReactNode; action?: ReactNode }) {
+export function EmptyMessage({ icon: Icon, title, action }: { icon: AppIcon; title: ReactNode; action?: ReactNode }) {
 	return (
 		<div className="flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 p-6 pb-[15vh] text-center" data-testid="empty-message">
 			<span aria-hidden="true" className="flex size-10 items-center justify-center rounded-lg bg-interactive-hover text-muted-foreground">
@@ -938,7 +938,7 @@ export function EmptyMessage({ icon: Icon, title, action }: { icon: LucideIcon; 
 export function RetryButton({ onClick }: { onClick: () => void }) {
 	const { t } = useTranslation();
 	return (
-		<Button onClick={onClick} size="sm" type="button" variant="outline">
+		<Button onClick={onClick} size="sm" type="button" variant="secondary">
 			{t("files.retry")}
 		</Button>
 	);

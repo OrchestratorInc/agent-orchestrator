@@ -334,6 +334,19 @@ describe("editor handoff", () => {
 		expect(readIcon).toHaveBeenCalledTimes(4);
 	});
 
+	it("reads File Explorer's icon from explorer.exe on Windows and none for xdg-open on Linux", async () => {
+		const iconDataUrl = "data:image/png;base64,dGVzdA==";
+		const winIcon = vi.fn().mockResolvedValue(iconDataUrl);
+		const winState = await createEditorHandoff(winDeps({ readIcon: winIcon, env: { SystemRoot: "D:\\Win" } })).getState("ao-1");
+		expect(winIcon).toHaveBeenCalledWith("D:\\Win\\explorer.exe");
+		expect(winState.targets.find((target) => target.id === "file-manager")).toMatchObject({ name: "File Explorer", iconDataUrl });
+		expect(JSON.stringify(winState)).not.toContain("explorer.exe");
+
+		const linuxIcon = vi.fn().mockResolvedValue(iconDataUrl);
+		const linuxState = await createEditorHandoff(deps({ platform: "linux", readIcon: linuxIcon })).getState("ao-1");
+		expect(linuxState.targets.find((target) => target.id === "file-manager")).not.toHaveProperty("iconDataUrl");
+	});
+
 	it.each([
 		["cursor", "Cursor"], ["vscode", "Visual Studio Code"], ["zed", "Zed"], ["antigravity", "Antigravity IDE"],
 	])("derives %s branding from its discovered app without an editor icon mapping", async (id, appName) => {
@@ -443,7 +456,7 @@ describe("editor handoff", () => {
 
 		expect(input.launch).toHaveBeenCalledWith(
 			"C:\\Windows\\System32\\cmd.exe",
-			["/d", "/s", "/v:off", "/k", `""C:\\bin\\nvim.exe" ".""`],
+			["/d", "/s", "/v:off", "/c", `"start "" "C:\\bin\\nvim.exe" ".""`],
 			workspacePath,
 		);
 	});
@@ -509,6 +522,42 @@ describe("editor handoff", () => {
 			"That artifact is not valid.",
 		);
 		expect(input.revealPath).not.toHaveBeenCalled();
+	});
+
+	it("opens a browser-renderable artifact in the default browser", async () => {
+		const openInBrowser = vi.fn(async () => undefined);
+		const handoff = createEditorHandoff(deps({ openInBrowser }));
+		await handoff.openArtifactInBrowser({ sessionId: "ao-1", path: "plans/report.html" });
+		expect(openInBrowser).toHaveBeenCalledWith("/ao/data/artifacts/ao-1/plans/report.html");
+	});
+
+	it.each(["clip.mov", "spinner.apng", "talk.opus", "diagram.SVG"])("opens %j, a format the viewer previews, in the browser", async (artifactPath) => {
+		const openInBrowser = vi.fn(async () => undefined);
+		const handoff = createEditorHandoff(deps({ openInBrowser }));
+		await handoff.openArtifactInBrowser({ sessionId: "ao-1", path: artifactPath });
+		expect(openInBrowser).toHaveBeenCalledWith(`/ao/data/artifacts/ao-1/${artifactPath}`);
+	});
+
+	it.each([
+		["../ao-2/page.html", "That artifact is not valid."],
+		["/etc/page.html", "That artifact is not valid."],
+		["plans/notes.md", "This file does not open in a browser."],
+		["tool.command", "This file does not open in a browser."],
+	])("refuses to open %j in the browser", async (artifactPath, message) => {
+		const openInBrowser = vi.fn(async () => undefined);
+		const handoff = createEditorHandoff(deps({ openInBrowser }));
+		await expect(handoff.openArtifactInBrowser({ sessionId: "ao-1", path: artifactPath })).rejects.toThrow(message);
+		expect(openInBrowser).not.toHaveBeenCalled();
+	});
+
+	it("refuses a page that is a symlink to a file a browser does not render", async () => {
+		const openInBrowser = vi.fn(async () => undefined);
+		const handoff = createEditorHandoff(deps({
+			openInBrowser,
+			realPath: vi.fn(async (candidatePath: string) => candidatePath.replace("page.html", "run.sh")),
+		}));
+		await expect(handoff.openArtifactInBrowser({ sessionId: "ao-1", path: "page.html" })).rejects.toThrow("This file does not open in a browser.");
+		expect(openInBrowser).not.toHaveBeenCalled();
 	});
 
 	it("refuses an artifact whose symlinks resolve outside the artifact directory", async () => {
@@ -747,6 +796,16 @@ describe("editor handoff (win32 fallback discovery)", () => {
 	});
 });
 
+describe("shared terminal command", () => {
+	it("preserves terminal launcher argv on Linux and Windows", async () => {
+		const { terminalCommand } = await import("./terminal-command");
+		expect(terminalCommand(["/bin/nvim", "/work tree"], "linux", { PATH: "/bin" }, (p) => p === "/bin/gnome-terminal"))
+			.toEqual({ command: "/bin/gnome-terminal", args: ["--", "/bin/nvim", "/work tree"] });
+		expect(terminalCommand(["C:\\a&b\\nvim.exe", "."], "win32", {}, () => false))
+			.toEqual({ command: "cmd.exe", args: ["/d", "/s", "/v:off", "/c", '"start "" "C:\\a&b\\nvim.exe" ".""'] });
+	});
+});
+
 describe("chat path actions", () => {
 	it.skipIf(process.platform === "win32")("checks existing symlink parents before copying missing relative paths", async () => {
 		const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "ao-missing-path-")));
@@ -924,7 +983,7 @@ describe("chat path actions", () => {
 			isExecutable: installedExecutables("C:\\bin\\nvim.exe"),
 		});
 		await createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/a b.ts", action: "open", editorId: "neovim" });
-		expect(input.launch).toHaveBeenCalledWith("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/v:off", "/k", '""C:\\bin\\nvim.exe" "C:\\worktrees\\ao-1\\src\\a b.ts""'], "C:\\worktrees\\ao-1\\src");
+		expect(input.launch).toHaveBeenCalledWith("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/v:off", "/c", '"start "" "C:\\bin\\nvim.exe" "C:\\worktrees\\ao-1\\src\\a b.ts""'], "C:\\worktrees\\ao-1\\src");
 		await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "src/%TEMP%.ts", action: "open", editorId: "neovim" })).rejects.toThrow("safely");
 		expect(input.launch).toHaveBeenCalledTimes(1);
 	});

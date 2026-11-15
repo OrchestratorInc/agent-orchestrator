@@ -94,6 +94,36 @@ describe("FileContentPane", () => {
 		await waitFor(() => expect(putMock).toHaveBeenCalledOnce());
 	});
 
+	it("renders the feedback Send bar in the host's footer instead of sticking it to scaled content", async () => {
+		getMock.mockResolvedValue({
+			data: {
+				sessionId: "sess-1",
+				path: "src/App.tsx",
+				status: "unmodified",
+				content: "complete source",
+				size: 15,
+				binary: false,
+				deleted: false,
+				contentTruncated: false,
+				diff: "",
+				diffTruncated: false,
+			},
+		});
+		// Two written comments bring the bar up.
+		const targets = [
+			{ path: "src/App.tsx", side: "file", surface: "focused", line: 1 },
+			{ path: "src/App.tsx", side: "file", surface: "focused", line: 2 },
+		];
+		const annotation = { ...noopAnnotation(), targets, draftFor: () => "tighten this" } as unknown as FileAnnotationModel;
+		const footer = document.createElement("div");
+		document.body.append(footer);
+		renderWithQuery(<FileContentPane annotation={annotation} footerHost={footer} initialMode="file" path="src/App.tsx" sessionId="sess-1" split={false} toolbarHost={null} />);
+		const bar = await screen.findByTestId("file-feedback-bar");
+		expect(footer).toContainElement(bar);
+		expect(bar).not.toHaveClass("sticky");
+		footer.remove();
+	});
+
 	it("offers center navigation from a full-file preview", async () => {
 		const onOpenInCenter = vi.fn();
 		getMock.mockResolvedValue({
@@ -417,7 +447,7 @@ describe("FileContentPane", () => {
 			</AppBrowserLinkContext.Provider>,
 		);
 
-		await userEvent.click(await screen.findByRole("button", { name: "Open in AO Browser" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Open in Orchestrator Browser" }));
 		expect(openInBrowser).toHaveBeenCalledExactlyOnceWith("reports/index.html");
 	});
 

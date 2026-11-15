@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -25,7 +26,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes", "stakpak":
 		return true
 	default:
 		return false
@@ -37,7 +38,7 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 	if agentID == "hermes" {
 		return discoverHermesCatalog(base, modelConfigPaths(agentID, workingDir, env))
 	}
-	parser := configModelParser(agentID)
+	parser := configModelParser(agentID, env)
 	if parser == nil {
 		return base, fmt.Errorf("%s has no configuration model parser", agentID)
 	}
@@ -71,7 +72,7 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 	return base, nil
 }
 
-func configModelParser(agentID string) configParser {
+func configModelParser(agentID string, env map[string]string) configParser {
 	switch agentID {
 	case "qwen":
 		return parseQwenModels
@@ -87,6 +88,9 @@ func configModelParser(agentID string) configParser {
 		return parseAutoHandModels
 	case "hermes":
 		return parseHermesModels
+	case "stakpak":
+		profile := stakpakProfile(env)
+		return func(raw []byte) ([]ports.AgentModelInfo, error) { return parseStakpakModels(raw, profile) }
 	default:
 		return nil
 	}
@@ -111,6 +115,11 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 		if root := hermesConfigHome(home, env); root != "" {
 			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "provider_models_cache.json"))
 		}
+	case "stakpak":
+		// Stakpak has no config-dir override; its config is always here.
+		if home != "" {
+			paths = append(paths, filepath.Join(home, ".stakpak", "config.toml"))
+		}
 	case "goose":
 		if root := strings.TrimSpace(env["GOOSE_PATH_ROOT"]); root != "" {
 			paths = append(paths, filepath.Join(root, "config", "config.yaml"))
@@ -128,6 +137,12 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 			for _, name := range [...]string{"cordis.yml", "cordis.patch.yml", "package.json"} {
 				paths = append(paths, filepath.Join(root, name))
 			}
+		}
+	case "minimax-code":
+		// `mcode provider list` reads the profile's providers and models from
+		// config.yaml, and the region preference picks the account namespace.
+		if root := miniMaxProfileDir(home, env); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "preferences", "mcode-region.json"))
 		}
 	case "vibe":
 		if root := strings.TrimSpace(env["VIBE_HOME"]); root != "" {
@@ -324,6 +339,28 @@ func deepseekProfileDir(home string, env map[string]string) string {
 	return filepath.Join(root, "profiles", "acp")
 }
 
+// miniMaxProfileDir resolves the profile MiniMax Code reads, in the CLI's
+// own precedence order. Its default lives under Node's os.homedir(), which
+// follows the launch environment's HOME (USERPROFILE on Windows).
+func miniMaxProfileDir(home string, env map[string]string) string {
+	for _, key := range []string{"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"} {
+		if root := envValue(env, key); root != "" {
+			return root
+		}
+	}
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	if requested := strings.TrimSpace(env[homeKey]); requested != "" {
+		home = requested
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".minimax")
+}
+
 func readModelConfig(path string) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // paths are fixed agent configuration locations
 	if err != nil {
@@ -503,6 +540,42 @@ func parseGooseModels(raw []byte) ([]ports.AgentModelInfo, error) {
 		})
 	}
 	return normalize(models), nil
+}
+
+// stakpakProfile is the profile Stakpak sessions run with: STAKPAK_PROFILE from
+// the launch environment, else the daemon's, else "default". An empty value in
+// the launch environment means unset there.
+func stakpakProfile(env map[string]string) string {
+	if profile := envValue(env, "STAKPAK_PROFILE"); profile != "" {
+		return profile
+	}
+	return "default"
+}
+
+// parseStakpakModels offers the model of Stakpak's active profile, over the
+// shared "all" profile. Stakpak lists no other models: custom providers take
+// any name, so the picker keeps free-form entry for the rest.
+func parseStakpakModels(raw []byte, profile string) ([]ports.AgentModelInfo, error) {
+	var config struct {
+		Profiles map[string]struct {
+			Model string `toml:"model"`
+		} `toml:"profiles"`
+	}
+	if err := toml.Unmarshal(raw, &config); err != nil {
+		return nil, err
+	}
+	model := strings.TrimSpace(config.Profiles[profile].Model)
+	if model == "" {
+		model = strings.TrimSpace(config.Profiles["all"].Model)
+	}
+	if model == "" {
+		return nil, nil
+	}
+	provider := ""
+	if prefix, _, ok := strings.Cut(model, "/"); ok {
+		provider = prefix
+	}
+	return []ports.AgentModelInfo{{ID: model, Label: model, Provider: provider, IsDefault: true}}, nil
 }
 
 func parseVibeModels(raw []byte) ([]ports.AgentModelInfo, error) {

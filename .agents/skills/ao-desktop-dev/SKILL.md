@@ -75,7 +75,7 @@ $env:AO_DATA_DIR = $realAoData
 npm run dev
 ```
 
-Do not print unrelated environment variables: AO sessions may carry credentials. It is safe to report only `AO_DATA_DIR`, `AO_RUN_FILE`, and `AO_PORT`.
+Do not print unrelated environment variables: Orchestrator-managed sessions may carry credentials. It is safe to report only `AO_DATA_DIR`, `AO_RUN_FILE`, and `AO_PORT`.
 
 ## Confirm the correct app is ready
 
@@ -125,7 +125,7 @@ Once one PR merges, prefer rebasing the remaining PR onto current `main`; the no
 
 ## Common mistakes
 
-- `ao preview` controls the AO Browser panel; it does not launch the desktop shell.
+- `ao preview` controls the Orchestrator Browser panel; it does not launch the desktop shell.
 - `npm run dev:web` is useful for browser-only renderer work but does not provide Electron APIs or native chrome.
 - Renderer URLs can move from `5173` when a port is occupied. Trust Forge's printed URL rather than assuming one.
 - Multiple dev instances share `~/.ao/dev/electron` by default, and Chromium's
