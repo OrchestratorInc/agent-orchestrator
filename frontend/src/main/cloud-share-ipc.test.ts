@@ -408,6 +408,27 @@ describe("cloudShare IPC", () => {
 		expect(await snapshots()).toEqual([]);
 	});
 
+	it("leaves out a page's file that is removed before it is copied, and still publishes the page", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "photo.jpg"), "jpeg");
+		await fs.writeFile(path.join(docs, "chart.png"), "png");
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="photo.jpg"><img src="chart.png">`);
+		const { publish, bodies } = setup({ files: true });
+		// Removed once the page's files were found, as the page's copy is written.
+		const open = fs.open;
+		const spy = vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+			if (path.dirname(String(args[0])) === path.join(dataDir, "snapshots")) await fs.rm(path.join(docs, "photo.jpg"), { force: true });
+			return open(...args);
+		});
+		try {
+			await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1, unsupported: false } });
+		} finally {
+			spy.mockRestore();
+		}
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:chart.png" }] });
+		expect(await snapshots()).toEqual([]);
+	});
+
 	it("publishes a page alone to a control plane that cannot serve its images, and says so", async () => {
 		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
 		await fs.writeFile(path.join(docs, "photo.jpg"), "jpeg");

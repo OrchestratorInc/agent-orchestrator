@@ -55,6 +55,20 @@ import {
 import { type ShareLinkRecordStore, artifactRecordKey, shareAccess, shareRecordKey } from "./cloud-share-links";
 import { collectPageFiles, isSharePage, type PageFileSkip } from "./cloud-share-page-files";
 
+/** Filesystem errors that say a file is no longer there to open, or is no longer a plain file. */
+const SOURCE_GONE_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP"]);
+
+/**
+ * Whether copying a page's file failed because the file changed since it was
+ * found: removed, swapped for a symlink or rewritten. Then only that file is
+ * left out. A cancel, a full disk or an error writing the copy is still fatal.
+ */
+function sourceFileGone(error: unknown, realPath: string): boolean {
+	if (error instanceof CloudShareError) return error.code !== "cancelled" && error.code !== "disk_full";
+	const failure = error as NodeJS.ErrnoException | null;
+	return typeof failure?.code === "string" && SOURCE_GONE_CODES.has(failure.code) && failure.path === realPath;
+}
+
 export interface CloudShareIpcDeps extends CloudShareApi {
 	ipcMain: Pick<IpcMain, "handle">;
 	/** The daemon's data directory, which holds artifacts/<session>. */
@@ -528,7 +542,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 						files.push({ path: used.path, snapshot: copy });
 					} catch (error) {
 						// A file gone or rewritten while it was copied is left out, not the page.
-						if (!(error instanceof CloudShareError) || error.code === "cancelled" || error.code === "disk_full") throw error;
+						if (!sourceFileGone(error, used.file.realPath)) throw error;
 						skipped.push({ reference: used.path, reason: "missing" });
 					}
 					copied = before + used.file.size;
