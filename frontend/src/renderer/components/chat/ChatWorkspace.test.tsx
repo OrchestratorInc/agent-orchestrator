@@ -202,6 +202,49 @@ function stubGeometry(
 	});
 }
 
+/**
+ * Lays out the minimap track and the centered text column as a chat `width()`
+ * pixels wide would: a 768px column inside 16px padding, the 24px track 4px
+ * from the right edge.
+ */
+function stubMinimapRoom(width: () => number) {
+	const original = HTMLElement.prototype.getBoundingClientRect;
+	const rect = (left: number, rectWidth: number) =>
+		({ left, right: left + rectWidth, width: rectWidth, x: left, top: 0, bottom: 800, height: 800, y: 0 }) as DOMRect;
+	return vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+		const chatWidth = width();
+		if (this.dataset.testid === "chat-conversation-minimap") return rect(chatWidth - 28, 24);
+		if (this.parentElement?.getAttribute("role") === "log" && this.classList.contains("max-w-3xl")) {
+			const column = Math.min(768, chatWidth - 32);
+			return rect((chatWidth - column) / 2, column);
+		}
+		return original.call(this);
+	});
+}
+
+/** Swaps in a ResizeObserver the test reports resizes to. */
+function captureResizeObservers() {
+	const original = window.ResizeObserver;
+	const observers: Array<{ targets: Set<Element>; callback: ResizeObserverCallback }> = [];
+	class TestResizeObserver {
+		targets = new Set<Element>();
+		constructor(public callback: ResizeObserverCallback) { observers.push(this); }
+		observe(target: Element) { this.targets.add(target); }
+		unobserve(target: Element) { this.targets.delete(target); }
+		disconnect() { this.targets.clear(); }
+	}
+	window.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+	return {
+		resize(target: Element, width: number, height: number) {
+			const entry = { target, contentRect: { width, height }, borderBoxSize: [{ inlineSize: width, blockSize: height }] } as unknown as ResizeObserverEntry;
+			for (const observer of observers) {
+				if (observer.targets.has(target)) observer.callback([entry], observer as unknown as ResizeObserver);
+			}
+		},
+		restore() { window.ResizeObserver = original; },
+	};
+}
+
 beforeEach(() => {
 	forgetReadingPositions();
 	writeText.mockClear();
@@ -3847,54 +3890,82 @@ describe("ChatWorkspace timeline", () => {
 		expect(scrollbar).toHaveAttribute("aria-valuenow", "100");
 	});
 
-	it("disables the conversation minimap while the inspector is open", () => {
+	it("disables the conversation minimap when the chat opens too narrow for it", () => {
+		const rects = stubMinimapRoom(() => 780);
+		try {
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+			const log = screen.getByRole("log");
+			const scrollbar = screen.getByTestId("chat-conversation-minimap");
+			stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
+			stubGeometry(scrollbar, { scrollHeight: 800, clientHeight: 800, scrollTop: 0 });
+			fireEvent.scroll(log);
+
+			expect(scrollbar).toHaveAttribute("aria-hidden", "true");
+			expect(scrollbar).toHaveAttribute("tabindex", "-1");
+			expect(scrollbar).toHaveClass("pointer-events-none", "opacity-0");
+
+			fireEvent.wheel(scrollbar, { deltaY: 200 });
+			expect(log.scrollTop).toBe(1000);
+		} finally {
+			rects.mockRestore();
+		}
+	});
+
+	it("keeps the conversation minimap with the inspector open when the chat has room", () => {
 		useUiStore.setState({
 			inspectorSessions: { "ao-long": { isOpen: true, view: "summary" } },
 		});
-		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
-		const log = screen.getByRole("log");
-		const scrollbar = screen.getByTestId("chat-conversation-minimap");
-		stubGeometry(log, {
-			scrollHeight: 4000,
-			clientHeight: 800,
-			scrollTop: 1000,
-		});
-		stubGeometry(scrollbar, {
-			scrollHeight: 800,
-			clientHeight: 800,
-			scrollTop: 0,
-		});
-		fireEvent.scroll(log);
+		const rects = stubMinimapRoom(() => 1000);
+		try {
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+			const log = screen.getByRole("log");
+			const scrollbar = screen.getByTestId("chat-conversation-minimap");
+			stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
+			stubGeometry(scrollbar, { scrollHeight: 800, clientHeight: 800, scrollTop: 0 });
+			fireEvent.scroll(log);
 
-		expect(scrollbar).toHaveAttribute("aria-hidden", "true");
-		expect(scrollbar).toHaveClass("pointer-events-none");
-		expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]")).toHaveLength(0);
-
-		fireEvent.wheel(scrollbar, { deltaY: 200 });
-		expect(log.scrollTop).toBe(1000);
+			expect(scrollbar).not.toHaveAttribute("aria-hidden", "true");
+			expect(scrollbar).toHaveAttribute("tabindex", "0");
+			expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]").length).toBeGreaterThan(0);
+			fireEvent.wheel(scrollbar, { deltaY: 200 });
+			expect(log.scrollTop).toBe(1200);
+		} finally {
+			rects.mockRestore();
+		}
 	});
 
-	it("updates the minimap interaction boundary when the inspector toggles", async () => {
-		useUiStore.setState({
-			inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } },
-		});
-		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
-		const log = screen.getByRole("log");
-		const scrollbar = screen.getByTestId("chat-conversation-minimap");
-		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
-		stubGeometry(scrollbar, { scrollHeight: 800, clientHeight: 800, scrollTop: 0 });
-		fireEvent.scroll(log);
-		expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]").length).toBeGreaterThan(0);
+	it("updates the minimap interaction boundary as the chat narrows past it and widens again", () => {
+		let width = 1000;
+		const rects = stubMinimapRoom(() => width);
+		const observers = captureResizeObservers();
+		try {
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
+			const log = screen.getByRole("log");
+			const scrollbar = screen.getByTestId("chat-conversation-minimap");
+			stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1000 });
+			stubGeometry(scrollbar, { scrollHeight: 800, clientHeight: 800, scrollTop: 0 });
+			fireEvent.scroll(log);
+			expect(scrollbar).toHaveAttribute("tabindex", "0");
 
-		act(() => useUiStore.getState().setInspectorOpen("ao-long", true));
-		await waitFor(() => expect(scrollbar).toHaveAttribute("aria-hidden", "true"));
-		expect(scrollbar).toHaveAttribute("tabindex", "-1");
-		fireEvent.wheel(scrollbar, { deltaY: 200 });
-		expect(log.scrollTop).toBe(1000);
+			// At 840px only 8px separates the column from the track: the hovered dash would reach the text.
+			width = 840;
+			act(() => observers.resize(log, width, 800));
+			expect(scrollbar).toHaveAttribute("aria-hidden", "true");
+			expect(scrollbar).toHaveAttribute("tabindex", "-1");
+			fireEvent.wheel(scrollbar, { deltaY: 200 });
+			expect(log.scrollTop).toBe(1000);
 
-		act(() => useUiStore.getState().setInspectorOpen("ao-long", false));
-		await waitFor(() => expect(scrollbar).toHaveAttribute("aria-hidden", "false"));
-		expect(scrollbar).toHaveAttribute("tabindex", "0");
+			width = 860;
+			act(() => observers.resize(log, width, 800));
+			expect(scrollbar).toHaveAttribute("aria-hidden", "false");
+			expect(scrollbar).toHaveAttribute("tabindex", "0");
+			expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]").length).toBeGreaterThan(0);
+			fireEvent.wheel(scrollbar, { deltaY: 200 });
+			expect(log.scrollTop).toBe(1200);
+		} finally {
+			observers.restore();
+			rects.mockRestore();
+		}
 	});
 
 	it("opens large histories at the latest turn without mounting offscreen messages", async () => {
@@ -4264,53 +4335,6 @@ describe("ChatWorkspace timeline", () => {
 		expect(scrollbar).not.toHaveAttribute("aria-hidden", "true");
 		expect(scrollbar).not.toHaveClass("pointer-events-none");
 		expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]").length).toBeGreaterThan(1);
-	});
-
-	it("re-enables the conversation minimap when the inspector closes again", async () => {
-		useUiStore.setState({
-			inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } },
-		});
-		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
-		const log = screen.getByRole("log");
-		const scrollbar = screen.getByTestId("chat-conversation-minimap");
-		stubGeometry(log, {
-			scrollHeight: 4000,
-			clientHeight: 800,
-			scrollTop: 1000,
-		});
-		stubGeometry(scrollbar, {
-			scrollHeight: 800,
-			clientHeight: 800,
-			scrollTop: 0,
-		});
-		fireEvent.scroll(log);
-
-		expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]").length).toBeGreaterThan(0);
-		fireEvent.wheel(scrollbar, { deltaY: 200 });
-		expect(log.scrollTop).toBe(1200);
-
-		act(() => {
-			useUiStore.setState({
-				inspectorSessions: { "ao-long": { isOpen: true, view: "summary" } },
-			});
-		});
-		await waitFor(() => {
-			expect(scrollbar).toHaveAttribute("aria-hidden", "true");
-		});
-		fireEvent.wheel(scrollbar, { deltaY: 200 });
-		expect(log.scrollTop).toBe(1200);
-
-		act(() => {
-			useUiStore.setState({
-				inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } },
-			});
-		});
-		await waitFor(() => {
-			expect(scrollbar).not.toHaveAttribute("aria-hidden", "true");
-			expect(scrollbar.querySelectorAll("[data-chat-scroll-marker]").length).toBeGreaterThan(0);
-		});
-		fireEvent.wheel(scrollbar, { deltaY: 200 });
-		expect(log.scrollTop).toBe(1400);
 	});
 
 	it("previews the request and response for a hovered conversation marker", () => {
