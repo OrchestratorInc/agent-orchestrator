@@ -4848,6 +4848,33 @@ type MoveImportTranscript struct {
 	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder as a gzipped tar, base64-encoded."`
 }
 
+// MoveTargetsQuery names the repository and branch a session from
+// Orchestrator Cloud would move into.
+type MoveTargetsQuery struct {
+	RepoKey string `query:"repoKey" required:"true" description:"The repository's key, lower-case github.com/<owner>/<name>."`
+	Branch  string `query:"branch" required:"true" description:"The branch the session continues on."`
+}
+
+// MoveTargetsResponse lists the projects here a session from Orchestrator
+// Cloud could move into.
+type MoveTargetsResponse struct {
+	Targets []MoveTargetView `json:"targets"`
+}
+
+// MoveTargetView is one project; refusal says why the session cannot move into it.
+type MoveTargetView struct {
+	ProjectID string       `json:"projectId"`
+	Name      string       `json:"name"`
+	Path      string       `json:"path"`
+	Refusal   *MoveRefusal `json:"refusal,omitempty"`
+}
+
+// MoveRefusal is why a move cannot happen, as the dialog shows it.
+type MoveRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // MoveImportResponse is the new session. Warnings list what did not carry
 // over, such as a pull request this machine could not claim.
 type MoveImportResponse struct {

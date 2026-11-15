@@ -14725,6 +14725,53 @@ paths:
       summary: Start a session moved from AO Cloud
       tags:
       - sessions
+  /api/v1/sessions/move/targets:
+    get:
+      operationId: listSessionMoveTargets
+      parameters:
+      - description: The repository's key, lower-case github.com/<owner>/<name>.
+        in: query
+        name: repoKey
+        required: true
+        schema:
+          description: The repository's key, lower-case github.com/<owner>/<name>.
+          type: string
+      - description: The branch the session continues on.
+        in: query
+        name: branch
+        required: true
+        schema:
+          description: The branch the session continues on.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersMoveTargetsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the projects here a session from Orchestrator Cloud could move
+        into, and why one cannot
+      tags:
+      - sessions
   /api/v1/settings:
     get:
       operationId: getSettings
@@ -18906,6 +18953,40 @@ components:
       - agentSessionId
       - projectDir
       - transcriptGzip
+      type: object
+    ControllersMoveRefusal:
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+      required:
+      - code
+      - message
+      type: object
+    ControllersMoveTargetView:
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        projectId:
+          type: string
+        refusal:
+          $ref: '#/components/schemas/ControllersMoveRefusal'
+      required:
+      - projectId
+      - name
+      - path
+      type: object
+    ControllersMoveTargetsResponse:
+      properties:
+        targets:
+          items:
+            $ref: '#/components/schemas/ControllersMoveTargetView'
+          type: array
+      required:
+      - targets
       type: object
     ControllersMoveTranscriptInfo:
       properties:

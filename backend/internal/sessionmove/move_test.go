@@ -163,3 +163,28 @@ func TestImportBranchPlacesSafely(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckImportBranch(t *testing.T) {
+	f := newFixture(t)
+	// src has feat/x checked out.
+	if err := CheckImportBranch(t.Context(), f.src, "feat/x"); !errors.Is(err, ErrBranchCheckedOut) {
+		t.Fatalf("checked out: err = %v, want ErrBranchCheckedOut", err)
+	}
+	repo := filepath.Join(f.tmp, "here")
+	g(t, f.tmp, "clone", "-q", f.origin, repo)
+	if err := CheckImportBranch(t.Context(), repo, "feat/x"); err != nil {
+		t.Fatalf("no branch here: err = %v", err)
+	}
+	g(t, repo, "branch", "-q", "feat/x", "origin/feat/x")
+	if err := CheckImportBranch(t.Context(), repo, "feat/x"); err != nil {
+		t.Fatalf("same as origin: err = %v", err)
+	}
+	g(t, repo, "switch", "-q", "feat/x")
+	writeFile(t, filepath.Join(repo, "local.txt"), "here\n", 0o644)
+	g(t, repo, "add", "local.txt")
+	g(t, repo, "commit", "-q", "-m", "only here")
+	g(t, repo, "switch", "-q", "main")
+	if err := CheckImportBranch(t.Context(), repo, "feat/x"); !errors.Is(err, ErrLocalAhead) {
+		t.Fatalf("ahead of origin: err = %v, want ErrLocalAhead", err)
+	}
+}

@@ -18,6 +18,7 @@ type SessionMover interface {
 	ExportMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveExportInput) (sessionsvc.MoveExport, error)
 	MoveTranscript(ctx context.Context, id domain.SessionID) (sessionsvc.MoveTranscript, error)
 	ImportMove(ctx context.Context, in sessionsvc.MoveImportInput) (sessionsvc.MoveImportOutcome, error)
+	MoveTargets(ctx context.Context, repoKey, branch string) ([]sessionsvc.MoveTarget, error)
 	CompleteMove(ctx context.Context, id domain.SessionID, in sessionsvc.MoveCompleteInput) (domain.Session, error)
 }
 
@@ -39,6 +40,7 @@ func (c *SessionMovesController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/move/preview", c.preview)
 	r.Post("/sessions/{sessionId}/move/export", c.export)
 	r.Get("/sessions/{sessionId}/move/transcript", c.transcript)
+	r.Get("/sessions/move/targets", c.targets)
 	r.Post("/sessions/move/import", c.importMove)
 	r.Post("/sessions/{sessionId}/move/complete", c.complete)
 }
@@ -109,6 +111,32 @@ func (c *SessionMovesController) export(w http.ResponseWriter, r *http.Request) 
 	envelope.WriteJSON(w, http.StatusOK, MoveExportResponse{
 		Manifest: out.Manifest, HandoffNote: out.HandoffNote, Changes: out.Changes, Submodules: out.Submodules,
 	})
+}
+
+func (c *SessionMovesController) targets(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/move/targets")
+		return
+	}
+	repoKey, branch := r.URL.Query().Get("repoKey"), r.URL.Query().Get("branch")
+	if repoKey == "" || branch == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "MOVE_TARGETS_INVALID", "repoKey and branch are required", nil)
+		return
+	}
+	targets, err := c.Svc.MoveTargets(r.Context(), repoKey, branch)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := MoveTargetsResponse{Targets: []MoveTargetView{}}
+	for _, target := range targets {
+		view := MoveTargetView{ProjectID: target.Project.ID, Name: target.Project.DisplayName, Path: target.Project.Path}
+		if target.Refusal != nil {
+			view.Refusal = &MoveRefusal{Code: target.Refusal.Code, Message: target.Refusal.Message}
+		}
+		out.Targets = append(out.Targets, view)
+	}
+	envelope.WriteJSON(w, http.StatusOK, out)
 }
 
 func (c *SessionMovesController) importMove(w http.ResponseWriter, r *http.Request) {

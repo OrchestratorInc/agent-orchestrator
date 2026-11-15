@@ -37,6 +37,56 @@ func ImportBranch(ctx context.Context, repo, branch, tip string) error {
 	return PlaceBranch(ctx, repo, branch, tip)
 }
 
+// ErrLocalAhead reports a branch here with commits origin's lacks, which a
+// move from AO Cloud could not fast-forward.
+var ErrLocalAhead = errors.New("the branch here has commits origin's does not")
+
+// CheckImportBranch says whether a move from AO Cloud could place branch in
+// repo, changing nothing but origin's refs: it refuses a branch checked out in
+// a worktree and one with commits origin's branch lacks.
+func CheckImportBranch(ctx context.Context, repo, branch string) error {
+	if err := FetchOrigin(ctx, repo); err != nil {
+		return err
+	}
+	ref := "refs/heads/" + branch
+	if _, err := runGit(ctx, repo, nil, nil, "check-ref-format", ref); err != nil {
+		return fmt.Errorf("branch %q: %w", branch, err)
+	}
+	list, err := runGit(ctx, repo, nil, nil, "worktree", "list", "--porcelain")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(list, "\n") {
+		if line == "branch "+ref {
+			return fmt.Errorf("%w: %s", ErrBranchCheckedOut, branch)
+		}
+	}
+	local, ok := resolveRef(ctx, repo, ref)
+	if !ok {
+		return nil
+	}
+	// Without the branch on origin yet the export pushes it, and the import
+	// then refuses a branch here it cannot fast-forward.
+	remote, ok := resolveRef(ctx, repo, "refs/remotes/origin/"+branch)
+	if !ok {
+		return nil
+	}
+	ahead, err := gitLine(ctx, repo, "rev-list", "--count", remote+".."+local)
+	if err != nil {
+		return err
+	}
+	if ahead != "0" {
+		return fmt.Errorf("%w: %s", ErrLocalAhead, branch)
+	}
+	return nil
+}
+
+// resolveRef returns the commit ref names, and false when it does not exist.
+func resolveRef(ctx context.Context, repo, ref string) (string, bool) {
+	id, err := gitLine(ctx, repo, "rev-parse", "-q", "--verify", ref)
+	return id, err == nil
+}
+
 // PlaceBranch creates branch at tip, or fast-forwards it. It refuses a branch
 // with commits tip lacks, and one checked out in a worktree, whose files would
 // no longer match it.

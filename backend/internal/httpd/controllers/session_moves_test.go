@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 )
 
@@ -66,5 +69,31 @@ func TestMoveExportAndCompleteRefuseAnOversizedBody(t *testing.T) {
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INVALID_JSON") {
 			t.Errorf("%s: %d %s", path, w.Code, w.Body)
 		}
+	}
+}
+
+type targetsMover struct{ SessionMover }
+
+func (targetsMover) MoveTargets(_ context.Context, repoKey, branch string) ([]sessionsvc.MoveTarget, error) {
+	return []sessionsvc.MoveTarget{
+		{Project: domain.ProjectRecord{ID: "app", DisplayName: "app", Path: "/code/app"}},
+		{Project: domain.ProjectRecord{ID: "app-2", DisplayName: "app-2", Path: "/work/app"}, Refusal: apierr.Conflict("MOVE_LOCAL_AHEAD", branch+" here has commits", nil)},
+	}, nil
+}
+
+func TestMoveTargetsListsProjectsWithTheirRefusals(t *testing.T) {
+	r := chi.NewRouter()
+	(&SessionMovesController{Svc: targetsMover{}}).Register(r)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/sessions/move/targets?repoKey=github.com/acme/app&branch=feat/x", nil))
+	var got MoveTargetsResponse
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &got) != nil || len(got.Targets) != 2 ||
+		got.Targets[0].Refusal != nil || got.Targets[1].Refusal == nil || got.Targets[1].Refusal.Code != "MOVE_LOCAL_AHEAD" {
+		t.Fatalf("targets = %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/sessions/move/targets?repoKey=github.com/acme/app", nil))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("missing branch = %d, want 400", w.Code)
 	}
 }

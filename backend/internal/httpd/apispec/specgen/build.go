@@ -4195,6 +4195,17 @@ func sessionOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/sessions/move/targets", id: "listSessionMoveTargets", tag: "sessions",
+			summary:    "List the projects here a session from Orchestrator Cloud could move into, and why one cannot",
+			pathParams: []any{controllers.MoveTargetsQuery{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.MoveTargetsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/move/import", id: "importSessionMove", tag: "sessions",
 			summary: "Start a session moved from AO Cloud",
 			reqBody: controllers.MoveImportRequest{},

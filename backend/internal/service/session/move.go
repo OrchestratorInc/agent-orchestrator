@@ -440,6 +440,7 @@ func moveAPIError(err error) error {
 		{sessionmove.ErrLFSObjects, "MOVE_LFS", "Git LFS files cannot move yet: %s."},
 		{sessionmove.ErrDiverged, "MOVE_BRANCH_DIVERGED", "The branch here has commits the moved branch does not."},
 		{sessionmove.ErrBranchCheckedOut, "MOVE_BRANCH_CHECKED_OUT", "The branch is checked out in a worktree here."},
+		{sessionmove.ErrLocalAhead, "MOVE_LOCAL_AHEAD", "%s here has commits that Orchestrator Cloud's does not. Push them first."},
 		{sessionmove.ErrMissingCommit, "MOVE_MISSING_COMMIT", "Origin does not have the commit Orchestrator Cloud pushed."},
 	} {
 		if errors.Is(err, c.err) {
@@ -521,6 +522,67 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 		out.SidecarGzip = sidecar.Bytes()
 	}
 	return out, nil
+}
+
+// MoveTarget is a project on this machine a session from AO Cloud could
+// move into.
+type MoveTarget struct {
+	Project domain.ProjectRecord
+	// Refusal says why the session cannot move into it, or is nil.
+	Refusal *apierr.Error
+}
+
+type projectLister interface {
+	ListProjects(ctx context.Context) ([]domain.ProjectRecord, error)
+}
+
+// MoveTargets lists this machine's single-repository projects of repoKey and
+// whether branch could be placed in each, as move/import would.
+func (s *Service) MoveTargets(ctx context.Context, repoKey, branch string) ([]MoveTarget, error) {
+	lister, ok := s.store.(projectLister)
+	if !ok {
+		return nil, apierr.NotImplemented("MOVE_UNSUPPORTED", "This build cannot list projects for a move")
+	}
+	projects, err := lister.ListProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []MoveTarget
+	for _, project := range projects {
+		if !project.ArchivedAt.IsZero() || project.Kind.WithDefault() != domain.ProjectKindSingleRepo ||
+			domain.RepositoryKey(project.RepoOriginURL) != repoKey {
+			continue
+		}
+		target := MoveTarget{Project: project}
+		if err := sessionmove.CheckImportBranch(ctx, project.Path, branch); err != nil {
+			target.Refusal = s.moveTargetRefusal(ctx, project, branch, err)
+		}
+		out = append(out, target)
+	}
+	return out, nil
+}
+
+// moveTargetRefusal turns a CheckImportBranch error into the dialog's reason,
+// naming the session that has the branch checked out when there is one.
+func (s *Service) moveTargetRefusal(ctx context.Context, project domain.ProjectRecord, branch string, err error) *apierr.Error {
+	if errors.Is(err, sessionmove.ErrBranchCheckedOut) {
+		if sessions, listErr := s.store.ListSessions(ctx, domain.ProjectID(project.ID)); listErr == nil {
+			for _, rec := range sessions {
+				if !rec.IsTerminated && rec.Metadata.Branch == branch {
+					name := rec.DisplayName
+					if name == "" {
+						name = string(rec.ID)
+					}
+					return apierr.Conflict("MOVE_BRANCH_CHECKED_OUT", fmt.Sprintf("%s is checked out here by %s. Archive that session first.", branch, name), nil)
+				}
+			}
+		}
+	}
+	var refusal *apierr.Error
+	if errors.As(moveAPIError(err), &refusal) {
+		return refusal
+	}
+	return apierr.Conflict("MOVE_CHECK_FAILED", "Could not check the branch here: "+err.Error(), nil)
 }
 
 // writeImportArchive unzips a transcript from AO Cloud, and its sidecar

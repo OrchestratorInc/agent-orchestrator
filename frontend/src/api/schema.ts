@@ -4795,6 +4795,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/move/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the projects here a session from Orchestrator Cloud could move into, and why one cannot */
+        get: operations["listSessionMoveTargets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -6453,6 +6470,19 @@ export interface components {
              * @description The transcript, gzipped and base64-encoded.
              */
             transcriptGzip: string;
+        };
+        ControllersMoveRefusal: {
+            code: string;
+            message: string;
+        };
+        ControllersMoveTargetView: {
+            name: string;
+            path: string;
+            projectId: string;
+            refusal?: components["schemas"]["ControllersMoveRefusal"];
+        };
+        ControllersMoveTargetsResponse: {
+            targets: components["schemas"]["ControllersMoveTargetView"][];
         };
         ControllersMoveTranscriptInfo: {
             /**
@@ -27914,6 +27944,58 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionMoveTargets: {
+        parameters: {
+            query: {
+                /** @description The repository's key, lower-case github.com/<owner>/<name>. */
+                repoKey: string;
+                /** @description The branch the session continues on. */
+                branch: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersMoveTargetsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
