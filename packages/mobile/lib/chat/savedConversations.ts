@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { ConversationPage } from "./snapshot";
+import type { ConversationItem, ConversationTurn } from "./types";
 import { DEFAULT_CONFIG, hostMachineIdentity, machineIdentity } from "../config";
 import type { HostMetadata } from "../hosts";
 
@@ -9,6 +10,11 @@ import type { HostMetadata } from "../hosts";
 // conversation…" until the machine answered, which on a slow link takes
 // seconds. A chat with nothing in memory now shows its saved page at once,
 // and its first read replaces it.
+//
+// Agent output can carry secrets, so these pages stay out of device backups:
+// app.json turns Android's Auto Backup off (`android.allowBackup: false`), and
+// on iOS AsyncStorage keeps its directory out of iCloud backup by default
+// (unless Info.plist sets RCTAsyncStorageExcludeFromBackup to false).
 
 const INDEX_KEY = "ao.chat.saved.v1";
 const PAGE_PREFIX = "ao.chat.saved.v1.";
@@ -38,10 +44,42 @@ export async function loadSavedConversation(key: string, now = Date.now()): Prom
 		const saved = JSON.parse(raw) as Partial<Saved>;
 		if (saved.v !== 1 || typeof saved.savedAt !== "number" || now - saved.savedAt >= SAVED_PAGE_KEEP_MS) return null;
 		const page = saved.page;
-		return page && Array.isArray(page.items) && Array.isArray(page.turns) ? page : null;
+		return page && Array.isArray(page.items) && Array.isArray(page.turns) ? savedPageView(page) : null;
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * A saved page as it shows until the first live read replaces it: a record of
+ * what was said, never a live one. A question the agent asked then may be
+ * answered or gone, and a turn running then may have ended days ago, so the
+ * page offers no Approve/Deny or answer form (an open request is left out) and
+ * shows nothing as working: no running turn with its ticking timer, no running
+ * step, no busy or starting agent. The live read brings back whatever is still
+ * open. A page with none of these is returned as it is.
+ */
+export function savedPageView(page: ConversationPage): ConversationPage {
+	const openRequest = (item: ConversationItem) =>
+		item.kind === "activity" && item.status === "pending" && (item.activityKind === "approval" || item.activityKind === "user_input");
+	const runningStep = (item: ConversationItem) => item.kind === "activity" && item.status === "running";
+	const live = (turn: ConversationTurn) => turn.state === "running" || turn.state === "queued";
+	const state = page.controller?.state;
+	const controllerLive = state === "busy" || state === "connecting" || state === "recovering";
+	if (!controllerLive && !page.turns.some(live) && !page.items.some((item) => openRequest(item) || runningStep(item))) return page;
+	return {
+		...page,
+		// What the agent is doing is not known until the machine answers; "ready" draws no banner or busy state.
+		controller: controllerLive ? { ...page.controller, state: "ready" } : page.controller,
+		// "recovered" is a turn whose outcome is not known: no timer, no working row.
+		turns: page.turns.map((turn) => (live(turn) ? { ...turn, state: "recovered" } : turn)),
+		items: page.items.flatMap((item): ConversationItem[] => {
+			if (openRequest(item)) return [];
+			// A settled step draws no spinner, and claims no outcome ("failed", "stopped").
+			if (item.kind === "activity" && runningStep(item)) return [{ ...item, status: "completed" }];
+			return [item];
+		}),
+	};
 }
 
 /**
@@ -143,8 +181,11 @@ async function removeSaved(matches: (key: string) => boolean): Promise<void> {
 
 /**
  * Saves each chat's newest page at most every `everyMs` (a streaming reply
- * changes it several times a second), and every waiting one at once on
- * `flush` (leaving the app). One write at a time, in order.
+ * changes it several times a second). One write at a time, in order. Nothing
+ * is written when the app goes to the background, deliberately: a kill loses
+ * at most the last few seconds of a saved copy, which only shows until the
+ * live read replaces it. `flush` writes every waiting page at once; the app
+ * does not call it (tests do, to write without waiting on the timers).
  */
 export function createConversationSaver(
 	write: (key: string, page: ConversationPage, now: number) => Promise<void> = writeSaved,

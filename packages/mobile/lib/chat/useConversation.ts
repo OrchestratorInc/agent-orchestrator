@@ -91,6 +91,11 @@ export type ConversationAction =
 
 export type MobileConversation = {
 	snapshot?: ConversationSnapshot;
+	/**
+	 * The snapshot is the page saved on the phone (see savedPageView), shown
+	 * read-only until the first live read replaces it.
+	 */
+	saved?: boolean;
 	loading: boolean;
 	loadingOlder: boolean;
 	error?: string;
@@ -160,6 +165,9 @@ export function useMobileConversation(
 		: { pages: [] as ConversationPage[], loading: true });
 	const [pages, setPages] = useState<ConversationPage[]>(initialState.pages);
 	const [loading, setLoading] = useState(initialState.loading);
+	// The page loaded from the phone, and whether no live read has answered since.
+	const [savedShown, setSavedShown] = useState(false);
+	const savedPage = useRef<ConversationPage | undefined>(undefined);
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
@@ -236,6 +244,7 @@ export function useMobileConversation(
 					if (next !== old) conversationSaver.schedule(cacheKey, next[0]);
 					return next;
 				});
+				setSavedShown(false);
 				setUnavailable(undefined);
 				setError(undefined);
 			} catch (cause) {
@@ -286,13 +295,16 @@ export function useMobileConversation(
 		setPages(cached.pages);
 		setLoading(cached.loading);
 		setUnavailable(undefined);
+		setSavedShown(false);
 		// Nothing in memory (the app was closed since): the page saved on the phone
-		// shows until the first read answers, which replaces it.
+		// shows, read-only, until the first read answers, which replaces it.
 		if (!cacheKey || cached.pages.length) return;
 		let active = true;
 		void loadSavedConversation(cacheKey).then((saved) => {
 			if (!active || !saved) return;
+			savedPage.current = saved;
 			setPages((current) => current.length ? current : [saved]);
+			setSavedShown(true);
 			setLoading(false);
 		});
 		return () => { active = false; };
@@ -609,6 +621,7 @@ export function useMobileConversation(
 
 	return {
 		snapshot,
+		saved: savedShown && pages[0] !== undefined && pages[0] === savedPage.current,
 		loading,
 		loadingOlder,
 		error,

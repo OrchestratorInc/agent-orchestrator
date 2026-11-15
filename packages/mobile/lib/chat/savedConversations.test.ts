@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stored = new Map<string, string>();
@@ -19,6 +21,7 @@ import {
 	SAVED_PAGE_MAX_BYTES,
 	SAVED_TOTAL_MAX_BYTES,
 	savedConversationMachines,
+	savedPageView,
 	utf8Bytes,
 } from "./savedConversations";
 import type { ConversationPage } from "./snapshot";
@@ -108,6 +111,60 @@ describe("saved chat pages", () => {
 		saver.schedule("a", at(3));
 		await saver.flush();
 		expect(writes.at(-1)).toEqual(["a", 3]);
+	});
+});
+
+describe("a saved page shown before the live read", () => {
+	const midTurn = {
+		...page("hi"),
+		controller: { state: "busy" },
+		turns: [{ id: "t1", state: "running", requestedAt: "2026-11-01T10:00:00Z" }, { id: "t0", state: "completed", requestedAt: "2026-11-01T09:00:00Z" }],
+		items: [
+			{ kind: "message", id: "m" },
+			{ kind: "activity", id: "cmd", activityKind: "command", status: "running" },
+			{ kind: "activity", id: "ask", activityKind: "user_input", status: "pending", requestId: "r2" },
+			{ kind: "activity", id: "ok", activityKind: "approval", status: "pending", requestId: "r1" },
+			{ kind: "activity", id: "old", activityKind: "approval", status: "resolved", requestId: "r0" },
+		],
+	} as unknown as ConversationPage;
+
+	it("offers no open request and shows nothing as working", () => {
+		const view = savedPageView(midTurn);
+		expect(view.controller.state).toBe("ready");
+		expect(view.turns.map((turn) => turn.state)).toEqual(["recovered", "completed"]);
+		expect(view.items.map((item) => item.id)).toEqual(["m", "cmd", "old"]);
+		expect(view.items.find((item) => item.id === "cmd")).toMatchObject({ status: "completed" });
+	});
+
+	it("is the page itself when nothing in it was live", () => {
+		const settled = page("done");
+		expect(savedPageView(settled)).toBe(settled);
+	});
+
+	it("loads as that read-only view", async () => {
+		await save("host.a/mid-turn", midTurn);
+		const loaded = await loadSavedConversation("host.a/mid-turn");
+		expect(loaded?.items.map((item) => item.id)).toEqual(["m", "cmd", "old"]);
+		expect(loaded?.turns[0]?.state).toBe("recovered");
+	});
+});
+
+// Transcripts can hold secrets from agent output, so they must not leave the
+// phone in a device backup.
+describe("saved pages and device backups", () => {
+	const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+	const expo = JSON.parse(read("../../app.json")).expo;
+
+	it("turns Android Auto Backup off", () => {
+		expect(expo.android.allowBackup).toBe(false);
+	});
+
+	// AsyncStorage marks its directory excluded from iCloud backup unless
+	// Info.plist sets RCTAsyncStorageExcludeFromBackup to false.
+	it("leaves AsyncStorage's iOS backup exclusion on", () => {
+		expect(expo.ios.infoPlist?.RCTAsyncStorageExcludeFromBackup).not.toBe(false);
+		const native = read("../../node_modules/@react-native-async-storage/async-storage/ios/RNCAsyncStorage.mm");
+		expect(native).toMatch(/if \(isExcludedFromBackup == nil\) \{[^}]*isExcludedFromBackup = @YES;/);
 	});
 });
 
