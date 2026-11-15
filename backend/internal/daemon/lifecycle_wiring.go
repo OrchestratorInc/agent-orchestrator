@@ -68,6 +68,9 @@ type lifecycleStack struct {
 	trackerDone      <-chan struct{}
 	herdr            *herdr.Server
 	automationDone   <-chan struct{}
+	// activity is the activity observer, which receives the session
+	// manager's runtime environment once that exists.
+	activity *activityobserver.Observer
 }
 
 // startLifecycle constructs the Lifecycle Manager over the store and starts the
@@ -109,6 +112,7 @@ func startLifecycle(ctx context.Context, dataDir string, store *sqlite.Store, ru
 		turnFailureDone:  turnFailurePoller.Start(ctx),
 		herdr:            herdrServer,
 		artifactsDone:    artifactsPoller.Start(ctx),
+		activity:         activityPoller,
 	}
 }
 
@@ -236,6 +240,9 @@ type sessionLifecycle interface {
 	BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error)
 	StopHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionID, error)
 	ResumeHarnessSessions(ctx context.Context, ids []domain.SessionID) error
+	// SessionRuntimeEnv feeds the activity observer's native-identity
+	// lookups the environment each session's agent runs in.
+	SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecord) (map[string]string, error)
 	SetVersionTelemetry(sink ports.EventSink)
 	SetVersionRefreshPolicy(policy func() sessionmanager.VersionRefreshPolicy)
 	SetComputerUseEnabled(enabled func(context.Context) bool)

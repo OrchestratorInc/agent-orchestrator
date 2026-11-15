@@ -108,6 +108,18 @@ func (m *Manager) updateBlocker(ctx context.Context, rec domain.SessionRecord) (
 	return "", false
 }
 
+// SessionRuntimeEnv is the environment the session's agent process runs in,
+// as the runtime layers it over the daemon's: the project environment,
+// provider keys and the session's account. It issues no browser capability,
+// for callers that only look the session up through the agent CLI.
+func (m *Manager) SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecord) (map[string]string, error) {
+	project, err := m.loadProject(ctx, rec.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	return m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness), nil
+}
+
 // terminalResumesNatively reports whether a terminal stopped for an update
 // could start again on its own conversation, as resumeAfterUpdate requires:
 // the adapter has a restore command and the conversation was persisted.

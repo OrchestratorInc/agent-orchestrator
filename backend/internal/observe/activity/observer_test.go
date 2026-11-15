@@ -57,15 +57,50 @@ type pollingResolverAgent struct {
 	resolvedID   string
 	resolveErr   error
 	resolveCalls int
+	lastResolve  ports.NativeSessionResolveConfig
 }
 
 func (a *pollingResolverAgent) DetectTerminalActivity(string) (domain.ActivityState, bool) {
 	return a.state, true
 }
 func (*pollingResolverAgent) ContinuouslyDetectTerminalActivity() bool { return true }
-func (a *pollingResolverAgent) ResolveNativeSessionID(context.Context, ports.NativeSessionResolveConfig) (string, bool, error) {
+func (a *pollingResolverAgent) ResolveNativeSessionID(_ context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
 	a.resolveCalls++
+	a.lastResolve = cfg
 	return a.resolvedID, true, a.resolveErr
+}
+
+// An adapter whose native-identity lookup runs its CLI (Stakpak on a remote
+// profile) may need a credential set only in the project environment. The
+// observer passes the session's runtime environment from the session manager.
+func TestPollResolvesNativeIdentityInTheSessionEnvironment(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	session := activeSession(now, domain.HarnessCodewhale)
+	agent := &pollingResolverAgent{state: domain.ActivityIdle, resolvedID: "native-id"}
+	sink := &fakeSink{}
+	observer := New(fakeSessions{rows: []domain.SessionRecord{session}}, sink, &fakeRuntime{}, fakeAgents{session.Harness: agent}, Config{DataDir: t.TempDir(), Clock: func() time.Time { return now }, Logger: testLogger()})
+	var asked domain.SessionID
+	observer.SetSessionEnv(func(_ context.Context, rec domain.SessionRecord) (map[string]string, error) {
+		asked = rec.ID
+		return map[string]string{"STAKPAK_API_KEY": "project-only"}, nil
+	})
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 1 || asked != session.ID || agent.lastResolve.Env["STAKPAK_API_KEY"] != "project-only" {
+		t.Fatalf("resolve calls=%d asked=%q env=%v; want the session environment passed", agent.resolveCalls, asked, agent.lastResolve.Env)
+	}
+	// A session whose environment cannot be built still resolves, without one.
+	observer.SetSessionEnv(func(context.Context, domain.SessionRecord) (map[string]string, error) {
+		return nil, errors.New("project unavailable")
+	})
+	agent.state = domain.ActivityWaitingInput
+	if err := observer.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if agent.resolveCalls != 2 || agent.lastResolve.Env != nil {
+		t.Fatalf("resolve calls=%d env=%v; want a resolve without an environment", agent.resolveCalls, agent.lastResolve.Env)
+	}
 }
 
 func TestPollOnlyResolvesOrdinaryNativeIdentityOnStateChange(t *testing.T) {

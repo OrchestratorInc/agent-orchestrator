@@ -3,6 +3,7 @@ package activity
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -51,6 +52,19 @@ type Observer struct {
 	outputLines int
 	clock       func() time.Time
 	logger      *slog.Logger
+	sessionEnv  atomic.Pointer[SessionEnvFunc]
+}
+
+// SessionEnvFunc builds the environment a session's agent process runs in.
+type SessionEnvFunc func(ctx context.Context, session domain.SessionRecord) (map[string]string, error)
+
+// SetSessionEnv gives native-identity lookups the session's runtime
+// environment: an adapter whose lookup runs the agent CLI may need a
+// project-level profile or credential the daemon's own environment lacks.
+// The daemon sets it once the session manager exists; lookups before that run
+// without one.
+func (o *Observer) SetSessionEnv(fn SessionEnvFunc) {
+	o.sessionEnv.Store(&fn)
 }
 
 // New builds an activity observer.
@@ -179,6 +193,13 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 	nativeID := ""
 	if resolver, supports := agent.(ports.AgentNativeSessionResolver); supports && o.dataDir != "" {
 		resolveCfg := ports.NativeSessionResolveConfig{DataDir: o.dataDir, SessionID: session.ID, LaunchID: session.Metadata.RuntimeLaunchID}
+		if fn := o.sessionEnv.Load(); fn != nil && *fn != nil {
+			if env, envErr := (*fn)(ctx, session); envErr != nil {
+				o.logger.Debug("activity observer: session environment unavailable", "session", session.ID, "err", envErr)
+			} else {
+				resolveCfg.Env = env
+			}
+		}
 		id, found, resolveErr := resolver.ResolveNativeSessionID(ctx, resolveCfg)
 		if resolveErr != nil {
 			// Native identity is optional evidence; a failed lookup must not

@@ -669,6 +669,9 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	if lcStack.activity != nil {
+		lcStack.activity.SetSessionEnv(wiredSessMgr.SessionRuntimeEnv)
+	}
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}

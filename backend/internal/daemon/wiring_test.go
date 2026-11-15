@@ -999,6 +999,9 @@ func (*fakeSessionLifecycle) StopHarnessSessions(context.Context, domain.AgentHa
 func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.SessionID) error {
 	return nil
 }
+func (*fakeSessionLifecycle) SessionRuntimeEnv(context.Context, domain.SessionRecord) (map[string]string, error) {
+	return nil, nil
+}
 func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
 func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}
 func (*fakeSessionLifecycle) SetComputerUseEnabled(func(context.Context) bool)                   {}
