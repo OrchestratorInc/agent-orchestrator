@@ -82,10 +82,11 @@ func (p *Plugin) rememberLaunchEnv(sessionID string, env map[string]string) {
 }
 
 // sessionEnv is the environment every Stakpak command about a session runs
-// in. An environment the caller passes wins. AO's activity observer and its
-// update-when-idle probe pass none, so they get the one the session was
-// launched or resumed with. Either way the launch's recorded profile applies
-// when the environment names none.
+// in. An environment the caller passes wins: AO's activity observer, its
+// update-when-idle probe and its restores pass the session's runtime
+// environment. A caller that passes none (SessionInfo) gets the one this
+// process launched or resumed the session with. Either way the launch's
+// recorded profile applies when the environment names none.
 func (p *Plugin) sessionEnv(sessionID string, env map[string]string, record launchRecord) map[string]string {
 	if env == nil {
 		p.recordMu.Lock()
@@ -208,7 +209,7 @@ func parseSessionList(out []byte) ([]nativeSession, error) {
 // conversation the user starts with /new inside the TUI is therefore not
 // followed.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
-	return p.resolveNativeSessionID(ctx, cfg.DataDir, string(cfg.SessionID), nil)
+	return p.resolveNativeSessionID(ctx, cfg.DataDir, string(cfg.SessionID), cfg.Env)
 }
 
 // resolveNativeSessionID lists sessions in sessionEnv(env): a restore passes
@@ -259,9 +260,9 @@ func (p *Plugin) conversationEnv(ref ports.SessionRef, env map[string]string) (m
 	if strings.TrimSpace(ref.ID) == "" {
 		return env, nil
 	}
-	// A caller that brings the session's environment refreshes the in-memory
-	// copy, which a daemon restart empties.
-	p.rememberLaunchEnv(ref.ID, env)
+	// The environment is used, never kept: an account move's preflight asks
+	// with the target account's credentials while the session still runs on
+	// its own.
 	dataDir := ref.DataDir
 	if strings.TrimSpace(dataDir) == "" {
 		p.recordMu.Lock()

@@ -658,13 +658,9 @@ func TestProjectOnlyRemoteCredentialsReachEveryLookup(t *testing.T) {
 	if _, ok, err := restarted.GetRestoreCommand(ctx, afterRestartProbe); err != nil || !ok {
 		t.Fatalf("update-when-idle probe after a restart = %t, %v; want the conversation found", ok, err)
 	}
-	// The observer passes no environment. Once any call has brought the
-	// session's own (here the restore's conversation check), its discovery
-	// works again after the restart.
-	if exists, err := restarted.NativeConversationExists(ctx, ports.SessionRef{ID: "ao-4"}, nativeA, launchEnv); err != nil || !exists {
-		t.Fatalf("conversation check after a restart = %t, %v", exists, err)
-	}
-	if id, ok, err := restarted.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-4"}); err != nil || !ok || id != nativeA {
+	// The activity observer passes the session's runtime environment, so its
+	// discovery works after a restart without anything in memory.
+	if id, ok, err := restarted.ResolveNativeSessionID(ctx, ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-4", Env: launchEnv}); err != nil || !ok || id != nativeA {
 		t.Fatalf("observer discovery after a restart = %q, %t, %v; want %s", id, ok, err, nativeA)
 	}
 	for _, id := range sessions {
@@ -675,5 +671,38 @@ func TestProjectOnlyRemoteCredentialsReachEveryLookup(t *testing.T) {
 		if strings.Contains(string(raw), key) || strings.Contains(string(raw), "STAKPAK_API_KEY") {
 			t.Fatalf("launch record %s kept the credential: %s", id, raw)
 		}
+	}
+}
+
+// An account move's preflight checks the conversation with the target
+// account's environment while the session still runs on its own. That check
+// must not replace the session's kept environment: a later lookup that passes
+// none would otherwise run with the target's credentials and profile.
+func TestConversationChecksNeverReplaceTheSessionEnvironment(t *testing.T) {
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	t.Setenv("STAKPAK_API_KEY", "")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "known-session-remote"), []byte(nativeA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, ws := t.TempDir(), t.TempDir()
+	p := New()
+	ctx := context.Background()
+	own := map[string]string{"STAKPAK_PROFILE": "remote", "STAKPAK_API_KEY": "own-key"}
+	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: own}); err != nil {
+		t.Fatal(err)
+	}
+	target := map[string]string{"STAKPAK_PROFILE": "elsewhere", "STAKPAK_API_KEY": "target-account-key"}
+	if exists, err := p.NativeConversationExists(ctx, ports.SessionRef{ID: "ao-1", WorkspacePath: ws}, nativeA, target); err != nil || exists {
+		t.Fatalf("preflight check in the target environment = %t, %v; want the conversation missing there", exists, err)
+	}
+	p.recordMu.Lock()
+	kept := p.launchEnvs["ao-1"]
+	p.recordMu.Unlock()
+	if kept["STAKPAK_API_KEY"] != "own-key" || kept["STAKPAK_PROFILE"] != "remote" {
+		t.Fatalf("kept environment = %v; want the session's own, not the preflight's", kept)
+	}
+	// A lookup that passes no environment still uses the session's own.
+	if exists, err := p.NativeConversationExists(ctx, ports.SessionRef{ID: "ao-1", WorkspacePath: ws}, nativeA, nil); err != nil || !exists {
+		t.Fatalf("check without an environment after a preflight = %t, %v; want the session's own store", exists, err)
 	}
 }
