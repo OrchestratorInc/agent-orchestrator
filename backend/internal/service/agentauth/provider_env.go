@@ -50,6 +50,9 @@ var providerEnvironment = map[string][]LoginMethod{
 	"hermes":       {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}},
 	"openhands":    {{"env_LLM_API_KEY", "OpenHands LLM API key", true}},
 	"stakpak":      {{"env_STAKPAK_API_KEY", "Stakpak API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}},
+	// MiniMax Code reads these as credentials (minimaxcode authCredentialEnvNames);
+	// its account login stays the visible terminal /login.
+	"minimax-code": {{"env_MINIMAX_API_KEY", "MiniMax API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}},
 }
 
 func environmentMethod(agentID, method string) (string, bool) {

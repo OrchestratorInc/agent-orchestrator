@@ -71,10 +71,12 @@ const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // a few times before the panel reports it did not take.
 const AUTH_VERIFY_ATTEMPTS = 4;
 const AUTH_VERIFY_RETRY_MS = 1_500;
+// Harnesses whose auth probe reports stored credentials as "configured", never "authorized".
+const LOCALLY_CONFIRMED_AUTH_AGENTS = new Set(["mimo-code", "minimax-code"]);
 
 function authWorkflowSucceeded(workflow: AuthTerminalWorkflow, status: string | undefined): boolean {
 	if (workflow.action === "logout") return status === "unauthorized";
-	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || workflow.agentId === "mimo-code" || workflow.agentId === "claude-code"));
+	return status === "authorized" || (status === "configured" && (workflow.action === "setup" || LOCALLY_CONFIRMED_AUTH_AGENTS.has(workflow.agentId) || workflow.agentId === "claude-code"));
 }
 
 type AgentAuthStates = Partial<Record<AgentId, AgentAuthState>>;
