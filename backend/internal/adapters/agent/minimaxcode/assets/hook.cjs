@@ -56,6 +56,15 @@ try {
       // Reporting failures must not block native prompt submission.
     }
   };
+  // Standing context is delivered once per launch, but a prompt another hook
+  // or the runtime refuses never starts a turn. Its context stays pending
+  // until a turn event confirms the prompt was admitted.
+  const emitted=path.join(launchDir,'standing-context.emitted');
+  const pending=path.join(launchDir,'standing-context.pending');
+  if(event!=='SessionStart' && event!=='UserPromptSubmit') {
+    // Confirmation is best effort: a failure only repeats the context later.
+    try { if(fs.lstatSync(pending).isFile()) fs.renameSync(pending,emitted); } catch {}
+  }
   if(event==='UserPromptSubmit') {
     const file=path.join(launchDir,'standing.txt');
     let context;
@@ -68,30 +77,29 @@ try {
     }
     if(Buffer.byteLength(context,'utf8')>512*1024){refuse('AO MiniMax private instructions exceed the supported context limit.');process.exit(0);}
     if(context) {
-      // Native prompt context can become history. Emit it only for the first
-      // root submission of this launch; restore prepares a fresh launch dir.
-      const emitted=path.join(launchDir,'standing-context.emitted');
-      let claim;
-      try {
-        claim=fs.openSync(emitted,'wx',0o600);
-      } catch(error) {
-        if(error.code==='EEXIST' && fs.lstatSync(emitted).isFile()) { reportActivity(); process.exit(0); }
-        throw error;
+      // Native prompt context can become history. Emit it until an admitted
+      // prompt carried it in this launch; restore prepares a fresh launch dir.
+      let marker=null;
+      try { marker=fs.lstatSync(emitted); } catch(error) { if(error.code!=='ENOENT') throw error; }
+      if(marker) {
+        if(!marker.isFile()) throw new Error('invalid standing context marker');
+        reportActivity(); process.exit(0);
       }
-      fs.closeSync(claim);
+      const clearPending=()=>{ try { fs.unlinkSync(pending); } catch {} };
+      fs.writeFileSync(pending,'',{mode:0o600});
       try {
         process.stdout.write(JSON.stringify({hookSpecificOutput:{hookEventName:'UserPromptSubmit',additionalContext:context}})+'\n',(error)=>{
           if(error) {
-            fs.unlinkSync(emitted);
+            clearPending();
             refuse('AO MiniMax private instructions could not be delivered.');
             return;
           }
           // Submit activity carries semantic acceptance. Publish it only after
-          // all refusal checks and the first context write have succeeded.
+          // all refusal checks and the context write have succeeded.
           reportActivity();
         });
       } catch(error) {
-        fs.unlinkSync(emitted);
+        clearPending();
         throw error;
       }
     } else { reportActivity(); }

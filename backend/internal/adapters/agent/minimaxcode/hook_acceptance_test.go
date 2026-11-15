@@ -49,7 +49,9 @@ child.spawnSync=(binary,args,options)=>{
 	if err := os.WriteFile(preload, []byte(fixture), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"valid", "large", "repeated", "empty", "missing", "oversized", "directory", "unreadable", "write-error", "write-callback-error", "missing-after-first"} {
+	// "repeated" and "missing-after-first" confirm the first prompt with a turn
+	// event; "unconfirmed" does not, as when another hook refused that prompt.
+	for _, mode := range []string{"valid", "large", "repeated", "unconfirmed", "empty", "missing", "oversized", "directory", "unreadable", "write-error", "write-callback-error", "missing-after-first"} {
 		t.Run(mode, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), "prompt.txt")
 			if err := os.WriteFile(file, []byte("private standing context"), 0o600); err != nil {
@@ -92,19 +94,14 @@ child.spawnSync=(binary,args,options)=>{
 				}
 			}
 			turns := 1
-			if mode == "repeated" || mode == "missing-after-first" {
+			if mode == "repeated" || mode == "unconfirmed" || mode == "missing-after-first" {
 				turns = 2
 			}
-			for turn := range turns {
-				if mode == "missing-after-first" && turn == 1 {
-					if err := os.Remove(standing); err != nil {
-						t.Fatal(err)
-					}
-				}
-				reportFile := filepath.Join(t.TempDir(), "report.jsonl")
+			hook := func(event, reportFile string) []byte {
+				t.Helper()
 				cmd := exec.Command(node, "--require", preload, filepath.Join(profile, "plugins", "ao-activity", "hook.cjs"), hookLaunchArgument(profile, "current"))
 				cmd.Env = append(os.Environ(), "FIXTURE_MODE="+mode, "FIXTURE_REPORT="+reportFile)
-				payload, err := json.Marshal(map[string]string{"hook_event_name": "UserPromptSubmit", "session_id": nativeID, "prompt": prompt})
+				payload, err := json.Marshal(map[string]string{"hook_event_name": event, "session_id": nativeID, "prompt": prompt})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -113,13 +110,29 @@ child.spawnSync=(binary,args,options)=>{
 				if err != nil {
 					t.Fatal(err)
 				}
+				return output
+			}
+			for turn := range turns {
+				if turn == 1 && mode != "unconfirmed" {
+					// The admitted first prompt's turn ends.
+					if output := hook("Stop", filepath.Join(t.TempDir(), "stop.jsonl")); len(output) != 0 {
+						t.Fatalf("turn event refused: %s", output)
+					}
+				}
+				if mode == "missing-after-first" && turn == 1 {
+					if err := os.Remove(standing); err != nil {
+						t.Fatal(err)
+					}
+				}
+				reportFile := filepath.Join(t.TempDir(), "report.jsonl")
+				output := hook("UserPromptSubmit", reportFile)
 				var decision map[string]any
 				if len(output) != 0 {
 					if err := json.Unmarshal(output, &decision); err != nil {
 						t.Fatalf("invalid hook output %q: %v", output, err)
 					}
 				}
-				accepted := mode == "valid" || mode == "large" || mode == "repeated" || mode == "empty" || mode == "missing-after-first" && turn == 0
+				accepted := mode == "valid" || mode == "large" || mode == "repeated" || mode == "unconfirmed" || mode == "empty" || mode == "missing-after-first" && turn == 0
 				report, err := os.ReadFile(reportFile)
 				if err != nil && !errors.Is(err, os.ErrNotExist) {
 					t.Fatal(err)
@@ -138,7 +151,9 @@ child.spawnSync=(binary,args,options)=>{
 				if err := json.Unmarshal(report, &signal); err != nil {
 					t.Fatalf("expected exactly one acceptance report: %q, %v", report, err)
 				}
-				wantContext := turn == 0 && mode != "empty"
+				// An unconfirmed prompt may have been refused, so the next one
+				// carries the standing context again rather than losing it.
+				wantContext := (turn == 0 || mode == "unconfirmed") && mode != "empty"
 				if strings.Join(signal.Args, "/") != "hooks/minimax-code/user-prompt-submit" || signal.Prompt != prompt || signal.ContextFlushed != wantContext || decision["continue"] != nil {
 					t.Fatalf("incorrect acceptance ordering: report=%s output=%s", report, output)
 				}

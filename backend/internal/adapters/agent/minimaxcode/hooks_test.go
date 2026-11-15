@@ -335,6 +335,14 @@ child.spawnSync=(...args)=>{
 	if err != nil || info.Mode().Perm() != 0600 {
 		t.Fatalf("private snapshot permissions: %v %v", info, err)
 	}
+	// Until a turn event confirms the prompt was admitted, another hook may
+	// have refused it, so the next prompt carries the context again.
+	if value := run("restored", "UserPromptSubmit", id, "0"); value["hookSpecificOutput"] == nil {
+		t.Fatalf("unconfirmed prompt consumed the standing context: %+v", value)
+	}
+	if value := run("restored", "Stop", id, "0"); len(value) != 0 {
+		t.Fatalf("turn event refused: %+v", value)
+	}
 	if value := run("restored", "UserPromptSubmit", id, "0"); len(value) != 0 {
 		t.Fatalf("repeated prompt re-injected standing context: %+v", value)
 	}
@@ -346,7 +354,7 @@ child.spawnSync=(...args)=>{
 	}
 	for _, status := range []string{"1", "missing", "timeout", "throw"} {
 		// Exercise independent first-delivery attempts for each reporting failure.
-		if err := os.Remove(filepath.Join(profile, "launches", "restored", "standing-context.emitted")); err != nil {
+		if err := os.Remove(filepath.Join(profile, "launches", "restored", "standing-context.emitted")); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
 		value := run("restored", "UserPromptSubmit", id, status)
@@ -356,14 +364,26 @@ child.spawnSync=(...args)=>{
 		}
 	}
 	marker := filepath.Join(profile, "launches", "restored", "standing-context.emitted")
-	if err := os.Remove(marker); err != nil {
-		t.Fatal(err)
+	pending := filepath.Join(profile, "launches", "restored", "standing-context.pending")
+	for _, path := range []string{marker, pending} {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
 	}
 	if value := run("restored", "UserPromptSubmit", id, "context-write-error"); value["continue"] != false {
 		t.Fatalf("failed context output was not refused: %+v", value)
 	}
+	for _, path := range []string{marker, pending} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("failed context output left %s: %v", filepath.Base(path), err)
+		}
+	}
+	// A turn event without delivered context must not mark it delivered.
+	if value := run("restored", "Stop", id, "0"); len(value) != 0 {
+		t.Fatalf("turn event refused: %+v", value)
+	}
 	if _, err := os.Lstat(marker); !os.IsNotExist(err) {
-		t.Fatalf("failed context output consumed first delivery: %v", err)
+		t.Fatalf("turn event marked undelivered context as delivered: %v", err)
 	}
 	if value := run("restored", "UserPromptSubmit", id, "0"); value["hookSpecificOutput"] == nil {
 		t.Fatalf("first context delivery could not retry: %+v", value)
@@ -396,6 +416,9 @@ child.spawnSync=(...args)=>{
 	output, ok = value["hookSpecificOutput"].(map[string]any)
 	if !ok || output["additionalContext"] != "LATEST_RESTORE_CONTEXT" {
 		t.Fatalf("new launch did not refresh first-prompt context: %+v", value)
+	}
+	if value := run("latest-restore", "PreToolUse", id, "0"); len(value) != 0 {
+		t.Fatalf("turn event refused: %+v", value)
 	}
 	if value := run("latest-restore", "UserPromptSubmit", id, "0"); len(value) != 0 {
 		t.Fatalf("restored launch repeated standing context: %+v", value)
