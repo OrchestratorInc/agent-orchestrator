@@ -16,6 +16,11 @@ export type FillTarget = {
   projectId: string;
   /** The top-level page URL, read live. */
   pageURL: () => string;
+  /**
+   * The tab and document now shown (`<tab>:<document generation>`). It changes
+   * only when the document is replaced, not on an in-page URL change.
+   */
+  documentKey: () => string;
   pageTitle?: () => string;
   /** The command's cancellation; a late approval must not type anything. */
   signal?: AbortSignal;
@@ -126,8 +131,9 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
   const now = options.now ?? Date.now;
   const redactors = new Map<string, Redactor>();
   // Text redaction cannot reach pixels: while a 2FA code typed into a visible
-  // text field may still be on the page, agent screenshots are refused.
-  const codesOnScreen = new Map<string, { url: string; until: number }>();
+  // text field may still be on its document, agent screenshots of that
+  // document are refused. Keyed by session, then by `<tab>:<document>`.
+  const codesOnScreen = new Map<string, Map<string, number>>();
   const redactorFor = (sessionId: string) => {
     let redactor = redactors.get(sessionId);
     if (!redactor) redactors.set(sessionId, (redactor = createRedactor()));
@@ -257,7 +263,9 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
     ensureLive();
     await target.cdp.sendCommand("Input.insertText", { text: secret });
     if (field === "totp" && probe.type !== "password") {
-      codesOnScreen.set(target.sessionId, { url: target.pageURL(), until: now() + CODE_ON_SCREEN_MS });
+      const shown = codesOnScreen.get(target.sessionId) ?? new Map<string, number>();
+      shown.set(target.documentKey(), now() + CODE_ON_SCREEN_MS);
+      codesOnScreen.set(target.sessionId, shown);
     }
     return origin;
   };
@@ -391,14 +399,16 @@ export function createCredentialFiller(options: { store: VaultStore; now?: () =>
       });
     },
 
-    /** Why an agent screenshot of this session must wait, if it must. */
-    screenshotBlocked(sessionId: string, pageURL: string): string | undefined {
+    /**
+     * Why an agent screenshot of this document must wait, if it must. Only
+     * expiry ends protection early; a replaced document has a new key.
+     */
+    screenshotBlocked(sessionId: string, documentKey: string): string | undefined {
       const shown = codesOnScreen.get(sessionId);
       if (!shown) return undefined;
-      if (shown.url !== pageURL || now() >= shown.until) {
-        codesOnScreen.delete(sessionId);
-        return undefined;
-      }
+      for (const [key, until] of shown) if (now() >= until) shown.delete(key);
+      if (!shown.size) codesOnScreen.delete(sessionId);
+      if (!shown.has(documentKey)) return undefined;
       return "A 2FA code Orchestrator typed is on screen, so screenshots are paused. Submit the form (or wait for the code to expire) and try again.";
     },
 

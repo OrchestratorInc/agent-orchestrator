@@ -6932,7 +6932,7 @@ describe("browser view host credential fills", () => {
 		await page.host.execute("sess-1", "tabs");
 		page.setCurrentURL(`${ORIGIN}/2fa`);
 		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
-		expect(screenshotBlocked).toHaveBeenCalledWith("sess-1", `${ORIGIN}/2fa`);
+		expect(screenshotBlocked).toHaveBeenCalledWith("sess-1", expect.stringMatching(/^.+:\d+$/));
 		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
 	});
 

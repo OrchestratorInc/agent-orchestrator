@@ -107,7 +107,7 @@ describe("credential filler", () => {
 
   const target = (frames: FakeFrame[], pageURL = frames[0].url): FillTarget & ReturnType<typeof fakeCdp> => {
     const fake = fakeCdp(frames);
-    return { ...fake, sessionId: "s1", projectId: "proj", pageURL: () => pageURL, approvedOrigin: ORIGIN };
+    return { ...fake, sessionId: "s1", projectId: "proj", pageURL: () => pageURL, documentKey: () => "tab1:0", approvedOrigin: ORIGIN };
   };
 
   it("types the password into the focused field and returns only a mask", async () => {
@@ -239,28 +239,37 @@ describe("credential filler", () => {
     expect(t.inserted).toEqual([]);
   });
 
-  it("blocks agent screenshots while a typed 2FA code is on screen", async () => {
+  it("blocks agent screenshots of the document showing a typed 2FA code", async () => {
     let now = 1_000_000;
     let url = `${ORIGIN}/2fa`;
+    const document = "tab1:3";
     const filler = createCredentialFiller({ store, now: () => now });
-    const t = { ...target([{ id: "top", url, focused: { tag: "INPUT", type: "text" } }]), pageURL: () => url };
+    const t = {
+      ...target([{ id: "top", url, focused: { tag: "INPUT", type: "text" } }]),
+      pageURL: () => url,
+      documentKey: () => document,
+    };
     await filler.fillSecret(t, { itemId, field: "totp" });
-    expect(filler.screenshotBlocked("s1", url)).toMatch(/2FA code/);
-    expect(filler.screenshotBlocked("other", url)).toBeUndefined();
-    // Submitting the form moves the page on; the code is gone from view.
-    expect(filler.screenshotBlocked("s1", `${ORIGIN}/welcome`)).toBeUndefined();
-    expect(filler.screenshotBlocked("s1", url)).toBeUndefined();
-    // Or the code expires.
-    await filler.fillSecret(t, { itemId, field: "totp" });
+    expect(filler.screenshotBlocked("s1", "tab1:3")).toMatch(/2FA code/);
+    expect(filler.screenshotBlocked("other", "tab1:3")).toBeUndefined();
+    // An in-page URL change (#fragment) keeps the same document and the code.
+    url = `${ORIGIN}/2fa#step2`;
+    expect(filler.screenshotBlocked("s1", "tab1:3")).toMatch(/2FA code/);
+    // A screenshot of another tab is allowed and does not clear the protection.
+    expect(filler.screenshotBlocked("s1", "tab2:0")).toBeUndefined();
+    expect(filler.screenshotBlocked("s1", "tab1:3")).toMatch(/2FA code/);
+    // A replaced document (form submitted) no longer shows the code.
+    expect(filler.screenshotBlocked("s1", "tab1:4")).toBeUndefined();
+    // And the protection ends when the code expires.
     now += 91_000;
-    expect(filler.screenshotBlocked("s1", url)).toBeUndefined();
+    expect(filler.screenshotBlocked("s1", "tab1:3")).toBeUndefined();
   });
 
   it("does not block screenshots for masked password fields", async () => {
     const filler = createCredentialFiller({ store });
     const t = target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]);
     await filler.fillSecret(t, { itemId, field: "password" });
-    expect(filler.screenshotBlocked("s1", `${ORIGIN}/login`)).toBeUndefined();
+    expect(filler.screenshotBlocked("s1", "tab1:0")).toBeUndefined();
   });
 
   it("refuses a project the item is not allowed in", async () => {

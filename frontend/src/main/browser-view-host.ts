@@ -4986,9 +4986,10 @@ export function createBrowserViewHost(
             return devtoolsAction(session, operation);
           }
           case "screenshot": {
+            const shownEntry = activeEntry(session);
             const codeOnScreen = options.credentialFiller?.screenshotBlocked(
               sessionId,
-              activeEntry(session).view.webContents.getURL(),
+              `${shownEntry.tabId}:${shownEntry.documentGeneration}`,
             );
             if (codeOnScreen) throw browserError("BROWSER_SECRET_ON_SCREEN", codeOnScreen);
             if (!options.agentBrowserRuntime) {
@@ -5087,6 +5088,7 @@ export function createBrowserViewHost(
               projectId,
               pageURL: () => target.view.webContents.getURL(),
               pageTitle: () => target.view.webContents.getTitle(),
+              documentKey: () => `${target.tabId}:${target.documentGeneration}`,
               signal,
               approvedOrigin: optional("approvedOrigin"),
               requestedOrigin: optional("origin"),
