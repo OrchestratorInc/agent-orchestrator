@@ -46,7 +46,8 @@ export type RaceOutcome =
 		ok: false;
 		reason: "no-candidates" | "none-reachable" | "incompatible";
 		/** The endpoints that failed by timing out (ProbeTimeoutError), when
-		 * any did: the link to them may only be slow. Absent when none did. */
+		 * any did: the link to them may only be slow, even beside an address
+		 * that answered incompatible. Absent when none did. */
 		timedOut?: Endpoint[];
 	};
 
@@ -106,9 +107,7 @@ export async function raceEndpoints(
 			controller.abort();
 			const result: RaceOutcome = best
 				? { ok: true, endpoint: best, hostId: bestHostId }
-				: incompatible
-					? { ok: false, reason: "incompatible" }
-					: { ok: false, reason: "none-reachable", ...(timedOut.length > 0 ? { timedOut } : {}) };
+				: { ok: false, reason: incompatible ? "incompatible" : "none-reachable", ...(timedOut.length > 0 ? { timedOut } : {}) };
 			if (isDev) {
 				console.log("[race] Race finished:", result);
 			}

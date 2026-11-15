@@ -15,7 +15,7 @@ import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { noteRequestAnswered } from "./answeredRequests";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
 import { adoptHostIdentity, findHost, touchHost, updateHostEndpoints } from "./hosts";
-import { IncompatibleHostVersionError, type ProbeAnswer, ProbeTimeoutError, raceEndpoints } from "./race";
+import { IncompatibleHostVersionError, type ProbeAnswer, ProbeTimeoutError, raceEndpoints, type RaceOutcome } from "./race";
 
 function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string {
 	const hostId = typeof body.hostId === "string" ? body.hostId : "";
@@ -217,11 +217,14 @@ export type ConnectOptions = {
  * bounded by SLOW_LINK_PROBE_TIMEOUT_MS. Each answer still goes through the
  * same identity and version checks.
  */
-export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint) {
+export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint): Promise<RaceOutcome> {
 	const quick = await raceEndpoints(endpoints, hostId, probe);
 	if (quick.ok || !quick.timedOut?.length) return quick;
-	return raceEndpoints(quick.timedOut, hostId, (endpoint, signal) =>
+	const slow = await raceEndpoints(quick.timedOut, hostId, (endpoint, signal) =>
 		probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, retryTunnel: false }));
+	// Nothing compatible answered even slowly: an incompatible answer from the
+	// first race still explains it better than "unreachable".
+	return !slow.ok && quick.reason === "incompatible" ? { ok: false, reason: "incompatible" } : slow;
 }
 
 /** The production dependency set for connectHost. */

@@ -10,7 +10,7 @@ vi.mock("./hosts", () => ({
 
 import { PROBE_TIMEOUT_MS, probeEndpoint, raceWithSlowLinkRetry, SLOW_LINK_PROBE_TIMEOUT_MS } from "./connectRuntime";
 import type { Endpoint } from "./endpoints";
-import { ProbeTimeoutError, raceEndpoints } from "./race";
+import { IncompatibleHostVersionError, ProbeTimeoutError, raceEndpoints } from "./race";
 
 const lan: Endpoint = { kind: "lan", host: "192.168.1.42", port: 3011, secure: false };
 const tunnel: Endpoint = { kind: "tunnel", host: "abc.example.com", port: 443, secure: true };
@@ -62,6 +62,25 @@ describe("a slow link", () => {
 		await expect(outcome).resolves.toMatchObject({ ok: true, endpoint: tunnel, hostId: "h_paired" });
 		// The refused LAN address was asked once, not again in the slow race.
 		expect(fetchMock.mock.calls.filter(([url]) => url.includes(lan.host))).toHaveLength(1);
+	});
+
+	it("gives a slow compatible tunnel its longer try beside an incompatible LAN answer", async () => {
+		vi.useFakeTimers();
+		const tunnelAnswer = slowIdentity(4_000);
+		vi.stubGlobal("fetch", vi.fn((url: string, init?: { signal?: AbortSignal }) => url.includes(lan.host)
+			? Promise.resolve({ ok: true, json: async () => ({ hostId: "h_paired", apiVersion: 2 }) })
+			: tunnelAnswer(url, init)));
+		const outcome = raceWithSlowLinkRetry([lan, tunnel], "h_paired");
+		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + 4_000 + 300);
+		await expect(outcome).resolves.toMatchObject({ ok: true, endpoint: tunnel, hostId: "h_paired" });
+	});
+
+	it("still reports incompatible when the slow try finds nothing either", async () => {
+		const probe = vi.fn((endpoint: Endpoint) => endpoint === lan
+			? Promise.reject(new IncompatibleHostVersionError("h_paired"))
+			: Promise.reject(new ProbeTimeoutError(endpoint)));
+		await expect(raceWithSlowLinkRetry([lan, tunnel], "h_paired", probe)).resolves.toEqual({ ok: false, reason: "incompatible" });
+		expect(probe).toHaveBeenCalledTimes(3);
 	});
 
 	it("bounds a tunnel that never answers to the quick timeout plus one slow try", async () => {
