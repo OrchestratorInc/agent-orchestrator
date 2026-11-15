@@ -1035,6 +1035,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}/sidecar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                importId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Adds the uploaded conversation's sidecar folder (subagent transcripts, saved tool output) to its upload, which must exist and be the caller's. The worker places it beside the transcript, filling in the same placeholders. Uploading the transcript again clears it. */
+        put: operations["putSessionTranscriptImportSidecar"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children": {
         parameters: {
             query?: never;
@@ -8233,6 +8253,11 @@ export interface operations {
                             projectDir: string;
                             /** Format: byte */
                             transcriptGzip: string;
+                            /**
+                             * Format: byte
+                             * @description The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
+                             */
+                            sidecarGzip?: string;
                         };
                     };
                 };
@@ -8251,6 +8276,32 @@ export interface operations {
             path: {
                 orgId: components["parameters"]["OrgId"];
                 /** @description Chosen by the caller; createSession names it as transcriptImportId. */
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSessionTranscriptImportSidecar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
                 importId: string;
             };
             cookie?: never;

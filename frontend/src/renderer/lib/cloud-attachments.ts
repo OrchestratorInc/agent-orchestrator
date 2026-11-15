@@ -150,6 +150,18 @@ export async function uploadCloudTranscript(
 	if (response.status !== 204) throw new Error(errorMessage(response.body, response.status));
 }
 
+/** Upload a moving conversation's sidecar folder, a gzipped tar, to its import. */
+export async function uploadCloudTranscriptSidecar(baseUrl: string, orgId: string, importId: string, gzip: Uint8Array): Promise<void> {
+	const response = await binaryRequest({
+		baseUrl,
+		path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/transcript-imports/${encodeURIComponent(importId)}/sidecar`,
+		method: "PUT",
+		headers: { "Content-Type": "application/gzip" },
+		body: gzip,
+	}, { timeoutMs: uploadTimeoutMs(gzip.byteLength) });
+	if (response.status !== 204) throw new Error(errorMessage(response.body, response.status));
+}
+
 /** Read an attachment's bytes as a Blob of its content type. */
 export async function fetchCloudAttachment(
 	baseUrl: string,

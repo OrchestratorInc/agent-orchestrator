@@ -41,6 +41,25 @@ func (m *Manager) WriteCloudTranscript(ctx context.Context, rec domain.SessionRe
 	return nativetransfer.WriteClaudeTranscriptForCloud(ctx, w, opts, maxBytes)
 }
 
+// CloudSidecarInfo sizes the sidecar folder a move to AO Cloud would carry.
+func (m *Manager) CloudSidecarInfo(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (nativetransfer.ClaudeSidecar, error) {
+	opts, err := m.cloudTranscriptOptions(ctx, rec, project)
+	if err != nil {
+		return nativetransfer.ClaudeSidecar{}, err
+	}
+	return nativetransfer.ClaudeSidecarInfo(ctx, opts)
+}
+
+// WriteCloudSidecar writes a stopped session's sidecar folder for AO Cloud,
+// gzipped, and reports whether it has one.
+func (m *Manager) WriteCloudSidecar(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, w io.Writer, maxBytes int64) (bool, error) {
+	opts, err := m.cloudTranscriptOptions(ctx, rec, project)
+	if err != nil {
+		return false, err
+	}
+	return nativetransfer.WriteClaudeSidecarForCloud(ctx, w, opts, maxBytes)
+}
+
 func (m *Manager) cloudTranscriptOptions(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (nativetransfer.ClaudeExportOptions, error) {
 	if rec.Harness != domain.HarnessClaudeCode {
 		return nativetransfer.ClaudeExportOptions{}, ErrCloudTranscriptUnsupported

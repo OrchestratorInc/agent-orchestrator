@@ -159,6 +159,13 @@ it("moves the conversation when Orchestrator Cloud can resume it", async () => {
 	expect(useUiStore.getState().globalToast?.body).toBeFalsy();
 });
 
+it("counts the subagents that move with the conversation", async () => {
+	cloud.features = ["session.branch", "session.transcriptImport"];
+	daemon.preview = { data: { branch: "feat/x", changes: [], transcript: { bytes: 2048, subagents: 2 } } };
+	renderDialog();
+	expect(await screen.findByText("Full transcript with 2 subagents, 2 KB")).toBeTruthy();
+});
+
 it("says the conversation moved as a note when its upload fails", async () => {
 	daemon.posts = moveReplies;
 	cloud.features = ["session.branch", "session.transcriptImport"];

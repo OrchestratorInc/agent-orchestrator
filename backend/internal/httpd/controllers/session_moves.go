@@ -59,7 +59,7 @@ func (c *SessionMovesController) preview(w http.ResponseWriter, r *http.Request)
 	}
 	envelope.WriteJSON(w, http.StatusOK, MovePreviewResponse{
 		Branch: out.Branch, Changes: changes,
-		Transcript: MoveTranscriptInfo{Bytes: out.Transcript.Bytes, Unavailable: out.Transcript.Unavailable},
+		Transcript: MoveTranscriptInfo{Bytes: out.Transcript.Bytes, Subagents: out.Transcript.Subagents, Unavailable: out.Transcript.Unavailable},
 	})
 }
 
@@ -73,7 +73,7 @@ func (c *SessionMovesController) transcript(w http.ResponseWriter, r *http.Reque
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, MoveTranscriptResponse{AgentSessionID: out.AgentSessionID, TranscriptGzip: out.Gzip})
+	envelope.WriteJSON(w, http.StatusOK, MoveTranscriptResponse{AgentSessionID: out.AgentSessionID, TranscriptGzip: out.Gzip, SidecarGzip: out.SidecarGzip})
 }
 
 // moveChangeStatus names git's diff status letter.
@@ -126,7 +126,7 @@ func (c *SessionMovesController) importMove(w http.ResponseWriter, r *http.Reque
 		ProjectID: domain.ProjectID(in.ProjectID), MoveID: in.MoveID, Manifest: in.Manifest, HandoffNote: in.HandoffNote,
 	}
 	if t := in.Transcript; t != nil {
-		input.Transcript = &sessionsvc.MoveImportTranscript{AgentSessionID: t.AgentSessionID, ProjectDir: t.ProjectDir, Gzip: t.TranscriptGzip}
+		input.Transcript = &sessionsvc.MoveImportTranscript{AgentSessionID: t.AgentSessionID, ProjectDir: t.ProjectDir, Gzip: t.TranscriptGzip, SidecarGzip: t.SidecarGzip}
 	}
 	out, err := c.Svc.ImportMove(r.Context(), input)
 	if err != nil {

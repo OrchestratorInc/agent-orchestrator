@@ -94,6 +94,8 @@ type MoveImportTranscript struct {
 	// AgentSessionID names the conversation; Gzip is its transcript.
 	AgentSessionID string
 	Gzip           []byte
+	// SidecarGzip is its sidecar folder as a gzipped tar, or nil.
+	SidecarGzip []byte
 }
 
 // MoveImportOutcome is the new session and anything that did not carry over.
@@ -170,7 +172,10 @@ type MovePreview struct {
 
 // MoveTranscriptInfo says whether a move would carry the agent's conversation.
 type MoveTranscriptInfo struct {
+	// Bytes counts the transcript and the sidecar folder that moves with it.
 	Bytes int64
+	// Subagents counts the subagent transcripts in the sidecar folder.
+	Subagents int
 	// Unavailable is why it would not: "unsupported", "not_found" or "too_large".
 	Unavailable string
 }
@@ -183,6 +188,8 @@ const CloudTranscriptMaxBytes = 64 << 20
 type cloudTranscripts interface {
 	CloudTranscriptSize(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (int64, error)
 	WriteCloudTranscript(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, w io.Writer, maxBytes int64) (string, error)
+	CloudSidecarInfo(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (nativetransfer.ClaudeSidecar, error)
+	WriteCloudSidecar(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, w io.Writer, maxBytes int64) (bool, error)
 }
 
 // PreviewMove captures the session's worktree as ExportMove would, without
@@ -295,7 +302,11 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 			return MoveImportOutcome{}, err
 		}
 		defer func() { _ = os.RemoveAll(dir) }()
-		if archive, err := writeImportArchive(ctx, dir, *t); err != nil {
+		archive, sidecarWarning, err := writeImportArchive(ctx, dir, *t)
+		if sidecarWarning != "" {
+			warnings = append(warnings, sidecarWarning)
+		}
+		if err != nil {
 			warnings = append(warnings, "The conversation could not be read, so the session starts from the handoff note: "+err.Error())
 		} else {
 			// The resumed conversation holds the task; the note is only its fallback.
@@ -457,7 +468,13 @@ func (s *Service) moveTranscriptInfo(ctx context.Context, rec domain.SessionReco
 	case size > CloudTranscriptMaxBytes:
 		return MoveTranscriptInfo{Bytes: size, Unavailable: "too_large"}
 	}
-	return MoveTranscriptInfo{Bytes: size}
+	info := MoveTranscriptInfo{Bytes: size}
+	// A sidecar folder that cannot move leaves the transcript moving alone.
+	if sidecar, err := t.CloudSidecarInfo(ctx, rec, project); err == nil && sidecar.Bytes <= CloudTranscriptMaxBytes {
+		info.Bytes += sidecar.Bytes
+		info.Subagents = sidecar.Subagents
+	}
+	return info
 }
 
 // MoveTranscript is a stopped session's conversation for AO Cloud.
@@ -466,6 +483,9 @@ type MoveTranscript struct {
 	// Gzip is the transcript, gzipped, with this machine's paths replaced by
 	// the placeholders AO Cloud's worker fills in.
 	Gzip []byte
+	// SidecarGzip is the sidecar folder as a gzipped tar, paths replaced the
+	// same way; nil when there is none or it is over the limit.
+	SidecarGzip []byte
 }
 
 // MoveTranscript returns a stopped session's agent conversation for a move to
@@ -493,42 +513,57 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 	case err != nil:
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNAVAILABLE", "The agent's conversation could not be read.", map[string]any{"detail": err.Error()})
 	}
-	return MoveTranscript{AgentSessionID: nativeID, Gzip: buf.Bytes()}, nil
+	out := MoveTranscript{AgentSessionID: nativeID, Gzip: buf.Bytes()}
+	var sidecar bytes.Buffer
+	if ok, err := t.WriteCloudSidecar(ctx, rec, project, &sidecar, CloudTranscriptMaxBytes); err != nil {
+		s.logger.WarnContext(ctx, "move: sidecar folder stays behind", "session", id, "err", err)
+	} else if ok {
+		out.SidecarGzip = sidecar.Bytes()
+	}
+	return out, nil
 }
 
-// writeImportArchive unzips a transcript from AO Cloud into dir and writes the
-// archive the spawn places it from.
-func writeImportArchive(ctx context.Context, dir string, t MoveImportTranscript) (string, error) {
+// writeImportArchive unzips a transcript from AO Cloud, and its sidecar
+// folder, into dir and writes the archive the spawn places it from. A sidecar
+// that cannot be read is left out and described in the warning.
+func writeImportArchive(ctx context.Context, dir string, t MoveImportTranscript) (archive, warning string, err error) {
 	zr, err := gzip.NewReader(bytes.NewReader(t.Gzip))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	transcript := filepath.Join(dir, t.AgentSessionID+".jsonl")
 	if filepath.Base(transcript) != t.AgentSessionID+".jsonl" {
-		return "", fmt.Errorf("invalid conversation id %q", t.AgentSessionID)
+		return "", "", fmt.Errorf("invalid conversation id %q", t.AgentSessionID)
 	}
 	f, err := os.OpenFile(transcript, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	n, err := io.Copy(f, io.LimitReader(zr, CloudTranscriptMaxBytes+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if n > CloudTranscriptMaxBytes {
-		return "", nativetransfer.ErrTooLarge
+		return "", "", nativetransfer.ErrTooLarge
 	}
-	archive := filepath.Join(dir, "conversation.tgz")
+	if len(t.SidecarGzip) > 0 {
+		sidecar := filepath.Join(dir, t.AgentSessionID)
+		if err := nativetransfer.ExtractClaudeSidecar(bytes.NewReader(t.SidecarGzip), sidecar, CloudTranscriptMaxBytes); err != nil {
+			_ = os.RemoveAll(sidecar)
+			warning = "Subagent transcripts and saved tool output stayed in Orchestrator Cloud: " + err.Error()
+		}
+	}
+	archive = filepath.Join(dir, "conversation.tgz")
 	out, err := os.OpenFile(archive, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return "", err
+		return "", warning, err
 	}
 	_, err = nativetransfer.WriteClaudeArchiveFromCloud(ctx, out, transcript, t.ProjectDir)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
-	return archive, err
+	return archive, warning, err
 }

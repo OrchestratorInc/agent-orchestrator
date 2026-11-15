@@ -5172,6 +5172,8 @@
 	"move.cloudProject": "Cloud project",
 	"move.conversation": "Conversation",
 	"move.conversationTranscript": "Full transcript, {{size}}",
+	"move.conversationTranscriptSubagents_one": "Full transcript with {{count}} subagent, {{size}}",
+	"move.conversationTranscriptSubagents_other": "Full transcript with {{count}} subagents, {{size}}",
 	"move.conversationNote": "Summary note",
 	"move.conversationTooLarge": "Summary note: the transcript is over 64 MiB",
 	"move.doneNote": "The conversation moved as a summary note.",

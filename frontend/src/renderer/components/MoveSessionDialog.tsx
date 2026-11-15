@@ -7,7 +7,7 @@ import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
-import { uploadCloudTranscript } from "../lib/cloud-attachments";
+import { uploadCloudTranscript, uploadCloudTranscriptSidecar } from "../lib/cloud-attachments";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
@@ -142,7 +142,10 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 					onStep: setStep,
 					cloudRequest,
 					...(carriesTranscript
-						? { uploadTranscript: (importId: string, agentSessionId: string, gzip: Uint8Array) => uploadCloudTranscript(cloudBaseUrl, target.orgId, importId, agentSessionId, gzip) }
+						? {
+							uploadTranscript: (importId: string, agentSessionId: string, gzip: Uint8Array) => uploadCloudTranscript(cloudBaseUrl, target.orgId, importId, agentSessionId, gzip),
+							uploadTranscriptSidecar: (importId: string, gzip: Uint8Array) => uploadCloudTranscriptSidecar(cloudBaseUrl, target.orgId, importId, gzip),
+						}
 						: {}),
 				},
 			);
@@ -209,7 +212,9 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 									<dt className="text-settings-muted">{t("move.conversation")}</dt>
 									<dd className="text-settings-label">
 										{carriesTranscript && transcript
-											? t("move.conversationTranscript", { size: formatBytes(transcript.bytes) })
+											? transcript.subagents
+												? t("move.conversationTranscriptSubagents", { count: transcript.subagents, size: formatBytes(transcript.bytes) })
+												: t("move.conversationTranscript", { size: formatBytes(transcript.bytes) })
 											: transcript?.unavailable === "too_large"
 												? t("move.conversationTooLarge")
 												: t("move.conversationNote")}

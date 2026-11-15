@@ -5192,6 +5192,8 @@
 	"move.cloudProject": "Cloud-Projekt",
 	"move.conversation": "Unterhaltung",
 	"move.conversationTranscript": "Vollständiges Transkript, {{size}}",
+	"move.conversationTranscriptSubagents_one": "Vollständiges Transkript mit {{count}} Subagent, {{size}}",
+	"move.conversationTranscriptSubagents_other": "Vollständiges Transkript mit {{count}} Subagents, {{size}}",
 	"move.conversationNote": "Zusammenfassung",
 	"move.conversationTooLarge": "Zusammenfassung: Das Transkript ist größer als 64 MiB",
 	"move.doneNote": "Die Unterhaltung wurde als Zusammenfassung übertragen.",

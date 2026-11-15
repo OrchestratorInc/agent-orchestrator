@@ -18894,6 +18894,10 @@ components:
             Cloud; its paths and the sandbox's working directory become this machine's.
           minLength: 1
           type: string
+        sidecarGzip:
+          description: The transcript's sidecar folder as a gzipped tar, base64-encoded.
+          format: base64
+          type: string
         transcriptGzip:
           description: The transcript, gzipped and base64-encoded.
           format: base64
@@ -18906,7 +18910,12 @@ components:
     ControllersMoveTranscriptInfo:
       properties:
         bytes:
+          description: The transcript and the subagent transcripts and saved tool
+            output that move with it.
           format: int64
+          type: integer
+        subagents:
+          description: Subagent transcripts that move with the conversation.
           type: integer
         unavailable:
           description: 'Why the conversation would not move: an agent AO Cloud cannot
@@ -18922,6 +18931,12 @@ components:
     ControllersMoveTranscriptResponse:
       properties:
         agentSessionId:
+          type: string
+        sidecarGzip:
+          description: The transcript's sidecar folder (subagent transcripts, saved
+            tool output) as a gzipped tar, base64-encoded, paths replaced the same
+            way. Absent when there is none or it is over 64 MiB.
+          format: base64
           type: string
         transcriptGzip:
           description: The transcript, gzipped and base64-encoded, with this machine's

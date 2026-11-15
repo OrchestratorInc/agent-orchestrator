@@ -4790,7 +4790,8 @@ type MovePreviewResponse struct {
 // MoveTranscriptInfo says whether a move would carry the agent's conversation
 // to AO Cloud, which resumes it, or only the handoff note.
 type MoveTranscriptInfo struct {
-	Bytes       int64  `json:"bytes"`
+	Bytes       int64  `json:"bytes" description:"The transcript and the subagent transcripts and saved tool output that move with it."`
+	Subagents   int    `json:"subagents,omitempty" description:"Subagent transcripts that move with the conversation."`
 	Unavailable string `json:"unavailable,omitempty" enum:"unsupported,not_found,too_large" description:"Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB."`
 }
 
@@ -4798,6 +4799,7 @@ type MoveTranscriptInfo struct {
 type MoveTranscriptResponse struct {
 	AgentSessionID string `json:"agentSessionId"`
 	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory and Claude project folder replaced by placeholders AO Cloud's worker fills in."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB."`
 }
 
 // MoveChange is one uncommitted path a move would push.
@@ -4843,6 +4845,7 @@ type MoveImportTranscript struct {
 	AgentSessionID string `json:"agentSessionId" minLength:"1" pattern:"^[0-9a-fA-F-]{36}$"`
 	ProjectDir     string `json:"projectDir" minLength:"1" description:"The Claude project folder the transcript was in on Orchestrator Cloud; its paths and the sandbox's working directory become this machine's."`
 	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder as a gzipped tar, base64-encoded."`
 }
 
 // MoveImportResponse is the new session. Warnings list what did not carry

@@ -5192,6 +5192,8 @@
 	"move.cloudProject": "Cloud 프로젝트",
 	"move.conversation": "대화",
 	"move.conversationTranscript": "전체 대화 기록, {{size}}",
+	"move.conversationTranscriptSubagents_one": "전체 대화 기록과 하위 에이전트 {{count}}개, {{size}}",
+	"move.conversationTranscriptSubagents_other": "전체 대화 기록과 하위 에이전트 {{count}}개, {{size}}",
 	"move.conversationNote": "요약 메모",
 	"move.conversationTooLarge": "요약 메모: 대화 기록이 64MiB를 넘습니다",
 	"move.doneNote": "대화가 요약 메모로 이동되었습니다.",

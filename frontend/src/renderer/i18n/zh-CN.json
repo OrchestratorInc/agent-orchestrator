@@ -5174,6 +5174,8 @@
 	"move.cloudProject": "Cloud 项目",
 	"move.conversation": "对话",
 	"move.conversationTranscript": "完整对话记录，{{size}}",
+	"move.conversationTranscriptSubagents_one": "完整对话记录及 {{count}} 个子代理，{{size}}",
+	"move.conversationTranscriptSubagents_other": "完整对话记录及 {{count}} 个子代理，{{size}}",
 	"move.conversationNote": "摘要说明",
 	"move.conversationTooLarge": "摘要说明：对话记录超过 64 MiB",
 	"move.doneNote": "对话已以摘要说明的形式移动。",

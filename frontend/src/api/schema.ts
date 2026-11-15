@@ -6445,13 +6445,23 @@ export interface components {
             projectDir: string;
             /**
              * Format: base64
+             * @description The transcript's sidecar folder as a gzipped tar, base64-encoded.
+             */
+            sidecarGzip?: string;
+            /**
+             * Format: base64
              * @description The transcript, gzipped and base64-encoded.
              */
             transcriptGzip: string;
         };
         ControllersMoveTranscriptInfo: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The transcript and the subagent transcripts and saved tool output that move with it.
+             */
             bytes: number;
+            /** @description Subagent transcripts that move with the conversation. */
+            subagents?: number;
             /**
              * @description Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB.
              * @enum {string}
@@ -6460,6 +6470,11 @@ export interface components {
         };
         ControllersMoveTranscriptResponse: {
             agentSessionId: string;
+            /**
+             * Format: base64
+             * @description The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB.
+             */
+            sidecarGzip?: string;
             /**
              * Format: base64
              * @description The transcript, gzipped and base64-encoded, with this machine's working directory and Claude project folder replaced by placeholders AO Cloud's worker fills in.

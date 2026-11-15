@@ -1,6 +1,7 @@
 package session
 
 import (
+	"archive/tar"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +102,14 @@ func (c transcriptCommander) CloudTranscriptSize(context.Context, domain.Session
 	return c.size, c.sizeErr
 }
 
+func (c transcriptCommander) CloudSidecarInfo(context.Context, domain.SessionRecord, domain.ProjectRecord) (nativetransfer.ClaudeSidecar, error) {
+	return nativetransfer.ClaudeSidecar{}, nil
+}
+
+func (c transcriptCommander) WriteCloudSidecar(context.Context, domain.SessionRecord, domain.ProjectRecord, io.Writer, int64) (bool, error) {
+	return false, nil
+}
+
 func (c transcriptCommander) WriteCloudTranscript(_ context.Context, _ domain.SessionRecord, _ domain.ProjectRecord, w io.Writer, _ int64) (string, error) {
 	if c.writeErr != nil {
 		return "", c.writeErr
@@ -180,22 +190,41 @@ func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
 	zw := gzip.NewWriter(&gz)
 	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","sessionId":"` + id + `","version":"2.1.287","message":{"role":"user","content":"hi"}}` + "\n"))
 	_ = zw.Close()
-	transcript := MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()}
+	var sidecar bytes.Buffer
+	sw := gzip.NewWriter(&sidecar)
+	tw := tar.NewWriter(sw)
+	sub := []byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"sub"}}` + "\n")
+	_ = tw.WriteHeader(&tar.Header{Name: "subagents/agent-1.jsonl", Typeflag: tar.TypeReg, Size: int64(len(sub)), Mode: 0o600})
+	_, _ = tw.Write(sub)
+	_ = tw.Close()
+	_ = sw.Close()
+	transcript := MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes(), SidecarGzip: sidecar.Bytes()}
 
-	archive, err := writeImportArchive(context.Background(), t.TempDir(), transcript)
-	if err != nil {
-		t.Fatal(err)
+	archive, warning, err := writeImportArchive(context.Background(), t.TempDir(), transcript)
+	if err != nil || warning != "" {
+		t.Fatal(err, warning)
 	}
-	res, err := nativetransfer.ImportClaude(context.Background(), mustOpen(t, archive), nativetransfer.ClaudeImportOptions{ConfigDir: t.TempDir(), LaunchCwd: t.TempDir()})
+	cwd := t.TempDir()
+	res, err := nativetransfer.ImportClaude(context.Background(), mustOpen(t, archive), nativetransfer.ClaudeImportOptions{ConfigDir: t.TempDir(), LaunchCwd: cwd})
 	if err != nil || res.NativeID != id {
 		t.Fatalf("ImportClaude = %+v, %v", res, err)
+	}
+	placed, err := os.ReadFile(filepath.Join(filepath.Dir(res.TranscriptPath), id, "subagents", "agent-1.jsonl"))
+	if err != nil || !strings.Contains(string(placed), `"cwd":"`) || strings.Contains(string(placed), "/workspace/repository") {
+		t.Fatalf("placed subagent transcript = %q, %v", placed, err)
+	}
+
+	// A sidecar that cannot be read stays behind; the transcript still moves.
+	transcript.SidecarGzip = []byte("plain")
+	if _, warning, err := writeImportArchive(context.Background(), t.TempDir(), transcript); err != nil || !strings.Contains(warning, "stayed in Orchestrator Cloud") {
+		t.Fatalf("unreadable sidecar: warning %q, err %v", warning, err)
 	}
 
 	for name, bad := range map[string]MoveImportTranscript{
 		"not gzip":   {AgentSessionID: id, ProjectDir: transcript.ProjectDir, Gzip: []byte("plain")},
 		"id as path": {AgentSessionID: "../" + id, ProjectDir: transcript.ProjectDir, Gzip: gz.Bytes()},
 	} {
-		if _, err := writeImportArchive(context.Background(), t.TempDir(), bad); err == nil {
+		if _, _, err := writeImportArchive(context.Background(), t.TempDir(), bad); err == nil {
 			t.Errorf("%s: no error", name)
 		}
 	}

@@ -150,6 +150,20 @@ describe("moveSession", () => {
 			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: "m-5", prompt: exported.handoffNote });
 		});
 
+		it("uploads the sidecar folder after the transcript, and moves the transcript when that fails", async () => {
+			const withSidecar = { ...replies, "/api/v1/sessions/{sessionId}/move/transcript": ok({ agentSessionId: "aid-1", transcriptGzip: btoa("gz"), sidecarGzip: btoa("tar") }) };
+			const order: string[] = [];
+			const uploadTranscript = vi.fn(async () => { order.push("transcript"); });
+			const uploadTranscriptSidecar = vi.fn(async () => { order.push("sidecar"); throw new Error("over 32 MiB"); });
+			const cp = cloud();
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-9", target }, { source: fakeDaemon(withSidecar, []), cloud: cp, uploadTranscript, uploadTranscriptSidecar });
+			expect(order).toEqual(["transcript", "sidecar"]);
+			const [importId, gzip] = uploadTranscriptSidecar.mock.calls[0] as unknown as [string, Uint8Array];
+			expect([importId, Array.from(gzip)]).toEqual(["m-9", [116, 97, 114]]);
+			expect(result.conversation).toBe("transcript");
+			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: "m-9" });
+		});
+
 		it("moves the handoff note alone when the upload fails", async () => {
 			const cp = cloud();
 			const uploadTranscript = vi.fn(async () => { throw new Error("The file is larger than 32 MiB"); });

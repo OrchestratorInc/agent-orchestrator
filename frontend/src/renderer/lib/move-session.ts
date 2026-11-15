@@ -66,6 +66,8 @@ export interface MoveDeps {
 	 * handoff note.
 	 */
 	uploadTranscript?: (importId: string, agentSessionId: string, gzip: Uint8Array) => Promise<void>;
+	/** Uploads the conversation's sidecar folder (subagents, saved tool output) to the same import. */
+	uploadTranscriptSidecar?: (importId: string, gzip: Uint8Array) => Promise<void>;
 }
 
 /**
@@ -151,6 +153,11 @@ async function carryTranscript(deps: MoveDeps, path: { params: { path: { session
 		if (!transcript.data) return undefined;
 		const gzip = Uint8Array.from(atob(transcript.data.transcriptGzip), (c) => c.charCodeAt(0));
 		await deps.uploadTranscript(moveId, transcript.data.agentSessionId, gzip);
+		const sidecar = transcript.data.sidecarGzip;
+		if (sidecar && deps.uploadTranscriptSidecar) {
+			// The transcript moves even when its sidecar folder cannot.
+			await deps.uploadTranscriptSidecar(moveId, Uint8Array.from(atob(sidecar), (c) => c.charCodeAt(0))).catch(() => undefined);
+		}
 		return moveId;
 	} catch {
 		return undefined;

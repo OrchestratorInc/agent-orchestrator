@@ -265,6 +265,11 @@ check_cloud_conversation() {
 	cloud_exec 'grep -q "/ao-moved/" "$1"' "$file" && fail "placeholders left in Cloud's $file"
 	cloud_exec 'grep -qF "$2" "$1"' "$file" "$2" && fail "Cloud's $file still names this machine's $2"
 	cloud_exec 'grep -qF "\"cwd\":\"$2\"" "$1"' "$file" "$CLOUD_REPO" || fail "Cloud's $file does not run in $CLOUD_REPO"
+	local sub
+	sub="$(dirname "$file")/$1/subagents/agent-probe.jsonl"
+	cloud_exec 'grep -qF "\"cwd\":\"$2\"" "$1"' "$sub" "$CLOUD_REPO" || fail "Cloud's $sub is missing or does not run in $CLOUD_REPO"
+	cloud_exec 'grep -qF "$2" "$1"' "$sub" "$2" && fail "Cloud's $sub still names this machine's $2"
+	[[ "$(cloud_exec 'cat "$1"' "$(dirname "$file")/$1/tool-results/probe.txt")" == "probe output" ]] || fail "Cloud did not place the saved tool output"
 	for _ in $(seq 1 60); do
 		cloud_exec 'ps -eo args | grep -v grep | grep -q -- "--resume $1"' "$1" && {
 			echo "  Cloud agent resumed conversation $1 from $file"
@@ -286,6 +291,11 @@ check_local_conversation() {
 	[[ -n "$file" ]] || fail "this machine did not place conversation $1 for $wt"
 	grep -qF "\"cwd\":\"$2\"" "$file" && fail "$file still runs in the sandbox's $2"
 	grep -qF "$3" "$file" && fail "$file still names the sandbox's $3"
+	local sub
+	sub="$(dirname "$file")/$1/subagents/agent-probe.jsonl"
+	grep -qF "\"cwd\":\"$wt\"" "$sub" 2>/dev/null || fail "$sub is missing or does not run in $wt"
+	grep -qF "\"cwd\":\"$2\"" "$sub" && fail "$sub still runs in the sandbox's $2"
+	[[ "$(cat "$(dirname "$file")/$1/tool-results/probe.txt")" == "probe output" ]] || fail "this machine did not place the saved tool output"
 	for _ in $(seq 1 60); do
 		pgrep -f -- "--resume $1" >/dev/null && {
 			echo "  local agent resumed conversation $1 from $file"
@@ -294,6 +304,18 @@ check_local_conversation() {
 		sleep 1
 	done
 	fail "the local agent did not resume conversation $1"
+}
+
+# add_sidecar_probe gives conversation $1, run in worktree $2, a subagent
+# transcript and a saved tool output, as Claude Code keeps them beside it.
+add_sidecar_probe() {
+	local file dir
+	file=$(grep -lF "\"cwd\":\"$2\"" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null | head -1 || true)
+	[[ -n "$file" ]] || fail "no transcript of $1 for $2"
+	dir="$(dirname "$file")/$1"
+	mkdir -p "$dir/subagents" "$dir/tool-results"
+	printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"probe"}}\n' "$2" > "$dir/subagents/agent-probe.jsonl"
+	printf 'probe output' > "$dir/tool-results/probe.txt"
 }
 
 # local_to_cloud moves local session $1, with its agent's conversation, to a
@@ -308,12 +330,23 @@ local_to_cloud() {
 	echo "$out" | python3 -c "import json,sys; json.dump(json.load(sys.stdin), open('$W/export.json','w'))"
 	out=$(api GET "/sessions/$sid/move/transcript")
 	aid=$(echo "$out" | json "d['agentSessionId']") || { echo "$out"; fail "local transcript"; }
-	echo "$out" | python3 -c "import base64,json,sys; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)['transcriptGzip']))" > "$W/transcript.gz"
+	if [[ "$2" == 1 ]]; then
+		add_sidecar_probe "$aid" "$wt"
+		out=$(api GET "/sessions/$sid/move/transcript")
+	fi
+	echo "$out" > "$W/transcript.json"
+	python3 -c "import base64,json,sys; d=json.load(open(sys.argv[1])); open(sys.argv[2],'wb').write(base64.b64decode(d['transcriptGzip'])); open(sys.argv[3],'wb').write(base64.b64decode(d.get('sidecarGzip') or ''))" \
+		"$W/transcript.json" "$W/transcript.gz" "$W/sidecar.gz"
+	[[ -s "$W/sidecar.gz" ]] || fail "this machine's move/transcript carried no sidecar folder"
 	import=$(python3 -c 'import uuid; print(uuid.uuid4())')
 	code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
 		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=claude-code&agentSessionId=$aid" \
 		-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/transcript.gz")
 	[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "transcript upload answered $code"; }
+	code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
+		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import/sidecar" \
+		-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/sidecar.gz")
+	[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "sidecar upload answered $code"; }
 	body=$(python3 - "$W/export.json" "$CLOUD_PROJECT" "$import" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); m = d["manifest"]
