@@ -115,18 +115,20 @@ func HasFiles(ctx context.Context, dir string) (bool, error) {
 		return true, nil
 	case err == nil:
 		return false, nil
-	case errors.Is(err, fs.ErrNotExist) && !rootExists(root):
-		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		// A missing artifact directory reads as empty; a file vanishing
+		// mid-walk, or a root that cannot be checked again, stays an error.
+		_, statErr := os.Lstat(root)
+		if errors.Is(statErr, fs.ErrNotExist) {
+			return false, nil
+		}
+		if statErr != nil {
+			return false, statErr
+		}
+		return false, err
 	default:
 		return false, err
 	}
-}
-
-// rootExists reports whether root is still there, so a missing artifact
-// directory reads as empty while a file vanishing mid-walk stays an error.
-func rootExists(root string) bool {
-	_, err := os.Lstat(root)
-	return err == nil
 }
 
 // list is List, stopping after maxFiles files, that also records each file's
