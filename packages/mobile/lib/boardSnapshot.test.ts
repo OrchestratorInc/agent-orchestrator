@@ -87,6 +87,26 @@ describe("the saved board", () => {
 		expect(writes).toEqual([[boardKey("host.a"), 1], [boardKey("host.a"), 3]]);
 	});
 
+	// Switching machines inside the throttle window: the first machine's
+	// newer board is still saved, not replaced by the second's.
+	it("keeps a board waiting for each machine", async () => {
+		vi.useFakeTimers();
+		const writes: Array<[string, number]> = [];
+		const saver = createBoardSaver(async (key, text) => { writes.push([key, JSON.parse(text).notificationsUnread]); }, 15_000);
+		saver.schedule(board({ notificationsUnread: 1 }));
+		await vi.advanceTimersByTimeAsync(0);
+		saver.schedule(board({ notificationsUnread: 2 }));
+		saver.schedule(board({ machine: "host.b", notificationsUnread: 7 }));
+		await saver.flush();
+		expect(writes).toEqual([[boardKey("host.a"), 1], [boardKey("host.a"), 2], [boardKey("host.b"), 7]]);
+		// Forgetting one leaves the other's waiting save in place.
+		saver.schedule(board({ notificationsUnread: 3 }));
+		saver.schedule(board({ machine: "host.b", notificationsUnread: 8 }));
+		await saver.forget("host.a");
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(writes.slice(3)).toEqual([[boardKey("host.b"), 8]]);
+	});
+
 	// A poll inside the throttle window leaves a save waiting: forgetting the
 	// machine must not see it write the board back afterwards.
 	it("never writes a forgotten machine's board back", async () => {

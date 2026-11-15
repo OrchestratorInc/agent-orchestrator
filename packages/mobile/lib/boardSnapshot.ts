@@ -123,9 +123,13 @@ export async function loadBoard(machine: string): Promise<SavedBoard | null> {
 	}
 }
 
-/** Saves the newest board at most every `everyMs`, and at once when asked (leaving the app). */
+/**
+ * Saves each machine's newest board at most every `everyMs`, and at once when
+ * asked (leaving the app). Kept per machine: a poll of another machine inside
+ * the window never takes the place of one still waiting to be saved.
+ */
 export function createBoardSaver(write: (key: string, text: string) => Promise<void> = (key, text) => AsyncStorage.setItem(key, text), everyMs = 15_000) {
-	let pending: Omit<SavedBoard, "v"> | null = null;
+	const pending = new Map<string, Omit<SavedBoard, "v">>();
 	let lastWrite = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let chain = Promise.resolve();
@@ -134,18 +138,20 @@ export function createBoardSaver(write: (key: string, text: string) => Promise<v
 	const flush = () => {
 		clearTimeout(timer);
 		timer = undefined;
-		if (!pending) return chain;
-		const board = pending;
-		pending = null;
+		if (!pending.size) return chain;
+		const boards = [...pending.values()];
+		pending.clear();
 		lastWrite = Date.now();
-		const text = serializeBoard(board);
-		const epoch = forgotten.get(board.machine) ?? 0;
-		if (text) chain = chain.then(() => (forgotten.get(board.machine) ?? 0) === epoch ? write(boardKey(board.machine), text) : undefined).catch(() => {});
+		for (const board of boards) {
+			const text = serializeBoard(board);
+			const epoch = forgotten.get(board.machine) ?? 0;
+			if (text) chain = chain.then(() => (forgotten.get(board.machine) ?? 0) === epoch ? write(boardKey(board.machine), text) : undefined).catch(() => {});
+		}
 		return chain;
 	};
 	const saver = {
 		schedule(board: Omit<SavedBoard, "v">) {
-			pending = board;
+			pending.set(board.machine, board);
 			if (timer) return;
 			timer = setTimeout(() => void flush(), Math.max(0, lastWrite + everyMs - Date.now()));
 		},
@@ -153,8 +159,7 @@ export function createBoardSaver(write: (key: string, text: string) => Promise<v
 		/** Drops what is waiting to be saved for `machine`; resolves once a write already running is done. */
 		forget(machine: string) {
 			forgotten.set(machine, (forgotten.get(machine) ?? 0) + 1);
-			if (pending?.machine === machine) {
-				pending = null;
+			if (pending.delete(machine) && !pending.size) {
 				clearTimeout(timer);
 				timer = undefined;
 			}
