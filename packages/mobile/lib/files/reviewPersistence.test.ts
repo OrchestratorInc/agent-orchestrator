@@ -3,16 +3,42 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const store = vi.hoisted(() => ({
 	items: new Map<string, string>(),
 	pendingRead: null as null | { resolve(value: string | null): void },
+	/** How many of the next writes fail. */
+	failWrites: 0,
+	writes: 0,
 }));
-vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
-	// The first read waits until the test lets it answer.
-	getItem: (key: string) => new Promise<string | null>((resolve) => {
-		store.pendingRead = { resolve: (value) => resolve(value ?? store.items.get(key) ?? null) };
-	}),
-	setItem: async (key: string, value: string) => { store.items.set(key, value); },
-	removeItem: async (key: string) => { store.items.delete(key); },
+const appState = vi.hoisted(() => ({
+	currentState: "active",
+	listeners: [] as Array<(state: string) => void>,
+	set(state: string) {
+		this.currentState = state;
+		for (const listener of this.listeners) listener(state);
+	},
+}));
+vi.mock("@react-native-async-storage/async-storage", () => {
+	const failing = () => {
+		store.writes++;
+		if (store.failWrites > 0) {
+			store.failWrites--;
+			throw new Error("storage full");
+		}
+	};
+	return { default: {
+		// The first read waits until the test lets it answer.
+		getItem: (key: string) => new Promise<string | null>((resolve) => {
+			store.pendingRead = { resolve: (value) => resolve(value ?? store.items.get(key) ?? null) };
+		}),
+		setItem: async (key: string, value: string) => { failing(); store.items.set(key, value); },
+		removeItem: async (key: string) => { failing(); store.items.delete(key); },
+	} };
+});
+vi.mock("react-native", () => ({ AppState: {
+	get currentState() { return appState.currentState; },
+	addEventListener: (_: string, listener: (state: string) => void) => {
+		appState.listeners.push(listener);
+		return { remove: () => {} };
+	},
 } }));
-vi.mock("react-native", () => ({ AppState: { addEventListener: () => ({ remove: () => {} }) } }));
 
 const target = { path: "a.ts", side: "new" as const, line: 3 };
 
@@ -21,6 +47,10 @@ beforeEach(() => {
 	vi.useFakeTimers();
 	store.items.clear();
 	store.pendingRead = null;
+	store.failWrites = 0;
+	store.writes = 0;
+	appState.currentState = "active";
+	appState.listeners = [];
 });
 afterEach(() => vi.useRealTimers());
 
@@ -94,5 +124,76 @@ describe("saving review comments", () => {
 		await started;
 		await vi.advanceTimersByTimeAsync(1_000);
 		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(false);
+	});
+
+	// Left during the read, before anything listened for leaving: no delay, the
+	// phone may close the app before a timer would fire.
+	it("writes a comment made during the read at once when the read lands with the app in the background", async () => {
+		const { REVIEWS_STORAGE_KEY, startReviewPersistence } = await import("./reviewPersistence");
+		const { addReviewComment, reviewKey } = await import("./reviewStore");
+		const started = startReviewPersistence();
+		addReviewComment(reviewKey("host", "s1"), { label: "x", feedback: "written at launch", target });
+		appState.currentState = "background";
+		store.pendingRead!.resolve(null);
+		await started;
+		// Settles promises only: no timer is allowed to run.
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(true);
+	});
+
+	it("keeps a save that failed and tries it again", async () => {
+		const { REVIEWS_STORAGE_KEY, startReviewPersistence } = await import("./reviewPersistence");
+		const { addReviewComment, reviewKey } = await import("./reviewStore");
+		const started = startReviewPersistence();
+		store.pendingRead!.resolve(null);
+		await started;
+		store.failWrites = 1;
+		addReviewComment(reviewKey("host", "s1"), { label: "x", feedback: "kept", target });
+		await vi.advanceTimersByTimeAsync(300);
+		expect(store.writes).toBe(1);
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(false);
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(store.writes).toBe(2);
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(true);
+	});
+
+	it("writes a save that kept failing again when the app leaves the foreground", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const { REVIEWS_STORAGE_KEY, startReviewPersistence } = await import("./reviewPersistence");
+		const { addReviewComment, reviewKey } = await import("./reviewStore");
+		const started = startReviewPersistence();
+		store.pendingRead!.resolve(null);
+		await started;
+		store.failWrites = 4;
+		addReviewComment(reviewKey("host", "s1"), { label: "x", feedback: "kept", target });
+		await vi.advanceTimersByTimeAsync(60_000);
+		// The first try and three retries, then reported and no more timers.
+		expect(store.writes).toBe(4);
+		expect(warn).toHaveBeenCalled();
+		appState.set("background");
+		await vi.advanceTimersByTimeAsync(0);
+		expect(store.writes).toBe(5);
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(true);
+		warn.mockRestore();
+	});
+
+	it("flushes a waiting change, and resolves only once it is on the phone", async () => {
+		const { REVIEWS_STORAGE_KEY, flushReviewPersistence, startReviewPersistence } = await import("./reviewPersistence");
+		const { addReviewComment, forgetHostReviews, reviewKey } = await import("./reviewStore");
+		const started = startReviewPersistence();
+		store.pendingRead!.resolve(null);
+		await started;
+		addReviewComment(reviewKey("host", "s1"), { label: "x", feedback: "a", target });
+		await flushReviewPersistence();
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(true);
+		forgetHostReviews("host");
+		await flushReviewPersistence();
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(false);
+		// A flush whose write fails says so, and the next one writes it.
+		addReviewComment(reviewKey("host", "s2"), { label: "x", feedback: "b", target });
+		store.failWrites = 1;
+		await expect(flushReviewPersistence()).rejects.toThrow("storage full");
+		await flushReviewPersistence();
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(true);
 	});
 });

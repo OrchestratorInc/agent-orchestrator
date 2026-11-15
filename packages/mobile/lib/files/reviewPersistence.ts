@@ -8,8 +8,59 @@ import { beginRestoringReviews, finishRestoringReviews, onReviewsChanged, restor
 
 export const REVIEWS_STORAGE_KEY = "ao.review.comments.v1";
 const WRITE_DELAY_MS = 300;
+/** A save that fails is tried again this many times, each after twice the wait of the last. */
+const WRITE_RETRIES = 3;
 
 let started = false;
+let loaded = false;
+// A change not yet on the phone: a save waiting, or one that failed.
+let dirty = false;
+let failures = 0;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let writing: Promise<void> = Promise.resolve();
+
+function schedule(delayMs = WRITE_DELAY_MS) {
+	dirty = true;
+	clearTimeout(timer);
+	timer = setTimeout(() => void write().catch(() => {}), delayMs);
+}
+
+/** Writes what is in memory now, after the writes before it; rejects if it did not reach the phone. */
+function write(): Promise<void> {
+	clearTimeout(timer);
+	timer = undefined;
+	dirty = false;
+	const snapshot = storedReviews();
+	// One write at a time, in order, so an older snapshot never lands last.
+	const result = writing.then(() => snapshot.reviews.length
+		? AsyncStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(snapshot))
+		: AsyncStorage.removeItem(REVIEWS_STORAGE_KEY));
+	writing = result.then(
+		() => { failures = 0; },
+		(error: unknown) => {
+			// Still not on the phone: kept to save again, unless a newer change
+			// already will. Tried again shortly a few times, then on leaving the app.
+			if (dirty) return;
+			dirty = true;
+			failures++;
+			if (failures <= WRITE_RETRIES) schedule(WRITE_DELAY_MS * 2 ** failures);
+			else console.warn("[reviews] saving review comments keeps failing", error);
+		},
+	);
+	return result;
+}
+
+/**
+ * Writes a change still waiting (or a save that failed) now and resolves once
+ * every save started so far is done; rejects if what is in memory still did
+ * not reach the phone. Before the saved reviews were read back there is
+ * nothing to write yet: a change made meanwhile is written when that read lands.
+ */
+export async function flushReviewPersistence(): Promise<void> {
+	if (!loaded) return;
+	if (timer || dirty) return write();
+	await writing;
+}
 
 /** Restores saved reviews, then saves every change. Once per app launch. */
 export async function startReviewPersistence(): Promise<void> {
@@ -18,15 +69,8 @@ export async function startReviewPersistence(): Promise<void> {
 	// Listening starts before the saved reviews are read: a comment written
 	// while that read is pending is saved once it lands. Not before: a write
 	// then would replace the saved reviews with the new comment alone.
-	let loaded = false;
 	let changedWhileLoading = false;
 	let restoring = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let writing = Promise.resolve();
-	const schedule = () => {
-		clearTimeout(timer);
-		timer = setTimeout(write, WRITE_DELAY_MS);
-	};
 	onReviewsChanged(() => {
 		if (restoring) return;
 		if (loaded) schedule();
@@ -44,19 +88,15 @@ export async function startReviewPersistence(): Promise<void> {
 		restoring = false;
 		loaded = true;
 	}
-	// What was written meanwhile, with the restored reviews before it.
-	if (changedWhileLoading) schedule();
-	function write() {
-		clearTimeout(timer);
-		timer = undefined;
-		const snapshot = storedReviews();
-		// One write at a time, in order, so an older snapshot never lands last.
-		writing = writing.then(() => snapshot.reviews.length
-			? AsyncStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(snapshot))
-			: AsyncStorage.removeItem(REVIEWS_STORAGE_KEY)).catch(() => {});
+	// What was written meanwhile, with the restored reviews before it. Out of
+	// the foreground already, the leaving was missed (nothing listened yet), so
+	// it is written now rather than after a delay the phone may never allow.
+	if (changedWhileLoading) {
+		if (AppState.currentState !== "active") void write().catch(() => {});
+		else schedule();
 	}
-	// Leaving the app is when the phone may close it: a change still waiting is written now.
+	// Leaving the app is when the phone may close it: a change still waiting, or a save that failed, is written now.
 	AppState.addEventListener("change", (state) => {
-		if (state !== "active" && timer) write();
+		if (state !== "active" && (timer || dirty)) void write().catch(() => {});
 	});
 }
