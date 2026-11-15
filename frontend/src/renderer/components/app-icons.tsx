@@ -90,6 +90,7 @@ import {
 	Message as MynaMessage,
 	MessageDots as MynaMessageDots,
 	MessagePlus as MynaMessagePlus,
+	Microchip as MynaMicrochip,
 	Microphone as MynaMicrophone,
 	Minimize as MynaMinimize,
 	Minus as MynaMinus,
@@ -107,6 +108,7 @@ import {
 	Presentation as MynaPresentation,
 	QuestionCircle as MynaQuestionCircle,
 	Refresh as MynaRefresh,
+	Repeat as MynaRepeat,
 	Rows as MynaRows,
 	Save as MynaSave,
 	Search as MynaSearch,
@@ -157,7 +159,6 @@ import {
 	Bot as LucideBot,
 	Brain as LucideBrain,
 	CalendarClock as LucideCalendarClock,
-	Sparkles as LucideSparkles,
 	CaseSensitive as LucideCaseSensitive,
 	CheckCheck as LucideCheckCheck,
 	ChevronsDownUp as LucideChevronsDownUp,
@@ -411,6 +412,7 @@ export const MessageSquareDiff = fromLucide(LucideMessageSquareDiff, "message-sq
 export const MessageSquareDot = fromMyna(MynaMessageDots, "message-square-dot", "full");
 export const MessageSquarePlus = fromMyna(MynaMessagePlus, "message-square-plus", "full");
 export const MessageSquareQuote = fromLucide(LucideMessageSquareQuote, "message-square-quote");
+export const Microchip = fromMyna(MynaMicrochip, "microchip");
 export const Mic = fromMyna(MynaMicrophone, "mic");
 export const Minimize2 = fromMyna(MynaMinimize, "minimize-2");
 export const Minus = fromMyna(MynaMinus, "minus");
@@ -443,6 +445,7 @@ export const QrCode = fromLucide(LucideQrCode, "qr-code");
 export const Quote = fromLucide(LucideQuote, "quote");
 export const RefreshCw = fromMyna(MynaRefresh, "refresh-cw");
 export const Regex = fromLucide(LucideRegex, "regex");
+export const Repeat = fromMyna(MynaRepeat, "repeat");
 export const RotateCcw = fromLucide(LucideRotateCcw, "rotate-ccw");
 export const RotateCw = fromLucide(LucideRotateCw, "rotate-cw");
 export const Route = fromLucide(LucideRoute, "route");
@@ -488,7 +491,6 @@ export const UserRound = fromMyna(MynaUser, "user-round");
 export const Users = fromMyna(MynaUsers, "users");
 export const Video = fromMyna(MynaVideo, "video");
 export const WandSparkles = fromMyna(MynaSparkles, "wand-sparkles");
-export const Sparkles = fromLucide(LucideSparkles, "sparkles");
 export const Workflow = fromLucide(LucideWorkflow, "workflow");
 export const WrapText = fromLucide(LucideWrapText, "wrap-text");
 export const Wrench = fromMyna(MynaWrench, "wrench");

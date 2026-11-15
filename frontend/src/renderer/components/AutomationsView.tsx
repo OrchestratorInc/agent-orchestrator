@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { ArrowDownUp, CalendarClock, Folder, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Sparkles, Trash2, TriangleAlert } from "@/components/app-icons";
+import type { TFunction } from "i18next";
+import { ArrowDownUp, CalendarClock, Folder, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Repeat, Trash2, TriangleAlert, type AppIcon } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -26,6 +27,7 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
+import { MenuTriggerLabel } from "./ui/option-menu";
 import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
@@ -86,11 +88,22 @@ type StarterTemplateID = Exclude<AutomationTemplateID, "custom">;
 
 const STATUS_FILTERS: StatusFilter[] = ["all", "enabled", "paused"];
 const SORT_ORDERS: SortOrder[] = ["nextRun", "name", "created"];
-const TEMPLATE_ICONS = { daily_pr_review_v1: GitPullRequest, daily_issue_triage_v1: ListChecks, weekly_release_notes_v1: FileText };
+// The quiet captions over the dialog's prompt and its Run in and Schedule groups.
+const FORM_CAPTION_CLASS = "text-xs font-medium text-muted-foreground";
+const TEMPLATE_ICONS = {daily_pr_review_v1: GitPullRequest, daily_issue_triage_v1: ListChecks, weekly_release_notes_v1: FileText };
 
 function displayTime(value?: string, locale?: string) {
 	if (!value) return "—";
 	return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+/** "Tomorrow, 9:00 AM" while the run is today or tomorrow, the full date after that. */
+function displayNextRun(date: Date, t: TFunction, locale?: string) {
+	const days = Math.round((new Date(date).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86_400_000);
+	if (days > 1) return displayTime(date.toISOString(), locale);
+	const day = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(days, "day");
+	const time = new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(date);
+	return t("automations.nextRunRelative", { day: day.charAt(0).toLocaleUpperCase(locale) + day.slice(1), time });
 }
 
 function timestamp(value?: string) {
@@ -473,6 +486,7 @@ function AutomationFormDialog({
 	const projectDefaults = useProjectWorkerDefaults(open ? (automation?.projectId || projectId) : "");
 	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
+	const nameRef = useRef<HTMLInputElement>(null);
 	const [prompt, setPrompt] = useState("");
 	const [draftTemplateId, setDraftTemplateId] = useState<AutomationTemplateID>(initialTemplateId);
 	const templateId = automation?.templateId ?? draftTemplateId;
@@ -612,7 +626,7 @@ function AutomationFormDialog({
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
 		if (!prompt.trim()) nextErrors.prompt = t("automations.validation.prompt");
 		else if (new TextEncoder().encode(prompt.trim()).length > 4096) nextErrors.prompt = t("automations.validation.promptBytes");
-		if (schedule.preset === "daily" || schedule.preset === "weekly") {
+		if (schedule.preset !== "custom") {
 			if (!parseTimeValue(schedule.time)) nextErrors.time = t("automations.validation.time");
 		} else {
 			if (!parseHourMinute(schedule.hour, schedule.minute)) {
@@ -641,7 +655,8 @@ function AutomationFormDialog({
 			? null
 			: {
 					project_id: projectId,
-					schedule_preset: schedule.preset,
+					// Telemetry still files Weekdays under custom, where it lived before it was a preset.
+					schedule_preset: schedule.preset === "weekdays" ? "custom" : schedule.preset,
 					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
 				};
 		try {
@@ -692,13 +707,18 @@ function AutomationFormDialog({
 							</div>
 						) : null}
 						<div className="flex flex-col gap-1">
-							<input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} placeholder={t("automations.field.name")} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }}
-								className="w-full rounded-md bg-transparent text-heading! font-semibold! leading-tight text-foreground outline-none placeholder:text-passive focus-visible:ring-2 focus-visible:ring-ring/30" />
-							<label htmlFor={AUTOMATION_FIELD_IDS.name} className={onboardingFieldHintClass}>{t("automations.field.name")}</label>
+							{/* The name reads as the dialog's heading; the pencil puts the caret in it. */}
+							<div className="flex min-w-0 items-center gap-1">
+								<input ref={nameRef} id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} placeholder={t("automations.field.name")} aria-label={t("automations.field.name")} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }}
+									className="field-sizing-content -ms-1.5 min-w-[4ch] max-w-full rounded-md bg-transparent px-1.5 py-0.5 text-heading font-semibold leading-tight text-foreground outline-none placeholder:text-passive focus:bg-input/50" />
+								<Button type="button" size="icon-sm" variant="quiet" tabIndex={-1} aria-label={t("shell.rename")} onClick={() => { nameRef.current?.focus(); nameRef.current?.select(); }}>
+									<Pencil aria-hidden="true" className="size-icon-sm" />
+								</Button>
+							</div>
 							{validationErrors.name ? <p id={`${AUTOMATION_FIELD_IDS.name}-error`} className={onboardingFieldErrorClass}>{validationErrors.name}</p> : null}
 						</div>
 						<div className="flex min-h-48 flex-1 flex-col gap-2 rounded-lg border border-border bg-input/50 px-4 py-3 focus-within:border-ring has-aria-invalid:border-destructive">
-							<label htmlFor={AUTOMATION_FIELD_IDS.prompt} className={onboardingFormLabelClass}>{t("automations.field.prompt")}</label>
+							<label htmlFor={AUTOMATION_FIELD_IDS.prompt} className={FORM_CAPTION_CLASS}>{t("automations.field.prompt")}</label>
 							<textarea
 								id={AUTOMATION_FIELD_IDS.prompt}
 								required
@@ -714,7 +734,7 @@ function AutomationFormDialog({
 					</div>
 					<div className="flex min-h-0 flex-col gap-6 border-t border-border p-4 md:overflow-y-auto md:border-t-0 md:border-s">
 						<section className="flex flex-col gap-2" aria-labelledby="automation-run-in">
-						<h3 id="automation-run-in" className="text-caption text-passive">{t("automations.section.runIn")}</h3>
+						<h3 id="automation-run-in" className={FORM_CAPTION_CLASS}>{t("automations.section.runIn")}</h3>
 						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId} hideLabel>
 							<AutomationSelect
 								id={AUTOMATION_FIELD_IDS.projectId}
@@ -745,7 +765,7 @@ function AutomationFormDialog({
 								}}
 							/>
 							{open ? (
-								<div className="flex min-h-control-md min-w-0 flex-col justify-center gap-2 rounded-md bg-input/50 px-1 [&_.composer-chip]:w-full [&_.composer-chip]:justify-between" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+								<div className="flex min-w-0 flex-col gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"
@@ -764,9 +784,10 @@ function AutomationFormDialog({
 							) : null}
 						</section>
 						<section className="flex flex-col gap-2" aria-labelledby="automation-schedule">
-							<h3 id="automation-schedule" className="text-caption text-passive">{t("automations.field.schedule")}</h3>
+							<h3 id="automation-schedule" className={FORM_CAPTION_CLASS}>{t("automations.field.schedule")}</h3>
 							<Field label={t("automations.field.schedule")} hideLabel>
 								<AutomationSelect
+									icon={Repeat}
 									label={t("automations.field.schedule")}
 									value={schedule.preset}
 									onValueChange={(value) => {
@@ -778,6 +799,7 @@ function AutomationFormDialog({
 									}}
 									options={[
 										{ value: "daily", label: t("automations.schedule.daily") },
+										{ value: "weekdays", label: t("automations.customFrequency.weekdays") },
 										{ value: "weekly", label: t("automations.schedule.weekly") },
 										{ value: "custom", label: t("automations.schedule.custom") },
 									]}
@@ -786,6 +808,7 @@ function AutomationFormDialog({
 							{schedule.preset === "weekly" ? (
 								<Field label={t("automations.field.weekday")} hideLabel>
 									<AutomationSelect
+										icon={CalendarClock}
 										label={t("automations.field.weekday")}
 										value={schedule.weekday}
 										onValueChange={(value) => patchSchedule({ weekday: value as WeekdayCode })}
@@ -796,7 +819,7 @@ function AutomationFormDialog({
 									/>
 								</Field>
 							) : null}
-							{schedule.preset === "daily" || schedule.preset === "weekly" ? (
+							{schedule.preset !== "custom" ? (
 								<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.time} error={validationErrors.time} hideLabel>
 									<div className="relative">
 									<Clock aria-hidden="true" className="pointer-events-none absolute start-3 top-1/2 size-icon-sm -translate-y-1/2 text-muted-foreground" />
@@ -912,14 +935,13 @@ function AutomationFormDialog({
 								</Field>
 							</div>
 						) : null}
-						<p className={onboardingFieldHintClass}>{timezone}</p>
+						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
 						</section>
-						{templateId !== "custom" ? <p className="text-xs leading-5 text-muted-foreground">{t("automations.templates.setup")}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 						{nextRun ? (
 							<div className="mt-auto flex flex-col gap-1 rounded-lg border border-border px-4 py-3">
 								<span className="text-xs text-muted-foreground">{t("automations.nextRun")}</span>
-								<span className="text-sm text-foreground tabular-nums">{displayTime(nextRun.toISOString(), i18n.resolvedLanguage)}</span>
+								<span className="text-sm text-foreground tabular-nums">{displayNextRun(nextRun, t, i18n.resolvedLanguage)}</span>
 							</div>
 						) : null}
 					</div>
@@ -947,8 +969,8 @@ function TemplateMenu({ disabled, onSelect }: { disabled: boolean; onSelect: (id
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<Button type="button" size="sm" variant="quiet" disabled={disabled}>
-					<Sparkles aria-hidden="true" className="size-icon-sm" />
 					{t("automations.templates.use")}
+					<ChevronDown aria-hidden="true" className="size-icon-sm" />
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="w-80" data-browser-native-overlay="true">
@@ -975,10 +997,10 @@ function AutomationSelect({
 	disabled,
 	invalid,
 	describedBy,
-	icon: Icon,
+	icon,
 }: {
 	id?: string;
-	icon?: typeof Folder;
+	icon?: AppIcon;
 	label: string;
 	value: string;
 	onValueChange: (value: string) => void;
@@ -992,10 +1014,9 @@ function AutomationSelect({
 	return (
 		<Select value={value} onValueChange={onValueChange} required={required} disabled={disabled}>
 			<SelectTrigger id={id} size="sm" className="w-full text-control" aria-label={label} aria-invalid={invalid || undefined} aria-describedby={describedBy}>
-				<span className="flex min-w-0 items-center gap-2">
-					{Icon ? <Icon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" /> : null}
+				<MenuTriggerLabel icon={icon}>
 					<SelectValue placeholder={placeholder} />
-				</span>
+				</MenuTriggerLabel>
 			</SelectTrigger>
 			<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
 				{options.map((option) => (

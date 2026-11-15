@@ -9,10 +9,18 @@ import { NativeModePicker } from "./NativeModePicker";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
-import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
+import { Gauge, Microchip, type AppIcon } from "@/components/app-icons";
+import { cn } from "../lib/utils";
+import { MENU_TRIGGER_CHROME, MenuTriggerLabel } from "./ui/option-menu";
 
 // The agent, model and effort menus share one compact width.
 export const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
+const COMPOSER_CHIP = "composer-chip composer-toolbar-option w-fit";
+// In a form the pickers fill their column and match its selects.
+const FORM_FIELD_TRIGGER = cn(MENU_TRIGGER_CHROME, "h-control-form w-full justify-between rounded-md px-3 text-control");
+
+/** How a picker trigger looks outside the composer's chip row. */
+type TriggerAppearance = { triggerClassName?: string; icon?: AppIcon };
 
 export function TaskEffortPicker({
 	disabled,
@@ -23,7 +31,9 @@ export function TaskEffortPicker({
 	defaultEffort,
 	availability,
 	footer,
-}: TaskComposerEffortControl & { defaultEffort?: string; availability: EffortAvailability; footer?: ReactNode }) {
+	triggerClassName = COMPOSER_CHIP,
+	icon,
+}: TaskComposerEffortControl & TriggerAppearance & { defaultEffort?: string; availability: EffortAvailability; footer?: ReactNode }) {
 	return (
 		<EffortPicker
 			label={label}
@@ -33,7 +43,8 @@ export function TaskEffortPicker({
 			defaultEffort={defaultEffort}
 			availability={availability}
 			onChange={onChange}
-			triggerClassName="composer-chip composer-toolbar-option w-fit"
+			icon={icon}
+			triggerClassName={triggerClassName}
 			menuClassName={COMPOSER_MENU_WIDTH}
 			footer={footer}
 		/>
@@ -55,7 +66,9 @@ export function TaskModelPicker({
 	allowNativeSelection = false,
 	footer,
 	modelHint,
-}: TaskComposerModelControl & {
+	triggerClassName = COMPOSER_CHIP,
+	icon,
+}: TaskComposerModelControl & TriggerAppearance & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
 	hostId?: string;
@@ -72,11 +85,11 @@ export function TaskModelPicker({
 	if (agentId === "") {
 		return (
 			<span
-				className={`${MENU_TRIGGER_CHROME} composer-chip composer-toolbar-option pointer-events-none w-fit cursor-not-allowed justify-start opacity-50`}
+				className={cn(MENU_TRIGGER_CHROME, triggerClassName, "pointer-events-none cursor-not-allowed justify-start opacity-50")}
 				aria-disabled="true"
 				aria-label={t("newTask.model")}
 			>
-				<span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span>
+				<MenuTriggerLabel icon={icon}><span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span></MenuTriggerLabel>
 			</span>
 		);
 	}
@@ -89,7 +102,7 @@ export function TaskModelPicker({
 				onModeChange={onModeChange}
 				disabled={disabled}
 				showFollowAgentAction={showFollowAgentAction}
-				triggerClassName="composer-chip composer-toolbar-option w-fit"
+				triggerClassName={triggerClassName}
 				menuClassName={COMPOSER_MENU_WIDTH}
 			/>
 		);
@@ -128,15 +141,15 @@ export function TaskModelPicker({
 			onChange={selectCatalogModel}
 			compact
 			recentScope={agentId}
-			triggerClassName="composer-chip composer-toolbar-option w-fit"
+			triggerClassName={triggerClassName}
 			menuAlign="start"
 			menuClassName={COMPOSER_MENU_WIDTH}
-			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
+			renderTrigger={(label) => <MenuTriggerLabel icon={icon}><span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span></MenuTriggerLabel>}
 		/>
 	);
 }
 
-/** New Task's model and effort controls, with selection state owned by the caller. */
+/** The automation form's model and effort pickers, with selection state owned by the caller. */
 export function TaskModelSelection(props: TaskComposerModelControl & {
 	effort: string;
 	onEffortChange: (value: string) => void;
@@ -159,8 +172,8 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 	};
 	const availability: EffortAvailability = !selected || selected.efforts === undefined ? "unknown" : options.length ? "supported" : "unsupported";
 	return <>
-		<div className="flex min-w-0 flex-wrap items-center gap-1.5">
-			<TaskModelPicker {...props} value={selectedModel} showFollowAgentAction={true}
+		<div className="grid min-w-0 auto-cols-fr grid-flow-col gap-2">
+			<TaskModelPicker {...props} value={selectedModel} showFollowAgentAction={true} triggerClassName={FORM_FIELD_TRIGGER} icon={Microchip}
 				onModelChange={(next) => {
 					const picked = models?.find((item) => next ? item.id === next : item.isDefault);
 					props.onModelChange(next || picked?.id || "");
@@ -170,7 +183,7 @@ export function TaskModelSelection(props: TaskComposerModelControl & {
 				}}
 				onModeChange={(next) => { props.onModeChange(next); props.onModelChange(""); onEffortChange(""); }}
 			/>
-			<TaskEffortPicker id={`${props.id}-effort`} label={t("settings.models.effort")} disabled={props.disabled}
+			<TaskEffortPicker id={`${props.id}-effort`} label={t("settings.models.effort")} disabled={props.disabled} triggerClassName={FORM_FIELD_TRIGGER} icon={Gauge}
 				options={cursorChoice ? cursorChoice.family.efforts : options}
 				value={cursorChoice ? cursorChoice.variant.effort ?? "" : effort || fallbackEffort(options, selected?.defaultEffort) || ""}
 				defaultEffort={cursorChoice ? undefined : selected?.defaultEffort}

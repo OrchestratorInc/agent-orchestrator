@@ -216,8 +216,10 @@ describe("AutomationsView", () => {
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
 		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
 		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
-		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveClass("composer-chip");
-		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveClass("composer-chip");
+		// Model and effort fill the form's column like its selects, not the composer's chips.
+		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveClass("w-full");
+		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveClass("w-full");
+		expect(within(dialog).getByRole("button", { name: "Model" })).not.toHaveClass("composer-chip");
 		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
 		await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
@@ -677,7 +679,39 @@ describe("AutomationsView", () => {
 		await user.click(await screen.findByRole("menuitem", { name: /Weekly release notes/ }));
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("Weekly release notes");
 		expect((within(dialog).getByRole("textbox", { name: "Prompt" }) as HTMLTextAreaElement).value).toMatch(/^Draft weekly release notes/);
-		expect(within(dialog).getByText("Requires GitHub read access for the selected project.")).toBeInTheDocument();
+		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toHaveTextContent("Weekly");
+		expect(within(dialog).getByRole("combobox", { name: "Day" })).toHaveTextContent("Friday");
+		expect(mocks.create).not.toHaveBeenCalled();
+	});
+
+	it("offers Weekdays as a schedule with one time field", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("button", { name: "Use template" }));
+		await user.click(await screen.findByRole("menuitem", { name: /PR review inbox/ }));
+		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toHaveTextContent("Weekdays");
+		expect(within(dialog).getByLabelText("Time")).toHaveValue("09:00");
+		expect(within(dialog).queryByRole("combobox", { name: "Frequency" })).not.toBeInTheDocument();
+
+		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
+		await user.click(screen.getByRole("option", { name: "Demo" }));
+		const time = within(dialog).getByLabelText("Time");
+		await user.clear(time);
+		await user.type(time, "0815");
+		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
+		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=15;BYSECOND=0" }));
+		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.automation_create_succeeded", expect.objectContaining({ schedule_preset: "custom" }));
+	});
+
+	it("puts the caret in the name from its pencil", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveFocus();
 	});
 
 	it("shows AO-styled inline feedback when required fields are missing", async () => {
@@ -834,7 +868,6 @@ describe("automation starters", () => {
 		expect(mocks.create).not.toHaveBeenCalled();
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue(label);
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue(AUTOMATION_TEMPLATES[index].prompt);
-		expect(within(dialog).getByText(/Requires GitHub read access/)).toBeInTheDocument();
 		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
 		await user.click(screen.getByRole("option", { name: "Demo" }));
 		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
@@ -873,7 +906,7 @@ describe("automation starters", () => {
 		await user.click(screen.getByRole("button", { name: "Edit Review inbox" }));
 		const dialog = screen.getByRole("dialog");
 		expect(within(dialog).queryByRole("combobox", { name: "Start from" })).not.toBeInTheDocument();
-		expect(within(dialog).getByRole("combobox", { name: "Frequency" })).toHaveTextContent("Weekdays (Mon–Fri)");
+		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toHaveTextContent("Weekdays (Mon–Fri)");
 		expect(within(dialog).queryByText(/purpose|more options/i)).not.toBeInTheDocument();
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledExactlyOnceWith({ id: "starter", body: { displayName: "Review inbox", prompt: "My edited review prompt" } });

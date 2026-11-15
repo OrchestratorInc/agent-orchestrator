@@ -596,7 +596,8 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 
 	return (
 		<div className="flex flex-col gap-1.5">
-			<div className="flex min-w-0 items-baseline gap-1.5">
+			{/* A visually hidden label leaves no empty row (and gap) above the select. */}
+			<div className="flex min-w-0 items-baseline gap-1.5 has-[>label.sr-only]:contents">
 				<Label htmlFor={id} className={cn("text-xs font-medium text-muted-foreground", labelClassName)}>
 					{label}
 				</Label>
