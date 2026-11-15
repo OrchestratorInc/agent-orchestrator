@@ -32,9 +32,12 @@ export function RouteRestorer() {
 	if (pathname !== launchPath.current) navigated.current = true;
 
 	// Remembered as it changes: a screen worth reopening, or none (the board).
+	// When the app was left stays as the AppState listener last set it: a route
+	// that changes in the background (the reopened screen landing after a launch
+	// that finished there) is still a screen the app was left on.
 	useEffect(() => {
 		if (!decided.current) return;
-		current.current = { href: restorableHref(href) ? href : null, leftAt: null };
+		current.current = { href: restorableHref(href) ? href : null, leftAt: current.current.leftAt };
 		void AsyncStorage.setItem(LAST_ROUTE_KEY, JSON.stringify(current.current)).catch(() => {});
 	}, [href]);
 

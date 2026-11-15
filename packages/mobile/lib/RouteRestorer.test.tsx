@@ -104,6 +104,25 @@ describe("RouteRestorer", () => {
 		expect(typeof saved.leftAt).toBe("number");
 	});
 
+	// The reopened screen opens after the launch decided: that route change
+	// must not wipe the departure time, or a phone that closes the app before
+	// it comes back to the front leaves nothing to reopen.
+	it("keeps the departure time once the reopened screen has opened", async () => {
+		mocks.push.mockImplementationOnce(() => {
+			mocks.nav = { pathname: "/session/web-1", params: { id: "web-1", hostId: "a" }, segments: ["session", "[id]"] };
+		});
+		await launch(null, () => { mocks.appState.listener!("background"); });
+		await act(async () => { renderer!.update(createElement(RouteRestorer)); });
+		const saved = JSON.parse(mocks.items.get(LAST_ROUTE_KEY)!) as { href: string; leftAt: number | null };
+		expect(saved.href).toBe("/session/web-1?hostId=a");
+		expect(typeof saved.leftAt).toBe("number");
+		// Back in front, it is cleared, and a screen opened then is not marked as left.
+		mocks.appState.listener!("active");
+		mocks.nav = { pathname: "/session/web-4", params: { id: "web-4" }, segments: ["session", "[id]"] };
+		await act(async () => { renderer!.update(createElement(RouteRestorer)); });
+		expect(JSON.parse(mocks.items.get(LAST_ROUTE_KEY)!)).toEqual({ href: "/session/web-4", leftAt: null });
+	});
+
 	it("forgets that departure when the app came back before the reads landed", async () => {
 		await launch(null, () => {
 			mocks.appState.listener!("background");
