@@ -150,7 +150,13 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 	if remote == "" {
 		pr, ok, err := s.openPRUnder(ctx, rec.Metadata.WorkspacePath, rec.ID, local)
 		if err != nil {
-			return nil // A failed read is not evidence that nothing was pushed.
+			// A failed read is not evidence that nothing was pushed: keep the last
+			// state rather than report every commit unpushed, and let the next
+			// pass retry instead of failing every other session's reconcile.
+			if s.logger != nil {
+				s.logger.Warn("read session PRs for branch state", "session", rec.ID, "err", err)
+			}
+			return nil
 		}
 		if ok {
 			prHead = pr
