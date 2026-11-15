@@ -40,7 +40,9 @@ export function describeApprovalTarget(
 	const clean = (value: string | null | undefined, limit = 120): string =>
 		(value ?? "").replace(/\s+/g, " ").trim().slice(0, limit);
 	const normalized = (value: string): string =>
-		value.toLowerCase().replace(/[^a-z0-9\u0080-￿]+/g, " ").trim();
+		// ASCII-only source: a raw noncharacter here once stopped Chrome loading
+		// the extension's content script (source-encoding.test.ts guards it).
+		value.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, " ").trim();
 	const implicitRole = (el: Element): string => {
 		const explicit = el.getAttribute("role");
 		if (explicit) return explicit.split(/\s+/)[0].toLowerCase();
