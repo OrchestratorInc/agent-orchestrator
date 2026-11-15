@@ -104,7 +104,7 @@ func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request 
 		alias := false
 		for i := range catalog.Models {
 			id := strings.ToLower(catalog.Models[i].ID)
-			if id == strings.ToLower(request.Model) || id == base {
+			if strings.EqualFold(id, request.Model) || id == base {
 				picked = &catalog.Models[i]
 				break
 			}
