@@ -130,11 +130,19 @@ func applyPermissionMode(workspace string, mode ports.PermissionMode) error {
 			return fmt.Errorf("stakpak: write %s: %w", ignore, err)
 		}
 	}
-	if err := hookutil.AtomicWriteFile(path, append(data, '\n'), 0o600); err != nil {
-		return fmt.Errorf("stakpak: write tool policy: %w", err)
-	}
+	// Claim ownership before writing the policy, so a policy AO wrote is never
+	// left without its marker, where a later launch would keep it as the
+	// user's.
 	if err := hookutil.AtomicWriteFile(marker, []byte(string(ports.NormalizePermissionMode(mode))+"\n"), 0o600); err != nil {
 		return fmt.Errorf("stakpak: write tool policy marker: %w", err)
+	}
+	if err := hookutil.AtomicWriteFile(path, append(data, '\n'), 0o600); err != nil {
+		if fileErr != nil {
+			// No policy existed: drop the claim too, so it cannot later mark a
+			// file the user writes as AO's.
+			_ = os.Remove(marker)
+		}
+		return fmt.Errorf("stakpak: write tool policy: %w", err)
 	}
 	return nil
 }
