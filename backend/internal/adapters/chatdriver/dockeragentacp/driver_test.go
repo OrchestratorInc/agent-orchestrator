@@ -297,6 +297,9 @@ func clearProviderKeys(t *testing.T) {
 // Without AO_DOCKER_AGENT_CONFIG, AO writes a private default config for the
 // available provider and launches Docker Agent with it.
 func TestConfigureWritesDefaultConfigFromProviderKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("qualified native hook binding is Unix only")
+	}
 	clearProviderKeys(t)
 	t.Setenv(dockeragent.ConfigEnv, "")
 	cfg := acpdriver.LaunchConfig{DataDir: t.TempDir(), SessionID: "s", WorkspacePath: t.TempDir(), Env: map[string]string{"GEMINI_API_KEY": "secret-value-123"}}
