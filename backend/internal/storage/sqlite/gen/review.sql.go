@@ -105,6 +105,17 @@ func (q *Queries) ClearReviewChatController(ctx context.Context, arg ClearReview
 	return result.RowsAffected()
 }
 
+const clearReviewRunAutoInjectIfNoInject = `-- name: ClearReviewRunAutoInjectIfNoInject :exec
+UPDATE review_run SET auto_inject_review = FALSE WHERE id = ? AND no_inject AND auto_inject_review
+`
+
+// A --no-inject pass is never delivered, whatever auto-inject value its
+// result was submitted with (#6810).
+func (q *Queries) ClearReviewRunAutoInjectIfNoInject(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, clearReviewRunAutoInjectIfNoInject, id)
+	return err
+}
+
 const clearReviewerHandle = `-- name: ClearReviewerHandle :exec
 UPDATE review SET reviewer_handle_id = '', updated_at = CURRENT_TIMESTAMP WHERE session_id = ?
 `

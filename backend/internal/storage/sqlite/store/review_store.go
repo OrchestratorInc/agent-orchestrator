@@ -266,18 +266,31 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 func (s *Store) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	n, err := s.qw.UpdateReviewRunResult(ctx, gen.UpdateReviewRunResultParams{
-		Status:           status,
-		Verdict:          verdict,
-		Body:             body,
-		GithubReviewID:   githubReviewID,
-		AutoInjectReview: autoInjectReview,
-		ID:               id,
+	var updated bool
+	err := s.inTx(ctx, "update review run result", func(q *gen.Queries) error {
+		n, err := q.UpdateReviewRunResult(ctx, gen.UpdateReviewRunResultParams{
+			Status:           status,
+			Verdict:          verdict,
+			Body:             body,
+			GithubReviewID:   githubReviewID,
+			AutoInjectReview: autoInjectReview,
+			ID:               id,
+		})
+		if err != nil {
+			return err
+		}
+		updated = n > 0
+		if !updated || !autoInjectReview {
+			return nil
+		}
+		// The caller's value may predate a --no-inject restart marking this
+		// run; the stored mark wins (#6810).
+		return q.ClearReviewRunAutoInjectIfNoInject(ctx, id)
 	})
 	if err != nil {
 		return false, err
 	}
-	return n > 0, nil
+	return updated, nil
 }
 
 // SupersedeStaleRunningReviewRuns marks older running unverdicted passes for a

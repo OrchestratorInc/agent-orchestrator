@@ -255,3 +255,8 @@ WHERE pr_url = ? AND no_inject;
 -- A --no-inject trigger restarting a running pass makes that pass never
 -- delivered too (#6810).
 UPDATE review_run SET no_inject = TRUE, auto_inject_review = FALSE WHERE id = ? AND status = 'running';
+
+-- name: ClearReviewRunAutoInjectIfNoInject :exec
+-- A --no-inject pass is never delivered, whatever auto-inject value its
+-- result was submitted with (#6810).
+UPDATE review_run SET auto_inject_review = FALSE WHERE id = ? AND no_inject AND auto_inject_review;

@@ -148,3 +148,33 @@ func TestSubmitNoInjectRetryFinishesSuppression(t *testing.T) {
 		t.Fatalf("suppressed = %v, want the retry to suppress the posted review", st.suppressedReviews)
 	}
 }
+
+// markedDuringSubmitStore models a --no-inject restart marking the run after
+// Submit read it and before its result was written.
+type markedDuringSubmitStore struct{ *fakeStore }
+
+func (s markedDuringSubmitStore) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+	updated, err := s.fakeStore.UpdateReviewRunResult(ctx, id, status, verdict, body, githubReviewID, autoInjectReview)
+	// The store keeps auto-inject off for a run marked --no-inject.
+	s.run.NoInject, s.run.AutoInjectReview = true, false
+	return updated, err
+}
+
+func TestSubmitUsesNoInjectMarkedDuringSubmit(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+	}
+	svc := New(nil, markedDuringSubmitStore{st})
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.AutoInjectReview || !run.NoInject {
+		t.Fatalf("run = %+v, want the stored --no-inject mark", run)
+	}
+	if len(st.suppressedReviews) != 1 || st.suppressedReviews[0] != "pr1#987" {
+		t.Fatalf("suppressed = %v, want the posted review suppressed", st.suppressedReviews)
+	}
+}

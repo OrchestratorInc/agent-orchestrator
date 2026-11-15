@@ -231,3 +231,38 @@ func TestMarkReviewRunNoInject(t *testing.T) {
 		t.Fatalf("mark ended run: ok=%v err=%v, want no change", ok, err)
 	}
 }
+
+// #6810: a result submitted with auto-inject on, for a run a --no-inject
+// restart marked meanwhile, is stored with auto-inject off.
+func TestUpdateReviewRunResultKeepsNoInjectRunQuiet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	url := "https://github.com/acme/repo/pull/4"
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: r.ID, ProjectID: "mer", Harness: "claude-code", PRURL: url, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []domain.ReviewRun{
+		{ID: "quiet", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: url, TargetSHA: "h1", Status: domain.ReviewRunRunning, CreatedAt: now, NoInject: true},
+		{ID: "loud", ReviewID: "rev", SessionID: r.ID, Harness: "codex", PRURL: url, TargetSHA: "h1", Status: domain.ReviewRunRunning, CreatedAt: now},
+	} {
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+		if ok, err := s.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, domain.VerdictChangesRequested, "b", "", true); err != nil || !ok {
+			t.Fatalf("update %s: ok=%v err=%v", run.ID, ok, err)
+		}
+		got, _, err := s.GetReviewRun(ctx, run.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := !run.NoInject; got.AutoInjectReview != want {
+			t.Fatalf("run %s AutoInjectReview = %v, want %v", run.ID, got.AutoInjectReview, want)
+		}
+	}
+}

@@ -981,6 +981,15 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Body = body
 		run.GithubReviewID = githubReviewID
 		run.AutoInjectReview = autoInject
+		// A --no-inject restart may have marked the run after it was read
+		// above; the store kept auto-inject off for it, so take its values.
+		if stored, found, err := s.store.GetReviewRun(ctx, run.ID); err != nil {
+			return domain.ReviewRun{}, err
+		} else if found {
+			run.NoInject = stored.NoInject
+			run.AutoInjectReview = stored.AutoInjectReview
+			autoInject = stored.AutoInjectReview
+		}
 		if run.NoInject && githubReviewID != "" {
 			// The SCM observer may have stored this review's rows before the
 			// pass recorded its provider id, snapshotting the session's setting
