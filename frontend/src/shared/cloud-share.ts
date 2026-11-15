@@ -172,6 +172,11 @@ export interface CloudShareInspection {
 	 * not checked: a different value means the file changed since publishing.
 	 */
 	publishedFingerprint?: string;
+	/**
+	 * An HTML page published with the files it uses: whether any of them
+	 * changed, appeared or went since, though the page did not.
+	 */
+	pageFilesChanged?: boolean;
 }
 
 /**

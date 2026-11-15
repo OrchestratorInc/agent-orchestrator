@@ -69,6 +69,23 @@ function sourceFileGone(error: unknown, realPath: string): boolean {
 	return typeof failure?.code === "string" && SOURCE_GONE_CODES.has(failure.code) && failure.path === realPath;
 }
 
+/**
+ * Whether any file a published page used changed since: rewritten, gone, or
+ * there now though it was missing. Read from each file's metadata alone.
+ */
+async function pageFilesChanged(dataDir: string, sessionId: string, recorded: Record<string, string>): Promise<boolean> {
+	for (const [relativePath, fingerprint] of Object.entries(recorded)) {
+		let now = "";
+		try {
+			now = await statShareFile(await resolveShareFile(dataDir, sessionId, relativePath));
+		} catch (error) {
+			if (!(error instanceof CloudShareError) && !(error as NodeJS.ErrnoException | null)?.code) throw error;
+		}
+		if (fingerprint === "" ? now !== "" : now === "" || !sameShareFingerprint(fingerprint, now)) return true;
+	}
+	return false;
+}
+
 export interface CloudShareIpcDeps extends CloudShareApi {
 	ipcMain: Pick<IpcMain, "handle">;
 	/** The daemon's data directory, which holds artifacts/<session>. */
@@ -382,6 +399,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 		const shareId = await deps.records.get(key);
 		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
+		const pageFiles = shareId ? await deps.records.publishedPageFiles(key) : undefined;
 		return {
 			name: resolved.name,
 			size: resolved.size,
@@ -389,6 +407,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			fingerprint: await statShareFile(resolved),
 			...(shareId ? { shareId } : {}),
 			...(publishedFingerprint ? { publishedFingerprint } : {}),
+			...(pageFiles && await pageFilesChanged(deps.daemonDataDir(), file.sessionId, pageFiles) ? { pageFilesChanged: true } : {}),
 		};
 	});
 
@@ -526,10 +545,13 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			if (!file.fingerprint || !sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
 			if (controller.signal.aborted) return { status: "cancelled" };
 			let copied = taken.size;
-			let pageFiles: { files: PageFileSnapshot[]; skipped: PageFileSkip[] } | undefined;
+			let pageFiles: { files: PageFileSnapshot[]; skipped: PageFileSkip[]; fingerprints: Record<string, string> } | undefined;
 			if (found) {
 				const files: PageFileSnapshot[] = [];
 				const skipped = [...found.skipped];
+				// What each file held as it was copied, and what was missing, so a later change shows.
+				const fingerprints: Record<string, string> = {};
+				for (const skip of found.skipped) if (skip.relativePath) fingerprints[skip.relativePath] = "";
 				for (const used of found.files) {
 					if (controller.signal.aborted) return { status: "cancelled" };
 					const before = copied;
@@ -540,14 +562,16 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 						});
 						fileSnapshots.push(copy);
 						files.push({ path: used.path, snapshot: copy });
+						fingerprints[used.file.relativePath] = copy.fingerprint;
 					} catch (error) {
 						// A file gone or rewritten while it was copied is left out, not the page.
 						if (!sourceFileGone(error, used.file.realPath)) throw error;
-						skipped.push({ reference: used.path, reason: "missing" });
+						skipped.push({ reference: used.path, reason: "missing", relativePath: used.file.relativePath });
+						fingerprints[used.file.relativePath] = "";
 					}
 					copied = before + used.file.size;
 				}
-				pageFiles = { files, skipped };
+				pageFiles = { files, skipped, fingerprints };
 			}
 			// The document is the file's path in its session's artifacts, in its project.
 			const folder = path.posix.dirname(resolved.relativePath);
@@ -562,11 +586,14 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				emails: file.emails,
 				...(pageFiles ? { page: { files: pageFiles.files } } : {}),
 			}, (sentBytes) => progress(copied + sentBytes, total), controller.signal);
-			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share));
+			// The link serves the page's files only when the control plane took them.
+			const served = pageFiles && result.pageFiles && !result.pageFiles.unsupported ? pageFiles.fingerprints : undefined;
+			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share), served);
+			// What was left out here is said whether or not the control plane takes files.
 			const outcome: CloudSharePageFiles | undefined = pageFiles && result.pageFiles ? {
 				included: result.pageFiles.included,
-				skipped: result.pageFiles.unsupported ? 0 : pageFiles.skipped.length,
-				videos: result.pageFiles.unsupported ? 0 : pageFiles.skipped.filter((skip) => skip.reason === "video").length,
+				skipped: pageFiles.skipped.length,
+				videos: pageFiles.skipped.filter((skip) => skip.reason === "video").length,
 				// Said only when the page had files to include.
 				unsupported: result.pageFiles.unsupported && pageFiles.files.length > 0,
 			} : undefined;
