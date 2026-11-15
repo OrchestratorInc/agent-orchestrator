@@ -434,6 +434,86 @@ it("decides from a read sent after the reconnect, not one already in flight from
 	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
 });
 
+it("cancels a first host-list read still in flight from before the reconnect", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const resumes: string[] = [];
+	let state = "idle";
+	let release = () => {};
+	let hold: Promise<void> | undefined = new Promise((resolve) => { release = resolve; });
+	let held = 0;
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) {
+			const seen = state;
+			const wait = hold;
+			if (wait) held += 1;
+			await wait;
+			return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: seen, activity: { state: seen }, mode: "chat", prs: [] }] });
+		}
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: state === "exited" ? "stopped" : "ready" }));
+		if (path.endsWith("/resume-agent")) {
+			resumes.push(request.url);
+			state = "idle";
+			return Response.json({});
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+	await waitFor(() => expect(held).toBe(1));
+	await act(async () => { await disconnectHost("box-a"); });
+	state = "exited";
+	hold = undefined;
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	await act(async () => { release(); });
+	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
+});
+
+it("keeps the opening for a later read when the first read after a reconnect fails on an idle saved list", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const resumes: string[] = [];
+	let state = "idle";
+	let failing = false;
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) {
+			if (failing) return Response.json({ code: "INTERNAL", message: "list failed" }, { status: 500 });
+			return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: state, activity: { state }, mode: "chat", prs: [] }] });
+		}
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: state === "exited" ? "stopped" : "ready" }));
+		if (path.endsWith("/resume-agent")) {
+			resumes.push(request.url);
+			state = "idle";
+			return Response.json({});
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+	const first = renderRemoteSession(queryClient);
+	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
+	first.unmount();
+	await act(async () => { await disconnectHost("box-a"); });
+	state = "exited";
+	failing = true;
+	renderRemoteSession(queryClient);
+	expect(await screen.findByText(HOST_AWAY)).toBeInTheDocument();
+	await act(async () => { await connectHost("http://box-a:3001"); });
+	await waitFor(() => expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error"));
+	expect(resumes).toEqual([]);
+	failing = false;
+	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
+	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
+});
+
 it("waits for an away host to come back before resuming its exited agent", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
