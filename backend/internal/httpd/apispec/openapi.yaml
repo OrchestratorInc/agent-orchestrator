@@ -20282,6 +20282,7 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
@@ -21066,6 +21067,7 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
@@ -25312,6 +25314,7 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code

@@ -2205,7 +2205,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
 	needsStakpak := !strings.Contains(schema, "'stakpak'")
-	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 {
+	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
+	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2236,6 +2237,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize Docker Agent constraint: %w", err)
 		}
 		needsDockerAgent = true
+	}
+	if !needsMiniMaxCode {
+		// MiniMax Code's migration runs after Docker Agent's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after Docker Agent.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''minimax-code'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize MiniMax Code constraint: %w", err)
+		}
+		needsMiniMaxCode = true
 	}
 	type replacement struct {
 		old string
@@ -2366,6 +2376,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsDockerAgent {
 		repairs = append(repairs, replacement{"'fake'))", "'docker-agent', 'fake'))"})
 	}
+	// MiniMax Code's migration runs after Docker Agent's, so it follows it.
+	if needsMiniMaxCode {
+		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2417,6 +2431,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
+	}
+	if !strings.Contains(schema, "'minimax-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing MiniMax Code and did not match known pre-MiniMax-Code schema")
 	}
 	if !strings.Contains(schema, "'docker-agent'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Docker Agent")
