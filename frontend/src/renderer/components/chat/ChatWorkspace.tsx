@@ -206,6 +206,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -2199,7 +2200,7 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy || importBlock ? null : (
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
