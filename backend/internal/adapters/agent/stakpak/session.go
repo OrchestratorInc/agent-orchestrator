@@ -376,7 +376,11 @@ func sessionShowResult(nativeID, out string, err error) (bool, error) {
 		return false, fmt.Errorf("stakpak: sessions show %s printed no matching ID", nativeID)
 	}
 	lower := strings.ToLower(out)
-	if strings.Contains(lower, "not found") || strings.Contains(out, "API error 404") {
+	missing := strings.Contains(lower, "not found") || strings.Contains(out, "API error 404")
+	// "Profile '<name>' not found in configuration" (an empty or deleted
+	// STAKPAK_PROFILE) is a profile Stakpak cannot load, not a missing
+	// conversation: a restore must fail rather than discard the history.
+	if missing && !strings.Contains(lower, "not found in configuration") {
 		return false, nil
 	}
 	return false, fmt.Errorf("stakpak: sessions show %s: %w", nativeID, err)

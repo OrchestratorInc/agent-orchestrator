@@ -328,6 +328,11 @@ func TestSessionShowResult(t *testing.T) {
 	if _, err := sessionShowResult(nativeA, "Failed to load config", errors.New("exit 1")); err == nil {
 		t.Fatal("an unrelated failure must not read as a missing conversation")
 	}
+	// An empty or deleted STAKPAK_PROFILE fails config loading with a "not
+	// found" message of its own; the conversation may well still exist.
+	if _, err := sessionShowResult(nativeA, "Error: Profile '' not found in configuration\n", errors.New("exit 1")); err == nil {
+		t.Fatal("a profile Stakpak cannot load must not read as a missing conversation")
+	}
 }
 
 func TestPermissionPolicyFile(t *testing.T) {
