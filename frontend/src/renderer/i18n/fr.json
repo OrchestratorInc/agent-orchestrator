@@ -2991,7 +2991,7 @@
 	"settings.versionRefresh.label": "Passer automatiquement les sessions ouvertes aux nouvelles versions",
 	"settings.versionRefresh.description": "Après la mise à jour d’un agent, les sessions inactives redémarrent avec la nouvelle version au lieu d’attendre que vous les redémarriez.",
 	"settings.sessionRetention.label": "Supprimer les sessions archivées",
-	"settings.sessionRetention.description": "Les sessions archivées dont le worktree est nettoyé sont supprimées pour de bon après ce délai. Les branches, les pull requests et les totaux d’utilisation sont conservés. Les sessions qui ont des artefacts sont conservées jusqu’à ce que vous les supprimiez.",
+	"settings.sessionRetention.description": "Les sessions archivées dont le worktree est nettoyé sont supprimées pour de bon après ce délai. Les branches, les pull requests et les totaux d’utilisation sont conservés. Les sessions qui ont encore des artefacts sont conservées.",
 	"settings.sessionRetention.never": "Jamais",
 	"settings.sessionRetention.afterDays": "Après {{days}} jours",
 	"chat.versionSwitch.pending": "Passage à {{version}}…",

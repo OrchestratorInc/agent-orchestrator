@@ -364,3 +364,39 @@ func TestHasFiles_MatchesWhatListReturns(t *testing.T) {
 		t.Fatalf("one file: has=%v err=%v", has, err)
 	}
 }
+
+func TestHasFiles_ReportsAFolderItCannotRead(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder this user cannot read")
+	}
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	if err := os.MkdirAll(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "a.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if has, err := HasFiles(context.Background(), dir); err == nil {
+		t.Fatalf("unreadable folder: has=%v, want an error", has)
+	}
+}
+
+func TestHasFiles_CountsAWalkCutShortAsHavingFiles(t *testing.T) {
+	dir := t.TempDir()
+	for i := range MaxVisited + 1 {
+		if err := os.Mkdir(filepath.Join(dir, fmt.Sprintf("d%05d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "z.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := HasFiles(context.Background(), dir); err != nil || !has {
+		t.Fatalf("walk past MaxVisited: has=%v err=%v", has, err)
+	}
+}

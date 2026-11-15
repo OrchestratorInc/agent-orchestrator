@@ -119,7 +119,7 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 			void access.refetch();
 		};
 		if (artifact.kind === "html") return <CloudArtifactFrame onAccessRefused={accessRefused} title={artifact.name} url={pinned.url} />;
-		return <ArtifactFileView artifactName={artifact.name} artifactRoot={pinned.root} cloud onAccessRefused={accessRefused} path={artifact.path} rawUrl={pinned.url} readOnly sendMessage={async (message) => { await cloudClient.sendSessionMessage(orgId, artifact.sessionId, { text: message }); }} sessionId={artifact.sessionId} />;
+		return <ArtifactFileView artifactName={artifact.name} artifactRoot={pinned.root} cloud noFeedback={artifact.archived} onAccessRefused={accessRefused} path={artifact.path} rawUrl={pinned.url} readOnly sendMessage={async (message) => { await cloudClient.sendSessionMessage(orgId, artifact.sessionId, { text: message }); }} sessionId={artifact.sessionId} />;
 	}
 	// Another host's page has no inline origin here: it is framed, sandboxed, from its proxy's artifact origin.
 	if (artifact.kind === "html" && artifact.hostId && artifact.hostId !== LOCAL_HOST && artifact.rawUrl) {
@@ -129,5 +129,5 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 		return <iframe className="h-full w-full border-0 bg-background" key={`${page}:${artifact.updatedAt}`} sandbox="allow-scripts allow-same-origin" src={page} title={artifact.name} />;
 	}
 	if (!contentUrl) return <PanelMessage>{t("artifactLink.noPreview")}</PanelMessage>;
-	return <ArtifactFileView artifactName={artifact.name} hostId={artifact.hostId} path={artifact.path} rawUrl={artifact.rawUrl} readOnly sessionId={artifact.sessionId} />;
+	return <ArtifactFileView artifactName={artifact.name} hostId={artifact.hostId} path={artifact.path} rawUrl={artifact.rawUrl} noFeedback={artifact.archived} readOnly sessionId={artifact.sessionId} />;
 }
