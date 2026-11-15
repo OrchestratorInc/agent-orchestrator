@@ -398,6 +398,8 @@
 	"firstRun.signInPerkMobile": "모바일 앱",
 	"firstRun.signInPerkCloudDetail": "에이전트를 내 컴퓨터가 아닌 호스팅 샌드박스에서 실행합니다.",
 	"firstRun.signInPerkCloud": "클라우드 샌드박스",
+	"firstRun.signInPerkRemoteDetail": "다른 컴퓨터와 서버에서 에이전트를 실행하세요.",
+	"firstRun.signInPerkRemote": "원격 머신",
 	"firstRun.signIn": "로그인",
 	"firstRun.toolsTitle": "도구",
 	"firstRun.toolsChecking": "도구를 확인하는 중…",

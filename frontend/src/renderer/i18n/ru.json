@@ -362,6 +362,8 @@
 	"firstRun.signInPerkMobile": "Мобильное приложение",
 	"firstRun.signInPerkCloudDetail": "Запускайте агентов в облачных песочницах, а не на своём компьютере.",
 	"firstRun.signInPerkCloud": "Облачные песочницы",
+	"firstRun.signInPerkRemoteDetail": "Запускайте агентов на других своих компьютерах и серверах.",
+	"firstRun.signInPerkRemote": "Удалённые машины",
 	"firstRun.signIn": "Войти",
 	"firstRun.toolsTitle": "Ваши инструменты",
 	"firstRun.toolsChecking": "Проверяем инструменты…",

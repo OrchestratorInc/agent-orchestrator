@@ -399,6 +399,8 @@
 	"firstRun.signInPerkMobile": "App móvil",
 	"firstRun.signInPerkCloudDetail": "Ejecuta agentes en sandboxes alojados, fuera de tu equipo.",
 	"firstRun.signInPerkCloud": "Sandboxes en la nube",
+	"firstRun.signInPerkRemoteDetail": "Ejecuta agentes en tus otros equipos y servidores.",
+	"firstRun.signInPerkRemote": "Máquinas remotas",
 	"firstRun.signIn": "Iniciar sesión",
 	"firstRun.toolsTitle": "Tus herramientas",
 	"firstRun.toolsChecking": "Comprobando tus herramientas…",
