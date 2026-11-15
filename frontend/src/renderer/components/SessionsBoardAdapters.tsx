@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "@/components/app-icons";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Share2, Trash2 } from "@/components/app-icons";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
@@ -36,9 +36,7 @@ import {
 	useTerminateSessionState,
 } from "../hooks/useTerminateSession";
 import { cn } from "../lib/utils";
-import { useUiStore } from "../stores/ui-store";
 import { appI18n } from "../i18n";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
@@ -116,6 +114,7 @@ export function BoardSessionCardAdapter({
 	onOpen,
 	onOpenArtifact,
 	onOpenArtifacts,
+	onShare,
 	onTerminate,
 	session,
 }: {
@@ -127,6 +126,8 @@ export function BoardSessionCardAdapter({
 	/** Opens the session with this artifact (by path) shown in the inspector. */
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
+	/** Opens the share dialog for this session; set only where this person can share it. */
+	onShare?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
 	/** The people in this session when it is shared. */
@@ -143,6 +144,7 @@ export function BoardSessionCardAdapter({
 			onOpen={onOpen}
 			onOpenArtifact={onOpenArtifact}
 			onOpenArtifacts={onOpenArtifacts}
+			onShare={onShare}
 			onTerminate={onTerminate}
 			session={session}
 		/>
@@ -155,6 +157,7 @@ export function SessionPreviewCardAdapter({ session }: { session: WorkspaceSessi
 }
 
 export function ArchivedSessionCardAdapter({
+	compact = false,
 	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	isRestoreDisabled,
@@ -163,8 +166,11 @@ export function ArchivedSessionCardAdapter({
 	isRestoring,
 	restoreAction,
 	restoreError,
+	selected,
 	session,
 }: {
+	/** The archive grid's dense card: branch, PRs and time on one line. */
+	compact?: boolean;
 	/** Drops the "1 of 1 PR merged" line; the PR links already say it. */
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
@@ -176,12 +182,20 @@ export function ArchivedSessionCardAdapter({
 	isRestoring: boolean;
 	restoreAction: (event: MouseEvent<HTMLButtonElement>) => void;
 	restoreError?: string;
+	/** The list's selection, which then replaces the card's own hover fill. */
+	selected?: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
 	const branch = sessionBranchPresentation(session).branch ?? "";
 	return (
 		<DesktopSessionCard
+			compact={compact}
+			// A grid of many archived cards shows the PRs each session recorded
+			// (and any summary already cached) instead of fetching and polling
+			// one SCM summary per card.
+			live={!compact}
+			selected={selected}
 			hidePullRequestProgress={hidePullRequestProgress}
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
@@ -218,31 +232,40 @@ function DesktopSessionCard({
 	participants,
 	action,
 	branchAction,
+	compact = false,
 	footer,
 	hidePullRequestProgress = false,
 	hideTerminatedStatus = false,
 	interactive = true,
+	live = true,
 	memory,
 	memoryTone,
 	onOpen,
 	onOpenArtifact,
 	onOpenArtifacts,
+	onShare,
 	onTerminate,
+	selected,
 	session,
 	still = false,
 }: {
 	action?: ReactNode;
 	branchAction?: ReactNode;
+	compact?: boolean;
 	footer?: ReactNode;
 	hidePullRequestProgress?: boolean;
 	hideTerminatedStatus?: boolean;
 	interactive?: boolean;
+	/** Fetch and follow the session's PRs and archive state (on by default). */
+	live?: boolean;
 	memory?: SessionMemoryReading;
 	memoryTone?: ChipTone;
 	onOpen?: () => void;
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
+	onShare?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
+	selected?: boolean;
 	session: WorkspaceSession;
 	participants?: readonly SessionPerson[];
 	me?: string;
@@ -254,9 +277,9 @@ function DesktopSessionCard({
 	const [renameOpen, setRenameOpen] = useState(false);
 	const summaries = sessionPRDisplaySummaries(
 		session,
-		useSessionScmSummary(session.id, true, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
+		useSessionScmSummary(session.id, live, session.cloud?.orgId, session.cloud?.orgId ? session.autoInjectCI === true : false, session.hostId).data?.prs,
 	);
-	const termination = useTerminateSessionState(session.id, session.hostId);
+	const termination = useTerminateSessionState(session.id, session.hostId, live);
 	// Archiving is the owner workspace's; a guest's archive would always be refused.
 	const showTerminate = interactive && session.isTerminated !== true && !session.cloud?.shared && onTerminate;
 	const keepTerminateVisible = session.status === "merged";
@@ -315,7 +338,31 @@ function DesktopSessionCard({
 		/>
 	) : undefined;
 
-	const newSidebarDesign = useUiStore(isNewSidebarDesign);
+	// Share sits beside Archive and shows the same way: on hover or focus.
+	const share = interactive && onShare ? onShare : undefined;
+	const shareButton = share ? (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={t("share.titleNamed", { name: session.title })}
+					className="rounded-sm pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+					onClick={(event) => {
+						event.stopPropagation();
+						share();
+					}}
+					size="icon-sm"
+					type="button"
+					variant="quiet"
+					data-board-share-session=""
+				>
+					<Share2 className="size-icon-sm" aria-hidden="true" />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{t("share.button")}</TooltipContent>
+		</Tooltip>
+	) : null;
+	const people = participants && participants.length > 0 ? participants : undefined;
+
 	const card = (
 		<SessionCardView
 			action={action}
@@ -327,6 +374,7 @@ function DesktopSessionCard({
 			branchAction={branchAction}
 			branchLabel={sessionBranchPresentation(session).naming ? <BranchNamingLabel /> : undefined}
 			branchIcon={<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />}
+			compact={compact}
 			error={termination.error ?? undefined}
 			externalLink={ProductExternalLink}
 			footer={
@@ -344,9 +392,11 @@ function DesktopSessionCard({
 			}}
 			onOpen={onOpen}
 			resource={resourcePresentation}
-			overlay={participants && participants.length > 0 ? (
+			overlay={people || shareButton ? (
 				<span className="inline-flex items-center gap-1">
-					<SessionPeopleStack people={participants} me={me} />
+					{/* The circles open the same share dialog, as they do in the session header. */}
+					{people ? <SessionPeopleStack people={people} me={me} onActivate={share} /> : null}
+					{shareButton}
 					{terminationOverlay}
 				</span>
 			) : terminationOverlay}
@@ -371,8 +421,8 @@ function DesktopSessionCard({
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
 					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
+			selected={selected}
 			still={still}
-			legacyStatus={!newSidebarDesign}
 			translate={translate}
 		/>
 	);

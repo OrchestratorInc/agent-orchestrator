@@ -30,9 +30,9 @@ export type BoardHeaderItemsProps = {
 	 */
 	filter?: ReactElement | null;
 	/**
-	 * The tab's create action, ending the bar as a "+" on iOS, which has no
-	 * floating button. Android draws no header item for it: the page floats
-	 * Material's FAB (`AddFab`) with the same action.
+	 * The tab's create action, ending the bar as a "+". A page that draws it
+	 * elsewhere (iOS Projects puts it at the end of its own title line) leaves
+	 * it out there.
 	 */
 	onAdd?: () => void;
 	/** What the "+" does, for VoiceOver. */
@@ -41,9 +41,8 @@ export type BoardHeaderItemsProps = {
 
 /**
  * The board tabs' header items: Settings, Pull Requests, and Notifications
- * with its unread count, plus a tab's own filter and create action. Android
- * leaves out Settings and Pull Requests, which are tabs there. Native bar-button items on
- * iOS, Compose icon buttons on Android.
+ * with its unread count, plus a tab's own filter and create action. Native
+ * bar-button items on iOS, Compose icon buttons on Android.
  *
  * Pull requests and notifications come from a paired machine, so a board with
  * none shows Settings alone; pairing starts from there.
@@ -63,9 +62,8 @@ export function BoardHeaderItems({ unread, notifications = true, filter = null, 
 	const trailing = useMemo(() => (
 		<Stack.Toolbar placement="right">
 			{!ios ? filter : null}
-			{/* Android has Settings and Pull Requests as tabs. */}
-			{ios ? <Stack.Toolbar.Button icon={SETTINGS_ICON} hidesSharedBackground accessibilityLabel="Settings" onPress={() => router.navigate("/settings")} /> : null}
-			{ios && notifications ? (
+			<Stack.Toolbar.Button icon={SETTINGS_ICON} hidesSharedBackground accessibilityLabel="Settings" onPress={() => router.navigate("/settings")} />
+			{notifications ? (
 				<Stack.Toolbar.Button icon={PULL_REQUESTS_ICON} iconRenderingMode="template" hidesSharedBackground accessibilityLabel="Pull Requests" onPress={() => router.navigate("/prs")} />
 			) : null}
 			{notifications ? (
@@ -81,7 +79,7 @@ export function BoardHeaderItems({ unread, notifications = true, filter = null, 
 					{unread > 0 ? <Stack.Toolbar.Badge>{unread > MAX_BADGE ? `${MAX_BADGE}+` : String(unread)}</Stack.Toolbar.Badge> : null}
 				</Stack.Toolbar.Button>
 			) : null}
-			{ios && onAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel={addLabel} onPress={onAdd} /> : null}
+			{onAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel={addLabel} onPress={onAdd} /> : null}
 		</Stack.Toolbar>
 	), [addLabel, filter, ios, notifications, onAdd, router, unread]);
 	return (

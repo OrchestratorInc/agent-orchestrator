@@ -224,3 +224,45 @@ describe("persisting an inline machine edit", () => {
 		expect(d.saveHost).not.toHaveBeenCalled();
 	});
 });
+
+describe("a newly typed code or password on a saved machine", () => {
+	const host = { id: "h_manual", name: "Old", platform: "linux", token: "old", fallbackToken: "older", lastConnected: 42, endpoints: [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }] };
+	const token = "aod_" + "a".repeat(64);
+	const editDeps = (pair: NonNullable<Parameters<typeof persistManualHostEdit>[4]["pair"]>) => ({
+		probe: vi.fn(async () => ({ hostId: "h_manual" })),
+		ping: vi.fn(async () => {}),
+		saveHost: vi.fn(async () => {}),
+		renameHost: vi.fn(async () => {}),
+		pair: vi.fn(pair),
+	});
+
+	it.each([
+		["a one-time code", "pairing-code" as const, undefined],
+		["the pairing password", "password" as const, "typed"],
+	])("swaps %s for this phone's own token after the identity probe", async (_name, credential, fallbackToken) => {
+		const d = editDeps(async () => ({ kind: "paired", token, credential }));
+		const saved = await persistManualHostEdit(host, { ...cfg, password: "typed" }, "Old", 0, d);
+
+		expect(d.probe.mock.invocationCallOrder[0]).toBeLessThan(d.pair.mock.invocationCallOrder[0]);
+		expect(d.pair).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ password: "typed", hostId: "h_manual" }));
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		expect(saved.token).toBe(token);
+		expect(saved.fallbackToken).toBe(fallbackToken);
+		expect(d.saveHost).toHaveBeenCalledWith(saved);
+	});
+
+	it("saves the typed password, and drops the old fallback, on a machine without device tokens", async () => {
+		const d = editDeps(async () => ({ kind: "unsupported" }));
+		const saved = await persistManualHostEdit(host, { ...cfg, password: "typed" }, "Old", 0, d);
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ password: "typed" }));
+		expect(saved.token).toBe("typed");
+		expect(saved.fallbackToken).toBeUndefined();
+	});
+
+	it("pairs nothing when only the address changes, and keeps the fallback", async () => {
+		const d = editDeps(async () => ({ kind: "unsupported" }));
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "192.168.1.50", password: "old" }, "Old", 0, d);
+		expect(d.pair).not.toHaveBeenCalled();
+		expect(saved.fallbackToken).toBe("older");
+	});
+});

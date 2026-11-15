@@ -1,11 +1,16 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { createWebSideCloseBridge } from "./web-side-close";
+import { SIDE_CLOSE_PROTOCOL_VERSION } from "../../shared/side-close";
 export type { FeatureBuild } from "../../main/feature-builds";
 
 
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		triage: {
+			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+		},
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -33,6 +38,7 @@ export const aoBridge: AoBridge =
 		checkGitHubRepositoryAvailability: async () => ({ available: true }),
 			getPathForFile: () => "",
 			onOpenFolderPath: () => () => undefined,
+			onOpenSessionDeepLink: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
@@ -47,6 +53,7 @@ export const aoBridge: AoBridge =
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: () => () => undefined,
+			reportSessionsShown: () => undefined,
 			setMenuAvailability: () => undefined,
 			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
@@ -136,6 +143,18 @@ export const aoBridge: AoBridge =
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
 			cancel: async () => undefined,
+			setAccess: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			grants: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			invite: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
+			removeGrant: async () => {
+				throw new Error("Sharing needs the Orchestrator desktop app.");
+			},
 			unpublish: async () => {
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
@@ -152,6 +171,9 @@ export const aoBridge: AoBridge =
 			},
 			onFrameNavigated: () => () => undefined,
 		},
+		artifactSnapshot: {
+			request: async () => false,
+		},
 		daemon: {
 			getStatus: async () => ({
 				state: "stopped",
@@ -163,7 +185,14 @@ export const aoBridge: AoBridge =
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+		sideChats: import.meta.env.VITE_NO_ELECTRON === "1" ? createWebSideCloseBridge() : {
+			protocolVersion: SIDE_CLOSE_PROTOCOL_VERSION,
+			mode: "desktop",
+			capture: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			requestClose: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			getCloseState: async () => { throw new Error("Desktop side chat bridge is unavailable. Reload the desktop app."); },
+			onCloseStateChanged: () => () => {},
+		},
 		editorHandoff: {
 			pathAction: async () => { throw new Error("Desktop app is required to open local paths."); },
 			getState: async () => ({
@@ -229,6 +258,8 @@ export const aoBridge: AoBridge =
 			}),
 			historySuggestions: async () => [],
 			historyFavicon: async () => undefined,
+			userBrowser: async () => null,
+			openInUserBrowser: async () => ({ name: "", chrome: false }),
 			clear: async (viewId: string) => ({
 				viewId,
 				url: "",
@@ -452,6 +483,8 @@ export const aoBridge: AoBridge =
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
+			previewFolderUpload: async () => ({ status: "error", code: "invalid_request", message: "Uploading folders requires the desktop app." }),
 			takePendingSignIn: async () => null,
 		},
 		cloudCp: {

@@ -22,12 +22,11 @@ describe("Settings environment navigation", () => {
 
 	// A cold link to /settings/theme lands with the Settings list beneath it,
 	// so the back button goes back to the list instead of leaving Settings.
-	// On iOS, where Settings is pushed from the board. Android's Settings list
-	// is a tab, so a page opens alone over it and back returns to the tab.
-	it("opens every Settings page above the Settings list on iOS", () => {
+	// Settings is pushed from the board's header on both platforms.
+	it("opens every Settings page above the Settings list", () => {
 		const settingsLayout = read("../app/settings/_layout.tsx");
 
-		expect(settingsLayout).toContain('export const unstable_settings = Platform.OS === "ios" ? { initialRouteName: "index" } : {};');
+		expect(settingsLayout).toContain('export const unstable_settings = { initialRouteName: "index" };');
 	});
 
 	// Each machine's row in Settings opens its page, pushed inside Settings'

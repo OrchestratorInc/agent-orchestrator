@@ -34,6 +34,7 @@ vi.mock("../voice/MicKey", () => ({ MicKey: "MicKey" }));
 vi.mock("../voice/useVoiceInput", () => ({ useVoiceInput: () => ({}) }));
 vi.mock("./chatSheetRegistry", () => ({ chatSheetRoute: vi.fn() }));
 vi.mock("./ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
+vi.mock("../ImageViewer", () => ({ ImageViewer: "ImageViewer" }));
 vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handler) => { paste.handler = handler; return () => {}; } }));
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 vi.mock("./ChatTurnSettingsControl", () => ({ ChatTurnSettingsControl: "ChatTurnSettingsControl" }));

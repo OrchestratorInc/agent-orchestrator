@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import type { components } from "../../api/schema";
 import type { useDaemonStatus } from "../hooks/useDaemonStatus";
+import type { RemoteHost } from "../hooks/useRemoteHosts";
 
 // Shared state the persistent _shell layout owns and route content reads. The
 // daemon status effect (IPC poll + event transport) must run exactly once, so
@@ -12,6 +13,7 @@ export type ShellContextValue = {
 		path: string;
 		workerAgent: string;
 		orchestratorAgent: string;
+		reviewerAgent?: string;
 		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 		asWorkspace?: boolean;
 	}) => Promise<void>;
@@ -20,10 +22,15 @@ export type ShellContextValue = {
 		destinationParent: string;
 		workerAgent: string;
 		orchestratorAgent: string;
+		reviewerAgent?: string;
 		trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
 	}) => Promise<void>;
 	initializeProjectRepository: (path: string) => Promise<void>;
 	openRemoteProjectSettings: (hostId: string, projectId: string) => void;
+	remoteHosts?: RemoteHost[];
+	retryRemoteHosts?: () => void;
+	/** Removes a project the way the sidebar's Remove project does, after its confirm. */
+	removeProject?: (projectId: string, cloud: boolean) => void;
 	/** Navigate to a project's board, e.g. a cloud project just created. */
 	openProject?: (projectId: string) => void;
 	validateImport?: (input: {

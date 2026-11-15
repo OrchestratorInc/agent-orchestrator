@@ -10,6 +10,7 @@ import Archive from "lucide-react-native/icons/archive";
 import ArrowDown from "lucide-react-native/icons/arrow-down";
 import ArrowUp from "lucide-react-native/icons/arrow-up";
 import ArrowUpFromLine from "lucide-react-native/icons/arrow-up-from-line";
+import ArrowRight from "lucide-react-native/icons/arrow-right";
 import ClipboardCheck from "lucide-react-native/icons/clipboard-check";
 import Check from "lucide-react-native/icons/check";
 import CircleCheck from "lucide-react-native/icons/circle-check";
@@ -44,7 +45,12 @@ import Image from "lucide-react-native/icons/image";
 import Layers from "lucide-react-native/icons/layers";
 import MessageSquare from "lucide-react-native/icons/message-square";
 import MessageSquarePlus from "lucide-react-native/icons/message-square-plus";
+import Pause from "lucide-react-native/icons/pause";
 import Play from "lucide-react-native/icons/play";
+import ChartBar from "lucide-react-native/icons/chart-bar";
+import Music from "lucide-react-native/icons/music";
+import Table2 from "lucide-react-native/icons/table-2";
+import Video from "lucide-react-native/icons/video";
 import RotateCcw from "lucide-react-native/icons/rotate-ccw";
 import Trash from "lucide-react-native/icons/trash";
 import MessageCircle from "lucide-react-native/icons/message-circle";
@@ -92,6 +98,8 @@ export const glyphs = {
 	"arrow-down": ArrowDown,
 	"arrow-up": ArrowUp,
 	"arrow-up-from-line": ArrowUpFromLine,
+	"arrow-right": ArrowRight,
+	"bar-chart": ChartBar,
 	"check": Check,
 	"check-circle": CircleCheck,
 	"circle": Circle,
@@ -132,7 +140,9 @@ export const glyphs = {
 	"monitor-off": MonitorOff,
 	"monitor-smartphone": MonitorSmartphone,
 	"moon": Moon,
+	"music": Music,
 	"mouse-pointer": MousePointer2,
+	"pause": Pause,
 	"pin": Pin,
 	"play": Play,
 	"plus": Plus,
@@ -150,11 +160,13 @@ export const glyphs = {
 	"shield-off": ShieldOff,
 	"shuffle": Shuffle,
 	"smartphone": Smartphone,
+	"table": Table2,
 	"terminal": Terminal,
 	"timer": Timer,
 	"tool": Wrench,
 	"trash-2": Trash,
 	"unplug": Unplug,
+	"video": Video,
 	"wifi-off": WifiOff,
 	"x": X,
 } as const;

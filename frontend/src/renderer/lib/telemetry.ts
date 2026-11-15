@@ -1014,8 +1014,8 @@ const EDITOR_ID_SET = new Set<string>(EDITOR_IDS);
 const OPEN_TARGET_KIND_SET = new Set(["editor", "file_manager", "terminal"]);
 const TOPBAR_ACTION_SET = new Set<string>(TOPBAR_ACTIONS);
 const TOPBAR_VIEW_SET = new Set<string>(TOPBAR_VIEWS);
-const SESSION_IMPORT_SURFACE_SET = new Set(["home", "project_board"]);
-const SESSION_IMPORT_SOURCE_SET = new Set(["home_folders", "project_offer", "project_dialog", "settings"]);
+const SESSION_IMPORT_SURFACE_SET = new Set(["onboarding", "project_board"]);
+const SESSION_IMPORT_SOURCE_SET = new Set(["home_folders", "onboarding", "project_offer", "project_dialog", "settings"]);
 const SESSION_IMPORT_OPEN_OUTCOME_SET = new Set(["succeeded", "failed", "open_elsewhere"]);
 
 function agentList(value: unknown): string | undefined {
@@ -1069,7 +1069,7 @@ export async function sanitizeRendererProperties(
 			if (properties?.variant === "prompt" || properties?.variant === "control") safe.variant = properties.variant;
 			break;
 		case "ao.onboarding.first_run_prompt_action":
-			if (properties?.action === "clone" || properties?.action === "local_folder" || properties?.action === "standalone" || properties?.action === "dismissed") safe.action = properties.action;
+			if (properties?.action === "clone" || properties?.action === "local_folder" || properties?.action === "standalone" || properties?.action === "import" || properties?.action === "dismissed") safe.action = properties.action;
 			break;
 		case "ao.projects.added":
 		case "ao.projects.removed":
@@ -1281,7 +1281,7 @@ export async function sanitizeRendererProperties(
 			// The report's summary, details, and diagnostics block are the user's own
 			// words and machine state. Only the chosen destination and whether the
 			// hand-off worked are reported.
-			if (properties?.destination === "github" || properties?.destination === "discord" || properties?.destination === "email") {
+			if (properties?.destination === "agent" || properties?.destination === "terminal" || properties?.destination === "github" || properties?.destination === "discord" || properties?.destination === "email") {
 				safe.destination = properties.destination;
 			}
 			if (properties?.outcome === "succeeded" || properties?.outcome === "failed") safe.outcome = properties.outcome;

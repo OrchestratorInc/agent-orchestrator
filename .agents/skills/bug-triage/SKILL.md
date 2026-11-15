@@ -96,7 +96,7 @@ Collect only what helps explain this symptom:
 | Persisted state mismatch | Relevant rows and schema from a read-only SQLite query |
 
 Locate logs for the affected process rather than assuming `~/.ao/daemon.log` is current.
-Daemon output goes to stderr and may not persist; that file mostly covers keep-alive
+The daemon logs to `$AO_DATA_DIR/daemon.log`; that older file only covers keep-alive
 launches. Record missing evidence instead of enabling logging just to create it.
 
 Use the daemon API/CLI for state first. If database evidence is needed, discover the
@@ -108,8 +108,8 @@ artifact, including screenshots. Keep diagnostic artifacts under `~/.ao` and out
 Git commits. Preserve evidentiary content when redacting, and verify that unrelated
 content did not change. Share a useful excerpt rather than a wall of output.
 
-The report form's sanitizer masks known patterns only; review the exact draft and
-artifacts before sharing.
+Redaction masks known patterns only; review the exact draft and artifacts before
+sharing.
 
 Try a safe reproduction when practical, recording the build actually tested. Failure
 to reproduce does not invalidate the human report. Code tracing or dependency research

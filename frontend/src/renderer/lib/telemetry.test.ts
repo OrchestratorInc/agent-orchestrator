@@ -42,7 +42,7 @@ describe("telemetry sanitizers", () => {
 		for (const variant of ["prompt", "control"]) {
 			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
 		}
-		for (const action of ["clone", "local_folder", "standalone", "dismissed"]) {
+		for (const action of ["clone", "local_folder", "standalone", "import", "dismissed"]) {
 			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
 		}
 		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
@@ -208,9 +208,9 @@ describe("telemetry sanitizers", () => {
 		})).toEqual({});
 	});
 
-	it("reports a support submission with only the destination and outcome", async () => {
+	it.each(["agent", "terminal", "github", "discord", "email"])("reports a support submission to %s with only the destination and outcome", async (destination) => {
 		const safe = await sanitizeRendererProperties("ao.renderer.support_submitted", {
-			destination: "discord",
+			destination,
 			outcome: "succeeded",
 			// Everything the dialog collects is passed in deliberately: the user's own
 			// bug report, and the diagnostics block that carries machine state.
@@ -218,11 +218,11 @@ describe("telemetry sanitizers", () => {
 			details: "stack trace from /Users/me/work/secret-client",
 			diagnostics: { platform: "darwin", appVersion: "0.11.2" },
 		});
-		expect(safe).toEqual({ destination: "discord", outcome: "succeeded" });
+		expect(safe).toEqual({ destination, outcome: "succeeded" });
 	});
 
 	it("reports chat import counts and agents without titles, paths or ids", async () => {
-		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "home", project_id: "p1" })).toEqual({ surface: "home" });
+		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "onboarding", project_id: "p1" })).toEqual({ surface: "onboarding" });
 		expect(await sanitizeRendererProperties("ao.session_imports.scan_completed", {
 			outcome: "succeeded",
 			candidate_count: 42,

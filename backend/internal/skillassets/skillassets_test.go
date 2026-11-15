@@ -51,9 +51,9 @@ func TestEmbeddedPreviewGuidanceDoesNotScaffoldStaticSites(t *testing.T) {
 		"Never create or modify `package.json`",
 		"Do not create `.ao/launch.json` unless the user asks",
 		"reuse the repository's existing dev command",
-		"without waiting for a separate \"open it\" request",
+		"Do not run `ao preview` on a deliverable in this session's artifact directory, whatever its file type",
+		"renders it in the session's Artifacts tab",
 		"Do not steal the browser from an active application",
-		"open the primary requested artifact",
 		"relative to the session workspace root, not the shell's current directory",
 		"Do not compensate for the current directory with `../README.md`",
 		"existing confined loopback preview origin",
@@ -72,7 +72,7 @@ func TestEmbeddedPreviewGuidanceDoesNotScaffoldStaticSites(t *testing.T) {
 	skillText := string(skillBody)
 	normalizedSkillText := strings.Join(strings.Fields(skillText), " ")
 	if !strings.Contains(normalizedSkillText, "[commands/preview.md](commands/preview.md) before acting") ||
-		!strings.Contains(normalizedSkillText, "automatic-handoff rules are load-bearing") ||
+		!strings.Contains(normalizedSkillText, "artifacts render in the Artifacts tab after `ao artifact add`, never through `ao preview`") ||
 		!strings.Contains(normalizedSkillText, "[commands/browser.md](commands/browser.md)") ||
 		!strings.Contains(normalizedSkillText, "opt-in network policy") {
 		t.Fatalf("skill catalog is missing focused preview/browser routing:\n%s", skillText)
@@ -129,14 +129,17 @@ func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
 	}
 }
 
-func TestEmbeddedReviewGuidanceSeparatesExternalReviewFromOwnership(t *testing.T) {
+func TestEmbeddedReviewGuidanceUsesReviewClaims(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		want string
 	}{
-		{"using-ao/commands/review.md", "normal review-only worker without claiming or attaching the target PR"},
-		{"using-ao/commands/spawn.md", "Spawn a normal worker to review someone else's PR without taking ownership"},
-		{"using-ao/commands/session.md", "Reviewing someone else's PR"},
+		{"using-ao/commands/review.md", "ao spawn --claim-pr <pr-ref> --no-takeover --review"},
+		{"using-ao/commands/review.md", "ao session claim-pr <pr-ref> --review=false"},
+		{"using-ao/commands/spawn.md", `--name "review-pr-88" --claim-pr 88 --no-takeover --review`},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --no-takeover --review"},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --review=false"},
+		{"using-ao/commands/session.md", "do not commit, push, rebase, or otherwise change it unless the user explicitly asks"},
 	} {
 		body, err := files.ReadFile(tc.path)
 		if err != nil {
@@ -147,8 +150,8 @@ func TestEmbeddedReviewGuidanceSeparatesExternalReviewFromOwnership(t *testing.T
 		}
 	}
 	spawn, _ := files.ReadFile("using-ao/commands/spawn.md")
-	if strings.Contains(string(spawn), `--name "review-pr-88" --claim-pr`) {
-		t.Fatal("spawn guidance still claims the review target")
+	if strings.Contains(string(spawn), "Do not claim or attach the PR") {
+		t.Fatal("spawn guidance still tells reviewers not to claim the PR")
 	}
 }
 

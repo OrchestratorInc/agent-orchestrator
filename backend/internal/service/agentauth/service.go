@@ -1,6 +1,6 @@
 // Package agentauth owns the fixed, daemon-trusted authentication plans for
 // supported harnesses. Clients select an agent and a reviewed login method;
-// commands stay private, and optional credentials travel only through stdin.
+// commands stay private, and optional credentials never appear in API results.
 package agentauth
 
 import (
@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -95,6 +96,7 @@ type Plan struct {
 	prepareWorkspace func(context.Context, string) error
 	launcher         string
 	launcherArgs     []string
+	hiddenTerminal   bool
 }
 
 // TerminalOpener opens the daemon-trusted terminal used for a native
@@ -126,6 +128,9 @@ type Service struct {
 	dataDir        string
 	selfExecutable func() (string, error)
 	mu             sync.Mutex
+	// keysMu serializes changes to AO's provider keys and their OS user
+	// environment copies: saves, removals and the startup republication.
+	keysMu         sync.Mutex
 	operations     map[string]*loginOperation
 	terminalStarts map[string]bool
 	closed         bool
@@ -141,7 +146,56 @@ func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 // NewWithAgentResolver creates a service that uses AO's adapter-aware binary
 // resolver as the authoritative validation and discovery boundary.
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
-	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	// Restore AO-managed provider variables before adapter authentication probes
+	// and model discovery run after a daemon restart.
+	republish := map[string]string{}
+	if keys, err := providerkeys.Load(dataDir); err == nil {
+		device, _ := providerkeys.DeviceNames(dataDir)
+		users, _ := providerkeys.UserValueNames(dataDir)
+		for name, value := range keys {
+			// Recorded first, so a value the user exported before starting AO
+			// still reaches the sessions that must not receive AO's copy. A
+			// key AO published itself comes back from the OS user environment
+			// after a restart; that copy is AO's, not the user's.
+			var published []string
+			if device[name] && !users[name] {
+				published = []string{value}
+			}
+			_ = providerkeys.ExportForProbes(name, value, published...)
+			// A value the user set themselves comes from their own setup.
+			if device[name] && !users[name] && deviceSupported {
+				republish[name] = value
+			}
+		}
+		// launchd and systemd user environments are session-scoped. Restore
+		// the keys the user published when AO starts again after a login or
+		// daemon restart, in the background so a slow or missing user bus
+		// never delays daemon startup. A value the user set there since is
+		// left in place.
+	}
+	s := &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
+	if len(republish) > 0 {
+		go s.republishProviderKeys(republish)
+	}
+	return s
+}
+
+// republishProviderKeys restores the shared keys recorded at startup. Each
+// runs under keysMu and only if it is still stored with the same value and
+// still shared, so a removal or sharing change made meanwhile is never undone.
+func (s *Service) republishProviderKeys(republish map[string]string) {
+	for name, value := range republish {
+		s.keysMu.Lock()
+		keys, err := providerkeys.Load(s.dataDir)
+		device, deviceErr := providerkeys.DeviceNames(s.dataDir)
+		users, usersErr := providerkeys.UserValueNames(s.dataDir)
+		if err == nil && deviceErr == nil && usersErr == nil && keys[name] == value && device[name] && !users[name] {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = publishProviderKey(refreshCtx, name, value, value)
+			cancel()
+		}
+		s.keysMu.Unlock()
+	}
 }
 
 // Plans returns every known harness plan in stable Harness settings order.
@@ -211,6 +265,10 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 		if op.snapshot.AgentID != agentID {
 			continue
 		}
+		if op.cleanupFailed {
+			s.mu.Unlock()
+			return nil, apierr.Conflict("AGENT_AUTH_CLEANUP_PENDING", "The previous native login terminal could not be stopped. Restart AO before retrying.", nil)
+		}
 		select {
 		case <-op.done:
 		default:
@@ -257,6 +315,11 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 		return StartResult{}, err
 	}
 	defer release()
+	return s.startReserved(ctx, plan)
+}
+
+// startReserved launches only after reserveLogin excludes other login flows.
+func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, error) {
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_UNAVAILABLE", plan.Reason, nil)
@@ -281,22 +344,30 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	input := shellterm.OpenCommandTerminalInput{
 		Owner:                          "agentauth:" + plan.AgentID,
 		Argv:                           argv,
+		HideFromList:                   plan.hiddenTerminal,
 		Title:                          plan.title,
 		InitialInput:                   plan.initialInput,
 		InitialInputReadyStates:        plan.initialInputReadyStates,
 		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
 	}
+	// The terminal starts from the daemon's environment, which holds every
+	// AO-saved provider key. A key that would override this harness's own
+	// sign-in is held back, so the CLI never asks about it mid-login.
+	env := providerkeys.WithheldForSignIn(plan.AgentID)
 	if plan.AgentID == "claude-code" && s.dataDir != "" {
 		// The launcher runs in a private auth workspace. Preserve the daemon's
 		// resolved data root instead of re-resolving a relative inherited value.
-		input.Env = map[string]string{"AO_DATA_DIR": s.dataDir}
+		env["AO_DATA_DIR"] = s.dataDir
 	}
 	if plan.AgentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
 		if err != nil {
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
 		}
-		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
+		env["XDG_DATA_HOME"] = dataHome
+	}
+	if len(env) > 0 {
+		input.Env = env
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)

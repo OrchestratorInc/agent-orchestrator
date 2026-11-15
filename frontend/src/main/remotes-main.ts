@@ -2,10 +2,10 @@ import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity, type RemoteHealth } from "./remote-request";
+import { IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readRemoteIdentity, type PairDeviceResult, type RemoteHealth } from "./remote-request";
 import { findRemote, removeSavedRemote, toHostViews, updateSavedRemote } from "./remotes-ipc";
 import type { RemoteRegistry } from "./remote-registry";
-import { ACCOUNT_TOKEN, addRemote, holdsAccountToken, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
+import { ACCOUNT_TOKEN, DEVICE_TOKEN_PREFIX, addRemote, holdsAccountToken, holdsPairingPassword, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
 import { ExpectedIpcError } from "./main-error-capture";
 
 // An isolated desktop run must not read or write the real user's credentials.
@@ -54,6 +54,9 @@ export type RemotesIpcDeps = {
 	accountDirectoryTimeoutMs?: number;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
+	pair?: (entry: Pick<RemoteEntry, "url" | "hostId">, secret: string, device: { name: string; platform: string }) => Promise<PairDeviceResult>;
+	authErrorCode?: (entry: RemoteEntry) => Promise<string | undefined>;
+	deviceName?: () => Promise<string>;
 };
 
 class LocalIdentityUnavailableError extends ExpectedIpcError {
@@ -69,7 +72,10 @@ type AccountHost = { hostId: string; label: string; url: string; token: string }
  */
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
-	{ file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000, probe = probeRemote, identity = readRemoteIdentity }: RemotesIpcDeps,
+	{
+		file, registry, requireAccount, getAccountId, localIdentity, cloudRequest, accountDirectoryTimeoutMs = 10_000,
+		probe = probeRemote, identity = readRemoteIdentity, pair = pairDevice, authErrorCode = readAuthErrorCode, deviceName = computerName,
+	}: RemotesIpcDeps,
 ): void {
 	const disconnect = (url: string) => registry.disconnect(url);
 	const refuseSelf = (hostId: string | undefined, localHostId: string | null) => {
@@ -103,6 +109,36 @@ export function registerRemotesIpc(
 		const health = await probe(entry);
 		await checkConnectionContext(localHostId, account);
 		return health;
+	};
+	const askAgainAt = new Map<string, number>();
+	const ASK_AGAIN_MS = 60 * 60_000;
+	// A password is kept as the fallback; a spent pairing code is not.
+	const pairOwnToken = async (entry: RemoteEntry): Promise<{ entry: RemoteEntry; result: PairDeviceResult["kind"] }> => {
+		const result = await pair(entry, entry.password, { name: await deviceName(), platform: process.platform });
+		if (result.kind === "unsupported" && entry.hostId) askAgainAt.set(entry.hostId, Date.now() + ASK_AGAIN_MS);
+		if (result.kind !== "paired") return { entry, result: result.kind };
+		const { sealedPassword: _sealed, accountToken: _account, ...kept } = entry;
+		return {
+			entry: { ...kept, password: result.token, fallbackPassword: result.credential === "password" ? entry.password : undefined },
+			result: "paired",
+		};
+	};
+	// A token issued for an add or edit whose probe then failed, by account and host.
+	// The code it replaced is spent, so a retry with the same code uses the token. In memory only.
+	const unsaved = new Map<string, { typed: string } & Pick<RemoteEntry, "password" | "fallbackPassword">>();
+	const unsavedKey = (account: string, hostId: string) => `${account}\n${hostId}`;
+	const pairOrReuse = async (account: string, typed: RemoteEntry) => {
+		const kept = typed.hostId ? unsaved.get(unsavedKey(account, typed.hostId)) : undefined;
+		if (kept?.typed !== typed.password) return pairOwnToken(typed);
+		return { entry: { ...typed, password: kept.password, fallbackPassword: kept.fallbackPassword }, result: "paired" as const };
+	};
+	const remember = (account: string, typed: RemoteEntry, paired: Awaited<ReturnType<typeof pairOwnToken>>, health: RemoteHealth) => {
+		if (!typed.hostId) return;
+		if (paired.result === "paired" && health !== "online" && health !== "unauthorized") {
+			unsaved.set(unsavedKey(account, typed.hostId), { typed: typed.password, password: paired.entry.password, fallbackPassword: paired.entry.fallbackPassword });
+		} else {
+			unsaved.delete(unsavedKey(account, typed.hostId));
+		}
 	};
 	// Keep edits and connects ordered so an update cannot leave a stale proxy.
 	// ponytail: one queue includes network probes; split by host if five-host setup is too slow.
@@ -147,8 +183,13 @@ export function registerRemotesIpc(
 			return "offline" as RemoteHealth;
 		}
 		refuseSelf(hostId, localHostId);
-		const entry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
+		const typed: RemoteEntry = { label: input.label, url: input.url, password: input.password, hostId, accountUserId: account };
+		await checkConnectionContext(localHostId, account);
+		const paired = await pairOrReuse(account, typed);
+		if (paired.result === "unauthorized") return "unauthorized" as RemoteHealth;
+		const entry = paired.entry;
 		const health = await checkedProbe(entry, account);
+		remember(account, typed, paired, health);
 		if (health === "online") {
 			const previous = (await owned()).find((saved) => saved.hostId === hostId);
 			await addRemote(file, entry);
@@ -160,7 +201,29 @@ export function registerRemotesIpc(
 	ipcMain.handle("remotes:update", async (_event, url: string, changes: RemoteChanges) => ordered(async () => {
 		const account = await accountID();
 		if (!(await owned()).some((entry) => entry.url === url)) throw new ExpectedIpcError("Host does not belong to this account.");
-		const { accountUserId: _ignored, ...editable } = changes;
+		const editable: RemoteChanges = { label: changes.label, url: changes.url, password: changes.password };
+		const current = (await readRemotes(file)).find((entry) => entry.url === url);
+		if (editable.password !== undefined && current) {
+			const typed: RemoteEntry = { ...current, url: editable.url ?? url, password: editable.password, fallbackPassword: undefined, sealedFallbackPassword: undefined };
+			const localHostId = await requireLocalIdentity();
+			refuseSelf(typed.hostId, localHostId);
+			let actual: string;
+			try {
+				actual = await identity(typed);
+			} catch (error) {
+				return error instanceof IncompatibleRemoteVersionError ? "incompatible" : "offline";
+			}
+			refuseSelf(actual, localHostId);
+			if (typed.hostId && actual !== typed.hostId) throw new ExpectedIpcError(`remote host identity changed for ${typed.url}; connection refused`);
+			await checkConnectionContext(localHostId, account);
+			const paired = await pairOrReuse(account, typed);
+			if (paired.result === "unauthorized") return "unauthorized";
+			editable.password = paired.entry.password;
+			editable.fallbackPassword = paired.entry.fallbackPassword;
+			const health = await updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
+			remember(account, typed, paired, health);
+			return health;
+		}
 		return updateSavedRemote(file, url, editable, disconnect, (entry) => checkedProbe(entry, account));
 	}));
 	ipcMain.handle("remotes:remove", async (_event, url: string) => ordered(async () => {
@@ -186,8 +249,27 @@ export function registerRemotesIpc(
 			if (error instanceof LocalIdentityUnavailableError && connected && await accountID() === account) return connected;
 			throw error;
 		}
+		let current = entry;
+		// Only a release without device tokens, as after a rollback, refuses a token with
+		// BAD_PASSWORD; the kept password works there. Any other answer, or none, keeps it out.
+		if (health === "unauthorized" && current.fallbackPassword && current.password.startsWith(DEVICE_TOKEN_PREFIX)
+			&& await authErrorCode(current) === "BAD_PASSWORD") {
+			const previous: RemoteEntry = { ...current, password: current.fallbackPassword, fallbackPassword: undefined };
+			if (await checkedProbe(previous, account) === "online") {
+				current = await updateRemote(file, url, { password: previous.password });
+				health = "online";
+			}
+		}
 		if (health !== "online") throw new ExpectedIpcError(`host ${url} is ${health}`);
-		return registry.connect(entry);
+		// Swap a pairing password for this device's own token, but never under a
+		// live connection: the new credential restarts the host's proxy.
+		if (holdsPairingPassword(current) && !registry.connected(current) && Date.now() >= (askAgainAt.get(current.hostId ?? "") ?? 0)) {
+			const paired = await pairOwnToken(current);
+			if (paired.result === "paired") {
+				current = await updateRemote(file, url, { password: paired.entry.password, fallbackPassword: paired.entry.fallbackPassword });
+			}
+		}
+		return registry.connect(current);
 	}));
 	// AO Cloud calls run outside the ordered queue: a slow answer must not hold
 	// up list, connect and the other handlers for locally paired hosts.

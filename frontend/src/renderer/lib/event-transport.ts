@@ -401,6 +401,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										conversationId?: unknown;
 										reviewId?: unknown;
 										interfaceTransitionId?: unknown;
+										activity?: unknown;
 										shellTerminalHandleId?: unknown;
 										kind?: unknown;
 										agentId?: unknown;
@@ -474,6 +475,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							// refetching for each one reloaded its whole page every few seconds.
 							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
 								pendingConversationSessions.add(decoded.sessionId);
+							}
+							// Native identity and provisioning changes carry the session-row
+							// activity field. Recheck switch readiness even after its poll
+							// budget expires, without reacting to id-only usage updates.
+							if (typeof payload?.activity === "string") {
+								pendingInterfaceTransitionSessions.add(decoded.sessionId);
 							}
 							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}

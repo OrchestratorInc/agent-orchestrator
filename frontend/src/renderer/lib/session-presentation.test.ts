@@ -12,7 +12,6 @@ import {
 	isSessionIdle,
 } from "./session-presentation";
 import type { WorkspaceSession } from "../types/workspace";
-import { useUiStore } from "../stores/ui-store";
 
 function sessionWith(overrides: Partial<WorkspaceSession>): WorkspaceSession {
 	return {
@@ -246,31 +245,6 @@ describe("session presentation", () => {
 		expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: false });
 	});
 
-	it("keeps the old dot when the new sidebar design is switched off in Developer mode", () => {
-		const merged = sessionWith({
-			status: "working",
-			scmStatus: "merged",
-			activity: { state: "active", lastActivityAt: "" },
-		});
-		useUiStore.setState({ developerMode: true, newSidebarDesign: false });
-		try {
-			// The old dot breathes with the agent even after the PR merged.
-			expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: true });
-		} finally {
-			useUiStore.setState({ developerMode: false, newSidebarDesign: true });
-		}
-	});
-
-	it("ignores the switched-off design outside Developer mode", () => {
-		useUiStore.setState({ developerMode: false, newSidebarDesign: false });
-		try {
-			const merged = sessionWith({ status: "working", scmStatus: "merged", activity: { state: "active", lastActivityAt: "" } });
-			expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: false });
-		} finally {
-			useUiStore.setState({ newSidebarDesign: true });
-		}
-	});
-
 	it("flags only sessions waiting on the user for the alert icon", () => {
 		const flagged = (overrides: Partial<WorkspaceSession>) => getSessionStatusDotView(sessionWith(overrides)).needsInput;
 
@@ -331,16 +305,6 @@ describe("session presentation", () => {
 		const session = sessionWith({ status: "idle", scmStatus: "ci_failed", kanbanColumn: "ready", displayStatus: "Mergeable" });
 
 		expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
-	});
-
-	it("keeps the legacy dot on the PR the card's phrase describes", () => {
-		useUiStore.setState({ developerMode: true, newSidebarDesign: false });
-		try {
-			const session = sessionWith({ status: "idle", scmStatus: "ci_failed", displayStatus: "Mergeable" });
-			expect(getSessionStatusDotView(session)).toEqual({ className: "bg-status-ready", breathe: false });
-		} finally {
-			useUiStore.setState({ developerMode: false, newSidebarDesign: true });
-		}
 	});
 
 	it.each(["Working", "", undefined])("falls back to SCM state for the phrase %s", (displayStatus) => {

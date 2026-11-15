@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -671,6 +672,16 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 	}
 	env[sessionmanager.EnvProjectID] = string(spec.ProjectID)
 	env[sessionmanager.EnvDataDir] = l.dataDir
+	// A reviewer inherits the daemon's environment, which holds every AO-saved
+	// provider key. Hold back the ones this harness's sessions never receive,
+	// as a worker would, unless the project sets them itself.
+	if strings.TrimSpace(l.dataDir) != "" {
+		for key, value := range providerkeys.Withheld(l.dataDir, string(spec.Harness)) {
+			if _, set := spec.ProjectEnv[key]; !set {
+				env[key] = value
+			}
+		}
+	}
 	if strings.TrimSpace(l.runFile) != "" {
 		env[EnvRunFile] = l.runFile
 	}

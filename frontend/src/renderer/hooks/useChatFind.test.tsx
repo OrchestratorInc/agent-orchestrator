@@ -31,6 +31,14 @@ function Harness({ snapshot = source, markdown = false }: { snapshot?: Conversat
 	</section>;
 }
 
+let openFind: ((value: string, anchorMessageId?: string) => void) | undefined;
+function OpenWithHarness() {
+	const root = useRef<HTMLDivElement>(null), viewport = useRef<HTMLDivElement>(null);
+	const find = useChatFind({ source, root, viewport, reveal, pauseFollow: pause });
+	openFind = find.openWith;
+	return <section data-chat-find-scope=""><div ref={root} data-chat-find-surface="">{find.bar}<div ref={viewport} tabIndex={-1}>{find.snapshot.items.map((item) => <div key={item.id} data-find-message-id={item.id}><p data-chat-message-body="">{item.kind === "message" ? item.text : ""}</p></div>)}</div></div></section>;
+}
+
 async function tick(ms = 180) { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); }
 async function openAndSearch() {
 	fireEvent.keyDown(document.activeElement ?? document.body, { key: "f", ctrlKey: true }); await tick(20);
@@ -47,6 +55,22 @@ describe("find in chat interactions", () => {
 		useKeybindingsStore.setState({ overrides: {} });
 	});
 	afterEach(() => { cleanup(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+	it("opens searching for a session search result's word, from the result's message", async () => {
+		get.mockResolvedValue({ data: { conversationId: "c", transcriptRevision: "r", occurrences: hits, total: 2, offset: 0, initialIndex: 1 }, response: { status: 200 } });
+		render(<OpenWithHarness />);
+		act(() => openFind?.("hello", "m")); await tick(20); await tick();
+		expect(screen.getByRole("searchbox")).toHaveValue("hello");
+		expect(get.mock.calls[0][1].params.query).toMatchObject({ query: "hello", anchorMessageId: "m", anchorBlock: 0, anchorOffset: 0, fallbackToPrevious: false });
+		expect(screen.getByText("2/2")).toBeInTheDocument();
+		expect(reveal).toHaveBeenLastCalledWith(hits[1]);
+		// Another result for the same word searches again from its own message
+		// rather than keeping the active match.
+		const calls = get.mock.calls.length;
+		act(() => openFind?.("hello", "other")); await tick();
+		expect(get.mock.calls.length).toBeGreaterThan(calls);
+		expect(get.mock.calls.at(-1)?.[1].params.query).toMatchObject({ query: "hello", anchorMessageId: "other", fallbackToPrevious: false });
+	});
 
 	it("reveals and highlights a daemon occurrence after a rendered hard break without timing out", async () => {
 		const registry = new Map<string, Set<Range>>();

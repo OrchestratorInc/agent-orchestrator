@@ -74,6 +74,66 @@ func TestForegroundTrackerRechecksQuietScreenAfterEchoOrResize(t *testing.T) {
 	}
 }
 
+// exec swaps the program inside the shell's process group; the new program's
+// first screen must get the same start grace as one launched normally.
+func TestForegroundTrackerRestartsGraceWhenExecSwapsProgram(t *testing.T) {
+	reader := &fakeForegroundReader{pgid: 42}
+	tracker := newForegroundTracker(reader)
+	argv := []string{"-zsh"}
+	processArgvBefore := processArgvFunc
+	processArgvFunc = func(int) []string { return argv }
+	t.Cleanup(func() { processArgvFunc = processArgvBefore })
+
+	start := time.Now()
+	tracker.evaluate(start)
+	exec := start.Add(foregroundStartGrace + time.Minute)
+	argv = []string{"claude"}
+	tracker.noteOutput(exec)
+	if _, changed, state := tracker.evaluate(exec); !changed || state.Busy {
+		t.Fatalf("first screen after exec = %+v (changed %v), want the new program reported idle", state, changed)
+	}
+	drawing := exec.Add(time.Second)
+	tracker.noteOutput(drawing)
+	if _, _, state := tracker.evaluate(drawing); state.Busy {
+		t.Fatal("output inside the exec'd program's start grace counted as working")
+	}
+}
+
+func TestForegroundTrackerMarksEchoOnlyScreenUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		draw func(tracker *foregroundTracker, now time.Time)
+		echo bool
+	}{
+		{name: "typing", echo: true, draw: func(tracker *foregroundTracker, now time.Time) {
+			tracker.noteInput(now)
+			tracker.noteOutput(now.Add(20 * time.Millisecond))
+		}},
+		{name: "resize", echo: false, draw: func(tracker *foregroundTracker, now time.Time) {
+			tracker.noteResize(now)
+			tracker.noteOutput(now.Add(20 * time.Millisecond))
+		}},
+		{name: "typing then a late prompt", echo: false, draw: func(tracker *foregroundTracker, now time.Time) {
+			tracker.noteInput(now)
+			tracker.noteOutput(now.Add(20 * time.Millisecond))
+			tracker.noteOutput(now.Add(foregroundEchoWindow + 50*time.Millisecond))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker := newForegroundTracker(&fakeForegroundReader{pgid: 42})
+			now := time.Now()
+			tracker.evaluate(now)
+			now = now.Add(foregroundStartGrace + time.Second)
+			tc.draw(tracker, now)
+			settled := now.Add(foregroundBusyWindow + time.Second)
+			_, changed, state := tracker.evaluate(settled)
+			if !changed || state.Busy || state.EchoOnly != tc.echo {
+				t.Fatalf("settled screen = %+v (changed %v), want idle with EchoOnly %v", state, changed, tc.echo)
+			}
+		})
+	}
+}
+
 type fakeForegroundPTY struct {
 	ptyConn
 	fakeForegroundReader

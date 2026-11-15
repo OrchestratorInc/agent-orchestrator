@@ -14,12 +14,12 @@
  * Only a call that failed shows without being asked for, under the line that folds it.
  */
 
-import { useState } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2 } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
-import { ActivityRow, ActivityTransition } from "./ChatTimelineItems";
+import { ActivityRow, ActivityTransition, RevealedChatActivity } from "./ChatTimelineItems";
 import { useChatEntrance } from "./chat-entrance";
 import {
 	ACTIVITY_SUMMARY_BUTTON_CLASS,
@@ -50,6 +50,13 @@ export function ActivityRun({
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, next);
 		else setLocalOpen(next);
 	};
+	// A search match inside this run opens it, as a reader's choice would, so it
+	// stays open once the match has been shown.
+	const revealed = useContext(RevealedChatActivity);
+	const holdsRevealed = Boolean(revealed && activities.some((activity) => activity.id === revealed));
+	useEffect(() => {
+		if (holdsRevealed && !open) updateOverride(disclosureKey ?? "", true);
+	}, [holdsRevealed, revealed]);
 	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
 	// The group fades in when it forms while the chat is on screen, never when the
@@ -150,14 +157,7 @@ export function ActivityRun({
 					>
 						<div className="flex flex-col gap-1 pt-1">
 							{subgroups.length === 1
-								? subgroups[0]!.activities.map((activity) => {
-										const node = nodesByActivityID.get(activity.id);
-										return node ? (
-											<ActivityTree key={activity.id} node={node} />
-										) : (
-											<ActivityRow key={activity.id} activity={activity} />
-										);
-								  })
+								? renderActivityRows(subgroups[0]!.activities, nodesByActivityID)
 								: subgroups.map((group) => (
 										<ActivitySubgroup
 											key={group.activities.map((activity) => activity.id).join(":")}
@@ -202,6 +202,49 @@ function FailedCalls({ activities, folded }: { activities: ConversationActivity[
 
 function newestSequence(activities: readonly ConversationActivity[]): number {
 	return activities.reduce((newest, activity) => Math.max(newest, activity.sequence), 0);
+}
+
+/**
+ * The rows of a run. Back-to-back commands that finished and read the same
+ * ("Checked the browser console" twice) show as one row; opening it still
+ * shows every call.
+ */
+function renderActivityRows(
+	activities: readonly ConversationActivity[],
+	nodesByActivityID: ReadonlyMap<string, ActivityNode>,
+): ReactNode[] {
+	const rows: ReactNode[] = [];
+	let index = 0;
+	while (index < activities.length) {
+		const activity = activities[index]!;
+		const node = nodesByActivityID.get(activity.id);
+		if (node && node.children.length > 0) {
+			rows.push(<ActivityTree key={activity.id} node={node} />);
+			index += 1;
+			continue;
+		}
+		const label = repeatableLabel(activity);
+		let end = index + 1;
+		while (
+			label &&
+			end < activities.length &&
+			!nodesByActivityID.get(activities[end]!.id)?.children.length &&
+			repeatableLabel(activities[end]!) === label
+		) {
+			end += 1;
+		}
+		const last = activities[end - 1]!;
+		rows.push(<ActivityRow key={activity.id} activity={last} repeats={activities.slice(index, end - 1)} />);
+		index = end;
+	}
+	return rows;
+}
+
+/** The label two finished commands must share to fold into one row, or undefined. */
+function repeatableLabel(activity: ConversationActivity): string | undefined {
+	if (activity.activityKind !== "command" || activity.status !== "completed") return undefined;
+	const step = activityCommandStep(activity);
+	return [step.done, step.target].filter(Boolean).join(" ");
 }
 
 type ActivitySubgroupData = { key: string; activities: ConversationActivity[] };
@@ -252,6 +295,15 @@ function ActivitySubgroup({
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
 		else setLocalOpen(next);
 	};
+	const revealed = useContext(RevealedChatActivity);
+	// A subgroup lists top-level calls; a match inside a subagent below one counts too.
+	const holdsRevealed = Boolean(revealed && activities.some((activity) => {
+		const node = nodesByActivityID.get(activity.id);
+		return node ? nodeActivities(node).some((nested) => nested.id === revealed) : activity.id === revealed;
+	}));
+	useEffect(() => {
+		if (holdsRevealed && !open) updateOverride(true);
+	}, [holdsRevealed, revealed]);
 	const hasNestedAgent = activities.some((activity) =>
 		nodesByActivityID.get(activity.id)?.children.length,
 	);
@@ -259,14 +311,7 @@ function ActivitySubgroup({
 	if (activities.length === 1 || hasNestedAgent || isStructural) {
 		return (
 			<>
-				{activities.map((activity) => {
-					const node = nodesByActivityID.get(activity.id);
-					return node ? (
-						<ActivityTree key={activity.id} node={node} />
-					) : (
-						<ActivityRow key={activity.id} activity={activity} />
-					);
-				})}
+				{renderActivityRows(activities, nodesByActivityID)}
 			</>
 		);
 	}
@@ -296,14 +341,7 @@ function ActivitySubgroup({
 						className="overflow-hidden"
 					>
 						<div className="flex flex-col gap-1">
-							{activities.map((activity) => {
-								const node = nodesByActivityID.get(activity.id);
-								return node ? (
-									<ActivityTree key={activity.id} node={node} />
-								) : (
-									<ActivityRow key={activity.id} activity={activity} />
-								);
-							})}
+							{renderActivityRows(activities, nodesByActivityID)}
 						</div>
 					</motion.div>
 				) : null}
@@ -408,7 +446,13 @@ function ActivityTree({ node }: { node: ActivityNode }) {
 }
 
 function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
-	const [open, setOpen] = useState(false);
+	// A search match in one of the subagent's calls opens the fold that holds it.
+	const revealed = useContext(RevealedChatActivity);
+	const holdsRevealed = Boolean(revealed && nodes.some((node) => nodeActivities(node).some((activity) => activity.id === revealed)));
+	const [open, setOpen] = useState(holdsRevealed);
+	useEffect(() => {
+		if (holdsRevealed) setOpen(true);
+	}, [holdsRevealed, revealed]);
 	const reducedMotion = useReducedMotion();
 	const count = countNodes(nodes);
 	const running = nodes.some(nodeRunning);

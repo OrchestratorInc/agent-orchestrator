@@ -32,6 +32,19 @@ document.write('<meta property="og:description" content="Script Description">');
 	}
 }
 
+func TestParseHeadKeepsColorSchemeIconsApart(t *testing.T) {
+	doc := []byte(`<html><head>
+<link rel="icon" href="/dark.svg" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/light.svg" media="(prefers-color-scheme:light)">
+<link rel="icon" href="/plain.png">
+</head><body></body></html>`)
+
+	m := parseHead(doc)
+	if m.favicon != "/plain.png" || m.faviconLight != "/light.svg" || m.faviconDark != "/dark.svg" {
+		t.Errorf("icons = %q / light %q / dark %q, want the dark-only icon kept out of the default", m.favicon, m.faviconLight, m.faviconDark)
+	}
+}
+
 func TestParseHeadSkipsStyleBodies(t *testing.T) {
 	doc := []byte(`<html><head>
 <style>
