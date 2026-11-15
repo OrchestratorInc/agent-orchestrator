@@ -210,7 +210,12 @@ if (typeof window !== "undefined") {
 			set: async () => undefined,
 			persistTerminal: async () => undefined,
 			setWindowBackground: async () => undefined,
-			setWindowTranslucent: async () => undefined,
+			setWindowTranslucent: async (enabled) => {
+				const supported = /Mac|Win/.test(navigator.platform);
+				return { supported, enabled: supported && enabled, reason: supported ? null : "unsupported" };
+			},
+			getWindowTransparency: async () => ({ supported: false, enabled: false, reason: "unsupported" }),
+			onWindowTransparency: () => () => undefined,
 		},
 		menu: {
 			action: async () => undefined,

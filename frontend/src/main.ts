@@ -5,6 +5,9 @@ import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { launchTriageInTerminal } from "./main/triage-launch";
 import { initializeDesktopLog } from "./main/desktop-log";
 import { syncMacWindowButtons } from "./main/window-chrome";
+import { WindowTransparency } from "./main/window-transparency";
+import { registerWindowTransparencyIpc } from "./main/window-transparency-ipc";
+import { WINDOW_TRANSPARENCY_CHANGED } from "./shared/window-transparency";
 import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
 import { acknowledgeMacUpdateRestart } from "./main/mac-update-progress";
@@ -586,12 +589,7 @@ function getShellWebContents(): WebContents | null {
 // browser page shows, so the native window background must match it or the
 // gutters around the panels render in the fallback colour.
 let rendererWindowBackground: string | null = null;
-// macOS window transparency: the shell paints translucent surfaces and the
-// native vibrancy material underneath blurs the desktop.
-let windowTranslucent = false;
-// What each window last received, so theme changes and resizes skip identical
-// native calls. A new window (a Dock reopen) starts with no entry.
-const appliedNativeBackground = new WeakMap<BaseWindow, { vibrancy: string | null; color: string }>();
+const windowTransparency = new WindowTransparency(process.platform, os.release());
 
 /**
  * Keep vibrancy and the native background in sync after window/renderer
@@ -601,17 +599,16 @@ const appliedNativeBackground = new WeakMap<BaseWindow, { vibrancy: string | nul
  */
 function syncNativeWindowBackground(force = false): void {
 	if (!windowComposition || !mainWindow || mainWindow.isDestroyed()) return;
-	const vibrancy = process.platform === "darwin" && windowTranslucent ? "under-window" : null;
-	const color = windowTranslucent
-		? "#00000000"
-		: rendererWindowBackground ??
-			(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT);
-	const applied = appliedNativeBackground.get(mainWindow);
-	if (process.platform === "darwin" && (force || applied?.vibrancy !== vibrancy)) {
-		mainWindow.setVibrancy(vibrancy);
+	const previous = windowTransparency.state;
+	const state = windowTransparency.sync(mainWindow, rendererWindowBackground ??
+		(nativeTheme.shouldUseDarkColors ? NATIVE_WINDOW_BACKGROUND_DARK : NATIVE_WINDOW_BACKGROUND_LIGHT), {
+		dark: nativeTheme.shouldUseDarkColors,
+		reducedTransparency: nativeTheme.prefersReducedTransparency,
+		highContrast: nativeTheme.shouldUseHighContrastColors || nativeTheme.inForcedColorsMode,
+	}, force);
+	if (previous.enabled !== state.enabled || previous.reason !== state.reason) {
+		getShellWebContents()?.send(WINDOW_TRANSPARENCY_CHANGED, state);
 	}
-	if (force || applied?.color !== color) mainWindow.setBackgroundColor(color);
-	appliedNativeBackground.set(mainWindow, { vibrancy, color });
 }
 
 function resolvedDaemonDataDir(): string {
@@ -3429,13 +3426,19 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 	}
 });
 
-ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
-	// No early return when the value is unchanged: each new shell document asks
-	// again, and re-applying is cheap and recovers any native state that drifted.
-	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
-	if (!mainWindow || mainWindow.isDestroyed()) return;
-	windowTranslucent = enabled;
-	syncNativeWindowBackground(true);
+registerWindowTransparencyIpc({
+	ipcMain,
+	isShell: (sender) => sender === getShellWebContents(),
+	read: () => {
+		syncNativeWindowBackground();
+		return windowTransparency.state;
+	},
+	set: (enabled) => {
+		// Each new shell document re-applies native state, including unchanged requests.
+		windowTransparency.request(enabled);
+		syncNativeWindowBackground(true);
+		return windowTransparency.state;
+	},
 });
 
 ipcMain.handle("theme:persist-terminal",(_event, scheme: unknown) => {

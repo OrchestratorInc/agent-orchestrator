@@ -10,6 +10,7 @@ import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
 import { aoBridge } from "../lib/bridge";
+import { applyWindowTranslucency } from "../lib/window-translucency";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -1378,6 +1379,29 @@ describe("useBrowserView", () => {
 		expect(bridge.destroy).not.toHaveBeenCalled();
 	});
 
+	it("publishes an existing native page's tint cutout when transparency changes without resizing", async () => {
+		const bridge = setupBridge();
+		bridge.nativeCompositionEnabled = true;
+		const shell = document.createElement("div");
+		shell.className = "app-shell-root";
+		document.body.appendChild(shell);
+		const slot = createSlot();
+		vi.spyOn(aoBridge.theme, "setWindowTranslucent").mockImplementation(async (enabled) => ({ supported: true, enabled, reason: null }));
+		const { result, unmount } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		try {
+			await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+			act(() => result.current.slotRef(slot));
+			await act(() => applyWindowTranslucency(true));
+			expect(document.documentElement.dataset.browserHole).toBe("true");
+			expect(shell.style.getPropertyValue("--browser-hole-w")).toBe("320px");
+			await act(() => applyWindowTranslucency(false));
+			expect(document.documentElement.dataset.browserHole).toBeUndefined();
+		} finally {
+			await act(() => applyWindowTranslucency(false));
+			unmount();
+		}
+	});
+
 	it("does not snapshot or park the native page for an ordinary modal dialog", async () => {
 		const bridge = setupBridge();
 		const slot = createSlot();
@@ -1411,7 +1435,9 @@ describe("useBrowserView", () => {
 			document.body.appendChild(dialog);
 			await Promise.resolve();
 		});
-		expect(bridge.setBounds).not.toHaveBeenCalled();
+		// A queued rAF may repeat visible geometry; opening the modal must never
+		// park the native page, even when that measurement lands during this act.
+		expect(bridge.setBounds.mock.calls.every(([bounds]) => bounds.visible !== false)).toBe(true);
 
 		bridge.setBounds.mockClear();
 		await act(async () => {
