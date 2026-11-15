@@ -276,7 +276,7 @@ func (c *conversation) steerByRequest(
 	case SteerInjected:
 		c.mu.Lock()
 		if c.activeTurn == providerTurnID {
-			c.steerSegment++
+			c.advanceIDLessSegmentsLocked()
 		}
 		c.mu.Unlock()
 		return ports.ChatTurnRef{ProviderTurnID: providerTurnID}, nil
@@ -411,7 +411,7 @@ func (c *conversation) collectSteers(params json.RawMessage) any {
 		}
 		c.pendingSteers = nil
 		if len(texts) > 0 {
-			c.steerSegment++
+			c.advanceIDLessSegmentsLocked()
 		}
 	}
 	c.mu.Unlock()

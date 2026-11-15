@@ -163,11 +163,7 @@ func (c *conversation) beginHistoryReplay(sessionID string) {
 	c.mu.Lock()
 	c.sessionID = sessionID
 	c.activeTurn = ""
-	c.messages = make(map[string]string)
-	c.steerSegment = 0
-	c.thoughts = make(map[string]string)
-	c.nestedMessages = make(map[string]nestedMessageState)
-	c.tools = make(map[string]*toolState)
+	c.resetTurnItemsLocked()
 	c.mu.Unlock()
 
 	c.historyMu.Lock()
@@ -443,11 +439,7 @@ func (c *conversation) finishHistoryTurn(state domain.TurnState) {
 func (c *conversation) resetHistoryItems(turnID string) {
 	c.mu.Lock()
 	c.activeTurn = turnID
-	c.messages = make(map[string]string)
-	c.steerSegment = 0
-	c.thoughts = make(map[string]string)
-	c.nestedMessages = make(map[string]nestedMessageState)
-	c.tools = make(map[string]*toolState)
+	c.resetTurnItemsLocked()
 	c.mu.Unlock()
 }
 

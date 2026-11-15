@@ -500,6 +500,134 @@ func TestACPReplayAbortDiscardsRawUpdates(t *testing.T) {
 	}
 }
 
+func TestACPReplayDrainSegmentsIDLessProseAcrossTools(t *testing.T) {
+	replay := func() []ports.ChatEvent {
+		conv := replayConversation()
+		conv.beginHistoryReplay("session-1")
+
+		completed := acpsdk.ToolCallStatusCompleted
+		updates := []acpsdk.SessionNotification{
+			replayUserChunk("session-1", "", "fix the bug"),
+			replayAgentChunk("session-1", "", "I'll inspect the files."),
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					ToolCall: &acpsdk.SessionUpdateToolCall{
+						ToolCallId: "t1",
+						Title:      "Inspect bug",
+						Kind:       acpsdk.ToolKindRead,
+						Status:     acpsdk.ToolCallStatusInProgress,
+					},
+				},
+			},
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					ToolCallUpdate: &acpsdk.SessionToolCallUpdate{
+						ToolCallId: "t1",
+						Status:     &completed,
+					},
+				},
+			},
+			replayAgentChunk("session-1", "", "I found it. "),
+			replayAgentChunk("session-1", "", "Applying fix."),
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					Plan: &acpsdk.SessionUpdatePlan{
+						Entries: []acpsdk.PlanEntry{{Content: "Patch", Priority: acpsdk.PlanEntryPriorityMedium, Status: acpsdk.PlanEntryStatusCompleted}},
+					},
+				},
+			},
+			{
+				SessionId: "session-1",
+				Update: acpsdk.SessionUpdate{
+					AgentThoughtChunk: &acpsdk.SessionUpdateAgentThoughtChunk{
+						Content: textBlock("Double checking."),
+					},
+				},
+			},
+			replayAgentChunk("session-1", "", "All fixed."),
+		}
+		for _, update := range updates {
+			if err := conv.SessionUpdate(context.Background(), update); err != nil {
+				t.Fatalf("SessionUpdate: %v", err)
+			}
+		}
+		if err := conv.drainAndFinishReplay(context.Background()); err != nil {
+			t.Fatalf("drainAndFinishReplay: %v", err)
+		}
+		history, err := conv.ReadHistory(context.Background())
+		if err != nil {
+			t.Fatalf("ReadHistory: %v", err)
+		}
+		return history
+	}
+
+	first := replay()
+	second := replay()
+	assertReplayHistoryEqual(t, first, second)
+
+	type step struct {
+		kind ports.ChatEventKind
+		text string
+	}
+	var got []step
+	var completedItems []string
+	seenEventIDs := map[string]bool{}
+	for _, ev := range first {
+		if ev.ProviderEventID == "" {
+			t.Fatalf("replayed event missing ProviderEventID: %+v", ev)
+		}
+		if seenEventIDs[ev.ProviderEventID] {
+			t.Fatalf("duplicate ProviderEventID %q on %+v", ev.ProviderEventID, ev)
+		}
+		seenEventIDs[ev.ProviderEventID] = true
+
+		switch ev.Kind {
+		case ports.ChatEventUserMessageCompleted, ports.ChatEventMessageCompleted:
+			if ev.Kind == ports.ChatEventMessageCompleted {
+				completedItems = append(completedItems, ev.ProviderItemID)
+			}
+			got = append(got, step{kind: ev.Kind, text: ev.Text})
+		case ports.ChatEventActivityStarted, ports.ChatEventActivityCompleted:
+			got = append(got, step{kind: ev.Kind, text: ev.Summary})
+		case ports.ChatEventPlanUpdated:
+			got = append(got, step{kind: ev.Kind})
+		case ports.ChatEventTurnStarted, ports.ChatEventTurnCompleted:
+			got = append(got, step{kind: ev.Kind})
+		}
+	}
+
+	want := []step{
+		{kind: ports.ChatEventTurnStarted},
+		{kind: ports.ChatEventUserMessageCompleted, text: "fix the bug"},
+		{kind: ports.ChatEventMessageCompleted, text: "I'll inspect the files."},
+		{kind: ports.ChatEventActivityStarted, text: "Inspect bug"},
+		{kind: ports.ChatEventActivityCompleted, text: "Inspect bug"},
+		{kind: ports.ChatEventMessageCompleted, text: "I found it. Applying fix."},
+		{kind: ports.ChatEventPlanUpdated},
+		{kind: ports.ChatEventActivityStarted, text: "Reasoning"},
+		{kind: ports.ChatEventActivityCompleted, text: "Reasoning"},
+		{kind: ports.ChatEventMessageCompleted, text: "All fixed."},
+		{kind: ports.ChatEventTurnCompleted},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("replayed steps = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("replayed step %d = %+v, want %+v (all=%+v)", i, got[i], want[i], got)
+		}
+	}
+	if len(completedItems) != 3 ||
+		completedItems[0] == completedItems[1] ||
+		completedItems[1] == completedItems[2] ||
+		completedItems[0] == completedItems[2] {
+		t.Fatalf("message item IDs were not distinct across segments: %v", completedItems)
+	}
+}
+
 func assertReplayHistoryEqual(t *testing.T, want, got []ports.ChatEvent) {
 	t.Helper()
 	expected, err := json.Marshal(want)

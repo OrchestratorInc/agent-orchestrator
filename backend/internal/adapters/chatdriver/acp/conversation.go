@@ -153,11 +153,15 @@ type conversation struct {
 	stopAttempts int
 	// nudging is set while a drain nudge is in flight; see steerByDrain.
 	nudging atomic.Bool
-	// steerSegment counts steers the running turn has taken. Text the agent
-	// streams without a message id after one goes to a new message, so it
-	// renders after the steer instead of growing the reply above it.
-	steerSegment int
-	legacyModel  bool
+	// messageSegment and thoughtSegment split ID-less prose across tool calls,
+	// plans, thought/message transitions, and steers so interleaved output stays
+	// ordered in the timeline instead of concatenating into a single item.
+	messageSegment int
+	openMessageID  string
+	thoughtSegment int
+	openThoughtID  string
+	settledItems   map[string]bool
+	legacyModel    bool
 	// The agent lists model among its own config options, as well as the older model list.
 	modelConfigOption  bool
 	legacyMode         bool
@@ -502,11 +506,7 @@ func (c *conversation) ActivateLiveReconnect(ctx context.Context, providerTurnID
 			c.compactingTurnID = providerTurnID
 			c.compactionBefore = c.contextTokens
 		}
-		c.messages = make(map[string]string)
-		c.steerSegment = 0
-		c.thoughts = make(map[string]string)
-		c.nestedMessages = make(map[string]nestedMessageState)
-		c.tools = make(map[string]*toolState)
+		c.resetTurnItemsLocked()
 	}
 	c.mu.Unlock()
 	c.proc.gate.Open()
@@ -830,11 +830,7 @@ func (c *conversation) StartDeferredTurn(providerTurnID string) error {
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
 	sessionID := c.sessionID
-	c.messages = make(map[string]string)
-	c.steerSegment = 0
-	c.thoughts = make(map[string]string)
-	c.nestedMessages = make(map[string]nestedMessageState)
-	c.tools = make(map[string]*toolState)
+	c.resetTurnItemsLocked()
 	c.turnDiffs = nil
 	c.turnDiffTurnID = ""
 	c.providerFailure = nil
@@ -1132,11 +1128,7 @@ func (c *conversation) Compact(ctx context.Context) (ports.ChatCompactionResult,
 	c.settlingTurn = ""
 	turnCtx, cancel := context.WithCancel(context.Background())
 	c.turnCancel = cancel
-	c.messages = make(map[string]string)
-	c.steerSegment = 0
-	c.thoughts = make(map[string]string)
-	c.nestedMessages = make(map[string]nestedMessageState)
-	c.tools = make(map[string]*toolState)
+	c.resetTurnItemsLocked()
 	c.turnDiffs = nil
 	c.turnDiffTurnID = ""
 	c.providerFailure = nil
@@ -1552,10 +1544,70 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	}
 }
 
+func (c *conversation) resetTurnItemsLocked() {
+	c.messages = make(map[string]string)
+	c.thoughts = make(map[string]string)
+	c.settledItems = make(map[string]bool)
+	c.messageSegment = 0
+	c.openMessageID = ""
+	c.thoughtSegment = 0
+	c.openThoughtID = ""
+	c.nestedMessages = make(map[string]nestedMessageState)
+	c.tools = make(map[string]*toolState)
+}
+
+func (c *conversation) advanceIDLessSegmentsLocked() {
+	if c.openMessageID != "" {
+		c.messageSegment++
+		c.openMessageID = ""
+	}
+	if c.openThoughtID != "" {
+		c.thoughtSegment++
+		c.openThoughtID = ""
+	}
+}
+
+func (c *conversation) closeIDLessMessageLocked() (string, string) {
+	if c.openMessageID == "" {
+		return "", ""
+	}
+	id := c.openMessageID
+	text := c.messages[id]
+	if c.settledItems == nil {
+		c.settledItems = make(map[string]bool)
+	}
+	c.settledItems[id] = true
+	c.openMessageID = ""
+	c.messageSegment++
+	return id, text
+}
+
+func (c *conversation) closeIDLessThoughtLocked() (string, string) {
+	if c.openThoughtID == "" {
+		return "", ""
+	}
+	id := c.openThoughtID
+	text := c.thoughts[id]
+	if c.settledItems == nil {
+		c.settledItems = make(map[string]bool)
+	}
+	c.settledItems[id] = true
+	c.openThoughtID = ""
+	c.thoughtSegment++
+	return id, text
+}
+
+func (c *conversation) closeIDLessSegmentsLocked() (string, string, string, string) {
+	msgID, msgText := c.closeIDLessMessageLocked()
+	thoughtID, thoughtText := c.closeIDLessThoughtLocked()
+	return msgID, msgText, thoughtID, thoughtText
+}
+
 func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
 	c.mu.Lock()
 	messages := c.messages
 	thoughts := c.thoughts
+	settledItems := c.settledItems
 	nestedMessages := c.nestedMessages
 	tools := c.tools
 	c.mu.Unlock()
@@ -1566,11 +1618,17 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	}
 	messageIDs := sortedKeys(messages)
 	for _, id := range messageIDs {
+		if settledItems[id] {
+			continue
+		}
 		text := messages[id]
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turnID, ProviderItemID: id, Text: text})
 	}
 	thoughtIDs := sortedKeys(thoughts)
 	for _, id := range thoughtIDs {
+		if settledItems[id] {
+			continue
+		}
 		text := thoughts[id]
 		c.emit(ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
 			ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
