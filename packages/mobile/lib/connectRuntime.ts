@@ -14,7 +14,7 @@ import type { ServerConfig } from "./config";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { noteRequestAnswered } from "./answeredRequests";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
-import { adoptHostIdentity, findHost, hostEndpointRevision, touchHost, updateHostEndpoints } from "./hosts";
+import { adoptHostIdentity, endpointRevisionOf, findHost, touchHost, updateHostEndpoints } from "./hosts";
 import { IncompatibleHostVersionError, type ProbeAnswer, ProbeTimeoutError, raceEndpoints, type RaceOutcome } from "./race";
 
 function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string {
@@ -279,7 +279,7 @@ export function runtimeConnectDeps(options: ConnectOptions = {}): ConnectDeps {
 				? Promise.resolve([])
 				: fetchAdvertisedEndpoints(config),
 		saveEndpoints: updateHostEndpoints,
-		endpointRevision: hostEndpointRevision,
+		endpointRevision: endpointRevisionOf,
 		adoptIdentity: adoptHostIdentity,
 		touch: touchHost,
 		...deviceTokenConnectDeps(),
