@@ -12,6 +12,14 @@ export class IncompatibleHostVersionError extends Error {
 	}
 }
 
+/** An endpoint that did not answer within the probe's own timeout. */
+export class ProbeTimeoutError extends Error {
+	constructor(readonly endpoint: Endpoint) {
+		super(`identity probe to ${endpoint.kind}://${endpoint.host}:${endpoint.port} timed out`);
+		this.name = "ProbeTimeoutError";
+	}
+}
+
 export type RaceOptions = {
 	/**
 	 * How long, after the first successful answer, to keep waiting for a
@@ -33,7 +41,12 @@ export type RaceOutcome =
 	/** hostId is what actually answered, so a machine migrated without one can
 	 * record the identity it just learned. */
 	| { ok: true; endpoint: Endpoint; hostId: string }
-	| { ok: false; reason: "no-candidates" | "none-reachable" | "incompatible" };
+	| {
+		ok: false;
+		reason: "no-candidates" | "none-reachable" | "incompatible";
+		/** Every endpoint failed by timing out (ProbeTimeoutError): the link may only be slow. */
+		allTimedOut?: boolean;
+	};
 
 /**
  * Probes every candidate at once and returns the best one that answers as the
@@ -77,6 +90,7 @@ export async function raceEndpoints(
 	let bestHostId = "";
 	let settled = 0;
 	let incompatible = false;
+	let timeouts = 0;
 	let done = false;
 	let graceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -90,7 +104,9 @@ export async function raceEndpoints(
 			controller.abort();
 			const result: RaceOutcome = best
 				? { ok: true, endpoint: best, hostId: bestHostId }
-				: { ok: false, reason: incompatible ? "incompatible" : "none-reachable" };
+				: incompatible
+					? { ok: false, reason: "incompatible" }
+					: { ok: false, reason: "none-reachable", ...(timeouts === endpoints.length ? { allTimedOut: true } : {}) };
 			if (isDev) {
 				console.log("[race] Race finished:", result);
 			}
@@ -129,6 +145,7 @@ export async function raceEndpoints(
 				})
 				.catch((err) => {
 					if (err instanceof IncompatibleHostVersionError && (expectedHostId === "" || err.hostId === expectedHostId)) incompatible = true;
+					if (err instanceof ProbeTimeoutError) timeouts += 1;
 					if (isDev) {
 						console.log("[race] Endpoint failed:", `${endpoint.kind}://${endpoint.host}:${endpoint.port}`, err);
 					}

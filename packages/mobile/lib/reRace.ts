@@ -55,3 +55,15 @@ export function shouldReRace(state: ReRaceState): boolean {
 	if (state.lastReRaceAt === 0) return true;
 	return state.now - state.lastReRaceAt >= RE_RACE_COOLDOWN_MS;
 }
+
+/**
+ * How long a machine that could not be reached waits before the next try:
+ * 2 s, 4 s, 8 s, then every 15 s. A flat 15 s left the app saying "can't
+ * reach" for up to that long after a blip it had already recovered from;
+ * starting short catches the common case (a network that took a moment to
+ * come up), and the cap keeps a machine that is really off from being raced
+ * continuously.
+ */
+export function recoveryDelayMs(attempt: number): number {
+	return [2_000, 4_000, 8_000][attempt] ?? RE_RACE_COOLDOWN_MS;
+}

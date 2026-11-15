@@ -61,6 +61,26 @@ describe("connectHost", () => {
 		...over,
 	});
 
+	it("hands back the connection without waiting long for the endpoint refresh, which still lands", async () => {
+		vi.useFakeTimers();
+		try {
+			let answer!: (endpoints: Endpoint[]) => void;
+			const d = deps({ refreshEndpoints: vi.fn(() => new Promise<Endpoint[]>((resolve) => { answer = resolve; })) });
+			let settled = false;
+			const connecting = connectHost("h_paired", { ...d, refreshWaitMs: 1_000 }).then((result) => { settled = true; return result; });
+			await vi.advanceTimersByTimeAsync(999);
+			expect(settled).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect((await connecting).ok).toBe(true);
+			expect(d.saveEndpoints).not.toHaveBeenCalled();
+			answer([lan]);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(d.saveEndpoints).toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("returns a usable config for the endpoint that won", async () => {
 		const d = deps();
 		const got = await connectHost("h_paired", d);
