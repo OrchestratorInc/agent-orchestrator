@@ -213,6 +213,72 @@ describe("the New task draft", () => {
 		expect(await saver.flush()).toBe(true);
 	});
 
+	it("keeps a failed background save for the next flush, unless a newer draft replaced it", async () => {
+		const saved: string[] = [];
+		let fail = true;
+		const saver = createSpawnDraftSaver(async (draft) => { if (fail) throw new Error("disk full"); saved.push(draft.prompt); });
+		saver.schedule({ prompt: "latest edits", attachments: [] });
+		expect(await saver.flush()).toBe(false);
+		fail = false;
+		// Leaving the app later: the failed draft is tried again.
+		expect(await saver.flush()).toBe(true);
+		expect(saved).toEqual(["latest edits"]);
+
+		fail = true;
+		saver.schedule({ prompt: "older", attachments: [] });
+		const failing = saver.flush();
+		saver.schedule({ prompt: "newer", attachments: [] });
+		expect(await failing).toBe(false);
+		fail = false;
+		expect(await saver.flush()).toBe(true);
+		expect(saved).toEqual(["latest edits", "newer"]);
+	});
+
+	it("does not retry a failed save after a Start cancelled it", async () => {
+		let attempts = 0;
+		let fail!: () => void;
+		const saver = createSpawnDraftSaver(async () => { attempts++; await new Promise<void>((_done, reject) => { fail = () => reject(new Error("disk full")); }); });
+		saver.schedule({ prompt: "a", attachments: [] });
+		const flushing = saver.flush();
+		await vi.waitFor(() => expect(attempts).toBe(1));
+		void saver.cancel();
+		fail();
+		expect(await flushing).toBe(false);
+		await saver.flush();
+		expect(attempts).toBe(1);
+	});
+
+	// A failed read is not an empty draft: the page must not save over it.
+	it("rejects when the saved draft could not be read", async () => {
+		await saveSpawnDraft({ prompt: "Keep me", attachments: [] });
+		const { default: AsyncStorage } = await import("@react-native-async-storage/async-storage");
+		const getItem = vi.spyOn(AsyncStorage, "getItem").mockRejectedValueOnce(new Error("storage busy"));
+		await expect(loadSpawnDraft()).rejects.toThrow("storage busy");
+		getItem.mockRestore();
+		expect((await loadSpawnDraft())?.prompt).toBe("Keep me");
+	});
+
+	// Two open pages (a cloud project's page under a second New task) save in
+	// one queue: one's file cleanup never runs between the other's file write
+	// and its commit.
+	it("runs every saver's saves and removals one at a time", async () => {
+		const events: string[] = [];
+		let release!: () => void;
+		const first = createSpawnDraftSaver(async () => { events.push("first:start"); await new Promise<void>((done) => { release = done; }); events.push("first:end"); });
+		const second = createSpawnDraftSaver(async () => { events.push("second"); });
+		first.schedule({ prompt: "a", attachments: [] });
+		const firstSave = first.flush();
+		await Promise.resolve();
+		second.schedule({ prompt: "b", attachments: [] });
+		const secondSave = second.flush();
+		const clearing = clearSpawnDraft().then(() => { events.push("clear"); });
+		await new Promise((done) => setTimeout(done, 0));
+		expect(events).toEqual(["first:start"]);
+		release();
+		await Promise.all([firstSave, secondSave, clearing]);
+		expect(events).toEqual(["first:start", "first:end", "second", "clear"]);
+	});
+
 	// A save still waiting, or queued behind one writing, when the machine is
 	// forgotten or the account signs out must not write the draft back after.
 	it("drops saves of a forgotten owner's draft that are still waiting or queued", async () => {

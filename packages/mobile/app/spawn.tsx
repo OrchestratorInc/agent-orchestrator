@@ -112,9 +112,12 @@ export default function SpawnScreen() {
 		if (hostSelectionInitialized.current) return;
 		// The saved draft is read first: restored, it goes back to its own machine.
 		if (!draftRestored) return;
-		if (!spawnHostSelectionReady({ routeHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;
-		hostSelectionInitialized.current = true;
 		const draftHostId = restoredHostId.current;
+		// Unrouted, a restored draft's machine is the one waited for: picking
+		// another while it is still connecting would move its draft there.
+		const awaitedHostId = routeHostId ?? draftHostId ?? undefined;
+		if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;
+		hostSelectionInitialized.current = true;
 		const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;
 		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: preferredHostId, hosts: connectedHosts }));
 	}, [configResolved, connectedHosts, currentHostId, draftRestored, hostStates, machineHosts, routeHostId]);
@@ -139,6 +142,9 @@ export default function SpawnScreen() {
 	const [draftSaver] = useState(() => createSpawnDraftSaver());
 	// Bumped by each read of the saved draft, and on leaving the page: only the latest one lands.
 	const restoreGeneration = useRef(0);
+	// The last read of the saved draft failed: it may still be on the phone, so
+	// an empty composer is not saved over it (which would delete it).
+	const draftUnread = useRef(false);
 	// The draft a Start began a task with: cleared rather than saved again, until
 	// the prompt or attachments change (on a page kept open after it started).
 	const startedDraft = useRef<{ prompt: string; attachments: readonly SpawnAttachment[] } | null>(null);
@@ -184,6 +190,7 @@ export default function SpawnScreen() {
 	}), [agentTouched, approvalChoice, effort, harness, mode, model, modelTouched, projectId]);
 	useEffect(() => {
 		if (!draftRestored || !accountKnown) return;
+		if (draftUnread.current && !prompt.trim() && attachments.length === 0) return;
 		const started = startedDraft.current;
 		if (started && started.prompt === prompt && started.attachments === attachments) return;
 		startedDraft.current = null;
@@ -191,8 +198,13 @@ export default function SpawnScreen() {
 		// restored with others, its id must not be sent with them.
 		const request = requestRef.current;
 		const current = request && request.attachments === attachmentsKey(attachments) ? request : undefined;
-		draftSaver.schedule({ prompt, attachments, owner: draftOwner, selections: draftSelections, ...(current ? { request: current } : {}) });
-	}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt]);
+		// Until the machine is picked, the restored draft keeps the machine it was
+		// written for rather than being saved as no machine's.
+		const owner = selectedHostId === null && !hostSelectionInitialized.current
+			? { ...draftOwner, hostId: restoredHostId.current }
+			: draftOwner;
+		draftSaver.schedule({ prompt, attachments, owner, selections: draftSelections, ...(current ? { request: current } : {}) });
+	}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt, selectedHostId]);
 	// Puts back what a restored draft had picked. The machine is picked once the
 	// list of machines is known (above); a model or agent picked stays picked.
 	const restoreSelections = (draft: SpawnDraft) => {
@@ -210,7 +222,9 @@ export default function SpawnScreen() {
 		const generation = ++restoreGeneration.current;
 		setDraftRestored(false);
 		void loadSpawnDraft().then((draft) => {
-			if (generation !== restoreGeneration.current || !draft) return;
+			if (generation !== restoreGeneration.current) return;
+			draftUnread.current = false;
+			if (!draft) return;
 			// Text typed or files added before the draft was read are the page's
 			// now: the old draft neither replaces nor joins them.
 			if (promptRef.current || attachmentsRef.current.length) return;
@@ -221,6 +235,8 @@ export default function SpawnScreen() {
 			// The Start it last sent: sent again unchanged, it reuses the request id,
 			// so a task started before the app was closed is not started twice.
 			if (draft.request) requestRef.current = draft.request;
+		}, () => {
+			if (generation === restoreGeneration.current) draftUnread.current = true;
 		}).finally(() => { if (generation === restoreGeneration.current) setDraftRestored(true); });
 	};
 	useEffect(() => {

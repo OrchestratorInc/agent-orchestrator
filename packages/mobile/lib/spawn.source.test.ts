@@ -175,9 +175,22 @@ describe("spawn draft", () => {
 	it("saves text typed before the saved draft was read, and does not restore over it", () => {
 		expect(spawn).toContain("const [draftRestored, setDraftRestored] = useState(false);");
 		expect(spawn).toContain("}).finally(() => { if (generation === restoreGeneration.current) setDraftRestored(true); });");
-		expect(spawn).toContain("}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt]);");
+		expect(spawn).toContain("}, [accountKnown, attachments, draftOwner, draftRestored, draftSaver, draftSelections, prompt, selectedHostId]);");
 		expect(spawn).toContain("if (promptRef.current || attachmentsRef.current.length) return;");
 		expect(spawn).not.toContain("draftRestored.current");
+	});
+
+	// A failed read may have left the draft on the phone: an empty composer
+	// saved then would delete it.
+	it("does not save an empty composer over a draft it could not read", () => {
+		expect(spawn).toContain("if (generation === restoreGeneration.current) draftUnread.current = true;");
+		expect(spawn).toContain("if (draftUnread.current && !prompt.trim() && attachments.length === 0) return;");
+	});
+
+	// Saved before the machine is picked, a restored draft keeps its machine.
+	it("keeps the restored draft's machine while the machine is still being picked", () => {
+		expect(spawn).toContain("const owner = selectedHostId === null && !hostSelectionInitialized.current\n\t\t\t? { ...draftOwner, hostId: restoredHostId.current }\n\t\t\t: draftOwner;");
+		expect(spawn).toContain("draftSaver.schedule({ prompt, attachments, owner, selections: draftSelections");
 	});
 
 	// Made once: a saver per render would each stay registered for forgetting.
@@ -225,7 +238,10 @@ describe("spawn draft", () => {
 		expect(spawn).toContain("if (isApprovalMode(picked.approvalMode)) setApprovalChoice(picked.approvalMode);");
 		expect(spawn).toContain("if (picked.effort) setEffort(picked.effort);");
 		// The machine waits for the draft, and goes back to the draft's own.
-		expect(spawn).toContain("if (!draftRestored) return;\n\t\tif (!spawnHostSelectionReady({ routeHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;");
+		expect(spawn).toContain("if (!draftRestored) return;\n\t\tconst draftHostId = restoredHostId.current;");
+		// Unrouted, the restored draft's machine is waited for before another is picked.
+		expect(spawn).toContain("const awaitedHostId = routeHostId ?? draftHostId ?? undefined;");
+		expect(spawn).toContain("if (!spawnHostSelectionReady({ routeHostId: awaitedHostId, configResolved, hosts: hostStates, connectedMachineCount: machineHosts.length })) return;");
 		expect(spawn).toContain("const preferredHostId = draftHostId && connectedHosts.some((host) => host.id === draftHostId) ? draftHostId : currentHostId ?? undefined;");
 	});
 
