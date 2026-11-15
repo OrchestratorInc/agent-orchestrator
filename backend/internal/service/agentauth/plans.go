@@ -5,6 +5,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -16,12 +17,16 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
+	plan("docker-agent", ActionSetup, "Set up Docker Agent", []string{"docker-agent", "setup"}, "Native model setup: connect Anthropic, OpenAI or Google and Docker Agent saves the key in its own env file, which Orchestrator's default configuration uses. To use your own YAML, set AO_DOCKER_AGENT_CONFIG to its absolute path. Authorization is checked by the provider on a live turn.", "https://docs.docker.com/ai/docker-agent/getting-started/quickstart/"),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, SSO, or setup token", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),
 	plan("opencode", ActionLogin, "Log in to OpenCode", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://github.com/anomalyco/opencode"),
 	plan("opencode-v2", ActionLogin, "Log in to OpenCode 2", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://opencode.ai/v2/docs"),
 	plan("mimo-code", ActionLogin, "Log in to MiMo Code", []string{"mimo", "auth", "login"}, "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code"),
+	// MiniMax's TUI /login offers both China and Global accounts; the bare
+	// `mcode login` subcommand defaults to the China region.
+	terminalInputPlan("minimax-code", ActionLogin, "Log in to MiniMax Code", []string{"mcode"}, "/login\r", "Select Open login after MiniMax Code finishes starting", "https://agent.minimax.io/docs/cli/quick-start"),
 	documentationPlan("memcode", "Set up memcode", "Configure a native endpoint and provider credentials before launching Orchestrator", "https://github.com/memcode-ai/memcode"),
 	documentationPlan("aider", "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
 	copilotLoginPlan(),
@@ -196,6 +201,15 @@ func plan(agentID string, action Action, title string, command []string, guidanc
 	}
 }
 
+// nativeLogoutCommand completes a logout argv whose account scope lives in the
+// harness's own state when the logout runs.
+func nativeLogoutCommand(agentID string, command []string) []string {
+	if agentID == "minimax-code" {
+		return append(append([]string(nil), command...), minimaxcode.LogoutArgs()...)
+	}
+	return command
+}
+
 // Only documented CLI subcommands belong here. An absent entry explicitly
 // means unsupported; do not infer logout from login or delete credential files.
 func logoutCommand(agentID string) []string {
@@ -214,6 +228,8 @@ func logoutCommand(agentID string) []string {
 		return []string{"auggie", "logout"}
 	case "devin":
 		return []string{"devin", "auth", "logout"}
+	case "minimax-code":
+		return []string{"mcode", "logout"}
 	default:
 		return nil
 	}

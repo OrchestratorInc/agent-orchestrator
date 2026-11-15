@@ -47,9 +47,11 @@ var agentDocumentationURLs = map[Target]string{
 	TargetFX:          "https://fx.sh/docs",
 	TargetUnreal:      "https://github.com/unreallabsai/unreal-agent",
 	TargetMiMoCode:    "https://github.com/XiaomiMiMo/MiMo-Code",
+	TargetMiniMaxCode: "https://agent.minimax.io/docs/cli/quick-start",
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
+	TargetDockerAgent: "https://docs.docker.com/ai/docker-agent/getting-started/installation/",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
 	TargetStakpak:     "https://github.com/stakpak/agent#installation",
 }
@@ -256,6 +258,14 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			Target: target, Unsupported: true, Method: "manual",
 			Reason: "Unreal Agent is built into Orchestrator; update Orchestrator to update the harness.",
 		}}
+	case TargetMiniMaxCode:
+		// The official installers install npm latest into ~/.minimax-code
+		// (%USERPROFILE%\.minimax-code on Windows) with a private Node runtime
+		// when needed, so they work without a system Node.js.
+		plans = []Plan{
+			s.officialByOS(target, "https://filecdn.minimax.chat/public/install.sh", "bash", "https://filecdn.minimax.chat/public/install.ps1", agentDocumentationURLs[target]),
+			s.planNPM(target, "@minimax-ai/code"),
+		}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
 	case TargetDeepSeek:
@@ -269,6 +279,16 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		plans = []Plan{s.planUV(target, "openhands")}
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
+		}
+	case TargetDockerAgent:
+		// Docker publishes the standalone CLI as a Homebrew formula; AO installs
+		// and updates to its latest release (Chat admits v1.150.0 or newer).
+		// Its Chat binding is Unix only, so Windows gets no install route.
+		if s.goos == "darwin" || s.goos == "linux" {
+			manual := manualPlan(target, "Install the latest official standalone Docker Agent binary (v1.150.0 or newer). Docker Desktop is optional; Orchestrator supports native ACP Chat only.", agentDocumentationURLs[target])
+			plans = []Plan{s.planBrew(target, "docker-agent"), manual}
+		} else {
+			plans = []Plan{manualPlan(target, "Orchestrator runs Docker Agent Chat on macOS and Linux only.", agentDocumentationURLs[target])}
 		}
 	case TargetMemcode:
 		if s.goos == "darwin" || s.goos == "linux" {

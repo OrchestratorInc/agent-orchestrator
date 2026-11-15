@@ -20282,9 +20282,11 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
           - stakpak
@@ -21065,9 +21067,11 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
           - stakpak
@@ -25310,9 +25314,11 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
           - stakpak

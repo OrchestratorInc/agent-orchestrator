@@ -102,6 +102,9 @@ jobs:
       - name: Test SQLite filesystem path identity
         run: go test -race -count=1 -run 'Test(OpenPreservesDataDirectoryCharacters|FragmentPathsKeepDatabasesIsolated|OpenRefusesToHideLegacyDatabase|OpenPrefersExistingIntendedDatabase|DatabaseURIPreservesWindowsPaths)$' ./internal/storage/sqlite
 
+      - name: Test MiniMax Windows auth, native history and restore
+        run: go test -race -count=1 -run '^Test(AuthStatus|LocalAuth|NativeHistory|History)' ./internal/adapters/agent/minimaxcode
+
       - name: Test data-dir lock (LockFileEx)
         run: go test -race -count=1 ./internal/datadirlock/
 
@@ -110,6 +113,9 @@ jobs:
 
       - name: Test Windows Chat environment precedence
         run: go test -race -count=1 ./internal/adapters/chatdriver/processenv/ ./internal/agentlaunch/
+
+      - name: Test Docker Agent Windows admission and native config
+        run: go test -race -count=1 -run '^(TestProbeChecksPlatformWithoutRequiringDaemonConfig|TestContextualConfigValidation)$' ./internal/adapters/chatdriver/dockeragentacp/
 
       - name: Test Windows shell terminal start grid (pty-host --size)
         run: go test -race -count=3 -v -run '^(TestConPTYStartsAtRequestedGrid|TestHostStartGrid|TestPtyHostArgsCarryInitialGrid|TestPtyHostArgsCarryHostOptions)$' ./internal/adapters/runtime/conpty/

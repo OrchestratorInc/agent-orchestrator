@@ -1,11 +1,13 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { BrowserIcon } from "./icons";
+import { BrowserIcon, SubagentIcon } from "./icons";
 import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
+import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
+import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,8 +15,6 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
 	InspectorActivityTimelineView,
 	InspectorPullRequestCardView,
@@ -139,7 +139,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
@@ -147,6 +147,7 @@ const VIEW_DEFS: {
 	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
@@ -179,6 +180,7 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView,
 	browserView,
 	sideChatView,
+	subagentsView,
 	view: viewProp,
 	onViewChange,
 	standaloneAgent = false,
@@ -205,6 +207,8 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView?: ReactNode;
 	browserView?: BrowserViewModel;
 	sideChatView?: ReactNode;
+	/** The chat's Subagents panel; the tab shows only while the chat has subagents to list. */
+	subagentsView?: ReactNode;
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
@@ -266,22 +270,30 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
+	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
-		entry.id === "summary" || entry.id === "browser" || (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
+		entry.id === "summary" || entry.id === "browser"
+		|| (entry.id === "subagents" && subagentsView !== undefined)
+		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
+			&& (entry.id !== "subagents" || subagentsView !== undefined)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
+	// The chat reports its subagents just after it mounts, so on the way back to a
+	// session the Subagents tab is briefly missing. Show Summary through that gap but
+	// keep the reader's choice, so the tab comes back selected.
+	const awaitingSubagents = requestedView === "subagents" && subagentsView === undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator) || awaitingSubagents) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
+	}, [awaitingSubagents, onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -305,6 +317,7 @@ export const SessionInspector = memo(function SessionInspector({
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
 				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
+				subagentsView={subagentsView}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
 				artifactsView={
@@ -2028,10 +2041,7 @@ function LocalReviewsSection({
 	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data?.prs);
 	const githubReviews = prSummaries.filter(
 		(pr) =>
-			(pr.state === "open" || pr.state === "draft") &&
-			((pr.review?.reviews?.length ?? 0) > 0 ||
-				(pr.review?.unresolvedBy ?? []).some((reviewer) => reviewer.count > 0) ||
-				(pr.review?.resolvedBy ?? []).some((reviewer) => reviewer.count > 0)),
+			(pr.state === "open" || pr.state === "draft") && prHasReviewActivity(pr),
 	);
 	return (
 		<>
@@ -2455,8 +2465,11 @@ function MergedReviewsSection({
 		const entries = (github?.review?.reviews ?? []).filter(
 			(entry) => !externalReviewActorMatchesPRAuthor(entry.reviewerId, github?.author),
 		);
-		const allUnresolvedReviewers = github?.review?.unresolvedBy ?? [];
-		const allResolvedReviewers = github?.review?.resolvedBy ?? [];
+		// A bot's inline comments (CodeRabbit's) come from the PR's review threads:
+		// the summary's lists leave bots out.
+		const botReviewers = github ? botThreadReviewers(github) : { unresolved: [], resolved: [] };
+		const allUnresolvedReviewers = mergeReviewers(github?.review?.unresolvedBy ?? [], botReviewers.unresolved);
+		const allResolvedReviewers = mergeReviewers(github?.review?.resolvedBy ?? [], botReviewers.resolved);
 		const agentReviewIds = new Set(aoRuns.map((run) => run.githubReviewId).filter(Boolean));
 		const agentComments = new Map<string, { inlineComments: InspectorInlineComment[]; resolvedComments: InspectorInlineComment[] }>();
 		const partitionReviewerComments = (
@@ -2520,7 +2533,7 @@ function MergedReviewsSection({
 		const resolvedByReviewer = new Map(
 			resolvedReviewers.map((reviewer) => [reviewer.reviewerId, reviewer]),
 		);
-		const externalEntries = entries.map((entry) => {
+		const externalEntries: InspectorGithubReview[] = entries.map((entry) => {
 			const reviewer = unresolvedByReviewer.get(entry.reviewerId);
 			const resolvedReviewer = resolvedByReviewer.get(entry.reviewerId);
 			unresolvedByReviewer.delete(entry.reviewerId);
@@ -2586,6 +2599,25 @@ function MergedReviewsSection({
 				submittedAt: "",
 				submittedAtLabel: "",
 				verdict: githubVerdict("none", t),
+			});
+		}
+		// Top-level PR comments read beside the reviews: a bot's walkthrough or a
+		// person's note is feedback too, and the PR page shows it in the same place.
+		for (const comment of github ? prConversationComments(github) : []) {
+			externalEntries.push({
+				body: comment.body,
+				canRequestRereview: false,
+				id: `comment:${comment.url || comment.id}`,
+				kind: "comment" as const,
+				pullRequestUrl: github?.url,
+				inlineComments: [],
+				resolvedComments: [],
+				isBot: comment.isBot,
+				reviewerId: comment.author,
+				reviewUrl: comment.url,
+				submittedAt: comment.createdAt ?? "",
+				submittedAtLabel: comment.createdAt ? formatTimeCompact(comment.createdAt) : "",
+				verdict: githubVerdict("commented", t),
 			});
 		}
 		for (const reviewer of resolvedByReviewer.values()) {
@@ -2708,6 +2740,7 @@ function reviewLabels(t: TFunction): InspectorReviewLabels {
 		reviewActions: t("inspector.reviewActions"),
 		reviews: t("inspector.reviews"),
 		reviewedAt: (time) => t("inspector.reviewedAt", { time }),
+		commentedAt: (time) => t("inspector.commentedAt", { time }),
 		resolvedComments: (count) => t("inspector.resolvedComments", { count }),
 		rereviewRequested: t("inspector.rereviewRequested"),
 		rereviewRequestFailed: t("inspector.rereviewRequestFailed"),
@@ -2730,19 +2763,12 @@ function reviewLabels(t: TFunction): InspectorReviewLabels {
 }
 
 function renderReviewMarkdown(body: string) {
+	// The same renderer as the PR's comments, so a bot's <details> sections and
+	// badges read as GitHub shows them rather than as literal tags.
 	return (
-		<ReactMarkdown
-			components={{
-				a: ({ href, children }) => (
-					<AppLink href={href} target="_blank" rel="noopener noreferrer">
-						{children}
-					</AppLink>
-				),
-			}}
-			remarkPlugins={[remarkGfm]}
-		>
-			{body}
-		</ReactMarkdown>
+		<div className={githubHtmlClass}>
+			<GitHubMarkdown body={body} />
+		</div>
 	);
 }
 
