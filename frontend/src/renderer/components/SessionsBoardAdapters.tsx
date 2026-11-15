@@ -21,6 +21,8 @@ import { clientForHost } from "../lib/host-clients";
 import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useSettings } from "../hooks/useSettings";
+import { prepareUnpublish, sessionPublishedCount, sessionUnpublishTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
@@ -830,10 +832,14 @@ export function DeleteArchivedSessionDialog({
 		if (open) setError(null);
 	}
 	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
+	const publishedCount = sessionPublishedCount(session);
 	const confirmDelete = async () => {
 		setDeleting(true);
 		setError(null);
 		try {
+			// Looked up while the files are there; unpublished only once they are gone.
+			const links = await prepareUnpublish(baseUrl, sessionUnpublishTargets(session));
 			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
 				params: { path: { sessionId: session.id }, query: { cleanup: true } },
 			});
@@ -843,6 +849,7 @@ export function DeleteArchivedSessionDialog({
 			}
 			onOpenChange(false);
 			onDeleted?.();
+			warnLinksStillLive(t, await links.unpublish());
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
@@ -862,7 +869,11 @@ export function DeleteArchivedSessionDialog({
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("deleteSession.dialog")}
-		/>
+		>
+			{publishedCount > 0 ? (
+				<p className="text-control leading-5 text-foreground">{t("deleteSession.published", { count: publishedCount })}</p>
+			) : null}
+		</ConfirmDialog>
 	);
 }
 

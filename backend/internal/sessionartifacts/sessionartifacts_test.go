@@ -336,3 +336,31 @@ func TestListRegisteredKeepsADeliverablePastTheFileCap(t *testing.T) {
 		t.Fatal("files are not sorted by path")
 	}
 }
+
+// HasFiles counts what List lists: a missing or empty directory, OS metadata
+// and version history are not artifacts; one real file is.
+func TestHasFiles_MatchesWhatListReturns(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "mer-1")
+	if has, err := HasFiles(ctx, dir); err != nil || has {
+		t.Fatalf("missing dir: has=%v err=%v", has, err)
+	}
+	for _, rel := range []string{".DS_Store", VersionsDir + "/a.md/1"} {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if has, err := HasFiles(ctx, dir); err != nil || has {
+		t.Fatalf("metadata and history only: has=%v err=%v", has, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := HasFiles(ctx, dir); err != nil || !has {
+		t.Fatalf("one file: has=%v err=%v", has, err)
+	}
+}

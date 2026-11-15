@@ -1,6 +1,6 @@
 import { useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
-import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -85,7 +85,7 @@ function canRenderMermaid(path: string, detail: WorkspaceFileDetail): boolean {
 export function FileContentPane({
 	onOpenInCenter,
 	active = true,
-	annotation,
+	annotation: annotationProp,
 	initialEditing = false,
 	initialLine,
 	annotationRange,
@@ -155,6 +155,10 @@ export function FileContentPane({
 	toolbar?: "tabs" | "compact";
 }) {
 	const { t } = useTranslation();
+	// An archived session's artifact takes no feedback: nothing starts a comment,
+	// and the buttons that would are not offered.
+	const feedbackOff = source.kind === "artifact" && source.noFeedback === true;
+	const annotation = useMemo(() => feedbackOff ? { ...annotationProp, begin: () => {} } : annotationProp, [annotationProp, feedbackOff]);
 	// The menu actions this render offers; published once it commits, and
 	// withdrawn while loading, on an error, or when the pane goes away.
 	const menuPublish = useRef<ArtifactMenuAction[]>([]);
@@ -513,7 +517,7 @@ export function FileContentPane({
 					) : source.kind === "snapshot" ? (
       <Tooltip><TooltipTrigger asChild><span tabIndex={0}><Button aria-label={t("files.editFile")} disabled size="icon-sm" type="button" variant="ghost"><Pencil aria-hidden="true" className="size-icon-sm"/></Button></span></TooltipTrigger><TooltipContent side="bottom">{t("files.readOnlySnapshot")}</TooltipContent></Tooltip>
      ) : null}
-     <Tooltip>
+     {feedbackOff ? null : <Tooltip>
 						<TooltipTrigger asChild>
 							<Button
 								aria-label={t("files.addFeedback")}
@@ -527,7 +531,7 @@ export function FileContentPane({
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="bottom">{t("files.addFeedback")}</TooltipContent>
-					</Tooltip>
+					</Tooltip>}
 				</div>
 			)}
 		</div>
@@ -542,7 +546,7 @@ export function FileContentPane({
 				id: `mode:${id}`, label, icon, disabled: editing, mode: { checked: effectiveMode === id }, onSelect: () => selectMode(id),
 			})) : []),
 			...(!editing && editable ? [{ id: "edit", label: t("files.editFile"), icon: <Pencil aria-hidden="true" />, onSelect: beginEditing }] : []),
-			...(!editing ? [{
+			...(!editing && !feedbackOff ? [{
 				id: "feedback",
 				label: t("files.addFeedback"),
 				icon: <MessageSquarePlus aria-hidden="true" />,

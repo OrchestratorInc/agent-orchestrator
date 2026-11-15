@@ -1355,7 +1355,8 @@ type archivedSessionLister interface {
 
 // DeleteExpired permanently deletes the archived sessions whose worktree is
 // released and that were archived more than days ago, the same way Delete
-// does. The store leaves out sessions with shared history, which the delete
+// does. A session whose artifact directory still holds files is kept until
+// the person deletes them or it. The store leaves out sessions with shared history, which the delete
 // always refuses. A session the delete refuses for now (an operation running)
 // or that is already gone is left for a later pass.
 func (s *Service) DeleteExpired(ctx context.Context, days int) error {
@@ -1374,6 +1375,14 @@ func (s *Service) DeleteExpired(ctx context.Context, days int) error {
 			return ctx.Err()
 		}
 		if sess.ArchivedAt.After(cutoff) {
+			continue
+		}
+		// Artifacts are deleted only when the person deletes them, so a session
+		// that still has any is kept. One that cannot be checked is kept too.
+		if hasArtifacts, err := sessionartifacts.HasFiles(ctx, sessionartifacts.Dir(s.dataDir, sess.ID)); hasArtifacts || err != nil {
+			if err != nil && ctx.Err() == nil && s.logger != nil {
+				s.logger.Warn("check artifacts of expired session", "session", sess.ID, "err", err)
+			}
 			continue
 		}
 		err := s.Delete(ctx, sess.ID, false)

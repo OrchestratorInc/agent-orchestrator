@@ -1,6 +1,7 @@
 import { type ReactElement, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { sessionArtifacts, type WorkspaceSession } from "../types/workspace";
+import { sessionPublishedCount } from "../lib/unpublish-artifacts";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
 
@@ -18,7 +19,8 @@ export type SessionArchiveChoice = { deleteArtifacts: boolean };
 //
 // A session with artifact files also offers an unchecked "Delete N
 // artifacts" box. Checking it turns Confirm destructive, since the delete
-// cannot be undone and a restored session comes back without the files.
+// cannot be undone and a restored session comes back without the files. It
+// says how many are published: their links stop working with the files.
 export function SessionArchiveDialog({
 	onConfirm,
 	onOpenChange,
@@ -45,6 +47,7 @@ export function SessionArchiveDialog({
 	const isCloud = session?.cloud !== undefined;
 	const body = isCloud ? t("archive.bodyCloud") : t("archive.body");
 	const artifactCount = session ? sessionArtifacts(session).length : 0;
+	const publishedCount = sessionPublishedCount(session);
 	const deleting = artifactCount > 0 && deleteArtifacts;
 	return (
 		<>
@@ -72,7 +75,10 @@ export function SessionArchiveDialog({
 							<label htmlFor={checkboxId} className="text-foreground">
 								{t("archive.deleteArtifacts", { count: artifactCount })}
 							</label>
-							<p className="text-settings-muted">{t("archive.deleteArtifactsHint", { count: artifactCount })}</p>
+							<p className="text-settings-muted">
+								{t("archive.deleteArtifactsHint", { count: artifactCount })}
+								{publishedCount > 0 ? ` ${t("archive.deleteArtifactsPublished", { count: publishedCount })}` : null}
+							</p>
 						</div>
 					</div>
 				) : null}

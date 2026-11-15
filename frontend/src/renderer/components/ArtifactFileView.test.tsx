@@ -287,6 +287,28 @@ describe("ArtifactFileView", () => {
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
 	});
 
+	it("offers no feedback for an archived session's artifact, by button or by selection", async () => {
+		fetchMock.mockImplementation(async () => new Response("# Plan\n\nCache the session list.", { status: 200 }));
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+
+		const live = renderWithQuery(<ArtifactFileView artifactName="plan.md" path="plan.md" rawUrl={RAW_URL} sessionId="sess-1" />);
+		await screen.findByText("Cache the session list.");
+		expect(screen.getByRole("button", { name: "Add feedback" })).toBeInTheDocument();
+		live.unmount();
+
+		renderWithQuery(<ArtifactFileView artifactName="plan.md" noFeedback path="plan.md" rawUrl={RAW_URL} readOnly sessionId="sess-1" />);
+		const paragraph = await screen.findByText("Cache the session list.");
+		expect(screen.queryByRole("button", { name: "Add feedback" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		const range = document.createRange();
+		range.selectNodeContents(paragraph);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(paragraph);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(screen.queryByRole("textbox", { name: /Feedback for plan\.md/ })).not.toBeInTheDocument();
+	});
+
 	it("does not offer editing for a truncated artifact", async () => {
 		fetchMock.mockResolvedValue(new Response("a".repeat(256 * 1024 + 1), { status: 200 }));
 
