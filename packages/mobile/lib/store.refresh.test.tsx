@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
 	resolve: vi.fn(), sessions: vi.fn(), notifications: vi.fn(), selected: "a",
 	endpoints: [] as unknown[],
 	paired: [] as unknown[], others: {} as Record<string, unknown>,
+	stillAnswers: vi.fn(async (): Promise<boolean> => false),
 }));
 vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ org: null, projects: [], sessions: [], connections: [], chatHarnesses: [], client: {}, upsertSession: () => {}, refreshSessions: async () => {}, refresh: async () => {} }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
@@ -22,7 +23,7 @@ vi.mock("expo-network", () => ({
 vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: state.sessions, getNotifications: state.notifications }));
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolve, runtimeResolveDeps: () => ({}) }));
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
-vi.mock("./connectRuntime", () => ({ endpointStillAnswers: async () => false, rejectedEndpointNeedsRace: () => false }));
+vi.mock("./connectRuntime", () => ({ endpointStillAnswers: () => state.stillAnswers(), rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({
 	activeHost: async () => ({ id: state.selected, name: state.selected, endpoints: state.endpoints, token: "secret" }),
 	loadHosts: async () => state.paired, sameHostConnections: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
@@ -62,6 +63,7 @@ beforeEach(() => {
 	state.resolve.mockImplementation(async () => ({ hostId: state.selected, host: `${state.selected}.test`, httpPort: "3011", muxPort: "3011", password: "secret" }));
 	state.sessions.mockResolvedValue(board("Fresh"));
 	state.notifications.mockResolvedValue({ notifications: [], unreadCount: 0 });
+	state.stillAnswers.mockImplementation(async () => false);
 });
 afterEach(async () => {
 	await act(async () => { renderer?.unmount(); }); renderer = undefined;
@@ -340,4 +342,21 @@ it("gives another machine the same reconnecting grace period", async () => {
 	expect(scoped.currentHostId).toBe("b");
 	expect(scoped.linkHealth).toBe("reconnecting");
 	expect(scoped.unreachable).toBe(false);
+});
+
+// #8369: a reload superseded while its fallback probe ran must not write its
+// empty result over the machine selected in the meantime.
+it("drops a superseded reload whose probe of the old connection failed", async () => {
+	await mount();
+	expect(current.config?.hostId).toBe("a");
+	let answer!: (value: boolean) => void;
+	state.stillAnswers.mockImplementationOnce(() => new Promise<boolean>((done) => { answer = done; }));
+	state.resolve.mockResolvedValueOnce(null);
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	await act(async () => { state.onNetwork!({ isConnected: true, isInternetReachable: true, type: "WIFI" }); });
+	expect(state.stillAnswers).toHaveBeenCalledTimes(1);
+	await act(async () => { await current.switchHost("b"); });
+	expect(current.config?.hostId).toBe("b");
+	await act(async () => { answer(false); });
+	expect(current.config?.hostId).toBe("b");
 });

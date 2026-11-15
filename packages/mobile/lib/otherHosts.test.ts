@@ -159,6 +159,35 @@ describe("another paired host's live runner", () => {
 		} finally { runner.stop(); }
 	});
 
+	// #8369: the connection is handed back before its endpoint refresh finishes,
+	// so a late fallback to the kept password cannot change the config in use.
+	it("connects again with the kept password after a late credential repair", async () => {
+		const { connectToHost } = await import("./connectRuntime");
+		const { ApiError, getSessions, getNotifications } = await import("./api");
+		const endpoint = { kind: "lan" as const, host: config.host, port: 3011, secure: false };
+		let repair!: (repaired: boolean) => void;
+		const refused = { ...config, password: "aod_refused" };
+		vi.mocked(connectToHost)
+			.mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint, config: refused, credentialRepair: new Promise<boolean>((done) => { repair = done; }) })
+			.mockResolvedValueOnce({ ok: true, hostId: host.id, endpoint, config });
+		vi.mocked(getSessions).mockImplementation(async (c: ServerConfig) => {
+			if (c.password === refused.password) throw new ApiError(401, "unauthorized");
+			return { projects: [], sessions: [], orchestrators: [], orchestratorId: null, stats: {} };
+		});
+		vi.mocked(getNotifications).mockResolvedValue({ notifications: [], unreadCount: 0, nextCursor: undefined });
+		const { emptyHostSnapshot, startOtherHost } = await import("./otherHosts");
+		let snapshot = emptyHostSnapshot(host);
+		const runner = startOtherHost(host, undefined, (patch) => { snapshot = { ...snapshot, ...patch }; });
+		try {
+			await runner.refresh();
+			expect(runner.config).toBeNull();
+			repair(true);
+			await vi.waitFor(() => expect(snapshot.connection).toBe("open"));
+			expect(runner.config).toBe(config);
+			expect(connectToHost).toHaveBeenCalledTimes(2);
+		} finally { runner.stop(); }
+	});
+
 	it("hides a cached bearer until a returning host has passed identity verification", async () => {
 		const { connectToHost } = await import("./connectRuntime");
 		const { getSessions, getNotifications } = await import("./api");

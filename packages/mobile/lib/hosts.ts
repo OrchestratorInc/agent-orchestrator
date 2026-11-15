@@ -147,8 +147,26 @@ export async function updateHostAppearance(id: string, appearance: MachineAppear
  * advertises, so a rotated tunnel hostname or a changed LAN address is picked
  * up without the user doing anything.
  */
-export async function updateHostEndpoints(id: string, endpoints: Endpoint[]): Promise<void> {
-	await mutateStored((stored) => stored.map((h) => (h.id === id ? { ...h, endpoints } : h)));
+export async function updateHostEndpoints(id: string, endpoints: Endpoint[], unchangedSince?: number): Promise<void> {
+	await mutateStored((stored) => {
+		// Checked inside the serialized write, so no other save can land between
+		// the check and this one.
+		if (unchangedSince !== undefined && hostEndpointRevision(id) !== unchangedSince) return stored;
+		endpointRevisions.set(id, hostEndpointRevision(id) + 1);
+		return stored.map((h) => (h.id === id ? { ...h, endpoints } : h));
+	});
+}
+
+const endpointRevisions = new Map<string, number>();
+
+/**
+ * Counts the endpoint saves for a machine in this process. A refresh that read
+ * the stored list at revision N saves only while it is still N, so a slow
+ * refresh cannot replace a list a later connection already saved (a rotated
+ * tunnel address above all).
+ */
+export function hostEndpointRevision(id: string): number {
+	return endpointRevisions.get(id) ?? 0;
 }
 
 /** Records a successful connection, so the list orders by recency. */
