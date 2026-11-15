@@ -103,6 +103,14 @@ describe("collectPageFiles", () => {
 		]);
 	});
 
+	it("leaves out a file a symlink in the page's folder leads out of it to", async () => {
+		await fs.symlink(path.join(artifacts, "top.png"), path.join(artifacts, "docs", "up.png"));
+		await fs.symlink(path.join(artifacts, "docs", "b.jpg"), path.join(artifacts, "docs", "images", "same.jpg"));
+		const { files, skipped } = await collectPageFiles(dataDir, "sess-1", "docs/report.html", `<img src="up.png"><img src="images/same.jpg">`);
+		expect(files.map((file) => [file.path, file.file.relativePath])).toEqual([["images/same.jpg", "docs/b.jpg"]]);
+		expect(skipped).toEqual([{ reference: "up.png", reason: "outside" }]);
+	});
+
 	it("resolves a page at the top of the artifacts folder", async () => {
 		const { files } = await collectPageFiles(dataDir, "sess-1", "page.html", `<img src="top.png"><img src="docs/b.jpg">`);
 		expect(files.map((file) => file.file.relativePath)).toEqual(["top.png", "docs/b.jpg"]);

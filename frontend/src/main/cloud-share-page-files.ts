@@ -181,8 +181,9 @@ function validServedPath(served: string): boolean {
 
 /**
  * The files the page at pageRelativePath (slash-separated, in the session's
- * artifacts) uses, each resolved strictly inside the session's artifacts
- * folder (see resolveShareFile), and what it uses that cannot be included.
+ * artifacts, as resolveShareFile names it once symlinks are followed) uses,
+ * each resolved strictly inside the page's folder, symlinks followed too, and
+ * what it uses that cannot be included.
  * Each served path is listed once, in the order the page first uses it.
  */
 export async function collectPageFiles(
@@ -218,6 +219,11 @@ export async function collectPageFiles(
 		} catch (error) {
 			if (!(error instanceof CloudShareError)) throw error;
 			skipped.push({ reference, reason: error.code === "file_missing" ? "missing" : "outside" });
+			continue;
+		}
+		// A symlink in the page's folder may lead out of it: only what is in it goes.
+		if (folder !== "." && !file.relativePath.startsWith(`${folder}/`)) {
+			skipped.push({ reference, reason: "outside" });
 			continue;
 		}
 		if (files.length >= MAX_PAGE_FILES) {
