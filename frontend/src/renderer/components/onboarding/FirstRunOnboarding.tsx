@@ -1023,9 +1023,11 @@ function ToolsStep({ onNext, onSkip, login }: {
 	// A harness from the full list that's installed, waiting to be signed in,
 	// installing or failed joins the main list, so it never hides behind
 	// "N more" (or scrolls out of sight in the full list).
+	// (One still being checked stays where it is, so the list doesn't swell
+	// while the daemon looks over every harness.)
 	const pinned = more.filter(({ agent, state }) => {
 		const view = agentInstalls.view(agent.id);
-		return state !== "missing" || view.busy || view.ended;
+		return state === "ready" || state === "signin" || view.busy || view.ended;
 	});
 	const pinnedIds = new Set(pinned.map(({ agent }) => agent.id));
 	const listed = [...agents, ...pinned];
