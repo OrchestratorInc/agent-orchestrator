@@ -135,6 +135,7 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen = false,
 	agentSwitch,
 	beforePicker,
+	afterPicker,
 	pickerNotice,
 	modelsLoading,
 	lastModel,
@@ -189,6 +190,8 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
+	/** Right after the model control, in either picker, such as the usage-limit sign. */
+	afterPicker?: ReactNode;
 	/** A line under the Agent row of the open model menu, such as the usage limit near its end. */
 	pickerNotice?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
@@ -547,6 +550,8 @@ export function TurnSettingsBar({
 							notice={pickerNotice}
 						/>
 					) : null}
+
+					{afterPicker}
 
 					{standaloneExecutionMode && onChangeConfigOption ? (
 						<ExecutionModePicker

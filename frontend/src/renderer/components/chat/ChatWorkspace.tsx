@@ -1820,7 +1820,8 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
-					beforePicker={agentSwitch ? <><ContextMeter usage={stableUsage} compactsAt={compactsAt} />{quotaSign}</> : undefined}
+					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
+					afterPicker={quotaSign}
 					pickerNotice={pickerNotice}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
@@ -2427,7 +2428,8 @@ function ChatWorkspaceContent({
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
-											{agentSwitch ? null : quotaSign}
+											{/* Normally right of the model control; with no settings bar, beside the ring. */}
+											{composerSettings ? null : quotaSign}
 											<QuotaStatus quota={nearQuota} />
 											{composerSettings}
 										</>}
