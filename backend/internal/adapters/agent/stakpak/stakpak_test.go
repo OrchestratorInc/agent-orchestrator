@@ -384,3 +384,104 @@ func TestPermissionPolicyLeavesUserFileAlone(t *testing.T) {
 		}
 	}
 }
+
+// A policy AO writes must never be left without its ownership marker: a later
+// default-mode launch would keep it as the user's and stay permissive.
+func TestPermissionPolicyNeedsItsMarker(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".stakpak", "session")
+	// A directory where the marker goes makes its write fail.
+	if err := os.MkdirAll(filepath.Join(dir, policyMarker, "blocker"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyPermissionMode(ws, ports.PermissionModeBypassPermissions); err == nil {
+		t.Fatal("applyPermissionMode succeeded without writing its marker")
+	}
+	if _, err := os.Stat(filepath.Join(dir, policyFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("policy written without an ownership marker: %v", err)
+	}
+}
+
+// The conversation check runs in the resumed process's environment: a
+// conversation in another profile's store exists only for that profile.
+func TestRestoreChecksTheConversationInTheRestoreEnvironment(t *testing.T) {
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	t.Setenv("STAKPAK_PROFILE", "")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "known-session-other"), []byte(nativeA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore := ports.RestoreConfig{
+		DataDir: t.TempDir(),
+		Session: ports.SessionRef{ID: "ao-1", WorkspacePath: t.TempDir(), Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}},
+		Env:     map[string]string{"STAKPAK_PROFILE": "other"},
+	}
+	argv, ok, err := New().GetRestoreCommand(context.Background(), restore)
+	if err != nil || !ok || !slices.Equal(argv, []string{bin, "--session", nativeA}) {
+		t.Fatalf("restore in the other profile = %q, %t, %v; want a resume of %s", argv, ok, err, nativeA)
+	}
+}
+
+// Inline instructions win over the file, so Stakpak must receive the inline
+// text whose digest AO records, not a file that says something else.
+func TestLaunchPassesTheSelectedInstructions(t *testing.T) {
+	fakeStakpak(t, `{"sessions":[]}`, "")
+	data := t.TempDir()
+	stale := filepath.Join(t.TempDir(), "rules.md")
+	if err := os.WriteFile(stale, []byte("older rules"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir: data, SessionID: "ao-1", WorkspacePath: t.TempDir(), SystemPrompt: "current rules", SystemPromptFile: stale,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.Index(argv, "--system-prompt-file")
+	if i < 0 || i+1 >= len(argv) || argv[i+1] == stale {
+		t.Fatalf("argv = %q; want AO's copy of the inline instructions, not %s", argv, stale)
+	}
+	if b, err := os.ReadFile(argv[i+1]); err != nil || string(b) != "current rules" { //nolint:gosec // test path
+		t.Fatalf("passed instructions = %q, %v; want the inline text", b, err)
+	}
+
+	// A file holding the same text is reused as is.
+	same := filepath.Join(t.TempDir(), "same.md")
+	if err := os.WriteFile(same, []byte("current rules\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argv, err = New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir: data, SessionID: "ao-2", WorkspacePath: t.TempDir(), SystemPrompt: "current rules", SystemPromptFile: same,
+	})
+	if err != nil || !slices.Contains(argv, same) {
+		t.Fatalf("argv = %q, %v; want the matching file %s", argv, err, same)
+	}
+}
+
+// A resolver that read the session list while a relaunch replaced the launch
+// record must not write the earlier launch's conversation over it.
+func TestResolvedIDNeverOverwritesANewerLaunch(t *testing.T) {
+	data, ws := t.TempDir(), t.TempDir()
+	p := New()
+	first := launchRecord{Workspace: ws, LaunchedAt: time.Now().UTC().Add(-time.Minute)}
+	if err := p.saveLaunchRecord(data, "ao-1", first); err != nil {
+		t.Fatal(err)
+	}
+	seen, _, err := readLaunchRecord(data, "ao-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := launchRecord{Workspace: ws, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest("rules")}
+	if err := p.saveLaunchRecord(data, "ao-1", newer); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := p.recordResolvedID(data, "ao-1", seen, nativeA); err != nil || stored {
+		t.Fatalf("stale resolve stored = %t, %v; want it dropped", stored, err)
+	}
+	current, _, err := readLaunchRecord(data, "ao-1")
+	if err != nil || current.ResolvedID != "" || !current.LaunchedAt.Equal(newer.LaunchedAt) || current.PromptDigest != newer.PromptDigest {
+		t.Fatalf("launch record = %+v, %v; want the newer launch untouched", current, err)
+	}
+	if stored, err := p.recordResolvedID(data, "ao-1", current, nativeA); err != nil || !stored {
+		t.Fatalf("current resolve stored = %t, %v; want it recorded", stored, err)
+	}
+}

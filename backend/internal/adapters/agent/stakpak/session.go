@@ -163,13 +163,38 @@ func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSes
 		return "", false, err
 	}
 	id, found := matchLaunch(record, sessions)
-	if found {
-		record.ResolvedID = id
-		if err := writeLaunchRecord(cfg.DataDir, string(cfg.SessionID), record); err != nil {
-			return "", false, err
-		}
+	if !found {
+		return "", false, nil
 	}
-	return id, found, nil
+	stored, err := p.recordResolvedID(cfg.DataDir, string(cfg.SessionID), record, id)
+	if err != nil || !stored {
+		return "", false, err
+	}
+	return id, true, nil
+}
+
+// saveLaunchRecord writes a launch's record under recordMu.
+func (p *Plugin) saveLaunchRecord(dataDir, sessionID string, record launchRecord) error {
+	p.recordMu.Lock()
+	defer p.recordMu.Unlock()
+	return writeLaunchRecord(dataDir, sessionID, record)
+}
+
+// recordResolvedID stores the conversation the launch seen started. stored is
+// false when a newer launch replaced the record while the session list was
+// read: that id belongs to the earlier launch, so nothing is recorded.
+func (p *Plugin) recordResolvedID(dataDir, sessionID string, seen launchRecord, id string) (bool, error) {
+	p.recordMu.Lock()
+	defer p.recordMu.Unlock()
+	current, ok, err := readLaunchRecord(dataDir, sessionID)
+	if err != nil || !ok || !current.LaunchedAt.Equal(seen.LaunchedAt) || current.NativeID != seen.NativeID {
+		return false, err
+	}
+	current.ResolvedID = id
+	if err := writeLaunchRecord(dataDir, sessionID, current); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // matchLaunch picks the newest conversation Stakpak started in the launch's

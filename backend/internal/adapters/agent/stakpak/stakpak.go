@@ -49,6 +49,9 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
+	// recordMu serializes launch-record writes, so a resolver that read the
+	// session list while a relaunch replaced the record cannot overwrite it.
+	recordMu sync.Mutex
 }
 
 // New returns a ready-to-register Stakpak adapter.
@@ -166,7 +169,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
-	if err := writeLaunchRecord(cfg.DataDir, cfg.SessionID, launchRecord{Workspace: cfg.WorkspacePath, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest(prompt)}); err != nil {
+	if err := p.saveLaunchRecord(cfg.DataDir, cfg.SessionID, launchRecord{Workspace: cfg.WorkspacePath, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest(prompt)}); err != nil {
 		return nil, err
 	}
 	return argv, nil
@@ -193,7 +196,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if !validSessionID(nativeID) {
 		return nil, false, fmt.Errorf("%s: native session id %q is not a Stakpak session UUID", adapterID, nativeID)
 	}
-	exists, err := p.NativeConversationExists(ctx, cfg.Session, nativeID, nil)
+	// Ask in the resumed process's environment: its profile decides which
+	// store, local or the Stakpak API, holds the conversation.
+	exists, err := p.NativeConversationExists(ctx, cfg.Session, nativeID, cfg.Env)
 	if err != nil {
 		return nil, false, err
 	}
@@ -227,7 +232,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if recorded == "" && sameConversation {
 		recorded = previous.PromptDigest
 	}
-	if err := writeLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded}); err != nil {
+	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded}); err != nil {
 		return nil, false, err
 	}
 	return append(argv, "--session", nativeID), true, nil
@@ -300,14 +305,18 @@ func promptDigest(prompt string) string {
 }
 
 // systemPromptFile returns the file passed to --system-prompt-file: AO's own
-// file when it wrote one, else the instructions written under the AO data
-// dir. Empty means no standing instructions.
+// file when it holds the selected instructions, else those instructions
+// written under the AO data dir. Empty means no standing instructions.
 func systemPromptFile(dataDir, sessionID, inline, file string) (string, error) {
 	if strings.TrimSpace(inline) == "" {
 		return "", nil
 	}
 	if strings.TrimSpace(file) != "" {
-		return file, nil
+		// Inline instructions win (standingInstructions), so the file is
+		// reused only when it holds the same text whose digest AO records.
+		if data, err := os.ReadFile(file); err == nil && strings.TrimSpace(string(data)) == strings.TrimSpace(inline) { //nolint:gosec // AO-owned launch config path
+			return file, nil
+		}
 	}
 	if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(sessionID) == "" {
 		return "", errors.New("stakpak: a system prompt needs the AO data dir and session id")

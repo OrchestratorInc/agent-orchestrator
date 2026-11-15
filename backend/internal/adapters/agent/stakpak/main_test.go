@@ -44,7 +44,13 @@ func runFakeStakpak(dir string, args []string) int {
 		}
 		_, _ = os.Stdout.Write(list)
 	case len(args) > 2 && args[0] == "sessions" && args[1] == "show":
-		known, _ := os.ReadFile(filepath.Join(dir, "known-session")) //nolint:gosec // test-only path
+		// Each profile has its own store: known-session, or
+		// known-session-<profile> under STAKPAK_PROFILE.
+		name := "known-session"
+		if profile := os.Getenv("STAKPAK_PROFILE"); profile != "" {
+			name += "-" + profile
+		}
+		known, _ := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // test-only path
 		if len(known) == 0 || args[2] != string(known) {
 			_, _ = fmt.Fprintf(os.Stderr, "Error: Not found: Session %s not found\n", args[2])
 			return 1
