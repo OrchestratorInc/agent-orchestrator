@@ -738,7 +738,7 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 		>
 			{/* Narrates the preview: the whole story at once, the part playing
 			    brought up and the rest dimmed. */}
-			<ol className="flex flex-col gap-4 pt-6">
+			<ol className="flex flex-col gap-4 pt-6 pb-8">
 				{ORCH_POINTS.map(({ title, body }, i) => {
 					const active = i === point;
 					return (
