@@ -28,6 +28,7 @@ var hookSource []byte
 
 const profileMarker = "agent-orchestrator: private minimax-code profile\n"
 const standingTransportMarker = "agent-orchestrator: native user-prompt context v1\n"
+
 // maxHookOutputBytes is MiniMax Code's plugin hook stdout limit. Larger output
 // is rejected as invalid and its context is dropped without failing the prompt.
 const maxHookOutputBytes = 64 << 10
