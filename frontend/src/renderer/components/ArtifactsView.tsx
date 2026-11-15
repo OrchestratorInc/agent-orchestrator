@@ -40,7 +40,8 @@ import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifact
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { useArtifactShareFile, useHostShareLinks, useReconciledShareLinks } from "./ShareArtifactPopover";
+import { useArtifactShareFile, useHostShareLinks, useReconciledShareLinks, useShareAccess } from "./ShareArtifactPopover";
+import { prepareUnpublish, publishedArtifacts, unpublishTarget, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -212,6 +213,7 @@ export function ArtifactsView() {
 		() => groups.flatMap((group) => group.rows).filter((row) => selectedIds.has(artifactKey(row))),
 		[groups, selectedIds],
 	);
+	const selectedPublished = publishedArtifacts(selectedRows).length;
 	const selectableVisibleIds = cards.filter(({ row }) => !deleteBlockedReason(row)).map(({ row }) => artifactKey(row));
 	const allVisibleSelected = selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selectedIds.has(id));
 	const toggleSelected = (id: string) => setSelectedIds((current) => {
@@ -233,11 +235,19 @@ export function ArtifactsView() {
 	};
 	// Each file is deleted on its own; the ones that fail stay selected so
 	// the person can retry them.
+	// A published file's link is looked up before its delete and unpublished
+	// once that file is gone; a file that failed to delete keeps its link.
+	const { baseUrl: shareBaseUrl } = useShareAccess();
 	const bulkDelete = useMutation({
 		mutationFn: async (rows: readonly ArtifactRow[]) => {
+			const links = await Promise.all(rows.map((row) => prepareUnpublish(shareBaseUrl, row.shareUrl
+				? [unpublishTarget({ id: row.sessionId, cloud: row.cloud, workspaceId: row.projectId }, row)]
+				: [])));
 			const results = await Promise.allSettled(rows.map((row) => row.cloud
 				? cloudClient.deleteSessionArtifact(row.cloud.orgId, row.sessionId, row.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
 				: deleteSessionArtifactFile({ path: row.path, sessionId: row.sessionId, hostId: row.hostId })));
+			const linksLive = await Promise.all(links.map((link, index) => results[index]?.status === "fulfilled" ? link.unpublish() : 0));
+			warnLinksStillLive(t, linksLive.reduce((sum, count) => sum + count, 0));
 			const deleted = rows.filter((_, index) => results[index]?.status === "fulfilled").map(artifactKey);
 			const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
 			const { unpinArtifact } = useArtifactsViewStore.getState();
@@ -470,7 +480,9 @@ export function ArtifactsView() {
 			<ConfirmDialog
 				busy={bulkDelete.isPending}
 				confirmLabel={t("artifacts.bulkDeleteConfirm", { count: selectedRows.length })}
-				description={t("artifacts.bulkDeleteDescription")}
+				description={selectedPublished > 0
+					? `${t("artifacts.bulkDeleteDescription")} ${t("artifacts.bulkDeletePublished", { count: selectedPublished })}`
+					: t("artifacts.bulkDeleteDescription")}
 				destructive
 				error={bulkDelete.error?.message ?? null}
 				onConfirm={() => bulkDelete.mutate(selectedRows)}
@@ -526,7 +538,8 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 	const navigateToSession = useNavigateToSession();
 	const KindIcon = artifactFileIcon(row);
 	const selectionDescriptionId = useId();
-	const context = `${projectName} · ${row.sessionTitle}`;
+	// An archived session's files stay listed, view only; the context says so.
+	const context = row.archived ? `${projectName} · ${row.sessionTitle} · ${t("artifacts.archivedSession")}` : `${projectName} · ${row.sessionTitle}`;
 
 	const open = () => {
 		onPreview(row, projectName);

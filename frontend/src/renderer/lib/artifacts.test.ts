@@ -66,19 +66,24 @@ describe("groupArtifactsByProject", () => {
 		expect(artifactCount(groups)).toBe(1);
 	});
 
-	it("hides archived and terminated sessions and drops projects left empty", () => {
+	it("keeps archived and terminated sessions' artifacts, marked archived, and drops projects left empty", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
 				session("ao-1", [artifact("kept.md", "2026-10-09T10:00:00Z")]),
-				session("ao-2", [artifact("archived.md", "2026-10-10T10:00:00Z")], { kanbanColumn: "archive" }),
+				session("ao-2", [artifact("archived.md", "2026-10-11T10:00:00Z")], { kanbanColumn: "archive" }),
 				session("ao-3", [artifact("killed.md", "2026-10-10T10:00:00Z")], { isTerminated: true }),
 			]),
-			workspace("old", "old-project", [session("old-1", [artifact("gone.md", "2026-10-10T10:00:00Z")], { status: "terminated" })]),
+			workspace("old", "old-project", [session("old-1", [artifact("ended.md", "2026-10-08T10:00:00Z")], { status: "terminated" })]),
 			workspace("empty", "empty-project", [session("empty-1", [])]),
 		]);
 
-		expect(groups.map((group) => group.id)).toEqual(["ao"]);
-		expect(groups[0].rows.map((row) => row.name)).toEqual(["kept.md"]);
+		expect(groups.map((group) => group.id)).toEqual(["ao", "old"]);
+		expect(groups[0].rows.map((row) => [row.name, row.archived ?? false])).toEqual([
+			["archived.md", true],
+			["killed.md", true],
+			["kept.md", false],
+		]);
+		expect(groups[1].rows.map((row) => [row.name, row.archived])).toEqual([["ended.md", true]]);
 	});
 
 	it("labels the standalone workspace as the Scratchpad without a project id", () => {
@@ -145,14 +150,14 @@ describe("groupArtifactsByProject", () => {
 		expect(group.rows[1].bundle).toEqual({ path: "brand.icon", fileCount: 2 });
 	});
 
-	it("hides a replaced orchestrator's artifacts as it does a killed worker's", () => {
+	it("keeps a replaced orchestrator's artifacts, marked archived, as it does a killed worker's", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
 				session("ao-40", [artifact("old-report.md", "2026-10-09T10:00:00Z")], { kind: "orchestrator", isTerminated: true }),
 			]),
 		], "Orchestrator");
 
-		expect(groups).toEqual([]);
+		expect(groups[0].rows).toEqual([expect.objectContaining({ name: "old-report.md", sessionTitle: "Orchestrator", archived: true })]);
 	});
 
 	it("includes cloud projects' artifacts", () => {

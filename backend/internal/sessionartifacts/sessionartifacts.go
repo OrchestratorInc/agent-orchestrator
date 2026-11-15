@@ -49,12 +49,20 @@ const MaxVisited = 10000
 // ignored are skipped, as are unreadable entries rather than failing the walk.
 // A cancelled ctx stops the walk and returns its error.
 func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error) {
-	return list(ctx, dir, nil)
+	return list(ctx, dir, nil, MaxFiles)
 }
 
-// list is List that also records each file's identity in quick, when quick is
-// not nil.
-func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
+// HasFiles reports whether a session's artifact directory holds any file List
+// would return. It stops at the first one, so a sweep over many sessions does
+// not walk whole trees. A missing directory has none.
+func HasFiles(ctx context.Context, dir string) (bool, error) {
+	files, err := list(ctx, dir, nil, 1)
+	return len(files) > 0, err
+}
+
+// list is List, stopping after maxFiles files, that also records each file's
+// identity in quick, when quick is not nil.
+func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity, maxFiles int) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, nil
@@ -79,7 +87,7 @@ func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity)
 			return nil
 		}
 		visited++
-		if len(files) >= MaxFiles || visited > MaxVisited {
+		if len(files) >= maxFiles || visited > MaxVisited {
 			return filepath.SkipAll
 		}
 		if d.Type()&os.ModeSymlink != 0 {
@@ -235,7 +243,7 @@ func ListRegistered(ctx context.Context, dir string, registered []string) ([]dom
 }
 
 func listRegistered(ctx context.Context, dir string, registered []string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
-	files, err := list(ctx, dir, quick)
+	files, err := list(ctx, dir, quick, MaxFiles)
 	if err != nil || len(registered) == 0 {
 		return files, err
 	}
@@ -302,7 +310,7 @@ func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool, qui
 	if quick != nil {
 		inner = make(map[string]domain.FileIdentity)
 	}
-	inside, err := list(ctx, full, inner)
+	inside, err := list(ctx, full, inner, MaxFiles)
 	if err != nil {
 		return nil, err
 	}

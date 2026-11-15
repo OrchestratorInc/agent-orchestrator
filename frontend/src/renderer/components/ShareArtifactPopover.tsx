@@ -21,6 +21,7 @@ import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
+import { onArtifactLinksUnpublished } from "../lib/unpublish-artifacts";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -165,6 +166,8 @@ function subscribeShareLinks(listener: () => void): () => void {
 	shareLinksListeners.add(listener);
 	return () => shareLinksListeners.delete(listener);
 }
+// A delete that unpublished links changed the list as much as this panel does.
+onArtifactLinksUnpublished(shareLinksChanged);
 
 /**
  * Whose link list: the control plane and the signed-in account. A list holds

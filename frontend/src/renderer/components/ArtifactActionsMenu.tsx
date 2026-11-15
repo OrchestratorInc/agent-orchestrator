@@ -15,12 +15,13 @@ import type { CloudCpClient } from "../lib/cloud-cp";
 import { artifactChangeError, artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
+import { prepareUnpublish, unpublishTarget, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
-import { ShareArtifactMenuPopover, VIDEO_FILE, useShareAvailable } from "./ShareArtifactPopover";
+import { ShareArtifactMenuPopover, VIDEO_FILE, useShareAccess, useShareAvailable } from "./ShareArtifactPopover";
 import type { CloudShareFile } from "../../shared/cloud-share";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -89,7 +90,7 @@ export function ArtifactActionsMenu({
 	className,
 	children,
 }: {
-	artifact: Pick<SessionArtifact, "name" | "path" | "rawUrl" | "updatedAt" | "shareUrl">;
+	artifact: Pick<SessionArtifact, "id" | "name" | "path" | "rawUrl" | "updatedAt" | "shareUrl">;
 	downloadUrl?: string;
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
@@ -136,13 +137,21 @@ export function ArtifactActionsMenu({
 	const cloudFileUrl = session.cloud
 		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
 		: undefined;
+	const { baseUrl: shareBaseUrl } = useShareAccess();
 	// The deleted file leaves the session's artifact list on the next read.
+	// Its link is looked up while the file is there and unpublished once it is
+	// gone; a remote host's file has no link recorded on this computer.
 	const remove = useMutation({
-		mutationFn: () => session.cloud
-			? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
-			: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
-		onSuccess: async () => {
+		mutationFn: async () => {
+			const links = await prepareUnpublish(shareBaseUrl, published && !hostId ? [share ?? unpublishTarget(session, artifact)] : []);
+			await (session.cloud
+				? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
+				: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }));
+			return links.unpublish();
+		},
+		onSuccess: async (linksLive) => {
 			setConfirmingDelete(false);
+			warnLinksStillLive(t, linksLive);
 			useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path, hostId }));
 			onDeleted?.();
 			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
@@ -432,7 +441,7 @@ export function ArtifactActionsMenu({
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}
-				description={t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}
+				description={`${t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}${published ? ` ${t("artifacts.deletePublished")}` : ""}`}
 				destructive
 				error={remove.error?.message ?? null}
 				onConfirm={() => remove.mutate()}
