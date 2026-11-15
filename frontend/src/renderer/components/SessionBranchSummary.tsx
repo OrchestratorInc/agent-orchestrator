@@ -73,7 +73,13 @@ export type BranchGitStep = {
 };
 
 /** The branch rows and git step, handed to the PR card new commits land on. */
-export type BranchWork = { content: ReactNode; hasRows: boolean; git?: BranchGitStep };
+export type BranchWork = {
+	content: ReactNode;
+	hasRows: boolean;
+	git?: BranchGitStep;
+	/** The diff the commits row states, when there is one; the card leaves the same numbers off its own line. */
+	diff?: { additions: number; deletions: number };
+};
 
 export function SessionBranchSummary({
 	conflictFiles,
@@ -82,7 +88,6 @@ export function SessionBranchSummary({
 	merged = false,
 	onOpenFiles,
 	openPRConflicting = false,
-	openPRDiff,
 	openPRNumber,
 	pullRequests,
 	session,
@@ -99,8 +104,6 @@ export function SessionBranchSummary({
 	/** The provider says that PR conflicts with its base, whatever the local checkout knows. */
 	openPRConflicting?: boolean;
 	/** The open or draft PR that new commits would update. */
-	/** The open PR's diff size as its card states it, so the commits row doesn't say the same numbers again. */
-	openPRDiff?: { additions: number; deletions: number };
 	openPRNumber?: number;
 	/**
 	 * The PR cards. As a function it receives the branch rows and git action
@@ -169,12 +172,8 @@ export function SessionBranchSummary({
 		);
 	}
 
-	// Inside the PR's card, the line under the title already states the diff. The
-	// commits row repeats it only when the branch differs, as with unpushed work.
 	const committedAdditions = sum(facts.committed, "additions");
 	const committedDeletions = sum(facts.committed, "deletions");
-	const repeatsPRDiff = typeof pullRequests === "function" && openPRNumber !== undefined
-		&& openPRDiff?.additions === committedAdditions && openPRDiff.deletions === committedDeletions;
 	const rows = (
 		<>
 			{facts.uncommitted.length > 0 ? (
@@ -192,7 +191,6 @@ export function SessionBranchSummary({
 				<GitStatusRow
 					additions={committedAdditions}
 					deletions={committedDeletions}
-					hideCounts={repeatsPRDiff}
 					icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
 					files={facts.committed}
 					label={commitsRow.label}
@@ -239,7 +237,7 @@ export function SessionBranchSummary({
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
 				{/* A PR's card names its own branches; the line is for a branch without one. */}
 				{(branch || naming) && !pullRequests ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
-				{renderCards(workInPR ? { content: rows, hasRows: hasWork, git: gitStep } : undefined)}
+				{renderCards(workInPR ? { content: rows, hasRows: hasWork, git: gitStep, diff: commitsRow ? { additions: committedAdditions, deletions: committedDeletions } : undefined } : undefined)}
 				{workInPR ? null : workRows}
 			</section>
 		</InspectorSection>
@@ -267,7 +265,6 @@ function GitStatusRow({
 	additions,
 	deletions,
 	files,
-	hideCounts = false,
 	icon,
 	label,
 	note,
@@ -278,8 +275,6 @@ function GitStatusRow({
 	additions: number;
 	deletions: number;
 	files: WorkspaceFileSummary[];
-	/** Leave the numbers out: something beside the row already states them. */
-	hideCounts?: boolean;
 	icon: ReactNode;
 	label: string;
 	note?: string;
@@ -306,7 +301,7 @@ function GitStatusRow({
 						<span className={noteTone === "warn" ? "shrink-0 text-xs text-status-in-review" : "shrink-0 text-xs text-passive"}>{note}</span>
 					) : null}
 				</span>
-				{hideCounts ? null : <ChangeCounts additions={additions} deletions={deletions} className="gap-1.5 text-xs" />}
+				<ChangeCounts additions={additions} deletions={deletions} className="gap-1.5 text-xs" />
 				<ChevronRight aria-hidden="true" className={cn("size-icon-sm shrink-0 text-passive transition-transform motion-reduce:transition-none", opens && open && "rotate-90")} />
 			</Pressable>
 			{opens && open ? <ChangedFilesList files={files} id={id} onOpenAll={onOpenAll} onOpenFile={onOpenFile} /> : null}

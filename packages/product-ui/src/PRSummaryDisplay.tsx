@@ -35,6 +35,7 @@ export function PRSummaryMeta({
 	className,
 	countNounLabel = defaultCountNounLabel,
 	externalLink: ExternalLink,
+	hideDiffCounts = false,
 	inline = false,
 	leading,
 	openedViaLabel = "via Orchestrator",
@@ -43,6 +44,8 @@ export function PRSummaryMeta({
 	className?: string;
 	countNounLabel?: CountNounLabel;
 	externalLink: ExternalLinkComponent;
+	/** The compact line leaves +/− out: something beside it states the same numbers. */
+	hideDiffCounts?: boolean;
 	/** The author and the diff stats share one line, as the PR view's card shows them. */
 	inline?: boolean;
 	leading?: string;
@@ -51,7 +54,7 @@ export function PRSummaryMeta({
 	pr: PRSummaryMetadata;
 }) {
 	if (inline) {
-		return <PRCompactMeta className={className} countNounLabel={countNounLabel} externalLink={ExternalLink} leading={leading} openedViaLabel={openedViaLabel} pr={pr} />;
+		return <PRCompactMeta className={className} countNounLabel={countNounLabel} externalLink={ExternalLink} hideDiffCounts={hideDiffCounts} leading={leading} openedViaLabel={openedViaLabel} pr={pr} />;
 	}
 	const branchRange = prBranchRange(pr);
 	const hasDiff = hasDiffMetadata(pr);
@@ -150,6 +153,7 @@ function PRCompactMeta({
 	className,
 	countNounLabel,
 	externalLink: ExternalLink,
+	hideDiffCounts = false,
 	leading,
 	openedViaLabel,
 	pr,
@@ -157,6 +161,7 @@ function PRCompactMeta({
 	className?: string;
 	countNounLabel: CountNounLabel;
 	externalLink: ExternalLinkComponent;
+	hideDiffCounts?: boolean;
 	leading?: string;
 	openedViaLabel: string;
 	pr: PRSummaryMetadata;
@@ -208,7 +213,7 @@ function PRCompactMeta({
 			{hasDiff || avatar ? (
 				<span className="flex shrink-0 items-center gap-2 tabular-nums">
 					{pr.changedFiles > 0 ? <span>{countNounLabel(pr.changedFiles, "file")}</span> : null}
-					{changed ? (
+					{changed && !hideDiffCounts ? (
 						<span className="inline-flex items-center gap-1">
 							{pr.additions > 0 ? <span aria-hidden="true" className="text-success">+{formatCount(pr.additions)}</span> : null}
 							{pr.deletions > 0 ? <span aria-hidden="true" className="text-error">−{formatCount(pr.deletions)}</span> : null}

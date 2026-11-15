@@ -6163,7 +6163,7 @@ describe("SessionInspector branch summary", () => {
     expect(await within(screen.getByTestId("pr-card")).findByRole("button", { name: "Resolving conflicts…" })).toBeDisabled();
   });
 
-  it("states the diff once in the PR card: the commits row drops numbers the card already shows", async () => {
+  it("states the diff once in the PR card: the commits row has it, so the branch line leaves it off", async () => {
     const same = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
     mockGitState({ committed: [changedFile("src/a.ts", 5, 2)], prs: [same] });
     renderWithQuery(
@@ -6175,10 +6175,13 @@ describe("SessionInspector branch summary", () => {
     const card = within(await screen.findByTestId("pr-card"));
     expect(await card.findByText("2 commits")).toBeInTheDocument();
     expect(card.getAllByText("+5")).toHaveLength(1);
-    expect(card.getAllByText("−2")).toHaveLength(1);
+    // The branch line keeps the file count and drops the numbers.
+    const meta = within(card.getByTestId("pr-meta"));
+    expect(meta.getByText("2 files")).toBeInTheDocument();
+    expect(meta.queryByText("+5")).toBeNull();
   });
 
-  it("keeps the commits row's numbers when the branch differs from the PR", async () => {
+  it("keeps both sets of numbers when the branch differs from the PR", async () => {
     const behindPR = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
     mockGitState({ committed: [changedFile("src/a.ts", 9, 2)], prs: [behindPR] });
     renderWithQuery(
@@ -6189,7 +6192,7 @@ describe("SessionInspector branch summary", () => {
 
     const card = within(await screen.findByTestId("pr-card"));
     expect(await card.findByText("3 commits")).toBeInTheDocument();
-    expect(card.getByText("+5")).toBeInTheDocument();
+    expect(within(card.getByTestId("pr-meta")).getByText("+5")).toBeInTheDocument();
     expect(card.getByText("+9")).toBeInTheDocument();
   });
 
