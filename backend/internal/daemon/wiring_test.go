@@ -840,6 +840,9 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 		ProjectID: "p",
 		Kind:      domain.KindWorker,
 		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+		// Spawned sessions start with automatic CI fixing on; that switch also
+		// gates the merge-conflict nudge.
+		AutoInjectCI: true,
 	})
 	if err != nil {
 		t.Fatal(err)
