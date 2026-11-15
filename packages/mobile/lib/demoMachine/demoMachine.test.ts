@@ -48,6 +48,32 @@ describe("demo machine", () => {
 		expect(demoServer()).not.toBe(server);
 	});
 
+	it("does not start the simulator again for a request that set out before removal", async () => {
+		vi.useFakeTimers();
+		const server = demoServer();
+		const request = demoFetch(`http://${DEMO_HOSTNAME}:${DEMO_PORT}/api/v1/identity`).catch((error: unknown) => error);
+		await removeDemoMachine();
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(await request).toBeInstanceOf(TypeError);
+		const tick = vi.spyOn(server, "tick");
+		vi.advanceTimersByTime(1_000);
+		expect(tick).not.toHaveBeenCalled();
+		// Explicit requests afterwards still reach a fresh machine.
+		const later = demoFetch(`http://${DEMO_HOSTNAME}:${DEMO_PORT}/api/v1/identity`);
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect((await later).status).toBe(200);
+	});
+
+	it("stops the simulator even when removing the pairing fails part-way", async () => {
+		vi.useFakeTimers();
+		const server = demoServer();
+		vi.mocked(secureStore.deleteItemAsync).mockRejectedValueOnce(new Error("keystore busy"));
+		await expect(removeDemoMachine()).rejects.toThrow("keystore busy");
+		const tick = vi.spyOn(server, "tick");
+		vi.advanceTimersByTime(1_000);
+		expect(tick).not.toHaveBeenCalled();
+	});
+
 	it("answers only its own address", () => {
 		expect(isDemoUrl(`http://${DEMO_HOSTNAME}:${DEMO_PORT}/api/v1/identity`)).toBe(true);
 		expect(isDemoUrl(`ws://${DEMO_HOSTNAME}:${DEMO_PORT}/mux`)).toBe(true);

@@ -23,8 +23,12 @@ export async function addDemoMachine(): Promise<void> {
 }
 
 export async function removeDemoMachine(): Promise<void> {
-	await removeHost(DEMO_HOST_ID);
-	stopDemoServer();
+	try {
+		await removeHost(DEMO_HOST_ID);
+	} finally {
+		// Stopped even if a keystore cleanup after the removal failed.
+		stopDemoServer();
+	}
 }
 
 export function chooseDemoNetwork(next: DemoNetwork): void {

@@ -30,6 +30,9 @@ const networkListeners = new Set<() => void>();
 let server: DemoServer | null = null;
 let ticker: ReturnType<typeof setInterval> | null = null;
 let chatPagesInFlight = 0;
+// Bumped each time the demo machine is stopped: a request that set out before
+// then finds no machine when it arrives, instead of starting a new one.
+let generation = 0;
 let installed = false;
 
 export function demoNetwork(): DemoNetwork {
@@ -61,6 +64,7 @@ export function demoServer(): DemoServer {
  * background. The next request starts a fresh one; the network chosen stays.
  */
 export function stopDemoServer(): void {
+	generation += 1;
 	if (ticker) clearInterval(ticker);
 	ticker = null;
 	server = null;
@@ -157,7 +161,9 @@ export async function demoFetch(input: unknown, init?: RequestInit): Promise<Res
 	// The Problem 2 signal: chat pages still downloading when the next one starts.
 	if (isChatPage) console.info(`[demo] ${label} · ${++chatPagesInFlight} chat page(s) downloading on ${DEMO_NETWORKS[network].label}`);
 	try {
+		const setOut = generation;
 		await travel(init?.signal);
+		if (setOut !== generation) throw new TypeError("Network request failed");
 		const answer = demoServer().handle(method, url, typeof init?.body === "string" ? init.body : undefined);
 		return new Response(answer.text ?? JSON.stringify(answer.body), {
 			status: answer.status,
@@ -179,7 +185,9 @@ type StreamReader = { read(): Promise<{ done: boolean; value?: Uint8Array }>; ca
  */
 export async function demoEventStream(_input: unknown, init?: { signal?: AbortSignal | null }): Promise<StreamResponse> {
 	if (!isDevBuild()) throw new TypeError("Network request failed");
+	const setOut = generation;
 	await travel(init?.signal);
+	if (setOut !== generation) throw new TypeError("Network request failed");
 	const source = demoServer();
 	const encoder = new TextEncoder();
 	const queue: Uint8Array[] = [];
