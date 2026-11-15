@@ -1,4 +1,4 @@
-import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
+import { Info, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
@@ -47,6 +47,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => !account.device || account.signedIn).length > 1;
 	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[loginKey];
@@ -144,7 +145,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>; })}
-			{hostId ? null : <AccountHandoffRow />}
+			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
@@ -229,7 +230,17 @@ function AccountHandoffRow() {
 	const { settings, isLoading } = useSettings();
 	const { update, saving, error } = useUpdateAccountHandoff();
 	return <>
-		<HarnessDetailRow label={t("settings.agentAccounts.handoff")} description={t("settings.agentAccounts.handoffDescription")}>
+		<HarnessDetailRow label={<span className="inline-flex items-center gap-1.5">
+			{t("settings.agentAccounts.handoff")}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button type="button" size="icon-xs" variant="quiet" aria-label={t("settings.agentAccounts.problemDetails")}>
+						<Info className="size-icon-sm" aria-hidden="true" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-sm">{t("settings.agentAccounts.handoffDescription")}</TooltipContent>
+			</Tooltip>
+		</span>}>
 			<Switch
 				aria-label={t("settings.agentAccounts.handoff")}
 				checked={settings?.accountHandoff ?? false}
