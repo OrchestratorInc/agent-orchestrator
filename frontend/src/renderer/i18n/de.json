@@ -1284,7 +1284,6 @@
 	"notify.clearAll": "Alle löschen",
 	"notify.clearOne": "Benachrichtigung löschen: {{title}}",
 	"notify.clearOneShort": "Benachrichtigung löschen",
-	"notify.cloud": "Cloud",
 	"notify.couldNotClearAll": "Benachrichtigungen konnten nicht gelöscht werden",
 	"notify.couldNotClearOne": "Benachrichtigung konnte nicht gelöscht werden",
 	"notify.couldNotMarkAllRead": "Benachrichtigungen konnten nicht als gelesen markiert werden",

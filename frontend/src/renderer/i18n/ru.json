@@ -1294,7 +1294,6 @@
 	"notify.clearAll": "Очистить всё",
 	"notify.clearOne": "Удалить уведомление: {{title}}",
 	"notify.clearOneShort": "Удалить уведомление",
-	"notify.cloud": "Облако",
 	"notify.couldNotClearAll": "Не удалось удалить уведомления",
 	"notify.couldNotClearOne": "Не удалось удалить уведомление",
 	"notify.couldNotMarkAllRead": "Не удалось отметить уведомления прочитанными",

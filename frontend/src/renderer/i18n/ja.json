@@ -1284,7 +1284,6 @@
 	"notify.clearAll": "すべてクリア",
 	"notify.clearOne": "通知をクリア: {{title}}",
 	"notify.clearOneShort": "通知をクリア",
-	"notify.cloud": "クラウド",
 	"notify.couldNotClearAll": "通知をクリアできませんでした",
 	"notify.couldNotClearOne": "通知をクリアできませんでした",
 	"notify.couldNotMarkAllRead": "すべての通知を既読にできませんでした",

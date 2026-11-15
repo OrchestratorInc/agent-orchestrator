@@ -1283,7 +1283,6 @@
 	"notify.clearAll": "清除全部",
 	"notify.clearOne": "清除通知：{{title}}",
 	"notify.clearOneShort": "清除通知",
-	"notify.cloud": "云端",
 	"notify.couldNotClearAll": "无法清除通知",
 	"notify.couldNotClearOne": "无法清除通知",
 	"notify.couldNotMarkAllRead": "无法将通知全部标为已读",

@@ -1223,9 +1223,9 @@ describe("Sidebar", () => {
 		expect(section).toContainElement(screen.getByText("baby"));
 		const agentRow = screen.getByText("Fix the flake").closest("[data-session-row]")!;
 		expect(section).toContainElement(agentRow as HTMLElement);
-		// Only the Cloud agent carries the badge that tells it from a local one.
-		expect(within(agentRow as HTMLElement).getByText("Cloud")).toBeInTheDocument();
-		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByText("Cloud")).toBeNull();
+		// Only the Cloud agent carries the cloud mark that tells it from a local one.
+		expect(within(agentRow as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
+		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByRole("img", { name: "Cloud" })).toBeNull();
 		// It is no project of its own; a standalone agent shared with the person stays with the shared projects.
 		expect(document.querySelector('li[data-project-id="agent-1"]')).toBeNull();
 		expect(document.querySelector('li[data-project-id="agent-shared"]')).not.toBeNull();
