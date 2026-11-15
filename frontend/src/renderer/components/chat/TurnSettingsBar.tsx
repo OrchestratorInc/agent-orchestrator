@@ -38,7 +38,7 @@ import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button, GHOST_PILL_CLASS } from "../ui/button";
 import { agentLabel } from "../../lib/agent-options";
-import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerOverride, type PickerSource } from "./AgentSwitchPicker";
+import { AgentModelPicker, AutoCompactRow, compactsEarly, ToggleRow, type AgentSwitchProps, type PickerSource } from "./AgentSwitchPicker";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { providerQualifiedChoice } from "../../lib/model-variants";
 import type {
@@ -135,7 +135,6 @@ export function TurnSettingsBar({
 	autoSelectEffortOnOpen = false,
 	agentSwitch,
 	beforePicker,
-	pickerOverride,
 	pickerNotice,
 	modelsLoading,
 	lastModel,
@@ -190,8 +189,6 @@ export function TurnSettingsBar({
 	agentSwitch?: AgentSwitchProps;
 	/** Drawn just before that picker, such as the context meter. */
 	beforePicker?: ReactNode;
-	/** Shown in the picker after the agent's logo, in place of the model and effort, such as the usage limit near its end. */
-	pickerOverride?: PickerOverride;
 	/** A line under the Agent row of the open model menu, such as the usage limit near its end. */
 	pickerNotice?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
@@ -506,7 +503,6 @@ export function TurnSettingsBar({
 								loading={configPending && !nativeModelMenu}
 								loadingModels={modelsLoading}
 								savedModel={settings.model || lastModel}
-								override={pickerOverride}
 								notice={pickerNotice}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								extras={pickerExtras}

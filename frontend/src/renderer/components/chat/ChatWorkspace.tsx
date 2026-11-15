@@ -195,8 +195,7 @@ import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
-import { nearQuotaWindow, QuotaMenuNotice, QuotaPill, QuotaReadout, QuotaStatus, quotaTitle, useQuotaFlash } from "./QuotaReadout";
-import { SmoothSwap } from "./SmoothSwap";
+import { nearQuotaWindow, QuotaMenuNotice, QuotaSign, QuotaStatus } from "./QuotaReadout";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -1124,7 +1123,7 @@ function ChatWorkspaceContent({
 		// The focusable context tooltip must not redirect focus to the composer.
 		if (
 			target.closest(
-				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [data-context-meter], [data-quota-pill], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
+				"button, a, input, textarea, select, [contenteditable='true'], [role='button'], [role='option'], [data-context-meter], [role='menuitem'], [role='dialog'], [data-testid='session-terminal'], .xterm, .terminal-surface",
 			)
 		)
 			return;
@@ -1799,20 +1798,10 @@ function ChatWorkspaceContent({
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
 	const stableUsage = useStableValue(snapshot.usage);
 	const { t } = useTranslation();
-	// Near the account's usage limit, the model picker shows the limit in its place.
+	// Near the account's usage limit, a warning sign sits beside the model and the menu repeats it.
 	const nearQuota = useStableValue(nearQuotaWindow(snapshot.rateLimits));
-	// The warning holds the model's place briefly; a full window holds it until reset.
-	const quotaFlash = useQuotaFlash(nearQuota, snapshot.conversationId);
-	const pickerOverride = useMemo(
-		() => (nearQuota && quotaFlash
-			? {
-				key: `${nearQuota.kind}:${nearQuota.percent >= 100 ? "full" : "warn"}`,
-				label: <QuotaReadout quota={nearQuota} />,
-				...quotaTitle(nearQuota, t),
-			}
-			: undefined),
-		[nearQuota, quotaFlash, t],
-	);
+	// The running agent's limit; a pending switch names another agent, so the sign steps aside.
+	const quotaSign = nearQuota && !agentSwitch?.pending ? <QuotaSign quota={nearQuota} /> : null;
 	const pickerNotice = useMemo(() => (nearQuota ? <QuotaMenuNotice quota={nearQuota} /> : undefined), [nearQuota]);
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
@@ -1831,8 +1820,7 @@ function ChatWorkspaceContent({
 			settingsReady && (onChooseSettings || onChooseConfigOption) ? (
 				<TurnSettingsBar
 					agentSwitch={agentSwitch}
-					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
-					pickerOverride={pickerOverride}
+					beforePicker={agentSwitch ? <><ContextMeter usage={stableUsage} compactsAt={compactsAt} />{quotaSign}</> : undefined}
 					pickerNotice={pickerNotice}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
@@ -1880,7 +1868,7 @@ function ChatWorkspaceContent({
 			models,
 			agentSwitch,
 			stableUsage,
-			pickerOverride,
+			nearQuota,
 			pickerNotice,
 			newWorkDisabled,
 			session?.provisionState,
@@ -2439,12 +2427,7 @@ function ChatWorkspaceContent({
 										commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 										settings={draftSettings ?? <>
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
-											{/* Flashes like the agent picker's; a full window stays until it resets. */}
-											{!agentSwitch && nearQuota ? (
-												<SmoothSwap swapKey={pickerOverride?.key ?? "hidden"} appear>
-													{pickerOverride ? <QuotaPill quota={nearQuota} /> : null}
-												</SmoothSwap>
-											) : null}
+											{agentSwitch ? null : quotaSign}
 											<QuotaStatus quota={nearQuota} />
 											{composerSettings}
 										</>}

@@ -1,6 +1,7 @@
-import { act, render, renderHook, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatQuotaReset, nearQuotaWindow, QUOTA_FLASH_MS, QuotaMenuNotice, QuotaReadout, QuotaStatus, useQuotaFlash, type QuotaWindow } from "./QuotaReadout";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+import { formatQuotaReset, nearQuotaWindow, QuotaMenuNotice, QuotaSign, QuotaStatus, type QuotaWindow } from "./QuotaReadout";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
@@ -8,7 +9,7 @@ function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLim
 }
 
 describe("QuotaReadout", () => {
-	it("only takes the picker's place from 82%", () => {
+	it("only warns from 82%", () => {
 		expect(nearQuotaWindow(limits({ primaryUsedPercent: 81 }))).toBeUndefined();
 		expect(nearQuotaWindow(limits({ primaryUsedPercent: 82 }))?.kind).toBe("session");
 		expect(nearQuotaWindow(undefined)).toBeUndefined();
@@ -46,26 +47,23 @@ describe("QuotaReadout", () => {
 		expect(status).toBeEmptyDOMElement();
 	});
 
-	it("warns without a percentage once close", () => {
-		const { rerender } = render(<QuotaReadout quota={{ percent: 82, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByText("Approaching limit")).toBeInTheDocument();
-		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+	it("is a warning sign, or a clock once full, with no text beside the model", () => {
+		const { rerender } = render(<QuotaSign quota={{ percent: 85, kind: "session", resetsIn: 8_100 }} />);
+		const sign = screen.getByRole("button", { name: /Approaching limit/ });
+		expect(sign).toHaveAttribute("data-severity", "warn");
+		expect(sign).toHaveTextContent("");
 
-		rerender(<QuotaReadout quota={{ percent: 94, kind: "weekly" }} />);
-		expect(screen.getByText("Approaching weekly limit")).toBeInTheDocument();
-		expect(screen.queryByText(/%/)).not.toBeInTheDocument();
+		rerender(<QuotaSign quota={{ percent: 100, kind: "weekly" }} />);
+		expect(screen.getByRole("button", { name: /Usage limit reached/ })).toHaveAttribute("data-severity", "full");
 	});
 
-	it("is a clock and the time left once full", () => {
-		render(<QuotaReadout quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByLabelText("Resets in 2h 15m")).toHaveTextContent(/^2h 15m$/);
-		expect(screen.queryByText("Approaching limit")).not.toBeInTheDocument();
-		expect(screen.queryByText("100%")).not.toBeInTheDocument();
-	});
-
-	it("names the limit when a full window has no reported reset", () => {
-		render(<QuotaReadout quota={{ percent: 100, kind: "weekly" }} />);
-		expect(screen.getByText("Usage limit reached")).toBeInTheDocument();
+	it("shows the usage and reset on hover, in two lines and without the model", async () => {
+		render(<QuotaSign quota={{ percent: 85, kind: "session", resetsIn: 8_100 }} />);
+		await userEvent.hover(screen.getByRole("button", { name: /Approaching limit/ }));
+		const tip = await screen.findByRole("tooltip");
+		expect(tip).toHaveTextContent("Approaching limit");
+		expect(tip).toHaveTextContent("Session usage limit 85% used. Resets in 2h 15m.");
+		expect(tip).not.toHaveTextContent(/Opus|Sonnet/);
 	});
 
 	it("formats resets to the useful unit", () => {
@@ -84,59 +82,5 @@ describe("QuotaReadout", () => {
 		rerender(<QuotaMenuNotice quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
 		expect(screen.getByRole("status")).toHaveTextContent("Usage limit reached");
 		expect(screen.getByRole("status")).toHaveAttribute("data-severity", "full");
-	});
-});
-
-describe("useQuotaFlash", () => {
-	beforeEach(() => { vi.useFakeTimers(); });
-	afterEach(() => { vi.useRealTimers(); });
-
-	const warn: QuotaWindow = { percent: 80, kind: "session" };
-	const flash = (quota: QuotaWindow | undefined, scope = "chat-a") => ({ quota, scope });
-
-	it("shows the warning when a chat opens close to the limit, then steps aside", () => {
-		const { result } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
-		expect(result.current).toBe(true);
-		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
-		expect(result.current).toBe(false);
-	});
-
-	it("does not flash again for a new reading in the same chat", () => {
-		const { result, rerender } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
-		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
-		rerender(flash({ percent: 88, kind: "session" }));
-		expect(result.current).toBe(false);
-	});
-
-	it("flashes again when usage crosses the line anew, or another chat opens", () => {
-		const { result, rerender } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
-		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
-		rerender(flash(undefined));
-		rerender(flash(warn));
-		expect(result.current).toBe(true);
-
-		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
-		rerender(flash(warn, "chat-b"));
-		expect(result.current).toBe(true);
-	});
-
-	it("re-arms a dismissed chat after briefly visiting another chat", () => {
-		const { result, rerender } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash(warn) });
-		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
-		expect(result.current).toBe(false);
-		rerender(flash(warn, "chat-b"));
-		act(() => { vi.advanceTimersByTime(1000); });
-		rerender(flash(warn));
-		expect(result.current).toBe(true);
-		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS); });
-		expect(result.current).toBe(false);
-		rerender(flash({ ...warn, percent: 85 }));
-		expect(result.current).toBe(false);
-	});
-
-	it("holds a full window until it resets", () => {
-		const { result } = renderHook(({ quota, scope }) => useQuotaFlash(quota, scope), { initialProps: flash({ percent: 100, kind: "session" }) });
-		act(() => { vi.advanceTimersByTime(QUOTA_FLASH_MS * 3); });
-		expect(result.current).toBe(true);
 	});
 });

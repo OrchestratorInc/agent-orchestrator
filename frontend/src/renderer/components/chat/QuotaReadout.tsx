@@ -1,21 +1,17 @@
 /**
- * The account's usage limit in the model picker. Close to the limit a warning
- * pill holds the model's place for a few seconds (when a chat opens, or when
- * usage first crosses the line) and the open menu keeps it under the Agent row.
- * A full window shows a clock and the time left until it resets.
+ * The account's usage limit beside the model picker. Close to the limit a small
+ * warning sign sits next to the model (a clock once the window is full); hovering
+ * or focusing it shows the usage and when it resets, and the open model menu
+ * repeats the warning under its Agent row.
  */
 
-import type { TFunction } from "i18next";
-import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Clock } from "@/components/app-icons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ConversationRateLimits } from "../../types/conversation";
 
-/** Where the warning replaces the model name. */
+/** Where the warning sign appears. */
 export const QUOTA_WARN = 82;
-/** How long the warning pill holds before the model comes back. */
-export const QUOTA_FLASH_MS = 5_000;
 
 export type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" };
 
@@ -55,20 +51,28 @@ function useQuotaText(quota: QuotaWindow) {
 	return { t, full, resets, label, Icon: full ? Clock : AlertTriangle, severity: full ? "full" : "warn" };
 }
 
-/** The pill in the picker: the warning, or once full, the time left. */
-export function QuotaReadout({ quota }: { quota: QuotaWindow }) {
-	const { t, full, resets, label, Icon, severity } = useQuotaText(quota);
+/** The sign beside the model: a warning, or a clock once full. Its tooltip wears the model menu's surface. */
+export function QuotaSign({ quota }: { quota: QuotaWindow }) {
+	const { t, resets, label, Icon, severity } = useQuotaText(quota);
+	const used = t(quota.kind === "session" ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent: Math.min(100, Math.round(quota.percent)) });
+	const detail = resets ? `${used} ${t("chat.quota.resetsIn", { time: resets })}.` : used;
 	return (
-		<span data-quota-readout="" data-severity={severity} className="quota-pill">
-			<Icon aria-hidden="true" className="size-3 shrink-0" />
-			{full && resets
-				? <span className="tabular-nums" aria-label={t("chat.quota.resetsIn", { time: resets })}>{resets}</span>
-				: <span className="truncate">{label}</span>}
-		</span>
+		<TooltipProvider><Tooltip>
+			<TooltipTrigger asChild>
+				<button type="button" data-quota-sign="" data-severity={severity} aria-label={`${label}. ${detail}`} className="quota-sign">
+					<Icon aria-hidden="true" />
+				</button>
+			</TooltipTrigger>
+			<TooltipContent hideArrow sideOffset={6}
+				className="quota-tip whitespace-nowrap rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu px-3 py-2 text-foreground">
+				<span className="quota-tip-title" data-severity={severity}><Icon aria-hidden="true" />{label}</span>
+				<span className="quota-tip-meta">{detail}</span>
+			</TooltipContent>
+		</Tooltip></TooltipProvider>
 	);
 }
 
-/** Stays mounted outside the animated model label so only quota changes speak. */
+/** Announces quota changes to screen readers, whether or not anything is hovered. */
 export function QuotaStatus({ quota }: { quota: QuotaWindow | undefined }) {
 	const { t, label, resets } = useQuotaText(quota ?? { percent: 0, kind: "session" });
 	return (
@@ -78,23 +82,7 @@ export function QuotaStatus({ quota }: { quota: QuotaWindow | undefined }) {
 	);
 }
 
-/** A two-line tooltip body: the usage, then a muted line under it. */
-export function QuotaTip({ title, detail }: { title: string; detail?: string }) {
-	return <><p>{title}</p>{detail ? <p className="text-muted-foreground">{detail}</p> : null}</>;
-}
-
-/** The pill on its own, for composers whose model controls are not the agent picker. */
-export function QuotaPill({ quota }: { quota: QuotaWindow }) {
-	const { t } = useTranslation();
-	return (
-		<TooltipProvider><Tooltip>
-			<TooltipTrigger asChild><span data-quota-pill="" tabIndex={0} className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring"><QuotaReadout quota={quota} /></span></TooltipTrigger>
-			<TooltipContent><QuotaTip {...quotaTitle(quota, t)} /></TooltipContent>
-		</Tooltip></TooltipProvider>
-	);
-}
-
-/** The line under the Agent row of the open model menu, which outlasts the pill. */
+/** The line under the Agent row of the open model menu. */
 export function QuotaMenuNotice({ quota }: { quota: QuotaWindow }) {
 	const { t, resets, label, Icon, severity } = useQuotaText(quota);
 	return (
@@ -104,29 +92,4 @@ export function QuotaMenuNotice({ quota }: { quota: QuotaWindow }) {
 			{resets ? <><span aria-hidden="true">·</span><span className="quota-note-meta">{t("chat.quota.resetsIn", { time: resets })}</span></> : null}
 		</span>
 	);
-}
-
-/**
- * Whether the picker shows the readout in place of the model right now. A full
- * window always does; a warning does for QUOTA_FLASH_MS each time it starts for
- * a conversation (chat opened, line crossed, or tighter window changed).
- * Dropping back below the line re-arms it.
- */
-export function useQuotaFlash(quota: QuotaWindow | undefined, scope: string): boolean {
-	const full = quota !== undefined && quota.percent >= 100;
-	const key = quota && !full ? `${scope}:${quota.kind}` : undefined;
-	const [dismissed, setDismissed] = useState<string>();
-	useEffect(() => {
-		setDismissed(undefined);
-		if (!key) return;
-		const timer = window.setTimeout(() => setDismissed(key), QUOTA_FLASH_MS);
-		return () => window.clearTimeout(timer);
-	}, [key]);
-	return full || (key !== undefined && key !== dismissed);
-}
-
-/** The hover tooltip's two lines: the exact share used, then when it resets. */
-export function quotaTitle(quota: QuotaWindow, t: TFunction): { title: string; detail?: string } {
-	const title = t(quota.kind === "session" ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent: Math.min(100, Math.round(quota.percent)) });
-	return { title, detail: quota.resetsIn && quota.resetsIn > 0 ? t("chat.quota.resetsIn", { time: formatQuotaReset(quota.resetsIn) }) : undefined };
 }
