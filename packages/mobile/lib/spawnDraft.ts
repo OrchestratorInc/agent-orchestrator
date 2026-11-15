@@ -233,11 +233,13 @@ function ownedBy(written: SpawnDraftOwner | undefined, owner: ForgetOwner): bool
  */
 export async function forgetSpawnDraftFor(owner: ForgetOwner): Promise<void> {
 	await Promise.all([...draftSavers].map((saver) => saver.forget(owner)));
+	// A read that fails rejects, so the caller can try again or report it: the draft may still be there.
+	const raw = await AsyncStorage.getItem(SPAWN_DRAFT_KEY);
 	let stored: StoredDraft | null = null;
 	try {
-		stored = readStored(await AsyncStorage.getItem(SPAWN_DRAFT_KEY));
+		stored = readStored(raw);
 	} catch {
-		// Unreadable: nothing anyone can restore either.
+		// Unparseable: nothing anyone can restore either.
 	}
 	if (!stored) return;
 	if (ownedBy(stored.owner, owner)) await clearSpawnDraft();

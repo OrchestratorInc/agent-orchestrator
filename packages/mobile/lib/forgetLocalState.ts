@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { forgetBoard } from "./boardSnapshot";
 import { CLOUD_HOST_ID } from "./cloud/mapping";
 import { hostMachineIdentity } from "./config";
+import { flushReviewPersistence } from "./files/reviewPersistence";
 import { forgetHostReviews } from "./files/reviewStore";
 import { LAST_ROUTE_KEY } from "./lastRoute";
 import { forgetSpawnDraftFor } from "./spawnDraft";
@@ -33,6 +34,8 @@ export async function forgetMachineState(hostId: string): Promise<void> {
 		() => forgetBoard(hostMachineIdentity(hostId)),
 		() => forgetSpawnDraftFor({ hostId }),
 		() => AsyncStorage.removeItem(LAST_ROUTE_KEY),
+		// The reviews' removal reaches the phone before this resolves, not after a delay the app may not live through.
+		() => flushReviewPersistence(),
 	]);
 }
 
@@ -42,5 +45,6 @@ export async function forgetAccountState(accountId: string): Promise<void> {
 	await forgetAll("a signed-out account", [
 		() => forgetSpawnDraftFor({ accountId }),
 		() => AsyncStorage.removeItem(LAST_ROUTE_KEY),
+		() => flushReviewPersistence(),
 	]);
 }
