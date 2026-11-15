@@ -89,6 +89,8 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 			return data;
 		},
 		retry: false,
+		// Reopening the dialog must not show the last preview while it reloads.
+		gcTime: 0,
 	});
 	const signedIn = Boolean(cloudClient && org);
 	const loading = signedIn && (sourceRepo.isPending || cloudProjects.isPending || cloudSessions.isPending || preview.isPending);

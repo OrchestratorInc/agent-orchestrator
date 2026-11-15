@@ -55,3 +55,16 @@ func TestMoveImportRefusesAnOversizedBody(t *testing.T) {
 		t.Fatalf("oversized body = %d, %d imports; body=%s", w.Code, mover.imports, w.Body)
 	}
 }
+
+func TestMoveExportAndCompleteRefuseAnOversizedBody(t *testing.T) {
+	r := chi.NewRouter()
+	(&SessionMovesController{Svc: &importOnlyMover{}}).Register(r)
+	for _, path := range []string{"/sessions/s-1/move/export", "/sessions/s-1/move/complete"} {
+		body := io.MultiReader(strings.NewReader(`{"moveId":"`), io.LimitReader(repeatByte('a'), maxMoveRequestBodyBytes), strings.NewReader(`"}`))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, body))
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "INVALID_JSON") {
+			t.Errorf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+}

@@ -326,3 +326,53 @@ func TestImportMoveStartsFromTheNoteWhenTheConversationCannotBeRead(t *testing.T
 		})
 	}
 }
+
+type failingMoveNoter struct{}
+
+func (failingMoveNoter) MoveNote(context.Context, domain.SessionRecord, string, bool, int) (string, error) {
+	return "", errors.New("note failed")
+}
+
+// A failed export leaves origin and the local branch as they were.
+func TestExportMoveWritesTheNoteBeforePushing(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	root := t.TempDir()
+	git := func(dir string, args ...string) string {
+		t.Helper()
+		args = append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)
+		out, err := exec.Command("git", args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	origin, wt := root+"/origin.git", root+"/wt"
+	git(root, "init", "-q", "--bare", "-b", "main", origin)
+	git(root, "clone", "-q", origin, wt)
+	git(wt, "switch", "-q", "-c", "feat/move")
+	git(wt, "commit", "-q", "--allow-empty", "-m", "work")
+	git(wt, "push", "-q", "origin", "feat/move")
+	head := git(wt, "rev-parse", "HEAD")
+	if err := os.WriteFile(wt+"/new.txt", []byte("uncommitted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", RepoOriginURL: "https://github.com/acme/app"}
+	st.sessions["mer-2"] = domain.SessionRecord{
+		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		Activity: domain.Activity{State: domain.ActivityExited}, Metadata: domain.SessionMetadata{WorkspacePath: wt},
+	}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: moveStore{st}})
+	svc.SetMoveNoter(failingMoveNoter{})
+	if _, err := svc.ExportMove(context.Background(), "mer-2", MoveExportInput{MoveID: "m-1", SourceLabel: "Mac"}); err == nil {
+		t.Fatal("export succeeded with a failing note")
+	}
+	if got := git(wt, "ls-remote", "origin", "refs/heads/feat/move"); !strings.HasPrefix(got, head) {
+		t.Fatalf("origin feat/move = %q, want %s", got, head)
+	}
+	if got := git(wt, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("local HEAD = %s, want %s", got, head)
+	}
+}

@@ -182,3 +182,24 @@ it.each([
 	renderDialog();
 	expect(await screen.findByText(text)).toBeTruthy();
 });
+
+it("does not show the last preview while it reloads on reopen", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const ui = () => (
+		<QueryClientProvider client={client}>
+			<TooltipProvider>
+				<MoveSessionDialog />
+			</TooltipProvider>
+		</QueryClientProvider>
+	);
+	useUiStore.setState({ moveSessionTarget: session, globalToast: null });
+	const view = render(ui());
+	expect(await screen.findByText("A login.go")).toBeTruthy();
+	useUiStore.setState({ moveSessionTarget: null });
+	await waitFor(() => expect(screen.queryByText("A login.go")).toBeNull());
+	daemon.preview = new Promise<Reply>(() => {}) as unknown as Reply;
+	useUiStore.setState({ moveSessionTarget: session });
+	view.rerender(ui());
+	expect(await screen.findByText("Checking what moves")).toBeTruthy();
+	expect(screen.queryByText("A login.go")).toBeNull();
+});

@@ -127,17 +127,18 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 	if err != nil {
 		return MoveExport{}, moveAPIError(err)
 	}
-	if err := sessionmove.PushBranch(ctx, wt, c, sessionmove.GitHubFileLimit); err != nil {
-		return MoveExport{}, moveAPIError(err)
-	}
 	out := MoveExport{Changes: len(c.Changes), Submodules: c.Submodules}
 
+	// Everything that can fail without pushing runs first, so a failed export
+	// leaves origin and the local branch as they were.
+	list, err := s.store.ListPRsBySession(ctx, id)
+	if err != nil {
+		return MoveExport{}, fmt.Errorf("list pull requests of %s: %w", id, err)
+	}
 	var prs []string
-	if list, err := s.store.ListPRsBySession(ctx, id); err == nil {
-		for _, pr := range list {
-			if !pr.Merged && !pr.Closed {
-				prs = append(prs, pr.URL)
-			}
+	for _, pr := range list {
+		if !pr.Merged && !pr.Closed {
+			prs = append(prs, pr.URL)
 		}
 	}
 	out.Manifest = MoveManifest{
@@ -153,6 +154,9 @@ func (s *Service) ExportMove(ctx context.Context, id domain.SessionID, in MoveEx
 		if out.HandoffNote, err = s.moveNotes.MoveNote(ctx, rec, label, out.Manifest.WIP, CloudPromptMaxBytes); err != nil {
 			return MoveExport{}, err
 		}
+	}
+	if err := sessionmove.PushBranch(ctx, wt, c, sessionmove.GitHubFileLimit); err != nil {
+		return MoveExport{}, moveAPIError(err)
 	}
 	return out, nil
 }
@@ -362,10 +366,16 @@ func (s *Service) CompleteMove(ctx context.Context, id domain.SessionID, in Move
 	return s.Get(ctx, id)
 }
 
+// moveNoticeTimeout bounds telling the orchestrator, which runs detached from
+// the request.
+const moveNoticeTimeout = 30 * time.Second
+
 func (s *Service) tellOrchestrator(ctx context.Context, rec domain.SessionRecord, d domain.SessionMove) {
 	if rec.ProjectID == "" {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, moveNoticeTimeout)
+	defer cancel()
 	orchestrators, err := s.activeOrchestrators(ctx, rec.ProjectID)
 	if err != nil {
 		return
