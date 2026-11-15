@@ -370,6 +370,31 @@ describe("attachAppShortcuts", () => {
 		}
 	});
 
+	it("honors a user's own binding while a terminal is focused (issue #8420)", () => {
+		const source = fakeSource();
+		const target = fakeTarget();
+		attachAppShortcuts(
+			source,
+			false,
+			target,
+			false,
+			() => ({ "toggle-terminal": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }] }),
+			() => false,
+			() => true,
+			undefined,
+			() => true,
+		);
+
+		// The default Ctrl+` still belongs to the terminal; the chord the user chose
+		// themselves is theirs, or rebinding could never escape the yield.
+		const kept = source.emit({ key: "`", code: "Backquote", control: true });
+		expect(kept.preventDefault).not.toHaveBeenCalled();
+
+		const bound = source.emit({ key: "j", control: true });
+		expect(target.send).toHaveBeenCalledWith(APP_SHORTCUT_CHANNEL, { id: "toggle-terminal" });
+		expect(bound.preventDefault).toHaveBeenCalledOnce();
+	});
+
 	it("still opens the palette from a focused terminal on macOS", () => {
 		const source = fakeSource();
 		const target = fakeTarget();

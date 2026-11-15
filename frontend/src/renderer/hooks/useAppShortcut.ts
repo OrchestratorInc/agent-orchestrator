@@ -1,5 +1,11 @@
 import { useEffect, useRef } from "react";
-import { matchesAppShortcut, shortcutYieldsToTerminal, type AppShortcutEvent, type AppShortcutId } from "../../shared/shortcuts";
+import {
+	matchedByUserOverride,
+	matchesAppShortcut,
+	shortcutYieldsToTerminal,
+	type AppShortcutEvent,
+	type AppShortcutId,
+} from "../../shared/shortcuts";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform } from "../lib/platform";
 import { useKeybindingsStore } from "../stores/keybindings-store";
@@ -105,7 +111,13 @@ export function useAppShortcut(
 			if (!matchesAppShortcut(id, chord, isMac, overrides)) return;
 			if (!shouldHandleRef.current()) return;
 			const target = event.target instanceof Element ? event.target : null;
-			if (!isMac && shortcutYieldsToTerminal(id, chord) && target?.closest(TERMINAL_SELECTOR)) return;
+			if (
+				!isMac &&
+				shortcutYieldsToTerminal(id, chord, matchedByUserOverride(id, chord, overrides)) &&
+				target?.closest(TERMINAL_SELECTOR)
+			) {
+				return;
+			}
 			claimedEvents.add(event);
 			event.preventDefault();
 			handlerRef.current(id === "jump-to-session" ? { id, index: Number(event.key) - 1 } : { id });

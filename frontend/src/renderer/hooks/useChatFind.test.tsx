@@ -145,10 +145,14 @@ describe("find in chat interactions", () => {
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument(); fireEvent.keyDown(document.activeElement ?? document.body, { key: "f", ctrlKey: true }); expect(screen.getByRole("searchbox")).toHaveValue("");
 	});
 
-	it("does not capture find from a terminal or modal", async () => {
+	it("leaves the terminal its own find but opens chat find on the terminal-safe chord", async () => {
 		render(<Harness />);
 		const terminal = document.createElement("textarea"); terminal.className = "xterm"; document.body.append(terminal); terminal.focus();
-		fireEvent.keyDown(terminal, { key: "f", ctrlKey: true }); expect(screen.queryByRole("searchbox")).not.toBeInTheDocument(); terminal.remove();
+		// Plain Ctrl+F is the terminal's own search and readline forward-char.
+		fireEvent.keyDown(terminal, { key: "f", ctrlKey: true }); expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		fireEvent.keyDown(terminal, { key: "F", ctrlKey: true, shiftKey: true }); await tick(20);
+		expect(screen.getByRole("searchbox")).toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Escape" }); terminal.remove();
 		const modal = document.createElement("div"); modal.setAttribute("role", "dialog"); document.body.append(modal);
 		fireEvent.keyDown(screen.getByRole("textbox"), { key: "f", ctrlKey: true }); expect(screen.queryByRole("searchbox")).not.toBeInTheDocument(); modal.remove();
 	});

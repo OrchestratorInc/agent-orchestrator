@@ -4,6 +4,7 @@ import {
 	CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL,
 	KEYBOARD_SHORTCUTS_HELP_CHANNEL,
 	matchesAppShortcut,
+	matchedByUserOverride,
 	shortcutYieldsToTerminal,
 	NEXT_SESSION_SHORTCUT_CHANNEL,
 	NEXT_TAB_SHORTCUT_CHANNEL,
@@ -172,7 +173,13 @@ export function attachAppShortcuts(
 		// Contextual actions are owned by the focused surface. Let the renderer
 		// inspect dialogs, editors, focus and the live selection before claiming them.
 		if (id === "find-in-chat" || id === "add-selection-to-chat") return;
-		if (!isMac && shortcutYieldsToTerminal(id, chord) && isTerminalFocused()) return;
+		if (
+			!isMac &&
+			shortcutYieldsToTerminal(id, chord, matchedByUserOverride(id, chord, getOverrides())) &&
+			isTerminalFocused()
+		) {
+			return;
+		}
 		if (!shouldHandle(id, chord)) {
 			// Browser context owns these chords. Consume them so a racing shell
 			// listener cannot open/close a terminal from the same keypress, and so
