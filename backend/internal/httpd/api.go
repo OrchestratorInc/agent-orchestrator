@@ -268,11 +268,13 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
 
-// moveCaptureRoute reports a route that captures a session's whole worktree,
-// which can outlast the default request budget.
+// moveCaptureRoute reports a move route that reads a session's whole worktree
+// or fetches origin, either of which can outlast the default request budget.
+// move/targets fetches origin once for each project with the repository.
 func moveCaptureRoute(req *http.Request) bool {
 	switch chi.RouteContext(req.Context()).RoutePattern() {
-	case "/api/v1/sessions/{sessionId}/move/export", "/api/v1/sessions/{sessionId}/move/preview", "/api/v1/sessions/{sessionId}/move/transcript":
+	case "/api/v1/sessions/{sessionId}/move/export", "/api/v1/sessions/{sessionId}/move/preview", "/api/v1/sessions/{sessionId}/move/transcript",
+		"/api/v1/sessions/move/targets":
 		return true
 	}
 	return false

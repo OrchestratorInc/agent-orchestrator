@@ -124,6 +124,37 @@ func TestAttachmentUploadRouteUsesExtendedTimeout(t *testing.T) {
 	}
 }
 
+type timeoutProbeSessionMover struct {
+	controllers.SessionMover
+	budget chan time.Duration
+}
+
+func (m *timeoutProbeSessionMover) MoveTargets(ctx context.Context, _, _ string) ([]sessionsvc.MoveTarget, error) {
+	m.budget <- remainingRequestBudget(ctx)
+	return nil, nil
+}
+
+// move/targets fetches origin for every project with the repository, which
+// can take minutes on a large repository.
+func TestMoveTargetsRouteUsesExtendedTimeout(t *testing.T) {
+	mover := &timeoutProbeSessionMover{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{SessionMoves: mover},
+		ControlDeps{},
+	)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/sessions/move/targets?repoKey=github.com/acme/app&branch=feat/x", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("GET move/targets status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if budget := <-mover.budget; budget < 9*time.Minute || budget > 10*time.Minute {
+		t.Fatalf("move/targets budget = %s, want about 10 minutes", budget)
+	}
+}
+
 // A managed preview carries the dev server's HMR socket and event streams; the
 // REST budget cut them at a minute (504) and reloaded the page.
 func TestManagedPreviewAppProxyHasNoRequestTimeout(t *testing.T) {
