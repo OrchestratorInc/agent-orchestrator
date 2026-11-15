@@ -41,11 +41,47 @@ describe("a slow link", () => {
 		expect(await caught).toBeInstanceOf(ProbeTimeoutError);
 	});
 
-	it("is marked when every endpoint timed out, and not when one refused", async () => {
+	it("names the endpoints that timed out, and none when every one refused", async () => {
 		const timeout = (endpoint: Endpoint) => Promise.reject(new ProbeTimeoutError(endpoint));
-		await expect(raceEndpoints([lan, tunnel], "h_paired", timeout)).resolves.toEqual({ ok: false, reason: "none-reachable", allTimedOut: true });
+		await expect(raceEndpoints([lan, tunnel], "h_paired", timeout)).resolves.toEqual({ ok: false, reason: "none-reachable", timedOut: [lan, tunnel] });
 		const refusedLan = (endpoint: Endpoint) => endpoint === lan ? Promise.reject(new Error("refused")) : timeout(endpoint);
-		await expect(raceEndpoints([lan, tunnel], "h_paired", refusedLan)).resolves.toEqual({ ok: false, reason: "none-reachable" });
+		await expect(raceEndpoints([lan, tunnel], "h_paired", refusedLan)).resolves.toEqual({ ok: false, reason: "none-reachable", timedOut: [tunnel] });
+		const refused = () => Promise.reject(new Error("refused"));
+		await expect(raceEndpoints([lan, tunnel], "h_paired", refused)).resolves.toEqual({ ok: false, reason: "none-reachable" });
+	});
+
+	it("gives a slow tunnel its longer try when an old LAN address refused at once", async () => {
+		vi.useFakeTimers();
+		const tunnelAnswer = slowIdentity(4_000);
+		const fetchMock = vi.fn((url: string, init?: { signal?: AbortSignal }) => url.includes(lan.host)
+			? Promise.reject(new TypeError("Network request failed"))
+			: tunnelAnswer(url, init));
+		vi.stubGlobal("fetch", fetchMock);
+		const outcome = raceWithSlowLinkRetry([lan, tunnel], "h_paired");
+		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + 4_000 + 300);
+		await expect(outcome).resolves.toMatchObject({ ok: true, endpoint: tunnel, hostId: "h_paired" });
+		// The refused LAN address was asked once, not again in the slow race.
+		expect(fetchMock.mock.calls.filter(([url]) => url.includes(lan.host))).toHaveLength(1);
+	});
+
+	it("bounds a tunnel that never answers to the quick timeout plus one slow try", async () => {
+		vi.useFakeTimers();
+		const fetchMock = slowIdentity(120_000);
+		vi.stubGlobal("fetch", fetchMock);
+		let settled: unknown;
+		void raceWithSlowLinkRetry([tunnel], "h_paired").then((result) => { settled = result; });
+		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + SLOW_LINK_PROBE_TIMEOUT_MS + 100);
+		expect(settled).toMatchObject({ ok: false, reason: "none-reachable" });
+		// One quick attempt and one slow attempt: no propagation retries.
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not retry a slow answer from a different machine", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal("fetch", slowIdentity(4_000, "someone-else"));
+		const outcome = raceWithSlowLinkRetry([lan], "h_paired");
+		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + 4_000 + 300);
+		await expect(outcome).resolves.toMatchObject({ ok: false, reason: "none-reachable" });
 	});
 
 	it("connects on the second race when answers take longer than the quick timeout", async () => {
