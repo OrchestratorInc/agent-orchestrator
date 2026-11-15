@@ -1016,7 +1016,8 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 				icon={<AgentAvatar provider={agent.id} className="size-icon-base" decorative />}
 				label={agent.label}
 				detail={manual && !view.ended ? plan?.reason : undefined}
-				trailing={view.busy || signingIn ? <RowSpinner />
+				trailing={view.busy ? <InstallProgress compact job={view.job} label={agent.label} />
+					: signingIn ? <RowSpinner />
 					: state === "ready" ? <RowState>{t("settings.harness.installed")}</RowState>
 					: state === "signin" ? (
 						<Button size="sm" variant="secondary" disabled={startAuth.isPending} onClick={() => void signIn(agent.id)}>{t("firstRun.signIn")}</Button>
@@ -1029,8 +1030,9 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 					: manual && plan?.documentationUrl ? <InstallDocsLink url={plan.documentationUrl} label={t("firstRun.installHowTo")} />
 					: missing ? <RowState>{t("firstRun.agentMissing")}</RowState>
 					: <RowSpinner />}
-				below={view.busy && missing ? <InstallProgress job={view.job} label={agent.label} />
-					: view.ended && missing ? (
+				// Installing shows as a short bar on the row, as for the GitHub CLI;
+				// a failed install says why.
+				below={view.ended && missing ? (
 						<InstallProblem view={view} docsUrl={plan?.documentationUrl} otherWays={() => openHarnessSettings(agent.id, view.job)} />
 					)
 					: undefined}
