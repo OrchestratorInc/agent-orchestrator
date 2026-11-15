@@ -14,7 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // ArtifactRegistration is the outcome of RegisterArtifacts. OtherFiles counts
@@ -105,7 +104,7 @@ func (s *Service) emitArtifactsRegistered(paths []string, known map[string]bool)
 			continue
 		}
 		known[path] = true
-		counts[telemetrymeta.ArtifactFileType(path, sessionartifacts.IsBundleDir(pathpkg.Base(path)))]++
+		counts[domain.ArtifactFileType(path, sessionartifacts.IsBundleDir(pathpkg.Base(path)))]++
 	}
 	for _, fileType := range slices.Sorted(maps.Keys(counts)) {
 		s.telemetry.Emit(context.Background(), ports.TelemetryEvent{

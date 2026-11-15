@@ -1,7 +1,7 @@
 // Closed vocabularies for artifact telemetry. Only these enums, counts and
 // durations leave the machine: never a file name, path, URL, title, session
 // name, content or invitee. The daemon's ao.artifacts.registered uses the same
-// file type buckets (backend/internal/telemetrymeta/artifact.go).
+// file type buckets (backend/internal/domain/artifact_file_type.go).
 
 export const ARTIFACT_FILE_TYPES = ["html", "markdown", "pdf", "image", "video", "audio", "data", "text", "office", "code", "archive", "bundle", "other"] as const;
 export type ArtifactFileType = (typeof ARTIFACT_FILE_TYPES)[number];

@@ -22,7 +22,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const postHogBufferSize = 128
@@ -827,7 +826,7 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 		}
 		if name == "ao.artifacts.registered" {
 			if key == "file_type" {
-				if text, ok := value.(string); !ok || !telemetrymeta.ValidArtifactFileType(text) {
+				if text, ok := value.(string); !ok || !domain.ValidArtifactFileType(text) {
 					continue
 				}
 			} else if _, ok := value.(int); !ok {

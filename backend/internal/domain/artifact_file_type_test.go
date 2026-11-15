@@ -1,4 +1,4 @@
-package telemetrymeta
+package domain
 
 import "testing"
 
