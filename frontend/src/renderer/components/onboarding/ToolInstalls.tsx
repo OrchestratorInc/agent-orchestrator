@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, ArrowUpRight } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,6 +10,8 @@ import {
 	isActiveInstallJob,
 	upsertInstallJob,
 } from "../../hooks/useHarnessUpdates";
+import { probeAgentAuth } from "../../hooks/useAgentAuth";
+import { invalidateAgentModelCatalogs } from "../../hooks/useAgentModelsQuery";
 import type { AgentReadinessSnapshot } from "../../hooks/useAgentReadinessQuery";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
@@ -140,6 +142,26 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 	};
 
 	return { plansReady: !plans.isPending, planFor, canInstall, start, view };
+}
+
+/**
+ * Readiness reuses sign-in observations for a while, so a login that just
+ * finished can still read as signed out. Where the answer must be current (a
+ * login's terminal ended, or the person asked to check again) this makes the
+ * daemon verify each harness's sign-in first, as Settings > Harness does, then
+ * reads readiness again through `refresh` (which caches it).
+ */
+export async function verifyAgentSignIn(queryClient: QueryClient, agentIds: string[], refresh: (agentIds: string[]) => Promise<void>) {
+	await Promise.all(agentIds.map(async (agentId) => {
+		try {
+			await probeAgentAuth(agentId);
+			// The probe also refreshes the agent's model catalogs; drop stale copies.
+			void invalidateAgentModelCatalogs(queryClient, agentId);
+		} catch {
+			// The read below still reports what the daemon knows.
+		}
+	}));
+	await refresh(agentIds);
 }
 
 /** The GitHub CLI: a system install, started and then polled until it ends. */

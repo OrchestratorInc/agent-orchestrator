@@ -58,7 +58,7 @@ import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow 
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { startGuidedTour } from "./GuidedTour";
-import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, type AgentRowState } from "./ToolInstalls";
+import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
@@ -933,6 +933,11 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 			await readiness.refetch();
 		}
 	}, [queryClient, readiness]);
+	// Readiness reuses sign-in observations for a while, so a login that just
+	// finished can still read as signed out. Where the answer must be current
+	// (a login's terminal ended, or the person asked to check again), make the
+	// daemon verify sign-in first, as Settings > Harness does, then read again.
+	const verify = useCallback((agentIds: string[]) => verifyAgentSignIn(queryClient, agentIds, refresh), [queryClient, refresh]);
 	const ghInstall = useGhInstall(() => {
 		void queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey });
 		void ghAuth.refetch();
@@ -1059,7 +1064,13 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 	const checkAgain = async () => {
 		setChecking(true);
 		try {
-			await Promise.all([refresh(), queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey }), ghAuth.refetch()]);
+			// Installed harnesses still waiting on sign-in are verified afresh.
+			const awaitingSignIn = [...agents, ...more].filter((row) => row.state === "signin").map((row) => row.agent.id);
+			await Promise.all([
+				awaitingSignIn.length ? verify(awaitingSignIn) : refresh(),
+				queryClient.invalidateQueries({ queryKey: systemRequirementsQueryKey }),
+				ghAuth.refetch(),
+			]);
 		} finally {
 			setChecking(false);
 		}
@@ -1155,7 +1166,7 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 						onClose={closeLogin}
 						onRetry={() => void signIn(workflow.agentId)}
 						onTerminalState={(state) => {
-							if (state === "exited" || state === "error") void refresh([workflow.agentId]);
+							if (state === "exited" || state === "error") void verify([workflow.agentId]);
 						}}
 					/>
 				</div>
