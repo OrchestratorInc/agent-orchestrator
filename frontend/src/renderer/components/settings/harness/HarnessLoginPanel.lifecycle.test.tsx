@@ -86,8 +86,11 @@ it.each(["old-login", "recovered-login"])("finishes stale startup and disposal b
 		get.mockResolvedValue({ data: { ...recovered, status: "succeeded" } } as never);
 		expect(await screen.findByText("Connected", {}, { timeout: 3_000 })).toBeVisible();
 		expect(props.onVerify).toHaveBeenCalledTimes(1);
-		expect(remove).toHaveBeenCalledTimes(1);
 		expect(screen.queryByText("Sign-in cancelled")).not.toBeInTheDocument();
+		// The verified sign-in closes itself, ending the recovered operation first.
+		await waitFor(() => expect(props.onClose).toHaveBeenCalledTimes(1));
+		expect(remove).toHaveBeenCalledTimes(2);
+		expect(remove).toHaveBeenLastCalledWith("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: "codex", operationId: recovered.id } } });
 	} finally {
 		finishStart({ data: old });
 		finishStop();

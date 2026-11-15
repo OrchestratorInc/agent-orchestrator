@@ -608,6 +608,20 @@ describe("HarnessLoginPanel", () => {
 		expect(screen.queryByRole("button", { name: "Open sign-in page" })).toBeNull();
 	});
 
+	it("ends a verified sign-in before closing, and stays open when that fails", async () => {
+		vi.mocked(getAgentUILogin).mockResolvedValue({ ...snapshot, status: "succeeded" });
+		vi.mocked(cancelAgentUILogin).mockRejectedValueOnce(new Error("Host is disconnected"));
+		const { user, onClose } = setup("remote-2");
+		await user.click(screen.getByRole("button", { name: "Device code" }));
+		expect(await screen.findByRole("alert", {}, { timeout: 3000 })).toHaveTextContent("Host is disconnected");
+		expect(cancelAgentUILogin).toHaveBeenCalledWith("codex", "login-1", "remote-2");
+		expect(onClose).not.toHaveBeenCalled();
+		// Nothing is left pending for the account row while the panel stays open.
+		await waitFor(() => expect(isAgentLoginPending("codex", "remote-2")).toBe(false));
+		await user.click(screen.getByRole("button", { name: "Close" }));
+		await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+	});
+
 	it("polls the selected host and verifies when the process finishes", async () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue({ ...snapshot, status: "succeeded" });
 		const { user, onVerify } = setup("remote-1");
