@@ -6787,10 +6787,10 @@ func (m *Manager) runtimeEnvForHarness(id domain.SessionID, project domain.Proje
 }
 
 // chatPreflightEnv is the environment a new Chat session will launch with,
-// before it has an ID: the same AO-stored provider keys, withheld keys and
-// account environment as runtimeEnvForHarness, so admission and launch agree
-// on which credentials exist. An unresolved account leaves its keys out, as
-// the launch would.
+// before it has an ID: the same AO-stored provider keys and withheld keys as
+// runtimeEnvForHarness, so admission and launch agree on which provider keys
+// exist. Subscription-account environment is left to the launch: resolving it
+// now would bind the provider default to a session that does not exist yet.
 func (m *Manager) chatPreflightEnv(cfg ports.SpawnConfig, projectEnv map[string]string) map[string]string {
 	env, _ := m.runtimeEnvChecked("", cfg.ProjectID, cfg.IssueID, projectEnv, cfg.AgentAccountID, cfg.Harness)
 	return env
@@ -6881,7 +6881,9 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 // accountID replaces the session's binding. An error means the env may lack an
 // account's variables.
 func (m *Manager) applyAgentAccountEnv(id domain.SessionID, accountID string, env map[string]string, caseInsensitive bool) error {
-	if m.agentAccounts == nil {
+	// A session without an ID is a Chat admission check before the session
+	// exists: resolving an account would bind the provider default to "".
+	if m.agentAccounts == nil || id == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

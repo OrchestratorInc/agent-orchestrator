@@ -297,7 +297,6 @@ func splitHookContext(text string, limit int) ([][]byte, error) {
 				continue
 			}
 			parts = append(parts, current)
-			open = false
 		}
 		for {
 			ok, err := fits(line)
