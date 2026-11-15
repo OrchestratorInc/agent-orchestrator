@@ -1229,6 +1229,8 @@ describe("Sidebar", () => {
 		// It is no project of its own; a standalone agent shared with the person stays with the shared projects.
 		expect(document.querySelector('li[data-project-id="agent-1"]')).toBeNull();
 		expect(document.querySelector('li[data-project-id="agent-shared"]')).not.toBeNull();
+		// A Cloud project row carries the same cloud mark, not a text pill.
+		expect(within(document.querySelector('li[data-project-id="agent-shared"]') as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
 		expect(section).not.toContainElement(screen.queryByText("Their work"));
 
 		await user.click(screen.getByText("Fix the flake"));
