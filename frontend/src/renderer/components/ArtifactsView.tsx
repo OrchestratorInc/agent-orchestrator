@@ -92,7 +92,8 @@ export function ArtifactsView() {
 		setScrollElement(node);
 	}, [edgeFadeRef]);
 	const { t } = useTranslation();
-	const cloudArtifacts = useCloudOffering().artifacts;
+	const offering = useCloudOffering();
+	const cloudArtifacts = offering.artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
 	const orchestratorTitle = t("shell.orchestrator");
@@ -144,8 +145,10 @@ export function ArtifactsView() {
 	const grid = useVirtualGridRows(cards.length, scrollElement);
 	useArtifactListTelemetry({
 		surface: "page",
-		// Only an empty outcome waits for the cloud lists; the first card does not.
-		settled: !workspaceQuery.isLoading && !workspaceQuery.cloudLoading,
+		// Only an empty outcome waits for the cloud lists, and for /me to say
+		// whether there are any (signed out, it never loads and does not wait);
+		// the first card does not.
+		settled: !offering.isLoading && !workspaceQuery.isLoading && !workspaceQuery.cloudLoading,
 		// The same condition that shows the error in place of any cached cards,
 		// or no cards because a cloud list could not be read (not an empty list).
 		failed: Boolean(workspaceQuery.error) || (cards.length === 0 && workspaceQuery.cloudFailed),
