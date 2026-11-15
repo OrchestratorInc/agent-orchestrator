@@ -196,4 +196,40 @@ describe("saving review comments", () => {
 		await flushReviewPersistence();
 		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(true);
 	});
+	// #8367: forgetting resolves once the removal is on the phone, even while
+	// the saved reviews are still being read back at launch.
+	it("waits for the launch read before flushing, then writes the removal", async () => {
+		const { REVIEWS_STORAGE_KEY, flushReviewPersistence, startReviewPersistence } = await import("./reviewPersistence");
+		const { forgetHostReviews, reviewKey } = await import("./reviewStore");
+		store.items.set(REVIEWS_STORAGE_KEY, JSON.stringify({ v: 1, reviews: [
+			{ key: reviewKey("machine-a", "s1"), changedAt: Date.now(), comments: [{ id: "c1", label: "x", feedback: "for-a", target, status: "queued" }] },
+		] }));
+		void startReviewPersistence();
+		forgetHostReviews("machine-a");
+		let flushed = false;
+		const flushing = flushReviewPersistence().then(() => { flushed = true; });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(flushed).toBe(false);
+		store.pendingRead!.resolve(null);
+		await flushing;
+		expect(store.items.has(REVIEWS_STORAGE_KEY)).toBe(false);
+	});
+
+	it("resolves at once before persistence started", async () => {
+		const { flushReviewPersistence } = await import("./reviewPersistence");
+		await expect(flushReviewPersistence()).resolves.toBeUndefined();
+	});
+
+	it("rejects a flush when the save already running fails", async () => {
+		const { flushReviewPersistence, startReviewPersistence } = await import("./reviewPersistence");
+		const { addReviewComment, reviewKey } = await import("./reviewStore");
+		const started = startReviewPersistence();
+		store.pendingRead!.resolve(null);
+		await started;
+		store.failWrites = 1;
+		addReviewComment(reviewKey("host", "s1"), { label: "x", feedback: "a", target });
+		// The delayed save starts, but has not finished, when the flush runs.
+		vi.advanceTimersByTime(300);
+		await expect(flushReviewPersistence()).rejects.toThrow("storage full");
+	});
 });

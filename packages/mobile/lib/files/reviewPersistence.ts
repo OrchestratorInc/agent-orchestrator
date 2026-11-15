@@ -18,6 +18,12 @@ let dirty = false;
 let failures = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let writing: Promise<void> = Promise.resolve();
+// The latest write as it went: rejects if it failed (`writing` never does, so
+// the next write still runs).
+let lastWrite: Promise<void> = Promise.resolve();
+// Settles once the saved reviews were read back at launch and what changed
+// meanwhile is scheduled; null until startReviewPersistence runs.
+let ready: Promise<void> | null = null;
 
 function schedule(delayMs = WRITE_DELAY_MS) {
 	dirty = true;
@@ -35,6 +41,7 @@ function write(): Promise<void> {
 	const result = writing.then(() => snapshot.reviews.length
 		? AsyncStorage.setItem(REVIEWS_STORAGE_KEY, JSON.stringify(snapshot))
 		: AsyncStorage.removeItem(REVIEWS_STORAGE_KEY));
+	lastWrite = result;
 	writing = result.then(
 		() => { failures = 0; },
 		(error: unknown) => {
@@ -53,17 +60,27 @@ function write(): Promise<void> {
 /**
  * Writes a change still waiting (or a save that failed) now and resolves once
  * every save started so far is done; rejects if what is in memory still did
- * not reach the phone. Before the saved reviews were read back there is
- * nothing to write yet: a change made meanwhile is written when that read lands.
+ * not reach the phone, a save already running included. While the saved
+ * reviews are still being read back, waits for that read first, so a change
+ * made meanwhile (a forgotten machine's reviews removed) is written before
+ * this resolves. Before persistence started there is nothing to write.
  */
 export async function flushReviewPersistence(): Promise<void> {
-	if (!loaded) return;
+	if (!loaded) {
+		if (!ready) return;
+		await ready;
+	}
 	if (timer || dirty) return write();
-	await writing;
+	await lastWrite;
 }
 
 /** Restores saved reviews, then saves every change. Once per app launch. */
-export async function startReviewPersistence(): Promise<void> {
+export function startReviewPersistence(): Promise<void> {
+	if (!ready) ready = startOnce();
+	return ready;
+}
+
+async function startOnce(): Promise<void> {
 	if (started) return;
 	started = true;
 	// Listening starts before the saved reviews are read: a comment written
