@@ -1055,6 +1055,7 @@
 	"inspector.requestRereviewPR": "请求重新评审 PR",
 	"inspector.reviewActions": "审查操作",
 	"inspector.reviewedAt": "{{time}}前评审",
+	"inspector.commentedAt": "{{time}}前评论",
 	"inspector.resolvedComments": "已解决评论 · {{count}}",
 	"inspector.rereviewRequested": "已请求重新评审",
 	"inspector.rereviewRequestFailed": "无法请求重新评审",

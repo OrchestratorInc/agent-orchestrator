@@ -531,6 +531,8 @@ export type InspectorGithubReview = {
 	id: string;
 	inlineComments?: InspectorInlineComment[];
 	isBot?: boolean;
+	/** A top-level PR comment rather than a review: its time reads "Commented", not "Reviewed". */
+	kind?: "comment";
 	pullRequestUrl?: string;
 	resolvedComments?: InspectorInlineComment[];
 	reviewerId: string;
@@ -593,6 +595,7 @@ export type InspectorReviewLabels = {
 	reviewActions: string;
 	reviews: string;
 	reviewedAt: (time: string) => string;
+	commentedAt?: (time: string) => string;
 	resolvedComments: (count: number) => string;
 	rereviewRequested: string;
 	rereviewRequestFailed: string;
@@ -1076,7 +1079,7 @@ function ExternalReviewCard({
 					<span className="min-w-0 break-words">{entry.reviewerId}</span>
 					{entry.isBot ? <span className="shrink-0 font-mono text-micro text-passive">{labels.bot}</span> : null}
 				</span>
-				{entry.submittedAtLabel ? <span className="font-mono text-micro text-passive">{labels.reviewedAt(entry.submittedAtLabel)}</span> : null}
+				{entry.submittedAtLabel ? <span className="font-mono text-micro text-passive">{entry.kind === "comment" && labels.commentedAt ? labels.commentedAt(entry.submittedAtLabel) : labels.reviewedAt(entry.submittedAtLabel)}</span> : null}
 			</span>
 			<span className={cn("flex shrink-0 items-center gap-2 whitespace-nowrap pr-1 text-2xs font-medium @max-[420px]/inspector:col-start-2 @max-[420px]/inspector:row-start-2 @max-[420px]/inspector:justify-self-start", reviewerVerdictTone[entry.verdict.tone])}>
 				<span>{entry.verdict.label}</span>

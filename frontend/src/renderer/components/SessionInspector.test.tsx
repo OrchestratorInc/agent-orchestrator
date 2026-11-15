@@ -4109,6 +4109,14 @@ describe("SessionInspector summary reviews", () => {
                 url: "https://example.com/pr/3#issuecomment-3",
                 createdAt: "2026-06-15T12:00:00Z",
                 body: "Pushed the schema fix.",
+              }, {
+                // A deploy bot that never reviewed: not review feedback.
+                id: "deploy-1",
+                author: "vercel[bot]",
+                isBot: true,
+                url: "https://example.com/pr/3#issuecomment-4",
+                createdAt: "2026-06-15T12:30:00Z",
+                body: "Preview deployed to example.vercel.app.",
               }],
             })],
           },
@@ -4129,6 +4137,11 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getByText("Please also update the docs.")).toBeInTheDocument();
     // The PR author's own note is not feedback, so it gets no card to send back.
     expect(screen.queryByText("Pushed the schema fix.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Preview deployed to example.vercel.app.")).not.toBeInTheDocument();
+    // A top-level comment's time reads as a comment, not a review.
+    const mayaCard = screen.getByText("Please also update the docs.").closest("[data-testid=github-review-card]") as HTMLElement;
+    expect(mayaCard).toHaveTextContent(/Commented \d/);
+    expect(mayaCard).not.toHaveTextContent(/Reviewed \d/);
 
     // The bot's inline comment is listed under its review, previewed as words.
     await userEvent.click(screen.getByRole("button", { name: /coderabbitai.*Commented/i }));

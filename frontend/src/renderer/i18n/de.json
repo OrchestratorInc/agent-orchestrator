@@ -1056,6 +1056,7 @@
 	"inspector.requestRereviewPR": "Erneute PR-Review anfragen",
 	"inspector.reviewActions": "Review-Aktionen",
 	"inspector.reviewedAt": "Geprüft vor {{time}}",
+	"inspector.commentedAt": "Kommentiert vor {{time}}",
 	"inspector.resolvedComments": "Erledigte Kommentare · {{count}}",
 	"inspector.rereviewRequested": "Erneute Review angefragt",
 	"inspector.rereviewRequestFailed": "Erneute Review konnte nicht angefragt werden",

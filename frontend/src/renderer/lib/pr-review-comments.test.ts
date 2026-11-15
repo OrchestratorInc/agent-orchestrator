@@ -46,7 +46,7 @@ describe("botThreadReviewers", () => {
 
 describe("prHasReviewActivity", () => {
 	it("counts a PR with only a top-level comment, but not an empty one", () => {
-		const conversation = [{ id: "1", author: "coderabbitai", isBot: true, body: "## Walkthrough" }, { id: "2", author: "x", isBot: false, body: "  " }];
+		const conversation = [{ id: "1", author: "maya", isBot: false, body: "Please update the docs." }, { id: "2", author: "x", isBot: false, body: "  " }];
 		const pr = { ...base, conversation } as unknown as SessionPRSummary;
 		expect(prConversationComments(pr)).toHaveLength(1);
 		expect(prHasReviewActivity(pr)).toBe(true);
@@ -94,8 +94,29 @@ describe("prHasReviewActivity, for the PR author", () => {
 describe("the PR author, against a bot of the same name", () => {
 	it("keeps release-helper[bot]'s comments on release-helper's PR", () => {
 		const conversation = [{ id: "1", author: "release-helper[bot]", isBot: true, body: "Release notes drafted." }];
-		const pr = { ...base, author: "release-helper", conversation } as unknown as SessionPRSummary;
+		const pr = { ...base, author: "release-helper", conversation, review: { ...base.review, reviews: [{ reviewerId: "release-helper[bot]" }] } } as unknown as SessionPRSummary;
 		expect(prConversationComments(pr)).toHaveLength(1);
 		expect(prHasReviewActivity(pr)).toBe(true);
+	});
+});
+
+describe("prConversationComments, for bots", () => {
+	const conversation = [
+		{ id: "1", author: "coderabbitai", isBot: true, body: "## Walkthrough" },
+		{ id: "2", author: "vercel[bot]", isBot: true, body: "Preview deployed." },
+		{ id: "3", author: "codecov[bot]", isBot: true, body: "Coverage 91%." },
+	];
+
+	it("keeps a bot's comment only when that bot also reviewed the PR", () => {
+		const reviewed = { ...base, conversation, review: { ...base.review, reviews: [{ reviewerId: "coderabbitai[bot]" }] } } as unknown as SessionPRSummary;
+		expect(prConversationComments(reviewed).map((comment) => comment.id)).toEqual(["1"]);
+		const threaded = { ...base, conversation, threads: [thread("t1", "codecov[bot]", true)] } as unknown as SessionPRSummary;
+		expect(prConversationComments(threaded).map((comment) => comment.id)).toEqual(["3"]);
+	});
+
+	it("does not turn the Reviews tab on for deploy and coverage bots alone", () => {
+		const pr = { ...base, conversation } as unknown as SessionPRSummary;
+		expect(prConversationComments(pr)).toEqual([]);
+		expect(prHasReviewActivity(pr)).toBe(false);
 	});
 });

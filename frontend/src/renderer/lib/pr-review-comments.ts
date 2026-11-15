@@ -56,11 +56,20 @@ export function botThreadReviewers(pr: SessionPRSummary): { unresolved: CommentR
  * The PR's top-level comments (a bot's walkthrough, a person's note), oldest
  * first, for the Reviews tab to list beside its reviews. The PR author's own
  * comments are left out, as their reviews are: a worker's \`gh pr comment\`
- * notes are not feedback to send back to it.
+ * notes are not feedback to send back to it. A bot's comment is kept only
+ * when that bot also reviewed the PR (a review or an inline thread), so a
+ * review bot's walkthrough lists and a deploy preview, coverage report or
+ * CLA check does not.
  */
 export function prConversationComments(pr: SessionPRSummary): NonNullable<SessionPRSummary["conversation"]> {
 	const author = pr.author ? authorKey(pr.author) : "";
-	return (pr.conversation ?? []).filter((comment) => comment.body.trim() && !(author && authorKey(comment.author) === author));
+	const reviewers = new Set([
+		...(pr.review?.reviews ?? []).map((review) => loginKey(review.reviewerId)),
+		...(pr.threads ?? []).flatMap((thread) => thread.comments.map((comment) => loginKey(comment.author))),
+	]);
+	return (pr.conversation ?? []).filter((comment) => comment.body.trim()
+		&& !(author && authorKey(comment.author) === author)
+		&& (!comment.isBot || reviewers.has(loginKey(comment.author))));
 }
 
 /**
