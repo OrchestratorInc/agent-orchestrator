@@ -1058,34 +1058,14 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 	return (
 		<StepSplit
 			title={t("firstRun.toolsTitle")}
-			// The Harnesses and Tools groups say what this page is for.
+			// The Tools and Harnesses groups say what this page is for.
 			titleHidden
 		>
 			{ghChecking || readiness.isPending ? (
 				<Waiting>{t("firstRun.toolsChecking")}</Waiting>
 			) : (
 				<div className="flex flex-col gap-5">
-					<RowGroup title={t("firstRun.toolsAgentsHeading")} hint={t("firstRun.agentsBodyNone")}>
-						<ul className={ROW_LIST}>
-							{agents.map(agentRow)}
-							{more.length > 0 && !showAllAgents ? (
-								<MoreHarnessesRow ids={more.map(({ agent }) => agent.id)} onShow={() => setShowAllAgents(true)} />
-							) : null}
-						</ul>
-						{showAllAgents && more.length > 0 ? (
-							<>
-								{/* Every other harness, installable from here too; scrolls past a few rows. */}
-								<ul className={cn(ROW_LIST, "max-h-80 overflow-y-auto")} aria-label={t("firstRun.moreHarnessesList")}>
-									{more.map(agentRow)}
-								</ul>
-								<Button type="button" variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setShowAllAgents(false)}>
-									{t("firstRun.showFewerHarnesses")}
-									<ChevronUp aria-hidden="true" />
-								</Button>
-							</>
-						) : null}
-					</RowGroup>
-					{/* GitHub is optional: agents still work locally without it. */}
+					{/* GitHub first; it stays optional (agents still work locally without it). */}
 					<RowGroup title={t("firstRun.toolsGithubHeading")} hint={t("firstRun.toolsGithubHint")}>
 						<ul className={ROW_LIST}>
 							<CheckRow
@@ -1108,6 +1088,26 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 						</ul>
 						{/* The existing login flow: an embedded `gh auth login` terminal. */}
 						{ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded /> : null}
+					</RowGroup>
+					<RowGroup title={t("firstRun.toolsAgentsHeading")} hint={t("firstRun.agentsBodyNone")}>
+						<ul className={ROW_LIST}>
+							{agents.map(agentRow)}
+							{more.length > 0 && !showAllAgents ? (
+								<MoreHarnessesRow ids={more.map(({ agent }) => agent.id)} onShow={() => setShowAllAgents(true)} />
+							) : null}
+						</ul>
+						{showAllAgents && more.length > 0 ? (
+							<>
+								{/* Every other harness, installable from here too; scrolls past a few rows. */}
+								<ul className={cn(ROW_LIST, "max-h-80 overflow-y-auto")} aria-label={t("firstRun.moreHarnessesList")}>
+									{more.map(agentRow)}
+								</ul>
+								<Button type="button" variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => setShowAllAgents(false)}>
+									{t("firstRun.showFewerHarnesses")}
+									<ChevronUp aria-hidden="true" />
+								</Button>
+							</>
+						) : null}
 					</RowGroup>
 					<Button variant="ghost" size="sm" className="self-end text-muted-foreground" onClick={() => void checkAgain()} disabled={checking}>
 						<RefreshCw className={cn("size-icon-md", checking && "animate-spin")} aria-hidden="true" />
