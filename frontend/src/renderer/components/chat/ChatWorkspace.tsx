@@ -2240,7 +2240,7 @@ function ChatWorkspaceContent({
 						agentStopped={controllerStopped}
 					/>
 					<div
-						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
+						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", (arrivingWithHistory || openedDocked) && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider

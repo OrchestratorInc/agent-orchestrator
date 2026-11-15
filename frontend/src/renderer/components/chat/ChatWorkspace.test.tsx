@@ -3719,6 +3719,27 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("heading", { name: "What do you want to work on?" })).toBeInTheDocument();
 	});
 
+	it("opens an existing session docked while its history is read, and keeps it there", () => {
+		const session = { ...chatSession, lastUserMessageAt: undefined };
+		const view = render(<ChatWorkspace snapshot={chatFixtureEmpty} session={session} historyUnread />);
+		const placement = () => document.querySelector("[data-composer-placement]");
+		expect(placement()).toHaveAttribute("data-composer-placement", "dock");
+		// The empty transcript renders nothing, so the composer is pushed to the bottom.
+		expect(placement()).toHaveClass("justify-end");
+		expect(document.querySelector("[data-empty]")).toBeNull();
+		// No arrival chrome: this is a plain open, not a switch from the terminal.
+		expect(screen.queryByText("Restoring your conversation")).not.toBeInTheDocument();
+		// Read and empty, it stays docked rather than jumping back to the middle.
+		view.rerender(<ChatWorkspace snapshot={chatFixtureEmpty} session={session} />);
+		expect(placement()).toHaveAttribute("data-composer-placement", "dock");
+		expect(placement()).toHaveClass("justify-end");
+		expect(screen.queryByRole("heading", { name: "What do you want to work on?" })).not.toBeInTheDocument();
+		// Read with messages, the composer is where it already was.
+		view.rerender(<ChatWorkspace snapshot={{ ...chatFixtureEmpty, items: [humanMessage("hello")] }} session={session} />);
+		expect(placement()).toHaveAttribute("data-composer-placement", "dock");
+		expect(document.querySelector("[data-composer-motion]")).toBeNull();
+	});
+
 	it("keeps the composer quiet while leaving chat for the terminal", () => {
 		render(
 			<ChatWorkspace
