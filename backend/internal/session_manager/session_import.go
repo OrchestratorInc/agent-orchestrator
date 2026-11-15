@@ -314,6 +314,12 @@ func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.S
 	if rec.Metadata.ImportSource == nil || rec.Harness != domain.HarnessClaudeCode {
 		return false, false
 	}
+	// ImportSource remains as provenance after an edit forks the conversation
+	// or a provider switch replaces it. Those providers no longer share the
+	// imported transcript, whose path is intentionally cleared at that boundary.
+	if current := rec.Metadata.ProviderConversationID; current != "" && current != importedNativeRef(rec.Metadata.ImportSource).NativeSessionID {
+		return false, false
+	}
 	if adoptedOwnedElsewhere(ctx, rec) {
 		return true, false
 	}

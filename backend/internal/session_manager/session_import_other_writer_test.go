@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestClaudeTurnsWrittenElsewhere(t *testing.T) {
@@ -84,5 +86,19 @@ func TestClaudeTurnsWrittenElsewhereCannotProveTranscriptUnchanged(t *testing.T)
 		if !claudeTurnsWrittenElsewhere(context.Background(), path, "/ao/worktree", time.Now()) {
 			t.Fatalf("unknown transcript %q was treated as unchanged", path)
 		}
+	}
+}
+
+func TestImportedChatWrittenElsewhereOnlyChecksTheImportedNativeConversation(t *testing.T) {
+	for _, current := range []string{"imported-native", "edited-branch", "replacement-provider"} {
+		t.Run(current, func(t *testing.T) {
+			rec := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
+			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "imported-native", ConfigDir: t.TempDir()}
+			rec.Metadata.ProviderConversationID = current
+			open, wrote := (&Manager{}).ImportedChatWrittenElsewhere(context.Background(), rec, time.Now())
+			if open || wrote != (current == "imported-native") {
+				t.Fatalf("current %q: open=%v wrote=%v; only the imported provider needs a reload for its missing transcript", current, open, wrote)
+			}
+		})
 	}
 }
