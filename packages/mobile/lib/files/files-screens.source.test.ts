@@ -54,6 +54,12 @@ describe("the file viewer", () => {
 		expect(file).toContain('source={Platform.OS === "android" ? [pane.source] : pane.source}');
 	});
 
+	// A side read while the connection is away can time out; that is no answer,
+	// so it is read again once verified instead of shown as a missing image.
+	it("reads an image side again after reconnecting rather than recording it missing", () => {
+		expect(file).toMatch(/const side = \([^)]*\) => retryWhenVerified\(backend, \(signal\) => backend\.imageSource\(/);
+	});
+
 	// At a large text size the drag strip has to cover the scaled +/− column too.
 	it("sizes the drag-to-select strip to the scaled gutter and marker", () => {
 		expect(file).toContain("gutterWidth: gutterWidth(digits, codeScale) + MARKER_WIDTH * codeScale,");

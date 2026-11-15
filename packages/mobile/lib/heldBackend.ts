@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef } from "react";
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
-import { UnreachableError } from "./connectionError";
+import { isUnreachableError, UnreachableError } from "./connectionError";
 import type { FilesBackend } from "./files/backend";
 
 // A machine's backend that lives as long as the machine stays selected,
@@ -192,9 +192,10 @@ export function sourceKey(source: { uri: string; headers?: Record<string, string
  * Whether a view may load what `key` names (a source, see `sourceKey`) with the
  * backend's credential: at once with a verified connection (or a backend that
  * needs none, as Cloud's), else once the connection is verified again. What
- * the view last loaded stays: the same key keeps it through a reconnect. Any
- * other key waits: a view first becoming eligible (a card scrolled into view,
- * a page swiped to) or another file. `null` is nothing to load yet.
+ * the view has on screen stays: the same key, still on screen, keeps it through
+ * a reconnect. Any other key waits: a view first becoming eligible (a card
+ * scrolled into view, a page swiped to), another file, or one shown before
+ * another source (or nothing) replaced it. `null` is nothing to load yet.
  *
  * Checked when the view becomes eligible, not when it mounts: one mounted
  * hidden while connected still waits if it first shows while the app
@@ -202,12 +203,16 @@ export function sourceKey(source: { uri: string; headers?: Record<string, string
  * render it wakes builds it again from the verified connection.
  */
 export function useVerifiedFor(backend: Verifiable | null | undefined, key: string | null | undefined): boolean {
-	const allowed = useRef<string | undefined>(undefined);
+	const allowed = useRef<{ backend: Verifiable; key: string } | undefined>(undefined);
 	const [, wake] = useReducer((count: number) => count + 1, 0);
 	// A backend with no verification concept (Cloud's signed addresses) is always ready.
 	const needs = Boolean(backend?.whenVerified);
-	const ready = key != null && (!needs || (backend?.verified?.() ?? true) || allowed.current === key);
-	if (ready && needs) allowed.current = key;
+	const kept = allowed.current?.backend === backend && allowed.current?.key === key;
+	const ready = key != null && (!needs || (backend?.verified?.() ?? true) || kept);
+	// Only the source on screen keeps its allowance: another key (or nothing) on
+	// screen, or another backend, ends it, so switching back to an earlier source
+	// is a new load that waits (A -> B -> A must not remount A's old credential).
+	allowed.current = ready && needs && backend ? { backend, key: key! } : undefined;
 	const waiting = needs && key != null && !ready;
 	useEffect(() => {
 		if (!waiting || !backend?.whenVerified) return;
@@ -257,5 +262,26 @@ export async function resolveWhenVerified<S>(backend: Verifiable | null | undefi
 		return signal?.aborted ? undefined : source;
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * `load` (what a view will show, where undefined is a confirmed "nothing to
+ * show"), tried again once the connection is verified when it started while
+ * the connection was away and failed to reach it: a call that timed out waiting
+ * is not an answer, so it must not be kept as "nothing there". Other failures,
+ * and one from an attempt made while verified, reject as they are; cancelled
+ * with `signal`.
+ */
+export async function retryWhenVerified<T>(backend: Verifiable | null | undefined, load: (signal?: AbortSignal) => Promise<T>, signal?: AbortSignal): Promise<T> {
+	for (;;) {
+		// Started while the connection was away: a failure to reach it is no answer.
+		const away = Boolean(backend?.whenVerified) && !(backend?.verified?.() ?? true);
+		try {
+			return await load(signal);
+		} catch (error) {
+			if (!away || !isUnreachableError(error) || signal?.aborted) throw error;
+			await backend!.whenVerified!(signal);
+		}
 	}
 }
