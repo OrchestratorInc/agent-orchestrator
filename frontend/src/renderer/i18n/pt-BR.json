@@ -5359,7 +5359,7 @@
 	"move.moving": "Movendo…",
 	"move.open": "Abrir sessão",
 	"move.done": "Movida para o Orchestrator Cloud",
-	"move.completeFailed": "A sessão roda no Orchestrator Cloud, mas este computador não a marcou como movida.",
+	"move.completeFailed": "A sessão roda no Orchestrator Cloud. Este computador ainda não a marcou como movida; o Orchestrator continua tentando.",
 	"move.failedRolledBack": "A sessão continua aqui, sem alterações.",
 	"move.failedPushedWip": "Os arquivos sem commit agora são o commit {{commit}} em {{branch}}, aqui e no GitHub.",
 	"move.failedPushed": "{{branch}} foi enviado ao GitHub.",

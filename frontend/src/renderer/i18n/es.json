@@ -5359,7 +5359,7 @@
 	"move.moving": "Moviendo…",
 	"move.open": "Abrir sesión",
 	"move.done": "Movida a Orchestrator Cloud",
-	"move.completeFailed": "La sesión se ejecuta en Orchestrator Cloud, pero este equipo no la marcó como movida.",
+	"move.completeFailed": "La sesión se ejecuta en Orchestrator Cloud. Este equipo aún no la marcó como movida; Orchestrator lo sigue intentando.",
 	"move.failedRolledBack": "La sesión continúa aquí sin cambios.",
 	"move.failedPushedWip": "Los archivos sin confirmar ahora son el commit {{commit}} en {{branch}}, aquí y en GitHub.",
 	"move.failedPushed": "{{branch}} se subió a GitHub.",

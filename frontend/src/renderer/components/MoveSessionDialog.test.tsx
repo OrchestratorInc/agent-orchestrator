@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { MoveSessionDialog } from "./MoveSessionDialog";
 import { useUiStore } from "../stores/ui-store";
+import { useUnfinishedMoveStore } from "../lib/move-finish";
 import { TooltipProvider } from "./ui/tooltip";
 import type { WorkspaceSession } from "../types/workspace";
 
@@ -209,4 +210,17 @@ it("does not show the last preview while it reloads on reopen", async () => {
 	view.rerender(ui());
 	expect(await screen.findByText("Checking what moves")).toBeTruthy();
 	expect(screen.queryByText("A login.go")).toBeNull();
+});
+
+it("keeps recording the move on this computer when that last step fails", async () => {
+	useUnfinishedMoveStore.setState({ moves: [] });
+	daemon.posts = { ...moveReplies, "/api/v1/sessions/{sessionId}/move/complete": { error: { code: "INTERNAL", message: "database is locked" } } };
+	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
+	renderDialog();
+	const user = userEvent.setup();
+	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
+	expect(await screen.findByText(/Orchestrator keeps trying/)).toBeTruthy();
+	expect(useUnfinishedMoveStore.getState().moves).toEqual([
+		expect.objectContaining({ kind: "complete", sessionId: "app-1", orgId: "org-1", cloudSessionId: "cloud-9" }),
+	]);
 });

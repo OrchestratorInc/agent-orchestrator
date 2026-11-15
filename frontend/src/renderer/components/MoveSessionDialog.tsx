@@ -8,6 +8,7 @@ import { useCloudOrg } from "../hooks/useCloudOrg";
 import { cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
 import { uploadCloudTranscript, uploadCloudTranscriptSidecar } from "../lib/cloud-attachments";
+import { useUnfinishedMoveStore } from "../lib/move-finish";
 import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
@@ -150,6 +151,10 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 				},
 			);
 			if (moved.completeError) {
+				// The session runs in Cloud; recording that here is retried until it lands.
+				useUnfinishedMoveStore.getState().add({
+					kind: "complete", host: session.hostId, sessionId: session.id, moveId, orgId: target.orgId, cloudSessionId: moved.sessionId,
+				});
 				setResult(moved);
 				return;
 			}

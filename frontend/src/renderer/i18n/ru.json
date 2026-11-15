@@ -5501,7 +5501,7 @@
 	"move.moving": "Перемещение…",
 	"move.open": "Открыть сессию",
 	"move.done": "Перемещено в Orchestrator Cloud",
-	"move.completeFailed": "Сессия работает в Orchestrator Cloud, но этот компьютер не отметил её как перемещённую.",
+	"move.completeFailed": "Сессия работает в Orchestrator Cloud. Этот компьютер ещё не отметил её как перемещённую; Orchestrator продолжает попытки.",
 	"move.failedRolledBack": "Сессия продолжается здесь без изменений.",
 	"move.failedPushedWip": "Незакоммиченные файлы теперь — коммит {{commit}} в {{branch}}, здесь и на GitHub.",
 	"move.failedPushed": "{{branch}} отправлена на GitHub.",

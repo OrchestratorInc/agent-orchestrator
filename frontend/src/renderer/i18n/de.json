@@ -5211,7 +5211,7 @@
 	"move.moving": "Wird verschoben…",
 	"move.open": "Session öffnen",
 	"move.done": "In die Orchestrator Cloud verschoben",
-	"move.completeFailed": "Die Sitzung läuft in der Orchestrator Cloud, aber dieser Computer hat sie nicht als verschoben markiert.",
+	"move.completeFailed": "Die Sitzung läuft in der Orchestrator Cloud. Dieser Computer hat sie noch nicht als verschoben markiert; Orchestrator versucht es weiter.",
 	"move.failedRolledBack": "Die Session läuft hier unverändert weiter.",
 	"move.failedPushedWip": "Die nicht committeten Dateien sind jetzt Commit {{commit}} auf {{branch}}, hier und auf GitHub.",
 	"move.failedPushed": "{{branch}} wurde zu GitHub gepusht.",

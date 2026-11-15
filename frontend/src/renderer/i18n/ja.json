@@ -5211,7 +5211,7 @@
 	"move.moving": "移動中…",
 	"move.open": "セッションを開く",
 	"move.done": "Orchestrator Cloud に移動しました",
-	"move.completeFailed": "セッションは Orchestrator Cloud で実行されていますが、このコンピュータでは移動済みとして記録されませんでした。",
+	"move.completeFailed": "セッションは Orchestrator Cloud で実行されています。このコンピュータではまだ移動済みとして記録されていません。Orchestrator が再試行を続けます。",
 	"move.failedRolledBack": "セッションは変更されずにここで続きます。",
 	"move.failedPushedWip": "未コミットのファイルは、このコンピュータと GitHub の両方で {{branch}} のコミット {{commit}} になりました。",
 	"move.failedPushed": "{{branch}} は GitHub にプッシュされました。",
