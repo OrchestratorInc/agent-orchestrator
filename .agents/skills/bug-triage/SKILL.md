@@ -125,15 +125,18 @@ binary rather than whichever `ao` is on PATH, and an environment whose `AO_DATA_
 ```bash
 ao_bin=/path/to/affected/ao  # the binary identified above
 port=$("$ao_bin" status --json | jq -r '.port // empty')
-[ -n "$port" ] || echo 'daemon not running; record that and skip daemon evidence'
-api="http://127.0.0.1:$port/api/v1/agents"
 h=claude-code  # affected harness id
-curl -fsS "$api/readiness" | jq --arg h "$h" '.agents[] | select(.id == $h)
-  | del(.authentication.account.email, .authentication.account.name,
-        .authentication.account.organization)'
-curl -fsS "$api/install-jobs" | jq --arg h "$h" '.jobs[] | select(.target == $h)'
-curl -fsS "$api/installers" | jq --arg h "$h" '.agents[] | select(.agentId == $h)'
-curl -fsS "$api/$h/update-advisory"
+if [ -n "$port" ]; then
+  api="http://127.0.0.1:$port/api/v1/agents"
+  curl -fsS "$api/readiness" | jq --arg h "$h" '.agents[] | select(.id == $h)
+    | del(.authentication.account.email, .authentication.account.name,
+          .authentication.account.organization)'
+  curl -fsS "$api/install-jobs" | jq --arg h "$h" '.jobs[] | select(.target == $h)'
+  curl -fsS "$api/installers" | jq --arg h "$h" '.agents[] | select(.agentId == $h)'
+  curl -fsS "$api/$h/update-advisory"
+else
+  echo 'daemon not running; record that and skip daemon evidence'
+fi
 ```
 
 If the daemon is not running, don't start it to collect this evidence.
@@ -177,8 +180,8 @@ readiness filter above drops them so they never enter the evidence, matching the
 Health-tab copy, and keeps `method`, `sourceKind`, and `provider`. `source` paths and
 installer output can include usernames and home directories. Keep the source kind and
 path shape (for example `~/.claude/.credentials.json`) and redact identity unless the
-reporter agrees it matters. Never open or attach the credential
-files, keychain entries, or environment values these diagnostics point to.
+reporter agrees it matters. Never open or attach the credential files, keychain
+entries, or environment values these diagnostics point to.
 
 Use the daemon API/CLI for state first. If database evidence is needed, discover the
 actual database location and schema, open it read-only, and select only relevant rows
