@@ -15,6 +15,7 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { IpcMain, Session } from "electron";
+import { isBrowserArtifactPath } from "../shared/editor-handoff";
 
 /** The control plane refuses artifact files over 100 MiB. */
 export const MAX_CLOUD_ARTIFACT_BYTES = 100 * 1024 * 1024;
@@ -104,15 +105,21 @@ export interface CloudArtifactFolderFile {
 }
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A session's folder, or its separate copy for pages opened in a browser. */
+const SESSION_FOLDER = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.browser)?$/i;
 
 /** The folder every cloud session's copied artifacts live under: under ~/.ao, never an OS app-data location. */
 function cloudArtifactsRoot(env: NodeJS.ProcessEnv): string {
 	return path.join(env.AO_DATA_DIR?.trim() || path.join(os.homedir(), ".ao"), "cloud-artifacts");
 }
 
-/** Where a cloud session's artifacts are copied to open them in a folder: under ~/.ao, never an OS app-data location. */
-export function cloudArtifactsFolder(sessionId: string, env: NodeJS.ProcessEnv = process.env): string {
-	return path.join(cloudArtifactsRoot(env), sessionId);
+/**
+ * Where a cloud session's artifacts are copied to open them in a folder: under
+ * ~/.ao, never an OS app-data location. A page opened in a browser gets its
+ * own copy, so a later "Show in" of one file does not take its files away.
+ */
+export function cloudArtifactsFolder(sessionId: string, env: NodeJS.ProcessEnv = process.env, browser = false): string {
+	return path.join(cloudArtifactsRoot(env), browser ? `${sessionId}.browser` : sessionId);
 }
 
 /** Copies of one session's folder run one after another, so two never race to replace it. */
@@ -140,23 +147,34 @@ function oneCopyAtATime<T>(sessionId: string, copy: () => Promise<T>): Promise<T
  */
 export async function copyCloudArtifactsToFolder(
 	session: Pick<Session, "fetch">,
-	input: { sessionId: string; files: CloudArtifactFolderFile[]; reveal?: string },
+	input: { sessionId: string; files: CloudArtifactFolderFile[]; reveal?: string; browser?: boolean },
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
 	if (!SESSION_ID.test(String(input.sessionId))) throw new Error("Invalid session");
 	const sessionId = String(input.sessionId);
+	const browser = input.browser === true;
 	const parent = cloudArtifactsRoot(env);
-	const root = cloudArtifactsFolder(sessionId, env);
+	const root = cloudArtifactsFolder(sessionId, env, browser);
+	const revealed = input.reveal === undefined ? undefined : path.resolve(root, String(input.reveal));
 	const files = input.files.map((file) => {
 		const target = path.resolve(root, String(file.path));
 		if (!target.startsWith(root + path.sep)) throw new Error("Invalid artifact path");
-		return { relative: path.relative(root, target), url: String(file.url) };
+		// For a browser only the page must arrive; its other files are best effort.
+		return { path: String(file.path), relative: path.relative(root, target), url: String(file.url), required: !browser || target === revealed };
 	});
-	await oneCopyAtATime(sessionId, async () => {
+	await oneCopyAtATime(path.basename(root), async () => {
 		await fs.mkdir(parent, { recursive: true });
 		const staging = await fs.mkdtemp(path.join(parent, `${STAGING_PREFIX}${sessionId}-`));
 		try {
-			await forEachLimited(files, CLOUD_ARTIFACT_COPY_CONCURRENCY, (file) => downloadCloudArtifact(session, file.url, path.join(staging, file.relative)));
+			await forEachLimited(files, CLOUD_ARTIFACT_COPY_CONCURRENCY, async (file) => {
+				const target = path.join(staging, file.relative);
+				try {
+					await downloadCloudArtifact(session, file.url, target);
+				} catch (error) {
+					if (file.required) throw new Error(`Couldn't copy ${file.path}: ${error instanceof Error ? error.message : String(error)}`);
+					await fs.rm(target, { force: true });
+				}
+			});
 			await fs.rm(root, { recursive: true, force: true });
 			await fs.rename(staging, root);
 		} catch (error) {
@@ -167,8 +185,7 @@ export async function copyCloudArtifactsToFolder(
 		const now = new Date();
 		await fs.utimes(root, now, now);
 	});
-	if (input.reveal === undefined) return root;
-	const revealed = path.resolve(root, input.reveal);
+	if (revealed === undefined) return root;
 	return revealed.startsWith(root + path.sep) ? revealed : root;
 }
 
@@ -194,7 +211,7 @@ export async function pruneCloudArtifactFolders(
 	const removed: string[] = [];
 	await Promise.all(entries.map(async (entry) => {
 		const staging = entry.name.startsWith(STAGING_PREFIX);
-		if (!entry.isDirectory() || (!staging && !SESSION_ID.test(entry.name))) return;
+		if (!entry.isDirectory() || (!staging && !SESSION_FOLDER.test(entry.name))) return;
 		const target = path.join(parent, entry.name);
 		const { mtimeMs } = await fs.stat(target);
 		if (now - mtimeMs <= (staging ? STAGING_MAX_AGE_MS : maxAgeMs)) return;
@@ -208,10 +225,22 @@ export function registerCloudArtifactIpc(deps: {
 	ipcMain: Pick<IpcMain, "handle">;
 	/** Opens a folder, or shows a file in its folder, in the file manager. */
 	openInFileManager?: (target: string, isFile: boolean) => Promise<void> | void;
+	/** Opens a file in the system's default browser. */
+	openInBrowser?: (target: string) => Promise<void> | void;
 }): void {
 	deps.ipcMain.handle("cloudArtifact:fetch", (event, url: string) => fetchCloudArtifact(event.sender.session, String(url)));
-	deps.ipcMain.handle("cloudArtifact:openFolder", async (event, input: { sessionId: string; files: CloudArtifactFolderFile[]; reveal?: string }) => {
-		const target = await copyCloudArtifactsToFolder(event.sender.session, input);
-		await deps.openInFileManager?.(target, input.reveal !== undefined && target !== cloudArtifactsFolder(input.sessionId));
+	deps.ipcMain.handle("cloudArtifact:openFolder", async (event, input: { sessionId: string; files: CloudArtifactFolderFile[]; reveal?: string; open?: "browser" }) => {
+		// A browser opens only the copied file named by reveal, and only one it renders itself.
+		const browser = input.open === "browser";
+		if (browser && (input.reveal === undefined || !isBrowserArtifactPath(String(input.reveal)))) throw new Error("This file does not open in a browser.");
+		if (browser && !deps.openInBrowser) throw new Error("Opening in a browser is not available.");
+		const target = await copyCloudArtifactsToFolder(event.sender.session, { ...input, browser });
+		const isFile = input.reveal !== undefined && target !== cloudArtifactsFolder(input.sessionId, process.env, browser);
+		if (browser) {
+			if (!isFile) throw new Error("That artifact is not valid.");
+			await deps.openInBrowser?.(target);
+			return;
+		}
+		await deps.openInFileManager?.(target, isFile);
 	});
 }

@@ -20,11 +20,11 @@
 
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { ChevronDown, ListChecks } from "lucide-react";
+import { ChevronDown, ListChecks } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
 import { Pressable } from "../ui/pressable";
 import type { ConversationPlan, PlanStepStatus } from "../../types/conversation";
-import { syncEdgeFade as syncViewportEdgeFade } from "./edge-fade";
+import { syncEdgeFade as syncViewportEdgeFade } from "../../hooks/useEdgeFade";
 
 const STEP_LABEL: Record<PlanStepStatus, string> = {
 	pending: "not started",
@@ -152,7 +152,7 @@ export const TurnPlan = memo(function TurnPlan({
 						<div
 							ref={viewportRef}
 							onScroll={syncEdgeFade}
-							className="edge-fade-viewport scrollbar-none relative max-h-60 overflow-y-auto"
+							className="edge-fade scrollbar-none relative max-h-60 overflow-y-auto"
 						>
 							{/* A real list, so a screen reader hears "list, 5 items" and the status of each
 							    step is spoken rather than left to a colour. */}

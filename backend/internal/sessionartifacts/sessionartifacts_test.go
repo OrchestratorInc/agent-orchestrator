@@ -233,3 +233,106 @@ func TestList_StopsOnCancelledContext(t *testing.T) {
 		t.Fatalf("List with a cancelled context = %v, want context.Canceled", err)
 	}
 }
+
+func writeArtifact(t *testing.T, dir, rel string) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegistrable(t *testing.T) {
+	dir := t.TempDir()
+	writeArtifact(t, dir, "brand.html")
+	writeArtifact(t, dir, "icons/app.icon/icon.json")
+	writeArtifact(t, dir, ".versions/x")
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	writeArtifact(t, filepath.Dir(outside), "outside.md")
+	if err := os.Symlink(outside, filepath.Join(dir, "link.md")); err != nil {
+		t.Logf("symlink unavailable: %v", err)
+	}
+	tests := []struct {
+		name, reference, want string
+		err                   error
+	}{
+		{name: "relative file", reference: "brand.html", want: "brand.html"},
+		{name: "absolute file", reference: filepath.Join(dir, "brand.html"), want: "brand.html"},
+		{name: "bundle directory", reference: "icons/app.icon", want: "icons/app.icon"},
+		{name: "file in a bundle", reference: "icons/app.icon/icon.json", want: "icons/app.icon/icon.json"},
+		{name: "plain directory", reference: "icons", err: ErrNotRegistrable},
+		{name: "the directory itself", reference: dir, err: ErrNotRegistrable},
+		{name: "versions directory", reference: ".versions/x", err: ErrNotRegistrable},
+		{name: "symlink", reference: "link.md", err: ErrNotRegistrable},
+		{name: "missing", reference: "gone.md", err: ErrNotFound},
+		{name: "parent traversal", reference: "../outside.md", err: ErrOutsideDir},
+		{name: "absolute outside", reference: outside, err: ErrOutsideDir},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Registrable(dir, tc.reference)
+			if !errors.Is(err, tc.err) || got.Path != tc.want {
+				t.Fatalf("Registrable(%q) = %q, %v, want %q, %v", tc.reference, got.Path, err, tc.want, tc.err)
+			}
+		})
+	}
+}
+
+func registeredPaths(files []domain.SessionArtifactFile) []string {
+	paths := []string{}
+	for _, file := range files {
+		if file.Registered {
+			paths = append(paths, file.Path)
+		}
+	}
+	return paths
+}
+
+func TestListRegisteredMarksFilesAndBundleContents(t *testing.T) {
+	dir := t.TempDir()
+	for _, rel := range []string{"brand.html", "assets/a.png", "app.icon/icon.json", "app.icon/mark.svg"} {
+		writeArtifact(t, dir, rel)
+	}
+	files, err := ListRegistered(context.Background(), dir, []string{"brand.html", "app.icon", "gone.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 4 {
+		t.Fatalf("files = %+v, want all 4", files)
+	}
+	want := []string{"app.icon/icon.json", "app.icon/mark.svg", "brand.html"}
+	if got := registeredPaths(files); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("registered = %v, want %v", got, want)
+	}
+}
+
+func TestListRegisteredKeepsADeliverablePastTheFileCap(t *testing.T) {
+	dir := t.TempDir()
+	for i := range MaxFiles + 5 {
+		writeArtifact(t, dir, fmt.Sprintf("assets/%05d.png", i))
+	}
+	writeArtifact(t, dir, "brand.html")
+	writeArtifact(t, dir, "z.icon/icon.json")
+
+	plain, err := List(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plain) != MaxFiles || plain[len(plain)-1].Path == "brand.html" {
+		t.Fatalf("List reached past the cap: %d files", len(plain))
+	}
+	files, err := ListRegistered(context.Background(), dir, []string{"brand.html", "z.icon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"brand.html", "z.icon/icon.json"}
+	if got := registeredPaths(files); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("registered = %v, want %v", got, want)
+	}
+	if !sort.SliceIsSorted(files, func(i, j int) bool { return files[i].Path < files[j].Path }) {
+		t.Fatal("files are not sorted by path")
+	}
+}

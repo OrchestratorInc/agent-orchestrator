@@ -40,9 +40,9 @@ func TestStandaloneSessionKindsOnSpawnAndFailure(t *testing.T) {
 	sink := &fakeTelemetrySink{}
 	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore(), Telemetry: sink})
 	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
-	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
-	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("failed"), 1)
-	for _, name := range []string{"ao.session.spawned", "ao.session.spawn_failed"} {
+	svc.emitSpawned(rec, 1, 1, false, false, spawnFacts{createdBy: domain.SessionCreatedByUser})
+	svc.emitSpawnFailed(spawnFailure{kind: domain.KindWorker, harness: domain.HarnessCodex}, errors.New("failed"), 1, 1)
+	for _, name := range []string{"ao.sessions.spawned", "ao.sessions.spawn_failed"} {
 		if got := lastEvent(t, sink, name).Payload["kind"]; got != "standalone" {
 			t.Fatalf("%s kind = %#v", name, got)
 		}
@@ -97,7 +97,7 @@ func TestSpawnCreatedByAndSurface(t *testing.T) {
 			if _, _, _, err := svc.Spawn(ctx, cfg); err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
-			ev := lastEvent(t, sink, "ao.session.spawned")
+			ev := lastEvent(t, sink, "ao.sessions.spawned")
 			if ev.Payload["created_by"] != string(tc.want) {
 				t.Fatalf("created_by = %#v, want %q", ev.Payload["created_by"], tc.want)
 			}

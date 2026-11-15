@@ -1,6 +1,6 @@
 # ao cue
 
-Create and inspect reusable Cues for a local AO project. Both orchestrators and workers can use this command from their sessions. The project defaults to `AO_PROJECT_ID`, then the current session's project, then the registered project containing the current directory. Pass `--project <id>` when the target differs.
+Create and inspect reusable Cues for a local Orchestrator project. Both orchestrators and workers can use this command from their sessions. The project defaults to `AO_PROJECT_ID`, then the current session's project, then the registered project containing the current directory. Pass `--project <id>` when the target differs.
 
 When the user asks to turn a repetitive workflow into a Cue, first list the project's Cues to avoid creating a duplicate. Choose an **agent Cue** for a reusable natural-language instruction. Choose a **command Cue** only when the exact shell command is known. If the requested behavior is ambiguous, clarify the missing instruction or command before creating it. After creation, tell the user the Cue's name, kind, and what it will run.
 

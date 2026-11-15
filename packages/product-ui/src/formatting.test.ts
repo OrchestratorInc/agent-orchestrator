@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatTimeCompact, formatTokenCount } from "./formatting";
+import { branchTopic, formatTimeCompact, formatTokenCount } from "./formatting";
 
 describe("formatting", () => {
 	it.each([
@@ -19,5 +19,21 @@ describe("formatting", () => {
 		});
 
 		expect(result).toBe("time.minutesAgo:42");
+	});
+});
+
+describe("branchTopic", () => {
+	it("drops the session namespace and keeps the topic", () => {
+		expect(branchTopic("ao/agent-orchestrator-132/archived-sessions-label")).toBe("archived-sessions-label");
+		expect(branchTopic("ao/warm-worktree/dev-warm/cache")).toBe("dev-warm/cache");
+	});
+
+	it("names a root branch after its session", () => {
+		expect(branchTopic("ao/warm-worktree/root")).toBe("warm-worktree");
+	});
+
+	it("leaves other branches alone", () => {
+		expect(branchTopic("main")).toBe("main");
+		expect(branchTopic("feat/login")).toBe("feat/login");
 	});
 });

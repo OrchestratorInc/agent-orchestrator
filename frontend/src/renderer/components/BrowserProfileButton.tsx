@@ -1,4 +1,4 @@
-import { ChevronDown, UserRound } from "lucide-react";
+import { ChevronDown, UserRound } from "@/components/app-icons";
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import type { BrowserProfileViewState } from "../../shared/browser-profiles";

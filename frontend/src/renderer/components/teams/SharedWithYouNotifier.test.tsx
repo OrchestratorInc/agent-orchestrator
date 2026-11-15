@@ -193,10 +193,10 @@ describe("SessionAccessTag", () => {
 	it("shows the live role and the team it came through", () => {
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "viewer" }] };
 		const { container, rerender } = render(tag({ id: "s1", cloud: { orgId: "org", shared: true, sharedVia: "Platform" } as never }));
-		expect(container.textContent).toBe("Watch · via Platform");
+		expect(container.textContent).toBe("Can watch · via Platform");
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "editor" }] };
 		rerender(tag({ id: "s1", cloud: { orgId: "org", shared: true } as never }));
-		expect(container.textContent).toBe("Write to the agent");
+		expect(container.textContent).toBe("Can write");
 	});
 
 	it("names no team while the shared list catches up with a role change, and asks it at once", async () => {
@@ -204,18 +204,18 @@ describe("SessionAccessTag", () => {
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "viewer" }] };
 		const session = { id: "s1", cloud: { orgId: "org", shared: true, sharedVia: "Recipient QA" } as never };
 		const { container, rerender } = render(tag(session));
-		expect(container.textContent).toBe("Watch · via Recipient QA");
+		expect(container.textContent).toBe("Can watch · via Recipient QA");
 		// A direct share raises the role above the team's; the list still says
 		// the team until it is read again.
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "editor" }] };
 		rerender(tag(session));
-		expect(container.textContent).toBe("Write to the agent");
+		expect(container.textContent).toBe("Can write");
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-shared-workspaces"] });
 		// Once the list answers after the change, its team shows again.
 		await act(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 5));
 			queryClient.setQueryData(SHARED_LIST, []);
 		});
-		expect(container.textContent).toBe("Write to the agent · via Recipient QA");
+		expect(container.textContent).toBe("Can write · via Recipient QA");
 	});
 });

@@ -111,6 +111,30 @@ func TestCommandCodeDispatchesAvailableLifecycleSignals(t *testing.T) {
 	}
 }
 
+// Kimi's managed config installs the tool-use trio plus PermissionResult as
+// AO's canonical permission-resolved event; every sub-command it writes must
+// derive through the shared standard deriver (#2814).
+func TestKimiDerivesMidTurnToolActivity(t *testing.T) {
+	for _, tc := range []struct {
+		event string
+		want  domain.ActivityState
+	}{
+		{event: "pre-tool-use", want: domain.ActivityActive},
+		{event: "post-tool-use", want: domain.ActivityActive},
+		{event: "post-tool-use-failure", want: domain.ActivityActive},
+		{event: "permission-resolved", want: domain.ActivityActive},
+		{event: "permission-request", want: domain.ActivityWaitingInput},
+		{event: "stop", want: domain.ActivityIdle},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			got, ok := Derive("kimi", tc.event, []byte(`{"session_id":"kimi-native-1"}`))
+			if !ok || got != tc.want {
+				t.Fatalf("Derive(kimi, %q) = (%q, %v), want (%q, true)", tc.event, got, ok, tc.want)
+			}
+		})
+	}
+}
+
 // SessionStart fires on resume and clear as well as startup, and a native
 // restore delivers no prompt, so it must report no activity. A restored session
 // at an empty prompt would otherwise read as working until the user's next turn.

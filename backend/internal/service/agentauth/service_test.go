@@ -387,6 +387,7 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 	// seed lands in a throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("KIMI_CODE_HOME", "")
 
 	dataDir := t.TempDir()
@@ -417,7 +418,10 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read trust record: %v", err)
 	}
-	if !strings.Contains(string(data), `"root":"`+wantDir+`"`) {
+	var trust struct {
+		Root string `json:"root"`
+	}
+	if err := json.Unmarshal(data, &trust); err != nil || filepath.Clean(trust.Root) != filepath.Clean(wantDir) {
 		t.Fatalf("trust record = %s, want root %q", data, wantDir)
 	}
 }
@@ -427,6 +431,7 @@ func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
 	// seed lands in a throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("COPILOT_HOME", "")
 
 	dataDir := t.TempDir()
@@ -456,11 +461,12 @@ func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read copilot config: %v", err)
 	}
-	realDir, err := filepath.EvalSymlinks(wantDir)
-	if err != nil {
-		t.Fatalf("resolve auth workspace: %v", err)
+	realDir := wantDir
+	if resolved, err := filepath.EvalSymlinks(wantDir); err == nil {
+		realDir = resolved
 	}
-	if !strings.Contains(string(data), `"`+realDir+`"`) {
+	encodedDir, err := json.Marshal(realDir)
+	if err != nil || !strings.Contains(string(data), string(encodedDir)) {
 		t.Fatalf("copilot config = %s, want trusted folder %q", data, realDir)
 	}
 }
@@ -543,6 +549,40 @@ func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {
 			}
 			if result.Action != "logout" || result.Terminal.HandleID != "logout-terminal" || result.TerminalInput != "" || opener.input.InitialInput != "" {
 				t.Fatalf("unexpected logout: %+v, input %+v", result, opener.input)
+			}
+		})
+	}
+}
+
+// MiniMax's bare logout targets the China account, so a saved Global login
+// must reach the CLI as --region global.
+func TestMiniMaxLogoutTargetsSavedRegion(t *testing.T) {
+	for _, tc := range []struct {
+		name, preference string
+		args             []string
+	}{
+		{"global", `{"version":1,"regions":{"prod":"en"}}`, []string{"logout", "--region", "global"}},
+		{"no preference", "", []string{"logout"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := t.TempDir()
+			t.Setenv("MINIMAX_DATA_DIR", profile)
+			if tc.preference != "" {
+				path := filepath.Join(profile, "preferences", "mcode-region.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tc.preference), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "logout-terminal"}}
+			svc := NewWithAgentResolver(nil, managedExecutableResolver{agentID: "minimax-code", path: "/managed/mcode"}, opener, "")
+			if _, err := svc.Logout(context.Background(), "minimax-code"); err != nil {
+				t.Fatal(err)
+			}
+			if want := append([]string{"/managed/mcode"}, tc.args...); !reflect.DeepEqual(opener.input.Argv, want) {
+				t.Fatalf("argv = %v, want %v", opener.input.Argv, want)
 			}
 		})
 	}

@@ -1,4 +1,4 @@
-import { Code2, FolderOpen, SquareTerminal } from "lucide-react";
+import { Code2, FolderOpen, SquareTerminal } from "@/components/app-icons";
 import { useState } from "react";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import {
@@ -47,7 +47,18 @@ const editorColors: Record<string, string> = {
 
 export function OpenTargetIcon({ target, className }: { target?: OpenTarget; className?: string }) {
 	const [failedIcon, setFailedIcon] = useState<string>();
+	const iconDataUrl = target?.iconDataUrl;
+	const nativeIcon = iconDataUrl && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(iconDataUrl) && iconDataUrl !== failedIcon
+		// Use the same SVG slot and sizing rules as every other menu icon.
+		? (
+			<svg width="24" height="24" viewBox="0 0 24 24" className={className} aria-hidden="true">
+				<image href={iconDataUrl} width="24" height="24" onError={() => setFailedIcon(iconDataUrl)} />
+			</svg>
+		)
+		: null;
+	// Finder and File Explorer show their real app icon; the glyphs cover a missing or broken one.
 	if (target?.kind === "file_manager") {
+		if (nativeIcon) return nativeIcon;
 		const Icon = target.name === "Finder" ? FinderIcon : FolderOpen;
 		return <Icon className={className} aria-hidden="true" />;
 	}
@@ -59,15 +70,7 @@ export function OpenTargetIcon({ target, className }: { target?: OpenTarget; cla
 		const color = editorColors[target.id];
 		return <BrandedIcon className={className} style={color ? { color } : undefined} aria-hidden="true" />;
 	}
-	const iconDataUrl = target?.iconDataUrl;
-	if (iconDataUrl && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(iconDataUrl) && iconDataUrl !== failedIcon) {
-		// Use the same SVG slot and sizing rules as every other menu icon.
-		return (
-			<svg width="24" height="24" viewBox="0 0 24 24" className={className} aria-hidden="true">
-				<image href={iconDataUrl} width="24" height="24" onError={() => setFailedIcon(iconDataUrl)} />
-			</svg>
-		);
-	}
+	if (nativeIcon) return nativeIcon;
 	if (target?.kind === "terminal") {
 		return <SquareTerminal className={className} aria-hidden="true" />;
 	}

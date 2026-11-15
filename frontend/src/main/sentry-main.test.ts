@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ElectronMainOptions, ErrorEvent } from "@sentry/electron/main";
 import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
-import { clearMainSentryCache, electronMainSentryDsn, initMainSentry, sanitizeRendererCapture } from "./sentry-main";
+import { clearMainSentryCache, createErrorBudget, ERROR_BUDGET_FILE, electronMainSentryDsn, initMainSentry, installInErrorSample, sanitizeRendererCapture } from "./sentry-main";
 
 const sdkTransport = vi.hoisted(() => vi.fn());
 const sdk = vi.hoisted(() => ({
@@ -26,27 +27,38 @@ vi.mock("@sentry/electron/main", () => ({
 	getCurrentScope: () => ({ clear: sdk.clearCurrent }),
 	getIsolationScope: () => ({ clear: sdk.clearIsolation }),
 }));
-vi.mock("../shared/telemetry", () => ({ loadOrCreateTelemetryInstallId: vi.fn().mockResolvedValue("ins_test") }));
+// sha256("ins_sampled_5") % 10 == 0: this install is in the 1-in-10 error sample.
+const installId = vi.hoisted(() => ({ value: "ins_sampled_5" }));
+vi.mock("../shared/telemetry", () => ({ loadOrCreateTelemetryInstallId: vi.fn(async () => installId.value) }));
 
-beforeEach(() => { vi.spyOn(Math, "random").mockReturnValue(0); });
-afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.clearAllMocks(); sdk.close.mockResolvedValue(true); });
+let dataDir = "";
+beforeEach(() => {
+	vi.spyOn(Math, "random").mockReturnValue(0);
+	vi.stubEnv("AO_PUBLISHED_BUILD", "1");
+	dataDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+});
+afterEach(() => {
+	vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.clearAllMocks(); sdk.close.mockResolvedValue(true);
+	installId.value = "ins_sampled_5";
+	rmSync(dataDir, { recursive: true, force: true });
+});
 
 describe("Electron main Sentry configuration", () => {
 	it("keeps Electron and daemon overrides separate and leaves development empty", () => {
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
 		vi.stubEnv("AO_SENTRY_DSN", "https://daemon.example/1");
-		expect(electronMainSentryDsn(false)).toBe(DEFAULT_ELECTRON_SENTRY_DSN);
-		expect(electronMainSentryDsn(true)).toBe("");
+		expect(electronMainSentryDsn("1.0.0", false)).toBe(DEFAULT_ELECTRON_SENTRY_DSN);
+		expect(electronMainSentryDsn("1.0.0", true)).toBe("");
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "https://electron.example/2");
-		expect(electronMainSentryDsn(false)).toBe("https://electron.example/2");
-		expect(electronMainSentryDsn(true)).toBe("https://electron.example/2");
+		expect(electronMainSentryDsn("1.0.0", false)).toBe("https://electron.example/2");
+		expect(electronMainSentryDsn("1.0.0", true)).toBe("https://electron.example/2");
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "");
-		expect(electronMainSentryDsn(false)).toBe("");
+		expect(electronMainSentryDsn("1.0.0", false)).toBe("");
 	});
 
 	it("creates an offline client with consent-owned crash integrations and an install user", async () => {
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		expect(transport).toBeTruthy();
 		expect(sdk.init).toHaveBeenCalledOnce();
 		const options = sdk.init.mock.calls[0]?.[0];
@@ -61,12 +73,12 @@ describe("Electron main Sentry configuration", () => {
 		});
 		expect(Array.isArray(options.integrations) ? options.integrations.map((item) => item.name) : undefined).toEqual(["OnUncaughtException", "OnUnhandledRejection", "ChildProcess"]);
 		expect(sdk.childProcessIntegration).toHaveBeenCalledWith({ breadcrumbs: false, events: ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] });
-		expect(sdk.setUser).toHaveBeenCalledWith({ id: "ins_test" });
+		expect(sdk.setUser).toHaveBeenCalledWith({ id: "ins_sampled_5" });
 		expect(sdk.makeElectronOfflineTransport).toHaveBeenCalledOnce();
 	});
 
 	it("keeps every consented main and renderer error without random sampling", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const options = sdk.init.mock.calls[0]?.[0];
 		const beforeSend = options.beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		const random = vi.mocked(Math.random);
@@ -80,8 +92,17 @@ describe("Electron main Sentry configuration", () => {
 		expect(random).not.toHaveBeenCalled();
 	});
 
+	it.each(["query", "mutation", "route", "react_render", "open_orchestrator", "xterm_init", "/private/session"])("forwards only registered renderer operations through final scrubbing: %s", async (operation) => {
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", tags: { operation } });
+		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
+		const event = beforeSend(sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent);
+		expect(event?.tags?.operation).toBe(operation.startsWith("/") ? undefined : operation);
+		expect(JSON.stringify(event)).not.toContain("/private/session");
+	});
+
 	it("reports handled main failures with fixed titles and no error text", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		const secret = "/Users/dave/private-project";
 		transport.captureMain?.({ category: "daemon", reason: "exited", detail: "signal:SIGKILL", error: new TypeError(`spawn ${secret}`) });
@@ -101,7 +122,7 @@ describe("Electron main Sentry configuration", () => {
 	});
 
 	it("scrubs side-chat recovery faults before the SDK sends them", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		transport.captureMain?.({ category: "side_chat", reason: "recovery", error: new TypeError("private-session /Users/private token=secret"), detail: "private-project" });
 		const event = beforeSend(sdk.captureEvent.mock.calls[0][0]);
@@ -111,17 +132,34 @@ describe("Electron main Sentry configuration", () => {
 
 	it("matches daemon Sentry environments for stable, nightly, and development versions", async () => {
 		vi.stubEnv("AO_TELEMETRY_APP_VERSION", undefined);
-		for (const [version, environment] of [["1.0.0", "stable"], ["1.0.1-nightly.20261029", "nightly"], ["1.0.1-edge.1", "development"], ["1.0.1-pr7386.1", "development"], ["", "unknown"]]) {
-			await initMainSentry(version, "/tmp/ao-test", "/tmp/ao-electron-test");
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
+		for (const [version, environment] of [["1.0.0", "stable"], ["1.0.1-nightly.202610291200", "nightly"]]) {
+			await initMainSentry(version, dataDir, "/tmp/ao-electron-test");
 			expect(sdk.init.mock.calls.at(-1)?.[0].environment).toBe(environment);
 		}
-		vi.stubEnv("AO_TELEMETRY_APP_VERSION", "1.0.1-nightly.20261029");
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		vi.stubEnv("AO_TELEMETRY_APP_VERSION", "1.0.1-nightly.202610291200");
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		expect(sdk.init.mock.calls.at(-1)?.[0]).toMatchObject({ release: "1.0.0", environment: "nightly" });
+		// Only an explicit DSN override initializes Sentry for any other version.
+		vi.stubEnv("AO_TELEMETRY_APP_VERSION", undefined);
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "https://electron.example/2");
+		for (const [version, environment] of [["1.0.1-edge.1", "development"], ["1.0.1-pr7386.1", "development"], ["", "unknown"]]) {
+			await initMainSentry(version, dataDir, "/tmp/ao-electron-test");
+			expect(sdk.init.mock.calls.at(-1)?.[0].environment).toBe(environment);
+		}
+	});
+
+	it("does not initialize Sentry for a self-built or development copy", async () => {
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
+		vi.stubEnv("AO_TELEMETRY_APP_VERSION", undefined);
+		for (const version of ["0.13.0-ragcorp.7", "0.14.10+ptbr.1", "development"]) await initMainSentry(version, dataDir, "/tmp/ao-electron-test");
+		vi.stubEnv("AO_PUBLISHED_BUILD", "");
+		await initMainSentry("0.13.0", dataDir, "/tmp/ao-electron-test");
+		expect(sdk.init).not.toHaveBeenCalled();
 	});
 
 	it("forwards a safe renderer event and drains before clearing SDK scopes", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const request = { consentGeneration: "generation-1", kind: "exception", message: "get project ai-sports-coach-113 failed", level: "error", tags: { category: "http_5xx", code: "WORKSPACE_GIT_READ_FAILED" } } as const;
 		transport.capture(request);
 		expect(sdk.captureEvent).toHaveBeenCalledOnce();
@@ -137,7 +175,7 @@ describe("Electron main Sentry configuration", () => {
 		await transport.clearCache();
 		expect(sdk.clearCurrent).toHaveBeenCalledOnce();
 		expect(sdk.clearIsolation).toHaveBeenCalledOnce();
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		expect(Array.isArray(sdk.init.mock.calls[1]?.[0].integrations) ? sdk.init.mock.calls[1]?.[0].integrations.map((item) => item.name) : undefined).toEqual(["OnUncaughtException", "OnUnhandledRejection"]);
 	});
 
@@ -149,13 +187,13 @@ describe("Electron main Sentry configuration", () => {
 			process.on("unhandledRejection", () => undefined);
 		};
 		sdk.init.mockImplementationOnce(addSdkListeners).mockImplementationOnce(addSdkListeners);
-		const first = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const first = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		expect(process.listenerCount("uncaughtException")).toBe(initialUncaught + 1);
 		expect(process.listenerCount("unhandledRejection")).toBe(initialRejections + 1);
 		await first.closeAndDrain();
 		expect(process.listenerCount("uncaughtException")).toBe(initialUncaught);
 		expect(process.listenerCount("unhandledRejection")).toBe(initialRejections);
-		const second = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const second = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		expect(process.listenerCount("uncaughtException")).toBe(initialUncaught + 1);
 		expect(process.listenerCount("unhandledRejection")).toBe(initialRejections + 1);
 		await second.closeAndDrain();
@@ -169,7 +207,7 @@ describe("Electron main Sentry configuration", () => {
 			const queuePath = path.join(cacheRoot, "sentry", "queue");
 			await mkdir(queuePath, { recursive: true });
 			await writeFile(path.join(queuePath, "queued-event"), "synthetic queued event");
-			const transport = await initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot);
+			const transport = await initMainSentry("1.0.0", dataDir, cacheRoot);
 			expect(sdk.init.mock.calls[0]?.[0].transportOptions).toMatchObject({ queuePath });
 			await transport.closeAndDrain();
 			await transport.clearCache();
@@ -180,7 +218,7 @@ describe("Electron main Sentry configuration", () => {
 	});
 
 	it("blocks offline retries after close and waits for a retry already sending", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		let finishSend!: (response: { statusCode: number }) => void;
 		const pendingSend = new Promise<{ statusCode: number }>((resolve) => { finishSend = resolve; });
 		const baseSend = vi.fn(() => pendingSend);
@@ -222,7 +260,7 @@ describe("Electron main Sentry configuration", () => {
 			};
 			const transportFactory = vi.fn(async () => {
 				expect(await readdir(path.join(cacheRoot, "sentry"))).toEqual([]);
-				return initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot);
+				return initMainSentry("1.0.0", dataDir, cacheRoot);
 			});
 			const controller = new DesktopTelemetryController({ authority, transportFactory, clearTransportCache: () => clearMainSentryCache(cacheRoot), environmentAllowsEvents: true, productionEnabled: true });
 			await controller.initialize();
@@ -253,7 +291,7 @@ describe("Electron main Sentry configuration", () => {
 				},
 				retryPendingReplacement: async () => snapshot,
 			};
-			const controller = new DesktopTelemetryController({ authority, transportFactory: () => initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot), environmentAllowsEvents: true, productionEnabled: true });
+			const controller = new DesktopTelemetryController({ authority, transportFactory: () => initMainSentry("1.0.0", dataDir, cacheRoot), environmentAllowsEvents: true, productionEnabled: true });
 			await controller.initialize();
 			expect(sdk.init).not.toHaveBeenCalled();
 			await controller.setEventsEnabled(true, "generation-0");
@@ -276,7 +314,7 @@ describe("Electron main Sentry configuration", () => {
 	});
 
 	it("drops dynamic exception text, paths, account fields, and breadcrumbs before send", async () => {
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const result = beforeSend({
 			type: undefined,
@@ -288,14 +326,14 @@ describe("Electron main Sentry configuration", () => {
 			tags: { "ao.origin": "renderer", "ao.kind": "exception", "ao.category": "http_5xx", "ao.code": "WORKSPACE_GIT_READ_FAILED", branch: "private" },
 			exception: { values: [{ type: "Error", value: "get project ai-sports-coach-113", stacktrace: { frames: [{ function: "ChatWorkspace", filename: "/Users/alice/private-repo/file.ts", context_line: "private" }] } }] },
 		});
-		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_test" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "ChatWorkspace", "renderer"] });
+		expect(result).toMatchObject({ message: "Renderer Error in ChatWorkspace (WORKSPACE_GIT_READ_FAILED)", user: { id: "ins_sampled_5" }, fingerprint: ["electron", "exception", "WORKSPACE_GIT_READ_FAILED", "Error", "ChatWorkspace", "renderer"] });
 		const encoded = JSON.stringify(result);
 		for (const secret of ["ai-sports-coach-113", "private-repo", "private branch", "private@example.test", "private-host", "file:///"]) expect(encoded).not.toContain(secret);
 		expect(result.exception?.values?.[0]?.stacktrace?.frames?.[0]).toEqual({ function: "ChatWorkspace", in_app: true });
 	});
 
 	it("groups renderer exceptions by safe type and top frame without using messages", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (type: string, functionName: string, message: string) => {
 			transport.capture({ consentGeneration: "generation-1", kind: "exception", message, exception: { type, frames: [{ function: functionName, filename: "assets/app-A1B2C3D4.js", lineno: 42 }] } });
@@ -309,12 +347,12 @@ describe("Electron main Sentry configuration", () => {
 		expect(same.fingerprint).toEqual(first.fingerprint);
 		expect(otherType.fingerprint).not.toEqual(first.fingerprint);
 		expect(otherFrame.fingerprint).not.toEqual(first.fingerprint);
-		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", abs_path: "app://renderer/assets/app-A1B2C3D4.js", lineno: 42, in_app: true }]);
 		expect(JSON.stringify(first)).not.toMatch(/ai-sports-coach-113|private-repo/);
 	});
 
 	it("groups minified renderer functions by app chunk, line, and column while retaining source map filenames", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (filename: string, lineno: number, colno: number, functionName: string) => {
 			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, filename, lineno, colno }] } });
@@ -326,11 +364,11 @@ describe("Electron main Sentry configuration", () => {
 		expect(first.message).toBe("Renderer TypeError in assets/_shell:42:7 (unknown)");
 		expect(first.fingerprint).toEqual(same.fingerprint);
 		expect(otherColumn.fingerprint).not.toEqual(first.fingerprint);
-		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 42, colno: 7, in_app: true }]);
+		expect(first.exception?.values?.[0]?.stacktrace?.frames).toEqual([{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", abs_path: "app://renderer/assets/_shell-A1B2C3D4.js", lineno: 42, colno: 7, in_app: true }]);
 	});
 
 	it("separates dev renderer sites by line when no packaged asset name exists", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const capture = (functionName: string, lineno: number) => {
 			transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", exception: { type: "TypeError", frames: [{ function: functionName, lineno }] } });
@@ -344,7 +382,7 @@ describe("Electron main Sentry configuration", () => {
 	});
 
 	it("titles renderer API failures with the actual allowlisted code", async () => {
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "private session", tags: { category: "http_5xx", code: "CHAT_DELIVERY_FAILED" } });
 		const event = beforeSend(sdk.captureEvent.mock.calls.at(-1)?.[0] as ErrorEvent);
@@ -354,7 +392,7 @@ describe("Electron main Sentry configuration", () => {
 	});
 
 	it("groups Electron main exceptions by safe type and top in-app frame", async () => {
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const mainError = (type: string, top: string, message: string) => beforeSend({
 			type: undefined, message,
@@ -369,7 +407,7 @@ describe("Electron main Sentry configuration", () => {
 	});
 
 	it("separates minified main failures by numeric bundle location without sending paths", async () => {
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent;
 		const mainError = (colno: number, functionName: string) => beforeSend({
 			type: undefined, message: "private project",
@@ -384,7 +422,7 @@ describe("Electron main Sentry configuration", () => {
 	});
 
 	it("drops expected noise and groups main failures without message text", async () => {
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		const beforeSend = sdk.init.mock.calls[0]?.[0].beforeSend as (event: ErrorEvent) => ErrorEvent | null;
 		for (const message of ["AbortError", "net::ERR_NETWORK_CHANGED", "net::ERR_INTERNET_DISCONNECTED"]) {
 			expect(beforeSend({ type: undefined, message })).toBeNull();
@@ -402,7 +440,7 @@ describe("Electron main Sentry configuration", () => {
 
 	it("does not start a client when the environment explicitly sets a blank DSN", async () => {
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "");
-		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "error" });
 		expect(sdk.init).not.toHaveBeenCalled();
 		expect(sdk.captureEvent).not.toHaveBeenCalled();
@@ -410,10 +448,10 @@ describe("Electron main Sentry configuration", () => {
 
 	it("does not send from development builds without an explicit Electron override", async () => {
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test", true);
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test", true);
 		expect(sdk.init).not.toHaveBeenCalled();
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "https://electron.example/2");
-		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test", true);
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test", true);
 		expect(sdk.init.mock.calls[0]?.[0].dsn).toBe("https://electron.example/2");
 	});
 });
@@ -460,5 +498,93 @@ describe("sanitizeRendererCapture", () => {
 			expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", colno }] } })).toBeNull();
 		}
 		expect(sanitizeRendererCapture({ ...base, kind: "exception", exception: { type: "TypeError", frames: [{ function: "privateProject", filename: "assets/app-A1B2C3D4.js", lineno: 5, colno: 138_000 }] } })?.exception?.frames).toEqual([{ function: "renderer_frame", filename: "assets/app-A1B2C3D4.js", lineno: 5, colno: 138_000 }]);
+	});
+});
+
+describe("Electron main error sampling and budget", () => {
+	type BeforeSend = (event: ErrorEvent) => ErrorEvent | null;
+	const beforeSendOf = (call = -1) => sdk.init.mock.calls.at(call)?.[0].beforeSend as BeforeSend;
+	const mainError = (fn: string): ErrorEvent => ({ type: undefined, exception: { values: [{ type: "TypeError", stacktrace: { frames: [{ function: fn === "main" ? "startDaemon" : "initMainSentry", lineno: 1 }] } }] } });
+	const crash = (): ErrorEvent => ({ type: undefined, level: "fatal", message: "'renderer' process exited with 'crashed'" });
+
+	it("samples non-fatal errors by install, sends crashes from every install, and tags the rate", async () => {
+		// Pinned against sentryobs.InstallInErrorSample in the daemon.
+		expect(installInErrorSample("ins_sampled_5")).toBe(true);
+		expect(installInErrorSample("ins_unsampled_0")).toBe(false);
+		expect(installInErrorSample("")).toBe(false);
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		expect(beforeSendOf()(mainError("main"))?.tags).toMatchObject({ sample_rate: "0.1" });
+		installId.value = "ins_unsampled_0";
+		const unsampledDir = mkdtempSync(path.join(os.tmpdir(), "ao-sentry-main-"));
+		try {
+			await initMainSentry("1.0.0", unsampledDir, "/tmp/ao-electron-test");
+			const beforeSend = beforeSendOf();
+			expect(beforeSend(mainError("main"))).toBeNull();
+			const uncaught: ErrorEvent = { type: undefined, level: "fatal", exception: { values: [{ type: "Error", mechanism: { type: "generic", handled: false } }] } };
+			expect(beforeSend(uncaught)?.tags).toMatchObject({ kind: "uncaught_exception", sample_rate: "1" });
+			expect(beforeSend(crash())?.tags).toMatchObject({ kind: "process_exit", sample_rate: "1" });
+		} finally {
+			rmSync(unsampledDir, { recursive: true, force: true });
+		}
+	});
+
+	it("titles an anonymous renderer frame by bundle file and line and keeps its debug ID", async () => {
+		const debugId = "8a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
+		const transport = await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		transport.capture({ consentGeneration: "generation-1", kind: "exception", message: "private", level: "error", exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId }] } });
+		const sent = sdk.captureEvent.mock.calls[0]?.[0] as ErrorEvent;
+		expect(sent.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
+		const event = beforeSendOf()(sent);
+		expect(event?.message).toBe("Renderer TypeError in assets/useSessionWorkspaceFiles:123:45 (unknown)");
+		// Sentry applies source maps only to javascript or node events.
+		expect(event?.platform).toBe("javascript");
+		expect(event?.exception?.values?.[0]?.value).toBe("");
+		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ abs_path: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45 });
+		expect(event?.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
+		expect(sanitizeRendererCapture({ consentGeneration: "g", kind: "exception", message: "m", exception: { type: "Error", frames: [{ function: "renderer_frame", filename: "assets/x-BjAotn5p.js", debug_id: "not-a-uuid" }] } })).toBeNull();
+	});
+
+	it("maps main bundle frames and debug images to app URLs without install paths", async () => {
+		const debugId = "0a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
+		const bundle = "/Users/alice/Applications/Orchestrator.app/Contents/Resources/app.asar/.vite/build/main.js";
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		const event = beforeSendOf()({
+			type: undefined,
+			exception: { values: [{ type: "TypeError", value: "private", stacktrace: { frames: [{ function: "startDaemon", filename: bundle, lineno: 10, colno: 2 }, { function: "x", filename: "/Users/alice/other.js", lineno: 1 }] } }] },
+			debug_meta: { images: [{ type: "sourcemap", code_file: bundle, debug_id: debugId }, { type: "sourcemap", code_file: "/Users/alice/other.js", debug_id: debugId }] },
+		});
+		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ function: "startDaemon", abs_path: "app:///.vite/build/main.js" });
+		expect(event?.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app:///.vite/build/main.js", debug_id: debugId }]);
+		expect(event?.platform).toBe("node");
+		const handled = beforeSendOf()({ type: undefined, platform: "node", exception: { values: [{ type: "Error" }] }, tags: { "ao.origin": "main_handled", "ao.category": "daemon", "ao.reason": "spawn_failed" } });
+		expect(handled).toMatchObject({ message: "Electron main daemon failure (spawn_failed)", platform: "node" });
+		expect(JSON.stringify(event)).not.toMatch(/alice|Applications/);
+	});
+
+	it("caps each final fingerprint at three events per UTC day", () => {
+		const budget = createErrorBudget(path.join(dataDir, ERROR_BUDGET_FILE));
+		const day = Date.UTC(2026, 10, 10, 12);
+		for (let i = 0; i < 3; i++) expect(budget(["electron", "a"], day)).toBe(true);
+		expect(budget(["electron", "a"], day)).toBe(false);
+		expect(budget(["electron", "b"], day)).toBe(true);
+		expect(budget(["electron", "a"], Date.UTC(2026, 10, 11, 0))).toBe(true);
+	});
+
+	it("caps an install at 25 events per UTC day across fingerprints", () => {
+		const budget = createErrorBudget(path.join(dataDir, ERROR_BUDGET_FILE));
+		const day = Date.UTC(2026, 10, 10, 12);
+		for (let i = 0; i < 25; i++) expect(budget(["electron", String(i)], day)).toBe(true);
+		expect(budget(["electron", "new"], day)).toBe(false);
+	});
+
+	it("keeps the budget across a restart and caps on the scrubbed fingerprint", async () => {
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		// Different raw text, same scrubbed fingerprint.
+		const sent = ["private one", "private two", "private three", "private four"].map((message) => beforeSendOf()({ ...mainError("main"), message }));
+		expect(sent.map((event) => event !== null)).toEqual([true, true, true, false]);
+		// A fresh init, as after a reload or restart, reads the persisted counters.
+		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
+		expect(beforeSendOf()(mainError("main"))).toBeNull();
+		expect(beforeSendOf()(mainError("other"))).not.toBeNull();
 	});
 });

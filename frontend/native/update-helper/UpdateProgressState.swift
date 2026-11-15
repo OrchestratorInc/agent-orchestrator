@@ -131,7 +131,7 @@ struct UpdateProgressState {
             return parentAlive ? .closing : .installing
         }
         return .recovery(parentAlive
-            ? "AO is taking longer than expected to close. The update will continue when AO has closed."
-            : "AO has not reopened yet. The installer may still be working. You can keep waiting or download the latest app.")
+            ? "Orchestrator is taking longer than expected to close. The update will continue when Orchestrator has closed."
+            : "Orchestrator has not reopened yet. The installer may still be working. You can keep waiting or download the latest app.")
     }
 }

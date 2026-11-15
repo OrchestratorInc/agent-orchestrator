@@ -140,7 +140,8 @@ type Config struct {
 	// RequestTimeout bounds REST request handling.
 	RequestTimeout time.Duration
 	// ShutdownTimeout is the hard graceful-shutdown deadline.
-	ShutdownTimeout time.Duration
+	ShutdownTimeout          time.Duration
+	InstallerShutdownTimeout time.Duration
 	// RunFilePath is where the PID + port handshake file (running.json) is
 	// written so the Electron supervisor can discover and reap the daemon.
 	RunFilePath string
@@ -249,6 +250,7 @@ func (c Config) Addr() string {
 //	AO_PORT              bind port           (default 3001)
 //	AO_REQUEST_TIMEOUT   per-request timeout (Go duration > 0, default 60s)
 //	AO_SHUTDOWN_TIMEOUT  shutdown deadline   (Go duration > 0, default 10s)
+//	AO_INSTALLER_SHUTDOWN_TIMEOUT harness installer drain (Go duration > 0, default systeminstall.DefaultShutdownTimeout)
 //	AO_RUN_FILE          running.json path   (default ~/.ao/running.json)
 //	AO_DATA_DIR          durable state dir   (default ~/.ao/data)
 //	AO_AGENT             compatibility agent id (default claude-code)
@@ -320,6 +322,14 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.ShutdownTimeout = d
+	}
+
+	if raw := os.Getenv("AO_INSTALLER_SHUTDOWN_TIMEOUT"); raw != "" {
+		d, err := parsePositiveDuration("AO_INSTALLER_SHUTDOWN_TIMEOUT", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.InstallerShutdownTimeout = d
 	}
 
 	if raw := os.Getenv("AO_AGENT"); raw != "" {
@@ -537,22 +547,11 @@ func Load() (Config, error) {
 		}
 	}
 
-	runFile, err := resolveRunFilePath()
+	stateDir, dataDir, runFile, err := ResolvePaths()
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.RunFilePath = runFile
-
-	dataDir, err := resolveDataDir()
-	if err != nil {
-		return Config{}, err
-	}
-	cfg.DataDir = dataDir
-	if raw, ok := os.LookupEnv("AO_DATA_DIR"); ok && raw != "" {
-		cfg.StateDir = dataDir
-	} else {
-		cfg.StateDir = filepath.Dir(dataDir)
-	}
+	cfg.StateDir, cfg.DataDir, cfg.RunFilePath = stateDir, dataDir, runFile
 
 	return cfg, nil
 }
@@ -759,4 +758,21 @@ func absOverride(name, p string) (string, error) {
 		return "", fmt.Errorf("resolve %s %q: %w", name, p, err)
 	}
 	return abs, nil
+}
+
+// ResolvePaths resolves state paths without parsing unrelated daemon settings.
+func ResolvePaths() (stateDir, dataDir, runFile string, err error) {
+	dataDir, err = resolveDataDir()
+	if err != nil {
+		return
+	}
+	runFile, err = resolveRunFilePath()
+	if err != nil {
+		return
+	}
+	stateDir = filepath.Dir(dataDir)
+	if os.Getenv("AO_DATA_DIR") != "" {
+		stateDir = dataDir
+	}
+	return
 }

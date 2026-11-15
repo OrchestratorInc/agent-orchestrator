@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw } from "@/components/app-icons";
 import {
 	createContext,
 	lazy,
@@ -122,11 +122,6 @@ type CachedTerminalEntry = TerminalCacheDescriptor & {
 function isUnlisted(entry: CachedTerminalEntry, listed: Set<string> | null): boolean {
 	return Boolean(entry.sessionId) && listed !== null && !listed.has(entry.sessionId ?? "");
 }
-
-type ActiveTerminalEntry = {
-	key: string;
-	slot: HTMLDivElement;
-};
 
 type TerminalCacheController = {
 	activate: (descriptor: TerminalCacheDescriptor, props: TerminalPaneProps, slot: HTMLDivElement) => void;
@@ -351,7 +346,10 @@ export function TerminalCacheProvider({
 	const workspaceQuery = useWorkspaceQuery();
 	const shellTerminalsQuery = useShellTerminals();
 	const entriesRef = useRef(new Map<string, CachedTerminalEntry>());
-	const activeRef = useRef<ActiveTerminalEntry | null>(null);
+	// Every terminal on screen, keyed by cache key, with the pane slot showing
+	// it. A split center shows two at once; moving a terminal between panes
+	// only re-parents its container, so xterm and its attachment survive.
+	const activeRef = useRef(new Map<string, HTMLDivElement>());
 	const parkingRef = useRef<HTMLDivElement | null>(null);
 	// The sessions the last workspace snapshot listed (null before one
 	// arrived). A terminal kept on screen while its session was not listed is
@@ -446,11 +444,10 @@ export function TerminalCacheProvider({
 		(cacheKey: string) => {
 			const entry = entriesRef.current.get(cacheKey);
 			if (!entry) return;
-			const active = activeRef.current;
-			if (active?.key === cacheKey) {
+			if (activeRef.current.has(cacheKey)) {
 				blurTerminal(entry.container);
 				setTerminalPhase(entry, "parked");
-				activeRef.current = null;
+				activeRef.current.delete(cacheKey);
 			}
 			entriesRef.current.delete(cacheKey);
 			entry.container.remove();
@@ -468,7 +465,7 @@ export function TerminalCacheProvider({
 		(cacheKey: string) => {
 			queueMicrotask(() => {
 				const entry = entriesRef.current.get(cacheKey);
-				if (!entry || activeRef.current?.key === cacheKey) return;
+				if (!entry || activeRef.current.has(cacheKey)) return;
 				if (isUnlisted(entry, listedSessionsRef.current)) removeEntry(cacheKey);
 			});
 		},
@@ -481,17 +478,18 @@ export function TerminalCacheProvider({
 			if (!parking) return;
 			const cachedProps = { ...props, createMux: resolveCreateMux(props.session, props.terminalTarget) };
 
-			const previous = activeRef.current;
-			if (previous && previous.key !== descriptor.cacheKey) {
-				const previousEntry = entriesRef.current.get(previous.key);
-				if (previousEntry) {
-					parkTerminal(previousEntry, parking);
-					if (previousEntry.discardOnDeactivate) {
-						entriesRef.current.delete(previous.key);
-						previousEntry.container.remove();
-					} else {
-						disposeIfUnlistedOnceParked(previous.key);
-					}
+			// Park whatever this slot showed before; terminals in other slots stay.
+			for (const [previousKey, previousSlot] of [...activeRef.current]) {
+				if (previousSlot !== slot || previousKey === descriptor.cacheKey) continue;
+				activeRef.current.delete(previousKey);
+				const previousEntry = entriesRef.current.get(previousKey);
+				if (!previousEntry) continue;
+				parkTerminal(previousEntry, parking);
+				if (previousEntry.discardOnDeactivate) {
+					entriesRef.current.delete(previousKey);
+					previousEntry.container.remove();
+				} else {
+					disposeIfUnlistedOnceParked(previousKey);
 				}
 			}
 
@@ -500,7 +498,7 @@ export function TerminalCacheProvider({
 			// old generation, even if an opaque handle is later reused elsewhere.
 			for (const entry of entriesRef.current.values()) {
 				if (entry.ownerKey === descriptor.ownerKey && entry.cacheKey !== descriptor.cacheKey) {
-					if (activeRef.current?.key === entry.cacheKey) parkTerminal(entry, parking);
+					if (activeRef.current.delete(entry.cacheKey)) parkTerminal(entry, parking);
 					entriesRef.current.delete(entry.cacheKey);
 					entry.container.remove();
 				}
@@ -527,8 +525,10 @@ export function TerminalCacheProvider({
 			} else {
 				entry.props = cachedProps;
 			}
+			// Showing an entry another slot holds moves it here; that slot's later
+			// deactivate no longer matches and leaves it alone.
 			showTerminal(entry, slot);
-			activeRef.current = { key: entry.cacheKey, slot };
+			activeRef.current.set(entry.cacheKey, slot);
 			rerender();
 		},
 		[disposeIfUnlistedOnceParked, muxPool, rerender],
@@ -536,11 +536,10 @@ export function TerminalCacheProvider({
 
 	const deactivate = useCallback(
 		(cacheKey: string, slot: HTMLDivElement) => {
-			const active = activeRef.current;
-			if (active?.key !== cacheKey || active.slot !== slot) return;
+			if (activeRef.current.get(cacheKey) !== slot) return;
 			const entry = entriesRef.current.get(cacheKey);
 			const parking = parkingRef.current;
-			activeRef.current = null;
+			activeRef.current.delete(cacheKey);
 			if (!entry) return;
 			if (entry.discardOnDeactivate || !parking) {
 				entriesRef.current.delete(cacheKey);
@@ -570,7 +569,7 @@ export function TerminalCacheProvider({
 		(cacheKey: string, _message: string) => {
 			const entry = entriesRef.current.get(cacheKey);
 			if (!entry) return;
-			if (activeRef.current?.key !== cacheKey) {
+			if (!activeRef.current.has(cacheKey)) {
 				removeEntry(cacheKey);
 				return;
 			}
@@ -626,7 +625,7 @@ export function TerminalCacheProvider({
 				// project created elsewhere that the project list has not fetched
 				// yet). Once it leaves the screen it is disposed unless a snapshot
 				// lists it by then (disposeIfUnlistedOnceParked).
-				if (activeRef.current?.key === entry.cacheKey) continue;
+				if (activeRef.current.has(entry.cacheKey)) continue;
 				removeEntry(entry.cacheKey);
 				continue;
 			}
@@ -704,7 +703,7 @@ export function TerminalCacheProvider({
 	// portals; remove their externally-created host nodes as well.
 	useEffect(
 		() => () => {
-			activeRef.current = null;
+			activeRef.current.clear();
 			for (const entry of entriesRef.current.values()) entry.container.remove();
 			entriesRef.current.clear();
 			muxPool.dispose();
@@ -731,7 +730,7 @@ export function TerminalCacheProvider({
 			{children}
 			{[...entriesRef.current.values()].map((entry) => (
 				<CachedTerminalPortal
-					active={activeRef.current?.key === entry.cacheKey}
+					active={activeRef.current.has(entry.cacheKey)}
 					entry={entry}
 					key={entry.cacheKey}
 					onFatal={markFatal}
@@ -1274,12 +1273,16 @@ function AttachedTerminal({
 				? undefined
 				: session?.provider;
 	const isSessionActive = session ? sessionIsActive(session) : false;
+	// A Cloud session shared from another organization is the sharer's to
+	// restore; a guest's restore would go to this machine's daemon.
+	const sharedCloudSession = session?.cloud?.shared === true;
 	// A standalone shell is never restorable: there is no session row to restore.
 	const canRestoreSession =
 		terminalTarget?.kind !== "reviewer" &&
 		terminalTarget?.kind !== "shell" &&
 		session !== undefined &&
-		!isSessionActive;
+		!isSessionActive &&
+		!sharedCloudSession;
 
 	const handleReady = useCallback((handle: AttachableTerminal) => {
 		setTerminal(handle);
@@ -1428,19 +1431,20 @@ function AttachedTerminal({
 	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
 	const coverLabel = switchingLabel ?? switchingHeldRef.current;
 	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
-	// A Cloud session's terminated row is explained by the session view's own
-	// Cloud notice, and its socket also closes for a pause, a handoff or a
-	// reviewer whose verdict is still landing, so the strip shows there only
-	// for the exit the control plane recorded: the agent process gone in a
-	// live session.
-	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" && sessionAgentExited(session);
+	// A Cloud session's socket also closes for a pause, a handoff or a reviewer
+	// whose verdict is still landing, so the strip shows there only for an end
+	// the control plane recorded: the agent process gone in a live session, or
+	// the session archived, which Restore brings back through the control plane
+	// as it does locally (for its own organization only: a guest gets no strip).
+	const cloudEnded = Boolean(session?.cloud) && terminalTarget?.kind !== "reviewer" && terminalTarget?.kind !== "shell" &&
+		(sessionAgentExited(session) || (!isSessionActive && !sharedCloudSession));
 	const showEndedState = showEndedStatePreview && (!session?.cloud || cloudEnded) && !isBoxComingUp && !booting && !coverLabel;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
 			{showEndedState && (
 				<TerminalEndedStrip
-					canRestore={canRestoreSession && !session?.cloud}
+					canRestore={canRestoreSession}
 					error={restoreError}
 					isRestoring={isRestoring}
 					onRestore={restoreSession}

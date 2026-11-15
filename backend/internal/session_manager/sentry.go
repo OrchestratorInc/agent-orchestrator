@@ -26,7 +26,7 @@ func isExpectedSessionFailure(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) {
 		return true
 	}
-	if errors.Is(err, ports.ErrChatAuthRequired) ||
+	if errors.Is(err, ports.ErrAgentAuthRequired) || errors.Is(err, ports.ErrChatAuthRequired) ||
 		errors.Is(err, ports.ErrAgentModelDiscoverySignInRequired) {
 		return true
 	}

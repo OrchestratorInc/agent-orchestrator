@@ -325,7 +325,7 @@ describe("modelCatalogAuthIssue", () => {
 
 	it("leaves other warnings alone", () => {
 		expect(modelCatalogAuthIssue({ warning: "codex model discovery returned no models" })).toBeUndefined();
-		expect(modelCatalogAuthIssue({ warning: "Models loaded, but AO could not update the model cache." })).toBeUndefined();
+		expect(modelCatalogAuthIssue({ warning: "Models loaded, but Orchestrator could not update the model cache." })).toBeUndefined();
 		expect(modelCatalogAuthIssue(undefined)).toBeUndefined();
 	});
 });
