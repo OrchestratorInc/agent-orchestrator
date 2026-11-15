@@ -10,10 +10,15 @@ const mocks = vi.hoisted(() => ({
 	push: vi.fn(),
 	initialURL: null as string | null,
 	launch: { resolve: (_: unknown) => {} },
+	failRead: false,
+	appState: { listener: null as null | ((state: string) => void) },
 }));
 
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
-	getItem: async (key: string) => mocks.items.get(key) ?? null,
+	getItem: async (key: string) => {
+		if (mocks.failRead) throw new Error("storage unavailable");
+		return mocks.items.get(key) ?? null;
+	},
 	setItem: async (key: string, value: string) => { mocks.items.set(key, value); },
 } }));
 vi.mock("expo-linking", () => ({ getInitialURL: async () => mocks.initialURL }));
@@ -24,7 +29,10 @@ vi.mock("expo-router", () => ({
 	useRootNavigationState: () => ({ key: "root" }),
 	useRouter: () => ({ push: mocks.push }),
 }));
-vi.mock("react-native", () => ({ AppState: { addEventListener: () => ({ remove: () => {} }) } }));
+vi.mock("react-native", () => ({ AppState: { addEventListener: (_: string, listener: (state: string) => void) => {
+	mocks.appState.listener = listener;
+	return { remove: () => { mocks.appState.listener = null; } };
+} } }));
 vi.mock("./launchNotification", () => ({
 	launchNotificationResponse: () => new Promise((resolve) => { mocks.launch.resolve = resolve; }),
 }));
@@ -39,6 +47,7 @@ beforeEach(() => {
 	mocks.items.set(LAST_ROUTE_KEY, JSON.stringify({ href: "/session/web-1?hostId=a", leftAt: Date.now() - 60_000 }));
 	mocks.nav = { pathname: "/", params: {}, segments: [] };
 	mocks.initialURL = null;
+	mocks.failRead = false;
 	mocks.push.mockClear();
 });
 
@@ -83,5 +92,36 @@ describe("RouteRestorer", () => {
 		mocks.initialURL = "ao-app://session/web-9";
 		await launch(null);
 		expect(mocks.push).not.toHaveBeenCalled();
+	});
+
+	// Left during the launch's reads and then closed by the phone: the screen
+	// must still say when it was left, or the next launch will not reopen it.
+	it("keeps the time the app was left while the launch was still reading", async () => {
+		await launch(null, () => { mocks.appState.listener!("background"); });
+		expect(mocks.push).toHaveBeenCalledWith("/session/web-1?hostId=a");
+		const saved = JSON.parse(mocks.items.get(LAST_ROUTE_KEY)!) as { href: string; leftAt: number | null };
+		expect(saved.href).toBe("/session/web-1?hostId=a");
+		expect(typeof saved.leftAt).toBe("number");
+	});
+
+	it("forgets that departure when the app came back before the reads landed", async () => {
+		await launch(null, () => {
+			mocks.appState.listener!("background");
+			mocks.appState.listener!("active");
+		});
+		expect(JSON.parse(mocks.items.get(LAST_ROUTE_KEY)!).leftAt).toBeNull();
+	});
+
+	// A failed read must not leave the screen unremembered for the whole launch.
+	it("goes on from the screen that is open when the saved one cannot be read", async () => {
+		mocks.failRead = true;
+		mocks.nav = { pathname: "/session/web-3", params: {}, segments: ["session", "[id]"] };
+		await launch(null);
+		expect(mocks.push).not.toHaveBeenCalled();
+		expect(JSON.parse(mocks.items.get(LAST_ROUTE_KEY)!)).toEqual({ href: "/session/web-3", leftAt: null });
+		mocks.appState.listener!("background");
+		await act(async () => {});
+		expect(JSON.parse(mocks.items.get(LAST_ROUTE_KEY)!).href).toBe("/session/web-3");
+		expect(typeof JSON.parse(mocks.items.get(LAST_ROUTE_KEY)!).leftAt).toBe("number");
 	});
 });

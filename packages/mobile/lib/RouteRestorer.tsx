@@ -19,6 +19,9 @@ export function RouteRestorer() {
 	const href = routeHref(pathname, params as Record<string, string | string[] | undefined>, segments);
 	const current = useRef<LastRoute>({ href: null, leftAt: null });
 	const decided = useRef(false);
+	// Leaving the app while the launch's reads run: kept, so the screen saved
+	// once they land still says when the app was left (null: back in front).
+	const leftDuringLaunch = useRef<number | null>(null);
 	// Where the app is now, read when the launch's reads come back: a screen
 	// opened meanwhile (by the person, a link or a notification) is not
 	// replaced by the one saved.
@@ -38,8 +41,11 @@ export function RouteRestorer() {
 	// Leaving the app stamps the time, which is what makes it reopen there.
 	useEffect(() => {
 		const subscription = AppState.addEventListener("change", (state) => {
-			if (!decided.current) return;
 			const leftAt = state === "active" ? null : Date.now();
+			if (!decided.current) {
+				leftDuringLaunch.current = leftAt;
+				return;
+			}
 			current.current = { ...current.current, leftAt };
 			void AsyncStorage.setItem(LAST_ROUTE_KEY, JSON.stringify(current.current)).catch(() => {});
 		});
@@ -53,23 +59,28 @@ export function RouteRestorer() {
 		if (decided.current || !navState?.key) return;
 		let active = true;
 		void (async () => {
+			let reopen: string | null = null;
 			try {
 				const [raw, url, response] = await Promise.all([
-					AsyncStorage.getItem(LAST_ROUTE_KEY),
+					// Unreadable: nothing to reopen, and the launch goes on from here.
+					AsyncStorage.getItem(LAST_ROUTE_KEY).catch(() => null),
 					Linking.getInitialURL().catch(() => null),
 					launchNotificationResponse(),
 				]);
 				if (!active) return;
 				const launchedElsewhere = Boolean(url || response) || navigated.current || latest.current.pathname !== "/";
-				const reopen = launchedElsewhere ? null : routeToRestore(parseLastRoute(raw), Date.now());
+				reopen = launchedElsewhere ? null : routeToRestore(parseLastRoute(raw), Date.now());
 				if (reopen) router.push(reopen as Href);
-				// What is open now replaces what was saved, so an old screen is never reopened twice.
-				const now = latest.current.href;
-				current.current = { href: reopen ?? (restorableHref(now) ? now : null), leftAt: null };
-				void AsyncStorage.setItem(LAST_ROUTE_KEY, JSON.stringify(current.current)).catch(() => {});
-			} finally {
-				if (active) decided.current = true;
+			} catch {
+				// A launch check that failed reopens nothing: the app stays where it is.
+				reopen = null;
 			}
+			if (!active) return;
+			// What is open now replaces what was saved, so an old screen is never reopened twice.
+			const now = latest.current.href;
+			current.current = { href: reopen ?? (restorableHref(now) ? now : null), leftAt: leftDuringLaunch.current };
+			decided.current = true;
+			void AsyncStorage.setItem(LAST_ROUTE_KEY, JSON.stringify(current.current)).catch(() => {});
 		})();
 		return () => { active = false; };
 		// Decided once, against the screen the app launched on.
