@@ -4,7 +4,7 @@ import { ArtifactThumbnail, hasContentThumbnail } from "./ArtifactThumbnail";
 import { artifactExtensionLabel, artifactViewKind, type SessionArtifact } from "./artifacts";
 import type { ArtifactsBackend } from "./artifactsBackend";
 import { artifactVisual } from "./artifactVisual";
-import { useVerifiedOnMount } from "./heldBackend";
+import { sourceKey, useVerifiedFor, useVerifiedOnMount } from "./heldBackend";
 import { Feather } from "./icons";
 import { imageSourceForPlatform } from "./imageSource";
 import type { Theme } from "./theme";
@@ -41,9 +41,12 @@ export function ArtifactPoster({ artifact, backend, sessionId, visible, versionO
 	if (visible && !reached) setReached(true);
 	// A card that comes on screen while the app reconnects shows its icon tile
 	// until the machine has answered as itself: the picture loads with the
-	// credential (see heldBackend). One already showing stays.
+	// credential (see heldBackend). Checked when the picture may first load, not
+	// when the card mounted: a card mounted off screen while connected must not
+	// load the last connection's address once it scrolls in. One already showing stays.
+	const wanted = reached && thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
+	const picture = useVerifiedFor(backend, sourceKey(wanted)) ? wanted : undefined;
 	const verified = useVerifiedOnMount(backend);
-	const picture = verified && reached && thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
 	// A card that previews its contents shows a plain tile while the preview
 	// loads, and its icon only if the preview cannot load: until the file
 	// changes or the preview is retried.

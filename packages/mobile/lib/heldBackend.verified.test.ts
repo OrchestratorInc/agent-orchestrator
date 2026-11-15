@@ -8,7 +8,7 @@ vi.mock("./config", () => ({}));
 
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
 import type { FilesBackend } from "./files/backend";
-import { afterVerified, createLiveSlot, HELD_WAIT_MS, holdArtifactsBackend, holdFilesBackend, useVerifiedOnMount } from "./heldBackend";
+import { afterVerified, createLiveSlot, HELD_WAIT_MS, holdArtifactsBackend, holdFilesBackend, resolveWhenVerified, sourceKey, useVerifiedFor, useVerifiedOnMount } from "./heldBackend";
 
 // While the app reconnects, a machine's last address may answer as another
 // device until the identity probe says otherwise. What is on screen stays, but
@@ -120,5 +120,114 @@ describe("useVerifiedOnMount", () => {
 		const cloud = { ...daemon("signed"), cloud: true } as ArtifactsBackend;
 		await act(async () => { renderer = create(createElement(Picture, { backend: cloud })); });
 		expect(images(renderer!)).toHaveLength(1);
+	});
+
+	// A view that mounted while the machine's connection was away, whose backend
+	// then becomes Cloud's in place, must not stay on its placeholder.
+	it("becomes ready when its backend changes in place to one with no verification", async () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		slot.set(null);
+		await act(async () => { renderer = create(createElement(Picture, { backend: held })); });
+		expect(images(renderer!)).toHaveLength(0);
+		const cloud = { ...daemon("signed"), cloud: true } as ArtifactsBackend;
+		await act(async () => { renderer!.update(createElement(Picture, { backend: cloud })); });
+		expect(images(renderer!)[0]!.props.source.uri).toBe("http://signed/s/shot.png");
+	});
+});
+
+describe("useVerifiedFor", () => {
+	// A card's picture: mounted off screen, it loads only once it comes into view.
+	function Card({ backend, visible }: { backend: ArtifactsBackend; visible: boolean }) {
+		const wanted = visible ? backend.imageSource("s", "shot.png") : undefined;
+		const source = useVerifiedFor(backend, sourceKey(wanted)) ? wanted : undefined;
+		return source ? createElement("Image", { source }) : createElement("Placeholder");
+	}
+	const images = (root: ReactTestRenderer) => root.root.findAll((node) => (node.type as unknown) === "Image");
+
+	it("checks when the picture first loads, not when the card mounted", async () => {
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		// Mounted off screen while connected; the builder has answered once, so it would repeat the LAN address.
+		await act(async () => { renderer = create(createElement(Card, { backend: held, visible: false })); });
+		held.imageSource("s", "shot.png");
+		slot.set(null);
+		await act(async () => { renderer!.update(createElement(Card, { backend: held, visible: true })); });
+		expect(images(renderer!)).toHaveLength(0);
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await act(async () => {});
+		expect(images(renderer!)[0]!.props.source.uri).toBe("http://tunnel/s/shot.png");
+	});
+
+	it("keeps what it loaded through a reconnect, and waits for anything else", async () => {
+		function File({ backend, path }: { backend: ArtifactsBackend; path: string }) {
+			const wanted = backend.webSource("s", path);
+			return useVerifiedFor(backend, sourceKey(wanted)) && wanted ? createElement("Web", { source: wanted }) : createElement("Placeholder");
+		}
+		const pages = (root: ReactTestRenderer) => root.root.findAll((node) => (node.type as unknown) === "Web");
+		const slot = createLiveSlot<ArtifactsBackend>();
+		slot.set(daemon("lan"));
+		const held = holdArtifactsBackend(slot, slot.get()!, "machine-a");
+		held.webSource("s", "b.html");
+		await act(async () => { renderer = create(createElement(File, { backend: held, path: "a.html" })); });
+		const shown = pages(renderer!)[0]!.props.source;
+		slot.set(null);
+		await act(async () => { renderer!.update(createElement(File, { backend: held, path: "a.html" })); });
+		expect(pages(renderer!)[0]!.props.source).toBe(shown);
+		// Another file, whose LAN address the builder still remembers, is a new load: it waits.
+		await act(async () => { renderer!.update(createElement(File, { backend: held, path: "b.html" })); });
+		expect(pages(renderer!)).toHaveLength(0);
+		await act(async () => { slot.set(daemon("tunnel")); });
+		await act(async () => {});
+		expect(pages(renderer!)[0]!.props.source.uri).toBe("http://tunnel/s/b.html");
+	});
+
+	it("loads nothing for a null key, and does not wait for Cloud's", async () => {
+		const cloud = { ...daemon("signed"), cloud: true } as ArtifactsBackend;
+		await act(async () => { renderer = create(createElement(Card, { backend: cloud, visible: false })); });
+		expect(images(renderer!)).toHaveLength(0);
+		await act(async () => { renderer!.update(createElement(Card, { backend: cloud, visible: true })); });
+		expect(images(renderer!)).toHaveLength(1);
+	});
+});
+
+describe("resolveWhenVerified", () => {
+	const files = (host: string) => ({
+		key: "machine-a",
+		cloud: false,
+		imageSource: async (_sessionId: string, path: string) => ({ uri: `http://${host}/${path}`, headers: { Authorization: "Bearer machine-password" } }),
+	}) as unknown as FilesBackend;
+
+	it("resolves through the connection verified now, never the address the pane was drawn from", async () => {
+		const slot = createLiveSlot<FilesBackend>();
+		slot.set(files("lan"));
+		const held = holdFilesBackend(slot, slot.get()!, "machine-a");
+		slot.set(null);
+		const opened = resolveWhenVerified(held, (signal) => held.imageSource("s", "a.png", "after", "v1", {}, signal));
+		await Promise.resolve();
+		slot.set(files("tunnel"));
+		expect(await opened).toEqual({ uri: "http://tunnel/a.png", headers: { Authorization: "Bearer machine-password" } });
+	});
+
+	it("resolves nothing once cancelled, and sends nothing for it", async () => {
+		const slot = createLiveSlot<FilesBackend>();
+		slot.set(files("lan"));
+		const held = holdFilesBackend(slot, slot.get()!, "machine-a");
+		slot.set(null);
+		const resolve = vi.fn(async () => ({ uri: "x" }));
+		const cancel = new AbortController();
+		const opened = resolveWhenVerified(held, resolve, cancel.signal);
+		cancel.abort();
+		slot.set(files("tunnel"));
+		expect(await opened).toBeUndefined();
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it("resolves at once with a verified connection or one with no verification", async () => {
+		const resolve = vi.fn(async () => ({ uri: "data:image/png;base64,AA" }));
+		expect(await resolveWhenVerified({}, resolve)).toEqual({ uri: "data:image/png;base64,AA" });
+		expect(resolve).toHaveBeenCalledTimes(1);
 	});
 });

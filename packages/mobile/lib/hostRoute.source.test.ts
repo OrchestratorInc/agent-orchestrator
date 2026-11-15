@@ -3,6 +3,24 @@ import { describe, expect, it } from "vitest";
 
 const source = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
 
+/** The text from `start` up to `end`; both must be there, or the slice would be the wrong text. */
+function between(text: string, start: string, end: string): string {
+	const from = text.indexOf(start);
+	expect(from, start).toBeGreaterThanOrEqual(0);
+	const to = text.indexOf(end, from);
+	expect(to, end).toBeGreaterThan(from);
+	return text.slice(from, to);
+}
+
+/** `first` comes before `then`, and both are there: a missing one is -1, which would pass a bare comparison. */
+function expectBefore(text: string, first: string, then: string) {
+	const a = text.indexOf(first);
+	const b = text.indexOf(then);
+	expect(a, first).toBeGreaterThanOrEqual(0);
+	expect(b, then).toBeGreaterThanOrEqual(0);
+	expect(a).toBeLessThan(b);
+}
+
 describe("retained-stack host routes", () => {
 	it("qualifies shell and preview links before they leave Chat", () => {
 		const chat = source("./chat/ChatSessionScreen.tsx");
@@ -34,25 +52,70 @@ describe("retained-stack host routes", () => {
 		const preview = source("../app/preview/[id].tsx");
 		expect(preview).toContain("const appWaits = showingApp && !config && !appMounted.current;");
 		expect(preview).toContain(": appWaits ? <View style={styles.center}><EmptyState busy title=\"Connecting to this machine…\" /></View> : <View style={styles.appPane}>");
-		const reload = preview.slice(preview.indexOf("const reloadApp = useCallback"), preview.indexOf("}, [config]);"));
-		expect(reload.indexOf("if (!currentConfig.current) {")).toBeLessThan(reload.indexOf("web.current?.reload();"));
+		const reload = between(preview, "const reloadApp = useCallback", "}, [config]);");
+		expectBefore(reload, "if (!currentConfig.current) {", "web.current?.reload();");
 		expect(reload).toContain("if (!config || !reloadWhenVerified.current) return;");
 		expect(preview).toContain("pullToRefreshEnabled={Boolean(config)}");
 	});
 
 	it("waits for a verified connection before an artifact or changed image loads afresh with the credential", () => {
 		const artifact = source("../app/artifact/[sessionId].tsx");
-		const body = artifact.slice(artifact.indexOf("function ArtifactBody("), artifact.indexOf("function NoPreview("));
-		expect(body.indexOf("const verified = useVerifiedOnMount(backend);")).toBeLessThan(body.indexOf("backend.webSource("));
-		const web = artifact.slice(artifact.indexOf("function ArtifactWeb("), artifact.indexOf("function ArtifactImage("));
-		expect(web).toContain("const verified = useVerifiedOnMount(backend);");
-		expect(web).toContain("afterVerified(backend, () => web.current?.reload(), retrying.current.signal);");
-		expect(web).not.toContain("setError(undefined); web.current?.reload();");
-		expect(artifact).toContain("const picture = verified && artifactViewKind(item) === \"image\"");
-		expect(source("./ArtifactPoster.tsx")).toContain("const picture = verified && reached && thumbnail");
+		const body = between(artifact, "function ArtifactBody(", "function NoPreview(");
+		expectBefore(body, "if (!verified) return", "backend.webSource(");
+		const web = between(artifact, "function ArtifactWeb(", "function ArtifactImage(");
+		// Built from the live connection where it is gated, never handed down from a parent's render.
+		expectBefore(web, "const source = backend.webSource(file.sessionId, file.path);", "const verified = useVerifiedFor(backend, source ? sourceKey(source) : \"unresolved\");");
+		expect(web).toContain("if (!source || !verified ||");
+		// Retry is a fresh view built once verified, not a reload of the address on screen.
+		expect(web).toContain("afterVerified(backend, () => setAttempt((n) => n + 1), retrying.current.signal);");
+		expect(web).toContain("key={`${version}|${inlined.html ? \"inline\" : \"url\"}|${attempt}`}");
+		expect(web).not.toContain("web.current?.reload()");
+		expect(artifact).not.toMatch(/<ArtifactWeb[^>]*source=/);
 		const file = source("../app/files/[sessionId]/file.tsx");
-		expect(file).toContain("onPress={() => afterVerified(backend, () => setViewing(pane))}");
 		expect(file).toContain("if (!verified) return <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;");
+	});
+
+	// A view mounted while connected but loading only later (off screen, a page
+	// not yet swiped to) checks when it first loads, not when it mounted.
+	it("checks a picture, a strip tile, a player and a document peek when they first load", () => {
+		const poster = source("./ArtifactPoster.tsx");
+		expectBefore(poster, "const wanted = reached && thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;", "const picture = useVerifiedFor(backend, sourceKey(wanted)) ? wanted : undefined;");
+		const artifact = source("../app/artifact/[sessionId].tsx");
+		const strip = between(artifact, "function StripPreview(", "function PagerTitle(");
+		expectBefore(strip, "backend.imageSource(sessionId, artifact.path, artifact.updatedAt)", "const picture = useVerifiedFor(backend, sourceKey(wanted)) ? wanted : undefined;");
+		expect(between(artifact, "function ArtifactFilmstrip(", "function StripPreview(")).toContain("<StripPreview ");
+		const body = between(artifact, "function ArtifactBody(", "function NoPreview(");
+		expectBefore(body, "const playable = useVerifiedFor(backend, active && (kind === \"video\" || kind === \"audio\") ? \"play\" : null);", "const stream = backend.streamSource(");
+		expect(body).toContain("active={active && playable}");
+		const thumbnail = source("./ArtifactThumbnail.tsx");
+		expectBefore(thumbnail, "const drawable = useVerifiedFor(backend, markdown && value ? key : null);", "if (!drawable) return null;");
+		expectBefore(thumbnail, "if (!drawable) return null;", "<ChatMarkdown text={value} resolveImage={resolveImage}");
+	});
+
+	// The pane on screen may carry the last connection's address and credential.
+	it("opens the full-screen image through the verified connection, not the pane's source", () => {
+		const file = source("../app/files/[sessionId]/file.tsx");
+		const compare = between(file, "function ImageCompare(", "const makeStyles = ");
+		expect(compare).toContain("void resolveWhenVerified(backend, (signal) => sources.resolveSide(pane.side, signal), controller.signal).then((source) => {");
+		expect(compare).toContain("if (source && !controller.signal.aborted) setViewing({ label: pane.label, source });");
+		expect(compare).toContain("onPress={() => open(pane)}");
+		expect(compare).not.toContain("setViewing(pane))");
+		expect(file).toContain("backend.imageSource(sessionId, path, which, version, read, signal)");
+	});
+
+	// A read that waits for the connection is cancelled with the screen that asked for it.
+	it("cancels a file, folder, search or image read with the screen that asked for it", () => {
+		const file = source("../app/files/[sessionId]/file.tsx");
+		expect(file).toContain("useEffect(() => () => reading.current?.abort(), []);");
+		expect(file).toContain("await branchBackend.file(id, path, read, controller.signal);");
+		expect(file).toContain("backend.imageSource(sessionId, path, which, version, read, controller.signal)");
+		const folder = source("./files/FolderList.tsx");
+		expect(folder).toContain("useEffect(() => () => inFlight.current?.abort(), []);");
+		expect(folder).toContain("await backend.tree(sessionId, dir, controller.signal);");
+		expect(folder).toContain("backend.search(sessionId, trimmed, controller.signal)");
+		expect(folder).toContain("return () => { controller.abort(); clearTimeout(timer); };");
+		const sender = source("./files/useReviewSender.ts");
+		expect(sender).toContain("}, signal);");
 	});
 
 	it("requires the owning host for review detail, reviewer chat, and actions", () => {

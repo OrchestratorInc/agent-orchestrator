@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import type { ArtifactsBackend, ArtifactSource } from "./artifactsBackend";
 import { UnreachableError } from "./connectionError";
 import type { FilesBackend } from "./files/backend";
@@ -27,7 +27,8 @@ import type { FilesBackend } from "./files/backend";
 // (a LAN address on another network). So nothing may start a new request with
 // it: a retry, a reload, a download or a view mounted fresh waits for the
 // connection to be verified again (`verified`, `whenVerified`,
-// `useVerifiedOnMount`). What is already on screen is left as it is.
+// `useVerifiedOnMount`, `useVerifiedFor`). What is already on screen is left
+// as it is.
 
 /** How long a call waits for the connection before it fails as unreachable. */
 export const HELD_WAIT_MS = 15_000;
@@ -114,11 +115,12 @@ function heldFiles(slot: LiveSlot<FilesBackend>, first: FilesBackend, key: strin
 		cloud: view.cloud,
 		...(view.view ? { view: view.view } : {}),
 		manifest: (sessionId, signal) => on((live) => live.manifest(sessionId, signal), signal),
-		file: (sessionId, path, read) => on((live) => live.file(sessionId, path, read)),
-		tree: (sessionId, dir) => on((live) => live.tree(sessionId, dir)),
-		search: (sessionId, query) => on((live) => live.search(sessionId, query)),
-		imageSource: (sessionId, path, side, version, read) => on((live) => live.imageSource(sessionId, path, side, version, read)),
-		sendFeedback: (sessionId, comments, onSent) => on((live) => live.sendFeedback(sessionId, comments, onSent)),
+		// A cancelled call stops waiting and is never sent (the screen that asked for it closed).
+		file: (sessionId, path, read, signal) => on((live) => live.file(sessionId, path, read, signal), signal),
+		tree: (sessionId, dir, signal) => on((live) => live.tree(sessionId, dir, signal), signal),
+		search: (sessionId, query, signal) => on((live) => live.search(sessionId, query, signal), signal),
+		imageSource: (sessionId, path, side, version, read, signal) => on((live) => live.imageSource(sessionId, path, side, version, read, signal), signal),
+		sendFeedback: (sessionId, comments, onSent, signal) => on((live) => live.sendFeedback(sessionId, comments, onSent, signal), signal),
 		...verifiedBy(slot),
 		...(git ? {
 			git: {
@@ -181,21 +183,51 @@ export function useHeldBackend<B>(live: B | null, scope: string, hold: (slot: Li
 
 type Verifiable = { verified?(): boolean; whenVerified?(signal?: AbortSignal): Promise<void> };
 
+/** A source's identity for `useVerifiedFor`: its address and the credential it carries. */
+export function sourceKey(source: { uri: string; headers?: Record<string, string> } | null | undefined): string | null {
+	return source ? JSON.stringify([source.uri, source.headers ?? null]) : null;
+}
+
+/**
+ * Whether a view may load what `key` names (a source, see `sourceKey`) with the
+ * backend's credential: at once with a verified connection (or a backend that
+ * needs none, as Cloud's), else once the connection is verified again. What
+ * the view last loaded stays: the same key keeps it through a reconnect. Any
+ * other key waits: a view first becoming eligible (a card scrolled into view,
+ * a page swiped to) or another file. `null` is nothing to load yet.
+ *
+ * Checked when the view becomes eligible, not when it mounts: one mounted
+ * hidden while connected still waits if it first shows while the app
+ * reconnects. Build the source in the component that calls this, so the
+ * render it wakes builds it again from the verified connection.
+ */
+export function useVerifiedFor(backend: Verifiable | null | undefined, key: string | null | undefined): boolean {
+	const allowed = useRef<string | undefined>(undefined);
+	const [, wake] = useReducer((count: number) => count + 1, 0);
+	// A backend with no verification concept (Cloud's signed addresses) is always ready.
+	const needs = Boolean(backend?.whenVerified);
+	const ready = key != null && (!needs || (backend?.verified?.() ?? true) || allowed.current === key);
+	if (ready && needs) allowed.current = key;
+	const waiting = needs && key != null && !ready;
+	useEffect(() => {
+		if (!waiting || !backend?.whenVerified) return;
+		const cancel = new AbortController();
+		backend.whenVerified(cancel.signal).then(() => { if (!cancel.signal.aborted) wake(); }, () => {});
+		return () => cancel.abort();
+	}, [backend, waiting]);
+	return ready;
+}
+
 /**
  * Whether a view that loads with the backend's credential may mount: at once
  * with a verified connection (or a backend that needs none, as Cloud's), else
  * once the connection is verified again. Once it has mounted, it stays: losing
- * the connection later does not take it off screen.
+ * the connection later does not take it off screen. A view that loads later
+ * than it mounts (once it scrolls into view or is swiped to) checks with
+ * `useVerifiedFor` at that moment instead.
  */
 export function useVerifiedOnMount(backend: Verifiable | null | undefined): boolean {
-	const [ready, setReady] = useState(() => backend?.verified?.() ?? true);
-	useEffect(() => {
-		if (ready || !backend?.whenVerified) return;
-		const waiting = new AbortController();
-		backend.whenVerified(waiting.signal).then(() => setReady(true), () => {});
-		return () => waiting.abort();
-	}, [backend, ready]);
-	return ready;
+	return useVerifiedFor(backend, "mounted");
 }
 
 /**
@@ -208,4 +240,22 @@ export function afterVerified(backend: Verifiable | null | undefined, fn: () => 
 		return;
 	}
 	backend.whenVerified(signal).then(() => { if (!signal?.aborted) fn(); }, () => {});
+}
+
+/**
+ * A source resolved afresh through the live connection once it is verified,
+ * for a view opened from one already on screen (the full-screen image viewer):
+ * the one on screen may carry the last connection's address and credential,
+ * and the machine answering as itself at a new address does not vouch for the
+ * old one. Undefined when cancelled with `signal` or when it cannot be resolved.
+ */
+export async function resolveWhenVerified<S>(backend: Verifiable | null | undefined, resolve: (signal?: AbortSignal) => Promise<S | undefined>, signal?: AbortSignal): Promise<S | undefined> {
+	try {
+		if (backend?.whenVerified && !(backend.verified?.() ?? true)) await backend.whenVerified(signal);
+		if (signal?.aborted) return undefined;
+		const source = await resolve(signal);
+		return signal?.aborted ? undefined : source;
+	} catch {
+		return undefined;
+	}
 }
