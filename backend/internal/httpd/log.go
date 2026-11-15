@@ -31,7 +31,7 @@ import (
 // envelope.WriteError: the wire envelope hides internals ("Internal server
 // error"), so without this the cause of a 500 was lost entirely.
 func requestLogger(log *slog.Logger, sink ports.EventSink) func(http.Handler) http.Handler {
-	return requestLoggerWithCapture(log, sink, sentryobs.CaptureError)
+	return requestLoggerWithCapture(log, sink, sentryobs.CaptureErrorAsync)
 }
 
 type captureHTTPErrorFunc func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute, telemetrymeta.FailureSite)
@@ -152,6 +152,11 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 						}
 					}
 					if capErr != nil && errorCode == "LINK_PREVIEW_FETCH_FAILED" && ww.Status() == http.StatusBadGateway {
+						captureSentry = false
+					}
+					// An unfinished Codex sign-in is user setup state, even when
+					// its staging step hit a deadline.
+					if errorCode == "CODEX_ACCOUNT_SETUP_INCOMPLETE" {
 						captureSentry = false
 					}
 					if captureSentry {

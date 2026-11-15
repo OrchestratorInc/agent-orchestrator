@@ -5,10 +5,14 @@ export type AppLocale = (typeof APP_LOCALES)[number];
 
 export const DEFAULT_LOCALE: AppLocale = "en";
 
-export const TERMINAL_SHELL_KINDS = ["auto", "git-bash", "pwsh", "powershell", "cmd", "custom"] as const;
+export const TERMINAL_SHELL_KINDS = ["auto", "git-bash", "pwsh", "powershell", "cmd", "wsl", "custom"] as const;
 
 export type TerminalShellKind = (typeof TERMINAL_SHELL_KINDS)[number];
 
+/**
+ * `custom` with a path is any executable, including a shell picked from the
+ * detected list on macOS and Linux; the other named kinds are Windows shells.
+ */
 export interface TerminalShellPreference {
 	kind: TerminalShellKind;
 	path?: string;
@@ -18,7 +22,7 @@ export interface UiSettings {
 	locale: AppLocale;
 	/** Whether attention-worthy notifications (needs input, ready to merge) also play a sound. */
 	soundNotificationsEnabled: boolean;
-	/** Windows shell used for new standalone terminal panes. */
+	/** Shell used for newly opened standalone terminal panes. */
 	terminalShell: TerminalShellPreference;
 }
 

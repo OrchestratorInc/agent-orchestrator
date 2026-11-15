@@ -7,7 +7,7 @@
  * turn, and the turn id that reaches the daemon is the one that was clicked.
  */
 
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
@@ -173,6 +173,79 @@ describe("ChatWorkspace retry", () => {
 		render(<ChatWorkspace snapshot={snapshot} retryControl={{ retry: vi.fn(), setAutoResume: vi.fn() }} />);
 		expect(screen.queryByRole("button", { name: "Auto-resume at reset" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+	});
+
+	it("asks the other owner to close it before retrying", async () => {
+		const retry = vi.fn();
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
+				onResumeAgent={retry}
+				resumeError="Reworded by the daemon"
+				resumeOpenElsewhere
+			/>,
+		);
+		expect(screen.getByText("This is open elsewhere")).toBeVisible();
+		expect(screen.getByText("Close it there to continue here. Codex can keep a closed chat for a while. Orchestrator checks again every 30 seconds.")).toBeVisible();
+		const button = screen.getByRole("button", { name: /^Retry$/ });
+		expect(button).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		await userEvent.click(button);
+		expect(retry).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads open elsewhere from the flag, not the message text", () => {
+		render(
+			<ChatWorkspace
+				snapshot={{ ...chatFixture, controller: { state: "stopped" } }}
+				onResumeAgent={vi.fn()}
+				resumeError="this is open elsewhere; close it there to continue here"
+				resumeOpenElsewhere={false}
+			/>,
+		);
+		expect(screen.queryByText("This is open elsewhere")).not.toBeInTheDocument();
+		expect(screen.getByText("this is open elsewhere; close it there to continue here")).toBeVisible();
+	});
+
+	it("stops checking once the agent is running again", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, controller: { state: "ready" } }}
+					onResumeAgent={retry}
+					resumeError="this is open elsewhere; close it there to continue here"
+					resumeOpenElsewhere
+				/>,
+			);
+			act(() => vi.advanceTimersByTime(60_000));
+			expect(retry).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps checking while another app holds the chat", () => {
+		vi.useFakeTimers();
+		try {
+			const retry = vi.fn();
+			render(
+				<ChatWorkspace
+					snapshot={{ ...chatFixture, harness: "claude-code", controller: { state: "stopped" } }}
+					onResumeAgent={retry}
+					resumeError="this is open elsewhere; close it there to continue here"
+					resumeOpenElsewhere
+				/>,
+			);
+			expect(screen.getByText("Close it there to continue here. Orchestrator checks again every 30 seconds.")).toBeVisible();
+			act(() => vi.advanceTimersByTime(29_000));
+			expect(retry).not.toHaveBeenCalled();
+			act(() => vi.advanceTimersByTime(1_000));
+			return Promise.resolve().then(() => expect(retry).toHaveBeenCalledTimes(1));
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("offers a retry on the failed turn and reports the clicked turn", async () => {

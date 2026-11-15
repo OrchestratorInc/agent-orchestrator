@@ -49,6 +49,14 @@ const CODING_VOCABULARY = [
 // firing early would cut off a final result still in flight.
 const STOP_GRACE_MS = 4000;
 
+// How often the recogniser reports the input level while capturing.
+const LEVEL_INTERVAL_MS = 80;
+
+/** The recogniser's -2 to 10 input meter as 0 (inaudible) to 1. */
+export function voiceLevel(value: number): number {
+	return Math.min(1, Math.max(0, value / 10));
+}
+
 // Recognition accuracy drops sharply when the locale doesn't match the speaker's
 // accent - "en-US" applied to an en-IN or en-GB speaker mishears steadily rather
 // than failing outright, which reads as "it just transcribes the wrong words".
@@ -331,6 +339,14 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 			);
 
 			current.subscriptions.push(
+				// The input meter, for the composer's waveform. The recogniser reports
+				// -2 to 10, anything below 0 inaudible.
+				ExpoSpeechRecognitionModule.addListener("volumechange", (e) => {
+					if (session === current) cb.onLevel?.(voiceLevel(e.value));
+				}),
+			);
+
+			current.subscriptions.push(
 				ExpoSpeechRecognitionModule.addListener("error", (e) => {
 					if (session !== current) return;
 					// Silence, a stray tap, or a deliberate abort is not a fault. Settle
@@ -362,6 +378,9 @@ export function createDeviceVoiceProvider(): VoiceProvider {
 					continuous: true,
 					addsPunctuation: true,
 					contextualStrings: CODING_VOCABULARY,
+					// Often enough for the waveform to follow speech, rarely enough to
+					// stay off the bridge's back.
+					volumeChangeEventOptions: { enabled: true, intervalMillis: LEVEL_INTERVAL_MS },
 					// The audio session is the warm-up: measured at ~1.1s, dominated by
 					// Bluetooth HFP route negotiation and configuring an output path.
 					// That cost is intolerable before a three-second phrase and irrelevant

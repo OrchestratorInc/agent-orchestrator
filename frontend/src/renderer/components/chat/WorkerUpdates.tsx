@@ -9,19 +9,17 @@
  * with where each one is now.
  */
 
-import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, FileText, GitPullRequest, LoaderCircle, Split, Tag } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import type { Options } from "react-markdown";
 import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
-import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
+import { isSteer, type BatchedDelivery, type ConversationItem } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
-import { AgentAvatar } from "../AgentAvatar";
 import { ArtifactPathCode, ChatMarkdown, SessionLabelLink, useChatLinkWorkspaces } from "./ChatMarkdown";
 import { formatTime, humanVisibleText, QueuedNote, stripSteerSenderPrefix } from "./ChatTimelineItems";
-import { CopyButton } from "./CopyButton";
-import { Button } from "../ui/button";
+import { AgentAvatar } from "../AgentAvatar";
 import { Pressable } from "../ui/pressable";
 
 export interface WorkerUpdate {
@@ -171,30 +169,64 @@ export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
 	return parseReports(envelope, item.createdAt, `${item.id}:reports`);
 });
 
-/** True when a reply asks the user something. A `?` in code or a link, or one running into more text (`a?.b`), is not a question. */
-// ponytail: punctuation is a guess at intent; a structured ask from the orchestrator would replace it.
-export function asksUser(text: string): boolean {
-	const prose = text.replace(/```[\s\S]*?(?:```|$)|`[^`\n]*`|\]\([^)]*\)|\bhttps?:\/\/\S+/g, " ");
-	return /[?？](?=[\s"'”’)\]*_]|$)/.test(prose);
+/** Reports AO batched into another message's provider input, by the message or steer they travelled with. */
+export interface BatchedReports {
+	/** Updates to draw under a human message (by message id) or a steer (by activity id). */
+	under: ReadonlyMap<string, readonly WorkerUpdate[]>;
+	/** Queued turns whose report now draws under that message, so the turn draws nothing itself. */
+	moved: ReadonlySet<string>;
 }
 
-function finalReply(items: readonly ConversationItem[]): ConversationMessage | undefined {
-	for (let index = items.length - 1; index >= 0; index -= 1) {
-		const item = items[index];
-		if (item?.kind === "message" && item.role === "assistant" && item.text.trim() !== "") return item;
-	}
-	return undefined;
-}
+export const BatchedReportsContext = createContext<BatchedReports | null>(null);
 
 /**
- * The orchestrator's answer to a turn a worker opened, when it asks the user
- * nothing. That answer is drawn as one line under the worker's rows.
+ * Where each batched report turn was delivered, from what the daemon recorded.
+ * A steer that carried it takes it, when that steer is loaded. A queue drain puts
+ * it under the last human message among the drained turns. Anything else, a
+ * steer outside the loaded page or a drain with no human message, keeps its
+ * reports on their own line.
  */
-export function quietWorkerReply(items: readonly ConversationItem[]): ConversationMessage | undefined {
-	const lead = items[0];
-	if (!isWorkerLead(lead)) return undefined;
-	const reply = finalReply(items);
-	return reply && !asksUser(reply.text) ? reply : undefined;
+export function placeBatchedReports(deliveries: readonly BatchedDelivery[], items: readonly ConversationItem[]): BatchedReports {
+	const under = new Map<string, WorkerUpdate[]>();
+	const moved = new Set<string>();
+	if (deliveries.length === 0) return { under, moved };
+	// One pass over the timeline: each turn's reports and last human message, and the loaded steers.
+	const reportsOf = new Map<string, WorkerUpdate[]>();
+	const lastHuman = new Map<string, { id: string; sequence: number }>();
+	const steers = new Set<string>();
+	for (const item of items) {
+		if (item.kind === "activity" && isSteer(item)) steers.add(item.id);
+		if (!item.turnId) continue;
+		if (item.kind === "message" && item.role === "user" && item.origin === "human") {
+			lastHuman.set(item.turnId, { id: item.id, sequence: item.sequence });
+			continue;
+		}
+		const reports = workerUpdatesOf(item).filter((update) => update.state !== undefined);
+		if (reports.length > 0) reportsOf.set(item.turnId, [...(reportsOf.get(item.turnId) ?? []), ...reports]);
+	}
+	// A drain's human message: the latest one among its target and every turn drained with it.
+	const drainHuman = new Map<string, { id: string; sequence: number }>();
+	const consider = (target: string, turnId: string) => {
+		const human = lastHuman.get(turnId);
+		const best = drainHuman.get(target);
+		if (human && (!best || human.sequence > best.sequence)) drainHuman.set(target, human);
+	};
+	for (const delivery of deliveries) {
+		if (delivery.steerActivityId) continue;
+		consider(delivery.deliveredWithTurnId, delivery.deliveredWithTurnId);
+		consider(delivery.deliveredWithTurnId, delivery.turnId);
+	}
+	for (const delivery of deliveries) {
+		const reports = reportsOf.get(delivery.turnId);
+		if (!reports) continue;
+		const target = delivery.steerActivityId
+			? steers.has(delivery.steerActivityId) ? delivery.steerActivityId : undefined
+			: drainHuman.get(delivery.deliveredWithTurnId)?.id;
+		if (!target) continue;
+		under.set(target, [...(under.get(target) ?? []), ...reports]);
+		moved.add(delivery.turnId);
+	}
+	return { under, moved };
 }
 
 export interface WorkerUpdateIndex {
@@ -323,11 +355,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	return (
 		<div className="min-w-0 text-xs" data-testid="worker-update">
 			<div className="group -mx-1.5 flex h-7 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover">
-				{session?.provider ? (
-					<AgentAvatar provider={session.provider} decorative className="size-4 shrink-0" />
-				) : (
-					<Bot aria-hidden="true" className="size-3.5 shrink-0" />
-				)}
+				<Bot aria-hidden="true" className="size-3.5 shrink-0" />
 				{/* The sender opens its session, as the "[from …]" label on a worker message does; the rest of the row expands. */}
 				{href ? (
 					<SessionLabelLink
@@ -359,7 +387,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 				<p key={path} className="ml-6 flex h-6 min-w-0 items-center gap-1.5 text-muted-foreground">
 					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
 					{/* A listed artifact links to its preview; one the session no longer lists stays a name. */}
-					<span className="min-w-0 truncate font-mono" title={path}>
+					<span className="min-w-0 truncate" title={path}>
 						<ArtifactPathCode text={artifactReference(path, update.sessionId)}>{path.split("/").at(-1)}</ArtifactPathCode>
 					</span>
 				</p>
@@ -386,6 +414,59 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 				<WorkerUpdateRow key={update.key} update={update} />
 			))}
 		</div>
+	);
+}
+
+/**
+ * Reports AO delivered together, as one line that opens to their rows: a batch
+ * that reached the orchestrator on its own, or one a worker's steer carried.
+ * Reports sent with a human message are not drawn. It leads with the first
+ * senders' agents, in black and white. A
+ * report whose worker still waits on the user (stuck counts too) keeps its count
+ * on the closed line; a newer update from that worker clears it.
+ */
+export function ReportsLine({ updates, open, onOpenChange }: {
+	updates: readonly WorkerUpdate[];
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+}) {
+	const { t } = useTranslation();
+	const index = useContext(WorkerUpdateIndexContext);
+	const needsYou = updates.filter((update) => update.state && STATES[update.state]?.attention && isCurrent(index, update)).length;
+	// One logo per sender, however many reports it sent.
+	const senders = [...new Map(updates.map((update) => [update.sessionId ?? update.key, update])).values()];
+	return (
+		<div className="min-w-0 text-[length:var(--font-size-base)]" data-testid="worker-reports">
+			<Pressable
+				aria-expanded={open}
+				onClick={() => onOpenChange(!open)}
+				// As tall as the hover actions that float under a message, so opened rows start below them.
+				className="-mx-1.5 inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-foreground/80 transition-colors hover:bg-interactive-hover hover:text-foreground"
+			>
+				<span aria-hidden="true" className="flex shrink-0 items-center">
+					{senders.slice(0, 3).map((update, position) => (
+						<ReportLogo key={update.key} update={update} first={position === 0} />
+					))}
+					{senders.length > 3 ? <span className="ml-1 leading-none text-muted-foreground">...</span> : null}
+				</span>
+				<span className="truncate">{t("chat.reports.count", { count: updates.length })}</span>
+				{needsYou > 0 ? (
+					<span className="shrink-0 font-medium text-status-needs-you">· {t("chat.reports.needsYou", { count: needsYou })}</span>
+				) : null}
+				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
+			</Pressable>
+			{open ? <WorkerUpdateRows updates={updates} /> : null}
+		</div>
+	);
+}
+
+/** One sender's agent on a reports line: its logo in black and white, stacked over the one before. */
+function ReportLogo({ update, first }: { update: WorkerUpdate; first: boolean }) {
+	const provider = useWorkerSession(update.sessionId, update.projectId)?.provider;
+	return (
+		<span data-report-logo="" className={cn("grid size-[22px] shrink-0 place-items-center rounded-full border-2 border-background bg-muted", !first && "-ml-1.5")}>
+			{provider ? <AgentAvatar provider={provider} decorative className="size-3.5 grayscale" /> : <Bot className="size-3.5 text-muted-foreground" />}
+		</span>
 	);
 }
 
@@ -418,7 +499,7 @@ export function FromAgent({ item, queued, children }: { item: ConversationItem; 
 	const name = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title || update.name;
 	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session.workspaceId });
 	return (
-		<SenderRow avatar={<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />} createdAt={update.createdAt} body={update.body}>
+		<SenderRow avatar={<Bot aria-hidden="true" className="absolute left-0 top-[3px] size-4 text-muted-foreground" />} createdAt={update.createdAt} body={update.body}>
 			{href ? (
 				<SessionLabelLink href={href} className={cn(SENDER_NAME, "decoration-foreground/40 underline-offset-2 hover:underline")}>
 					{name}
@@ -468,13 +549,16 @@ export function Folded({ watch, children }: { watch: unknown; children: ReactNod
 	}, [open, watch]);
 	return (
 		<>
-			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")}>
+			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")} onToggle={(event) => (event.target as HTMLDetailsElement).open && setOpen(true)}>
 				<div>{children}</div>
 			</div>
 			{folds || open ? (
 				<Pressable
 					aria-expanded={open}
-					onClick={() => setOpen((current) => !current)}
+					onClick={() => {
+						if (open) body.current?.querySelectorAll("details[open]").forEach((details) => details.removeAttribute("open"));
+						setOpen(!open);
+					}}
 					className="mt-1 inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					{t(open ? "shell.showLess" : "shell.showMore")}
@@ -495,80 +579,6 @@ export function TaskNamedLine({ title }: { title: string }) {
 				<Trans t={t} i18nKey="chat.taskNamed" values={{ title }} components={{ task: <span className="font-medium text-foreground" /> }} />
 			</span>
 		</p>
-	);
-}
-
-/**
- * The orchestrator's answer under the rows that prompted it. It keeps what the
- * reply would have — copy, rollback, the work behind it — but on one quiet line.
- */
-export function OrchestratorReply({
-	message,
-	work,
-	workOpen,
-	onWorkOpenChange,
-	onRollback,
-	rollbackDisabled,
-}: {
-	message: ConversationMessage;
-	work?: ReactNode;
-	workOpen: boolean;
-	onWorkOpenChange: (open: boolean) => void;
-	onRollback?: () => void;
-	rollbackDisabled?: boolean;
-}) {
-	const { t } = useTranslation();
-		return (
-		<div
-			className="group/message -mt-1.5 ml-6 min-w-0"
-			data-testid="orchestrator-reply"
-			data-chat-message-id={message.id}
-			data-chat-message-revision={message.revision}
-			data-chat-message-role={message.role}
-		>
-			<div className="flex min-w-0 items-start gap-2">
-				<CornerDownRight aria-hidden="true" className="mt-[3px] size-3 shrink-0 text-muted-foreground" />
-				{/* The timeline sizes chat markdown through these variables; a reply line sits at the rows' size. */}
-				<div
-					data-chat-message-body=""
-					className="min-w-0 flex-1 [--chat-readable-code-font-size:var(--font-size-caption)] [--chat-readable-font-size:var(--font-size-sm)]"
-				>
-					<ChatMarkdown text={message.text} />
-				</div>
-				<div className="-my-1 flex shrink-0 items-center">
-					{/* Revealed on hover or keyboard focus, so a list of quiet replies does not carry a toolbar each. */}
-					<div className="flex items-center opacity-0 transition-opacity group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none">
-						<CopyButton text={message.text} label="Copy message as markdown" compact size="icon-xs" />
-						{onRollback ? (
-							<Button
-								type="button"
-								variant="quiet"
-								size="icon-xs"
-								onClick={onRollback}
-								disabled={rollbackDisabled}
-								aria-label={t("chat.rollBackToHere")}
-								title={t("chat.rollBackToHere")}
-							>
-								<Undo2 aria-hidden="true" className="size-3" />
-							</Button>
-						) : null}
-					</div>
-					{work ? (
-						<Button
-							type="button"
-							variant="quiet"
-							size="icon-xs"
-							aria-expanded={workOpen}
-							aria-label={t("chat.showReplyWork")}
-							onClick={() => onWorkOpenChange(!workOpen)}
-						>
-							<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", workOpen && "rotate-90")} />
-						</Button>
-					) : null}
-				</div>
-			</div>
-			{workOpen && work ? <div className="mt-2 flex min-w-0 flex-col gap-2.5">{work}</div> : null}
-		</div>
 	);
 }
 

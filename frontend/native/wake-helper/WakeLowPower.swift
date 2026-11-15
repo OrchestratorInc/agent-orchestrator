@@ -10,7 +10,7 @@ enum WakePowerCommands {
     }
     static func rule(_ uid: UInt32) -> String {
         let commands = ["-b", "-c"].flatMap { flag in [0, 1].map { "/usr/bin/pmset \(flag) lowpowermode \($0)" } }
-        return "# AO Low Power Mode: fixed operations only\n" + commands.map { "#\(uid) ALL=(root) TIMEOUT=5s NOPASSWD: " + $0 }.joined(separator: "\n") + "\n"
+        return "# Orchestrator Low Power Mode: fixed operations only\n" + commands.map { "#\(uid) ALL=(root) TIMEOUT=5s NOPASSWD: " + $0 }.joined(separator: "\n") + "\n"
     }
     static func revocationMarker(_ directory: URL) -> URL { directory.appendingPathComponent("power-revocation.json") }
     static func revocationPending(_ directory: URL) -> Bool {

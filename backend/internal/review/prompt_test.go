@@ -29,6 +29,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		"After every PR has its own GitHub review from step 1",
 		"printf '%s'",
 		"do not use a heredoc",
+		"as its own shell call, in exactly the shape shown",
 		"ao review submit --session mer-1 --reviews -",
 		`"reviews": [`,
 	} {
@@ -43,7 +44,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 // inline, and optional suggestions must not be.
 func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 	prompt, system := reviewTexts(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"})
-	if !strings.Contains(prompt, "implementation pull request(s) owned by worker session mer-1") || !strings.Contains(system, "implementation PRs owned by an AO worker") {
+	if !strings.Contains(prompt, "implementation pull request(s) owned by worker session mer-1") || !strings.Contains(system, "implementation PRs owned by a worker") {
 		t.Fatalf("native review prompts must identify their owned implementation scope:\n%s\n%s", prompt, system)
 	}
 	for _, want := range []string{

@@ -38,6 +38,28 @@ export function useArtifactVersions({ cloud, enabled, hostId, path, sessionId }:
 }
 
 /**
+ * Whether another host's daemon can show and restore a media version. An older
+ * one would serve the live file under the version's label and refuse the
+ * restore, so its media files keep no History here.
+ */
+export function useHostServesMediaVersions({ enabled, hostId, path, sessionId }: { enabled: boolean; hostId?: string; path: string; sessionId: string }): boolean {
+	const { data } = useQuery({
+		enabled,
+		queryKey: ["artifact-media-versions", hostId ?? ""],
+		retry: 1,
+		staleTime: 5 * 60_000,
+		queryFn: async (): Promise<boolean> => {
+			const { data: list, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/artifact-versions", {
+				params: { path: { sessionId }, query: { path } },
+			});
+			if (error) throw apiErrorException(error, "Unable to load version history");
+			return list?.mediaVersions === true;
+		},
+	});
+	return data === true;
+}
+
+/**
  * Records an edit of the file the observer has not noticed yet, then refreshes
  * the cached list with the result. The history menu runs it when it opens.
  */

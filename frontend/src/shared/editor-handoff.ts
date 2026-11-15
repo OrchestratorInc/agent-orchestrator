@@ -71,6 +71,32 @@ export type OpenSessionArtifactsInput = {
 	path?: string;
 };
 
+/** One artifact to open in the system's default browser. */
+export type OpenArtifactInBrowserInput = {
+	sessionId: string;
+	/** Relative to the session's artifact directory. */
+	path: string;
+};
+
+/**
+ * Files a browser renders itself: pages, SVG, and every image, video, audio
+ * and PDF format the artifact viewer previews (renderer/lib/file-media.ts).
+ * Anything else could hand an executable to its OS handler.
+ */
+const BROWSER_ARTIFACT_EXTENSIONS: ReadonlySet<string> = new Set([
+	".html", ".htm", ".svg", ".pdf",
+	".apng", ".avif", ".bmp", ".gif", ".ico", ".jpg", ".jpeg", ".png", ".webp",
+	".m4v", ".mov", ".mp4", ".ogv", ".webm",
+	".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav",
+]);
+
+/** Whether an artifact opens in the default browser: the one rule the Open in browser action and the main process share. */
+export function isBrowserArtifactPath(path: string): boolean {
+	const name = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+	const dot = name.lastIndexOf(".");
+	return dot > 0 && BROWSER_ARTIFACT_EXTENSIONS.has(name.slice(dot).toLowerCase());
+}
+
 const editorIDSet = new Set<string>(EDITOR_IDS);
 
 export function isEditorId(value: unknown): value is EditorId {

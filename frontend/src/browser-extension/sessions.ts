@@ -1,5 +1,6 @@
 // AO session ↔ Chrome tab group ownership. Each AO session works only in its
-// own tab group ("AO · <session>") in its own Chrome window. Tabs get AO's
+// own tab group ("Orchestrator · <session>"), opened in the background of the
+// window the user last used, or in a window of its own when there is none. Tabs get AO's
 // logical ids (t1, t2, …). A tab the user drags out of the group is no longer
 // the agent's; a tab the user drags in becomes the agent's.
 
@@ -23,7 +24,7 @@ export type SessionTabs = {
 export type ActiveTab = { logicalId: string; tabId: number; tab: Tab };
 
 export function groupTitle(sessionId: string): string {
-	return `AO · ${sessionId.length > 24 ? `${sessionId.slice(0, 23)}…` : sessionId}`;
+	return `Orchestrator · ${sessionId.length > 24 ? `${sessionId.slice(0, 23)}…` : sessionId}`;
 }
 
 export function groupColor(sessionId: string): string {
@@ -112,7 +113,7 @@ export class SessionTabRegistry {
 		if (session.groupId !== undefined && tab.groupId !== session.groupId) {
 			delete session.tabs[logicalId];
 			await this.save();
-			throw new BridgeError("BROWSER_TARGET_MISMATCH", `Tab ${logicalId} left this session's AO tab group`);
+			throw new BridgeError("BROWSER_TARGET_MISMATCH", `Tab ${logicalId} left this session's Orchestrator tab group`);
 		}
 		return { logicalId, tabId, tab };
 	}
@@ -125,9 +126,13 @@ export class SessionTabRegistry {
 		}
 		let tab: (Tab & { id?: number }) | undefined;
 		if (windowId === undefined) {
-			// The session's own unfocused window: trusted input and screenshots
-			// need the agent's tab in front of its window, which must never be
-			// a window the user is working in.
+			// Beside the user's tabs, in the background: agents act on a tab that
+			// is not in front, so they never need a window of their own.
+			const user = await this.chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
+			if (user?.id !== undefined && !user.incognito) windowId = user.id;
+		}
+		if (windowId === undefined) {
+			// No window to join: open the session's own, unfocused.
 			const created = await this.chrome.windows.create({ type: "normal", focused: false, state: "normal", url: url ?? "about:blank" });
 			windowId = created.id;
 			tab = created.tabs?.[0];

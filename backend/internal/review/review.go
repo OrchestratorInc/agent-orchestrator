@@ -128,7 +128,7 @@ type Engine struct {
 	triggerLocks map[domain.SessionID]*sync.Mutex
 }
 
-const autoReviewFailedRetryLimit = 3
+const autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
 
 // New wires an Engine from its dependencies, defaulting the clock and id source.
 func New(d Deps) *Engine {
@@ -788,9 +788,9 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 func noTrackedPRMessage(worker domain.SessionRecord, branchLookupFoundNone bool) string {
 	retry := fmt.Sprintf("`ao review trigger %s --pr <url>`", worker.ID)
 	if branch := strings.TrimSpace(worker.Metadata.Branch); branch != "" && branchLookupFoundNone {
-		return fmt.Sprintf("AO is not tracking an open PR for worker %q yet and found no open PR from its branch %q; if you just opened one, run %s with that PR's URL", worker.ID, branch, retry)
+		return fmt.Sprintf("Orchestrator is not tracking an open PR for worker %q yet and found no open PR from its branch %q; if you just opened one, run %s with that PR's URL", worker.ID, branch, retry)
 	}
-	return fmt.Sprintf("AO is not tracking an open PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
+	return fmt.Sprintf("Orchestrator is not tracking an open PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
 }
 
 // headHasReview reports whether any reviewer has a running or completed pass

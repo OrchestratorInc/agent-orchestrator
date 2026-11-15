@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"time"
@@ -693,6 +694,11 @@ var _ ports.TerminalForegroundWatcher = (*Runtime)(nil)
 
 // WatchTerminalForeground streams the host's foreground program and activity.
 func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.RuntimeHandle, fn func(ports.TerminalForeground)) error {
+	// ConPTY has no process groups, so its host would hold the watch open
+	// without ever sending a reading.
+	if goruntime.GOOS == "windows" {
+		return fmt.Errorf("conpty: no foreground process group on windows: %w", ports.ErrTerminalForegroundUnavailable)
+	}
 	sess, err := r.resolveWithEvidence(ctx, handle.ID)
 	if err != nil {
 		return fmt.Errorf("conpty: resolve runtime %q for foreground: %w", handle.ID, err)
@@ -708,6 +714,27 @@ func (r *Runtime) WatchTerminalForeground(ctx context.Context, handle ports.Runt
 		return fmt.Errorf("conpty: pty-host protocol version %d: %w", protocolVersion, ports.ErrTerminalForegroundUnavailable)
 	}
 	return clientWatchForeground(ctx, sess.addr, func(state ForegroundPayload) {
-		fn(ports.TerminalForeground{PGID: state.PGID, Argv: state.Argv, Busy: state.Busy})
+		fn(ports.TerminalForeground{PGID: state.PGID, Argv: state.Argv, Busy: state.Busy, EchoOnly: state.EchoOnly})
 	})
+}
+
+var _ ports.TerminalTitleWatcher = (*Runtime)(nil)
+
+// WatchTerminalTitle streams the title the host's program last set.
+func (r *Runtime) WatchTerminalTitle(ctx context.Context, handle ports.RuntimeHandle, fn func(string)) error {
+	sess, err := r.resolveWithEvidence(ctx, handle.ID)
+	if err != nil {
+		return fmt.Errorf("conpty: resolve runtime %q for title: %w", handle.ID, err)
+	}
+	if sess == nil {
+		return fmt.Errorf("conpty: session %q not found: %w", handle.ID, ports.ErrTerminalTitleUnavailable)
+	}
+	protocolVersion, err := r.resolveHostProtocol(ctx, sess)
+	if err != nil {
+		return err
+	}
+	if protocolVersion < conPTYTitleProtocolVersion {
+		return fmt.Errorf("conpty: pty-host protocol version %d: %w", protocolVersion, ports.ErrTerminalTitleUnavailable)
+	}
+	return clientWatchTitle(ctx, sess.addr, func(state TitlePayload) { fn(state.Title) })
 }

@@ -31,7 +31,7 @@ test("never forwards the raw updater message", () => {
 		"0.11.3",
 	);
 	expect(outcome).toEqual({
-		event: "ao.renderer.update_failed",
+		event: "ao.updates.failed",
 		phase: "download",
 		trigger: "automatic",
 		error_category: "permission",

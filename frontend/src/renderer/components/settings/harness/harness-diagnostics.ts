@@ -35,9 +35,9 @@ export async function machineText(queryClient: QueryClient, remoteClient?: Retur
 	if (!app && !system) return "";
 	const lines = ["Machine"];
 	if (app && system) {
-		lines.push(`Memory: AO ${formatMemory(app.rssBytes)} · available ${formatMemory(system.availableBytes)} of ${formatMemory(system.totalBytes)}`);
+		lines.push(`Memory: Orchestrator ${formatMemory(app.rssBytes)} · available ${formatMemory(system.availableBytes)} of ${formatMemory(system.totalBytes)}`);
 	} else if (app) {
-		lines.push(`Memory: AO ${formatMemory(app.rssBytes)}`);
+		lines.push(`Memory: Orchestrator ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
 		// Windows has no load average and reports the sentinel -1 rather than a

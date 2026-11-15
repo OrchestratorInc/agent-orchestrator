@@ -8,15 +8,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // CmdRunner runs the command and returns the combined stdout/stderr.
-// It is exposed as a package variable to allow mocking in tests.
+// It is exposed as a package variable to allow mocking in tests. The child
+// gets PATH augmented as session launches do, so an npm launcher resolved
+// outside the daemon PATH can still find node.
 var CmdRunner = func(ctx context.Context, name string, arg ...string) ([]byte, error) {
-	return aoprocess.CommandContext(ctx, name, arg...).CombinedOutput()
+	cmd := aoprocess.CommandContext(ctx, name, arg...)
+	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, name)
+	return cmd.CombinedOutput()
 }
 
 // Classifier reads one probe's raw output. The bool reports whether it

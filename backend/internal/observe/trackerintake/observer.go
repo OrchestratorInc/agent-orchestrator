@@ -215,7 +215,7 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 			o.logger.Error("tracker intake: spawn issue session failed", "project", project.ID, "issue", issueID, "err", err)
 			// An automated spawn has no HTTP request, so the request logger never
 			// sees it. Bad input (an invalid issue or project) stays out.
-			if kind, _ := telemetrymeta.ErrorKindAndCode(err); kind == "internal" || kind == "conflict" || kind == "unavailable" {
+			if kind, code := telemetrymeta.ErrorKindAndCode(err); kind == "internal" || sentryobs.IsFaultCode(code) {
 				sentryobs.CaptureBackground(ctx, err, "trackerintake", "tracker_spawn", nil)
 			}
 			spawnFailed = true

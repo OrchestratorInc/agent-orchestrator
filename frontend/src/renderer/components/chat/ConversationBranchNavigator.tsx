@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { ConversationBranchPoint } from "../../types/conversation";
 import { Button } from "../ui/button";
