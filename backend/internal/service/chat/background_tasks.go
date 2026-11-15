@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -152,14 +153,20 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 		output, err = reader.BackgroundTaskOutput(readCtx, taskID)
 		cancel()
 	}
-	if output.Text != "" || (err != nil && !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable)) {
+	if err != nil && !errors.Is(err, ports.ErrBackgroundTaskOutputUnavailable) {
 		return output, err
 	}
-	// A command that writes a log file prints nothing of its own: the log is its output.
-	if logged, ok := controller.redirectedBackgroundOutput(taskID); ok {
-		return logged, nil
+	logged, ok := controller.redirectedBackgroundOutput(taskID)
+	if !ok {
+		return output, err
 	}
-	return output, err
+	// A command that writes a log file prints little of its own: the log is its
+	// output. Whatever the task did print follows it, such as stderr the command
+	// left alone or Claude Code's "[killed]" once the task is stopped.
+	if own := strings.Trim(output.Text, "\n"); own != "" {
+		return backgroundtasks.TailOutput(logged.Text+"\n"+own, logged.Truncated || output.Truncated), nil
+	}
+	return logged, nil
 }
 
 // redirectedBackgroundOutput reads the log file a background task's command

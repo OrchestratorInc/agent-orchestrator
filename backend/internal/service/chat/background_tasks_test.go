@@ -225,10 +225,15 @@ func TestBackgroundTaskOutputShowsTheLogACommandWritesTo(t *testing.T) {
 	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "ready on :3000" {
 		t.Fatalf("log output=%+v err=%v", got, err)
 	}
-	// Output the task printed itself wins over the log.
+	// What the task printed itself follows the log: stderr the command left
+	// alone, or the marker Claude Code appends when the task is stopped.
 	conv.output = ports.ChatBackgroundTaskOutput{Text: "warning: deprecated"}
-	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "warning: deprecated" {
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "ready on :3000\nwarning: deprecated" {
 		t.Fatalf("own output=%+v err=%v", got, err)
+	}
+	conv.output = ports.ChatBackgroundTaskOutput{Text: "\n[killed]"}
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "ready on :3000\n[killed]" {
+		t.Fatalf("stopped output=%+v err=%v", got, err)
 	}
 
 	// A harness that keeps no output still shows the log its command names.
