@@ -382,10 +382,13 @@ describe("following the newest message", () => {
 	});
 
 	// With focus scrolling off, a request form's field reveals itself when it
-	// takes focus, after the keyboard opens, and only when it is hidden.
+	// takes focus, after the keyboard opens, and only when it is hidden. Only the
+	// newest focus scrolls (createFieldReveals, tested in fieldReveal.test.ts).
 	it("reveals a focused request field above the keyboard and the composer", () => {
 		expect(source).toContain("<RevealFocusedField.Provider value={revealField}>");
-		expect(source).toContain('Keyboard.addListener("keyboardDidShow", reveal)');
+		expect(source).toContain("const [fieldReveals] = useState(() => createFieldReveals(Keyboard, FIELD_REVEAL_WAIT_MS));");
+		expect(source).toContain("useEffect(() => fieldReveals.cancel, [fieldReveals]);");
+		expect(source).toContain("if (target === undefined || !isCurrent()) return;");
 		expect(source).toContain("visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,");
 		expect(source).toContain("if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;");
 	});

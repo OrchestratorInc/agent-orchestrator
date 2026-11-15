@@ -65,7 +65,7 @@ import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
 import { atTail, openingRow } from "./timelineScroll";
-import { fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
+import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
 const JUMP_FADE_MS = 160;
@@ -407,27 +407,41 @@ function Timeline({
 	// `scrollsChildToFocus`). It is measured once the keyboard is up, and only a
 	// field that is hidden moves the list, by as little as shows it, so focusing
 	// one in view never nudges the conversation.
-	const revealField = useCallback((field: View | null) => {
+	//
+	// A field focused with the keyboard down waits for it to finish opening (and
+	// for the list's lift with it); with it up, nothing moves first. Only the
+	// newest focus is revealed: an earlier field's wait or measurement is
+	// cancelled, so it never scrolls back to that field once another took focus.
+	const [fieldReveals] = useState(() => createFieldReveals(Keyboard, FIELD_REVEAL_WAIT_MS));
+	useEffect(() => fieldReveals.cancel, [fieldReveals]);
+	const revealField = useCallback((field: View | null, input?: View | null) => {
 		const scroll = listRef.current?.getNativeScrollRef() as (View & { getInnerViewRef?(): View | null }) | null | undefined;
-		if (!field || !scroll?.measureInWindow) return;
-		let waiting = true;
-		const reveal = () => {
-			if (!waiting) return;
-			waiting = false;
-			shown.remove();
-			clearTimeout(fallback);
-			requestAnimationFrame(() => field.measureInWindow((_x, fieldTop, _width, fieldHeight) => scroll.measureInWindow((_listX, listTop, _listWidth, listHeight) => {
+		if (!field || !scroll?.measureInWindow) {
+			fieldReveals.cancel();
+			return;
+		}
+		// The input on its own, so a long hint never keeps it under the keyboard.
+		const measureInput = (done: (top?: number, height?: number) => void) => {
+			if (input?.measureInWindow) input.measureInWindow((_x, top, _width, height) => done(top, height));
+			else done();
+		};
+		fieldReveals.request((isCurrent) => requestAnimationFrame(() => {
+			if (!isCurrent()) return;
+			field.measureInWindow((_x, fieldTop, _width, fieldHeight) => measureInput((inputTop, inputHeight) => scroll.measureInWindow((_listX, listTop, _listWidth, listHeight) => {
 				const listBottom = listTop + listHeight;
 				const keyboardTop = Keyboard.isVisible() ? Keyboard.metrics()?.screenY : undefined;
 				const spans = {
 					fieldTop,
 					fieldBottom: fieldTop + fieldHeight,
+					inputTop,
+					inputBottom: inputTop === undefined || inputHeight === undefined ? undefined : inputTop + inputHeight,
 					visibleTop: listTop + underHeader + topInset + space.md,
 					visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,
 				};
 				const scrollTo = (offset: number) => {
 					const target = fieldRevealOffset({ ...spans, offset });
-					if (target === undefined) return;
+					// A later focus took over while this one measured.
+					if (target === undefined || !isCurrent()) return;
 					// A move of ours, not the person's: the list stops following new
 					// output until it comes back to the end.
 					followsTail.current = false;
@@ -440,12 +454,8 @@ function Timeline({
 				if (content) field.measureLayout(content, (_contentX, contentTop) => scrollTo(listTop + contentTop - fieldTop), () => scrollTo(scrollOffset.current));
 				else scrollTo(scrollOffset.current);
 			})));
-		};
-		// A field focused with the keyboard down waits for it to finish opening
-		// (and for the list's lift with it); with it up, nothing moves first.
-		const shown = Keyboard.addListener("keyboardDidShow", reveal);
-		const fallback = setTimeout(reveal, Keyboard.isVisible() ? 0 : FIELD_REVEAL_WAIT_MS);
-	}, [bottomInset, topInset, underHeader]);
+		}));
+	}, [bottomInset, fieldReveals, topInset, underHeader]);
 
 	if (plan.kind === "empty") openedAt.current = undefined;
 	if (plan.kind === "empty" && startup?.visible) {

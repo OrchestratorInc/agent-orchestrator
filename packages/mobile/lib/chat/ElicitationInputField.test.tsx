@@ -91,21 +91,26 @@ describe("other fields", () => {
 
 	// The timeline does not scroll a focused child into view, so a text field
 	// asks it to show the field, with its label, above the keyboard.
+	// The input is measured on its own too: a hint too long to fit above the
+	// keyboard must not keep it hidden (see fieldRevealOffset).
 	it("asks the timeline to reveal a text field, label and all, when it takes focus", () => {
 		const reveal = vi.fn();
 		const field = { measureInWindow: vi.fn() };
+		const input = { measureInWindow: vi.fn() };
 		act(() => {
 			renderer = create(
 				<RevealFocusedField.Provider value={reveal}>
-					<ElicitationInputField name="title" property={{ type: "string" }} required value="" onChange={vi.fn()} />
+					<ElicitationInputField name="title" property={{ type: "string", description: "A long hint" }} required value="" onChange={vi.fn()} />
 				</RevealFocusedField.Provider>,
-				{ createNodeMock: (element) => (element.type === "View" ? field : null) },
+				// The field holds the label, the hint and the input's own wrapper.
+				{ createNodeMock: (element) => (element.type !== "View" ? null : Array.isArray((element.props as { children?: unknown }).children) ? field : input) },
 			);
 		});
 		const text = renderer!.root.findByType("ElicitationTextField" as never);
 		expect(text.parent!.props.collapsable).toBe(false);
+		expect(text.parent!.parent!.props.collapsable).toBe(false);
 		act(() => text.props.onFocus());
-		expect(reveal).toHaveBeenCalledWith(field);
+		expect(reveal).toHaveBeenCalledWith(field, input);
 	});
 
 	it("asks nothing outside a timeline", () => {

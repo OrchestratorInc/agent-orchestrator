@@ -18,6 +18,7 @@ export function ElicitationInputField({ name, property, required, value, onChang
 	const { scheme } = useThemeState();
 	const reveal = useContext(RevealFocusedField);
 	const textField = useRef<View>(null);
+	const textInput = useRef<View>(null);
 	const label = `${property.title || humanizeInputName(name)}${required ? " *" : ""}`;
 	if (property.type === "boolean") {
 		const checked = Boolean(value);
@@ -51,11 +52,14 @@ export function ElicitationInputField({ name, property, required, value, onChang
 			<ElicitationChoiceList choices={options} multi={multi} selected={(choice) => multi ? Array.isArray(value) && value.includes(choice) : value === choice} onChange={(choice) => onChange(multi ? toggleInputValue(Array.isArray(value) ? value : [], choice) : choice)} />
 		</View>;
 	}
-	// The label and hint come into view with the field they describe.
+	// The label and hint come into view with the field they describe, when they
+	// fit; a hint too long for the space above the keyboard gives way to the input.
 	return <View ref={textField} collapsable={false} style={styles.field}>
 		<Text style={styles.inputLabel}>{label}</Text>
 		{property.description ? <Text style={styles.inputHint}>{property.description}</Text> : null}
-		<ElicitationTextField label={label} value={value} numeric={property.type === "number" || property.type === "integer"} maxLength={property.maxLength} onChange={onChange} onFocus={reveal ? () => reveal(textField.current) : undefined} />
+		<View ref={textInput} collapsable={false}>
+			<ElicitationTextField label={label} value={value} numeric={property.type === "number" || property.type === "integer"} maxLength={property.maxLength} onChange={onChange} onFocus={reveal ? () => reveal(textField.current, textInput.current) : undefined} />
+		</View>
 	</View>;
 }
 
