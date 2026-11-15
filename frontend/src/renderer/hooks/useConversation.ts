@@ -508,6 +508,35 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	});
 }
 
+/**
+ * Refresh an open local chat the way a remote one refreshes: read only the rows
+ * above its floor and merge them into the live page, instead of refetching every
+ * loaded page on each event of a streaming turn. Answers false, having written
+ * nothing, when the tail cannot replace those rows (a turn started or settled, an
+ * undo, a branch switch, compaction, a read that failed) or when anything wrote
+ * the live page during the read; the caller then refetches the chat as before.
+ */
+export async function refreshLocalConversationTail(queryClient: QueryClient, sessionId: string): Promise<boolean> {
+	const key = conversationQueryKey(sessionId);
+	const prior = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages?.[0];
+	const floor = prior ? remoteConversationFloor(prior) : 0;
+	if (!prior || floor < 1) return false;
+	let wire: WireSnapshot;
+	try {
+		wire = await fetchConversationWire(sessionId, undefined, { afterSequence: floor, limit: CONVERSATION_PAGE_SIZE });
+	} catch {
+		return false;
+	}
+	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
+	// A refetch or an optimistic edit that landed during the read is newer than
+	// this tail's view of the page, so the tail must not overwrite it.
+	if (wire.afterSequence !== floor || current?.pages[0] !== prior) return false;
+	const merged = mergeRemoteConversationTail(prior, toSnapshot(wire), floor);
+	if (!merged) return false;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+	return true;
+}
+
 const remoteConversationRefreshes = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
 
 /**

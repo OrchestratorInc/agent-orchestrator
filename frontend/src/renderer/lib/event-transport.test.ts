@@ -52,6 +52,7 @@ vi.mock("./host-clients", () => ({
 import { createEventTransport } from "./event-transport";
 import { interfaceTransitionRefetchInterval } from "../hooks/useSessionInterfaceTransition";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
+import { conversationQueryOptions } from "../hooks/useConversation";
 
 class EventSourceStub {
 	static instances: EventSourceStub[] = [];
@@ -1282,4 +1283,46 @@ it("refreshes again when a root catch-up joins an older targeted conversation fe
 		client.clear();
 		vi.useRealTimers();
 	}
+});
+
+describe("local chat tail refresh", () => {
+	const wire = (extra: Record<string, unknown>) => ({
+		data: { conversationId: "c1", sessionId: "local-chat", mode: "chat", controller: "busy", latestSequence: 4, activeBranchId: "b1", turns: [], messages: [], activities: [], ...extra },
+	});
+	const wireTurn = (id: string, state: string) => ({ id, state, requestedAt: `2026-11-03T00:00:0${id.slice(-1)}Z` });
+	const wireMessage = (id: string, turnId: string, sequence: number, text = id) => ({ kind: "message", id, turnId, sequence, revision: 1, role: "user", origin: "human", text, createdAt: "" });
+	// t1 settled at 1-2, so the floor is 2; t2 is still running at 3-4.
+	const wholePage = wire({ oldestSequence: 1, turns: [wireTurn("t1", "completed"), wireTurn("t2", "running")], messages: [wireMessage("m1", "t1", 1), wireMessage("r1", "t1", 2), wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "partial")] });
+	const emit = () => cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "local-chat", payload: { conversationId: "c1" } }));
+	const queries = () => remoteGetMock.mock.calls.map((call) => call[1].params.query);
+
+	it("reads only an open chat's tail and refetches the whole chat only when the tail cannot be merged", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		remoteGetMock.mockReset().mockResolvedValueOnce(wholePage);
+		const observer = new InfiniteQueryObserver(client, conversationQueryOptions("local-chat"));
+		const unsubscribe = observer.subscribe(() => undefined);
+		const disconnect = createEventTransport(client).connect();
+		const text = (id: string) => client.getQueryData<{ pages: Array<{ items: Array<{ id: string; text?: string }> }> }>(["conversation", "local-chat"])
+			?.pages[0].items.find((item) => item.id === id)?.text;
+		try {
+			await vi.waitFor(() => expect(text("r2")).toBe("partial"));
+
+			remoteGetMock.mockResolvedValueOnce(wire({ afterSequence: 2, oldestSequence: 3, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "partial and more")] }));
+			emit();
+			await vi.waitFor(() => expect(text("r2")).toBe("partial and more"));
+			expect(queries()).toEqual([{ beforeSequence: undefined, limit: 200 }, { afterSequence: 2, limit: 200 }]);
+
+			// The turn settles: the tail no longer merges, so the whole chat is read as before.
+			remoteGetMock
+				.mockResolvedValueOnce(wire({ afterSequence: 2, oldestSequence: 3, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "done")] }))
+				.mockResolvedValueOnce(wire({ oldestSequence: 1, turns: [wireTurn("t1", "completed"), wireTurn("t2", "completed")], messages: [wireMessage("m1", "t1", 1), wireMessage("r1", "t1", 2), wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "done")] }));
+			emit();
+			await vi.waitFor(() => expect(text("r2")).toBe("done"));
+			expect(queries().slice(2)).toEqual([{ afterSequence: 2, limit: 200 }, { beforeSequence: undefined, limit: 200 }]);
+		} finally {
+			disconnect();
+			unsubscribe();
+			client.clear();
+		}
+	});
 });
