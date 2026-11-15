@@ -44,17 +44,27 @@ func newLifecycleEngineWith(t *testing.T, launcher *fakeLauncher, cfg RunLifecyc
 // restart does, and runs the reaper's boot pass.
 func (s *lifecycleEngine) restart(t *testing.T, launcher *fakeLauncher, cfg RunLifecycleConfig) *Engine {
 	t.Helper()
+	eng := s.restartBeforeBoot(t, launcher, cfg)
+	s.pass(t)
+	return eng
+}
+
+// restartBeforeBoot is restart without the reaper's boot pass, as the daemon
+// is between Chat reviewer recovery and ReconcileRuntime. Like the daemon,
+// the engine reserves a previous daemon's runs for that pass.
+func (s *lifecycleEngine) restartBeforeBoot(t *testing.T, launcher *fakeLauncher, cfg RunLifecycleConfig) *Engine {
+	t.Helper()
 	ids := 0
 	now := s.now
 	eng := New(Deps{
 		Store: s.store, Sessions: s.store, PRs: prAt("sha1"), Launcher: launcher, RunLifecycle: cfg,
-		Clock: func() time.Time { return *now },
-		NewID: func() string { ids++; return fmt.Sprintf("id-%d", ids) },
+		AwaitBootPass: true,
+		Clock:         func() time.Time { return *now },
+		NewID:         func() string { ids++; return fmt.Sprintf("id-%d", ids) },
 	})
 	s.Engine = eng
 	s.reaper = reaper.New(noWorkers{}, noWorkers{}, noWorkers{}, reaper.Config{Clock: func() time.Time { return *now }})
 	s.reaper.BindReviewers(eng)
-	s.pass(t)
 	return eng
 }
 
@@ -252,8 +262,7 @@ func TestRunLifecycleFailsARunWithNoFirstActivityFromItsLaunch(t *testing.T) {
 
 	// Activity from an older launch never counts as this run's first activity.
 	s.observe(t, "launch-from-an-older-reviewer", domain.ActivityActive)
-	s.advance(DefaultRunLifecycleConfig().FirstActivityWindow)
-	s.evaluate(t)
+	s.wait(t, DefaultRunLifecycleConfig().FirstActivityWindow)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureNeverStarted)
 	if !launcher.cancelled {
 		t.Fatal("a reviewer that never started was not interrupted")
@@ -273,16 +282,13 @@ func TestRunLifecycleFailsARunWhoseTurnEndedWithoutSubmit(t *testing.T) {
 		t.Fatalf("first activity not recorded: %+v", got)
 	}
 	s.observe(t, launchID, domain.ActivityWaitingInput)
-	s.advance(10 * time.Minute)
-	s.evaluate(t)
+	s.wait(t, 10*time.Minute)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunRunning, "")
 
 	s.observe(t, launchID, domain.ActivityIdle)
-	s.advance(DefaultRunLifecycleConfig().IdleGrace - time.Second)
-	s.evaluate(t)
+	s.wait(t, DefaultRunLifecycleConfig().IdleGrace-time.Second)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunRunning, "")
-	s.advance(time.Second)
-	s.evaluate(t)
+	s.wait(t, time.Second)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureTurnEndedWithoutSubmit)
 }
 
@@ -305,11 +311,9 @@ func TestRunLifecycleNeverFailsARunOnAProbeError(t *testing.T) {
 	run := s.trigger(t)
 	launcher.spawned = false
 	launcher.aliveErr = errors.New("runtime probe unavailable")
-	s.advance(DefaultRunLifecycleConfig().MaxDuration - time.Second)
-	s.evaluate(t)
+	s.wait(t, DefaultRunLifecycleConfig().MaxDuration-time.Second)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunRunning, "")
-	s.advance(time.Second)
-	s.evaluate(t)
+	s.wait(t, time.Second)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureTimedOut)
 }
 
@@ -321,8 +325,7 @@ func TestRunLifecycleTimesOutARunPastItsMaxDuration(t *testing.T) {
 	launchID := s.run(t, run.ID).LaunchID
 	s.observe(t, launchID, domain.ActivityActive)
 	s.observe(t, launchID, domain.ActivityWaitingInput)
-	s.advance(DefaultRunLifecycleConfig().MaxDuration)
-	s.evaluate(t)
+	s.wait(t, DefaultRunLifecycleConfig().MaxDuration)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureTimedOut)
 	if !launcher.cancelled {
 		t.Fatal("a timed-out reviewer was not interrupted")
@@ -336,8 +339,7 @@ func TestFirstFinalStateWinsBetweenSubmitAndTimeout(t *testing.T) {
 	s := newLifecycleEngine(t, launcher)
 	ctx := context.Background()
 	timedOut := s.trigger(t)
-	s.advance(DefaultRunLifecycleConfig().MaxDuration)
-	s.evaluate(t)
+	s.wait(t, DefaultRunLifecycleConfig().MaxDuration)
 	if ok, err := s.store.TransitionReviewRun(ctx, timedOut.ID, []domain.ReviewRunStatus{domain.ReviewRunLaunching, domain.ReviewRunRunning}, domain.ReviewRunCompleted, domain.ReviewRunPatch{Verdict: domain.VerdictApproved}); err != nil || ok {
 		t.Fatalf("late submit accepted: ok=%v err=%v", ok, err)
 	}
@@ -348,8 +350,7 @@ func TestFirstFinalStateWinsBetweenSubmitAndTimeout(t *testing.T) {
 	if ok, err := s2.store.TransitionReviewRun(ctx, submitted.ID, []domain.ReviewRunStatus{domain.ReviewRunLaunching, domain.ReviewRunRunning}, domain.ReviewRunCompleted, domain.ReviewRunPatch{Verdict: domain.VerdictApproved}); err != nil || !ok {
 		t.Fatalf("submit: ok=%v err=%v", ok, err)
 	}
-	s2.advance(DefaultRunLifecycleConfig().MaxDuration)
-	s2.evaluate(t)
+	s2.wait(t, DefaultRunLifecycleConfig().MaxDuration)
 	if got := s2.run(t, submitted.ID); got.Status != domain.ReviewRunCompleted || got.Verdict != domain.VerdictApproved {
 		t.Fatalf("late timeout overwrote a submit: %+v", got)
 	}
@@ -384,11 +385,9 @@ func TestCancelIsConfirmedOrForceKilled(t *testing.T) {
 		if _, err := s.Cancel(context.Background(), s.worker.ID); err != nil {
 			t.Fatal(err)
 		}
-		s.advance(DefaultRunLifecycleConfig().CancelTimeout - time.Second)
-		s.evaluate(t)
+		s.wait(t, DefaultRunLifecycleConfig().CancelTimeout-time.Second)
 		wantRun(t, s.run(t, run.ID), domain.ReviewRunCancelling, "")
-		s.advance(time.Second)
-		s.evaluate(t)
+		s.wait(t, time.Second)
 		wantRun(t, s.run(t, run.ID), domain.ReviewRunCancelled, "")
 		if !launcher.destroyed || launcher.destroyedHandle != "review-mer-1" {
 			t.Fatalf("reviewer was not force-killed: %+v", launcher)
@@ -404,8 +403,7 @@ func TestCancelIsConfirmedOrForceKilled(t *testing.T) {
 		if _, err := s.Cancel(context.Background(), s.worker.ID); err != nil {
 			t.Fatal(err)
 		}
-		s.advance(DefaultRunLifecycleConfig().CancelTimeout)
-		s.evaluate(t)
+		s.wait(t, DefaultRunLifecycleConfig().CancelTimeout)
 		wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureCancelUnconfirmed)
 		if domain.ReviewFailureCancelUnconfirmed.AutoRetryable() {
 			t.Fatal("cancel_unconfirmed must not be retried automatically")
@@ -561,8 +559,7 @@ func TestRowOneReviewRunsAlwaysReachAFinalState(t *testing.T) {
 			launcher := &fakeLauncher{handle: "review-mer-1", reportsActivity: true}
 			s := newLifecycleEngine(t, launcher)
 			run := s.trigger(t)
-			s.advance(cfg.FirstActivityWindow)
-			s.evaluate(t)
+			s.wait(t, cfg.FirstActivityWindow)
 			return describeRun(s.run(t, run.ID))
 		}},
 		{"#6642", "reviewer exits right after launch (no List poll)", "failed (process_exited)", func(t *testing.T) string {
@@ -601,8 +598,7 @@ func TestRowOneReviewRunsAlwaysReachAFinalState(t *testing.T) {
 				t.Fatal(err)
 			}
 			afterCancel := s.run(t, run.ID).Status
-			s.advance(cfg.CancelTimeout)
-			s.evaluate(t)
+			s.wait(t, cfg.CancelTimeout)
 			alive, _ := launcher.Alive(context.Background(), "review-mer-1", "")
 			return fmt.Sprintf("%s -> %s (reviewer process still alive=%v, force killed=%v)", afterCancel, describeRun(s.run(t, run.ID)), alive, launcher.destroyed)
 		}},
@@ -625,4 +621,253 @@ func describeRun(run domain.ReviewRun) string {
 		return fmt.Sprintf("%s (%s)", run.Status, run.FailureReason)
 	}
 	return string(run.Status)
+}
+
+// --- review feedback on PR #8353 ---
+
+// The boot pass settles only what a previous daemon left. A run a trigger in
+// this daemon created before the boot pass reached its worker is left to the
+// normal rules, even when the boot rules would reject it: its reviewer is not
+// reaped and the run is never recorded as daemon_restarted.
+func TestBootPassLeavesARunATriggerRacedInAlone(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	s := newLifecycleEngine(t, launcher)
+	s.restartBeforeBoot(t, launcher, RunLifecycleConfig{})
+	s.advance(time.Second)
+	run := s.trigger(t)      // the trigger wins the worker lock before the boot pass
+	launcher.spawned = false // its reviewer looks gone when the boot pass probes
+	launcher.destroyed = false
+	s.pass(t) // boot pass
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunRunning, "")
+	if launcher.destroyed {
+		t.Fatalf("the boot pass reaped a reviewer this daemon launched: %+v", launcher)
+	}
+	s.pass(t) // the normal rules settle it
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureProcessExited)
+}
+
+// Until the boot pass runs, a previous daemon's run is reserved for it: a hook
+// from the surviving orphan does not settle the run (which would skip the
+// reap), and the boot pass then fails it daemon_restarted and destroys it.
+func TestPreviousDaemonRunsWaitForTheBootPass(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1", alive: true}
+	s := newLifecycleEngine(t, launcher)
+	review, err := s.upsertReview(context.Background(), s.worker, domain.ReviewerClaudeCode, "review-mer-1", "", "launch-1", domain.ActivityActive, *s.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := s.insertLaunchingRun(t, review)
+	s.advance(10 * time.Minute) // the daemon was down past the launch timeout
+	after := &fakeLauncher{handle: "review-mer-1", alive: true}
+	s.restartBeforeBoot(t, after, RunLifecycleConfig{})
+
+	s.observe(t, "launch-1", domain.ActivityActive) // the orphan's hook
+	if _, err := s.List(context.Background(), s.worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunLaunching, "")
+
+	s.pass(t) // boot pass
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureDaemonRestarted)
+	if !after.destroyed || after.destroyedHandle != "review-mer-1" {
+		t.Fatalf("orphaned reviewer not destroyed: %+v", after)
+	}
+}
+
+// An orphan the boot pass could not destroy stays an obligation until a later
+// pass destroys it.
+func TestBootPassRetriesAFailedOrphanReap(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	s := newLifecycleEngine(t, launcher)
+	run := s.trigger(t)
+	after := &fakeLauncher{handle: "review-mer-1", destroyErr: errors.New("pty host busy"), destroyErrCall: 1}
+	s.restartBeforeBoot(t, after, RunLifecycleConfig{})
+	if err := s.reaper.Tick(context.Background()); err == nil {
+		t.Fatal("the failed reap was not reported")
+	}
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureDaemonRestarted)
+	if s.review(t).ReviewerHandleID == "" {
+		t.Fatal("handle cleared although the reviewer was not destroyed")
+	}
+	s.pass(t) // boot pass retried: nothing active left
+	s.pass(t) // normal pass retries the orphan
+	if after.destroyCalls != 2 || s.review(t).ReviewerHandleID != "" {
+		t.Fatalf("orphan not reaped on retry: destroyCalls=%d handle=%q", after.destroyCalls, s.review(t).ReviewerHandleID)
+	}
+}
+
+// A sleep is recorded before any direct evaluation: List or the reviewer's
+// first hook after resume must not time a run out on the sleep.
+func TestDirectEvaluationAfterSleepDoesNotCountTheSleep(t *testing.T) {
+	for _, first := range []string{"list", "hook"} {
+		t.Run(first, func(t *testing.T) {
+			launcher := &fakeLauncher{handle: "review-mer-1", reportsActivity: true}
+			s := newLifecycleEngine(t, launcher)
+			run := s.trigger(t)
+			launchID := s.run(t, run.ID).LaunchID
+			s.observe(t, launchID, domain.ActivityActive)
+			s.wait(t, time.Minute)
+			s.advance(3 * time.Hour) // the laptop sleeps
+			if first == "list" {
+				if _, err := s.List(context.Background(), s.worker.ID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				s.observe(t, launchID, domain.ActivityActive)
+			}
+			wantRun(t, s.run(t, run.ID), domain.ReviewRunRunning, "")
+		})
+	}
+}
+
+// A run that sleeps twice keeps both pauses excluded, however old the first.
+func TestEverySleepOfAnActiveRunStaysExcluded(t *testing.T) {
+	cfg := RunLifecycleConfig{MaxDuration: 3 * time.Minute, SuspendGap: 30 * time.Second}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	s := newLifecycleEngineWith(t, launcher, cfg)
+	run := s.trigger(t)
+	for range 2 {
+		s.wait(t, time.Minute)
+		s.advance(3 * time.Hour)
+		s.pass(t)
+	}
+	s.wait(t, 50*time.Second)
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunRunning, "")
+	s.wait(t, 15*time.Second)
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureTimedOut)
+}
+
+// A probe answer applies only to the launch that was probed: a dead result for
+// a replaced launch does not fail the run its replacement serves.
+func TestStaleProbeOfAReplacedLaunchIsIgnored(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	s := newLifecycleEngine(t, launcher)
+	run := s.trigger(t)
+	review := s.review(t)
+	stale := ports.ReviewerObservationPass{ObservedAt: *s.now, Observations: []ports.ReviewerObservation{{
+		Target:   ports.ReviewerTarget{ReviewID: review.ID, SessionID: s.worker.ID, HandleID: review.ReviewerHandleID, LaunchID: "launch-replaced"},
+		Reviewer: ports.ProbeDead,
+	}}}
+	if err := s.ApplyReviewerObservations(context.Background(), stale); err != nil {
+		t.Fatal(err)
+	}
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunRunning, "")
+}
+
+// Repeated idle signals keep the time the reviewer went idle, so they cannot
+// postpone the idle grace.
+func TestRepeatedIdleSignalsDoNotResetTheIdleGrace(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1", reportsActivity: true}
+	s := newLifecycleEngine(t, launcher)
+	run := s.trigger(t)
+	launchID := s.run(t, run.ID).LaunchID
+	s.observe(t, launchID, domain.ActivityActive)
+	s.observe(t, launchID, domain.ActivityIdle)
+	s.wait(t, DefaultRunLifecycleConfig().IdleGrace/2)
+	s.observe(t, launchID, domain.ActivityIdle)
+	s.wait(t, DefaultRunLifecycleConfig().IdleGrace/2)
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureTurnEndedWithoutSubmit)
+}
+
+// waiting_input is also reported mid-turn, so it never confirms a cancel: a
+// reviewer that ignores the interrupt and asks for a tool is still killed.
+func TestWaitingInputDoesNotConfirmACancel(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1", reportsActivity: true, killOnDestroy: true}
+	s := newLifecycleEngine(t, launcher)
+	run := s.trigger(t)
+	launchID := s.run(t, run.ID).LaunchID
+	s.observe(t, launchID, domain.ActivityActive)
+	if _, err := s.Cancel(context.Background(), s.worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	s.observe(t, launchID, domain.ActivityWaitingInput)
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunCancelling, "")
+	s.wait(t, DefaultRunLifecycleConfig().CancelTimeout)
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunCancelled, "")
+	if !launcher.destroyed {
+		t.Fatal("the reviewer that kept working was not force-killed")
+	}
+}
+
+// New work is not handed to a reviewer that is still being cancelled: a
+// person is told to retry, auto review skips.
+func TestTriggerWaitsForAReviewerToFinishCancelling(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	s := newLifecycleEngine(t, launcher)
+	s.trigger(t)
+	if _, err := s.Cancel(context.Background(), s.worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TriggerWithOptions(context.Background(), s.worker.ID, TriggerOptions{Rerun: true}); !errors.Is(err, ErrReviewAlreadyRunning) {
+		t.Fatalf("manual trigger while cancelling: err = %v, want ErrReviewAlreadyRunning", err)
+	}
+	res, err := s.TriggerWithOptions(context.Background(), s.worker.ID, TriggerOptions{Source: domain.ReviewTriggerAuto})
+	if err != nil || res.SkipReason != "reviewer_stopping" {
+		t.Fatalf("auto trigger while cancelling = %+v err=%v, want skipped", res, err)
+	}
+}
+
+// A cancel during the first Spawn ends the run while the launch is pending;
+// when the reviewer arrives late nobody tracks its work, so it is destroyed.
+func TestALateReviewerWhoseRunWasCancelledIsStopped(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	s := newLifecycleEngine(t, launcher)
+	launcher.onSpawn = func(LaunchSpec) {
+		if _, err := s.Cancel(context.Background(), s.worker.ID); err != nil {
+			t.Errorf("Cancel during spawn: %v", err)
+		}
+	}
+	res, err := s.TriggerWithOptions(context.Background(), s.worker.ID, TriggerOptions{})
+	if err != nil {
+		t.Fatalf("TriggerWithOptions: %v", err)
+	}
+	if got := s.run(t, res.CreatedRuns[0].ID); got.Status != domain.ReviewRunCancelled {
+		t.Fatalf("run = %+v, want cancelled", got)
+	}
+	if !launcher.destroyed || launcher.destroyedHandle != "review-mer-1" || s.review(t).ReviewerHandleID != "" {
+		t.Fatalf("late reviewer kept working: %+v handle=%q", launcher, s.review(t).ReviewerHandleID)
+	}
+}
+
+// A restarted pass waits on its replacement launch like a new one: a hung
+// relaunch fails it after the launch timeout, and a failed relaunch hands it
+// back to the reviewer that was serving it.
+func TestRestartedRunsAreSupervisedThroughTheirRelaunch(t *testing.T) {
+	override := TriggerOptions{Harness: domain.ReviewerClaudeCode, Config: domain.AgentConfig{Model: "opus"}}
+	t.Run("hung relaunch", func(t *testing.T) {
+		launcher := &fakeLauncher{handle: "review-mer-1"}
+		s := newLifecycleEngine(t, launcher)
+		run := s.trigger(t)
+		started, unblock := make(chan struct{}), make(chan struct{})
+		launcher.spawnStarted, launcher.unblockSpawn = started, unblock
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.TriggerWithOptions(context.Background(), s.worker.ID, override)
+			done <- err
+		}()
+		<-started
+		if got := s.run(t, run.ID); got.Status != domain.ReviewRunLaunching {
+			t.Fatalf("restarted run during relaunch = %+v, want launching", got)
+		}
+		s.wait(t, DefaultRunLifecycleConfig().LaunchTimeout)
+		wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureNeverStarted)
+		close(unblock)
+		if err := <-done; err != nil {
+			t.Fatalf("trigger: %v", err)
+		}
+	})
+	t.Run("failed relaunch", func(t *testing.T) {
+		launcher := &fakeLauncher{handle: "review-mer-1"}
+		s := newLifecycleEngine(t, launcher)
+		run := s.trigger(t)
+		previousLaunch := s.run(t, run.ID).LaunchID
+		launcher.spawnErr = errors.New("pty exhausted")
+		if _, err := s.TriggerWithOptions(context.Background(), s.worker.ID, override); err == nil {
+			t.Fatal("relaunch error swallowed")
+		}
+		got := s.run(t, run.ID)
+		if got.Status != domain.ReviewRunRunning || got.LaunchID != previousLaunch {
+			t.Fatalf("restarted run after a failed relaunch = %+v, want running on launch %s", got, previousLaunch)
+		}
+	})
 }

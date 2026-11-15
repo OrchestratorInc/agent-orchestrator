@@ -3005,7 +3005,7 @@ function ReviewPanel({
 								{" "}
 								<Button
 									className="h-auto p-0 text-xs"
-									disabled={runDisabled || autoReviewEnabled || reviewRunning}
+									disabled={runDisabled || reviewRunning || isCancelling}
 									onClick={() => {
 										setDismissedFailureId(reviewFailure.id);
 										onTrigger();

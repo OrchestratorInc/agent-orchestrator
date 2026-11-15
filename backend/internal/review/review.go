@@ -114,6 +114,11 @@ type Deps struct {
 	// RunLifecycle sets the review runs' time limits; zero fields take
 	// DefaultRunLifecycleConfig's values.
 	RunLifecycle RunLifecycleConfig
+	// AwaitBootPass reserves runs a previous daemon left active for the
+	// runtime reaper's boot pass: until it has settled them, normal evaluation
+	// (hooks, List, Trigger) leaves them alone so their reviewers are reaped.
+	// The daemon sets it; engines without a reaper leave it off.
+	AwaitBootPass bool
 
 	// Clock and NewID are injectable for deterministic tests.
 	Clock func() time.Time
@@ -166,7 +171,7 @@ func New(d Deps) *Engine {
 		triggerLocks: make(map[domain.SessionID]*sync.Mutex),
 
 		chatRecoveryDone: d.ChatRecoveryDone,
-		runs:             newRunLifecycleState(d.RunLifecycle),
+		runs:             newRunLifecycleState(d.RunLifecycle, clock(), d.AwaitBootPass),
 	}
 }
 
@@ -467,6 +472,14 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			return TriggerResult{}, err
 		}
 	}
+	if reviewRunsCancellingForHarness(runs, harness) {
+		// The reviewer is still being stopped and may yet be force-killed;
+		// work handed to it now would die with it.
+		if source == domain.ReviewTriggerAuto {
+			return TriggerResult{SkipReason: "reviewer_stopping"}, nil
+		}
+		return TriggerResult{}, fmt.Errorf("%w: %s is still stopping its previous review; try again in a few seconds", ErrReviewAlreadyRunning, harness)
+	}
 	hadRunningReviewer := reviewRunsContainRunningForHarness(runs, harness)
 	reviews := Plan(prs, runs)
 	if source == domain.ReviewTriggerAuto || opts.Rerun {
@@ -604,7 +617,13 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 
 	failRuns := func(reason domain.ReviewFailureReason, err error) error {
 		if failErr := e.failRuns(ctx, created, reason, err); failErr != nil {
-			return errors.Join(err, failErr)
+			err = errors.Join(err, failErr)
+		}
+		// A restarted pass whose replacement did not start is still served by
+		// the previous reviewer. If that reviewer was stopped, rollback has
+		// already failed it and this is a no-op.
+		if revertErr := e.revertRelaunch(ctx, restarted); revertErr != nil {
+			err = errors.Join(err, revertErr)
 		}
 		return err
 	}
@@ -614,6 +633,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	previousLaunchID := reviewRow.ReviewerLaunchID
 	deferInitialMessage := modeChanging && previousHandleID != ""
 	handleID := ""
+	spawned := false
 	previousStopped := false
 	rollbackReplacement := func(cause error) error {
 		rollbackNow := e.clock()
@@ -688,6 +708,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 			previousStopped = true
 		}
+		// A restarted pass is now waiting on the replacement launch, so a hung
+		// launch is bounded by LaunchTimeout like a new one.
+		if err := e.markRunsRelaunching(ctx, restarted, launchID); err != nil {
+			return TriggerResult{}, rollbackReplacement(err)
+		}
 		reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, launchAgentSessionID, launchID, "", now)
 		if err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
@@ -720,6 +745,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			return TriggerResult{}, rollbackReplacement(fmt.Errorf("launch reviewer: %w", err))
 		}
 		handleID = launch.HandleID
+		spawned = true
 		if launch.LaunchID != "" {
 			reviewRow.ReviewerLaunchID = launch.LaunchID
 		}
@@ -811,6 +837,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			return TriggerResult{}, err
 		}
 		restarted[i] = run
+	}
+	if err := e.stopLateReviewer(ctx, reviewRow, handleID, spawned, append(append([]domain.ReviewRun{}, created...), restarted...)); err != nil {
+		return TriggerResult{}, err
 	}
 	if len(restarted) > 0 {
 		launchRun = restarted[0]
@@ -990,6 +1019,15 @@ func reviewerPaneReusable(reviewRow domain.Review, hadRunningReviewer bool) bool
 		return true
 	}
 	return hadRunningReviewer
+}
+
+func reviewRunsCancellingForHarness(runs []domain.ReviewRun, harness domain.ReviewerHarness) bool {
+	for _, run := range runs {
+		if (run.Harness == harness || run.Harness == "") && run.Status == domain.ReviewRunCancelling {
+			return true
+		}
+	}
+	return false
 }
 
 func reviewRunsContainRunningForHarness(runs []domain.ReviewRun, harness domain.ReviewerHarness) bool {

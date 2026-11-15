@@ -6066,6 +6066,13 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Auto review: Review failed. Please try again.",
     );
+    // Retrying a failed automatic pass does not require turning auto review off.
+    const retry = within(screen.getByRole("status")).getByRole("button", { name: "Retry" });
+    expect(retry).toBeEnabled();
+    await userEvent.click(retry);
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()),
+    );
   });
 
   it("surfaces a failed manual review with a retry", async () => {

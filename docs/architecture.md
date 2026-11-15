@@ -211,8 +211,12 @@ pass into guarded `review_run` transitions (`queued`, `launching`, `running`,
 the time limits (launch, first activity, idle grace, max duration, cancel), and
 force-kills a reviewer that ignores a cancel. The reaper's first pass after
 startup is the boot pass, which settles runs a previous daemon left in
-progress. Reviewer activity hooks, trigger, cancel and the reviews list settle
-their worker's runs directly without waiting for the next pass.
+progress; until it has, other paths leave those runs alone so their
+reviewers are reaped, and the boot pass never touches a run this daemon
+created. Reviewer activity hooks, trigger, cancel and the reviews list settle
+their worker's runs directly without waiting for the next pass. Time the
+daemon did not observe (the machine slept) never counts against a run, and a
+reviewer that is still being cancelled is not given new work.
 
 ### 4. Change data capture
 
