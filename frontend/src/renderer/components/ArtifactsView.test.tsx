@@ -36,6 +36,9 @@ vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type=
 
 const mocks = vi.hoisted(() => ({
 	workspaces: [] as WorkspaceSummary[],
+	remoteWorkspaces: [] as WorkspaceSummary[],
+	remoteHosts: [] as Array<{ hostId: string; label: string; url: string; status: "connected" | "offline" }>,
+	remoteDel: vi.fn(),
 	agents: [] as Array<Record<string, unknown>>,
 	navigate: vi.fn(),
 	post: vi.fn(),
@@ -74,6 +77,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryKeyForHost: () => ["workspaces"],
 	useWorkspaceQuery: () => ({ data: mocks.workspaces, isLoading: false, error: null }),
+	useRemoteWorkspaces: () => ({ data: mocks.remoteWorkspaces ?? [] }),
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { deleteSessionArtifact: mocks.deleteCloudArtifact } }),
@@ -97,6 +101,14 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () =
 vi.mock("../lib/api-client", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/api-client")>(),
 	apiClient: { POST: mocks.post, GET: mocks.get, DELETE: mocks.del },
+}));
+vi.mock("../lib/host-clients", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../lib/host-clients")>();
+	return { ...actual, clientForSessionHost: (hostId?: string) => hostId ? { DELETE: mocks.remoteDel } : actual.clientForSessionHost(hostId) };
+});
+vi.mock("../lib/shell-context", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/shell-context")>(),
+	useShellMaybe: () => ({ remoteHosts: mocks.remoteHosts }),
 }));
 vi.mock("../lib/telemetry", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/telemetry")>(),
@@ -216,6 +228,9 @@ describe("ArtifactsView", () => {
 			disconnect() {}
 		});
 		mocks.workspaces = withArtifacts;
+		mocks.remoteWorkspaces = [];
+		mocks.remoteHosts = [];
+		mocks.remoteDel.mockReset();
 		mocks.agents = [codexReady];
 		mocks.hideShellTopbar = true;
 		mocks.cloudArtifacts = undefined;
@@ -393,6 +408,40 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("button", { name: "List view" }));
 		expect(screen.getAllByRole("listitem")).toHaveLength(2);
 		expect(screen.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
+	});
+
+	it("lists a remote machine's artifacts under its own location, and deletes them on that machine", async () => {
+		const user = userEvent.setup();
+		mocks.remoteHosts = [{ hostId: "https://h-vm.useao.dev", label: "build-vm", url: "https://h-vm.useao.dev", status: "connected" }];
+		// The same project and session IDs as this computer's: the machine keeps them apart.
+		mocks.remoteWorkspaces = [{
+			hostId: "https://h-vm.useao.dev",
+			id: "ao",
+			name: "agent-orchestrator",
+			path: "/home/ao/code/ao",
+			sessions: [{ ...session("ao-2", "Benchmark on the VM", [{ name: "bench.md", updatedAt: "2026-10-12T10:00:00Z" }]), hostId: "https://h-vm.useao.dev" }],
+		}];
+		mocks.remoteDel.mockResolvedValue({});
+		useArtifactsViewStore.setState({ view: "list", pinnedArtifactIds: [JSON.stringify(["ao-2", "bench.md", "https://h-vm.useao.dev"])] });
+		renderView();
+
+		const location = screen.getByRole("group", { name: "Artifact location" });
+		expect(within(location).getAllByRole("button").map((button) => button.textContent)).toEqual(["All", "On this machine", "build-vm"]);
+		await user.click(within(location).getByRole("button", { name: "build-vm" }));
+		const rows = within(artifactList()).getAllByRole("listitem");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toHaveTextContent("bench.md");
+		expect(rows[0]).toHaveTextContent("agent-orchestrator · build-vm · Benchmark on the VM");
+		// Pinned by its machine's key.
+		expect(within(rows[0]!).getByRole("img", { name: "Pinned" })).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		await user.click(screen.getByRole("checkbox", { name: "Select bench.md" }));
+		await user.click(screen.getByRole("button", { name: "Delete" }));
+		await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Delete 1 artifact" }));
+		await waitFor(() => expect(mocks.remoteDel).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/artifact-files", { params: { path: { sessionId: "ao-2" }, query: { path: "bench.md" } } }));
+		expect(mocks.del).not.toHaveBeenCalled();
+		expect(useArtifactsViewStore.getState().pinnedArtifactIds).toEqual([]);
 	});
 
 	it("selects artifacts one by one and deletes them together after confirming", async () => {

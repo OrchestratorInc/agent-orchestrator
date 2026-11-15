@@ -965,7 +965,7 @@ describe("SessionArtifactsView", () => {
 
 	it.each([
 		{ location: "local", hostId: undefined, cloud: undefined, shown: true },
-		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: false },
+		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: true },
 		{ location: "cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "me-1" }, shown: true },
 		{ location: "another member's cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "someone-else" }, shown: false },
 		{ location: "creatorless cloud", hostId: undefined, cloud: { orgId: "org-1" }, shown: false },

@@ -175,6 +175,157 @@ export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: st
 	}
 }
 
+/** How long reading a remote host's file may take: its headers, and the whole download. */
+export const HOST_SHARE_TIMEOUTS: Record<"inspect" | "download", number> = {
+	inspect: 30_000,
+	download: 15 * 60_000,
+};
+
+/** A remote host's artifact as its daemon serves it. */
+export interface HostShareFileInfo {
+	name: string;
+	/** Slash-separated path in the session's artifacts folder. */
+	relativePath: string;
+	size: number;
+	/** See shareFileFingerprint; read from the host's ETag, so it matches a local file's. */
+	fingerprint: string;
+}
+
+/**
+ * The address of a remote host's artifact file on that host's loopback proxy
+ * (apiBase), served as its exact bytes. The path is checked as a local
+ * file's is, before the host's own check: no absolute path, no "..", and
+ * never the version history folder.
+ */
+export function hostShareFileUrl(apiBase: string, sessionId: unknown, relPath: unknown): { url: string; relativePath: string; name: string } {
+	if (typeof sessionId !== "string" || !SESSION_ID_PATTERN.test(sessionId) || sessionId === "." || sessionId === "..") {
+		throw new CloudShareError("invalid_file", "Not a session's artifact.");
+	}
+	if (typeof relPath !== "string" || relPath === "" || relPath.includes("\0") || relPath.includes("\\") || relPath.startsWith("/") || path.win32.isAbsolute(relPath)) {
+		throw new CloudShareError("invalid_file", "Not a file in the session's artifacts.");
+	}
+	const segments = relPath.split("/").filter((segment) => segment !== "");
+	if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+		throw new CloudShareError("invalid_file", "Only files in the session's artifacts folder can be shared.");
+	}
+	if (segments[0] === VERSIONS_DIR) throw new CloudShareError("invalid_file", "Version history cannot be shared.");
+	const relativePath = segments.join("/");
+	const url = `${apiBase.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${segments.map(encodeURIComponent).join("/")}?source=artifact&raw=true`;
+	return { url, relativePath, name: segments[segments.length - 1] ?? relativePath };
+}
+
+/**
+ * The fingerprint a remote host's response names. The daemon tags an
+ * artifact "<size>-<modification time in ns>", which gives the same
+ * fingerprint a local file's metadata would. A host that sends no such tag
+ * falls back to its Content-Length and Last-Modified, which only tells
+ * changes a second apart.
+ */
+export function hostShareFingerprint(headers: Headers): { size: number; fingerprint: string } | undefined {
+	const tag = /^(?:W\/)?"?(\d+)-(\d+)"?$/.exec(headers.get("etag")?.trim() ?? "");
+	if (tag) {
+		const size = Number(tag[1]);
+		const nanoseconds = BigInt(tag[2] ?? "0");
+		return { size, fingerprint: shareFileFingerprint({ size, mtimeMs: Number(nanoseconds / 1_000_000n) }) };
+	}
+	const length = headers.get("content-length");
+	const modified = Date.parse(headers.get("last-modified") ?? "");
+	if (length === null || !/^\d+$/.test(length) || Number.isNaN(modified)) return undefined;
+	const size = Number(length);
+	return { size, fingerprint: shareFileFingerprint({ size, mtimeMs: modified }) };
+}
+
+function hostFileError(response: Response): CloudShareError {
+	if (response.status === 404) return new CloudShareError("file_missing", "The file is no longer available.");
+	return new CloudShareError("host_unavailable", `The machine this file is on didn't answer (${response.status}).`, response.status);
+}
+
+/** fetch from a remote host, with a time limit; a cancel stays a cancel. */
+async function fetchHostWithin(fetchHost: HostFetch, url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
+	const timeout = AbortSignal.timeout(timeoutMs);
+	try {
+		return await fetchHost(url, { ...init, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+	} catch (error) {
+		if (timeout.aborted && !signal?.aborted) throw new CloudShareError("timeout", "The machine this file is on didn't answer in time. Check that it is online and try again.");
+		if (signal?.aborted) throw error;
+		throw new CloudShareError("host_unavailable", "The machine this file is on can't be reached. Check that it is online and try again.");
+	}
+}
+
+export type HostFetch = (url: string, init: RequestInit) => Promise<Response>;
+
+/** A remote host's file's name, size and fingerprint, read from its headers alone. */
+export async function inspectHostShareFile(fetchHost: HostFetch, file: { url: string; relativePath: string; name: string }, signal?: AbortSignal): Promise<HostShareFileInfo> {
+	const response = await fetchHostWithin(fetchHost, file.url, { method: "HEAD" }, HOST_SHARE_TIMEOUTS.inspect, signal);
+	if (!response.ok) throw hostFileError(response);
+	const version = hostShareFingerprint(response.headers);
+	if (!version) throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share its files.");
+	return { name: file.name, relativePath: file.relativePath, ...version };
+}
+
+/**
+ * Downloads a remote host's file into a private snapshot under snapshotDir,
+ * hashing it as it goes. The version is the one the response names, so a
+ * file the agent rewrote since the panel showed it is caught by the caller's
+ * fingerprint check; a body shorter or longer than that version is refused
+ * as source_changed. The download needs as much free space as the file.
+ */
+export async function snapshotHostShareFile(
+	fetchHost: HostFetch,
+	file: { url: string },
+	snapshotDir: string,
+	options: SnapshotOptions & { expectedSize?: number } = {},
+): Promise<ShareSnapshot> {
+	await fs.mkdir(snapshotDir, { recursive: true, mode: 0o700 });
+	if (options.expectedSize !== undefined) {
+		const free = await fs.statfs(snapshotDir).then((stats) => stats.bavail * stats.bsize, () => Number.POSITIVE_INFINITY);
+		if (free < options.expectedSize) throw new CloudShareError("disk_full", "There is not enough free disk space to prepare this file for sharing.");
+	}
+	const response = await fetchHostWithin(fetchHost, file.url, { method: "GET" }, HOST_SHARE_TIMEOUTS.download, options.signal);
+	if (!response.ok) {
+		await response.body?.cancel().catch(() => undefined);
+		throw hostFileError(response);
+	}
+	const version = hostShareFingerprint(response.headers);
+	if (!version || !response.body) {
+		await response.body?.cancel().catch(() => undefined);
+		throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share its files.");
+	}
+	const target = path.join(snapshotDir, randomUUID());
+	const output = await fs.open(target, "wx", 0o600);
+	const hash = createHash("sha256");
+	let size = 0;
+	try {
+		const reader = response.body.getReader();
+		for (;;) {
+			if (options.signal?.aborted) {
+				await reader.cancel().catch(() => undefined);
+				throw new CloudShareError("cancelled", "Sharing was cancelled.");
+			}
+			const { done, value } = await reader.read();
+			if (done) break;
+			hash.update(value);
+			await output.write(value);
+			size += value.byteLength;
+			if (size > version.size) {
+				await reader.cancel().catch(() => undefined);
+				break;
+			}
+			options.onProgress?.(size);
+		}
+		// The bytes must be all of the version the response named, and no more.
+		if (size !== version.size) throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
+		await output.close();
+		return { path: target, size, sha256: hash.digest("hex"), fingerprint: version.fingerprint };
+	} catch (error) {
+		await output.close().catch(() => undefined);
+		await fs.rm(target, { force: true });
+		// A connection that dropped mid-download reads as the host being away, not as a bug.
+		if (error instanceof CloudShareError || options.signal?.aborted) throw error;
+		throw new CloudShareError("host_unavailable", "The machine this file is on stopped answering. Check that it is online and try again.");
+	}
+}
+
 /** Removes snapshots left by an earlier run. */
 export async function clearShareSnapshots(snapshotDir: string): Promise<void> {
 	await fs.rm(snapshotDir, { recursive: true, force: true });
