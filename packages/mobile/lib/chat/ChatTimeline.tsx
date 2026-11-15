@@ -65,6 +65,7 @@ import { JumpToLatest } from "./JumpToLatest";
 import { useFlagValue, type Flag } from "./flag";
 import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
 import { atTail, openingRow } from "./timelineScroll";
+import { fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
 
 /** The jump back to the newest message fades in and out rather than popping. */
 const JUMP_FADE_MS = 160;
@@ -74,6 +75,8 @@ const OPENING_ROWS = 4;
 // shown, and the longest it stays hidden whatever it does.
 const OPENING_SETTLE_MS = 90;
 const OPENING_REVEAL_CAP_MS = 600;
+/** The longest a focused request field waits for the keyboard to open (none comes with a hardware keyboard). */
+const FIELD_REVEAL_WAIT_MS = 600;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
@@ -396,6 +399,54 @@ function Timeline({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [editingTurnId]);
 
+	// Where the list was last scrolled to, for `revealField` when it cannot read
+	// the field's place in the content.
+	const scrollOffset = useRef(0);
+	// A request-form field that takes focus comes into view above the keyboard
+	// and the composer: the list does not scroll a focused child into view (see
+	// `scrollsChildToFocus`). It is measured once the keyboard is up, and only a
+	// field that is hidden moves the list, by as little as shows it, so focusing
+	// one in view never nudges the conversation.
+	const revealField = useCallback((field: View | null) => {
+		const scroll = listRef.current?.getNativeScrollRef() as (View & { getInnerViewRef?(): View | null }) | null | undefined;
+		if (!field || !scroll?.measureInWindow) return;
+		let waiting = true;
+		const reveal = () => {
+			if (!waiting) return;
+			waiting = false;
+			shown.remove();
+			clearTimeout(fallback);
+			requestAnimationFrame(() => field.measureInWindow((_x, fieldTop, _width, fieldHeight) => scroll.measureInWindow((_listX, listTop, _listWidth, listHeight) => {
+				const listBottom = listTop + listHeight;
+				const keyboardTop = Keyboard.isVisible() ? Keyboard.metrics()?.screenY : undefined;
+				const spans = {
+					fieldTop,
+					fieldBottom: fieldTop + fieldHeight,
+					visibleTop: listTop + underHeader + topInset + space.md,
+					visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,
+				};
+				const scrollTo = (offset: number) => {
+					const target = fieldRevealOffset({ ...spans, offset });
+					if (target === undefined) return;
+					// A move of ours, not the person's: the list stops following new
+					// output until it comes back to the end.
+					followsTail.current = false;
+					listRef.current?.scrollToOffset({ offset: Math.max(target, Platform.OS === "ios" ? -underHeader : 0), animated: true });
+				};
+				if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;
+				// The list's offset right now, from where the field sits in the content
+				// and on screen: the last scroll event can trail the keyboard's lift.
+				const content = scroll.getInnerViewRef?.();
+				if (content) field.measureLayout(content, (_contentX, contentTop) => scrollTo(listTop + contentTop - fieldTop), () => scrollTo(scrollOffset.current));
+				else scrollTo(scrollOffset.current);
+			})));
+		};
+		// A field focused with the keyboard down waits for it to finish opening
+		// (and for the list's lift with it); with it up, nothing moves first.
+		const shown = Keyboard.addListener("keyboardDidShow", reveal);
+		const fallback = setTimeout(reveal, Keyboard.isVisible() ? 0 : FIELD_REVEAL_WAIT_MS);
+	}, [bottomInset, topInset, underHeader]);
+
 	if (plan.kind === "empty") openedAt.current = undefined;
 	if (plan.kind === "empty" && startup?.visible) {
 		// No brief in the timeline (a promptless start): the checklist stands alone.
@@ -419,6 +470,7 @@ function Timeline({
 	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
 	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
 	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+		scrollOffset.current = event.nativeEvent.contentOffset.y;
 		// iOS reports the end of the list's own scrolls (the opening one, each
 		// follow) as momentum ending too. Only a drag decides whether to follow;
 		// one of ours that landed short of an end still moving goes again.
@@ -454,6 +506,7 @@ function Timeline({
 			<ConversationHarness.Provider value={snapshot.harness}>
 				<LatestWorkerUpdates.Provider value={latestUpdates}>
 					<Animated.View style={[styles.timelineWrap, growthLift]}>
+						<RevealFocusedField.Provider value={revealField}>
 						<FlatList<ConversationGroup>
 							ref={listRef}
 							renderScrollComponent={renderScrollComponent}
@@ -469,7 +522,8 @@ function Timeline({
 							keyboardShouldPersistTaps="handled"
 							// A tap gives Android's selectable text focus, and scrolling it into
 							// view nudged the conversation as the keyboard closed. The list's
-							// one field reveals itself (`revealEdit`).
+							// fields reveal themselves: the message editor (`revealEdit`) and a
+							// request form's fields (`revealField`).
 							scrollsChildToFocus={false}
 							initialNumToRender={OPENING_ROWS}
 							initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}
@@ -486,6 +540,7 @@ function Timeline({
 							onScroll={(event) => {
 								// Only the person's own scrolling stops the follow (see `followsTail`);
 								// passing the end without a drag, as a jump does, resumes it.
+								scrollOffset.current = event.nativeEvent.contentOffset.y;
 								const tail = atTail(event.nativeEvent, keyboardInset.current);
 								if (tail && !dragging.current) followsTail.current = true;
 								setShowJump(!followsTail.current && !tail);
@@ -543,6 +598,7 @@ function Timeline({
 								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 							/>}
 						/>
+						</RevealFocusedField.Provider>
 						{/* An unresolved edit whose prompt left the conversation keeps its Retry and
 						    Abandon controls here, apart from the list, as the desktop does. */}
 						{detached && editDraft ? <View style={styles.detachedEditor}>

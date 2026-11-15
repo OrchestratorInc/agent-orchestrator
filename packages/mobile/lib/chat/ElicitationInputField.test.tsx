@@ -14,6 +14,7 @@ vi.mock("../ThemeProvider", () => ({
 vi.mock("./elicitation-native-controls", () => ({ ElicitationChoiceList: "ElicitationChoiceList", ElicitationTextField: "ElicitationTextField" }));
 
 import { ElicitationInputField } from "./ElicitationInputField";
+import { RevealFocusedField } from "./fieldReveal";
 import type { InputProperty } from "./types";
 
 let renderer: ReactTestRenderer | undefined;
@@ -86,5 +87,29 @@ describe("other fields", () => {
 	it("takes anything else as text, numeric for a number", () => {
 		render({ type: "integer", maxLength: 4 }, 3);
 		expect(renderer!.root.findByType("ElicitationTextField" as never).props).toMatchObject({ label: "Run tests *", numeric: true, maxLength: 4, value: 3 });
+	});
+
+	// The timeline does not scroll a focused child into view, so a text field
+	// asks it to show the field, with its label, above the keyboard.
+	it("asks the timeline to reveal a text field, label and all, when it takes focus", () => {
+		const reveal = vi.fn();
+		const field = { measureInWindow: vi.fn() };
+		act(() => {
+			renderer = create(
+				<RevealFocusedField.Provider value={reveal}>
+					<ElicitationInputField name="title" property={{ type: "string" }} required value="" onChange={vi.fn()} />
+				</RevealFocusedField.Provider>,
+				{ createNodeMock: (element) => (element.type === "View" ? field : null) },
+			);
+		});
+		const text = renderer!.root.findByType("ElicitationTextField" as never);
+		expect(text.parent!.props.collapsable).toBe(false);
+		act(() => text.props.onFocus());
+		expect(reveal).toHaveBeenCalledWith(field);
+	});
+
+	it("asks nothing outside a timeline", () => {
+		render({ type: "string" }, "");
+		expect(renderer!.root.findByType("ElicitationTextField" as never).props.onFocus).toBeUndefined();
 	});
 });

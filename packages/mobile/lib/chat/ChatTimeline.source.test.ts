@@ -381,6 +381,15 @@ describe("following the newest message", () => {
 		expect(source).toContain("onEditFocus={revealEdit}");
 	});
 
+	// With focus scrolling off, a request form's field reveals itself when it
+	// takes focus, after the keyboard opens, and only when it is hidden.
+	it("reveals a focused request field above the keyboard and the composer", () => {
+		expect(source).toContain("<RevealFocusedField.Provider value={revealField}>");
+		expect(source).toContain('Keyboard.addListener("keyboardDidShow", reveal)');
+		expect(source).toContain("visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,");
+		expect(source).toContain("if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;");
+	});
+
 	it("holds a follow to the end while the keyboard moves, and makes it once it stops", () => {
 		expect(source).toContain("if (keyboardOffset !== undefined && keyboardMoving.value) {");
 		expect(source).toContain("useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);");
