@@ -196,9 +196,14 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if !validSessionID(nativeID) {
 		return nil, false, fmt.Errorf("%s: native session id %q is not a Stakpak session UUID", adapterID, nativeID)
 	}
+	previous, _, err := readLaunchRecord(cfg.DataDir, cfg.Session.ID)
+	if err != nil {
+		return nil, false, err
+	}
 	// Ask in the resumed process's environment: its profile decides which
 	// store, local or the Stakpak API, holds the conversation.
-	exists, err := p.NativeConversationExists(ctx, cfg.Session, nativeID, cfg.Env)
+	env := restoreEnv(cfg.Env, previous)
+	exists, err := p.NativeConversationExists(ctx, cfg.Session, nativeID, env)
 	if err != nil {
 		return nil, false, err
 	}
@@ -212,10 +217,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	// Stakpak stores --system-prompt-file's message in the conversation and
 	// inserts it again on every resume. Instructions the conversation already
 	// holds are not passed a second time.
-	previous, _, err := readLaunchRecord(cfg.DataDir, cfg.Session.ID)
-	if err != nil {
-		return nil, false, err
-	}
 	digest := promptDigest(prompt)
 	sameConversation := previous.matches(nativeID)
 	launchPrompt, launchFile := prompt, cfg.SystemPromptFile
@@ -232,7 +233,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if recorded == "" && sameConversation {
 		recorded = previous.PromptDigest
 	}
-	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded, Profile: launchProfile(cfg.Env)}); err != nil {
+	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded, Profile: launchProfile(env)}); err != nil {
 		return nil, false, err
 	}
 	return append(argv, "--session", nativeID), true, nil

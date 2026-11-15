@@ -46,6 +46,22 @@ func launchProfile(env map[string]string) *string {
 	return nil
 }
 
+// restoreEnv is the environment a restore's conversation check runs in: the
+// restore's own, with the launch's recorded profile when the caller set none.
+// AO's update-when-idle probe passes no environment, and a project-level
+// STAKPAK_PROFILE would otherwise send it to the daemon's store.
+func restoreEnv(env map[string]string, previous launchRecord) map[string]string {
+	if _, set := env["STAKPAK_PROFILE"]; set || previous.Profile == nil {
+		return env
+	}
+	out := make(map[string]string, len(env)+1)
+	for key, value := range env {
+		out[key] = value
+	}
+	out["STAKPAK_PROFILE"] = *previous.Profile
+	return out
+}
+
 // listEnv is the environment the launch's session list must run in.
 func (r launchRecord) listEnv() map[string]string {
 	if r.Profile == nil {

@@ -528,3 +528,36 @@ func TestResolveNativeSessionIDListsTheLaunchProfile(t *testing.T) {
 		t.Fatalf("launch record kept the launch environment: %s", raw)
 	}
 }
+
+// A profile set only in the project environment reaches the launch, not the
+// daemon. AO's update-when-idle probe calls GetRestoreCommand without an
+// environment, so the check falls back to the profile the launch recorded,
+// and the probe keeps it on the record.
+func TestRestoreProbeUsesTheRecordedProfile(t *testing.T) {
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(bin), "known-session-other"), []byte(nativeA), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, ws := t.TempDir(), t.TempDir()
+	p := New()
+	ctx := context.Background()
+	if _, err := p.GetLaunchCommand(ctx, ports.LaunchConfig{DataDir: data, SessionID: "ao-1", WorkspacePath: ws, Env: map[string]string{"STAKPAK_PROFILE": "other"}}); err != nil {
+		t.Fatal(err)
+	}
+	probe := ports.RestoreConfig{
+		DataDir: data,
+		Session: ports.SessionRef{ID: "ao-1", WorkspacePath: ws, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeA}},
+	}
+	if argv, ok, err := p.GetRestoreCommand(ctx, probe); err != nil || !ok || !slices.Equal(argv, []string{bin, "--session", nativeA}) {
+		t.Fatalf("probe = %q, %t, %v; want the other profile's conversation found", argv, ok, err)
+	}
+	record, _, err := readLaunchRecord(data, "ao-1")
+	if err != nil || record.Profile == nil || *record.Profile != "other" {
+		t.Fatalf("launch record = %+v, %v; want profile other kept", record, err)
+	}
+	// An explicit restore environment still wins.
+	probe.Env = map[string]string{"STAKPAK_PROFILE": ""}
+	if _, ok, err := p.GetRestoreCommand(ctx, probe); err != nil || ok {
+		t.Fatalf("restore in the default profile = %t, %v; want the conversation missing there", ok, err)
+	}
+}
