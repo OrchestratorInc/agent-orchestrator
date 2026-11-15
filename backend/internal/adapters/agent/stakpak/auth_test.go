@@ -87,12 +87,43 @@ func TestProbeProvider(t *testing.T) {
 		{"anthropic without key", provider{Type: "anthropic"}, probeRejected},
 		{"server error", provider{Type: "custom", Endpoint: server.URL + "/broken", APIKey: "good"}, probeInconclusive},
 		{"unknown type", provider{Type: "amazon-bedrock"}, probeInconclusive},
+		// A key never travels in plaintext to a non-loopback host.
+		{"custom key over remote http", provider{Type: "custom", Endpoint: "http://provider.invalid/v1", APIKey: "good"}, probeInconclusive},
+		{"anthropic key over remote http", provider{Type: "anthropic", Endpoint: "http://provider.invalid/v1/", APIKey: "good"}, probeInconclusive},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := probeProvider(ctx, server.Client(), tc.p); got != tc.want {
 				t.Fatalf("probeProvider = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// Go keeps x-api-key on a cross-origin redirect, so the probe must not follow
+// one: the key would reach the redirect target.
+func TestProbeProviderDoesNotFollowRedirects(t *testing.T) {
+	leaked := make(chan string, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked <- r.Header.Get("x-api-key") + r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+	for _, p := range []provider{
+		{Type: "anthropic", Endpoint: origin.URL + "/v1/", APIKey: "secret"},
+		{Type: "custom", Endpoint: origin.URL + "/v1", APIKey: "secret"},
+	} {
+		if got := probeProvider(context.Background(), origin.Client(), p); got != probeInconclusive {
+			t.Fatalf("%s probe through a redirect = %d, want inconclusive", p.Type, got)
+		}
+	}
+	select {
+	case header := <-leaked:
+		t.Fatalf("redirect target received a request (credential headers %q)", header)
+	default:
 	}
 }
 
@@ -227,7 +258,10 @@ func TestEnvironmentKeysAreNotSignedOut(t *testing.T) {
 		t.Fatalf("keyless provider with ANTHROPIC_API_KEY = %q, %v; want authorized", got, err)
 	}
 
-	t.Setenv("HOME", t.TempDir())
+	// os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere.
+	empty := t.TempDir()
+	t.Setenv("HOME", empty)
+	t.Setenv("USERPROFILE", empty)
 	if got, err := authCheck(context.Background(), server.Client()); err != nil || got != ports.AgentAuthStatusUnauthorized {
 		t.Fatalf("no credentials = %q, %v; want unauthorized", got, err)
 	}

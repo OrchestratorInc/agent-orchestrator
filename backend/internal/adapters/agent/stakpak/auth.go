@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -257,7 +258,7 @@ func probeProvider(ctx context.Context, client *http.Client, p provider) probeVe
 		if endpoint == "" && p.Type == "openai" {
 			endpoint = "https://api.openai.com/v1"
 		}
-		if endpoint == "" {
+		if endpoint == "" || (p.APIKey != "" && !credentialEndpointAllowed(endpoint)) {
 			return probeInconclusive
 		}
 		req, err = http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint, "/")+"/models", http.NoBody)
@@ -267,6 +268,9 @@ func probeProvider(ctx context.Context, client *http.Client, p provider) probeVe
 	case "anthropic":
 		if p.APIKey == "" {
 			return probeRejected
+		}
+		if !credentialEndpointAllowed(anthropicBaseURL(p.Endpoint)) {
+			return probeInconclusive
 		}
 		req, err = http.NewRequestWithContext(ctx, http.MethodPost, anthropicBaseURL(p.Endpoint)+"messages",
 			bytes.NewReader([]byte(`{"model":"claude-haiku-4-5","max_tokens":1,"messages":[]}`)))
@@ -292,7 +296,11 @@ func probeProvider(ctx context.Context, client *http.Client, p provider) probeVe
 	if err != nil {
 		return probeInconclusive
 	}
-	resp, err := client.Do(req)
+	// Never follow a redirect with a key: Go strips Authorization on a
+	// cross-origin redirect but not x-api-key. A redirect stays inconclusive.
+	probeClient := *client
+	probeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := probeClient.Do(req)
 	if err != nil {
 		return probeInconclusive
 	}
@@ -305,6 +313,26 @@ func probeProvider(ctx context.Context, client *http.Client, p provider) probeVe
 		return probeRejected
 	}
 	return probeInconclusive
+}
+
+// credentialEndpointAllowed reports whether a probe may send an API key to
+// endpoint: HTTPS, or plain HTTP to a loopback host only, as authprobe's
+// connection check allows.
+func credentialEndpointAllowed(endpoint string) bool {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || u.Host == "" || u.User != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "https":
+		return true
+	case "http":
+		switch u.Hostname() {
+		case "127.0.0.1", "localhost", "::1":
+			return true
+		}
+	}
+	return false
 }
 
 // anthropicBaseURL normalizes an endpoint the way Stakpak does: a trailing
