@@ -1018,13 +1018,17 @@ func (c *commandContext) resumeSessionAgent(ctx context.Context, cmd *cobra.Comm
 		return err
 	}
 	// A retried failed start runs in the background, as a new spawn does. Wait
-	// for it so a second failure reaches the caller.
+	// for it so a second failure reaches the caller, then report the session as
+	// it is after the start, not as the retry request left it.
 	if res.Session.ProvisionState == "provisioning" {
-		settled, err := c.awaitSpawnStart(ctx, spawnedSession{ID: res.SessionID, ProvisionState: res.Session.ProvisionState})
+		if _, err := c.awaitSpawnStart(ctx, spawnedSession{ID: res.SessionID, ProvisionState: res.Session.ProvisionState}); err != nil {
+			return err
+		}
+		settled, err := c.fetchScopedSession(ctx, id, "")
 		if err != nil {
 			return err
 		}
-		res.Session.ProvisionState, res.Session.ProvisionError = settled.ProvisionState, settled.ProvisionError
+		res.Session = settled
 	}
 	if opts.json {
 		return writeJSON(cmd.OutOrStdout(), res)

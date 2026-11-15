@@ -670,21 +670,32 @@ func TestSessionRestore_FailedStartRetries(t *testing.T) {
 				t.Fatalf("list activity for a failed start = %q, want start failed", got)
 			}
 			out, _, err = executeCLI(t, deps, "session", "restore", "demo-1")
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || strings.Contains(out, "agent resumed") {
-					t.Fatalf("session restore: err=%v out=%q, want %q and no success line", err, out, tc.wantErr)
-				}
-			} else if err != nil || !strings.Contains(out, tc.wantOut) {
-				t.Fatalf("session restore: err=%v out=%q, want %q", err, out, tc.wantOut)
-			}
 			want := []string{
 				"GET /api/v1/sessions/demo-1",
 				"GET /api/v1/sessions/demo-1",
 				"POST /api/v1/sessions/demo-1/resume-agent",
 				"GET /api/v1/sessions/demo-1",
 			}
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) || strings.Contains(out, "agent resumed") {
+					t.Fatalf("session restore: err=%v out=%q, want %q and no success line", err, out, tc.wantErr)
+				}
+			} else {
+				if err != nil || !strings.Contains(out, tc.wantOut) {
+					t.Fatalf("session restore: err=%v out=%q, want %q", err, out, tc.wantOut)
+				}
+				// The reported session is re-read after the start, so it does
+				// not mix the retry request's status with the settled state.
+				want = append(want, "GET /api/v1/sessions/demo-1")
+			}
 			if got := log.all(); !reflect.DeepEqual(got, want) {
 				t.Fatalf("requests = %#v, want %#v", got, want)
+			}
+			if tc.wantErr == "" {
+				out, _, err = executeCLI(t, deps, "session", "resume-agent", "demo-1", "--json")
+				if err != nil || !strings.Contains(out, `"status": "working"`) || strings.Contains(out, "spawning") || !strings.Contains(out, `"provisionState": "ready"`) {
+					t.Fatalf("resume-agent --json: err=%v out=%s, want the settled session", err, out)
+				}
 			}
 		})
 	}
