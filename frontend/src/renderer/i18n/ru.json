@@ -373,7 +373,7 @@
 	"firstRun.install": "Установить",
 	"firstRun.agentsBodyNone": "Чтобы продолжить, установите хотя бы одного агента и войдите в него.",
 	"firstRun.toolsGithubHeading": "Инструменты",
-	"firstRun.toolsGithubHint": "Необязательно. Позволяет агентам открывать pull request.",
+	"firstRun.toolsGithubHint": "Позволяет агентам открывать pull request.",
 	"firstRun.toolsAgentsHeading": "Агенты",
 	"firstRun.moreHarnesses_one": "Ещё {{count}} агент",
 	"firstRun.moreHarnesses_few": "Ещё {{count}} агента",
