@@ -603,7 +603,6 @@ func TestTriggerKeepsAnotherConfiguredReviewersIdlePane(t *testing.T) {
 	}
 }
 
-
 func TestTriggerReportsReviewerSurfaceForConfiguredReviewers(t *testing.T) {
 	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), twoReviewerProject(), perHarnessLauncher())
 
