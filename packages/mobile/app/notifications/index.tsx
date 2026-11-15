@@ -37,6 +37,9 @@ import {
 	type HostedNotification,
 } from "../../lib/notificationView";
 import { useApp } from "../../lib/store";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { CLOUD_APPEARANCE, CLOUD_HOST_ID, CLOUD_HOST_NAME } from "../../lib/cloud/mapping";
+import { fetchCloudNotificationPage, hideCloudNotifications, markCloudNotificationsRead } from "../../lib/cloud/notificationFeed";
 import { MINUTE_MS, useNow } from "../../lib/useNow";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -79,7 +82,12 @@ function NotificationsContent() {
 	const styles = useThemedStyles(makeStyles);
 	const openPage = useOpenPage();
 	const insets = useSafeAreaInsets();
-	const { hostStates, configForHost, refreshHost, restore } = useApp();
+	const { hostStates, cloud, configForHost, refreshHost, restore } = useApp();
+	// Orchestrator Cloud is one more feed here, beside each machine's.
+	const cloudState = useCloud();
+	const cloudRef = useRef(cloudState);
+	cloudRef.current = cloudState;
+	const cloudOrgId = cloud ? cloudState.org?.id : undefined;
 	const [restoringId, setRestoringId] = useState<string>();
 	// A brief line rather than an Alert: the row is still there to act on, and
 	// a modal would make a dead tap feel like an error. Every one of these says
@@ -118,7 +126,7 @@ function NotificationsContent() {
 		return {
 			hostId: feed.hostId,
 			hostName: feed.hostName,
-			hostAppearance: machineAppearance({ id: feed.hostId, name: feed.hostName, appearance: host?.appearance }),
+			hostAppearance: machineAppearance({ id: feed.hostId, name: feed.hostName, appearance: feed.hostId === CLOUD_HOST_ID ? CLOUD_APPEARANCE : host?.appearance }),
 			items: feed.items,
 		};
 	})), [feeds, hostStates]);
@@ -129,7 +137,7 @@ function NotificationsContent() {
 	const hostSignature = hostStates.map((host) => {
 		const source = host.config;
 		return `${host.hostId}:${source ? `${source.host}:${source.httpPort}:${source.secure ? "secure" : "plain"}` : "offline"}`;
-	}).join("|");
+	}).join("|") + `|cloud:${cloudOrgId ?? "none"}`;
 
 	const updateFeeds = useCallback((update: (current: Record<string, HostFeed>) => Record<string, HostFeed>) => {
 		setFeeds((current) => {
@@ -159,17 +167,23 @@ function NotificationsContent() {
 				loadingMoreRef.current = true;
 				setLoadingMore(true);
 			}
-			const results = await Promise.all(targets.map(async ({ host, source, cursor }) => {
+			const cloudOrg = cloudRef.current.org && cloudRef.current.status !== "signed-out" ? cloudRef.current.org.id : undefined;
+			const cloudCursor = currentFeeds[CLOUD_HOST_ID]?.nextCursor;
+			const cloudRequest = cloudOrg && (mode !== "more" || cloudCursor)
+				? fetchCloudNotificationPage(cloudRef.current.client, cloudOrg, mode === "more" ? cloudCursor : undefined, PAGE_SIZE)
+				: Promise.resolve(null);
+			const [results, cloudResult] = await Promise.all([Promise.all(targets.map(async ({ host, source, cursor }) => {
 				try {
 					const page = await getNotifications(source, { status: "all", limit: PAGE_SIZE, cursor });
 					return { host, source, page } as const;
 				} catch (cause) {
 					return { host, source, error: userFacingError(cause, `Couldn't load notifications from ${host.name}.`) } as const;
 				}
-			}));
+			})), cloudRequest]);
 			if (generation !== loadGeneration.current) return;
 			updateFeeds((previous) => {
 				const paired = new Set(hosts.map((host) => host.hostId));
+				if (cloudOrg) paired.add(CLOUD_HOST_ID);
 				const next = Object.fromEntries(Object.entries(previous).filter(([hostId]) => paired.has(hostId)));
 				for (const host of hosts) {
 					if (configForHost(host.hostId)) continue;
@@ -207,6 +221,22 @@ function NotificationsContent() {
 						unreadCount: result.page.unreadCount,
 					};
 				}
+				if (cloudResult) {
+					const previousFeed = next[CLOUD_HOST_ID];
+					if ("error" in cloudResult) {
+						next[CLOUD_HOST_ID] = { hostId: CLOUD_HOST_ID, hostName: CLOUD_HOST_NAME, items: previousFeed?.items ?? [], nextCursor: previousFeed?.nextCursor, unreadCount: previousFeed?.unreadCount ?? 0, error: cloudResult.error };
+					} else {
+						const priorItems = mode === "more" ? previousFeed?.items ?? [] : [];
+						const seen = new Set(priorItems.map((item) => item.id));
+						next[CLOUD_HOST_ID] = {
+							hostId: CLOUD_HOST_ID,
+							hostName: CLOUD_HOST_NAME,
+							items: [...priorItems, ...cloudResult.page.notifications.filter((item) => !seen.has(item.id))],
+							nextCursor: cloudResult.page.nextCursor,
+							unreadCount: cloudResult.page.unreadCount,
+						};
+					}
+				}
 				return next;
 			});
 			loadedOnceRef.current = true;
@@ -230,8 +260,8 @@ function NotificationsContent() {
 	useEffect(() => {
 		if (!focused) return;
 		for (const feed of Object.values(feeds)) {
-			const source = feed.error ? null : configForHost(feed.hostId);
-			if (!source) continue;
+			const markRead = feed.error ? null : readMarker(feed.hostId);
+			if (!markRead) continue;
 			const ids = feed.items
 				.filter((item) => item.status === "unread" && !acknowledgedRef.current.has(notificationIdentity(feed.hostId, item.id)))
 				.map((item) => item.id);
@@ -254,7 +284,7 @@ function NotificationsContent() {
 					unreadCount: Math.max(0, current.unreadCount - marked),
 				} };
 			});
-			markAllNotificationsRead(source, ids).then(
+			markRead(ids).then(
 				// Refresh that machine so the bell badge is already clear on the way back.
 				// Its failure says nothing about the ack, so it must not roll rows back.
 				() => { void refreshHost(feed.hostId).catch(() => {}); },
@@ -280,7 +310,54 @@ function NotificationsContent() {
 		}
 	}, [configForHost, feeds, focused, notify, refreshHost, updateFeeds]);
 
+	/** How a feed's rows are marked read: its machine's daemon, or Orchestrator Cloud. */
+	function readMarker(hostId: string): ((ids: string[]) => Promise<void>) | null {
+		if (hostId === CLOUD_HOST_ID) {
+			const org = cloudRef.current.org;
+			if (!org) return null;
+			return (ids) => markCloudNotificationsRead(cloudRef.current.client, org.id, ids);
+		}
+		const source = configForHost(hostId);
+		return source ? (ids) => markAllNotificationsRead(source, ids) : null;
+	}
+
+	/** A cloud row opens its session, else its project; a terminated session's needs-input row offers Restore. */
+	function cloudAction(notification: FeedItem): "open" | "restore" | "none" {
+		const sessionId = notification.sessionId?.trim();
+		if (!sessionId) return notification.projectId ? "open" : "none";
+		const session = cloud?.sessions.find((item) => item.id === sessionId);
+		return session?.isTerminated && notification.type === "needs_input" ? "restore" : "open";
+	}
+
+	function openCloud(notification: FeedItem) {
+		haptics.tap();
+		updateFeeds((previous) => {
+			const feed = previous[CLOUD_HOST_ID];
+			if (!feed) return previous;
+			return { ...previous, [CLOUD_HOST_ID]: {
+				...feed,
+				items: feed.items.map((item) => item.id === notification.id ? { ...item, status: "read" } : item),
+				unreadCount: notification.status === "unread" ? Math.max(0, feed.unreadCount - 1) : feed.unreadCount,
+			} };
+		});
+		const org = cloudRef.current.org;
+		if (org && notification.status === "unread") {
+			void markCloudNotificationsRead(cloudRef.current.client, org.id, [notification.id]).catch(() => {}).finally(() => void cloudRef.current.refreshNotifications());
+		}
+		const action = cloudAction(notification);
+		const sessionId = notification.sessionId?.trim();
+		if (action === "restore") {
+			haptics.warning();
+			notify("This session is archived. Tap restore to bring it back.");
+		} else if (sessionId) openPage({ pathname: "/session/[id]", params: { id: sessionId, hostId: CLOUD_HOST_ID } });
+		else if (notification.projectId) openPage({ pathname: "/project/[id]", params: { id: notification.projectId, hostId: CLOUD_HOST_ID } });
+	}
+
 	function open(notification: FeedItem) {
+		if (notification.hostId === CLOUD_HOST_ID) {
+			openCloud(notification);
+			return;
+		}
 		const source = configForHost(notification.hostId);
 		if (!source) {
 			haptics.warning();
@@ -316,6 +393,24 @@ function NotificationsContent() {
 	}
 
 	function clear(notification: FeedItem) {
+		if (notification.hostId === CLOUD_HOST_ID) {
+			const org = cloudRef.current.org;
+			if (!org) return false;
+			haptics.warning();
+			updateFeeds((previous) => {
+				const feed = previous[CLOUD_HOST_ID];
+				if (!feed) return previous;
+				return { ...previous, [CLOUD_HOST_ID]: {
+					...feed,
+					items: feed.items.filter((item) => item.id !== notification.id),
+					unreadCount: notification.status === "unread" ? Math.max(0, feed.unreadCount - 1) : feed.unreadCount,
+				} };
+			});
+			// No delete route: hide it on this phone and mark it read.
+			void hideCloudNotifications(org.id, [notification.id]);
+			if (notification.status === "unread") void markCloudNotificationsRead(cloudRef.current.client, org.id, [notification.id]).catch(() => {}).finally(() => void cloudRef.current.refreshNotifications());
+			return true;
+		}
 		const source = configForHost(notification.hostId);
 		if (!source) {
 			haptics.warning();
@@ -348,7 +443,7 @@ function NotificationsContent() {
 	}
 
 	function sessionState(hostId: string, sessionId?: string) {
-		const host = hostStates.find((item) => item.hostId === hostId);
+		const host = hostId === CLOUD_HOST_ID ? cloud ?? undefined : hostStates.find((item) => item.hostId === hostId);
 		const session = sessionId ? host?.sessions.find((item) => item.id === sessionId) : undefined;
 		return {
 			terminated: Boolean(session?.isTerminated || session?.status === "terminated"),
@@ -357,7 +452,7 @@ function NotificationsContent() {
 			// pages its archive has answered once it reports the archive's size,
 			// even with no live workers. Its archived workers are not in `sessions`,
 			// so one of those offers Open, whose screen offers Restore.
-			sessionsReady: Boolean(host && !host.loading && (host.sessions.length > 0 || host.archive)),
+			sessionsReady: hostId === CLOUD_HOST_ID ? Boolean(cloud) : Boolean(host && !("loading" in host && host.loading) && (host.sessions.length > 0 || ("archive" in host && host.archive))),
 		};
 	}
 
@@ -387,12 +482,24 @@ function NotificationsContent() {
 	// Mirrors the desktop panel's Clear all: each machine's whole history goes,
 	// including pages this screen never loaded.
 	async function clearAll() {
-		const feedList = Object.values(feedsRef.current);
+		const cloudFeed = feedsRef.current[CLOUD_HOST_ID];
+		const cloudOrg = cloudRef.current.org;
+		if (cloudFeed && cloudOrg) {
+			updateFeeds((previous) => ({ ...previous, [CLOUD_HOST_ID]: { ...cloudFeed, items: [], nextCursor: undefined, unreadCount: 0 } }));
+			void hideCloudNotifications(cloudOrg.id, cloudFeed.items.map((item) => item.id));
+			void cloudRef.current.client.markAllNotificationsRead(cloudOrg.id).catch(() => {}).finally(() => void cloudRef.current.refreshNotifications());
+		}
+		const feedList = Object.values(feedsRef.current).filter((feed) => feed.hostId !== CLOUD_HOST_ID);
 		const targets = feedList.flatMap((feed) => {
 			const source = configForHost(feed.hostId);
 			return source ? [{ feed, source }] : [];
 		});
 		const offline = feedList.filter((feed) => !configForHost(feed.hostId) && feed.items.length > 0);
+		if (targets.length === 0 && cloudFeed && cloudOrg) {
+			haptics.warning();
+			if (offline.length > 0) notify(`${offline.map((feed) => feed.hostName).join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so ${offline.length === 1 ? "its" : "their"} notifications were not cleared.`);
+			return;
+		}
 		if (targets.length === 0) {
 			haptics.warning();
 			notify("Notifications are on machines that are currently offline.");
@@ -497,7 +604,7 @@ function NotificationsContent() {
 						item={item}
 						highlighted={highlightedIds.has(notificationIdentity(item.hostId, item.id))}
 						now={now}
-						action={notificationAction(item, sessionState(item.hostId, item.sessionId)).kind}
+						action={item.hostId === CLOUD_HOST_ID ? cloudAction(item) : notificationAction(item, sessionState(item.hostId, item.sessionId)).kind}
 						restoring={restoringId === notificationIdentity(item.hostId, item.sessionId)}
 						onPress={() => open(item)}
 						onRestore={() => item.sessionId && restoreSession(item.hostId, item.sessionId)}
@@ -516,14 +623,14 @@ function NotificationsContent() {
 						<View style={styles.center}>
 							<ActivityIndicator color={t.accent} />
 						</View>
-					) : hostStates.length > 0 && unavailableFeeds.length === hostStates.length ? (
+					) : hostStates.length > 0 && unavailableFeeds.length === hostStates.length && !cloud ? (
 						<EmptyState
 							icon="wifi-off"
 							title="Machines are offline"
 							message="Notifications will appear when at least one paired machine reconnects."
 							action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}
 						/>
-					) : hostStates.length === 0 ? (
+					) : hostStates.length === 0 && !cloud ? (
 						// Shared with the tabs: "Connecting…" while the launch race runs,
 						// the pairing prompt only once it has found no machine.
 						<UnpairedState />

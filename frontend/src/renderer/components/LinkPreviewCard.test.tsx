@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppBrowserLinkContext, AppLink } from "./AppLink";
-import { LinkPreviewCard } from "./LinkPreviewCard";
+import { forgetSettledFavicons, LinkPreviewCard } from "./LinkPreviewCard";
 import { aoBridge } from "../lib/bridge";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
@@ -163,6 +163,8 @@ describe("AppLink link preview", () => {
 	describe("favicon theme handling", () => {
 		const faviconPreview = { url, title: "Page", faviconUrl: "https://example.com/favicon.svg" };
 		const favicon = () => screen.getByTestId("link-preview-card").querySelector("img")!;
+		// Settled icons are remembered per URL for the run; each case starts fresh.
+		beforeEach(forgetSettledFavicons);
 
 		it("loads with CORS and inverts a dark glyph in dark themes", () => {
 			vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({

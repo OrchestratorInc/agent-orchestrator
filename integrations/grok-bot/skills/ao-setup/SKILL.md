@@ -129,22 +129,24 @@ Use this when Orchestrator runs on a computer that has no Grok Bot desktop app, 
 
 1. Ask for a short host name (letters, digits, `-`) and which connected computer to use as `via`. Default: the one the user's message came from.
 2. Tell the user, in one message:
-   "On the host, open Orchestrator, go to remote access (Connect Mobile) and turn on network access. It shows an address and a password. Send me the **address** here. You'll type the password on <via> in a window I open, so it never passes through this chat."
-   On the host's own terminal, `ao remote-host enable` turns on the same network access, and `ao remote-host status --show-password` shows the address and the password.
-3. When the address arrives, check it looks like `http://<ip or name>:<port>`. Then, on `via`, write a one-time password window and open it. Replace `<name>` with the host name you checked: run "Password window" below.
-   Tell the user: "A Terminal window opened on <via>. Type the password there and press Return."
+   "On the host, open Orchestrator, go to remote access (Connect Mobile) and turn on network access. It shows an address and a pairing code. Send me the **address** here. You'll type the pairing code on <via> in a window I open, so it never passes through this chat."
+   On the host's own terminal, `ao remote-host enable` turns on the same network access, and `ao remote-host pair` shows the address and a pairing code. A code works once, within 10 minutes.
+3. When the address arrives, check it looks like `http://<ip or name>:<port>`. Then, on `via`, write a one-time pairing window and open it. Replace `<name>` with the host name you checked and `<address>` with the address: run "Pairing window" below.
+   Tell the user: "A Terminal window opened on <via>. Type the pairing code there and press Return."
    On Linux, `open` doesn't run `.command` files: write the same lines to `~/.ao-grok/add-<name>.sh` and ask the user to run `zsh ~/.ao-grok/add-<name>.sh` in a terminal on `via`.
 4. When they say done, test it from `via`: run "Connection test" below.
-   HTTP 401 means a wrong password: open the window again. A timeout means the host is not reachable from `via` (another network, asleep, or access off).
+   HTTP 401 means a wrong, used or expired code: ask for a new code and open the window again. A timeout means the host is not reachable from `via` (another network, asleep, or access off).
 5. Add the host to the **AO hosts** note with `reach: remote`, `via`, `base` and `header`.
 
-### Password window
+### Pairing window
+The host swaps the code for this computer's own token, which the host can revoke by itself. A host from before pairing codes takes its password, typed the same way, and that is saved as is.
 ```sh
 f(){ mkdir -p ~/.ao-grok/out && cat > ~/.ao-grok/add-<name>.command <<'EOF'
 #!/bin/zsh
 umask 077
-read -rs "p?Orchestrator password for <name>: "; echo
-printf 'Authorization: Bearer %s\n' "$p" > ~/.ao-grok/<name>.header
+read -rs "p?Orchestrator pairing code for <name>: "; echo
+t="$(curl -fsS -m 10 -X POST -H "Authorization: Bearer $p" -H 'Content-Type: application/json' -d '{"name":"Grok Bot","platform":"'"$(uname -s | tr A-Z a-z)"'"}' '<address>/api/v1/remote-host/devices' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)"
+printf 'Authorization: Bearer %s\n' "${t:-$p}" > ~/.ao-grok/<name>.header
 echo "Saved. You can close this window."; rm -- "$0"
 EOF
 chmod +x ~/.ao-grok/add-<name>.command && open ~/.ao-grok/add-<name>.command; }; f
@@ -155,7 +157,7 @@ chmod +x ~/.ao-grok/add-<name>.command && open ~/.ao-grok/add-<name>.command; };
 f(){ <aoapi helper>; AO_REMOTE_BASE='<address>' AO_REMOTE_HEADER="$HOME/.ao-grok/<name>.header" aoapi GET 'sessions?active=true' | python3 -c 'import json,sys; print("live_sessions=%d" % len(json.load(sys.stdin)["sessions"]))'; }; f
 ```
 
-Limits of a remote host, said once: keep-awake, browser screenshots and starting a review work only on local hosts. For those, ask the host's orchestrator (ao-orchestrator). Quick-tunnel addresses change when the tunnel restarts, so prefer the LAN address or a named tunnel. If the user presses Regenerate in Orchestrator, run this section again.
+Limits of a remote host, said once: keep-awake, browser screenshots and starting a review work only on local hosts. For those, ask the host's orchestrator (ao-orchestrator). Quick-tunnel addresses change when the tunnel restarts, so prefer the LAN address or a named tunnel. If the user removes this computer from the host's devices, or revokes all devices, run this section again.
 
 ## 4. Mode and routines
 1. Save **Mode: default** in memory (ao-rules "Decisions"). Say in one line that away mode exists: "Say 'I'm away till 6' and I'll keep routine work moving."

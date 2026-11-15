@@ -31,7 +31,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.4"
           cache: false
 
       - name: CLI E2E (native)
@@ -51,7 +51,7 @@ jobs:
       - name: Build fresh-install image
         run: |
           docker build -f test/cli/Dockerfile -t ao-cli-smoke \
-            --build-arg GO_IMAGE=mirror.gcr.io/library/golang:1.27.1-bookworm \
+            --build-arg GO_IMAGE=mirror.gcr.io/library/golang:1.27.4-bookworm \
             --build-arg RUNTIME_IMAGE=mirror.gcr.io/library/debian:bookworm-slim .
 
       - name: Fresh-install check (container)

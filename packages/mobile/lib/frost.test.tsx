@@ -12,7 +12,8 @@ vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ t
 vi.mock("react-native-svg", () => ({ default: "Svg", Defs: "Defs", LinearGradient: "LinearGradient", Rect: "Rect", Stop: "Stop" }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ bgBase: "#bgBase" }) }));
 
-import { Frost, FROST_TAIL, frostStops, NAVIGATION_BAR_HEIGHT, useTabBarFrost } from "./frost";
+import { BOARD_BAR_HEIGHT, BOARD_BAR_MARGIN } from "./board-bar-layout";
+import { Frost, FROST_TAIL, frostStops, useTabBarFrost } from "./frost";
 
 let renderer: ReactTestRenderer | undefined;
 
@@ -55,10 +56,10 @@ describe("useTabBarFrost", () => {
 		return ref.current;
 	}
 
-	// Material's 80dp bar pads the system navigation below its items.
-	it("clears Android's bar and the system navigation under it, and frosts both", () => {
+	// The board bar floats its margin above the system navigation.
+	it("clears Android's board bar and the system navigation under it, and frosts both", () => {
 		const { inset, frost } = renderHook();
-		expect(inset).toBe(NAVIGATION_BAR_HEIGHT + 24);
+		expect(inset).toBe(BOARD_BAR_HEIGHT + BOARD_BAR_MARGIN + 24);
 		expect(frost).not.toBeNull();
 	});
 

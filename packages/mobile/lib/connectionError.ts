@@ -9,6 +9,8 @@
 
 // Type-only, so erased at runtime: this module stays free of native imports.
 import type { Endpoint } from "./endpoints";
+// Plain classes and copy, with no imports of their own.
+import { CloudError, cloudErrorMessage } from "./cloud/errors";
 import type { FeatherIconName } from "./icons";
 
 export type ConnectionFailure =
@@ -201,9 +203,9 @@ export function describeConnectionFailure(
 			// The connection itself worked, so "disconnected" would be wrong here —
 			// and re-scanning is the actual fix, not retrying the same password.
 			return {
-				title: "Your machine rejected the password",
+				title: "Your machine rejected this phone",
 				icon: "monitor-off",
-				message: "That password was rotated. Re-scan the code on that machine.",
+				message: "It was removed from that machine, or the password changed. Scan a new code there.",
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":
@@ -378,8 +380,13 @@ export function daemonDetail(error: unknown): string | undefined {
  *   request ID is kept, for matching against the desktop's logs
  * - an error the app threw itself → its message, which is already user copy
  * - a JS engine error (a code defect) → the fallback, never its text
+ *
+ * Orchestrator Cloud is not a paired machine, so its refusals get Cloud's own
+ * copy (`cloudErrorMessage`): its 429 is a plan's usage limit, not a password
+ * lockout, and its 401 an expired sign-in.
  */
 export function userFacingError(error: unknown, fallback = "Something went wrong. Try again."): string {
+	if (error instanceof CloudError) return cloudErrorMessage(error);
 	if (isUnreachableError(error)) return UNREACHABLE_ACTION_COPY;
 	const failure = answeredFailure(error);
 	if (failure) {

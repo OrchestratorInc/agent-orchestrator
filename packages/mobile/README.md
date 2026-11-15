@@ -13,6 +13,7 @@ computer through the endpoints advertised by the desktop pairing offer. It never
 > it; don't file bugs from it.
 
 - [How the phone reaches your machine](#how-the-phone-reaches-your-machine)
+- [Orchestrator Cloud](#orchestrator-cloud)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
 - [Step 1 — Turn on Connect Mobile on the desktop](#step-1--turn-on-connect-mobile-on-the-desktop)
@@ -46,6 +47,39 @@ desktop source contains an automatic secure-pairing attempt, but fresh configura
 report no secure-pairing availability while the mode is off, and current v2 endpoint data
 do not establish a verified working path. Use a managed HTTPS endpoint whose pairing
 record is marked `secure: true` for remote access. Background: [`docs/adr/0001-lan-listener-for-mobile.md`](../../docs/adr/0001-lan-listener-for-mobile.md).
+
+## Orchestrator Cloud
+
+Orchestrator Cloud runs agents in hosted sandboxes, with no computer involved. Signed in, it is one more
+environment beside the paired machines, labelled "Cloud" with a cloud icon wherever a machine shows its name:
+
+- **Workers** lists cloud workers on the same board, filterable by the Cloud machine chip. Rows open
+  the cloud session; pin, rename, archive, restore and resume go to Orchestrator Cloud.
+- **Projects** lists cloud projects beside each machine's; their page shows the orchestrator and
+  workers like any project's. **New cloud project** (the **+** at the end of the Projects title on iOS, the floating button on
+  Android, or the New task project menu) opens a form, a sheet on iOS and a page under the top app bar
+  on Android, as manual connect is: a repository the Orchestrator GitHub App can reach, or none.
+- **New task**: Cloud is a "Run on" choice after the connected machines. Its projects, connected agents,
+  models and effort levels fill the controls, and the approval mode and effort picked are passed to the
+  new session. Attachments are not supported for new cloud tasks yet; add files in the session's chat.
+- **Settings** lists Orchestrator Cloud in the Machines section while signed in. Its page holds the
+  organization, the coding agents and GitHub access.
+
+The phone talks to the control plane directly (`EXPO_PUBLIC_AO_CLOUD_API_BASE_URL`, default
+`https://api.aoagents.dev`, routes under `/api/cloud/v1`) with the Orchestrator account token from the existing
+sign-in (`lib/account.ts`). That token is never sent to a paired daemon, and a daemon's password is
+never sent to Orchestrator Cloud.
+
+| Flow | What the phone does |
+| --- | --- |
+| Sign in | The account's own sign-in, which also syncs the account's machines: Settings → Account, Sign in on an empty board, or onboarding's Sign in (an account with Cloud goes straight to the board, with no machine needed). The workspace is chosen as the desktop chooses it; a first sign-in creates one. |
+| Coding agents | Settings → Orchestrator Cloud. Claude Code: sign in on claude.com and paste back the code, or paste a `claude setup-token` / API key. Codex: ChatGPT device-code sign-in (enter the code on auth.openai.com), an API key, or `auth.json`. Cursor and OpenCode: API keys. The control plane validates each credential before storing it; nothing is kept on the phone. |
+| Sessions | The local chat's own screen parts: glass header, timeline, floating composer (model, effort, approvals, Plan mode for Claude Code, photos and files uploaded with the message where the organization's plan takes attachments), the request card, banners and the "⋯" actions sheet (shell, agent terminal, project, pin, the PR on GitHub, archive or restore). Events stream from the session's event stream, with the chat-events poll behind it. Agent and Shell terminals are the local terminal's parts over single-use terminal tickets on `wss://…/terminal` (protocol 2). Opening a paused session wakes it; reading it keeps it awake. |
+| Notifications | One Notifications screen lists machine and Cloud notifications together; Cloud rows carry the cloud icon and open their session. Clearing a Cloud row hides it on the phone and marks it read (the control plane has no delete). Cloud workers waiting on you count toward the Workers badge. When the control plane supports push devices, the phone registers its Expo token with `PUT /me/push-devices/{installId}`; an older control plane answers 404 and the app keeps to the list. |
+
+The code lives in `lib/cloud/` (client, state, row mapping, board actions, chat projection, event
+stream, attachments, terminal, sign-ins, notification feed), `app/cloud/` (new project, shell) and
+`app/settings/cloud/` (the Orchestrator Cloud page and each coding agent's page).
 
 ## Forgetting a machine
 

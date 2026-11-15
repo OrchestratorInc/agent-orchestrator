@@ -9,6 +9,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 // SwitchTUIProvider replaces one terminal provider with another in the same AO
@@ -297,7 +298,10 @@ func preflightTUISwitchTarget(ctx context.Context, harness domain.AgentHarness, 
 	status := ports.AgentAuthStatusUnknown
 	var err error
 	if runtimeChecker, ok := target.(ports.AgentRuntimeAuthChecker); ok && dataDir != "" {
-		status, _, _, err = runtimeChecker.AuthStatusForRuntime(ctx, dataDir)
+		// The probe sees what the relaunched session gets: no key AO holds
+		// back from this harness.
+		probeCtx := ports.WithAuthEnvironment(ctx, providerkeys.Withheld(dataDir, string(harness)))
+		status, _, _, err = runtimeChecker.AuthStatusForRuntime(probeCtx, dataDir)
 	} else if checker, ok := target.(ports.AgentAuthChecker); ok {
 		status, err = checker.AuthStatus(ctx)
 	}

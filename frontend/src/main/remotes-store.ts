@@ -14,7 +14,17 @@ export type RemoteEntry = {
 	sealedPassword?: string;
 	/** Set beside sealedPassword when that password is the account's token, not a pairing password. */
 	accountToken?: true;
+	/** The pairing password swapped for the token in `password`, used again if the host forgets the token. */
+	fallbackPassword?: string;
+	/** An encrypted fallbackPassword this launch could not decrypt. */
+	sealedFallbackPassword?: string;
 };
+
+export const DEVICE_TOKEN_PREFIX = "aod_";
+
+export function holdsPairingPassword(entry: Pick<RemoteEntry, "password">): boolean {
+	return entry.password !== "" && !entry.password.startsWith(DEVICE_TOKEN_PREFIX) && !ACCOUNT_TOKEN.test(entry.password);
+}
 
 /** An AO account's token for a host: 32 random bytes in hex. A pairing password never has this shape. */
 export const ACCOUNT_TOKEN = /^[0-9a-f]{64}$/;
@@ -36,7 +46,25 @@ export function setPasswordCipher(resolve: () => PasswordCipher | null): void {
 
 type StoredRemote = Omit<RemoteEntry, "password"> & { password?: string };
 
-function unseal({ password, sealedPassword, accountToken, ...rest }: StoredRemote, cipher: PasswordCipher | null): RemoteEntry {
+function unsealFallback(plain: string | undefined, sealed: string | undefined, cipher: PasswordCipher | null): Pick<RemoteEntry, "fallbackPassword" | "sealedFallbackPassword"> {
+	if (sealed === undefined) return plain ? { fallbackPassword: plain } : {};
+	if (cipher) {
+		try {
+			return { fallbackPassword: cipher.decrypt(sealed) };
+		} catch {
+			// Encrypted by another keychain; kept below.
+		}
+	}
+	return { sealedFallbackPassword: sealed };
+}
+
+function sealFallback(plain: string | undefined, sealed: string | undefined, cipher: PasswordCipher | null): Pick<RemoteEntry, "fallbackPassword" | "sealedFallbackPassword"> {
+	if (plain) return cipher ? { sealedFallbackPassword: cipher.encrypt(plain) } : { fallbackPassword: plain };
+	return sealed ? { sealedFallbackPassword: sealed } : {};
+}
+
+function unseal({ password, sealedPassword, accountToken, fallbackPassword, sealedFallbackPassword, ...stored }: StoredRemote, cipher: PasswordCipher | null): RemoteEntry {
+	const rest = { ...stored, ...unsealFallback(fallbackPassword, sealedFallbackPassword, cipher) };
 	if (sealedPassword === undefined) return { ...rest, password: password ?? "" };
 	if (cipher) {
 		try {
@@ -48,7 +76,8 @@ function unseal({ password, sealedPassword, accountToken, ...rest }: StoredRemot
 	return { ...rest, password: "", sealedPassword, ...(accountToken ? { accountToken } : {}) };
 }
 
-function seal({ password, sealedPassword, accountToken, ...rest }: RemoteEntry, cipher: PasswordCipher | null): StoredRemote {
+function seal({ password, sealedPassword, accountToken, fallbackPassword, sealedFallbackPassword, ...entry }: RemoteEntry, cipher: PasswordCipher | null): StoredRemote {
+	const rest = { ...entry, ...sealFallback(fallbackPassword, sealedFallbackPassword, cipher) };
 	if (cipher && password) return { ...rest, sealedPassword: cipher.encrypt(password), ...(ACCOUNT_TOKEN.test(password) ? { accountToken: true as const } : {}) };
 	if (!password && sealedPassword) return { ...rest, sealedPassword, ...(accountToken ? { accountToken } : {}) };
 	return { ...rest, password };
@@ -95,7 +124,7 @@ async function readStoredRemotes(path: string): Promise<StoredRemote[]> {
 /** Rewrites plaintext passwords encrypted, when a cipher is available. */
 export async function sealSavedPasswords(path: string): Promise<void> {
 	return serializeMutation(async () => {
-		if (!currentCipher() || !(await readStoredRemotes(path)).some((stored) => stored.password)) return;
+		if (!currentCipher() || !(await readStoredRemotes(path)).some((stored) => stored.password || stored.fallbackPassword)) return;
 		await writeRemotes(path, await readRemotes(path));
 	});
 }
@@ -158,6 +187,8 @@ export function applyRemoteChanges(entry: RemoteEntry, changes: RemoteChanges): 
 		accountUserId: changes.accountUserId ?? entry.accountUserId,
 		sealedPassword: changes.password === undefined ? entry.sealedPassword : undefined,
 		accountToken: changes.password === undefined ? entry.accountToken : undefined,
+		fallbackPassword: changes.password === undefined ? entry.fallbackPassword : changes.fallbackPassword,
+		sealedFallbackPassword: changes.password === undefined ? entry.sealedFallbackPassword : undefined,
 	};
 }
 

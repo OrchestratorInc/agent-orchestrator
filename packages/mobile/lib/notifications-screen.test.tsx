@@ -103,6 +103,8 @@ vi.mock("./api", () => ({
 	clearNotification: fixtures.clearNotification,
 	clearAllNotifications: fixtures.clearAllNotifications,
 }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ notificationsUnread: 0 }) }));
+vi.mock("./cloud/components", () => ({ CloudSignIn: () => null }));
 vi.mock("./store", () => ({ useApp: () => ({
 	hostStates: [
 		{ hostId: "dev", name: "Dev", appearance: { symbol: "linux" }, config: fixtures.configs.dev, notificationsUnread: 2, sessions: [], loading: false },

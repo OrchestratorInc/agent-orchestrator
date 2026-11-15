@@ -7,5 +7,9 @@ export const actionMenuContentClass =
 export const actionMenuItemClass =
 	"relative flex cursor-default select-none items-center gap-2.5 rounded-md px-2 py-1.5 text-control outline-none transition-col text-muted-foreground focus:bg-interactive-hover focus:text-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:size-icon-lg [&_svg]:shrink-0 [&_svg]:text-muted-foreground focus:[&_svg]:text-foreground";
 
+/** Red text and icon for an item that ends or removes something, kept red on focus. */
+export const actionMenuDestructiveItemClass =
+	"text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive";
+
 export const actionMenuLabelClass = "px-2 py-1.5 text-micro tracking-wide text-passive";
 export const actionMenuSeparatorClass = "-mx-1 my-1 h-px bg-border";

@@ -709,7 +709,7 @@ INSERT OR IGNORE INTO conversation_turns (
 -- event, so it is a keyed lookup rather than a scan.
 -- name: SelectConversationTurnByProviderID :one
 SELECT * FROM conversation_turns
-WHERE conversation_id = ? AND provider_turn_id = ?
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 LIMIT 1;
 
 -- name: BindConversationTurnProviderID :exec
@@ -856,6 +856,16 @@ ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 -- name: UpdateConversationTurnDiff :execrows
 UPDATE conversation_turns
 SET diff_json = ?
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> '';
+
+-- Record the session artifacts a turn created or edited. AO computes the whole
+-- list once, when the turn ends, so this replaces whatever was there.
+-- execrows so the caller can tell "recorded" from "no such turn".
+-- NOTE: keep these comments ASCII. sqlc locates its star-expansion edits by byte
+-- offset, so a multi-byte character here silently corrupts later queries.
+-- name: UpdateConversationTurnArtifacts :execrows
+UPDATE conversation_turns
+SET artifacts_json = ?
 WHERE conversation_id = ? AND provider_turn_id = ?;
 
 -- Overwrite the turn's plan. The provider re-sends the whole plan on every change,
@@ -868,7 +878,7 @@ WHERE conversation_id = ? AND provider_turn_id = ?;
 -- name: UpdateConversationTurnPlan :execrows
 UPDATE conversation_turns
 SET plan_json = ?
-WHERE conversation_id = ? AND provider_turn_id = ?;
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> '';
 
 -- name: SelectConversationTurnByID :one
 SELECT * FROM conversation_turns WHERE id = ? LIMIT 1;
@@ -1335,21 +1345,21 @@ SET text = text || ?, revision = revision + 1,
         WHERE conversation_turns.id = conversation_messages.turn_id
           AND conversation_turns.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
     ), updated_at = ?
-WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ?;
+WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ? AND conversation_messages.provider_item_id <> '';
 
 -- name: SettleConversationMessage :exec
 UPDATE conversation_messages
 SET text = ?, revision = revision + 1, streaming = 0, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?;
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '';
 
 -- name: SelectConversationMessageByProviderItem :one
 SELECT * FROM conversation_messages
-WHERE conversation_id = ? AND provider_item_id = ?
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 LIMIT 1;
 
 -- name: SelectConversationMessageByClientID :one
 SELECT * FROM conversation_messages
-WHERE conversation_id = ? AND client_message_id = ?
+WHERE conversation_id = ? AND client_message_id = ? AND client_message_id <> ''
 LIMIT 1;
 
 -- A native history import has the provider turn identity but not AO's turn id.
@@ -1463,7 +1473,7 @@ INSERT INTO conversation_activities (
 -- name: SettleConversationActivity :exec
 UPDATE conversation_activities
 SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled';
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '' AND status <> 'cancelled';
 
 -- A list the agent keeps across turns has one current copy on the active path:
 -- the one written last. Every copy has a plan row, a turn's included, so the rows
@@ -1535,6 +1545,7 @@ SET status = 'resolved',
     updated_at = sqlc.arg(updated_at)
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND request_id = sqlc.arg(request_id)
+  AND request_id <> ''
   AND status = 'pending';
 
 -- name: HasPendingConversationInteractions :one
@@ -1620,6 +1631,7 @@ SET command_output = substr(command_output || sqlc.arg(delta), 1, sqlc.arg(max_o
     updated_at = sqlc.arg(updated_at)
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND provider_item_id = sqlc.arg(provider_item_id)
+  AND provider_item_id <> ''
   AND status <> 'cancelled'
   AND command_output_truncated = 0;
 
@@ -1649,6 +1661,7 @@ SET streamed_text = substr(streamed_text || sqlc.arg(delta), 1, sqlc.arg(max_tex
     updated_at = sqlc.arg(updated_at)
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND provider_item_id = sqlc.arg(provider_item_id)
+  AND provider_item_id <> ''
   AND status <> 'cancelled'
   AND streamed_text_truncated = 0;
 
@@ -1661,6 +1674,7 @@ SELECT EXISTS(
     FROM conversation_activities
     WHERE conversation_id = sqlc.arg(conversation_id)
       AND provider_item_id = sqlc.arg(provider_item_id)
+      AND provider_item_id <> ''
       AND status <> 'cancelled'
 );
 
@@ -1676,11 +1690,11 @@ SELECT EXISTS(
 -- name: SettleConversationActivityStreamedText :execrows
 UPDATE conversation_activities
 SET streamed_text = ?, streamed_text_truncated = 0, revision = revision + 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled';
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '' AND status <> 'cancelled';
 
 -- name: SelectConversationActivityByProviderItem :one
 SELECT * FROM conversation_activities
-WHERE conversation_id = ? AND provider_item_id = ?
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 LIMIT 1;
 
 -- A question reaches the store with only its request id, and the chat host
@@ -1707,7 +1721,8 @@ SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) AS sequence
 FROM conversation_activities
 WHERE conversation_id = ?
   AND kind = 'system'
-  AND provider_item_id = ?;
+  AND provider_item_id = ?
+  AND provider_item_id <> '';
 
 -- Activities the agent still remembers, filtered the same way messages are and for
 -- the same reason. See SelectConversationMessages.

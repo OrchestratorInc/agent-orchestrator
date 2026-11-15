@@ -3,17 +3,16 @@
  *
  * Only a person publishes. The renderer names a file; this module resolves it
  * strictly inside the session's artifacts folder, copies it once into a
- * private snapshot while hashing it and looking for credentials, and uploads
- * that snapshot straight to storage through the control plane's presigned
- * multipart upload. The bytes that go public are exactly the ones hashed and
- * confirmed, even if an agent rewrites the file meanwhile. The sign-in token
- * never leaves this process.
+ * private snapshot while hashing it, and uploads that snapshot straight to
+ * storage through the control plane's presigned multipart upload. The bytes
+ * that go public are exactly the ones copied, even if an agent rewrites the
+ * file meanwhile. The sign-in token never leaves this process.
  */
 
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import path from "node:path";
-import type { CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
+import type { CloudShareAccess, CloudShareGrant, CloudShareLink, CloudShareLinks } from "../shared/cloud-share";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 
 const API_PREFIX = "/api/cloud/v1";
@@ -21,9 +20,6 @@ const API_PREFIX = "/api/cloud/v1";
 export const VERSIONS_DIR = ".versions";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const READ_CHUNK = 1 << 20;
-/** Only the start of a large file is scanned for credentials. */
-export const MAX_SCANNED_BYTES = 32 << 20;
-const SCAN_OVERLAP = 512;
 /** Parts presigned per request; the control plane allows up to 100. */
 const PRESIGN_BATCH = 8;
 /** Parts uploaded at once. */
@@ -95,90 +91,20 @@ export async function resolveShareFile(dataDir: string, sessionId: unknown, relP
 	return { realPath: realFile, name: path.basename(realFile), relativePath: segments.join("/"), size: stat.size, dev: stat.dev, ino: stat.ino };
 }
 
-const SECRET_PATTERNS: Array<[string, RegExp]> = [
-	["AWS access key", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/],
-	["private key", /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/],
-	["GitHub token", /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})/],
-	["Slack token", /\bxox[abprs]-[A-Za-z0-9-]{10,}/],
-	["Anthropic API key", /\bsk-ant-[A-Za-z0-9_-]{20,}/],
-	["OpenAI API key", /\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}/],
-	["Stripe secret key", /\b[rs]k_live_[A-Za-z0-9]{20,}/],
-	["Google API key", /\bAIza[0-9A-Za-z_-]{35}/],
-	// Also catches DB_PASSWORD=..., client_secret: ..., x-api-key: ....
-	["password or secret", /(?:password|passwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token)[A-Za-z0-9_]*["']?\s*[:=]\s*["']?[^\s"'<>]{8,}/i],
-];
-
-const SECRET_FILE_NAMES: Array<[string, RegExp]> = [
-	["environment file", /^\.env(?:\..+)?$/i],
-	["SSH key", /^id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?$/i],
-	["key or certificate file", /\.(?:pem|key|p12|pfx|jks|keystore)$/i],
-	["credentials file", /^(?:credentials(?:\.json)?|\.npmrc|\.netrc|\.pgpass)$/i],
-];
-
-/** Finds kinds of credential in a stream of bytes, across chunk boundaries. */
-export class SecretScanner {
-	private tail = "";
-	private scanned = 0;
-	readonly findings = new Set<string>();
-
-	constructor(name: string) {
-		for (const [kind, pattern] of SECRET_FILE_NAMES) if (pattern.test(name)) this.findings.add(kind);
-	}
-
-	push(chunk: Uint8Array): void {
-		if (this.scanned >= MAX_SCANNED_BYTES) return;
-		const take = chunk.subarray(0, MAX_SCANNED_BYTES - this.scanned);
-		this.scanned += take.byteLength;
-		// latin1 maps every byte to one character, so no match splits a code point.
-		const text = this.tail + Buffer.from(take.buffer, take.byteOffset, take.byteLength).toString("latin1");
-		for (const [kind, pattern] of SECRET_PATTERNS) if (pattern.test(text)) this.findings.add(kind);
-		this.tail = text.slice(-SCAN_OVERLAP);
-	}
-
-	list(): string[] {
-		return [...this.findings].sort();
-	}
-}
-
 /**
- * What the person was shown about a file: the hash of its scanned start, its
- * size and its modification time. Publishing refuses a file whose
- * fingerprint changed since, so the bytes that go public are the ones whose
- * scan the person saw.
+ * A local file's fingerprint: its size and modification time. Publishing
+ * refuses a file whose fingerprint changed since the panel showed it. Taken
+ * from the file's metadata alone, so nothing is read before publishing.
  */
-class FingerprintHash {
-	private readonly hash = createHash("sha256");
-	private hashed = 0;
-
-	push(chunk: Uint8Array): void {
-		if (this.hashed >= MAX_SCANNED_BYTES) return;
-		const take = chunk.subarray(0, MAX_SCANNED_BYTES - this.hashed);
-		this.hash.update(take);
-		this.hashed += take.byteLength;
-	}
-
-	digest(stat: { size: number; mtimeMs: number }): string {
-		return `${this.hash.digest("hex")}:${stat.size}:${Math.trunc(stat.mtimeMs)}`;
-	}
+export function shareFileFingerprint(stat: { size: number; mtimeMs: number }): string {
+	return `${stat.size}:${Math.trunc(stat.mtimeMs)}`;
 }
 
-/** Reads a file's start once: the credentials it looks like it holds, and its fingerprint. */
-export async function scanShareFile(file: ResolvedShareFile): Promise<{ secretFindings: string[]; fingerprint: string }> {
-	const scanner = new SecretScanner(file.name);
-	const fingerprint = new FingerprintHash();
+/** The fingerprint of a resolved file, read from its metadata. */
+export async function statShareFile(file: ResolvedShareFile): Promise<string> {
 	const handle = await openResolved(file);
 	try {
-		const stat = await handle.stat();
-		const buffer = Buffer.alloc(READ_CHUNK);
-		for (let read = 0; read < MAX_SCANNED_BYTES; ) {
-			const { bytesRead } = await handle.read(buffer, 0, READ_CHUNK, null);
-			if (bytesRead === 0) break;
-			const chunk = buffer.subarray(0, bytesRead);
-			scanner.push(chunk);
-			fingerprint.push(chunk);
-			read += bytesRead;
-		}
-		return { secretFindings: scanner.list(), fingerprint: fingerprint.digest(stat) };
+		return shareFileFingerprint(await handle.stat());
 	} finally {
 		await handle.close();
 	}
@@ -188,8 +114,7 @@ export interface ShareSnapshot {
 	path: string;
 	size: number;
 	sha256: string;
-	secretFindings: string[];
-	/** The source's fingerprint as it was copied; see scanShareFile. */
+	/** The source's fingerprint as it was copied; see shareFileFingerprint. */
 	fingerprint: string;
 }
 
@@ -202,7 +127,8 @@ export interface SnapshotOptions {
 
 /**
  * Copies a shared file into a private snapshot under snapshotDir, hashing it
- * and scanning it as it goes. The upload reads only the snapshot. The copy
+ * as it goes. A file written while it is copied is refused (source_changed):
+ * the snapshot would not be the version its fingerprint names. The upload reads only the snapshot. The copy
  * needs as much free space as the file, which is checked first.
  */
 export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: string, options: SnapshotOptions = {}): Promise<ShareSnapshot> {
@@ -216,8 +142,6 @@ export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: st
 		const stat = await source.stat();
 		output = await fs.open(target, "wx", 0o600);
 		const hash = createHash("sha256");
-		const scanner = new SecretScanner(file.name);
-		const fingerprint = new FingerprintHash();
 		const buffer = Buffer.alloc(READ_CHUNK);
 		let size = 0;
 		for (;;) {
@@ -226,13 +150,20 @@ export async function snapshotShareFile(file: ResolvedShareFile, snapshotDir: st
 			if (bytesRead === 0) break;
 			const chunk = buffer.subarray(0, bytesRead);
 			hash.update(chunk);
-			scanner.push(chunk);
-			fingerprint.push(chunk);
 			await output.write(chunk);
 			size += bytesRead;
 			options.onProgress?.(size);
 		}
-		return { path: target, size, sha256: hash.digest("hex"), secretFindings: scanner.list(), fingerprint: fingerprint.digest(stat) };
+		// The fingerprint is taken before the copy, so the copy must end on the
+		// same version: a write while it ran (an agent rewriting a part not yet
+		// read) leaves bytes the fingerprint does not name. The same open file
+		// is checked again, by its size, modification and change time, and the
+		// bytes copied must be all of it.
+		const after = await source.stat();
+		if (size !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
+			throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
+		}
+		return { path: target, size, sha256: hash.digest("hex"), fingerprint: shareFileFingerprint(stat) };
 	} catch (error) {
 		await output?.close().catch(() => undefined);
 		output = undefined;
@@ -281,22 +212,83 @@ function apiUrl(baseUrl: string, apiPath: string): string {
 	return base.origin + base.pathname.replace(/\/+$/, "") + API_PREFIX + apiPath;
 }
 
-async function callApi<T>(api: CloudShareApi, baseUrl: string, method: string, apiPath: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-	const token = await api.getToken();
-	if (!token) throw new CloudShareError("signed_out", "Sign in to share.");
-	const response = await api.fetch(apiUrl(baseUrl, apiPath), {
-		method,
-		headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
-		body: body === undefined ? undefined : JSON.stringify(body),
-		signal,
-	});
-	if (response.status === 401) throw new CloudShareError("signed_out", "Sign in to share.", 401);
-	if (!response.ok) {
-		const envelope = (await response.json().catch(() => ({}))) as { code?: string; message?: string };
-		throw new CloudShareError(envelope.code || `http_${response.status}`, envelope.message || `Request failed (${response.status})`, response.status);
+/**
+ * How long a request may take before it fails. A connection that dropped
+ * (Wi-Fi off and on) can otherwise leave a request that never answers, and
+ * the popover waiting on it for good.
+ */
+export const SHARE_TIMEOUTS: Record<"api" | "probe" | "transfer" | "publish", number> = {
+	/** An ordinary control-plane request. */
+	api: 30_000,
+	/** Whether the control plane serves share links at all. */
+	probe: 10_000,
+	/** Each upload part. */
+	transfer: 5 * 60_000,
+	/** Finalizing an upload or copying a cloud session's file: the control plane may be moving a large file. */
+	publish: 15 * 60_000,
+};
+
+/**
+ * fetch with a time limit. A request that takes longer is refused with
+ * CloudShareError "timeout"; one the caller's signal stopped still throws as
+ * an abort, so a cancel stays a cancel. The limit covers reading the body too.
+ */
+async function fetchWithin<T>(
+	timeoutMs: number,
+	signal: AbortSignal | undefined,
+	request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+	const timeout = AbortSignal.timeout(timeoutMs);
+	try {
+		return await request(signal ? AbortSignal.any([signal, timeout]) : timeout);
+	} catch (error) {
+		if (timeout.aborted && !signal?.aborted) {
+			throw new CloudShareError("timeout", "Orchestrator Cloud didn't answer in time. Check your connection and try again.");
+		}
+		throw error;
 	}
-	if (response.status === 204) return undefined as T;
-	return (await response.json()) as T;
+}
+
+/**
+ * `promise`, or the signal's abort as soon as it comes. For a step that takes
+ * no signal, such as reading the session token, which may refresh it over
+ * the network, so it counts against the request's own time limit.
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const stop = () => reject(signal.reason);
+		promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", stop));
+		if (signal.aborted) return stop();
+		signal.addEventListener("abort", stop, { once: true });
+	});
+}
+
+async function callApi<T>(
+	api: CloudShareApi,
+	baseUrl: string,
+	method: string,
+	apiPath: string,
+	body?: unknown,
+	signal?: AbortSignal,
+	timeoutMs: number = SHARE_TIMEOUTS.api,
+): Promise<T> {
+	return fetchWithin(timeoutMs, signal, async (limited) => {
+		const token = await untilAborted(api.getToken(), limited);
+		if (!token) throw new CloudShareError("signed_out", "Sign in to share.");
+		const response = await api.fetch(apiUrl(baseUrl, apiPath), {
+			method,
+			headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+			body: body === undefined ? undefined : JSON.stringify(body),
+			signal: limited,
+		});
+		if (response.status === 401) throw new CloudShareError("signed_out", "Sign in to share.", 401);
+		if (!response.ok) {
+			const envelope = (await response.json().catch(() => ({}))) as { code?: string; message?: string };
+			throw new CloudShareError(envelope.code || `http_${response.status}`, envelope.message || `Request failed (${response.status})`, response.status);
+		}
+		if (response.status === 204) return undefined as T;
+		return (await response.json()) as T;
+	});
 }
 
 /**
@@ -306,11 +298,14 @@ async function callApi<T>(api: CloudShareApi, baseUrl: string, method: string, a
  * when the control plane could not be reached.
  */
 export async function shareLinksAvailable(api: CloudShareApi, baseUrl: string): Promise<boolean | null> {
-	const token = await api.getToken();
+	// The token read (which may refresh it) and the request share one limit.
+	const limited = AbortSignal.timeout(SHARE_TIMEOUTS.probe);
 	try {
+		const token = await untilAborted(api.getToken(), limited);
 		const response = await api.fetch(apiUrl(baseUrl, "/me/artifact-shares"), {
 			method: "GET",
 			headers: token ? { Authorization: `Bearer ${token}` } : {},
+			signal: limited,
 		});
 		await response.body?.cancel().catch(() => undefined);
 		return response.status !== 404;
@@ -323,12 +318,53 @@ export function listShareLinks(api: CloudShareApi, baseUrl: string): Promise<Clo
 	return callApi<CloudShareLinks>(api, baseUrl, "GET", "/me/artifact-shares").then((links) => ({
 		...links,
 		unlimited: Boolean(links.unlimited),
+		privateLinks: Boolean(links.privateLinks),
 	}));
 }
 
+function shareLinkPath(shareId: string): string {
+	if (!UUID_PATTERN.test(shareId)) throw new CloudShareError("invalid_request", "Not a share link.");
+	return `/me/artifact-shares/${shareId}`;
+}
+
 export async function unpublishShareLink(api: CloudShareApi, baseUrl: string, shareId: string): Promise<void> {
-	if (!/^[0-9a-f-]{36}$/i.test(shareId)) throw new CloudShareError("invalid_request", "Not a share link.");
-	await callApi<void>(api, baseUrl, "DELETE", `/me/artifact-shares/${shareId}`);
+	await callApi<void>(api, baseUrl, "DELETE", shareLinkPath(shareId));
+}
+
+/** Makes a link private or public. Its URL stays the same. */
+export function setShareLinkAccess(api: CloudShareApi, baseUrl: string, shareId: string, access: CloudShareAccess): Promise<CloudShareLink> {
+	return callApi<CloudShareLink>(api, baseUrl, "PATCH", shareLinkPath(shareId), { access });
+}
+
+/** The emails a link is shared with. */
+export async function listShareGrants(api: CloudShareApi, baseUrl: string, shareId: string): Promise<CloudShareGrant[]> {
+	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "GET", `${shareLinkPath(shareId)}/grants`)).grants;
+}
+
+/** Shares a link with emails at once, and returns everyone it is shared with now. */
+export async function inviteShareGrants(api: CloudShareApi, baseUrl: string, shareId: string, emails: string[]): Promise<CloudShareGrant[]> {
+	return (await callApi<{ grants: CloudShareGrant[] }>(api, baseUrl, "POST", `${shareLinkPath(shareId)}/grants`, { emails })).grants;
+}
+
+export async function removeShareGrant(api: CloudShareApi, baseUrl: string, shareId: string, grantId: string): Promise<void> {
+	if (!UUID_PATTERN.test(grantId)) throw new CloudShareError("invalid_request", "Not someone the link is shared with.");
+	await callApi<void>(api, baseUrl, "DELETE", `${shareLinkPath(shareId)}/grants/${grantId}`);
+}
+
+/**
+ * What a publish asks a new link to start with. Neither is sent when unset:
+ * a control plane that predates private links refuses fields it does not know.
+ */
+export interface ShareAccessInput {
+	access?: CloudShareAccess;
+	emails?: string[];
+}
+
+function accessFields(input: ShareAccessInput): ShareAccessInput {
+	return {
+		...(input.access ? { access: input.access } : {}),
+		...(input.emails && input.emails.length > 0 ? { emails: input.emails } : {}),
+	};
 }
 
 /** One committed file of a cloud session, named by its organization, session and path. */
@@ -348,46 +384,20 @@ function sessionApiPath(ref: CloudSessionArtifactRef): string {
 }
 
 /**
- * Finds a cloud session's file and looks for credentials in its start, read
- * through the session's short-lived file access prefix. The file never leaves
- * the control plane's bucket to be shared; this read is only the check.
+ * A cloud session's file as its session lists it: its name, size and
+ * committed version (SHA-256). One request, made only when the renderer did
+ * not already name the version, or after the control plane refused a
+ * version that changed. The file itself is never read.
  */
-export async function inspectCloudSessionArtifact(
+export async function cloudSessionArtifactVersion(
 	api: CloudShareApi,
 	baseUrl: string,
 	ref: CloudSessionArtifactRef,
-): Promise<{ name: string; size: number; sha256: string; secretFindings: string[] }> {
-	const sessionPath = sessionApiPath(ref);
-	const { artifacts } = await callApi<{ artifacts: Array<{ path: string; name: string; size: number; sha256: string }> }>(api, baseUrl, "GET", `${sessionPath}/artifacts`);
+): Promise<{ name: string; size: number; sha256: string }> {
+	const { artifacts } = await callApi<{ artifacts: Array<{ path: string; name: string; size: number; sha256: string }> }>(api, baseUrl, "GET", `${sessionApiPath(ref)}/artifacts`);
 	const artifact = artifacts.find((candidate) => candidate.path === ref.path);
 	if (!artifact) throw new CloudShareError("file_missing", "The file is no longer available.");
-	const name = artifact.path.split("/").pop() || artifact.name;
-	const scanner = new SecretScanner(name);
-	const access = await callApi<{ filesPrefix: string }>(api, baseUrl, "POST", `${sessionPath}/artifacts/access`);
-	if (!access.filesPrefix.startsWith(`${API_PREFIX}/artifact-files/`)) throw new CloudShareError("invalid_response", "The control plane gave no file access.");
-	const base = parseCloudBaseUrl(baseUrl);
-	const fileUrl = base.origin + base.pathname.replace(/\/+$/, "") + access.filesPrefix + artifact.path.split("/").map(encodeURIComponent).join("/");
-	const controller = new AbortController();
-	const response = await api.fetch(fileUrl, { method: "GET", headers: { Range: `bytes=0-${MAX_SCANNED_BYTES - 1}` }, signal: controller.signal });
-	// An empty file has no range to read: 416.
-	if (!response.ok && response.status !== 416) {
-		throw new CloudShareError(`http_${response.status}`, `Reading the file failed (${response.status}).`, response.status);
-	}
-	if (response.ok && response.body) {
-		const reader = response.body.getReader();
-		let read = 0;
-		try {
-			while (read < MAX_SCANNED_BYTES) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				scanner.push(value);
-				read += value.byteLength;
-			}
-		} finally {
-			controller.abort();
-		}
-	}
-	return { name, size: artifact.size, sha256: artifact.sha256, secretFindings: scanner.list() };
+	return { name: artifact.path.split("/").pop() || artifact.name, size: artifact.size, sha256: artifact.sha256 };
 }
 
 /**
@@ -399,14 +409,14 @@ export async function inspectCloudSessionArtifact(
 export function shareCloudSessionArtifact(
 	api: CloudShareApi,
 	baseUrl: string,
-	ref: CloudSessionArtifactRef & { sha256: string; shareId?: string },
+	ref: CloudSessionArtifactRef & ShareAccessInput & { sha256: string; shareId?: string },
 	signal?: AbortSignal,
 ): Promise<{ share: CloudShareLink; replaced: boolean }> {
 	return callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", `${sessionApiPath(ref)}/artifacts/share`,
-		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}) }, signal);
+		{ path: ref.path, sha256: ref.sha256, ...(ref.shareId ? { shareId: ref.shareId } : {}), ...accessFields(ref) }, signal, SHARE_TIMEOUTS.publish);
 }
 
-export interface ShareUploadInput {
+export interface ShareUploadInput extends ShareAccessInput {
 	baseUrl: string;
 	snapshot: ShareSnapshot;
 	name: string;
@@ -494,7 +504,8 @@ export async function uploadShare(
 					const range = partRange(start, snapshot.size, part.partNumber);
 					const body = Buffer.alloc(range.length);
 					await handle.read(body, 0, range.length, range.offset);
-					const response = await api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal: batch.signal });
+					const response = await fetchWithin(SHARE_TIMEOUTS.transfer, batch.signal, (signal) =>
+						api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal }));
 					const etag = response.headers.get("etag");
 					if (!response.ok || !etag) throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${response.status}).`, response.status);
 					completed.push({ partNumber: part.partNumber, sha256: signed.sha256, etag });
@@ -508,7 +519,7 @@ export async function uploadShare(
 		}
 		completed.sort((a, b) => a.partNumber - b.partNumber);
 		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize",
-			{ uploadToken: start.uploadToken, parts: completed }, signal);
+			{ uploadToken: start.uploadToken, parts: completed, ...accessFields(input) }, signal, SHARE_TIMEOUTS.publish);
 	} catch (error) {
 		batch.abort();
 		await Promise.allSettled(running);

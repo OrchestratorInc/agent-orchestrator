@@ -1169,7 +1169,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	s.Metadata = domain.SessionMetadata{Branch: "qa/modal-worker", WorkspacePath: "/tmp/private-worktree", RuntimeHandleID: "runtime-1", Prompt: "private prompt"}
 	s.SCMStatus = domain.StatusReviewPending
 	s.KanbanColumn = domain.KanbanNeedsReview
-	s.DisplayStatus = contract.DisplayNeedsHumanReview
+	s.DisplayStatus = contract.DisplayAwaitingReview
 	svc.sessions["ao-1"] = s
 	srv := newSessionTestServer(t, svc)
 
@@ -1187,7 +1187,7 @@ func TestSessionsAPI_ListSpawnGetAndActions(t *testing.T) {
 	if list.Sessions[0].KanbanColumn != string(domain.KanbanNeedsReview) {
 		t.Fatalf("kanbanColumn = %q, want the derived column on the wire", list.Sessions[0].KanbanColumn)
 	}
-	if list.Sessions[0].DisplayStatus != string(contract.DisplayNeedsHumanReview) {
+	if list.Sessions[0].DisplayStatus != string(contract.DisplayAwaitingReview) {
 		t.Fatalf("displayStatus = %q, want the derived phrase on the wire", list.Sessions[0].DisplayStatus)
 	}
 	if list.Sessions[0].Branch != "qa/modal-worker" {
@@ -1983,6 +1983,29 @@ func TestSessionsAPI_SpawnPassesModelToService(t *testing.T) {
 	}
 	if svc.lastSpawn.AgentConfig.Model != "sonnet" {
 		t.Fatalf("service AgentConfig.Model = %q, want sonnet", svc.lastSpawn.AgentConfig.Model)
+	}
+}
+
+func TestSessionsAPI_SpawnAndDelegatePassAccountToService(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions",
+		`{"kind":"worker","harness":"claude-code","prompt":"fix","accountId":" acct-b "}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.AgentAccountID != "acct-b" {
+		t.Fatalf("spawn AgentAccountID = %q, want acct-b", svc.lastSpawn.AgentAccountID)
+	}
+
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate",
+		`{"projectId":"ao","brief":"Fix it","agent":"codex","accountId":"acct-c"}`)
+	if status != http.StatusAccepted {
+		t.Fatalf("POST delegate = %d, want 202; body=%s", status, body)
+	}
+	if svc.delegationInput.AccountID != "acct-c" {
+		t.Fatalf("delegate AccountID = %q, want acct-c", svc.delegationInput.AccountID)
 	}
 }
 

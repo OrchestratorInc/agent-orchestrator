@@ -1,17 +1,17 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { LayoutDashboard, Plus } from "@/components/app-icons";
+import { ChevronDown, Code2, LayoutDashboard, Play, Plus } from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import {
 	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
-	sessionIsActive,
+	canArchiveWorkerSession,
 	sessionCueTargetAvailable,
 	CLOUD_PROJECT_KIND,
-	STANDALONE_PROJECT_KIND,
+	isScratchpadWorkspace,
 	STANDALONE_WORKSPACE_ID,
 	toProjectKind,
 	type WorkspaceSession,
@@ -30,7 +30,7 @@ import { CoderWorkspaceTopbarButton } from "./CoderWorkspaceLinkButton";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { noDragStyle, PageTopbarActions } from "./PageTopbar";
-import { Button } from "./ui/button";
+import { Button, GHOST_PILL_CLASS } from "./ui/button";
 import { TopbarActionError } from "./TopbarActionError";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
@@ -78,7 +78,8 @@ export function SessionTopbarActions({
 	const project = workspaceScope?.project;
 	const supportsLocalCues = Boolean(!hostId && project && toProjectKind(project.kind));
 	const orchestrator = workspaceScope?.orchestrator;
-	const supportsProjectActions = project?.kind !== STANDALONE_PROJECT_KIND && projectId !== STANDALONE_WORKSPACE_ID;
+	// A scratchpad session, local or a Cloud standalone agent, has no orchestrator or board.
+	const supportsProjectActions = !isScratchpadWorkspace(project) && projectId !== STANDALONE_WORKSPACE_ID;
 	const projectActions = useProjectOrchestratorAction({
 		projectId: supportsProjectActions ? projectId : undefined,
 		project: supportsProjectActions ? project : undefined,
@@ -112,7 +113,7 @@ export function SessionTopbarActions({
 		captureTopbarAction("open_board", view);
 		void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
 	};
-	const archiveTarget = !isOrchestrator && session && !session.cloud && sessionIsActive(session) ? session : undefined;
+	const archiveTarget = !isOrchestrator && session && canArchiveWorkerSession(session) ? session : undefined;
 
 	// Reading order, left to right. Workers: Orchestrator (quiet, labeled), then
 	// the editor and cue icons; no emphasized action, the session is the focus.
@@ -153,6 +154,27 @@ export function SessionTopbarActions({
 				<div className="inline-flex shrink-0 items-center" style={noDragStyle}>
 					{sessionAction}
 				</div>
+			) : null}
+			{/* The session's own controls take their space while it starts, so the
+			    cluster keeps its width and nothing slides when the session lands.
+			    Each placeholder follows its real control's rule below: no editor on
+			    a remote host or cloud project, no cues on a remote host. */}
+			{startingOrchestrator && !hostId ? (
+				<>
+					{project?.kind !== CLOUD_PROJECT_KIND ? <div aria-hidden="true" className={`${GHOST_PILL_CLASS} inline-flex items-center gap-0 rounded-md before:hidden`} style={noDragStyle}>
+						<Button type="button" size="icon-sm" variant="quiet" className="before:hidden" aria-label={t("editor.chooseEditor")} disabled tabIndex={-1}>
+							<Code2 className="size-icon-md" aria-hidden="true" />
+						</Button>
+						<Button type="button" size="icon-sm" variant="quiet" className="before:hidden" aria-label={t("editor.openOptionsAria")} disabled tabIndex={-1}>
+							<ChevronDown className="size-icon-sm" aria-hidden="true" />
+						</Button>
+					</div> : null}
+					<span className="inline-flex" style={noDragStyle}>
+						<Button type="button" size="icon-sm" variant="quiet" aria-label={t("cues.run")} data-priority="secondary" disabled tabIndex={-1}>
+							<Play className="size-icon-md" aria-hidden="true" />
+						</Button>
+					</span>
+				</>
 			) : null}
 			{/* Cloud sessions have no local workspace to hand off to an editor: the
 			    local daemon has never heard of them, so querying it just surfaces
@@ -205,7 +227,7 @@ export function SessionTopbarActions({
 							void navigate(sessionNavigateTarget(workspaceId, nextRoute.sessionId, hostId));
 							return;
 						}
-						if (workspaceId === STANDALONE_WORKSPACE_ID) {
+						if (workspaceId === STANDALONE_WORKSPACE_ID || (workspaceId === project?.id && isScratchpadWorkspace(project))) {
 							void navigate({ to: "/" });
 							return;
 						}

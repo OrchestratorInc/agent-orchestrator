@@ -50,6 +50,8 @@ export type HarnessDescribeInput = {
 	authState?: AgentAuthState;
 	/** The login or logout terminal, when it belongs to this harness. */
 	authWorkflow: AuthTerminalWorkflow | null;
+	/** The last login check for this harness failed. */
+	authCheckFailed?: boolean;
 	updatedAt?: string;
 };
 
@@ -88,7 +90,9 @@ export function describeHarness(input: HarnessDescribeInput) {
 	// existing cached-readiness fallback when fetching the snapshot fails.
 	const installationPending = !input.readinessFailed && (input.readinessPending || readinessAgent?.installation.state === "unknown");
 	const isSetupAction = authPlan?.action === "setup";
-	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation";
+	// Inline key methods replace the documentation card: the button opens the
+	// Account login panel instead of the setup docs.
+	const isDocumentationAction = isSetupAction && authPlan?.launchMode === "documentation" && !authPlan?.methods?.length;
 	const authStatus = readinessAgent?.authentication.state;
 	// Who the harness is signed in as, when its own login check names it.
 	const account = authStatus === "authorized" || authStatus === "configured" ? readinessAgent?.authentication.account : undefined;
@@ -118,6 +122,12 @@ export function describeHarness(input: HarnessDescribeInput) {
 		&& ["provider_unsupported", "provider_inconclusive", "provider_unreachable", "probe_timeout", "probe_cancelled"].includes(step.code))
 		|| readinessAgent?.authentication.diagnostics?.some((step) => step.code === "model_selection_unresolved");
 	const renewsOnRun = authStatus === "configured" && Boolean(readinessAgent?.authentication.diagnostics?.some((step) => step.code === "token_renewal_pending"));
+	// One sign-in tone for the Account and Health tabs: green only for a fresh,
+	// successful check. An expired login token the harness renews by itself is
+	// signed in, not a problem to fix.
+	const authTone: HarnessTone = input.authCheckFailed || readinessAgent?.authentication.freshness !== "fresh" ? "off"
+		: renewsOnRun || authStatus === "authorized" || authStatus === "not_applicable" ? "ok"
+		: authStatus === "unauthorized" ? "error" : "off";
 	const authSummary = renewsOnRun ? t("settings.harness.loggedIn")
 		: authStatus === "configured" ? t(unverifiedProvider ? "settings.harness.health.authUnverified" : isSetupAction ? "settings.harness.configured" : "settings.harness.installed")
 		: authStatus === "authorized" ? t("settings.harness.loggedIn")
@@ -156,7 +166,7 @@ export function describeHarness(input: HarnessDescribeInput) {
 	return {
 		agentId, plan, job, isInstalled, availableMethods, installMethod, methodId, maintenanceMethod, canUpdate, manualOnly, updateReason,
 		advisoryQuery, advisory, updateUnknown, updateAvailable, currentVersion, busy, failed, jobFailed, currentOperation, readinessAgent,
-		authPlan, authState, authStatus, authSummary, renewsOnRun, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, showSetup, isSetupAction, isDocumentationAction, canRelogin,
+		authPlan, authState, authStatus, authSummary, authTone, renewsOnRun, unverifiedProvider, accountDescription, rowAuthWorkflow, authBusy, needsLogin, showSetup, isSetupAction, isDocumentationAction, canRelogin,
 		showUpdate, hasDiagnostics, installWarning, rowError, versionText, versionUnverified, updatedAt: input.updatedAt, progressLabel, installationPending, installNote, listTone, statusLabel,
 	};
 }

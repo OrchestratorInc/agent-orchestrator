@@ -118,6 +118,21 @@ function compareVersionsDesc(a: number[], b: number[]) {
 	return 0;
 }
 
+/** The newest effort-capable concrete model for a Claude family alias, matching spawn validation. */
+export function newestClaudeFamilyModel<T extends { id: string; label?: string; efforts?: string[] }>(models: T[], alias: string): T | undefined {
+	const family = CLAUDE_FAMILIES.indexOf(alias.trim().replace(/\[1m\]$/, "").toLowerCase());
+	if (family < 0) return undefined;
+	let best: { model: T; version: number[] } | undefined;
+	for (const model of models) {
+		if (!model.efforts?.length) continue;
+		const parsed = claudeFamilyVersion({ id: model.id, label: model.label ?? "" });
+		if (parsed?.family === family && (!best || compareVersionsDesc(parsed.version, best.version) < 0)) {
+			best = { model, version: parsed.version };
+		}
+	}
+	return best?.model;
+}
+
 // A context variant ("opus[1m]", "Opus 5.5 (1M context)") is its own choice,
 // not an older release of its family.
 function claudeVariant(model: { id: string; label: string }): string {

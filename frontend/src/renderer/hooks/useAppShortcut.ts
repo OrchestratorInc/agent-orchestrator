@@ -26,6 +26,28 @@ export function runAppShortcut(event: AppShortcutEvent): void {
 	for (const listener of Array.from(localListeners)) listener(event);
 }
 
+/**
+ * For shortcuts main delivers on a channel of their own (⌘N, session and tab
+ * cycling, New terminal, Close tab): subscribes `handler` there and to the
+ * command palette running the shortcut, which only reaches in-renderer
+ * listeners. Returns the unsubscribe.
+ */
+export function onDedicatedShortcut(
+	id: AppShortcutId,
+	subscribe: (handler: () => void) => () => void,
+	handler: () => void,
+): () => void {
+	const unsubscribe = subscribe(handler);
+	const local = (event: AppShortcutEvent) => {
+		if (event.id === id) handler();
+	};
+	localListeners.add(local);
+	return () => {
+		unsubscribe();
+		localListeners.delete(local);
+	};
+}
+
 const TERMINAL_SELECTOR = ".xterm, .terminal-surface, [data-testid='session-terminal']";
 
 /**
@@ -98,10 +120,16 @@ export function isSettingsPageOpen(): boolean {
 	return useUiStore.getState().settingsModal?.scope === "global";
 }
 
+/** True while the archive modal covers the routed page. */
+function isArchiveModalOpen(): boolean {
+	return Boolean(useUiStore.getState().archiveModal);
+}
+
 /**
  * For commands that act on the session on screen (archive, open in editor,
  * copy path, panel toggles). The session page stays mounted but hidden under
- * Settings, so these stand down there instead of acting on an invisible session.
+ * Settings or the archive modal, so these stand down there instead of acting
+ * on a session the user cannot see.
  */
 export function useSessionShortcut(
 	id: AppShortcutId,
@@ -111,7 +139,7 @@ export function useSessionShortcut(
 	useAppShortcut(
 		id,
 		(event) => {
-			if (!isSettingsPageOpen()) handler(event);
+			if (!isSettingsPageOpen() && !isArchiveModalOpen()) handler(event);
 		},
 		enabled,
 	);

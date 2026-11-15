@@ -28,6 +28,10 @@ type harnessImporter struct {
 	mode domain.SessionMode
 	// Global stores can also need registered paths to resolve older metadata.
 	readWithProjects func(context.Context, string, []string, ...string) (transcript, error)
+	// A source that is not an agent sets as to the agent its chats continue
+	// on, and adopt writes a selected chat where that agent reads it.
+	as    domain.AgentHarness
+	adopt func(context.Context, transcript) (transcript, error)
 }
 
 // Keep entries immutable after package initialization: scans read them in parallel.
@@ -46,6 +50,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCursor:   {root: cursorRoot, discover: discoverCursor, read: readCursorTranscript},
 	domain.HarnessGrok:     {root: grokRoot, discover: discoverGrok, read: readGrokTranscript},
 	domain.HarnessGemini:   {root: geminiRoot, discover: discoverGemini, readWithProjects: readGeminiTranscriptWithProjects},
+	conductorSource:        {root: conductorRoot, discover: discoverConductor, read: readConductorTranscript, as: domain.HarnessClaudeCode, adopt: writeConductorTranscript},
 }
 
 func claudeRoot(home string) string {

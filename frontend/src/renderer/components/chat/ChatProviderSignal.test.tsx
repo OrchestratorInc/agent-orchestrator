@@ -251,8 +251,8 @@ describe("auto review", () => {
 });
 
 describe("system events", () => {
-	it("names what actually answered when the provider rerouted", () => {
-		render(
+	it("draws nothing when the provider rerouted the model", () => {
+		const { container } = render(
 			<ActivityRow
 				activity={activity({
 					activityKind: "system",
@@ -266,9 +266,7 @@ describe("system events", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText("gpt-5.6-terra-mini")).toBeInTheDocument();
-		expect(screen.getByText("gpt-5.6-terra")).toBeInTheDocument();
-		expect(screen.getByText("at capacity")).toBeInTheDocument();
+		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("records where the provider demanded credentials", () => {
@@ -301,6 +299,59 @@ describe("steer message", () => {
 		);
 		expect(screen.getByText("Skip the integration tests")).toBeInTheDocument();
 		expect(screen.getByText(/Steered/i)).toBeInTheDocument();
+	});
+
+	it("draws a steered chat excerpt as an annotation chip, without the placeholder message", async () => {
+		const user = userEvent.setup();
+		render(
+			<SteerMessage
+				sessionId="ao-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "Use the attached 1 chat excerpt(s) as context",
+					detail: {
+						event: "steer",
+						text: "Use the attached 1 chat excerpt(s) as context",
+						origin: "human",
+						content: [{
+							type: "excerpt",
+							excerpt: { reference: { id: "ex-1", messageId: "m-1", revision: 0 }, selectedText: "Split across two pastes" },
+						}],
+					},
+				})}
+			/>,
+		);
+		expect(screen.queryByText(/Use the attached/)).not.toBeInTheDocument();
+		expect(screen.queryByText("excerpt")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		expect(await screen.findByText("Split across two pastes")).toBeInTheDocument();
+	});
+
+	it("keeps an automation steer's annotation and comment", async () => {
+		const user = userEvent.setup();
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "[from worker-1] look at this",
+					detail: {
+						event: "steer",
+						text: "[from worker-1] look at this",
+						origin: "human",
+						senderSessionId: "worker-1",
+						content: [{
+							type: "excerpt",
+							excerpt: { reference: { id: "ex-1", messageId: "m-1", revision: 0, comment: "Why twice?" }, selectedText: "Split across two pastes" },
+						}],
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText("look at this")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		expect(await screen.findByText("Split across two pastes")).toBeInTheDocument();
+		expect(screen.getByText("Why twice?")).toBeInTheDocument();
 	});
 
 	it("renders a CLI steer as an attributed automation block with a session link", () => {

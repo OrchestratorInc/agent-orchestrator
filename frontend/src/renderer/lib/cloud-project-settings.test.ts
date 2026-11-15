@@ -23,4 +23,11 @@ describe("cloud project settings draft", () => {
 			config: { workersRequestReview: true, trackerIntake: { enabled: true, repo: "acme/app", assignee: "octo" } },
 		});
 	});
+
+	it("names the App a commit co-author unless the project turned it off, and sends only a change", () => {
+		const before = cloudProjectSettingsDraft(project({}));
+		expect(before.coAuthorCommits).toBe(true);
+		expect(cloudProjectSettingsDraft(project({ coAuthorCommits: false })).coAuthorCommits).toBe(false);
+		expect(cloudProjectSettingsPatch(before, { ...before, coAuthorCommits: false })).toEqual({ config: { coAuthorCommits: false } });
+	});
 });

@@ -209,7 +209,34 @@ function describeKnownCommand(command: string): CommandStep | undefined {
 	if (segments.length > 1 && segments.every(isPlainRead)) {
 		return readStep(segments.flatMap((each) => (each.binary === "sed" ? sedFiles(each.args) : readerFiles(each.binary, each.args))));
 	}
-	return describeSegment(segment, 0);
+	const step = describeSegment(segment, 0);
+	if (step && segment.binary === "ao" && /^Checked the (?:browser console|page for errors)$/.test(step.done)) {
+		const pattern = pipedSearchPattern(command);
+		if (pattern) return { ...step, done: `${step.done} for`, live: `${step.live} for`, target: pattern };
+	}
+	return step;
+}
+
+/**
+ * The pattern of a `| grep` or `| rg` stage fed straight by an `ao` call. Later
+ * pipeline stages drop out of the parsed segments, so this reads the words again.
+ */
+function pipedSearchPattern(command: string): string | undefined {
+	for (const line of logicalLines(command)) {
+		let fedByAO = false;
+		let stage: Word[] = [];
+		for (const word of [...tokenize(line), { text: ";", operator: true } as Word]) {
+			if (!word.operator) {
+				stage.push(word);
+				continue;
+			}
+			const segment = toSegment(stage);
+			if (fedByAO && segment && (segment.binary === "grep" || segment.binary === "rg")) return searchPattern(segment.args);
+			fedByAO = word.text === "|" && segment?.binary === "ao";
+			stage = [];
+		}
+	}
+	return undefined;
 }
 
 function isPlainRead(segment: Segment): boolean {
@@ -258,6 +285,7 @@ function describeSegment(segment: Segment, depth: number): CommandStep | undefin
 
 	if (binary === "git") return gitStep(args);
 	if (binary === "gh") return ghStep(args);
+	if (binary === "ao") return aoStep(args);
 
 	if (binary === "mkdir") return countedStep(positionals(args), "Created folder", "Creating folder", "folders", "folder-new");
 	if (binary === "touch") return countedStep(positionals(args), "Created", "Creating", "files", "file-new");
@@ -596,6 +624,162 @@ function ghStep(args: string[]): CommandStep {
 	return { done: "Ran", live: "Running", target: ["gh", area, action].filter(Boolean).join(" "), icon: "git" };
 }
 
+/**
+ * A step the agent takes only to learn how to drive Orchestrator: reading the
+ * guides that ship with it, or `ao … --help`. It is not work on the user's task,
+ * so the chat leaves it out.
+ */
+export function isOrchestratorPlumbing(activity: ConversationActivity): boolean {
+	const detail = activity.detail;
+	// A failed call keeps its row and its error. A running one stays hidden, or the
+	// row would show and then vanish when it finishes.
+	if (activity.status === "failed" || activity.status === "cancelled") return false;
+	if (activity.activityKind === "mcp_tool") {
+		if (detail?.providerToolName !== "Read" || !isRecord(detail.input)) return false;
+		const path = detail.input.file_path ?? detail.input.path;
+		return typeof path === "string" && isOrchestratorGuide(path);
+	}
+	if (activity.activityKind !== "command" || !detail?.command) return false;
+	// Every stage counts, piped ones too: `cat SKILL.md | cat > copy.md` writes a file.
+	let stages = 0;
+	for (const line of logicalLines(detail.command)) {
+		let words: Word[] = [];
+		for (const word of [...tokenize(line), { text: ";", operator: true } as Word]) {
+			if (!word.operator || word.text === ")") {
+				if (!word.operator) words.push(word);
+				continue;
+			}
+			const segment = toSegment(words);
+			words = [];
+			// `source` and `.` run a script, which can do real work, so they are not skipped.
+			const sourced = segment?.binary === "source" || segment?.binary === ".";
+			if (!segment || (NAVIGATION.has(segment.binary) && !sourced) || SHELL_SYNTAX.has(segment.binary)) continue;
+			if (!isPlumbingStage(segment)) return false;
+			stages += 1;
+		}
+	}
+	return stages > 0;
+}
+
+/** One stage that only reads Orchestrator's guides or asks `ao` for help. */
+function isPlumbingStage(segment: Segment): boolean {
+	if (segment.writeTarget) return false;
+	if (segment.binary === "ao") return segment.args.includes("--help") || segment.args.includes("-h") || segment.args[0] === "help";
+	if (!isPlainRead(segment)) return false;
+	// Every operand, unfiltered: `cat SKILL.md notes` also reads `notes`.
+	const operands = guideReadOperands(segment);
+	return operands.length > 0 && operands.every(isOrchestratorGuide);
+}
+
+function guideReadOperands({ binary, args }: Segment): string[] {
+	if (binary === "sed") {
+		// Only a plain line-range print (`1,80p`) is known to just read; any other
+		// script could write (`w copy.md`), so it has no guide-only operands.
+		const hasScriptFlag = args.some((arg) => arg === "-e" || arg === "-f" || arg === "--expression" || arg === "--file");
+		const [script, ...files] = positionals(args, SED_VALUE_FLAGS);
+		return !hasScriptFlag && script && /^(?:\d+|\$)?(?:,(?:\d+|\$))?p$/.test(script) ? files : [];
+	}
+	const values = positionals(args, READER_VALUE_FLAGS[binary]);
+	return binary === "jq" ? values.slice(1) : values;
+}
+
+function isOrchestratorGuide(path: string): boolean {
+	return /[\\/]skills[\\/]using-ao[\\/]/.test(path);
+}
+
+
+/**
+ * Orchestrator's own CLI. It is plumbing the agent drives for the user, so a row
+ * says what it did ("Previewed hello.html"), never "Ran ao".
+ */
+function aoStep(args: string[]): CommandStep {
+	if (args.includes("--help") || args.includes("-h") || args[0] === "help") {
+		return { done: "Looked up how to use Orchestrator", live: "Looking up how to use Orchestrator", icon: "read" };
+	}
+	const values = positionals(args, AO_VALUE_FLAGS);
+	const [area, action] = values;
+	const page = (value: string | undefined) => (value ? (/^[a-z]+:\/\//i.test(value) ? { target: value } : fileTarget(value)) : {});
+	switch (area) {
+		case "preview":
+			return values[1]
+				? { done: "Previewed", live: "Previewing", ...page(values[1]), icon: "web" }
+				: { done: "Previewed the page", live: "Previewing the page", icon: "web" };
+		case "browser":
+			// `ao browser tab new <url>` names the page after its `new`.
+			return aoBrowserStep(action, (action === "tab" ? values[3] : values[2]) ?? flagValue(args, ["--url"]), page);
+		case "render":
+			return { done: "Rendered a preview", live: "Rendering a preview", icon: "web" };
+		case "artifact":
+			if (action === "add") return { done: "Saved deliverable", live: "Saving deliverable", ...page(values[2]), icon: "file-new" };
+			return { done: "Checked deliverables", live: "Checking deliverables", icon: "list" };
+		case "report":
+			if (args.includes("--done")) return { done: "Marked the task done", live: "Marking the task done", icon: "check" };
+			if (args.includes("--needs-input")) return { done: "Asked for input", live: "Asking for input", icon: "check" };
+			if (args.includes("--stuck")) return { done: "Reported a blocker", live: "Reporting a blocker", icon: "check" };
+			return { done: "Shared progress", live: "Sharing progress", icon: "check" };
+		case "send":
+			return { done: "Messaged session", live: "Messaging session", target: flagValue(args, ["--session"]), icon: "tool" };
+		case "spawn":
+			// The spawned agent's own row names it; repeating the name here shows it twice.
+			return { done: "Started a session", live: "Starting a session", icon: "tool" };
+		case "review":
+			if (action === "trigger") return { done: "Requested a code review", live: "Requesting a code review", icon: "pr" };
+			return { done: "Checked code reviews", live: "Checking code reviews", icon: "pr" };
+		case "session":
+			if (action === "claim-pr") {
+				const number = issueNumber(values[2]);
+				return { done: "Took over PR", live: "Taking over PR", target: number ? `#${number}` : undefined, icon: "pr" };
+			}
+			if (action === "ls" || action === "list") return { done: "Listed sessions", live: "Listing sessions", icon: "list" };
+			return { done: "Checked session", live: "Checking session", target: values[2], icon: "tool" };
+		case "project":
+			return { done: "Checked projects", live: "Checking projects", icon: "list" };
+	}
+	return { done: "Used Orchestrator", live: "Using Orchestrator", icon: "tool" };
+}
+
+function aoBrowserStep(
+	action: string | undefined,
+	url: string | undefined,
+	page: (value: string | undefined) => { target?: string; targetTitle?: string },
+): CommandStep {
+	switch (action) {
+		case "open":
+		case "navigate":
+		case "goto":
+		case "tab":
+			return url
+				? { done: "Opened", live: "Opening", ...page(url), icon: "web" }
+				: { done: "Opened the Browser panel", live: "Opening the Browser panel", icon: "web" };
+		case "console":
+			return { done: "Checked the browser console", live: "Checking the browser console", icon: "web" };
+		case "errors":
+			return { done: "Checked the page for errors", live: "Checking the page for errors", icon: "check" };
+		case "screenshot":
+			return { done: "Took a screenshot", live: "Taking a screenshot", icon: "web" };
+		case "wait":
+			return { done: "Waited for the page", live: "Waiting for the page", icon: "wait" };
+		case "reload":
+			return { done: "Reloaded the page", live: "Reloading the page", icon: "web" };
+		case "snapshot":
+		case "get":
+		case "eval":
+		case "text":
+		case "find":
+			return { done: "Inspected the page", live: "Inspecting the page", icon: "web" };
+	}
+	return { done: "Interacted with the page", live: "Interacting with the page", icon: "web" };
+}
+
+/** `ao` subcommands that only look, so a chain is named by the one that acts. */
+function aoObserves(args: string[]): boolean {
+	if (args.includes("--help") || args.includes("-h")) return true;
+	const [area, action] = positionals(args, AO_VALUE_FLAGS);
+	if (area === "browser") return AO_BROWSER_OBSERVERS.has(action ?? "");
+	if (area === "session" || area === "review" || area === "artifact") return action === "ls" || action === "list" || action === "get";
+	return area === "project" || area === "help";
+}
+
 function packageManagerStep(binary: string, args: string[]): CommandStep | undefined {
 	const values = positionals(args, PACKAGE_MANAGER_VALUE_FLAGS);
 	const sub = values[0];
@@ -838,6 +1022,7 @@ function workSegment(segments: Segment[]): Segment | undefined {
 function onlyObserves(segment: Segment): boolean {
 	if (segment.writeTarget) return false;
 	if (segment.binary === "git") return GIT_OBSERVERS.has(stripGitGlobals(segment.args)[0] ?? "");
+	if (segment.binary === "ao") return aoObserves(segment.args);
 	return isPlainRead(segment) || REPORTERS.has(segment.binary) || SEARCH_PROGRAMS.has(segment.binary);
 }
 
@@ -1223,6 +1408,8 @@ const SEARCH_VALUE_FLAGS = new Set([
 	"-M", "--max-columns", "-j", "--threads", "--max-depth", "-d", "--include", "--exclude",
 	"--exclude-dir", "--type-add", "--sort", "--sortr",
 ]);
+const AO_VALUE_FLAGS = new Set(["--session", "--note", "--artifact", "--pr-created", "--pr-reviewed", "--name", "--prompt", "--harness", "--agent", "--model", "--mode", "--effort", "--message", "-m", "--project", "--branch", "--ms", "--timeout", "--tab", "--format", "--url"]);
+const AO_BROWSER_OBSERVERS = new Set(["console", "errors", "snapshot", "screenshot", "get", "eval", "text", "find", "wait"]);
 const GH_VALUE_FLAGS = new Set(["-R", "--repo", "--json", "-q", "--jq", "-t", "--template", "-L", "--limit", "-s", "--state", "-A", "--author", "-B", "--base", "-H", "--head", "-b", "--body", "--title", "-l", "--label", "-X", "--method", "-f", "--raw-field", "-F", "--field", "--input"]);
 const PACKAGE_MANAGER_VALUE_FLAGS = new Set(["--filter", "-F", "-C", "--dir", "--prefix", "--workspace", "--cwd"]);
 const INTERPRETER_VALUE_FLAGS = new Set(["-r", "--require", "--import", "--loader", "-W", "-X"]);

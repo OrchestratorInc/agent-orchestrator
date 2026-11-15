@@ -1,6 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { QueryObserver } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { queryClient } from "../lib/query-client";
@@ -108,4 +108,48 @@ export function useLinkPreview(url: string, enabled: boolean) {
 		isPending: enabled && current.data === undefined && !settledEmpty,
 		isError: settledEmpty,
 	};
+}
+
+/**
+ * The HTTPS site root of a web link (`https://host/`), whose preview names the
+ * site's icon. An http link is looked up over HTTPS too, unless it names its own
+ * port, which says nothing about where HTTPS is served. Carries none of the
+ * link's path, query or credentials.
+ */
+export function linkOrigin(url: string): string | undefined {
+	try {
+		const parsed = new URL(url);
+		if (parsed.protocol === "https:") return `https://${parsed.host}/`;
+		if (parsed.protocol === "http:" && !parsed.port) return `https://${parsed.hostname}/`;
+		return undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function subscribeLinkPreviews(onChange: () => void) {
+	return queryClient.getQueryCache().subscribe((event) => {
+		if (event.query.queryKey[0] === "link-preview") onChange();
+	});
+}
+
+function previewWithFavicon(url: string): LinkPreview | undefined {
+	const preview = queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(url));
+	return preview?.faviconUrl ? preview : undefined;
+}
+
+/**
+ * What the cache knows of a link's site icons: the preview naming them (the
+ * link's own, which a hover loaded, or its site root's), "failed" when asking
+ * for the site root failed so no icon is coming, or undefined while unknown.
+ * Reads the cache only, through one subscription, and updates in place.
+ */
+export function useCachedLinkFavicons(url: string): LinkPreview | "failed" | undefined {
+	const origin = useMemo(() => linkOrigin(url), [url]);
+	const read = useCallback(() => {
+		const preview = previewWithFavicon(url) ?? (origin ? previewWithFavicon(origin) : undefined);
+		if (preview) return preview;
+		return origin && queryClient.getQueryState(linkPreviewQueryKey(origin))?.status === "error" ? "failed" : undefined;
+	}, [origin, url]);
+	return useSyncExternalStore(subscribeLinkPreviews, read);
 }

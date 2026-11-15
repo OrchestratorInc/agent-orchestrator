@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // MaxTerminalTitleRunes bounds a stored terminal title, matching the session
@@ -31,13 +32,19 @@ func NormalizeTerminalTitle(raw string) string {
 		return r
 	}, strings.ToValidUTF8(raw, ""))
 	title = strings.TrimLeftFunc(title, func(r rune) bool {
-		return unicode.IsSpace(r) || unicode.Is(unicode.So, r) || r == '\ufe0e' || r == '\ufe0f'
+		return unicode.IsSpace(r) || unicode.Is(unicode.So, r) || isSpinnerDot(r) || r == '\ufe0e' || r == '\ufe0f'
 	})
 	title = strings.Join(strings.Fields(title), " ")
 	if runes := []rune(title); len(runes) > MaxTerminalTitleRunes {
 		title = strings.TrimSpace(string(runes[:MaxTerminalTitleRunes]))
 	}
 	return title
+}
+
+// isSpinnerDot covers spinner frames that are punctuation or math symbols
+// rather than So symbols, such as the dot in Claude Code's "·✢✳✶✻✽" cycle.
+func isSpinnerDot(r rune) bool {
+	return r == '·' || r == '•' || r == '∙' || r == '⋅'
 }
 
 func isBidiControl(r rune) bool {
@@ -77,17 +84,46 @@ func MeaningfulTerminalTitle(title, workingDir string) string {
 	if title == "" || !strings.ContainsFunc(title, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) {
 		return ""
 	}
-	if isPathLike(title) || userAtHostTitle.MatchString(title) {
-		return ""
-	}
-	// Fish reports "<command> <directory>" around every command it runs.
-	if fields := strings.Fields(title); len(fields) == 2 && isPathLike(fields[1]) {
+	if isPathLike(title) || userAtHostTitle.MatchString(title) || isFishTitle(title) {
 		return ""
 	}
 	if _, generic := genericTerminalTitles[strings.ToLower(strings.TrimPrefix(title, "-"))]; generic {
 		return ""
 	}
 	return title
+}
+
+// fishTitleCommandRunes is how much of the command line fish's default
+// fish_title keeps (string sub -l 20).
+const fishTitleCommandRunes = 20
+
+// isFishTitle reports fish's default title, "[host] <command> <directory>":
+// an optional ssh host, up to 20 characters of the running command line, and
+// the working directory from prompt_pwd. Fish emits it at every prompt and
+// around every command, so it would relabel the tab for each `ls`.
+func isFishTitle(title string) bool {
+	if strings.HasPrefix(title, "[") {
+		if end := strings.Index(title, "] "); end > 0 {
+			title = title[end+2:]
+		}
+	}
+	if isPathLike(title) {
+		return true
+	}
+	// The directory can contain spaces, and so can the command, so try each
+	// split whose command part fits in fish's limit.
+	for i, r := range title {
+		if r != ' ' {
+			continue
+		}
+		if utf8.RuneCountInString(title[:i]) > fishTitleCommandRunes {
+			return false
+		}
+		if isPathLike(title[i+1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 func isPathLike(s string) bool {

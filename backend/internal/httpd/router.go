@@ -88,7 +88,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)
 	mountAwake(r, &controllers.AwakeController{Svc: deps.Awake})
-	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive})
+	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive, Access: deps.DeviceAccess})
 	api.Register(r)
 
 	return r
@@ -208,6 +208,9 @@ func mountMobile(r chi.Router, c *controllers.MobileController) {
 	r.Post("/api/v1/mobile/secure-pairing", c.SecurePairing)
 	r.Post("/api/v1/mobile/keep-awake", c.KeepAwake)
 	r.Post("/api/v1/remote-host/account-token", c.IssueAccountToken)
+	r.Post("/api/v1/remote-host/devices", c.PairDevice)
+	r.Post("/api/v1/mobile/pairing-code", c.NewPairingCode)
+	r.Post("/api/v1/mobile/require-device-credentials", c.RequireDeviceCredentials)
 	r.Post("/api/v1/mobile/browser-control", c.BrowserRemoteAccess)
 }
 
@@ -228,7 +231,7 @@ func mountMobileDevices(r chi.Router, c *controllers.MobileDevicesController) {
 		return
 	}
 	r.Get("/api/v1/mobile/devices", c.List)
-	r.Delete("/api/v1/mobile/devices/{installId}", c.Remove)
+	r.Delete("/api/v1/mobile/devices/{id}", c.Remove)
 }
 
 type cliInvokedRequest struct {

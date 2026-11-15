@@ -6,7 +6,7 @@ How to set up, build, run, and test Agent Orchestrator locally.
 
 | Tool       | Minimum version | Notes                                                                  |
 | ---------- | --------------- | ---------------------------------------------------------------------- |
-| Go         | 1.27.1          | `go version` to check; install via [go.dev](https://go.dev/dl/)        |
+| Go         | 1.27.4          | `go version` to check; install via [go.dev](https://go.dev/dl/)        |
 | Node.js    | 24         | `node --version`; install via [nodejs.org](https://nodejs.org/)        |
 | npm        | 10              | Ships with Node.js                                                     |
 | Nix (opt.) | -               | `nix develop` drops you into a shell with all deps; see `../flake.nix` |
@@ -263,10 +263,10 @@ go run ./cmd/ao --help
 
 | Symptom                              | Likely cause                               | Fix                                                                                                                                                                                                                                                                               |
 | ------------------------------------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `go: go.mod requires go >= 1.27`     | Wrong Go version                           | `go version`; install Go 1.27.1+ from [go.dev](https://go.dev/dl/)                                                                                                                                                                                                                                    |
+| `go: go.mod requires go >= 1.27`     | Wrong Go version                           | `go version`; install Go 1.27.4+ from [go.dev](https://go.dev/dl/)                                                                                                                                                                                                                                    |
 | `sqlc generate` produces errors      | Query SQL syntax or schema migration issue | Check `backend/internal/storage/sqlite/queries/` for SQL syntax, placeholder counts, and referenced columns/tables; if you changed the schema, add a new migration in `backend/internal/storage/sqlite/migrations/` instead of editing an existing one, then rerun `npm run sqlc` |
 | `openapi.yaml` is stale              | Changed DTOs without regenerating          | Run `npm run api` from repo root                                                                                                                                                                                                                                                  |
-| `golangci-lint` failures             | Linter version mismatch                    | Install v2.13.2 or use `npm run lint` from root                                                                                                                                                                                                                                   |
+| `golangci-lint` failures             | Linter version mismatch                    | Install v2.14.0 or use `npm run lint` from root                                                                                                                                                                                                                                   |
 | Tests fail with "connection refused" | Test tries real daemon                     | Tests should use `httptest`; check for `go test ./...` without a live daemon                                                                                                                                                                                                      |
 
 ### Frontend build / test failures
@@ -300,7 +300,7 @@ If CI fails on the schema.ts drift step of `codegen-drift`, the OpenAPI-generate
 npm run api
 ```
 
-If regeneration introduces unexpected diffs beyond your changes, check that your local tool versions match CI (Go 1.27.1+, Node 24, npm 10+).
+If regeneration introduces unexpected diffs beyond your changes, check that your local tool versions match CI (Go 1.27.4+, Node 24, npm 10+).
 
 ## OpenAPI spec and generated types
 
