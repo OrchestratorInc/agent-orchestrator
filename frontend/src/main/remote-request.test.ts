@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { IncompatibleRemoteVersionError, probeRemote, readRemoteIdentity } from "./remote-request";
+import { createLocalHostIdentity, IncompatibleRemoteVersionError, pairDevice, probeRemote, readAuthErrorCode, readRemoteIdentity } from "./remote-request";
 
 const entry = { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" };
 
@@ -15,6 +15,40 @@ function fakeTextFetch(status: number, text: string) {
 }
 
 const daemonProbe = { status: "ok", service: "agent-orchestrator-daemon", pid: 1234 };
+
+describe("createLocalHostIdentity", () => {
+	it("uses only the confirmed loopback port and caches until the attachment changes", async () => {
+		let attachment: { port: number; pid?: number; generation: number } | null = null;
+		const identity = vi.fn().mockResolvedValueOnce("h_first").mockRejectedValueOnce(new Error("restarting")).mockResolvedValueOnce("h_second");
+		const localIdentity = createLocalHostIdentity(() => attachment, identity);
+		await expect(localIdentity()).resolves.toBeNull();
+		expect(identity).not.toHaveBeenCalled();
+		attachment = { port: 4001, generation: 1 };
+		await expect(localIdentity()).resolves.toBe("h_first");
+		await expect(localIdentity()).resolves.toBe("h_first");
+		expect(identity).toHaveBeenCalledExactlyOnceWith({ url: "http://127.0.0.1:4001" });
+		attachment = { port: 4001, generation: 2 };
+		await expect(localIdentity()).resolves.toBeNull();
+		await expect(localIdentity()).resolves.toBe("h_second");
+		expect(identity).toHaveBeenCalledTimes(3);
+	});
+
+	it("ignores an identity response from an attachment that ended while the request was pending", async () => {
+		let attachment: { port: number; pid: number; generation: number } | null = { port: 4001, pid: 1, generation: 1 };
+		let finish!: (hostId: string) => void;
+		const identity = vi.fn(() => new Promise<string>((resolve) => { finish = resolve; }));
+		const localIdentity = createLocalHostIdentity(() => attachment, identity);
+		const pending = localIdentity();
+		attachment = { port: 4001, pid: 2, generation: 2 };
+		finish("h_first");
+		await expect(pending).resolves.toBeNull();
+		const fresh = localIdentity();
+		finish("h_second");
+		await expect(fresh).resolves.toBe("h_second");
+		attachment = null;
+		await expect(localIdentity()).resolves.toBeNull();
+	});
+});
 
 describe("readRemoteIdentity", () => {
 	it("learns the host ID without sending a credential", async () => {
@@ -90,5 +124,45 @@ describe("probeRemote", () => {
 		await expect(probeRemote(entry, fakeFetch(200, { ...daemonProbe, service: "grafana" }))).resolves.toBe(
 			"not-a-daemon",
 		);
+	});
+});
+
+describe("pairDevice", () => {
+	const host = { url: "https://vm.example", hostId: "h_vm" };
+	const device = { name: "Test Mac", platform: "darwin" };
+	const token = "aod_" + "a".repeat(64);
+
+	it("sends the secret as the bearer with the expected host, and returns the device token", async () => {
+		const fetchImpl = fakeFetch(200, { hostId: "h_vm", deviceId: "dev_1", token, credential: "pairing-code" });
+		await expect(pairDevice(host, "Code1234", device, fetchImpl)).resolves.toEqual({ kind: "paired", token, credential: "pairing-code" });
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe("https://vm.example/api/v1/remote-host/devices");
+		expect(init?.method).toBe("POST");
+		expect(init?.redirect).toBe("error");
+		expect(new Headers(init?.headers).get("authorization")).toBe("Bearer Code1234");
+		expect(new Headers(init?.headers).get("x-ao-expected-host-id")).toBe("h_vm");
+		expect(JSON.parse(String(init?.body))).toEqual(device);
+	});
+
+	it.each([
+		[401, "unauthorized"],
+		[404, "unsupported"], [405, "unsupported"], [403, "unsupported"], [409, "unsupported"],
+		[429, "offline"], [500, "offline"],
+	])("maps %i to %s", async (status, kind) => {
+		await expect(pairDevice(host, "secret", device, fakeFetch(status))).resolves.toEqual({ kind });
+	});
+
+	it("refuses an answer from another host or without a device token", async () => {
+		await expect(pairDevice(host, "secret", device, fakeFetch(200, { hostId: "h_other", token }))).resolves.toEqual({ kind: "offline" });
+		await expect(pairDevice(host, "secret", device, fakeFetch(200, { hostId: "h_vm", token: "b".repeat(64) }))).resolves.toEqual({ kind: "offline" });
+		await expect(pairDevice(host, "secret", device, vi.fn<typeof fetch>(async () => { throw new TypeError("fetch failed"); }))).resolves.toEqual({ kind: "offline" });
+	});
+});
+
+describe("readAuthErrorCode", () => {
+	it("returns the code of a 401 and nothing otherwise", async () => {
+		await expect(readAuthErrorCode(entry, fakeFetch(401, { code: "DEVICE_REVOKED" }))).resolves.toBe("DEVICE_REVOKED");
+		await expect(readAuthErrorCode(entry, fakeFetch(200, { code: "DEVICE_REVOKED" }))).resolves.toBeUndefined();
+		await expect(readAuthErrorCode(entry, fakeTextFetch(401, "<html>"))).resolves.toBeUndefined();
 	});
 });

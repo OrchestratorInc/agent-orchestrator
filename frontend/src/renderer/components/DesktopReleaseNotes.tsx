@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import Markdown, { type Components } from "react-markdown";
 import { prepareDesktopReleaseNotes } from "../lib/desktop-release-notes";
-import { ProductExternalLink } from "./ProductExternalLink";
+import { AppLink } from "./AppLink";
 
 // Published release bodies retain the old owner after a repository rename.
 const AO_RELEASE_LINK_PATTERN =
@@ -16,20 +16,25 @@ const releaseNoteComponents: Components = {
 	strong: ({ children }) => <strong className="font-medium text-foreground">{children}</strong>,
 	p: ({ children }) => <p className="mt-2 first:mt-0">{children}</p>,
 	ul: ({ children }) => <ul className="mt-2 list-disc space-y-1 pl-5">{children}</ul>,
-	ol: ({ children }) => <ol className="mt-2 list-decimal space-y-1 pl-5">{children}</ol>,
+	ol: ({ children, start }) => <ol start={start} className="mt-2 list-decimal space-y-1 pl-5">{children}</ol>,
 	blockquote: ({ children }) => (
 		<blockquote className="mt-3 border-l-2 border-settings-muted pl-3 text-settings-muted">
 			{children}
 		</blockquote>
 	),
 	code: ({ children }) => <code className="font-mono text-[0.92em]">{children}</code>,
+	// Release notes open in the user's own browser, never the Orchestrator
+	// Browser, whichever way the link is activated.
 	a: ({ href, children }) => href ? (
-		<ProductExternalLink
+		<AppLink
 			href={href}
+			systemBrowser
+			rel="noopener noreferrer"
+			target="_blank"
 			className="underline decoration-settings-muted underline-offset-2 transition-colors hover:text-foreground"
 		>
 			{children}
-		</ProductExternalLink>
+		</AppLink>
 	) : <>{children}</>,
 };
 

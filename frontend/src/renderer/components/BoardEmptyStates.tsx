@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
+import { useOnboardingStep } from "../lib/onboarding-telemetry";
 import { useShell } from "../lib/shell-context";
 import { CreateProjectFlow } from "./CreateProjectFlow";
-import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { WelcomePanel } from "./WelcomePanel";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -12,6 +12,13 @@ import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 export function BoardWelcome() {
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
+	const completeWelcome = useOnboardingStep("welcome", true);
+	// Adding the first project ends the welcome screen, which unmounts this
+	// component, so completion is reported from the handlers rather than an effect.
+	const done = <A extends unknown[]>(fn: (...args: A) => Promise<void>) => async (...args: A) => {
+		await fn(...args);
+		completeWelcome();
+	};
 	return (
 		<WelcomePanel>
 			<div
@@ -22,12 +29,14 @@ export function BoardWelcome() {
 					<CreateProjectFlow
 						embedded
 						mode="choose"
-						onCloneProject={cloneProject}
-						onCreateProject={createProject}
-						onInitializeProject={initializeProjectRepository}
-						onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+						onCloneProject={done(cloneProject)}
+						onCreateProject={done(createProject)}
+						onInitializeProject={done(initializeProjectRepository)}
+						onCreateStandaloneAgent={() => {
+							completeWelcome();
+							requestNewTask(STANDALONE_WORKSPACE_ID);
+						}}
 					/>
-					<GitHubOnboardingNotice />
 				</div>
 			</div>
 		</WelcomePanel>
@@ -35,14 +44,17 @@ export function BoardWelcome() {
 }
 
 // The center owns the prominent actions while the header keeps quiet copies.
-export function ProjectBoardEmpty({ actions }: { actions: ReactNode }) {
+export function ProjectBoardEmpty({ actions, offer }: { actions: ReactNode; offer?: ReactNode }) {
 	const { t } = useTranslation();
 	return (
 		<div className="flex h-full min-h-0 items-center justify-center overflow-y-auto" data-testid="project-board-empty">
-			<div className="flex w-full max-w-preview-content flex-col items-center pb-empty-offset-y text-center">
-				<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{t("board.empty.title")}</h2>
-				<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t("board.empty.body")}</p>
-				{actions}
+			<div className="flex w-full max-w-xl flex-col items-center px-4 pb-empty-offset-y text-center">
+				<div className="flex w-full max-w-preview-content flex-col items-center">
+					<h2 className="text-subtitle font-semibold tracking-tight text-foreground">{t("board.empty.title")}</h2>
+					<p className="mt-2 text-md-sm leading-relaxed text-muted-foreground">{t("board.empty.body")}</p>
+					{actions}
+				</div>
+				{offer}
 			</div>
 		</div>
 	);

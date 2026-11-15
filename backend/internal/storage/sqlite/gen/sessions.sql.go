@@ -79,6 +79,16 @@ func (q *Queries) ClaimChatControllerGeneration(ctx context.Context, arg ClaimCh
 	return result.RowsAffected()
 }
 
+const clearSessionBranchNaming = `-- name: ClearSessionBranchNaming :exec
+UPDATE sessions SET branch_naming = FALSE WHERE branch_naming
+`
+
+// No branch naming survives a daemon restart.
+func (q *Queries) ClearSessionBranchNaming(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, clearSessionBranchNaming)
+	return err
+}
+
 const commitClientRequestSession = `-- name: CommitClientRequestSession :execrows
 UPDATE sessions SET client_request_committed = 1 WHERE id = ? AND client_request_id <> ''
 `
@@ -144,6 +154,43 @@ func (q *Queries) CommitSessionControllerEpoch(ctx context.Context, arg CommitSe
 	return result.RowsAffected()
 }
 
+const countStaleBinarySessions = `-- name: CountStaleBinarySessions :many
+SELECT harness, COUNT(*) AS sessions FROM sessions
+WHERE is_terminated = 0 AND hibernated_at IS NULL AND activity_state <> 'exited'
+    AND stale_binary_since IS NOT NULL
+    AND stale_binary_launch = (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+GROUP BY harness
+`
+
+type CountStaleBinarySessionsRow struct {
+	Harness  domain.AgentHarness
+	Sessions int64
+}
+
+// Live launches still on a replaced release, per harness.
+func (q *Queries) CountStaleBinarySessions(ctx context.Context) ([]CountStaleBinarySessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, countStaleBinarySessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountStaleBinarySessionsRow{}
+	for rows.Next() {
+		var i CountStaleBinarySessionsRow
+		if err := rows.Scan(&i.Harness, &i.Sessions); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getClientRequestSession = `-- name: GetClientRequestSession :one
 SELECT id, client_request_hash, client_request_committed FROM sessions WHERE client_request_id = ?
 `
@@ -165,17 +212,22 @@ const getSession = `-- name: GetSession :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id, import_source
 FROM sessions WHERE id = ?
 `
 
@@ -200,6 +252,7 @@ type GetSessionRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -217,8 +270,11 @@ type GetSessionRow struct {
 	ProviderConversationID           string
 	ControllerGeneration             string
 	BrowserCapabilityVerifier        string
+	ArtifactDir                      string
+	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -234,13 +290,28 @@ type GetSessionRow struct {
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	RequestedOutput                  string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
+	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
+	ImportSource                     string
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -267,6 +338,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.UpdatedAt,
 		&i.Revision,
 		&i.DisplayName,
+		&i.DisplayNameExplicit,
 		&i.FirstSignalAt,
 		&i.PreviewURL,
 		&i.PreviewRevision,
@@ -284,8 +356,11 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.ProviderConversationID,
 		&i.ControllerGeneration,
 		&i.BrowserCapabilityVerifier,
+		&i.ArtifactDir,
+		&i.SessionOutputType,
 		&i.LatestUserPrompt,
 		&i.LatestUserPromptAt,
+		&i.LatestInteractionAt,
 		&i.LatestAssistantUpdate,
 		&i.LatestAssistantUpdateAt,
 		&i.ConversationCheckpointState,
@@ -301,13 +376,28 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.Model,
 		&i.Effort,
 		&i.SessionPermissions,
+		&i.RequestedOutput,
 		&i.ProvisionState,
 		&i.ProvisionError,
+		&i.ProvisionSteps,
+		&i.BranchState,
+		&i.BranchNaming,
+		&i.TemporaryBranch,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
+		&i.HibernatedAt,
+		&i.StaleBinarySince,
+		&i.StaleBinaryVersion,
+		&i.StaleBinaryLaunch,
+		&i.StaleBinarySwitchFailedAt,
+		&i.ClientRequestID,
+		&i.ClientRequestHash,
+		&i.ClientRequestCommitted,
+		&i.RuntimeReleasedLaunchID,
+		&i.ImportSource,
 	)
 	return i, err
 }
@@ -316,17 +406,22 @@ const getSessionByAutomationRunID = `-- name: GetSessionByAutomationRunID :one
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id, import_source
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -351,6 +446,7 @@ type GetSessionByAutomationRunIDRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -368,8 +464,11 @@ type GetSessionByAutomationRunIDRow struct {
 	ProviderConversationID           string
 	ControllerGeneration             string
 	BrowserCapabilityVerifier        string
+	ArtifactDir                      string
+	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -385,13 +484,28 @@ type GetSessionByAutomationRunIDRow struct {
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	RequestedOutput                  string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
+	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
+	ImportSource                     string
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -418,6 +532,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.UpdatedAt,
 		&i.Revision,
 		&i.DisplayName,
+		&i.DisplayNameExplicit,
 		&i.FirstSignalAt,
 		&i.PreviewURL,
 		&i.PreviewRevision,
@@ -435,8 +550,11 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.ProviderConversationID,
 		&i.ControllerGeneration,
 		&i.BrowserCapabilityVerifier,
+		&i.ArtifactDir,
+		&i.SessionOutputType,
 		&i.LatestUserPrompt,
 		&i.LatestUserPromptAt,
+		&i.LatestInteractionAt,
 		&i.LatestAssistantUpdate,
 		&i.LatestAssistantUpdateAt,
 		&i.ConversationCheckpointState,
@@ -452,15 +570,41 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.Model,
 		&i.Effort,
 		&i.SessionPermissions,
+		&i.RequestedOutput,
 		&i.ProvisionState,
 		&i.ProvisionError,
+		&i.ProvisionSteps,
+		&i.BranchState,
+		&i.BranchNaming,
+		&i.TemporaryBranch,
 		&i.IsTaskPreparation,
 		&i.AutomationRunID,
 		&i.AutomationLaunchCompleted,
 		&i.ClaudeActivityFacts,
 		&i.CodexActivityFacts,
+		&i.HibernatedAt,
+		&i.StaleBinarySince,
+		&i.StaleBinaryVersion,
+		&i.StaleBinaryLaunch,
+		&i.StaleBinarySwitchFailedAt,
+		&i.ClientRequestID,
+		&i.ClientRequestHash,
+		&i.ClientRequestCommitted,
+		&i.RuntimeReleasedLaunchID,
+		&i.ImportSource,
 	)
 	return i, err
+}
+
+const getSessionNumFloor = `-- name: GetSessionNumFloor :one
+SELECT max_num FROM session_num_floors WHERE id_prefix = ?1
+`
+
+func (q *Queries) GetSessionNumFloor(ctx context.Context, idPrefix string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSessionNumFloor, idPrefix)
+	var max_num int64
+	err := row.Scan(&max_num)
+	return max_num, err
 }
 
 const insertSession = `-- name: InsertSession :exec
@@ -474,12 +618,20 @@ INSERT INTO sessions (
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path,
     preview_url, preview_revision, terminate_on_pr_merge, cleanup_generation, browser_capability_verifier,
+    artifact_dir, session_output_type,
     session_mode, provider_conversation_id, controller_generation, model, effort, session_permissions,
+    requested_output,
     created_at, updated_at, is_pinned, pinned_at, auto_inject_review, auto_inject_ci,
     provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    client_request_id, client_request_hash
+    client_request_id, client_request_hash, import_source, display_name_explicit
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, ?, ?, ?, ?
 )
 `
 
@@ -525,12 +677,15 @@ type InsertSessionParams struct {
 	TerminateOnPRMerge               bool
 	CleanupGeneration                int64
 	BrowserCapabilityVerifier        string
+	ArtifactDir                      string
+	SessionOutputType                string
 	SessionMode                      domain.SessionMode
 	ProviderConversationID           string
 	ControllerGeneration             string
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	RequestedOutput                  string
 	CreatedAt                        time.Time
 	UpdatedAt                        time.Time
 	IsPinned                         bool
@@ -544,6 +699,8 @@ type InsertSessionParams struct {
 	AutomationLaunchCompleted        bool
 	ClientRequestID                  string
 	ClientRequestHash                string
+	ImportSource                     string
+	DisplayNameExplicit              bool
 }
 
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) error {
@@ -589,12 +746,15 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.TerminateOnPRMerge,
 		arg.CleanupGeneration,
 		arg.BrowserCapabilityVerifier,
+		arg.ArtifactDir,
+		arg.SessionOutputType,
 		arg.SessionMode,
 		arg.ProviderConversationID,
 		arg.ControllerGeneration,
 		arg.Model,
 		arg.Effort,
 		arg.SessionPermissions,
+		arg.RequestedOutput,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.IsPinned,
@@ -608,6 +768,8 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) er
 		arg.AutomationLaunchCompleted,
 		arg.ClientRequestID,
 		arg.ClientRequestHash,
+		arg.ImportSource,
+		arg.DisplayNameExplicit,
 	)
 	return err
 }
@@ -616,17 +778,22 @@ const listAllSessions = `-- name: ListAllSessions :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id, import_source
 FROM sessions ORDER BY project_id, num
 `
 
@@ -651,6 +818,7 @@ type ListAllSessionsRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -668,8 +836,11 @@ type ListAllSessionsRow struct {
 	ProviderConversationID           string
 	ControllerGeneration             string
 	BrowserCapabilityVerifier        string
+	ArtifactDir                      string
+	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -685,13 +856,28 @@ type ListAllSessionsRow struct {
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	RequestedOutput                  string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
+	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
+	ImportSource                     string
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -724,6 +910,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.UpdatedAt,
 			&i.Revision,
 			&i.DisplayName,
+			&i.DisplayNameExplicit,
 			&i.FirstSignalAt,
 			&i.PreviewURL,
 			&i.PreviewRevision,
@@ -741,8 +928,11 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.ProviderConversationID,
 			&i.ControllerGeneration,
 			&i.BrowserCapabilityVerifier,
+			&i.ArtifactDir,
+			&i.SessionOutputType,
 			&i.LatestUserPrompt,
 			&i.LatestUserPromptAt,
+			&i.LatestInteractionAt,
 			&i.LatestAssistantUpdate,
 			&i.LatestAssistantUpdateAt,
 			&i.ConversationCheckpointState,
@@ -758,14 +948,117 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.Model,
 			&i.Effort,
 			&i.SessionPermissions,
+			&i.RequestedOutput,
 			&i.ProvisionState,
 			&i.ProvisionError,
+			&i.ProvisionSteps,
+			&i.BranchState,
+			&i.BranchNaming,
+			&i.TemporaryBranch,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
+			&i.HibernatedAt,
+			&i.StaleBinarySince,
+			&i.StaleBinaryVersion,
+			&i.StaleBinaryLaunch,
+			&i.StaleBinarySwitchFailedAt,
+			&i.ClientRequestID,
+			&i.ClientRequestHash,
+			&i.ClientRequestCommitted,
+			&i.RuntimeReleasedLaunchID,
+			&i.ImportSource,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChatHibernationCandidates = `-- name: ListChatHibernationCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND trim(provider_conversation_id) <> ''
+ORDER BY id
+`
+
+func (q *Queries) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listChatHibernationCandidates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReleasedArchivedSessions = `-- name: ListReleasedArchivedSessions :many
+SELECT s.id, s.terminated_at, s.updated_at FROM sessions s
+WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
+    AND (s.workspace_path = '' OR EXISTS (
+        SELECT 1 FROM session_cleanup_facts f
+        WHERE f.session_id = s.id AND f.session_generation = s.cleanup_generation
+            AND f.workspace_disposition IN ('removed', 'not_applicable')
+    ))
+    AND s.id NOT IN (
+        SELECT t.handled_by_session_id FROM conversation_turns t
+        JOIN conversations c ON c.id = t.conversation_id
+        WHERE c.session_id IS NULL OR c.session_id <> t.handled_by_session_id
+    )
+    AND s.id NOT IN (
+        SELECT c.current_session_id FROM conversations c
+        WHERE c.current_session_id IS NOT NULL
+            AND (c.session_id IS NULL OR c.session_id <> c.current_session_id)
+    )
+ORDER BY s.id
+`
+
+type ListReleasedArchivedSessionsRow struct {
+	ID           domain.SessionID
+	TerminatedAt sql.NullTime
+	UpdatedAt    time.Time
+}
+
+// Archived sessions retention may delete: the worktree is released for the
+// current generation, or there never was one. A row archived before
+// terminated_at existed counts from its last update. Sessions in another
+// session's conversation history are left out, as DeleteTerminatedSession
+// refuses them, so retention does not retry them on every pass.
+func (q *Queries) ListReleasedArchivedSessions(ctx context.Context) ([]ListReleasedArchivedSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReleasedArchivedSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReleasedArchivedSessionsRow{}
+	for rows.Next() {
+		var i ListReleasedArchivedSessionsRow
+		if err := rows.Scan(&i.ID, &i.TerminatedAt, &i.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -783,17 +1076,22 @@ const listSessionsByProject = `-- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,
     runtime_handle_id, agent_session_id, agent_session_id_launch_id, native_identity_observed_at, prompt,
-    created_at, updated_at, revision, display_name, first_signal_at, preview_url,
+    created_at, updated_at, revision, display_name, display_name_explicit, first_signal_at, preview_url,
     preview_revision, cleanup_generation, runtime_launch_id,
     workspace_repo_path, terminate_on_pr_merge, diff_base_sha, diff_base_ref,
     reviewer_harness, reviewer_agent_config, is_pinned, pinned_at,
     session_mode, provider_conversation_id, controller_generation, browser_capability_verifier,
-    latest_user_prompt, latest_user_prompt_at, latest_assistant_update, latest_assistant_update_at,
+    artifact_dir, session_output_type,
+    latest_user_prompt, latest_user_prompt_at, latest_interaction_at, latest_assistant_update, latest_assistant_update_at,
     conversation_checkpoint_state, conversation_checkpoint_generation, conversation_checkpoint_native_id,
     conversation_checkpoint_unsettled, conversation_checkpoint_turn_id, native_checkpoint_evidence,
     native_transcript_path, auto_inject_review, auto_inject_ci, auto_review_enabled, model, effort, session_permissions,
-    provision_state, provision_error, is_task_preparation, automation_run_id, automation_launch_completed,
-    claude_activity_facts, codex_activity_facts
+    requested_output,
+    provision_state, provision_error, provision_steps, branch_state, branch_naming, temporary_branch, is_task_preparation, automation_run_id, automation_launch_completed,
+    claude_activity_facts, codex_activity_facts,
+    hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
+    client_request_id, client_request_hash, client_request_committed,
+    runtime_released_launch_id, import_source
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -818,6 +1116,7 @@ type ListSessionsByProjectRow struct {
 	UpdatedAt                        time.Time
 	Revision                         int64
 	DisplayName                      string
+	DisplayNameExplicit              bool
 	FirstSignalAt                    sql.NullTime
 	PreviewURL                       string
 	PreviewRevision                  int64
@@ -835,8 +1134,11 @@ type ListSessionsByProjectRow struct {
 	ProviderConversationID           string
 	ControllerGeneration             string
 	BrowserCapabilityVerifier        string
+	ArtifactDir                      string
+	SessionOutputType                string
 	LatestUserPrompt                 string
 	LatestUserPromptAt               sql.NullTime
+	LatestInteractionAt              sql.NullTime
 	LatestAssistantUpdate            string
 	LatestAssistantUpdateAt          sql.NullTime
 	ConversationCheckpointState      domain.ConversationCheckpointState
@@ -852,13 +1154,28 @@ type ListSessionsByProjectRow struct {
 	Model                            string
 	Effort                           string
 	SessionPermissions               string
+	RequestedOutput                  string
 	ProvisionState                   domain.SessionProvisionState
 	ProvisionError                   string
+	ProvisionSteps                   string
+	BranchState                      string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 	IsTaskPreparation                bool
 	AutomationRunID                  *domain.AutomationRunID
 	AutomationLaunchCompleted        bool
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	HibernatedAt                     sql.NullTime
+	StaleBinarySince                 sql.NullTime
+	StaleBinaryVersion               string
+	StaleBinaryLaunch                string
+	StaleBinarySwitchFailedAt        sql.NullTime
+	ClientRequestID                  string
+	ClientRequestHash                string
+	ClientRequestCommitted           bool
+	RuntimeReleasedLaunchID          string
+	ImportSource                     string
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -891,6 +1208,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.UpdatedAt,
 			&i.Revision,
 			&i.DisplayName,
+			&i.DisplayNameExplicit,
 			&i.FirstSignalAt,
 			&i.PreviewURL,
 			&i.PreviewRevision,
@@ -908,8 +1226,11 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.ProviderConversationID,
 			&i.ControllerGeneration,
 			&i.BrowserCapabilityVerifier,
+			&i.ArtifactDir,
+			&i.SessionOutputType,
 			&i.LatestUserPrompt,
 			&i.LatestUserPromptAt,
+			&i.LatestInteractionAt,
 			&i.LatestAssistantUpdate,
 			&i.LatestAssistantUpdateAt,
 			&i.ConversationCheckpointState,
@@ -925,13 +1246,28 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.Model,
 			&i.Effort,
 			&i.SessionPermissions,
+			&i.RequestedOutput,
 			&i.ProvisionState,
 			&i.ProvisionError,
+			&i.ProvisionSteps,
+			&i.BranchState,
+			&i.BranchNaming,
+			&i.TemporaryBranch,
 			&i.IsTaskPreparation,
 			&i.AutomationRunID,
 			&i.AutomationLaunchCompleted,
 			&i.ClaudeActivityFacts,
 			&i.CodexActivityFacts,
+			&i.HibernatedAt,
+			&i.StaleBinarySince,
+			&i.StaleBinaryVersion,
+			&i.StaleBinaryLaunch,
+			&i.StaleBinarySwitchFailedAt,
+			&i.ClientRequestID,
+			&i.ClientRequestHash,
+			&i.ClientRequestCommitted,
+			&i.RuntimeReleasedLaunchID,
+			&i.ImportSource,
 		); err != nil {
 			return nil, err
 		}
@@ -944,6 +1280,162 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 		return nil, err
 	}
 	return items, nil
+}
+
+const listTurnFailureCandidates = `-- name: ListTurnFailureCandidates :many
+SELECT id, harness, activity_state, activity_last_at, latest_user_prompt_at, revision,
+    runtime_launch_id, native_transcript_path
+FROM sessions
+WHERE harness = ?1 AND is_terminated = 0 AND session_mode = 'tui'
+    AND activity_state IN ('active', 'waiting_input', 'blocked')
+    AND native_transcript_path <> ''
+ORDER BY id
+`
+
+type ListTurnFailureCandidatesRow struct {
+	ID                   domain.SessionID
+	Harness              domain.AgentHarness
+	ActivityState        domain.ActivityState
+	ActivityLastAt       time.Time
+	LatestUserPromptAt   sql.NullTime
+	Revision             int64
+	RuntimeLaunchID      string
+	NativeTranscriptPath string
+}
+
+// Terminal sessions of one harness that are in a turn and have a native
+// transcript to check. Only the columns the failed-turn observer reads.
+func (q *Queries) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]ListTurnFailureCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTurnFailureCandidates, harness)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTurnFailureCandidatesRow{}
+	for rows.Next() {
+		var i ListTurnFailureCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Harness,
+			&i.ActivityState,
+			&i.ActivityLastAt,
+			&i.LatestUserPromptAt,
+			&i.Revision,
+			&i.RuntimeLaunchID,
+			&i.NativeTranscriptPath,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVersionRefreshChatCandidates = `-- name: ListVersionRefreshChatCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
+    AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= ?1
+    AND trim(provider_conversation_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = controller_generation
+`
+
+// Idle Chat sessions whose current launch still runs a replaced release.
+// Orchestrators are included: a move restarts them right away.
+func (q *Queries) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listVersionRefreshChatCandidates, idleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVersionRefreshTerminalCandidates = `-- name: ListVersionRefreshTerminalCandidates :many
+SELECT id FROM sessions
+WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
+    AND kind <> 'orchestrator'
+    AND activity_state = 'idle' AND activity_last_at IS NOT NULL
+    AND activity_last_at <= ?1
+    AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
+    AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
+    AND stale_binary_launch = runtime_launch_id
+`
+
+// Idle terminal sessions whose current launch still runs a replaced release
+// and can be resumed natively.
+func (q *Queries) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listVersionRefreshTerminalCandidates, idleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var id domain.SessionID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markHarnessSessionsStale = `-- name: MarkHarnessSessionsStale :execrows
+UPDATE sessions
+SET stale_binary_since = CASE
+        WHEN stale_binary_since IS NOT NULL AND stale_binary_launch =
+            (CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END)
+        THEN stale_binary_since ELSE ?1 END,
+    stale_binary_version = ?2,
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END,
+    stale_binary_switch_failed_at = NULL
+WHERE harness = ?3 AND is_terminated = 0 AND is_task_preparation = 0
+    AND hibernated_at IS NULL AND activity_state <> 'exited'
+`
+
+type MarkHarnessSessionsStaleParams struct {
+	Since   sql.NullTime
+	Version string
+	Harness domain.AgentHarness
+}
+
+// Marks the live launches of a harness an update just replaced. A launch that
+// was already marked keeps when it first went stale; the version moves on.
+func (q *Queries) MarkHarnessSessionsStale(ctx context.Context, arg MarkHarnessSessionsStaleParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markHarnessSessionsStale, arg.Since, arg.Version, arg.Harness)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const nextSessionNum = `-- name: NextSessionNum :one
@@ -975,45 +1467,49 @@ UPDATE sessions SET
     harness = ?3,
     auto_review_enabled = ?4,
     display_name = ?5,
-    activity_state = ?6,
-    activity_last_at = ?7,
+    display_name_explicit = ?6,
+    activity_state = ?7,
+    activity_last_at = ?8,
     is_terminated = 0,
-    session_mode = ?8,
-    model = ?9,
-    effort = ?10,
-    session_permissions = ?11,
-    created_at = ?12,
-    updated_at = ?13,
-    auto_inject_review = ?14,
-    auto_inject_ci = ?15,
-    provision_state = ?16,
+    session_mode = ?9,
+    model = ?10,
+    effort = ?11,
+    session_permissions = ?12,
+    requested_output = ?13,
+    created_at = ?14,
+    updated_at = ?15,
+    auto_inject_review = ?16,
+    auto_inject_ci = ?17,
+    provision_state = ?18,
     provision_error = '',
-    client_request_id = ?17,
-    client_request_hash = ?18,
+    client_request_id = ?19,
+    client_request_hash = ?20,
     is_task_preparation = 0
-WHERE id = ?19 AND is_task_preparation = 1
+WHERE id = ?21 AND is_task_preparation = 1
 `
 
 type PromoteTaskPreparationParams struct {
-	IssueID            domain.IssueID
-	Kind               domain.SessionKind
-	Harness            domain.AgentHarness
-	AutoReviewEnabled  bool
-	DisplayName        string
-	ActivityState      domain.ActivityState
-	ActivityLastAt     time.Time
-	SessionMode        domain.SessionMode
-	Model              string
-	Effort             string
-	SessionPermissions string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	AutoInjectReview   bool
-	AutoInjectCI       bool
-	ProvisionState     domain.SessionProvisionState
-	ClientRequestID    string
-	ClientRequestHash  string
-	ID                 domain.SessionID
+	IssueID             domain.IssueID
+	Kind                domain.SessionKind
+	Harness             domain.AgentHarness
+	AutoReviewEnabled   bool
+	DisplayName         string
+	DisplayNameExplicit bool
+	ActivityState       domain.ActivityState
+	ActivityLastAt      time.Time
+	SessionMode         domain.SessionMode
+	Model               string
+	Effort              string
+	SessionPermissions  string
+	RequestedOutput     string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	AutoInjectReview    bool
+	AutoInjectCI        bool
+	ProvisionState      domain.SessionProvisionState
+	ClientRequestID     string
+	ClientRequestHash   string
+	ID                  domain.SessionID
 }
 
 // Claim the hidden row without touching branch/workspace facts that may be
@@ -1025,12 +1521,14 @@ func (q *Queries) PromoteTaskPreparation(ctx context.Context, arg PromoteTaskPre
 		arg.Harness,
 		arg.AutoReviewEnabled,
 		arg.DisplayName,
+		arg.DisplayNameExplicit,
 		arg.ActivityState,
 		arg.ActivityLastAt,
 		arg.SessionMode,
 		arg.Model,
 		arg.Effort,
 		arg.SessionPermissions,
+		arg.RequestedOutput,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 		arg.AutoInjectReview,
@@ -1108,7 +1606,7 @@ func (q *Queries) RecordSessionLatestUserPrompt(ctx context.Context, arg RecordS
 }
 
 const renameSession = `-- name: RenameSession :execrows
-UPDATE sessions SET display_name = ?, updated_at = ? WHERE id = ?
+UPDATE sessions SET display_name = ?, display_name_explicit = 1, updated_at = ? WHERE id = ?
 `
 
 type RenameSessionParams struct {
@@ -1147,6 +1645,30 @@ func (q *Queries) RenameSessionIfDisplayName(ctx context.Context, arg RenameSess
 		arg.ID,
 		arg.CurrentDisplayName,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const replaceUnpersistedChatProvider = `-- name: ReplaceUnpersistedChatProvider :execrows
+UPDATE sessions SET
+    provider_conversation_id = ?1
+WHERE id = ?2
+  AND session_mode = 'chat'
+  AND provider_conversation_id = ?3
+`
+
+type ReplaceUnpersistedChatProviderParams struct {
+	ProviderConversationID         string
+	ID                             domain.SessionID
+	ExpectedProviderConversationID string
+}
+
+// Move a Chat from a provider id the provider never persisted to the fresh id
+// it started instead. Guarded on the old id so a newer owner is never replaced.
+func (q *Queries) ReplaceUnpersistedChatProvider(ctx context.Context, arg ReplaceUnpersistedChatProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceUnpersistedChatProvider, arg.ProviderConversationID, arg.ID, arg.ExpectedProviderConversationID)
 	if err != nil {
 		return 0, err
 	}
@@ -1290,6 +1812,66 @@ func (q *Queries) SetSessionAutoReview(ctx context.Context, arg SetSessionAutoRe
 	return result.RowsAffected()
 }
 
+const setSessionBranchNaming = `-- name: SetSessionBranchNaming :exec
+UPDATE sessions SET branch_naming = ?1
+WHERE id = ?2 AND branch_naming <> ?1
+`
+
+type SetSessionBranchNamingParams struct {
+	BranchNaming bool
+	ID           domain.SessionID
+}
+
+// Narrow: whether a task's generated branch name is still on the way.
+func (q *Queries) SetSessionBranchNaming(ctx context.Context, arg SetSessionBranchNamingParams) error {
+	_, err := q.db.ExecContext(ctx, setSessionBranchNaming, arg.BranchNaming, arg.ID)
+	return err
+}
+
+const setSessionBranchState = `-- name: SetSessionBranchState :execrows
+UPDATE sessions SET
+    branch_state = ?1
+WHERE id = ?2
+`
+
+type SetSessionBranchStateParams struct {
+	BranchState string
+	ID          domain.SessionID
+}
+
+// Narrow write for the branch-state reconcile: it names only branch_state, so a
+// stale read can never replay other session columns. updated_at is left
+// alone because an observed git fact is not user-visible recency.
+func (q *Queries) SetSessionBranchState(ctx context.Context, arg SetSessionBranchStateParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionBranchState, arg.BranchState, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionHibernated = `-- name: SetSessionHibernated :execrows
+UPDATE sessions
+SET hibernated_at = ?1
+WHERE id = ?2 AND revision = ?3
+`
+
+type SetSessionHibernatedParams struct {
+	HibernatedAt     sql.NullTime
+	ID               domain.SessionID
+	ExpectedRevision int64
+}
+
+// Revision fencing keeps an idle decision from overwriting a later send,
+// controller change, or lifecycle write. Generic updates leave this fact alone.
+func (q *Queries) SetSessionHibernated(ctx context.Context, arg SetSessionHibernatedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionHibernated, arg.HibernatedAt, arg.ID, arg.ExpectedRevision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setSessionPinned = `-- name: SetSessionPinned :execrows
 UPDATE sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?
 `
@@ -1366,6 +1948,30 @@ func (q *Queries) SetSessionProvisionState(ctx context.Context, arg SetSessionPr
 	return result.RowsAffected()
 }
 
+const setSessionProvisionSteps = `-- name: SetSessionProvisionSteps :execrows
+UPDATE sessions SET
+    provision_steps = ?1,
+    updated_at = ?2
+WHERE id = ?3
+`
+
+type SetSessionProvisionStepsParams struct {
+	ProvisionSteps string
+	UpdatedAt      time.Time
+	ID             domain.SessionID
+}
+
+// Publish an asynchronous Chat start's checklist. As narrow as
+// SetSessionProvisionState, for the same reason: the controller commit writes
+// the rest of the row from its own goroutine.
+func (q *Queries) SetSessionProvisionSteps(ctx context.Context, arg SetSessionProvisionStepsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionProvisionSteps, arg.ProvisionSteps, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setSessionProvisionedWorkspace = `-- name: SetSessionProvisionedWorkspace :execrows
 UPDATE sessions SET
     branch = ?1,
@@ -1431,6 +2037,61 @@ func (q *Queries) SetSessionReviewerConfig(ctx context.Context, arg SetSessionRe
 	return result.RowsAffected()
 }
 
+const setSessionRuntimeReleased = `-- name: SetSessionRuntimeReleased :execrows
+UPDATE sessions
+SET runtime_released_launch_id = ?1
+WHERE id = ?2 AND runtime_launch_id = ?1
+`
+
+type SetSessionRuntimeReleasedParams struct {
+	LaunchID string
+	ID       domain.SessionID
+}
+
+// Narrow write for an agent exit that keeps its session: names only the
+// released launch, and only while that launch is still the session's own.
+func (q *Queries) SetSessionRuntimeReleased(ctx context.Context, arg SetSessionRuntimeReleasedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionRuntimeReleased, arg.LaunchID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionTaskBranch = `-- name: SetSessionTaskBranch :execrows
+UPDATE sessions SET
+    branch = ?1,
+    temporary_branch = CASE WHEN ?1 <> ?2
+        THEN ?2 ELSE temporary_branch END,
+    branch_naming = FALSE,
+    updated_at = ?3
+WHERE id = ?4 AND branch = ?2
+`
+
+type SetSessionTaskBranchParams struct {
+	Branch         string
+	ExpectedBranch interface{}
+	UpdatedAt      time.Time
+	ID             domain.SessionID
+}
+
+// Background task naming renames only the branch; the checkout never moves.
+// It applies only while the row still carries the temporary branch it renamed,
+// keeps that branch once replaced so no later write restores it, and ends
+// branch naming.
+func (q *Queries) SetSessionTaskBranch(ctx context.Context, arg SetSessionTaskBranchParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionTaskBranch,
+		arg.Branch,
+		arg.ExpectedBranch,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setSessionTerminateOnPRMerge = `-- name: SetSessionTerminateOnPRMerge :execrows
 UPDATE sessions SET terminate_on_pr_merge = ?, updated_at = ? WHERE id = ?
 `
@@ -1443,6 +2104,30 @@ type SetSessionTerminateOnPRMergeParams struct {
 
 func (q *Queries) SetSessionTerminateOnPRMerge(ctx context.Context, arg SetSessionTerminateOnPRMergeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setSessionTerminateOnPRMerge, arg.TerminateOnPRMerge, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionVersionSwitchFailed = `-- name: SetSessionVersionSwitchFailed :execrows
+UPDATE sessions
+SET stale_binary_switch_failed_at = ?1,
+    stale_binary_since = COALESCE(stale_binary_since, ?1),
+    stale_binary_version = ?2,
+    stale_binary_launch = CASE WHEN session_mode = 'chat' THEN controller_generation ELSE runtime_launch_id END
+WHERE id = ?3
+`
+
+type SetSessionVersionSwitchFailedParams struct {
+	FailedAt sql.NullTime
+	Version  string
+	ID       domain.SessionID
+}
+
+// Records that the move to the new release failed for the launch that tried it.
+func (q *Queries) SetSessionVersionSwitchFailed(ctx context.Context, arg SetSessionVersionSwitchFailedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionVersionSwitchFailed, arg.FailedAt, arg.Version, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -1527,9 +2212,9 @@ func (q *Queries) UpdateBrowserCapabilityVerifier(ctx context.Context, arg Updat
 
 const updateSession = `-- name: UpdateSession :exec
 UPDATE sessions SET
-    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?, display_name = ?,
+    issue_id = ?, kind = ?, harness = ?, reviewer_harness = ?, reviewer_agent_config = ?, auto_review_enabled = ?,
     activity_state = ?, activity_last_at = ?, first_signal_at = ?, is_terminated = ?,
-    branch = ?, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
+    branch = CASE WHEN temporary_branch <> '' AND temporary_branch = ? THEN branch ELSE ? END, workspace_path = ?, workspace_repo_path = ?, diff_base_sha = ?, diff_base_ref = ?, runtime_handle_id = ?,
     runtime_launch_id = ?, agent_session_id = ?, agent_session_id_launch_id = ?, native_identity_observed_at = ?, prompt = ?,
     latest_user_prompt = ?, latest_user_prompt_at = ?, latest_assistant_update = ?, latest_assistant_update_at = ?,
     conversation_checkpoint_state = ?, conversation_checkpoint_generation = ?, conversation_checkpoint_native_id = ?,
@@ -1550,11 +2235,11 @@ type UpdateSessionParams struct {
 	ReviewerHarness                  domain.ReviewerHarness
 	ReviewerAgentConfig              string
 	AutoReviewEnabled                bool
-	DisplayName                      string
 	ActivityState                    domain.ActivityState
 	ActivityLastAt                   time.Time
 	FirstSignalAt                    sql.NullTime
 	IsTerminated                     bool
+	TemporaryBranch                  string
 	Branch                           string
 	WorkspacePath                    string
 	WorkspaceRepoPath                string
@@ -1595,6 +2280,8 @@ type UpdateSessionParams struct {
 	ID                               domain.SessionID
 }
 
+// The title has narrow writers only, and a renamed task's temporary branch is
+// never written back, so a write from an older read cannot undo either.
 func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) error {
 	_, err := q.db.ExecContext(ctx, updateSession,
 		arg.IssueID,
@@ -1603,11 +2290,11 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) er
 		arg.ReviewerHarness,
 		arg.ReviewerAgentConfig,
 		arg.AutoReviewEnabled,
-		arg.DisplayName,
 		arg.ActivityState,
 		arg.ActivityLastAt,
 		arg.FirstSignalAt,
 		arg.IsTerminated,
+		arg.TemporaryBranch,
 		arg.Branch,
 		arg.WorkspacePath,
 		arg.WorkspaceRepoPath,
@@ -1648,6 +2335,33 @@ func (q *Queries) UpdateSession(ctx context.Context, arg UpdateSessionParams) er
 		arg.ID,
 	)
 	return err
+}
+
+const updateSessionArtifactOutput = `-- name: UpdateSessionArtifactOutput :execrows
+UPDATE sessions
+SET artifact_dir = ?1, session_output_type = ?2
+WHERE id = ?3
+`
+
+type UpdateSessionArtifactOutputParams struct {
+	ArtifactDir       string
+	SessionOutputType string
+	ID                domain.SessionID
+}
+
+// Narrow write for lifecycle.Manager.ReconcileSessionOutputType: touches only
+// the two output-derivation columns. A full read-then-UpdateSession write here
+// would replay a stale SessionRecord over is_terminated, activity, runtime
+// identity, and preview state committed by another writer between the read
+// and this write (e.g. a session that terminated mid-reconcile could be
+// resurrected). This statement cannot clobber those fields because it never
+// names them.
+func (q *Queries) UpdateSessionArtifactOutput(ctx context.Context, arg UpdateSessionArtifactOutputParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSessionArtifactOutput, arg.ArtifactDir, arg.SessionOutputType, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateSessionModel = `-- name: UpdateSessionModel :execrows

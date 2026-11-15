@@ -100,6 +100,10 @@ func (c *CuesController) create(w http.ResponseWriter, r *http.Request) {
 	if !decodeCueBody(w, r, &req, 128<<10) {
 		return
 	}
+	if rejectLANCommandCueWrite(w, r, domain.CueType(req.Type)) {
+		return
+	}
+
 	cue, err := c.Svc.Create(r.Context(), projectCueID(r), cueInput(req))
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -124,6 +128,16 @@ func (c *CuesController) update(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "CUE_ID_INVALID", "Invalid cue id", nil)
 		return
 	}
+	if requestscope.IsLAN(r.Context()) {
+		existing, err := c.Svc.Get(r.Context(), domain.CueID(cueID))
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		if rejectLANCommandCueWrite(w, r, domain.CueType(req.Type), existing.Type) {
+			return
+		}
+	}
 	cue, err := c.Svc.Update(r.Context(), domain.CueID(cueID), cueInput(req))
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -132,6 +146,21 @@ func (c *CuesController) update(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, CueEnvelope{
 		Cue: cueResponse(cue),
 	})
+}
+
+// Check both the replacement and stored type so remote clients cannot convert
+// a desktop-owned command cue into an agent cue to bypass the write policy.
+func rejectLANCommandCueWrite(w http.ResponseWriter, r *http.Request, types ...domain.CueType) bool {
+	if !requestscope.IsLAN(r.Context()) {
+		return false
+	}
+	for _, cueType := range types {
+		if cueType == domain.CueTypeCommand {
+			envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "CUE_COMMAND_LOOPBACK_REQUIRED", "Command cues must be configured on the owning desktop", nil)
+			return true
+		}
+	}
+	return false
 }
 
 func (c *CuesController) delete(w http.ResponseWriter, r *http.Request) {
@@ -222,11 +251,10 @@ func projectCueID(r *http.Request) domain.ProjectID {
 
 func cueInput(req CueDefinitionRequest) cuesvc.Input {
 	return cuesvc.Input{
-		Name:        req.Name,
-		Description: req.Description,
-		Type:        domain.CueType(req.Type),
-		Command:     req.Command,
-		Prompt:      req.Prompt,
+		Name:    req.Name,
+		Type:    domain.CueType(req.Type),
+		Command: req.Command,
+		Prompt:  req.Prompt,
 	}
 }
 
@@ -240,14 +268,13 @@ func cueResponses(in []domain.Cue) []CueResponse {
 
 func cueResponse(cue domain.Cue) CueResponse {
 	return CueResponse{
-		ID:          string(cue.ID),
-		ProjectID:   string(cue.ProjectID),
-		Name:        cue.Name,
-		Description: cue.Description,
-		Type:        string(cue.Type),
-		Command:     cue.Command,
-		Prompt:      cue.Prompt,
-		CreatedAt:   cue.CreatedAt,
-		UpdatedAt:   cue.UpdatedAt,
+		ID:        string(cue.ID),
+		ProjectID: string(cue.ProjectID),
+		Name:      cue.Name,
+		Type:      string(cue.Type),
+		Command:   cue.Command,
+		Prompt:    cue.Prompt,
+		CreatedAt: cue.CreatedAt,
+		UpdatedAt: cue.UpdatedAt,
 	}
 }

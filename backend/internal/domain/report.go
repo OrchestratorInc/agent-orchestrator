@@ -20,11 +20,15 @@ func WrapReportDelivery(id, message string) string {
 // Delivery ids are generated internally and deliberately restricted so a
 // malformed prompt cannot manufacture markup or an unbounded correlation key.
 func ReportDeliveryID(message string) (string, bool) {
+	return deliveryID(message, reportDeliveryPrefix)
+}
+
+func deliveryID(message, prefix string) (string, bool) {
 	message = strings.TrimSpace(message)
-	if !strings.HasPrefix(message, reportDeliveryPrefix) {
+	if !strings.HasPrefix(message, prefix) {
 		return "", false
 	}
-	rest := strings.TrimPrefix(message, reportDeliveryPrefix)
+	rest := strings.TrimPrefix(message, prefix)
 	end := strings.Index(rest, `">`)
 	if end <= 0 || end > 128 {
 		return "", false
@@ -109,9 +113,12 @@ const (
 // ReportRecord is the durable report and outbox persistence shape. State and
 // outputs are independent, and neither changes authoritative session state.
 type ReportRecord struct {
-	ID                 string
-	SessionID          SessionID
-	ProjectID          ProjectID
+	ID        string
+	SessionID SessionID
+	ProjectID ProjectID
+	// SessionDisplayName is resolved at delivery time for presentation. It is
+	// intentionally not persisted with the durable report row.
+	SessionDisplayName string
 	State              ReportState
 	Note               string
 	Message            string
@@ -195,4 +202,18 @@ func ValidateReportContent(state ReportState, note, message string, outputs []Re
 		}
 	}
 	return nil
+}
+
+// WrapSessionDelivery preserves AO session-origin direction as coordination in
+// terminal prompt hooks, without labeling it as a human prompt or worker report.
+func WrapSessionDelivery(id, message string) string {
+	return fmt.Sprintf("<ao-session-delivery id=%q>\n%s\n</ao-session-delivery>", id, message)
+}
+
+// CoordinationDeliveryID recognizes both durable reports and session sends.
+func CoordinationDeliveryID(message string) (string, bool) {
+	if id, ok := ReportDeliveryID(message); ok {
+		return id, true
+	}
+	return deliveryID(message, `<ao-session-delivery id="`)
 }

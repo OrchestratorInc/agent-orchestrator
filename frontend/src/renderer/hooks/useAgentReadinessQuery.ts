@@ -1,7 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { apiErrorException } from "../lib/api-error-exception";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { AgentCheckError } from "../lib/agent-check-error";
+import { defaultProjectAgents, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 
 export type AgentReadiness = components["schemas"]["AgentReadinessResponse"];
@@ -13,7 +16,7 @@ export const agentReadinessQueryKeyForHost = (hostId?: string) => hostId ? ["age
 
 async function fetchAgentReadiness(hostId?: string): Promise<AgentReadiness> {
 	const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/agents/readiness");
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	return data as AgentReadiness;
 }
 
@@ -22,10 +25,10 @@ export async function ensureAgentReadiness(
 	purpose: AgentReadinessPurpose = "display",
 	hostId?: string,
 ): Promise<AgentReadiness> {
-	const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/agents/readiness/ensure", {
+	const { data, error, response } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/agents/readiness/ensure", {
 		body: { agentIds, purpose },
 	});
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error || !data) throw new AgentCheckError("Readiness refresh", error, response?.status);
 	return data as AgentReadiness;
 }
 
@@ -57,6 +60,36 @@ export const agentReadinessQueryOptions = {
 	gcTime: Number.POSITIVE_INFINITY,
 };
 
+/**
+ * The agents a new project starts on, ranked from the readiness snapshot the
+ * renderer already holds (one fetch when it holds none). When that snapshot
+ * has not confirmed the preferred agent yet, it waits for the daemon's checks
+ * (joining any already running) before ranking. A failed fetch ranks nothing,
+ * so the project falls back to the daemon's default agent.
+ */
+export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults> {
+	let agents: AgentReadinessSnapshot[] = [];
+	try {
+		agents = (await queryClient.ensureQueryData({
+			...agentReadinessQueryOptions,
+			queryKey: agentReadinessQueryKeyForHost(hostId),
+			queryFn: () => fetchAgentReadiness(hostId),
+		})).agents;
+	} catch {
+		// Keep the fallback below.
+	}
+	if (preferredAgentNeedsChecks(agents)) {
+		try {
+			const checked = await ensureAgentReadiness([], "display", hostId);
+			cacheAgentReadiness(queryClient, checked, hostId);
+			agents = mergeAgentReadiness({ agents }, checked).agents;
+		} catch {
+			// Rank what we have.
+		}
+	}
+	return defaultProjectAgents(agents);
+}
+
 export function useAgentReadinessQuery(enabled = true, hostId?: string) {
 	return useQuery({
 		...agentReadinessQueryOptions,
@@ -71,32 +104,56 @@ export function useEnsureAgentReadiness({
 	enabled = true,
 	purpose = "display",
 	hostId,
+	retryOnError = false,
 }: {
 	agentIds?: string[];
 	enabled?: boolean;
 	purpose?: AgentReadinessPurpose;
 	hostId?: string;
-} = {}): void {
+	retryOnError?: boolean;
+} = {}): boolean {
 	const queryClient = useQueryClient();
 	const agentIDsKey = [...new Set(agentIds.filter(Boolean))].sort().join("\u0000");
 	const normalizedIDs = useMemo(
 		() => (agentIDsKey === "" ? [] : agentIDsKey.split("\u0000")),
 		[agentIDsKey],
 	);
+	// A completion belongs to this exact request, never a previous host or
+	// enabled period. Cached installation data alone cannot open this gate.
+	const request = useMemo(() => ({}), [enabled, hostId, normalizedIDs, purpose, queryClient, retryOnError]);
+	const [completedRequest, setCompletedRequest] = useState<object | null>(null);
 
 	useEffect(() => {
 		if (!enabled) return;
 		let active = true;
-		void ensureAgentReadiness(normalizedIDs, purpose, hostId)
+		let retryTimer: ReturnType<typeof setTimeout> | undefined;
+		setCompletedRequest(null);
+		const ensure = () => void ensureAgentReadiness(normalizedIDs, purpose, hostId)
 			.then((next) => {
-				if (active) cacheAgentReadiness(queryClient, next, hostId);
+				if (!active) return;
+				cacheAgentReadiness(queryClient, next, hostId);
+				setCompletedRequest(request);
 			})
 			.catch(() => {
-				// Opportunistic: cached readiness remains useful and native launch is
-				// still the authoritative validation path.
+				// Keep cached display data, but never report a failed check as done.
+				if (active && retryOnError) retryTimer = setTimeout(ensure, 30_000);
 			});
+		ensure();
 		return () => {
 			active = false;
+			clearTimeout(retryTimer);
 		};
-	}, [enabled, hostId, normalizedIDs, purpose, queryClient]);
+	}, [enabled, hostId, normalizedIDs, purpose, queryClient, request, retryOnError]);
+	return enabled && completedRequest === request;
+}
+
+/**
+ * Keeps agent checks fresh while a create-project flow is open and returns the
+ * loader for the agents a new project starts on.
+ */
+export function useProjectAgentDefaults(enabled: boolean, hostId?: string): () => Promise<ProjectAgentDefaults> {
+	const queryClient = useQueryClient();
+	useAgentReadinessQuery(enabled, hostId);
+	useEnsureAgentReadiness({ enabled, hostId });
+	return useCallback(() => loadProjectAgentDefaults(queryClient, hostId), [queryClient, hostId]);
 }

@@ -121,7 +121,7 @@ func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 		WithClock(func() time.Time { return created.Add(90 * time.Second) }),
 	)
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		return reviewcore.TriggerResult{
 			Run:         domain.ReviewRun{Harness: "claude-code"},
@@ -139,9 +139,9 @@ func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 	}
 	closeSink()
 
-	triggered, ok := rec.find("ao.review.triggered")
+	triggered, ok := rec.find("ao.reviews.triggered")
 	if !ok {
-		t.Fatalf("ao.review.triggered never reached the wire; got %v", rec.names())
+		t.Fatalf("ao.reviews.triggered never reached the wire; got %v", rec.names())
 	}
 	if triggered.props["trigger"] != "auto" {
 		t.Fatalf("triggered.trigger = %#v, want auto (missing allowlist entry strips it silently)", triggered.props["trigger"])
@@ -150,9 +150,9 @@ func TestReviewFunnelReachesTheWireWithItsProperties(t *testing.T) {
 		t.Fatalf("triggered.harness = %#v, want claude-code", triggered.props["harness"])
 	}
 
-	submitted, ok := rec.find("ao.review.submitted")
+	submitted, ok := rec.find("ao.reviews.submitted")
 	if !ok {
-		t.Fatalf("ao.review.submitted never reached the wire; got %v", rec.names())
+		t.Fatalf("ao.reviews.submitted never reached the wire; got %v", rec.names())
 	}
 	for key, want := range map[string]any{
 		"verdict":            "changes_requested",

@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -23,6 +24,7 @@ import (
 // authMiddleware. The loopback listener is unaffected.
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
+	tunnel      http.Handler // lanTunnelPath, behind the same auth
 	defaultPort int
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
@@ -42,20 +44,25 @@ type LANManager struct {
 // network-facing listener. Most callers want NewMobileLAN, which owns the state.
 func NewLANManager(handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
 	lock := newLockout(time.Now)
-	return &LANManager{
-		handler:     lanControlBlock(authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))(handler)),
+	auth := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))
+	m := &LANManager{
+		handler:     lanControlBlock(auth(remoteJSONCompression(handler))),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
 		lock:        lock,
 	}
+	m.tunnel = auth(http.HandlerFunc(m.serveTunnel))
+	return m
 }
 
 // lanControlBlockedPrefixes are the loopback-only daemon-control route
 // prefixes that must never be reachable through the LAN listener: /shutdown,
 // the telemetry routes under /internal/, and the Connect Mobile control
 // surface under /api/v1/mobile, developer maintenance routes under /api/v1/dev,
-// host-mutating installer routes under /api/v1/system/install, and personal
+// host-mutating installer routes under /api/v1/system/install, desktop control
+// through Cua Driver under /api/v1/computer-use and the switch that hands it to
+// new chat sessions at /api/v1/settings/computer-use, and personal
 // Codex account-management routes under /api/v1/agents/codex/accounts and
 // /api/v1/agents/codex/account-switches (the harmless read-only Codex model
 // routes stay reachable so mobile can pick a model). Some routes
@@ -65,13 +72,17 @@ func NewLANManager(handler http.Handler, state *authState, defaultPort int, log 
 // the request arrived on. So the block below is applied only to the LAN-served
 // handler, outermost (wrapping authMiddleware), independent of any header.
 var lanControlBlockedPrefixes = []string{
+	"/api/v1/awake",
 	"/shutdown",
 	"/internal/",
 	"/api/v1/mobile",
 	"/api/v1/dev",
 	"/api/v1/browser",
 	"/api/v1/desktop",
+	"/api/v1/side-chats/launch",
 	"/api/v1/system/install",
+	"/api/v1/computer-use",
+	"/api/v1/settings/computer-use",
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",
 }
@@ -138,7 +149,7 @@ func expectedHostGuard(hostID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if expected := r.Header.Get("X-AO-Expected-Host-ID"); expected != "" && expected != hostID {
-				envelope.WriteAPIError(w, r, http.StatusMisdirectedRequest, "conflict", "HOST_ID_MISMATCH", "This address belongs to another AO host; reconnect to the intended host.", nil)
+				envelope.WriteAPIError(w, r, http.StatusMisdirectedRequest, "conflict", "HOST_ID_MISMATCH", "This address belongs to another Orchestrator host; reconnect to the intended host.", nil)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -161,11 +172,82 @@ func (m *LANManager) SetPasswordHash(hash string) {
 	ln := m.ln
 	m.mu.Unlock()
 	if ln != nil {
-		if err := ln.closeConnections(); err != nil {
+		if err := ln.closeConnections(""); err != nil {
 			m.log.Warn("close LAN connections after password rotation", "err", err)
 		}
 	}
 }
+
+// SetAccountTokenHash rotates the separate account credential without changing
+// the password used for direct/mobile pairing. Only connections authenticated
+// with the retired account token are closed; the pairing request must survive.
+func (m *LANManager) SetAccountTokenHash(hash string) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	previous := m.state.accountHash()
+	if previous == hash {
+		return
+	}
+	m.state.setAccountHash(hash)
+	m.lock.resetAll()
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil && previous != "" {
+		_ = ln.closeConnections(previous)
+	}
+}
+
+// UseDeviceCredentials makes the listener accept device tokens and pairing
+// codes. Call it before Start.
+func (m *LANManager) UseDeviceCredentials(devices *mobilebridge.AccessDevices, codes *mobilebridge.PairingCodes) {
+	m.state.devices, m.state.codes = devices, codes
+}
+
+// SetPasswordLoginDisabled turns the pairing password off or on. Off closes its connections.
+func (m *LANManager) SetPasswordLoginDisabled(off bool) {
+	m.transitionMu.Lock()
+	defer m.transitionMu.Unlock()
+	if m.state.passwordOff.Swap(off) == off || !off {
+		return
+	}
+	m.DisconnectCredential(m.state.currentHash())
+}
+
+// DisconnectCredential closes the connections of the credential with this SHA-256.
+func (m *LANManager) DisconnectCredential(hash string) {
+	if hash == "" {
+		return // closeConnections("") would close every connection
+	}
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	if ln != nil {
+		_ = ln.closeConnections(hash)
+	}
+}
+
+// ConnectedCredentials returns the SHA-256 of each credential with an open connection.
+func (m *LANManager) ConnectedCredentials() map[string]bool {
+	m.mu.Lock()
+	ln := m.ln
+	m.mu.Unlock()
+	connected := map[string]bool{}
+	if ln == nil {
+		return connected
+	}
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
+	for conn := range ln.conns {
+		if conn.tokenHash != "" {
+			connected[conn.tokenHash] = true
+		}
+	}
+	return connected
+}
+
+// AccountTokenHash returns the currently accepted account credential digest.
+func (m *LANManager) AccountTokenHash() string { return m.state.accountHash() }
 
 // PasswordHash returns the current connection password hash. Used to snapshot the
 // prior hash before an enable/regenerate so a failed persist can be rolled back.
@@ -224,10 +306,20 @@ func (m *LANManager) start(port int, host string) (int, error) {
 	m.bound = tcpAddr.Port
 	m.bindHost = host
 	m.srv = &http.Server{
-		Handler:           m.handler,
+		Handler:           m.dispatch(),
 		ReadHeaderTimeout: 10 * time.Second,
 		BaseContext:       func(net.Listener) context.Context { return streamCtx },
+		ConnContext: func(ctx context.Context, conn net.Conn) context.Context {
+			return context.WithValue(ctx, lanConnContextKey{}, conn)
+		},
 	}
+	// HTTP/2 without TLS (prior knowledge) lets a desktop carry a remote
+	// preview's hundreds of module requests over one connection; over HTTP/1.1
+	// each waits its turn on a handful of connections, a round trip apiece.
+	// HTTP/1.1 clients and WebSocket upgrades are unaffected.
+	m.srv.Protocols = new(http.Protocols)
+	m.srv.Protocols.SetHTTP1(true)
+	m.srv.Protocols.SetUnencryptedHTTP2(true)
 	srv := m.srv
 	boundPort := m.bound
 	m.mu.Unlock()
@@ -262,11 +354,21 @@ func (m *LANManager) Stop(ctx context.Context) error {
 	err = errors.Join(err, ln.Close())
 	// Shutdown and Close deliberately leave hijacked connections alone. The
 	// listener owns them until their actual Close, even after HTTP's handoff.
-	err = errors.Join(err, ln.closeConnections())
+	err = errors.Join(err, ln.closeConnections(""))
 	m.mu.Lock()
 	m.srv, m.ln, m.cancel, m.bound, m.bindHost = nil, nil, nil, 0, ""
 	m.mu.Unlock()
 	return err
+}
+
+func (m *LANManager) dispatch() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == lanTunnelPath {
+			m.tunnel.ServeHTTP(w, r)
+			return
+		}
+		m.handler.ServeHTTP(w, r)
+	})
 }
 
 // lanListener tracks the lifetime of the underlying connections rather than
@@ -306,25 +408,33 @@ func (l *lanListener) Close() error {
 	return l.closeErr
 }
 
-func (l *lanListener) closeConnections() error {
+// An empty tokenHash closes every connection; account rotation passes the
+// retired token's hash so password-authenticated clients keep their connections.
+func (l *lanListener) closeConnections(tokenHash string) error {
 	l.mu.Lock()
-	conns := make([]*lanConn, 0, len(l.conns))
-	for conn := range l.conns {
-		conns = append(conns, conn)
-	}
-	l.mu.Unlock()
+	defer l.mu.Unlock()
 	var errs []error
-	for _, conn := range conns {
-		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	for conn := range l.conns {
+		if tokenHash != "" && conn.tokenHash != tokenHash {
+			continue
+		}
+		// Keep selection and TCP close atomic with credential recording. Calling
+		// lanConn.Close here would re-enter mu; close its underlying socket instead.
+		if err := conn.Conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			errs = append(errs, err)
 		}
+		delete(l.conns, conn)
 	}
 	return errors.Join(errs...)
 }
 
+type lanConnContextKey struct{}
+
 type lanConn struct {
 	net.Conn
 	owner *lanListener
+	// Last authenticated credential, guarded by owner.mu; includes hijacked streams.
+	tokenHash string
 }
 
 // Preserve the TCP capabilities net/http uses for response copying and sending

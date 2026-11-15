@@ -1,7 +1,10 @@
-import { getApiBaseUrl } from "./api-client";
+import { getApiBaseUrl, reportingFetch } from "./api-client";
+import { markApiError } from "./reported-errors";
 
 export interface GitHubStatusResponse {
 	connected: boolean;
+	/** GitHub username AO is signed in as; absent when it could not be resolved. */
+	login?: string;
 }
 
 export interface GitHubRepo {
@@ -24,6 +27,7 @@ export class GitHubDaemonError extends Error {
 	) {
 		super(message);
 		this.name = "GitHubDaemonError";
+		markApiError(this);
 	}
 }
 
@@ -34,7 +38,8 @@ export function isGitHubAuthInvalidError(error: unknown): boolean {
 async function daemonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 	const baseUrl = getApiBaseUrl();
 	if (!baseUrl) throw new Error("Daemon is not running.");
-	const res = await fetch(`${baseUrl}${path}`, init);
+	// Shares the API client's failure reporting; these calls used to bypass it.
+	const res = await reportingFetch(new Request(`${baseUrl}${path}`, init));
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({}));
 		const message = typeof body?.message === "string" ? body.message : typeof body?.error === "string" ? body.error : `Request failed (${res.status})`;

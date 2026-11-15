@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
-import { filterWorkerSessions, workerSearchClearState } from "./worker-search";
+import { filterWorkerSessions } from "./worker-search";
 
 function session(id: string, overrides: Partial<DashboardSession> = {}): DashboardSession {
 	return {
@@ -47,11 +47,9 @@ describe("filterWorkerSessions", () => {
 	])("matches %s across worker fields", (query, expected) => {
 		expect(filterWorkerSessions(sessions, query, projectNameFor, statusLabelFor).map(({ id }) => id)).toEqual(expected);
 	});
-});
 
-describe("workerSearchClearState", () => {
-	it("keeps the inset clear control non-interactive until text exists", () => {
-		expect(workerSearchClearState("")).toEqual({ disabled: true, opacity: 0, scale: 0.82 });
-		expect(workerSearchClearState("audit")).toEqual({ disabled: false, opacity: 1, scale: 1 });
+	it("finds a worker by its separately displayed machine name", () => {
+		const hosted = { ...session("remote"), hostId: "host-a", hostName: "Studio Mac" } as DashboardSession;
+		expect(filterWorkerSessions([hosted], "studio mac", projectNameFor, statusLabelFor).map(({ id }) => id)).toEqual(["remote"]);
 	});
 });

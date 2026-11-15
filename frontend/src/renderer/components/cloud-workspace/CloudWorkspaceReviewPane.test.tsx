@@ -6,6 +6,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpClient, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse } from "../../lib/cloud-cp";
+import { useUiStore } from "../../stores/ui-store";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { TooltipProvider } from "../ui/tooltip";
 import { CloudWorkspaceReviewPane } from "./CloudWorkspaceReviewPane";
@@ -13,7 +14,7 @@ import { CloudWorkspaceReviewPane } from "./CloudWorkspaceReviewPane";
 vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: ({ file, split }: { file: CloudCpWorkspaceReviewFileSummary; split: boolean }) => <div data-split={String(split)} data-testid={`diff:${file.path}`} /> }));
 
 const changed = (path: string): CloudCpWorkspaceReviewFileSummary => ({ path, status: "modified", additions: 2, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: `fp:${path}` });
-const annotation: FileAnnotationModel = { target: null, draft: "", status: "idle", error: "", begin: vi.fn(), setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 
 function data(): CloudCpWorkspaceReviewResponse {
 	const unstaged = changed("src/App.tsx");
@@ -33,7 +34,10 @@ function renderPane(client: CloudCpClient) {
 }
 
 describe("CloudWorkspaceReviewPane", () => {
-	beforeEach(() => { window.localStorage.clear(); });
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ inspectorSessions: {} });
+	});
 
 	it("starts with unstaged changes and switches across working and committed sources", async () => {
 		const getWorkspaceReviewDiffs = vi.fn().mockResolvedValue({ workspaceVersion: "v1", groups: [{ patch: "diff", truncated: false, includedPaths: ["src/App.tsx"], deferred: [], errors: [] }] });

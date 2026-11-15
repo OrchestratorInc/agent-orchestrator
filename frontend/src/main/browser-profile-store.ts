@@ -12,6 +12,7 @@ import {
 	normalizeBrowserProfileName,
 	type BrowserProfile,
 	type BrowserProfileBinding,
+	type BrowserProfileId,
 	type BrowserProfileListState,
 	type BrowserProfileRegistry,
 	type BrowserProfileStoreError as BrowserProfileStoreErrorInfo,
@@ -43,10 +44,12 @@ const DEFAULT_REGISTRY: BrowserProfileRegistry = {
 	version: BROWSER_PROFILE_REGISTRY_VERSION,
 	profiles: [],
 	bindings: {},
+	defaultProfileId: null,
+	defaultProfileSeeded: true,
 };
 
 function emptyRegistry(): BrowserProfileRegistry {
-	return { version: DEFAULT_REGISTRY.version, profiles: [], bindings: {} };
+	return { version: DEFAULT_REGISTRY.version, profiles: [], bindings: {}, defaultProfileId: null, defaultProfileSeeded: true };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -111,7 +114,10 @@ function parseRegistry(raw: unknown): BrowserProfileRegistry {
 			throw invalidRegistry("The browser profile registry contains an invalid worker binding.");
 		}
 		const profileId = value.profileId;
-		if (!isBrowserProfileId(profileId) || profileId !== profileId.toLowerCase() || !profileIds.has(profileId)) {
+		if (
+			profileId !== null &&
+			(!isBrowserProfileId(profileId) || profileId !== profileId.toLowerCase() || !profileIds.has(profileId))
+		) {
 			throw invalidRegistry("The browser profile registry contains a binding to an unknown profile.");
 		}
 		if (!validTimestamp(value.updatedAt)) {
@@ -120,7 +126,16 @@ function parseRegistry(raw: unknown): BrowserProfileRegistry {
 		bindings[sessionId] = { profileId, updatedAt: value.updatedAt };
 	}
 
-	return { version: BROWSER_PROFILE_REGISTRY_VERSION, profiles, bindings };
+	const savedDefaultProfileId = raw.defaultProfileId ?? null;
+	if (savedDefaultProfileId !== null && (!isBrowserProfileId(savedDefaultProfileId) || !profileIds.has(savedDefaultProfileId))) {
+		throw invalidRegistry("The browser profile registry has an invalid default profile.");
+	}
+	// Registries saved before the first profile became the default get their
+	// oldest profile as the default once. The next write records the marker.
+	const defaultProfileId: BrowserProfileId | null =
+		savedDefaultProfileId ?? (raw.defaultProfileSeeded === true ? null : (profiles[0]?.id ?? null));
+
+	return { version: BROWSER_PROFILE_REGISTRY_VERSION, profiles, bindings, defaultProfileId, defaultProfileSeeded: true };
 }
 
 function cloneRegistry(registry: BrowserProfileRegistry): BrowserProfileRegistry {
@@ -130,6 +145,8 @@ function cloneRegistry(registry: BrowserProfileRegistry): BrowserProfileRegistry
 		bindings: Object.fromEntries(
 			Object.entries(registry.bindings).map(([sessionId, binding]) => [sessionId, { ...binding }]),
 		),
+		defaultProfileId: registry.defaultProfileId,
+		defaultProfileSeeded: true,
 	};
 }
 
@@ -186,6 +203,7 @@ export class BrowserProfileStore {
 	private listState(): BrowserProfileListState {
 		return {
 			profiles: this.loadError ? [] : this.registry.profiles.map((profile) => ({ ...profile })),
+			defaultProfileId: this.loadError ? null : this.registry.defaultProfileId,
 			...(this.loadError ? { error: { ...this.loadError } } : {}),
 		};
 	}
@@ -204,9 +222,19 @@ export class BrowserProfileStore {
 		return profile ? { ...profile } : undefined;
 	}
 
-	getSessionProfileId(sessionId: string): string | undefined {
+	/**
+	 * `undefined` means this session has never chosen a profile (fall back to
+	 * the default). `null` means it explicitly chose Temporary, which must
+	 * stick even once a default profile exists.
+	 */
+	getSessionProfileId(sessionId: string): string | null | undefined {
 		if (this.loadError) return undefined;
 		return this.registry.bindings[sessionId]?.profileId;
+	}
+
+	getDefaultProfileId(): string | null {
+		if (this.loadError) return null;
+		return this.registry.defaultProfileId;
 	}
 
 	isProfileOperationInProgress(profileId: string): boolean {
@@ -255,7 +283,12 @@ export class BrowserProfileStore {
 		}
 	}
 
-	async createProfile(rawName: unknown): Promise<BrowserProfile> {
+	/**
+	 * The first profile becomes the default. An import passes
+	 * `claimDefault: false` and calls `claimDefaultIfFirst` after it commits,
+	 * so no unbound worker opens a half-imported or rolled-back profile.
+	 */
+	async createProfile(rawName: unknown, { claimDefault = true }: { claimDefault?: boolean } = {}): Promise<BrowserProfile> {
 		const name = normalizeBrowserProfileName(rawName);
 		if (!name) throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile name is invalid.");
 		return this.enqueueMutation((current) => {
@@ -268,7 +301,18 @@ export class BrowserProfileStore {
 			const now = this.now().toISOString();
 			const profile: BrowserProfile = { id: randomUUID(), name, createdAt: now, updatedAt: now };
 			current.profiles.push(profile);
+			if (claimDefault && current.profiles.length === 1) current.defaultProfileId = profile.id;
 			return { registry: current, result: { ...profile } };
+		});
+	}
+
+	/** Makes `profileId` the default if no default is set and it is the oldest profile. */
+	async claimDefaultIfFirst(profileId: string): Promise<void> {
+		return this.enqueueMutation((current) => {
+			if (current.defaultProfileId === null && current.profiles[0]?.id === profileId) {
+				current.defaultProfileId = profileId;
+			}
+			return { registry: current, result: undefined };
 		});
 	}
 
@@ -306,17 +350,17 @@ export class BrowserProfileStore {
 				throw new BrowserProfileStoreError("BROWSER_PROFILE_NOT_FOUND", "Browser profile was not found.");
 			}
 			const nextBindings = { ...current.bindings };
-			if (profileId === null) {
-				delete nextBindings[sessionId];
-			} else {
-				if (!nextBindings[sessionId] && Object.keys(nextBindings).length >= BROWSER_PROFILE_MAX_BINDINGS) {
-					throw new BrowserProfileStoreError(
-						"BROWSER_PROFILE_BINDING_LIMIT",
-						"The retained browser worker binding limit has been reached.",
-					);
-				}
-				nextBindings[sessionId] = { profileId, updatedAt: this.now().toISOString() };
+			// An explicit choice of Temporary (profileId === null) is still recorded
+			// here, not deleted: once a default profile exists, "no binding" and
+			// "explicitly Temporary" must stay distinguishable so the default can't
+			// silently override a session that deliberately opted out of it.
+			if (!nextBindings[sessionId] && Object.keys(nextBindings).length >= BROWSER_PROFILE_MAX_BINDINGS) {
+				throw new BrowserProfileStoreError(
+					"BROWSER_PROFILE_BINDING_LIMIT",
+					"The retained browser worker binding limit has been reached.",
+				);
 			}
+			nextBindings[sessionId] = { profileId, updatedAt: this.now().toISOString() };
 			return { registry: { ...current, bindings: nextBindings }, result: undefined };
 		});
 	}
@@ -332,14 +376,29 @@ export class BrowserProfileStore {
 			const bindings = Object.fromEntries(
 				Object.entries(current.bindings).filter(([, binding]) => binding.profileId !== profileId),
 			);
+			const profiles = current.profiles.filter((profile) => profile.id !== profileId);
 			return {
 				registry: {
 					...current,
-					profiles: current.profiles.filter((profile) => profile.id !== profileId),
+					profiles,
 					bindings,
+					// Deleting the default promotes the oldest remaining profile.
+					defaultProfileId: current.defaultProfileId === profileId ? (profiles[0]?.id ?? null) : current.defaultProfileId,
 				},
 				result: undefined,
 			};
+		});
+	}
+
+	async setDefaultProfileId(profileId: string | null): Promise<void> {
+		if (profileId !== null && !isBrowserProfileId(profileId)) {
+			throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile ID is invalid.");
+		}
+		return this.enqueueMutation((current) => {
+			if (profileId !== null && !current.profiles.some((profile) => profile.id === profileId)) {
+				throw new BrowserProfileStoreError("BROWSER_PROFILE_NOT_FOUND", "Browser profile was not found.");
+			}
+			return { registry: { ...current, defaultProfileId: profileId }, result: undefined };
 		});
 	}
 

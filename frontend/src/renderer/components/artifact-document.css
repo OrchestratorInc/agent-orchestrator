@@ -1,0 +1,12 @@
+.ao-document-surface {
+	--document-canvas: light-dark(
+		color-mix(in oklch, var(--solid-bg-primary, var(--color-bg-primary)) 20%, white),
+		color-mix(in oklch, var(--solid-bg-primary, var(--color-bg-primary)) 75%, black)
+	);
+	--ao-file-canvas: var(--document-canvas);
+	background-color: var(--document-canvas);
+}
+
+.ao-document-surface .ao-pierre-surface {
+	background-color: var(--document-canvas);
+}

@@ -1,0 +1,2 @@
+.shortcut-keys { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; white-space: nowrap; }
+.shortcut-keys kbd { display: inline-flex; min-width: 28px; height: 28px; align-items: center; justify-content: center; padding-inline: 7px; border: 1px solid var(--color-border-settings-input); border-bottom-width: 2px; border-radius: var(--radius-sm); background: var(--color-bg-settings-input); color: var(--color-foreground); font-family: var(--font-mono); font-size: 13px; font-weight: 500; line-height: 1; }

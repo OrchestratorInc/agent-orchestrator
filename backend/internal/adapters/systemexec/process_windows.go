@@ -7,12 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 func commandContext(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
@@ -22,16 +22,19 @@ func commandContext(ctx context.Context, name string, args ...string) (*exec.Cmd
 	}
 	extension := filepath.Ext(resolved)
 	if !strings.EqualFold(extension, ".cmd") && !strings.EqualFold(extension, ".bat") {
-		return exec.CommandContext(ctx, resolved, args...), nil //nolint:gosec // Callers supply server-owned argv.
+		return aoprocess.CommandContext(ctx, resolved, args...), nil //nolint:gosec // Callers supply server-owned argv.
 	}
 
 	shell := strings.TrimSpace(os.Getenv("ComSpec"))
 	if shell == "" {
 		shell = "cmd.exe"
 	}
-	cmd := exec.CommandContext(ctx, shell) //nolint:gosec // ComSpec is Windows' configured batch interpreter.
+	cmd := aoprocess.CommandContext(ctx, shell) //nolint:gosec // ComSpec is Windows' configured batch interpreter.
 	cmd.Args = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`
 	return cmd, nil
 }
 
@@ -95,24 +98,4 @@ func mergeWindowsPath(values ...string) string {
 		}
 	}
 	return strings.Join(merged, ";")
-}
-
-func configureProcessGroup(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW | windows.CREATE_NEW_PROCESS_GROUP
-	cmd.SysProcAttr.HideWindow = true
-}
-
-func killProcessTree(cmd *exec.Cmd) error {
-	if cmd.Process == nil {
-		return nil
-	}
-	kill := exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
-	kill.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW, HideWindow: true}
-	if err := kill.Run(); err != nil {
-		return cmd.Process.Kill()
-	}
-	return nil
 }

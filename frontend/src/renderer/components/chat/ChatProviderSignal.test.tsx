@@ -2,13 +2,18 @@ import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { ActivityRow, SteerMessage } from "./ChatTimelineItems";
-import type { ConversationActivity } from "../../types/conversation";
+import { ActivityRow, OriginMessage, SteerMessage } from "./ChatTimelineItems";
+import { ChatLinkProvider } from "./ChatMarkdown";
+import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { aoBridge } from "../../lib/bridge";
 import { TooltipProvider } from "../ui/tooltip";
 
 function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
+	return rtlRender(
+		<TooltipProvider>
+			<ChatLinkProvider onSessionLinkOpen={vi.fn()}>{ui}</ChatLinkProvider>
+		</TooltipProvider>,
+	);
 }
 
 // One test file per new provider signal the daemon started serving. What each covers
@@ -70,7 +75,7 @@ describe("reasoning", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText(/longer than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	// The default install sends the item with no body. A labelled empty row teaches
@@ -99,8 +104,9 @@ describe("MCP tool call", () => {
 	it("names the server and the tool, not a shell command", () => {
 		render(<ActivityRow activity={call} />);
 		expect(screen.getByText("search_issues")).toBeInTheDocument();
-		// The distinction the kind exists to draw: nothing ran in the worktree.
-		expect(screen.getByText("MCP · github")).toBeInTheDocument();
+		// The distinction the kind exists to draw: nothing ran in the worktree, a
+		// tool server answered. The row reads "<tool> · <server>".
+		expect(screen.getByText("· github")).toBeInTheDocument();
 	});
 
 	it("shows the arguments and the answer when opened", async () => {
@@ -153,7 +159,7 @@ describe("MCP tool call", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button"));
-		expect(screen.getByText(/larger than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/larger than Orchestrator stores/i)).toBeInTheDocument();
 		expect(screen.getByText(/2\.0 MB/)).toBeInTheDocument();
 	});
 
@@ -245,8 +251,8 @@ describe("auto review", () => {
 });
 
 describe("system events", () => {
-	it("names what actually answered when the provider rerouted", () => {
-		render(
+	it("draws nothing when the provider rerouted the model", () => {
+		const { container } = render(
 			<ActivityRow
 				activity={activity({
 					activityKind: "system",
@@ -260,9 +266,7 @@ describe("system events", () => {
 				})}
 			/>,
 		);
-		expect(screen.getByText("gpt-5.6-terra-mini")).toBeInTheDocument();
-		expect(screen.getByText("gpt-5.6-terra")).toBeInTheDocument();
-		expect(screen.getByText("at capacity")).toBeInTheDocument();
+		expect(container).toBeEmptyDOMElement();
 	});
 
 	it("records where the provider demanded credentials", () => {
@@ -294,7 +298,143 @@ describe("steer message", () => {
 			/>,
 		);
 		expect(screen.getByText("Skip the integration tests")).toBeInTheDocument();
-		expect(screen.getByText(/Steered into the running turn/i)).toBeInTheDocument();
+		expect(screen.getByText(/Steered/i)).toBeInTheDocument();
+	});
+
+	it("draws a steered chat excerpt as an annotation chip, without the placeholder message", async () => {
+		const user = userEvent.setup();
+		render(
+			<SteerMessage
+				sessionId="ao-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "Use the attached 1 chat excerpt(s) as context",
+					detail: {
+						event: "steer",
+						text: "Use the attached 1 chat excerpt(s) as context",
+						origin: "human",
+						content: [{
+							type: "excerpt",
+							excerpt: { reference: { id: "ex-1", messageId: "m-1", revision: 0 }, selectedText: "Split across two pastes" },
+						}],
+					},
+				})}
+			/>,
+		);
+		expect(screen.queryByText(/Use the attached/)).not.toBeInTheDocument();
+		expect(screen.queryByText("excerpt")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		expect(await screen.findByText("Split across two pastes")).toBeInTheDocument();
+	});
+
+	it("keeps an automation steer's annotation and comment", async () => {
+		const user = userEvent.setup();
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "[from worker-1] look at this",
+					detail: {
+						event: "steer",
+						text: "[from worker-1] look at this",
+						origin: "human",
+						senderSessionId: "worker-1",
+						content: [{
+							type: "excerpt",
+							excerpt: { reference: { id: "ex-1", messageId: "m-1", revision: 0, comment: "Why twice?" }, selectedText: "Split across two pastes" },
+						}],
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText("look at this")).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "1 annotation" }));
+		expect(await screen.findByText("Split across two pastes")).toBeInTheDocument();
+		expect(screen.getByText("Why twice?")).toBeInTheDocument();
+	});
+
+	it("renders a CLI steer as an attributed automation block with a session link", () => {
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: "[from worker-1] focus on the API",
+					detail: {
+						event: "steer",
+						text: "[from worker-1] focus on the API",
+						origin: "human",
+						senderSessionId: "worker-1",
+						senderProjectId: "project-1",
+						senderDisplayName: "Backend worker",
+					},
+				})}
+			/>,
+		);
+		expect(screen.getByText("Backend worker")).toBeInTheDocument();
+		expect(screen.getByText("focus on the API")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "Backend worker" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-1/worker-1",
+		);
+	});
+
+	it("renders an idle automation message with the same sender header and link", () => {
+		const message: ConversationMessage = {
+			kind: "message",
+			id: "message-1",
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "automation",
+			text: "[from worker-1] use the simpler approach",
+			streaming: false,
+			senderSessionId: "worker-1",
+			senderProjectId: "project-1",
+			senderDisplayName: "Backend worker",
+			createdAt: new Date().toISOString(),
+		};
+		render(<OriginMessage message={message} />);
+
+		expect(screen.getByRole("link", { name: "Backend worker" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-1/worker-1",
+		);
+		expect(screen.getByText("use the simpler approach")).toBeInTheDocument();
+		expect(screen.queryByText("[from worker-1] use the simpler approach")).not.toBeInTheDocument();
+	});
+
+	it("keeps long attributed steers consistent with automation reports", async () => {
+		const user = userEvent.setup();
+		const body = `${"A long steering report. ".repeat(30)}See ao://sessions/project-2/worker-2`;
+		render(
+			<SteerMessage
+				sessionId="target-1"
+				activity={activity({
+					activityKind: "system",
+					summary: `[from worker-2] ${body}`,
+					detail: {
+						event: "steer",
+						text: `[from worker-2] ${body}`,
+						origin: "human",
+						senderSessionId: "worker-2",
+						senderProjectId: "project-1",
+						senderDisplayName: "A very long backend worker display name that should truncate",
+					},
+				})}
+			/>,
+		);
+
+		const label = screen.getByText(/A very long backend worker/);
+		expect(label.closest(".cursor-chat-origin-message")).toContainElement(label);
+		expect(screen.getByRole("button", { name: "Show full report" })).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Show full report" }));
+		expect(screen.getByRole("button", { name: "Hide report" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "ao://sessions/project-2/worker-2" })).toHaveAttribute(
+			"href",
+			"ao://sessions/project-2/worker-2",
+		);
 	});
 });
 
@@ -597,7 +737,7 @@ describe("file changes", () => {
 			/>,
 		);
 		await userEvent.click(screen.getByRole("button", { name: /Created/ }));
-		expect(screen.getByText(/longer than AO stores/i)).toBeInTheDocument();
+		expect(screen.getByText(/longer than Orchestrator stores/i)).toBeInTheDocument();
 	});
 
 	// Rows written by earlier builds carry no status. The file is still drawn, as a

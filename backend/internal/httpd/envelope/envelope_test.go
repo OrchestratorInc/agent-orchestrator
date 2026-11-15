@@ -16,10 +16,10 @@ import (
 
 func TestWriteErrorSerializesWrappedReportingOwner(t *testing.T) {
 	err := fmt.Errorf("outer: %w", fmt.Errorf("middle: %w", ownership.Own(
-		apierr.Internal("AGENT_SWITCH_FAILED", "Agent switch failed"),
-		ownership.OwnerAgentSwitchSaga,
+		apierr.Internal("INTERNAL", "Internal failure"),
+		ownership.OwnerHTTP,
 	)))
-	req, captured := WithErrorCapture(httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/switch-agent", nil))
+	req, captured := WithErrorCapture(httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/kill", nil))
 	rec := httptest.NewRecorder()
 
 	WriteError(rec, req, err)
@@ -31,15 +31,15 @@ func TestWriteErrorSerializesWrappedReportingOwner(t *testing.T) {
 	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &body); decodeErr != nil {
 		t.Fatalf("decode response: %v", decodeErr)
 	}
-	if body.ReportingOwner != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("reporting_owner = %q, want %q", body.ReportingOwner, ownership.OwnerAgentSwitchSaga)
+	if body.ReportingOwner != ownership.OwnerHTTP {
+		t.Fatalf("reporting_owner = %q, want %q", body.ReportingOwner, ownership.OwnerHTTP)
 	}
-	if body.Code != "AGENT_SWITCH_FAILED" || body.Message != "Agent switch failed" {
+	if body.Code != "INTERNAL" || body.Message != "Internal failure" {
 		t.Fatalf("body = %+v, want normal API error presentation", body)
 	}
 	gotCapture := captured()
-	if !errors.Is(gotCapture.Err, err) || gotCapture.ReportingOwner != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("captured = %+v, want raw error and saga owner", gotCapture)
+	if !errors.Is(gotCapture.Err, err) || gotCapture.ReportingOwner != ownership.OwnerHTTP {
+		t.Fatalf("captured = %+v, want raw error and HTTP owner", gotCapture)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestWriteErrorOmitsUnknownReportingOwner(t *testing.T) {
 
 func TestWriteAPIErrorRemainsUnowned(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/switch-agent", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", nil)
 
 	WriteAPIError(rec, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 
@@ -74,6 +74,41 @@ func TestWriteAPIErrorRemainsUnowned(t *testing.T) {
 	}
 	if _, ok := body["reporting_owner"]; ok {
 		t.Fatalf("direct validation response unexpectedly has reporting_owner: %s", rec.Body.String())
+	}
+}
+
+func TestWriteErrorWithCodePreservesCauseAndClassifiedFailures(t *testing.T) {
+	cause := errors.New("private database path")
+	req, captured := WithErrorCapture(httptest.NewRequest(http.MethodPost, "/api/v1/reports", nil))
+	rec := httptest.NewRecorder()
+	WriteErrorWithCode(rec, req, cause, "REPORT_CREATE_FAILED", "Unable to create report")
+	var body APIError
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusInternalServerError || body.Code != "REPORT_CREATE_FAILED" || body.Message != "Unable to create report" || errors.Is(captured().Err, cause) == false {
+		t.Fatalf("response = %+v, capture = %+v", body, captured())
+	}
+	if body.Message == cause.Error() {
+		t.Fatal("private cause reached the client")
+	}
+	for _, classified := range []struct {
+		err    error
+		status int
+		code   string
+	}{
+		{apierr.Conflict("REPORT_BUSY", "Try later", nil), http.StatusConflict, "REPORT_BUSY"},
+		{context.DeadlineExceeded, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE"},
+	} {
+		rec := httptest.NewRecorder()
+		WriteErrorWithCode(rec, httptest.NewRequest(http.MethodPost, "/api/v1/reports", nil), classified.err, "REPORT_CREATE_FAILED", "Unable to create report")
+		var got APIError
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != classified.status || got.Code != classified.code {
+			t.Fatalf("classified response = %d %+v", rec.Code, got)
+		}
 	}
 }
 

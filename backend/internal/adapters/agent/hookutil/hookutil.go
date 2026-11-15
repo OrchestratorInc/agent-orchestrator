@@ -4,18 +4,113 @@
 package hookutil
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
 )
 
 // GitignoreSentinel marks a workspace .gitignore as AO-managed so
 // EnsureWorkspaceGitignore can rewrite its own file idempotently while never
 // touching a user- or repo-provided .gitignore at the same path.
 const GitignoreSentinel = "# managed by agent-orchestrator: AO hook files stay out of git status"
+
+// bugTriageMarkerFile sits inside the skill folder because the skills folder's
+// .gitignore belongs to the using-ao install, which rewrites it. The marker is
+// written before the skill, and the folder is never cleared, so an install that
+// fails partway still carries the marker and the next one repairs it.
+const (
+	bugTriageMarkerFile = ".ao-managed"
+	bugTriageSentinel   = "agent-orchestrator: managed bug-triage skill"
+)
+
+// InstallBugTriageSkill writes AO's bug-triage skill into a harness's skills
+// folder. Unlike using-ao, the name is generic: a project may have its own
+// bug-triage, so a folder AO does not own stays and the session still starts.
+// An empty folder (an install that stopped before its marker) is nobody's,
+// even if that install left one of AtomicWriteFile's temp files, which the
+// install then removes.
+func InstallBugTriageSkill(skillsDir string) error {
+	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
+	if _, err := os.Lstat(skillDir); err == nil {
+		managed, err := bugTriageManaged(skillDir)
+		if err != nil {
+			return err
+		}
+		if !managed {
+			entries, err := os.ReadDir(skillDir)
+			if err != nil {
+				return fmt.Errorf("read bug-triage skill: %w", err)
+			}
+			// A temp file left by a write killed before the marker landed does
+			// not make the folder the project's.
+			for _, entry := range entries {
+				if !strings.HasPrefix(entry.Name(), ".ao-tmp-") {
+					return nil
+				}
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat bug-triage skill: %w", err)
+	}
+	if err := os.MkdirAll(skillDir, 0o750); err != nil {
+		return fmt.Errorf("create bug-triage skill: %w", err)
+	}
+	// Temp files from an interrupted write would stay untracked in git status.
+	// ReadDir, not Glob: the workspace path may hold pattern characters.
+	entries, err := os.ReadDir(skillDir)
+	if err != nil {
+		return fmt.Errorf("read bug-triage skill: %w", err)
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".ao-tmp-") {
+			continue
+		}
+		if err := os.Remove(filepath.Join(skillDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove bug-triage temp file: %w", err)
+		}
+	}
+	if err := AtomicWriteFile(filepath.Join(skillDir, bugTriageMarkerFile), []byte(bugTriageSentinel+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write bug-triage marker: %w", err)
+	}
+	if err := AtomicWriteFile(filepath.Join(skillDir, "SKILL.md"), skillassets.BugTriageSkill(), 0o600); err != nil {
+		return fmt.Errorf("write bug-triage skill: %w", err)
+	}
+	if err := EnsureWorkspaceGitignore(skillDir, "SKILL.md", bugTriageMarkerFile); err != nil {
+		return fmt.Errorf("bug-triage gitignore: %w", err)
+	}
+	return nil
+}
+
+// UninstallBugTriageSkill removes the skill only when AO's marker owns it.
+func UninstallBugTriageSkill(skillsDir string) error {
+	skillDir := filepath.Join(skillsDir, skillassets.BugTriageSkillName)
+	managed, err := bugTriageManaged(skillDir)
+	if err != nil || !managed {
+		return err
+	}
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("remove bug-triage skill: %w", err)
+	}
+	return nil
+}
+
+func bugTriageManaged(skillDir string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(skillDir, bugTriageMarkerFile)) //nolint:gosec // path is rooted in the caller-owned workspace
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read bug-triage marker: %w", err)
+	}
+	return strings.Contains(string(data), bugTriageSentinel), nil
+}
 
 // CopilotAgentProfileSentinel marks a Copilot custom-agent profile as
 // AO-managed so writers and scratch-workspace readers share one ownership
@@ -118,4 +213,60 @@ func AtomicWriteFile(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// FinalAssistantTextJS is shared by the JavaScript extensions AO installs for
+// agents whose run-end event carries the conversation.
+const FinalAssistantTextJS = `// The run's final assistant text. The event shape is the agent's, so anything
+// unexpected only means "no text".
+function finalAssistantText(event) {
+  try {
+    for (const message of [...(event?.messages ?? [])].reverse()) {
+      if (message?.role !== "assistant") continue;
+      const parts = typeof message.content === "string" ? [{ type: "text", text: message.content }] : message.content;
+      const text = (Array.isArray(parts) ? parts : []).filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n");
+      if (text.trim()) return text;
+    }
+  } catch {}
+  return "";
+}
+`
+
+// ReadJSONLTail returns the complete records in the last window bytes of a
+// JSON Lines transcript: a record cut by the window's start, and one the
+// harness has not finished writing, are dropped. A path that is not a regular
+// file yields no records.
+func ReadJSONLTail(path string, window int64) ([]byte, error) {
+	file, err := os.Open(path) //nolint:gosec // a transcript path reported by the harness's own hook
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, nil
+	}
+	offset := info.Size() - window
+	if offset < 0 {
+		offset = 0
+	}
+	data, err := io.ReadAll(io.NewSectionReader(file, offset, info.Size()-offset))
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		first := bytes.IndexByte(data, '\n')
+		if first < 0 {
+			return nil, nil
+		}
+		data = data[first+1:]
+	}
+	last := bytes.LastIndexByte(data, '\n')
+	if last < 0 {
+		return nil, nil
+	}
+	return data[:last+1], nil
 }

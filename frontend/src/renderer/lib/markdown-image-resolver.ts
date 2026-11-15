@@ -73,6 +73,19 @@ export function buildWorkspaceBlobUrl(sessionId: string, path: string, version: 
 }
 
 /** `undefined` for an empty src or an absolute one that should pass through untouched. */
+/**
+ * Resolves a markdown image against an artifact directory served from its own
+ * preview origin: the artifact origin root is the artifact-directory root, so
+ * a sibling `chart.png` of `report.md` is `<origin>/chart.png`.
+ */
+export function resolveArtifactImageSrc(artifactOrigin: string, markdownFilePath: string, rawSrc: string | undefined): string | undefined {
+	if (!rawSrc) return undefined;
+	if (isAbsoluteMarkdownAssetSrc(rawSrc)) return rawSrc;
+	const assetPath = resolveMarkdownAssetPath(markdownFilePath, rawSrc);
+	if (!assetPath) return undefined;
+	return `${artifactOrigin}/${assetPath.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 export function resolveMarkdownImageSrc(
 	sessionId: string,
 	markdownFilePath: string,

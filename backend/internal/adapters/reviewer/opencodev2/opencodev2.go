@@ -36,6 +36,14 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerOpenCodeV2
 }
 
+// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
+// the next review runs the release an install just switched to.
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 // ReviewCommand launches OpenCode 2 with a final agent-level permission list.
 // Accept-edits only forces the worker adapter to materialize its selected AO
 // agent when a direct caller supplies no system prompt; the edit allow is

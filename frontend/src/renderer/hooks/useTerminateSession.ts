@@ -1,20 +1,24 @@
-import { type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
-import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
-import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { apiErrorException } from "../lib/api-error-exception";
+import { useCallback, useSyncExternalStore } from "react";
+import { hashKey, type QueryClient, useMutation, useMutationState, useQueryClient } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { cloudSessionsQueryKey, remoteSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import {
 	applyTerminatedSession,
 	clearOptimisticSessionKill,
 	trackOptimisticSessionKill,
 } from "./optimistic-session-kills";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 import { captureRendererEvent } from "../lib/telemetry";
 import { createRendererCloudCpClient } from "./useCloudCp";
+import { useTranslation } from "react-i18next";
 import { settingsQueryKey, type Settings } from "./useSettings";
-import { useUiStore } from "../stores/ui-store";
-import { appI18n } from "../i18n";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
-import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+import { useUiStore } from "../stores/ui-store";
 
 type TerminateSessionOptions = {
 	/** Fires synchronously as the kill starts — before the cache drops the row. */
@@ -25,22 +29,37 @@ type TerminateSessionOptions = {
 
 export const terminateSessionMutationKey = ["terminate-session"] as const;
 
-async function terminateSession(queryClient: QueryClient, session: WorkspaceSession): Promise<void> {
+/**
+ * The session to archive. `deleteArtifacts` asks the daemon, or the control
+ * plane for a cloud session, to also delete the session's artifact files; only
+ * the archive dialog sets it.
+ */
+export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
+
+/** Resolves to whether the daemon or control plane confirmed it deleted the artifacts. */
+async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 		const baseUrl = settings?.cloudControlPlaneUrl ?? "";
 		if (baseUrl === "") throw new Error("The cloud control plane is not configured.");
-		await createRendererCloudCpClient(baseUrl).deleteSession(session.cloud.orgId, session.id);
-		return;
+		const client = createRendererCloudCpClient(baseUrl);
+		if (!session.deleteArtifacts) {
+			await client.deleteSession(session.cloud.orgId, session.id);
+			return false;
+		}
+		const deleted = await client.deleteSession(session.cloud.orgId, session.id, { deleteArtifacts: true });
+		return deleted.artifactsDeleted === true;
 	}
 
-	const { error, response } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/kill", {
+	const { data, error, response } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/kill", {
 		params: { path: { sessionId: session.id } },
+		body: session.deleteArtifacts ? { deleteArtifacts: true } : undefined,
 	});
 	if (error) {
 		const fallback = response ? `Failed to terminate session (${response.status})` : "Failed to terminate session";
-		throw new Error(apiErrorMessage(error, fallback));
+		throw apiErrorException(error, fallback);
 	}
+	return data?.artifactsDeleted === true;
 }
 
 // The merged board recomputes cloud cards from cloudSessionsQueryKey, NOT from
@@ -104,14 +123,13 @@ function summarizeBySession(mutations: TerminateSessionMutationState[]) {
 
 export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	const queryClient = useQueryClient();
+	const { t } = useTranslation();
 	return useMutation({
 		mutationKey: terminateSessionMutationKey,
-		mutationFn: async (session: WorkspaceSession) => {
-			void captureRendererEvent("ao.renderer.session_kill_requested", { project_id: session.workspaceId });
-			const toastTitle = appI18n.t("shell.archivingNamed", { title: session.branch || session.workspaceName || "Session" });
-			useUiStore.getState().showGlobalToast(toastTitle, undefined, "info");
+		mutationFn: async (session: TerminateSessionRequest) => {
+			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
 
-			await terminateSession(queryClient, session);
+			return terminateSession(queryClient, session);
 		},
 		// Navigate and archive the card on the click, not on the round trip: the
 		// delete is slow (daemon kill or CP delete + sandbox teardown), and a row
@@ -146,8 +164,14 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			}
 			return { workspace, cloud };
 		},
-		onSuccess: async (_data, session) => {
-			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
+		onSuccess: async (artifactsDeleted, session) => {
+			useUiStore.getState().resetFilesSelection(sessionUiKey(session.id, session.hostId));
+			void captureRendererEvent("ao.sessions.killed", { project_id: session.workspaceId });
+			// The archive stands either way. A failed delete, or a host whose daemon
+			// predates the option, leaves the files on disk, so say so.
+			if (session.deleteArtifacts && !artifactsDeleted) {
+				useUiStore.getState().showGlobalToast(t("archive.artifactsNotDeleted"), t("archive.artifactsNotDeletedBody"), "error");
+			}
 			// Reinforce before refresh; keep the optimistic id until this refetch finishes.
 			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			queryClient.setQueryData<WorkspaceSummary[]>(queryKey, (workspaces) =>
@@ -157,10 +181,11 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			// A cloud kill also lives in the cloud sessions query, which the board
 			// merges in separately, so refresh it too.
 			if (session.cloud) await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+			else reportArchiveCleanup(queryClient, session, t);
 			options.onSuccess?.(session);
 		},
 		onError: (_error, session, context) => {
-			void captureRendererEvent("ao.renderer.session_kill_failed", { project_id: session.workspaceId });
+			void captureRendererEvent("ao.sessions.kill_failed", { project_id: session.workspaceId });
 			// Restore the pre-mutation snapshots so a failed kill un-archives the card
 			// rather than leaving it wrongly terminated.
 			clearOptimisticSessionKill(session.id, session.hostId);
@@ -174,30 +199,142 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 	});
 }
 
-export function useTerminateSessionState(sessionId: string, hostId?: string) {
+type CleanupFacts = Pick<WorkspaceSession, "id" | "isTerminated" | "workspaceCleanup" | "workspaceCleanupReportOnly">;
+
+// `ao session cleanup` and the daemon's background pass record what they find
+// on sessions nobody archived; only a cleanup an archive started is the app's
+// to report.
+function archiveCleanup(session: CleanupFacts | undefined): WorkspaceSession["workspaceCleanup"] {
+	return session?.workspaceCleanupReportOnly ? undefined : session?.workspaceCleanup;
+}
+
+type WorkspaceCleanupErrorKey = "shell.workspaceCleanupFailed" | "shell.workspaceCleanupDirty";
+
+function workspaceCleanupErrorKey(session: CleanupFacts | undefined): WorkspaceCleanupErrorKey | null {
+	const cleanup = archiveCleanup(session);
+	if (cleanup === "failed") return "shell.workspaceCleanupFailed";
+	if (cleanup === "preserved_dirty") return "shell.workspaceCleanupDirty";
+	return null;
+}
+
+// Cleanup scripts are untimed and the daemon's retry sweep runs every 10 minutes.
+const CLEANUP_REPORT_WINDOW_MS = 30 * 60_000;
+const CLEANUP_NOTICE_MS = 10_000;
+
+function showWorkspaceCleanupNotice(session: WorkspaceSession, errorKey: WorkspaceCleanupErrorKey, t: TFunction) {
+	useUiStore.getState().showGlobalToast(t(errorKey), session.title, {
+		// A kept worktree protects the user's work; only a failed teardown is a failure.
+		tone: errorKey === "shell.workspaceCleanupFailed" ? "error" : "info",
+		dismissible: true,
+		durationMs: CLEANUP_NOTICE_MS,
+		dedupeKey: `workspace-cleanup:${sessionUiKey(session.id, session.hostId)}`,
+		// Cleanup sweeps by project, and the standalone workspace id is not one the daemon knows.
+		...(session.workspaceId !== STANDALONE_WORKSPACE_ID && {
+			action: { label: t("settings.project.retryCleanup"), run: () => void retryWorkspaceCleanup(session, t) },
+		}),
+	});
+}
+
+async function retryWorkspaceCleanup(session: WorkspaceSession, t: TFunction) {
+	const { showGlobalToast } = useUiStore.getState();
+	try {
+		const { data, error } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/cleanup", {
+			params: { query: { project: session.workspaceId } },
+		});
+		if (error || !data) throw new Error("cleanup retry refused");
+		const skip = data.skipped.find(({ sessionId }) => sessionId === session.id);
+		if (skip) {
+			showWorkspaceCleanupNotice(session, skip.code === "dirty" ? "shell.workspaceCleanupDirty" : "shell.workspaceCleanupFailed", t);
+			return;
+		}
+		showGlobalToast(t("settings.project.cleanupRetryResult", {
+			cleaned: data.cleaned.length + data.alreadyGone.length,
+			skipped: data.skipped.length,
+		}), undefined, "success");
+	} catch {
+		showGlobalToast(t("settings.project.cleanupRetryFailed"), undefined, "error");
+	}
+}
+
+// preserved_dirty and failed are terminal: the daemon keeps them until someone
+// retries, so as page chrome they would sit on the project forever. Report the
+// outcome once, to the person whose archive produced it. Cleanup outlives the
+// kill request, so follow the session in the cache until it settles.
+function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSession, t: TFunction) {
+	// The shell always polls a host's session list; the host-wide key only has
+	// data while one of that host's pages is open.
+	const queryKey = session.hostId ? remoteSessionsQueryKey(session.hostId) : workspaceQueryKey;
+	const rows = (): CleanupFacts[] | undefined => session.hostId
+		? queryClient.getQueryData<CleanupFacts[]>(queryKey)
+		: queryClient.getQueryData<WorkspaceSummary[]>(queryKey)?.flatMap((workspace) => workspace.sessions);
+	const settled = () => {
+		const current = rows()?.find(({ id }) => id === session.id);
+		if (!current?.isTerminated) return true;
+		const cleanup = archiveCleanup(current);
+		if (cleanup === undefined || cleanup === "pending") return false;
+		const errorKey = workspaceCleanupErrorKey(current);
+		if (errorKey) showWorkspaceCleanupNotice(session, errorKey, t);
+		return true;
+	};
+	if (settled()) return;
+	const stop = () => {
+		unsubscribe();
+		window.clearTimeout(timer);
+	};
+	const queryHash = hashKey(queryKey);
+	const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+		if (event.query.queryHash === queryHash && settled()) stop();
+	});
+	const timer = window.setTimeout(stop, CLEANUP_REPORT_WINDOW_MS);
+}
+
+const noSubscription = () => () => {};
+
+function useCachedWorkspaces(hostId?: string, enabled = true) {
+	const queryClient = useQueryClient();
+	const subscribe = useCallback((notify: () => void) => queryClient.getQueryCache().subscribe(notify), [queryClient]);
+	return useSyncExternalStore(
+		enabled ? subscribe : noSubscription,
+		() => (enabled ? queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKeyForHost(hostId)) : undefined),
+	);
+}
+
+/**
+ * `enabled` false skips watching the board data (every card watching the whole
+ * query cache re-renders on every fetch anywhere); only this session's own
+ * archive mutations are then followed.
+ */
+export function useTerminateSessionState(sessionId: string, hostId?: string, enabled = true) {
+	// Observe existing board data; this does not start another network request.
+	const data = useCachedWorkspaces(hostId, enabled);
+	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>
 		session.id === sessionId && session.hostId === hostId);
-
 	return {
-		error:
-			!summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
-				? summary.latest.error.message
-				: null,
-		isPending: summary?.isPending ?? false,
+		error: !summary?.isPending && summary?.latest.status === "error" && summary.latest.error instanceof Error
+			? summary.latest.error.message : null,
+		isPending: summary?.isPending === true || archiveCleanup(session) === "pending",
 	};
 }
 
-export function useProjectTerminateSessionStates(workspaceId: string | undefined) {
-	return summarizeBySession(useTerminateSessionMutations())
-		.filter(({ isPending, latest, session }) => {
-			return !session.hostId && session.workspaceId === workspaceId && (isPending || latest.status === "error");
-		})
+export function useProjectTerminateSessionStates(workspaceId: string | undefined, hostId?: string) {
+	const data = useCachedWorkspaces(hostId);
+	const sessions = data?.find((workspace) => workspace.id === workspaceId)?.sessions ?? [];
+	const states = summarizeBySession(useTerminateSessionMutations())
+		.filter(({ session }) => session.hostId === hostId && session.workspaceId === workspaceId)
 		.sort((a, b) => b.latest.submittedAt - a.latest.submittedAt)
 		.map(({ isPending, latest, session }) => ({
 			error: !isPending && latest.error instanceof Error ? latest.error.message : null,
-			isPending,
-			session,
+			isPending, session, cleanupPending: false,
 		}));
+	for (const session of sessions) {
+		if (archiveCleanup(session) !== "pending") continue;
+		const previous = states.findIndex((state) => state.session.id === session.id);
+		const state = { error: null, isPending: true, session, cleanupPending: true };
+		if (previous < 0) states.push(state);
+		else states[previous] = state;
+	}
+	return states.filter((state) => state.error || state.isPending);
 }
 
 export function clearTerminateSessionState(queryClient: QueryClient, sessionId: string, hostId?: string) {

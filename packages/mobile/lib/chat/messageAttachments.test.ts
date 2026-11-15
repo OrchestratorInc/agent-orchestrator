@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachmentTileSize, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, withAttachmentReferences } from "./messageAttachments";
+import { attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, withAttachmentReferences, withEditedBody } from "./messageAttachments";
 
 describe("mobile Chat staged attachments", () => {
 	it("strips the desktop composer suffix so the image can render instead of the raw path list", () => {
@@ -8,6 +8,11 @@ describe("mobile Chat staged attachments", () => {
 			body: "Look at this",
 			attachments: [".ao/attachments/attachment-a1b2c3.png", ".ao/attachments/attachment-d4e5f6.pdf"],
 		});
+	});
+
+	it("labels images the desktop composer placed inline instead of showing their paths", () => {
+		const text = "Make .ao/attachments/attachment-a.png shorter than .ao/attachments/attachment-b.png\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png\n- .ao/attachments/attachment-b.png";
+		expect(stagedAttachmentParts(text).body).toBe("Make [Image 1] shorter than [Image 2]");
 	});
 
 	it("accepts every AO-shipped wording, including mobile's own and legacy image-only prompts", () => {
@@ -62,5 +67,19 @@ describe("mobile Chat staged attachments", () => {
 		expect(isImageAttachment(".ao/attachments/attachment-a.JPG")).toBe(true);
 		expect(isImageAttachment(".ao/attachments/attachment-a.webp")).toBe(true);
 		expect(isImageAttachment(".ao/attachments/attachment-a.pdf")).toBe(false);
+	});
+});
+
+describe("editable message text", () => {
+	it("edits the body and keeps AO's staged attachment block", () => {
+		const text = withAttachmentReferences("Look at this", [".ao/attachments/image-a.png"]);
+		const parts = editableMessageText(text);
+		expect(parts).toEqual({ body: "Look at this", attachments: [".ao/attachments/image-a.png"] });
+		expect(withEditedBody("Look closer", parts.attachments)).toBe(withAttachmentReferences("Look closer", parts.attachments));
+	});
+
+	it("leaves plain prompts whole", () => {
+		expect(editableMessageText("Just text")).toEqual({ body: "Just text", attachments: [] });
+		expect(withEditedBody("Edited  ", [])).toBe("Edited");
 	});
 });

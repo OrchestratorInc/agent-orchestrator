@@ -62,6 +62,7 @@ describe("host store", () => {
 		const original = { id: "b", name: "B", platform: "linux", endpoints: [lan("host-b")], token: "pw", lastConnected: 1 };
 		expect(sameHostConnections([original], [{ ...original, lastConnected: 2 }])).toBe(true);
 		expect(sameHostConnections([original], [{ ...original, endpoints: [lan("new-host-b")] }])).toBe(false);
+		expect(sameHostConnections([original], [{ ...original, appearance: { symbol: "cloud" } }])).toBe(false);
 	});
 
 	it("keeps simultaneous endpoint updates from different machines", async () => {
@@ -99,6 +100,19 @@ describe("host store", () => {
 		await saveHost({ id: "h_one", name: "old", platform: "linux", endpoints: [lan("host")], token: "secret", lastConnected: 1 });
 		await renameHost("h_one", " AzureLinux ");
 		expect((await loadHosts())[0]).toEqual(expect.objectContaining({ name: "AzureLinux", endpoints: [lan("host")], token: "secret" }));
+	});
+
+	it("persists a machine appearance without changing its connection or credential", async () => {
+		const { saveHost, updateHostAppearance, loadHosts } = await mod();
+		await saveHost({ id: "h_one", name: "Studio Mac", platform: "darwin", endpoints: [lan("host")], token: "secret", lastConnected: 1 });
+
+		await updateHostAppearance("h_one", { symbol: "server" });
+
+		expect((await loadHosts())[0]).toEqual(expect.objectContaining({
+			appearance: { symbol: "server" },
+			endpoints: [lan("host")],
+			token: "secret",
+		}));
 	});
 
 	// The connection token authorises terminal input, spawns and PR actions. It
@@ -403,5 +417,31 @@ describe("the active host", () => {
 		await removeHost("a");
 
 		expect(secure.get("ao.hostToken.a")).toBeUndefined();
+	});
+});
+
+describe("fallback token", () => {
+	beforeEach(() => {
+		plain.clear();
+		secure.clear();
+		vi.resetModules();
+	});
+
+	it("keeps the pairing password beside the device token, in the keystore only", async () => {
+		const { saveHost, loadHosts, updateHostToken, removeHost } = await mod();
+		await saveHost({ id: "a", name: "A", platform: "darwin", endpoints: [lan("192.168.1.2")], token: "aod_token", fallbackToken: "pairing1", lastConnected: 1 });
+
+		expect((await loadHosts())[0]).toMatchObject({ token: "aod_token", fallbackToken: "pairing1" });
+		expect(plain.get("ao.hosts")).not.toContain("pairing1");
+		expect(secure.get("ao.hostFallbackToken.a")).toBe("pairing1");
+
+		await updateHostToken("a", "pairing1");
+		expect((await loadHosts())[0]).toMatchObject({ token: "pairing1" });
+		expect((await loadHosts())[0].fallbackToken).toBeUndefined();
+		await updateHostToken("a", "aod_next", "pairing1");
+		expect((await loadHosts())[0]).toMatchObject({ token: "aod_next", fallbackToken: "pairing1" });
+
+		await removeHost("a");
+		expect(secure.get("ao.hostFallbackToken.a")).toBeUndefined();
 	});
 });

@@ -24,6 +24,7 @@ func startShellTerminals(
 	store *sqlite.Store,
 	projects projectsvc.Manager,
 	sessions *sessionsvc.Service,
+	inputForgetter shelltermsvc.TerminalInputForgetter,
 	log *slog.Logger,
 ) *shelltermsvc.Service {
 	svc := shelltermsvc.NewService(
@@ -35,6 +36,9 @@ func startShellTerminals(
 		cfg.AppRunID,
 		log,
 	)
+	// Shell tabs are destroyed here, not by Session Manager, so the terminal
+	// mux's input timestamps for them are forgotten from this side (#5691).
+	svc.SetTerminalInputForgetter(inputForgetter)
 	// Best-effort: a failed sweep must never block boot. The rows survive and
 	// the next boot retries.
 	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil {
@@ -69,6 +73,20 @@ func (l *projectRootLocator) ProjectRoot(ctx context.Context, id domain.ProjectI
 	default:
 		return "", nil
 	}
+}
+
+func (l *projectRootLocator) ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error) {
+	if l.projects == nil {
+		return nil, nil
+	}
+	res, err := l.projects.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if res.Project == nil || res.Project.Config == nil {
+		return nil, nil
+	}
+	return res.Project.Config.Env, nil
 }
 
 // sessionGetter is the narrow slice of the session service the workspace

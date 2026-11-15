@@ -7,11 +7,25 @@ package gen
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+const archiveReviewsBySession = `-- name: ArchiveReviewsBySession :exec
+UPDATE review SET is_archived = TRUE, reviewer_handle_id = '', reviewer_launch_id = '',
+    controller_generation = '', reviewer_activity_state = 'exited', updated_at = ? WHERE session_id = ?
+`
+
+type ArchiveReviewsBySessionParams struct {
+	UpdatedAt time.Time
+	SessionID domain.SessionID
+}
+
+func (q *Queries) ArchiveReviewsBySession(ctx context.Context, arg ArchiveReviewsBySessionParams) error {
+	_, err := q.db.ExecContext(ctx, archiveReviewsBySession, arg.UpdatedAt, arg.SessionID)
+	return err
+}
 
 const cancelRunningReviewRunsBySession = `-- name: CancelRunningReviewRunsBySession :execrows
 UPDATE review_run SET status = 'cancelled', body = ? WHERE session_id = ? AND status = 'running' AND verdict = ''
@@ -50,7 +64,7 @@ func (q *Queries) CancelRunningReviewRunsBySessionAndHarness(ctx context.Context
 
 const claimReviewChatController = `-- name: ClaimReviewChatController :execrows
 UPDATE review SET provider_conversation_id = ?, controller_generation = ?, controller_error = '', updated_at = ?
-WHERE id = ? AND interface_mode = 'chat'
+WHERE id = ? AND interface_mode = 'chat' AND is_archived = FALSE
 `
 
 type ClaimReviewChatControllerParams struct {
@@ -74,7 +88,7 @@ func (q *Queries) ClaimReviewChatController(ctx context.Context, arg ClaimReview
 }
 
 const clearReviewChatController = `-- name: ClearReviewChatController :execrows
-UPDATE review SET controller_generation = '', updated_at = ? WHERE id = ? AND interface_mode = 'chat'
+UPDATE review SET controller_generation = '', updated_at = ? WHERE id = ? AND interface_mode = 'chat' AND is_archived = FALSE
 `
 
 type ClearReviewChatControllerParams struct {
@@ -136,7 +150,7 @@ func (q *Queries) FailUnsubmittedReviewBatchForChatTurn(ctx context.Context, tur
 }
 
 const getReviewByID = `-- name: GetReviewByID :one
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE id = ?
 `
 
@@ -154,6 +168,7 @@ type GetReviewByIDRow struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -175,6 +190,7 @@ func (q *Queries) GetReviewByID(ctx context.Context, id string) (GetReviewByIDRo
 		&i.ProviderConversationID,
 		&i.ControllerGeneration,
 		&i.ControllerError,
+		&i.IsArchived,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -182,7 +198,7 @@ func (q *Queries) GetReviewByID(ctx context.Context, id string) (GetReviewByIDRo
 }
 
 const getReviewBySession = `-- name: GetReviewBySession :one
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1
 `
 
@@ -200,6 +216,7 @@ type GetReviewBySessionRow struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -221,6 +238,7 @@ func (q *Queries) GetReviewBySession(ctx context.Context, sessionID domain.Sessi
 		&i.ProviderConversationID,
 		&i.ControllerGeneration,
 		&i.ControllerError,
+		&i.IsArchived,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -228,7 +246,7 @@ func (q *Queries) GetReviewBySession(ctx context.Context, sessionID domain.Sessi
 }
 
 const getReviewBySessionAndHarness = `-- name: GetReviewBySessionAndHarness :one
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE session_id = ? AND harness = ?
 `
 
@@ -251,6 +269,7 @@ type GetReviewBySessionAndHarnessRow struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -272,6 +291,7 @@ func (q *Queries) GetReviewBySessionAndHarness(ctx context.Context, arg GetRevie
 		&i.ProviderConversationID,
 		&i.ControllerGeneration,
 		&i.ControllerError,
+		&i.IsArchived,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -423,7 +443,25 @@ func (q *Queries) InsertReviewRun(ctx context.Context, arg InsertReviewRunParams
 }
 
 const listCurrentHeadReviewRunsBySession = `-- name: ListCurrentHeadReviewRunsBySession :many
-SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at
+SELECT review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
+       (
+           SELECT COUNT(*)
+           FROM review_run failed
+           WHERE failed.session_id = review_run.session_id
+             AND failed.pr_url = review_run.pr_url
+             AND failed.target_sha = review_run.target_sha
+             AND failed.status = 'failed'
+             AND failed.trigger_source = 'auto'
+       ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND (settled.status = 'cancelled' OR settled.verdict IN ('approved', 'changes_requested'))
+       ) AS INTEGER) AS auto_retry_blocked
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 WHERE review_run.session_id = ?
@@ -444,18 +482,24 @@ WHERE review_run.session_id = ?
 `
 
 type ListCurrentHeadReviewRunsBySessionRow struct {
-	ID        string
-	Harness   domain.ReviewerHarness
-	PRURL     string
-	Status    domain.ReviewRunStatus
-	Verdict   domain.ReviewVerdict
-	CreatedAt time.Time
+	ID               string
+	Harness          domain.ReviewerHarness
+	PRURL            string
+	Status           domain.ReviewRunStatus
+	Verdict          domain.ReviewVerdict
+	CreatedAt        time.Time
+	FailedAutoRuns   int64
+	AutoRetryBlocked int64
 }
 
 // AO review passes recorded against each PR's CURRENT head commit. Passes for
 // an earlier head are excluded here so a stale run can never decide the
 // session's Kanban column. The latest same-head pass per (pr, harness) wins,
 // so a superseded retry cannot outvote the rerun that replaced it.
+// failed_auto_runs counts every failed auto pass on that head, the number auto
+// review compares against its retry limit. auto_retry_blocked mirrors the other
+// reasons auto review will not run this head again for this harness: any
+// cancelled pass, or any pass with a verdict, even if a later pass superseded it.
 func (q *Queries) ListCurrentHeadReviewRunsBySession(ctx context.Context, sessionID domain.SessionID) ([]ListCurrentHeadReviewRunsBySessionRow, error) {
 	rows, err := q.db.QueryContext(ctx, listCurrentHeadReviewRunsBySession, sessionID)
 	if err != nil {
@@ -472,6 +516,8 @@ func (q *Queries) ListCurrentHeadReviewRunsBySession(ctx context.Context, sessio
 			&i.Status,
 			&i.Verdict,
 			&i.CreatedAt,
+			&i.FailedAutoRuns,
+			&i.AutoRetryBlocked,
 		); err != nil {
 			return nil, err
 		}
@@ -491,7 +537,25 @@ WITH wanted_session AS (
     SELECT CAST(j.value AS TEXT) AS session_id
     FROM json_each(?) AS j
 )
-SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at
+SELECT review_run.session_id, review_run.id, review_run.harness, review_run.pr_url, review_run.status, review_run.verdict, review_run.created_at,
+       (
+           SELECT COUNT(*)
+           FROM review_run failed
+           WHERE failed.session_id = review_run.session_id
+             AND failed.pr_url = review_run.pr_url
+             AND failed.target_sha = review_run.target_sha
+             AND failed.status = 'failed'
+             AND failed.trigger_source = 'auto'
+       ) AS failed_auto_runs,
+       CAST(EXISTS (
+           SELECT 1
+           FROM review_run settled
+           WHERE settled.session_id = review_run.session_id
+             AND settled.pr_url = review_run.pr_url
+             AND settled.target_sha = review_run.target_sha
+             AND settled.harness = review_run.harness
+             AND (settled.status = 'cancelled' OR settled.verdict IN ('approved', 'changes_requested'))
+       ) AS INTEGER) AS auto_retry_blocked
 FROM review_run
 JOIN pr ON pr.url = review_run.pr_url
 JOIN wanted_session ON wanted_session.session_id = review_run.session_id
@@ -512,13 +576,15 @@ WHERE pr.head_sha != ''
 `
 
 type ListCurrentHeadReviewRunsBySessionsRow struct {
-	SessionID domain.SessionID
-	ID        string
-	Harness   domain.ReviewerHarness
-	PRURL     string
-	Status    domain.ReviewRunStatus
-	Verdict   domain.ReviewVerdict
-	CreatedAt time.Time
+	SessionID        domain.SessionID
+	ID               string
+	Harness          domain.ReviewerHarness
+	PRURL            string
+	Status           domain.ReviewRunStatus
+	Verdict          domain.ReviewVerdict
+	CreatedAt        time.Time
+	FailedAutoRuns   int64
+	AutoRetryBlocked int64
 }
 
 // Batch form of ListCurrentHeadReviewRunsBySession for session-list reads.
@@ -541,6 +607,8 @@ func (q *Queries) ListCurrentHeadReviewRunsBySessions(ctx context.Context, jsonE
 			&i.Status,
 			&i.Verdict,
 			&i.CreatedAt,
+			&i.FailedAutoRuns,
+			&i.AutoRetryBlocked,
 		); err != nil {
 			return nil, err
 		}
@@ -601,8 +669,8 @@ func (q *Queries) ListLiveReviewerHandles(ctx context.Context) ([]ListLiveReview
 }
 
 const listRecoverableChatReviews = `-- name: ListRecoverableChatReviews :many
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
-FROM review WHERE interface_mode = 'chat' AND provider_conversation_id != '' ORDER BY updated_at, id
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
+FROM review WHERE interface_mode = 'chat' AND is_archived = FALSE AND provider_conversation_id != '' ORDER BY updated_at, id
 `
 
 type ListRecoverableChatReviewsRow struct {
@@ -619,6 +687,7 @@ type ListRecoverableChatReviewsRow struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -646,6 +715,7 @@ func (q *Queries) ListRecoverableChatReviews(ctx context.Context) ([]ListRecover
 			&i.ProviderConversationID,
 			&i.ControllerGeneration,
 			&i.ControllerError,
+			&i.IsArchived,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -756,7 +826,7 @@ func (q *Queries) ListReviewRunsBySession(ctx context.Context, sessionID domain.
 }
 
 const listReviewsBySession = `-- name: ListReviewsBySession :many
-SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at
+SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC
 `
 
@@ -774,6 +844,7 @@ type ListReviewsBySessionRow struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -801,6 +872,7 @@ func (q *Queries) ListReviewsBySession(ctx context.Context, sessionID domain.Ses
 			&i.ProviderConversationID,
 			&i.ControllerGeneration,
 			&i.ControllerError,
+			&i.IsArchived,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -861,25 +933,8 @@ func (q *Queries) ListRunningReviewRunsBySession(ctx context.Context, sessionID 
 	return items, nil
 }
 
-const markReviewRunDelivered = `-- name: MarkReviewRunDelivered :execrows
-UPDATE review_run SET status = 'delivered', delivered_at = ? WHERE id = ? AND status = 'complete' AND delivered_at IS NULL
-`
-
-type MarkReviewRunDeliveredParams struct {
-	DeliveredAt sql.NullTime
-	ID          string
-}
-
-func (q *Queries) MarkReviewRunDelivered(ctx context.Context, arg MarkReviewRunDeliveredParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markReviewRunDelivered, arg.DeliveredAt, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const recordReviewChatControllerError = `-- name: RecordReviewChatControllerError :execrows
-UPDATE review SET controller_error = ?, updated_at = ? WHERE id = ? AND interface_mode = 'chat'
+UPDATE review SET controller_error = ?, updated_at = ? WHERE id = ? AND interface_mode = 'chat' AND is_archived = FALSE
 `
 
 type RecordReviewChatControllerErrorParams struct {
@@ -899,7 +954,7 @@ func (q *Queries) RecordReviewChatControllerError(ctx context.Context, arg Recor
 const restoreReviewLaunchState = `-- name: RestoreReviewLaunchState :execrows
 UPDATE review SET pr_url = ?, interface_mode = ?, reviewer_handle_id = ?, agent_session_id = ?,
     reviewer_activity_state = ?, reviewer_launch_id = ?, provider_conversation_id = ?,
-    controller_generation = ?, controller_error = ?, updated_at = ? WHERE id = ?
+    controller_generation = ?, controller_error = ?, is_archived = ?, updated_at = ? WHERE id = ?
 `
 
 type RestoreReviewLaunchStateParams struct {
@@ -912,6 +967,7 @@ type RestoreReviewLaunchStateParams struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 	UpdatedAt              time.Time
 	ID                     string
 }
@@ -927,6 +983,7 @@ func (q *Queries) RestoreReviewLaunchState(ctx context.Context, arg RestoreRevie
 		arg.ProviderConversationID,
 		arg.ControllerGeneration,
 		arg.ControllerError,
+		arg.IsArchived,
 		arg.UpdatedAt,
 		arg.ID,
 	)
@@ -1075,8 +1132,8 @@ func (q *Queries) UpdateReviewRunResult(ctx context.Context, arg UpdateReviewRun
 }
 
 const upsertReview = `-- name: UpsertReview :exec
-INSERT INTO review (id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO review (id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (session_id, harness) DO UPDATE SET
     project_id = excluded.project_id,
     pr_url = excluded.pr_url,
@@ -1088,6 +1145,7 @@ ON CONFLICT (session_id, harness) DO UPDATE SET
 	provider_conversation_id = CASE WHEN excluded.provider_conversation_id != '' THEN excluded.provider_conversation_id ELSE review.provider_conversation_id END,
 	controller_generation = CASE WHEN excluded.controller_generation != '' THEN excluded.controller_generation ELSE review.controller_generation END,
 	controller_error = excluded.controller_error,
+    is_archived = excluded.is_archived,
     updated_at = excluded.updated_at
 `
 
@@ -1105,6 +1163,7 @@ type UpsertReviewParams struct {
 	ProviderConversationID string
 	ControllerGeneration   string
 	ControllerError        string
+	IsArchived             bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -1124,6 +1183,7 @@ func (q *Queries) UpsertReview(ctx context.Context, arg UpsertReviewParams) erro
 		arg.ProviderConversationID,
 		arg.ControllerGeneration,
 		arg.ControllerError,
+		arg.IsArchived,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)

@@ -1,10 +1,11 @@
 # Agent Orchestrator — Mobile
 
-Expo (expo-router) mobile supervisor for Agent Orchestrator. Four tabs — Kanban, PRs,
-Orchestrator, Settings — plus a Chat-first spawn flow, a native conversation surface,
-the existing live terminal, and a preview browser. Chat sessions expose durable history,
+Expo (expo-router) mobile supervisor for Agent Orchestrator. Three native tabs — Workers,
+Projects, Pull Requests — with Settings and Notifications in their headers, plus a
+Chat-first spawn flow, a native conversation surface, the existing live terminal, and a
+preview browser. Chat sessions expose durable history,
 streaming activity, approvals, provider controls, attachments, voice input, and a plain
-worktree-shell escape hatch. It is a **thin client**: it talks to the AO daemon running on your
+worktree-shell escape hatch. It is a **thin client**: it talks to the Orchestrator daemon running on your
 computer through the endpoints advertised by the desktop pairing offer. It never runs agents itself.
 
 > **Development builds only — Expo Go is not supported.** The app depends on native modules,
@@ -12,6 +13,7 @@ computer through the endpoints advertised by the desktop pairing offer. It never
 > it; don't file bugs from it.
 
 - [How the phone reaches your machine](#how-the-phone-reaches-your-machine)
+- [Orchestrator Cloud](#orchestrator-cloud)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
 - [Step 1 — Turn on Connect Mobile on the desktop](#step-1--turn-on-connect-mobile-on-the-desktop)
@@ -46,11 +48,59 @@ report no secure-pairing availability while the mode is off, and current v2 endp
 do not establish a verified working path. Use a managed HTTPS endpoint whose pairing
 record is marked `secure: true` for remote access. Background: [`docs/adr/0001-lan-listener-for-mobile.md`](../../docs/adr/0001-lan-listener-for-mobile.md).
 
+## Orchestrator Cloud
+
+Orchestrator Cloud runs agents in hosted sandboxes, with no computer involved. Signed in, it is one more
+environment beside the paired machines, labelled "Cloud" with a cloud icon wherever a machine shows its name:
+
+- **Workers** lists cloud workers on the same board, filterable by the Cloud machine chip. Rows open
+  the cloud session; pin, rename, archive, restore and resume go to Orchestrator Cloud.
+- **Projects** lists cloud projects beside each machine's; their page shows the orchestrator and
+  workers like any project's. **New cloud project** (the **+** at the end of the Projects title on iOS, the floating button on
+  Android, or the New task project menu) opens a form, a sheet on iOS and a page under the top app bar
+  on Android, as manual connect is: a repository the Orchestrator GitHub App can reach, or none.
+- **New task**: Cloud is a "Run on" choice after the connected machines. Its projects, connected agents,
+  models and effort levels fill the controls, and the approval mode and effort picked are passed to the
+  new session. Attachments are not supported for new cloud tasks yet; add files in the session's chat.
+- **Settings** lists Orchestrator Cloud in the Machines section while signed in. Its page holds the
+  organization, the coding agents and GitHub access.
+
+The phone talks to the control plane directly (`EXPO_PUBLIC_AO_CLOUD_API_BASE_URL`, default
+`https://api.aoagents.dev`, routes under `/api/cloud/v1`) with the Orchestrator account token from the existing
+sign-in (`lib/account.ts`). That token is never sent to a paired daemon, and a daemon's password is
+never sent to Orchestrator Cloud.
+
+| Flow | What the phone does |
+| --- | --- |
+| Sign in | The account's own sign-in, which also syncs the account's machines: Settings → Account, Sign in on an empty board, or onboarding's Sign in (an account with Cloud goes straight to the board, with no machine needed). The workspace is chosen as the desktop chooses it; a first sign-in creates one. |
+| Coding agents | Settings → Orchestrator Cloud. Claude Code: sign in on claude.com and paste back the code, or paste a `claude setup-token` / API key. Codex: ChatGPT device-code sign-in (enter the code on auth.openai.com), an API key, or `auth.json`. Cursor and OpenCode: API keys. The control plane validates each credential before storing it; nothing is kept on the phone. |
+| Sessions | The local chat's own screen parts: glass header, timeline, floating composer (model, effort, approvals, Plan mode for Claude Code, photos and files uploaded with the message where the organization's plan takes attachments), the request card, banners and the "⋯" actions sheet (shell, agent terminal, project, pin, the PR on GitHub, archive or restore). Events stream from the session's event stream, with the chat-events poll behind it. Agent and Shell terminals are the local terminal's parts over single-use terminal tickets on `wss://…/terminal` (protocol 2). Opening a paused session wakes it; reading it keeps it awake. |
+| Notifications | One Notifications screen lists machine and Cloud notifications together; Cloud rows carry the cloud icon and open their session. Clearing a Cloud row hides it on the phone and marks it read (the control plane has no delete). Cloud workers waiting on you count toward the Workers badge. When the control plane supports push devices, the phone registers its Expo token with `PUT /me/push-devices/{installId}`; an older control plane answers 404 and the app keeps to the list. |
+
+The code lives in `lib/cloud/` (client, state, row mapping, board actions, chat projection, event
+stream, attachments, terminal, sign-ins, notification feed), `app/cloud/` (new project, shell) and
+`app/settings/cloud/` (the Orchestrator Cloud page and each coding agent's page).
+
+## Forgetting a machine
+
+Forgetting a machine removes its local pairing without waiting for network requests.
+For identified machines, the phone first persists a remote-unpair cleanup job in
+SecureStore. The daemon removes the phone's push registration when that job succeeds;
+failed jobs are retried on launch, foregrounding, and every 30 seconds while the app is
+active, even after the last machine is removed. Each retry checks the daemon's identity
+before sending the saved credential. Credentials retained solely for cleanup are erased
+after success, or when an old job is superseded by a deliberate re-pair.
+
+An unreachable daemon can still send OS notifications until the phone reaches it and
+remote cleanup succeeds. Already-sent notifications cannot be recalled. An old pairing
+without a recorded host identity can only be forgotten locally: its remote registration
+must be removed from the desktop, rather than sending credentials to an unverified address.
+
 ## Prerequisites
 
 | For             | You need                                                                              |
 | --------------- | ------------------------------------------------------------------------------------- |
-| Everything      | Node 20+, and AO running on your machine (desktop app, or the daemon from source)     |
+| Everything      | Node 20+, and Orchestrator running on your machine (desktop app, or the daemon from source)     |
 | Phone ↔ machine | Same Wi-Fi network for LAN, or a reachable HTTPS endpoint for remote access         |
 | iOS build       | macOS, Xcode 16+, an Apple ID (a free one gives a 7-day signing profile), a USB cable |
 | Android build   | Android Studio (SDK + platform-tools for `adb`), a USB cable                          |
@@ -75,7 +125,7 @@ Two rules worth knowing before you fight an install:
 
 Nothing on the phone works until the desktop opens the LAN bridge. Do this first.
 
-**1. Start the desktop app.** Either launch the packaged AO app, or run it from source
+**1. Start the desktop app.** Either launch the packaged Orchestrator app, or run it from source
 (it starts its own daemon):
 
 ```bash
@@ -128,8 +178,8 @@ gitignored** — the run commands prebuild them for you.
    npx expo run:ios --device      # pick your iPhone from the list
    ```
 
-   If Xcode rejects the bundle identifier or team, open `ios/AO.xcworkspace`, select the
-   **AO** target → **Signing & Capabilities**, choose your personal team and let Xcode manage
+   If Xcode rejects the bundle identifier or team, open `ios/Orchestrator.xcworkspace`, select the
+   **Orchestrator** target → **Signing & Capabilities**, choose your personal team and let Xcode manage
    signing, then re-run the command.
 
 4. On first launch iOS asks for **Local Network** access. Allow it, or the app cannot reach
@@ -391,10 +441,10 @@ Play Store** checks on demand.
 | Crash at launch, _"main has not been registered"_ | Two React copies. Keep `metro.config.js` intact, reinstall with plain `npm install` (never `--force`), then `npx expo prebuild --clean`.                     |
 | **Connect** fails, everything times out            | Connect Mobile is off on the desktop, wrong port (`3011`, not `3001`), phone on a different network, or the macOS firewall is blocking incoming connections. |
 | 401 / invalid password                            | The password was regenerated on the desktop. Re-scan the QR.                                                                                                 |
-| Locked out after repeated failures                | The bridge locks out a source after 5 failed attempts. Wait it out, or toggle Connect Mobile off and on.                                                     |
+| Locked out after repeated failures                | The bridge locks out a source after 5 wrong passwords. Wait it out, or toggle Connect Mobile off and on.                                                     |
 | `adb devices` shows `unauthorized`                | Re-accept the USB debugging prompt on the phone.                                                                                                             |
 | iOS app installs, then closes immediately         | Untrusted developer profile: **Settings → General → VPN & Device Management → trust your Apple ID**.                                                         |
-| App runs but can't reach the daemon (iOS)         | The Local Network prompt was denied: **Settings → Privacy & Security → Local Network → AO** → on.                                                            |
+| App runs but can't reach the daemon (iOS)         | The Local Network prompt was denied: **Settings → Privacy & Security → Local Network → Orchestrator** → on.                                                            |
 | Phone can't reach Metro                           | `adb reverse tcp:8081 tcp:8081` (Android), or `npx expo start --tunnel` (either platform).                                                                   |
 | An update never arrives                           | Its runtime version differs from the build's — a native change since that build. Compare `runtimeversion:resolve` with the runtime shown in a bug-report body. |
 | Terminal renders blank                            | The xterm WebView is patched via `patch-package`; confirm `postinstall` ran (`npx patch-package`).                                                           |
@@ -403,10 +453,11 @@ Play Store** checks on demand.
 
 ```
 app/                 expo-router routes
-  (tabs)/            Kanban (index), PRs, Orchestrator, Settings
+  (tabs)/            NativeTabs; one group per tab, each a stack for its native header:
+                     (workers)/index, (projects)/projects, (prs)/prs
   session/[id].tsx   persisted-mode router (native Chat or Terminal UI)
   shell/[handleId]   session-scoped worktree shell over the existing mux
-  preview/[id]       authenticated session preview browser
+  preview/[id]       unified live browser and generated app preview
   spawn.tsx          spawn flow
   pair.tsx           pairing-QR scanner
 lib/
@@ -425,7 +476,7 @@ scripts/             ao-phone-proxy.js — superseded by Connect Mobile, kept fo
 ## Verify
 
 ```bash
-npm run typecheck    # tsc --noEmit
+npm run typecheck    # tsgo --noEmit
 npm test             # pure state/API/parser regression suite
 npx expo export --platform ios
 npx expo export --platform android

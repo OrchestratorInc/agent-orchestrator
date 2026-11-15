@@ -14,6 +14,16 @@ import { afterDraftWrites, clearPendingSend, needsAttachmentRecovery, pendingSen
 beforeEach(() => saved.clear());
 
 describe("pending Chat send", () => {
+	it("persists exact excerpt references through relaunch and reuses the original delivery", async () => {
+		const key = pendingSendKey("host", "session");
+		const excerpts = [{ conversationId: "conversation", messageId: "response", revision: 3, text: "Title\n• Bullet" }];
+		const candidate = { id: "first", draftText: JSON.stringify({ text: "Explain", excerpts }), text: "Explain", excerpts, hasAttachments: false };
+		await reservePendingSend(key, candidate);
+		expect(await readPendingSend(key)).toEqual(candidate);
+		expect(await reservePendingSend(key, { ...candidate, id: "new" })).toEqual(candidate);
+		await expect(reservePendingSend(key, { ...candidate, draftText: "different reference" })).rejects.toThrow("previous message");
+	});
+
 	it("reuses a host-scoped steer ID after acceptance, response loss, and app relaunch", async () => {
 		const key = pendingSendKey("host-A", "session-1");
 		const accepted = new Set<string>();
@@ -59,6 +69,25 @@ describe("pending Chat send", () => {
 		await expect(reservePendingSend(key, { id: "second", draftText: "Fix B", text: "Fix B", hasAttachments: false })).rejects.toThrow("previous message");
 		await clearPendingSend(key, "first");
 		expect((await reservePendingSend(key, { id: "second", draftText: "Fix B", text: "Fix B", hasAttachments: false })).id).toBe("second");
+	});
+
+	// Same text, new pick: the earlier record must not carry its old switch.
+	it("refuses to reuse an uncertain send for a different agent or model", async () => {
+		const key = pendingSendKey("host", "switch");
+		const toCodex = { id: "first", draftText: "carry on", text: "carry on", hasAttachments: false, kind: "send" as const, providerSwitch: { targetHarness: "codex", model: "gpt-6-sol" } };
+		await reservePendingSend(key, toCodex);
+		await expect(reservePendingSend(key, { ...toCodex, id: "pi", providerSwitch: { targetHarness: "pi" } })).rejects.toThrow("different agent or model");
+		await expect(reservePendingSend(key, { ...toCodex, id: "model", providerSwitch: { targetHarness: "codex" } })).rejects.toThrow("different agent or model");
+		const { providerSwitch: _dropped, ...plain } = toCodex;
+		await expect(reservePendingSend(key, { ...plain, id: "running-agent" })).rejects.toThrow("different agent or model");
+		expect(await reservePendingSend(key, { ...toCodex, id: "same-pick" })).toEqual(toCodex);
+		expect(await readPendingSend(key)).toEqual(toCodex);
+	});
+
+	it("treats a damaged switch on a saved send as a damaged record", async () => {
+		const key = pendingSendKey("host", "damaged-switch");
+		saved.set(key, JSON.stringify({ id: "x", draftText: "a", text: "a", hasAttachments: false, providerSwitch: { model: 3 } }));
+		await expect(readPendingSend(key)).rejects.toThrow("damaged");
 	});
 
 	it("never reuses an uncertain ID with newly selected attachments", async () => {

@@ -2,6 +2,7 @@
 // or Expo imports — so the wording and the routing decision are unit-testable,
 // the same split as pushStatus.ts / push.ts.
 import type { Theme } from "./theme";
+import type { MachineAppearance } from "./machineAppearance";
 
 export type NotificationVisual = {
 	/** lucide icon names, drawn from the renderer's own path data. */
@@ -19,6 +20,30 @@ export type NotificationSection<T> = {
 	title?: "Needs attention";
 	data: T[];
 };
+
+export type HostedNotification<T> = T & {
+	hostId: string;
+	hostName: string;
+	hostAppearance?: MachineAppearance;
+};
+
+/** Stable identity for an item whose daemon-local id may exist on another host. */
+export function notificationIdentity(hostId: string, id: string): string {
+	return `${hostId}:${id}`;
+}
+
+/** Adds the owning machine to daemon records and produces one recent-first feed. */
+export function notificationsAcrossHosts<T extends { id: string; createdAt: string }>(
+	batches: readonly { hostId: string; hostName: string; hostAppearance?: MachineAppearance; items: readonly T[] }[],
+): HostedNotification<T>[] {
+	return batches
+		.flatMap(({ hostId, hostName, hostAppearance, items }) => items.map((item) => ({ ...item, hostId, hostName, hostAppearance })))
+		.sort((left, right) => {
+			const recentFirst = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+			if (Number.isFinite(recentFirst) && recentFirst !== 0) return recentFirst;
+			return `${left.hostId}:${left.id}`.localeCompare(`${right.hostId}:${right.id}`);
+		});
+}
 
 export function notificationRowsForHost<T>(items: readonly T[], itemsHostId: string | undefined, activeHostId: string | undefined): readonly T[] {
 	return activeHostId && itemsHostId === activeHostId ? items : [];
@@ -56,6 +81,21 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
 			return { icon: "git-pull-request-arrow", color: t.green, label: "Review completed" };
 		case "review_changes_requested":
 			return { icon: "message-square-dot", color: t.amber, label: "Review changes requested" };
+		// Orchestrator Cloud's types, which share this list.
+		case "agent_failed":
+			return { icon: "bell", color: t.red, label: "Agent failed" };
+		case "agent_completed":
+			return { icon: "bell", color: t.green, label: "Completed" };
+		case "pr_opened":
+			return { icon: "git-pull-request-arrow", color: t.blue, label: "PR opened" };
+		case "review_feedback":
+			return { icon: "message-square-dot", color: t.amber, label: "Review feedback" };
+		case "merge_requested":
+			return { icon: "git-pull-request-arrow", color: t.amber, label: "Merge requested" };
+		case "merge_request_merged":
+			return { icon: "git-merge", color: t.purple, label: "Merged" };
+		case "merge_request_rejected":
+			return { icon: "git-pull-request-closed", color: t.red, label: "Merge rejected" };
 		default:
 			return { icon: "bell", color: t.textTertiary, label: type || "Notification" };
 	}

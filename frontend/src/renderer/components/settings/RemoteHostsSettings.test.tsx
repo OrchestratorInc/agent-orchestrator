@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
 
 const saved = vi.hoisted(() => ({ entries: [] as Array<{ hostId: string; label: string; url: string }> }));
+const account = vi.hoisted(() => ({ status: "authenticated" as "authenticated" | "unauthenticated" }));
 const remotes = vi.hoisted(() => ({
 	list: vi.fn(async () => saved.entries),
 	add: vi.fn(async ({ label, url }: { label: string; url: string }) => {
@@ -18,26 +20,45 @@ const remotes = vi.hoisted(() => ({
 	}),
 }));
 vi.mock("../../lib/bridge", () => ({ aoBridge: { remotes } }));
+vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: account.status, signIn: vi.fn() }) }));
+vi.mock("../../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: false }) }));
+vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
 
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 
+const renderSettings = () => render(<QueryClientProvider client={new QueryClient()}><RemoteHostsSettings /></QueryClientProvider>);
+
 afterEach(() => {
+	account.status = "authenticated";
 	saved.entries = [];
 	useUiStore.setState({ remoteHosts: false });
 	remotes.connect.mockClear();
+	remotes.list.mockClear();
 	remotes.add.mockClear();
 	remotes.update.mockClear();
 	remotes.remove.mockClear();
+});
+
+it("does not expose saved hosts or pairing controls before account sign-in", () => {
+	account.status = "unauthenticated";
+	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
+	renderSettings();
+	// The row names the requirement; the action is a short ghost "Sign in".
+	expect(screen.getByText("Orchestrator Cloud")).toBeVisible();
+	expect(screen.getByText("Sign in to connect remote hosts.")).toBeVisible();
+	expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
+	expect(screen.queryByRole("button", { name: "Edit Box A" })).toBeNull();
+	expect(remotes.list).not.toHaveBeenCalled();
 });
 
 it("does not connect a newly paired host after Remote hosts is turned off", async () => {
 	useUiStore.setState({ remoteHosts: true });
 	let finishAdd: ((health: "online") => void) | undefined;
 	remotes.add.mockImplementationOnce(() => new Promise((resolve) => { finishAdd = resolve; }));
-	render(<RemoteHostsSettings />);
+	renderSettings();
 	fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Box A" } });
 	fireEvent.change(screen.getByRole("textbox", { name: "Address" }), { target: { value: "http://box-a:3001" } });
-	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "secret123" } });
+	fireEvent.change(screen.getByLabelText("Pairing code or password"), { target: { value: "secret123" } });
 	const submit = screen.getByRole("button", { name: "Add host" });
 	fireEvent.click(submit);
 	expect(submit).toBeDisabled();
@@ -48,37 +69,37 @@ it("does not connect a newly paired host after Remote hosts is turned off", asyn
 });
 
 it("pairs a host and shows it in the saved-host list", async () => {
-	render(<RemoteHostsSettings />);
+	renderSettings();
 	expect(screen.getByRole("switch", { name: "Connect to remote hosts" })).toHaveAttribute("aria-checked", "false");
 	fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Box A" } });
 	fireEvent.change(screen.getByRole("textbox", { name: "Address" }), { target: { value: "http://box-a:3001" } });
-	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "secret123" } });
+	fireEvent.change(screen.getByLabelText("Pairing code or password"), { target: { value: "secret123" } });
 	fireEvent.click(screen.getByRole("button", { name: "Add host" }));
 	await waitFor(() => expect(screen.getByText("Box A")).toBeVisible());
 	expect(screen.getByRole("switch", { name: "Connect to remote hosts" })).toHaveAttribute("aria-checked", "true");
 	expect(remotes.add).toHaveBeenCalledWith({ label: "Box A", url: "http://box-a:3001", password: "secret123" });
-	expect(screen.getByLabelText("Connection password")).toHaveAttribute("type", "password");
+	expect(screen.getByLabelText("Pairing code or password")).toHaveAttribute("type", "password");
 });
 
 it("explains an incompatible host without adding it", async () => {
 	remotes.add.mockResolvedValueOnce("incompatible");
-	render(<RemoteHostsSettings />);
+	renderSettings();
 	fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Box A" } });
 	fireEvent.change(screen.getByRole("textbox", { name: "Address" }), { target: { value: "http://box-a:3001" } });
-	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "secret123" } });
+	fireEvent.change(screen.getByLabelText("Pairing code or password"), { target: { value: "secret123" } });
 	fireEvent.click(screen.getByRole("button", { name: "Add host" }));
-	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Update AO"));
+	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Update Orchestrator"));
 	expect(saved.entries).toEqual([]);
 });
 
 it("explains how to re-pair a saved host without an identity", async () => {
 	saved.entries = [{ hostId: "", label: "Old Box", url: "http://old-box:3001" }];
-	render(<RemoteHostsSettings />);
+	renderSettings();
 	await screen.findByText(/Old Box/);
 	expect(screen.getByText(/edit this host and enter its connection password/i)).toBeVisible();
 	fireEvent.click(screen.getByRole("button", { name: "Edit Old Box" }));
-	expect(screen.getByLabelText("Connection password")).toBeRequired();
-	fireEvent.change(screen.getByLabelText("Connection password"), { target: { value: "new-secret" } });
+	expect(screen.getByLabelText("Pairing code or password")).toBeRequired();
+	fireEvent.change(screen.getByLabelText("Pairing code or password"), { target: { value: "new-secret" } });
 	fireEvent.click(screen.getByRole("button", { name: "Save host" }));
 	await waitFor(() => expect(remotes.add).toHaveBeenCalledWith({
 		label: "Old Box",
@@ -90,11 +111,11 @@ it("explains how to re-pair a saved host without an identity", async () => {
 
 it("edits a saved host without reading or replacing its password", async () => {
 	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
-	render(<RemoteHostsSettings />);
+	renderSettings();
 	await screen.findByRole("button", { name: "Edit Box A" });
 	fireEvent.click(screen.getByRole("button", { name: "Edit Box A" }));
-	expect(screen.getByLabelText("Connection password")).toHaveValue("");
-	expect(screen.getByLabelText("Connection password")).not.toBeRequired();
+	expect(screen.getByLabelText("Pairing code or password")).toHaveValue("");
+	expect(screen.getByLabelText("Pairing code or password")).not.toBeRequired();
 	fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Office" } });
 	fireEvent.change(screen.getByRole("textbox", { name: "Address" }), { target: { value: "http://office:3011" } });
 	fireEvent.click(screen.getByRole("button", { name: "Save host" }));
@@ -108,7 +129,7 @@ it("edits a saved host without reading or replacing its password", async () => {
 it("requires confirmation before forgetting a host", async () => {
 	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
 	remotes.remove.mockImplementationOnce(async () => { saved.entries = []; });
-	render(<RemoteHostsSettings />);
+	renderSettings();
 	fireEvent.click(await screen.findByRole("button", { name: "Remove Box A" }));
 	expect(remotes.remove).not.toHaveBeenCalled();
 	expect(screen.getByText(/Sessions keep running on that host/i)).toBeVisible();

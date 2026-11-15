@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Button } from "../components/ui/button";
 import {
 	SessionInterfaceSwitchButton,
 	SessionInterfaceSwitchDialog,
-	SessionInterfaceSwitchMenuItem,
 	SessionInterfaceTransitionNotice,
 	interfaceTransitionOffersHistoryRecovery,
 } from "../components/SessionInterfaceSwitch";
@@ -31,7 +31,9 @@ import {
 	type ChatDraftBoundaryKind,
 } from "../lib/chat-draft-boundary";
 import { sessionUiKey } from "../lib/hosts";
+import { agentSwitchTarget, useIsCloudSessionCreator } from "./useCloudAgentSwitch";
 import type { WorkspaceSession } from "../types/workspace";
+import { ComposerErrorNotice } from "../components/chat/AgentSwitchPicker";
 import { readCloudTurnSettings } from "../components/chat/CloudSessionChatSurface";
 import type { ConversationWorkState } from "../components/chat/SessionChatSurface";
 
@@ -87,6 +89,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	const isCloud = Boolean(cloud);
 	const { client: cloudCpClient } = useCloudCp(isCloud);
 	const { cloudEnabled } = useCloudGate(isCloud);
+	const cloudCreator = useIsCloudSessionCreator(isCloud ? session : undefined);
 	const owner = sessionUiKey(sessionId, hostId);
 	const currentOwnerRef = useRef(owner);
 	useEffect(() => {
@@ -116,6 +119,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		transitionId: string;
 		pendingAttachments: PendingFileAttachmentCapture;
 	}>();
+	const [switchIntent, setSwitchIntent] = useState<{ owner: string; target: Mode }>();
 	const [chatLeaveLock, setChatLeaveLock] = useState<ChatLeaveLock>();
 	const chatLeaveRequestIdRef = useRef(0);
 	const pendingDraftDecisionRef = useRef<PendingDraftDecision | undefined>(undefined);
@@ -233,34 +237,88 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	}, [confirmedDraftDiscard, interfaceSwitch.transition, owner]);
 
 	const activeTransition = interfaceTransitionIsActive(interfaceSwitch.transition);
+	// A handoff that was already finished when this view opened is history, not a
+	// switch in progress; only one seen running (or started here) may settle. This
+	// keeps plain navigation from replaying the switch animations.
+	const liveTransitions = useRef(new Map<string, boolean>());
+	const liveKey = interfaceSwitch.transition?.id ? `${owner}:${interfaceSwitch.transition.id}` : "";
+	if (liveKey && !liveTransitions.current.has(liveKey)) {
+		liveTransitions.current.set(liveKey, activeTransition || interfaceSwitch.starting);
+	}
+	const settling = Boolean(liveKey && liveTransitions.current.get(liveKey) && interfaceSwitch.settling);
 	const cloudDrainWaiting = Boolean(isCloud && (
 		(interfaceSwitch.starting && interfaceSwitch.startingPolicy === "drain") ||
 		(interfaceSwitch.transition?.policy === "drain" &&
 			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase))
 	));
-	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && (
+	// An agent switch keeps the interface: the agent it switches to, while it
+	// runs. Chat keeps its conversation on screen with the "Switching" line, as a
+	// local switch does; the terminal is covered while the worker restarts on
+	// the new agent.
+	const agentSwitchTo = activeTransition || interfaceSwitch.settling ? agentSwitchTarget(interfaceSwitch.transition) : undefined;
+	const cloudLoader = Boolean(isCloud && !cloudDrainWaiting && !(agentSwitchTo && session?.mode === "chat") && (
 		interfaceSwitch.starting || activeTransition || interfaceSwitch.settling ||
 		(interfaceSwitch.transition?.phase === "completed" && session?.mode !== interfaceSwitch.transition.targetMode)
 	));
+	// A local switch shows its destination the moment it is requested; the daemon
+	// finishes the handoff behind it. Only a running turn that has to drain keeps
+	// the old surface (and its cancel action), and a failed switch falls back to
+	// the committed mode.
+	const reportedWork = conversationWork.owner === owner ? conversationWork : undefined;
+	const sourceBusy = Boolean(session && (
+		session.status === "working" || session.status === "needs_input" ||
+		session.activity?.state === "active" || session.activity?.state === "waiting_input" ||
+		session.activity?.state === "blocked" ||
+		(session.mode === "chat" && reportedWork && (
+			reportedWork.controllerBusy || reportedWork.hasRunningTurn || reportedWork.queuedTurnCount > 0
+		))
+	));
+	const localDrainWaiting = sourceBusy && Boolean(
+		(interfaceSwitch.starting && interfaceSwitch.startingPolicy === "drain") ||
+		(interfaceSwitch.transition?.policy === "drain" &&
+			["requested", "preflighting", "draining"].includes(interfaceSwitch.transition.phase)),
+	);
+	const pendingTarget = switchIntent?.owner === owner ? switchIntent.target : undefined;
+	// An account move keeps the mode. It is not an arrival: the conversation or
+	// terminal on screen stays while the agent restarts under the new account.
+	const accountMoveTarget = activeTransition || settling ? interfaceSwitch.transition?.targetAccountId || undefined : undefined;
+	const accountMoveQueues = Boolean(accountMoveTarget) &&
+		["source_stopped", "target_starting", "activating", "completed"].includes(interfaceSwitch.transition?.phase ?? "");
+	const optimisticTarget = isCloud || localDrainWaiting || accountMoveTarget || interfaceTransitionNeedsRestart(interfaceSwitch.transition)
+		? undefined
+		: pendingTarget ?? (interfaceSwitch.starting
+			? interfaceSwitch.startingTarget
+			: activeTransition || (settling && interfaceSwitch.transition?.phase === "completed")
+				? interfaceSwitch.transition?.targetMode
+				: undefined);
 	const hasNotice = interfaceTransitionHasUnacknowledgedNotice(interfaceSwitch.transition) &&
 		!(isCloud && session?.mode === "tui" &&
 			interfaceSwitch.transition?.errorCode === "SOURCE_DRAIN_FAILED" &&
 			interfaceSwitch.transition.targetMode === "chat");
+	// The notice above is hidden for a Cloud terminal-to-Chat drain because the
+	// next switch from an idle terminal stops it directly. A drain the user
+	// watched in this view must still say why its wait ended without a switch.
+	const cloudDrainUnconfirmed = Boolean(isCloud && liveKey && liveTransitions.current.get(liveKey) &&
+		interfaceSwitch.transition && !interfaceSwitch.transition.noticeAcknowledgedAt &&
+		interfaceSwitch.transition.phase === "failed" && interfaceSwitch.transition.policy === "drain" &&
+		interfaceSwitch.transition.sourceMode === "tui" && interfaceSwitch.transition.targetMode === "chat" &&
+		(interfaceSwitch.transition.errorCode === "SOURCE_DRAIN_FAILED" ||
+			interfaceSwitch.transition.errorDetail?.startsWith("source controller activity cannot be verified;")));
 	const historyRecoveryNotice = hasNotice && interfaceTransitionOffersHistoryRecovery(interfaceSwitch.transition);
 	const restartRequiredNotice = interfaceTransitionNeedsRestart(interfaceSwitch.transition);
 	const chatLeaveLocked = Boolean(chatLeaveLock?.owner === owner && session?.mode === "chat");
-	const controllerTransitioning = Boolean(session?.mode === "chat" && (
+	const controllerTransitioning = Boolean(optimisticTarget === "chat" || session?.mode === "chat" && (
 		(chatLeaveLocked && !cloudDrainWaiting) || (interfaceSwitch.starting && !cloudDrainWaiting) ||
 		(interfaceSwitch.transition?.targetMode === "tui" &&
 			((activeTransition && !cloudDrainWaiting) || interfaceSwitch.transition.phase === "completed")) ||
 		(interfaceSwitch.transition?.targetMode === "chat" &&
-			(activeTransition || interfaceSwitch.settling))
+			(activeTransition || settling))
 	));
 	const target = (activeTransition ? interfaceSwitch.transition?.targetMode : interfaceSwitch.status?.targetMode)
 		?? (session?.mode === "chat" ? "tui" : "chat");
 	const newWorkDisabled = Boolean(session?.mode === "chat" && (
 		(interfaceSwitch.starting && target === "tui") ||
-		(interfaceSwitch.transition?.targetMode === "tui" && (activeTransition || interfaceSwitch.settling))
+		(interfaceSwitch.transition?.targetMode === "tui" && (activeTransition || settling))
 	));
 	const dialogOpen = Boolean(dialogScope && session && dialogScope.owner === owner && dialogScope.targetMode === target);
 	useEffect(() => setDialogScope(undefined), [owner, target]);
@@ -289,6 +347,8 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			? await confirmUnsafeDraftLeave()
 			: ({ kind: "safe" } satisfies DraftDecision);
 		if (decision.kind === "cancelled") return;
+		// The destination shows on the click itself, not once the daemon answers.
+		if (!isCloud && !(policy === "drain" && sourceBusy)) setSwitchIntent({ owner, target: targetMode });
 		const requestId = chatToTerminal ? (chatLeaveRequestIdRef.current += 1) : undefined;
 		if (requestId !== undefined) setChatLeaveLock({
 			owner,
@@ -308,18 +368,34 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 				...(selected?.model ? { model: selected.model } : {}),
 				...(selected?.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}),
 			});
+			if (!response?.transition) setSwitchIntent((current) => current?.owner === owner ? undefined : current);
 			if (requestId !== undefined) setChatLeaveLock((current) =>
 				current?.requestId === requestId && response?.transition?.id
 					? { ...current, transitionId: response.transition.id, needsReconciliation: false }
 					: current?.requestId === requestId ? { ...current, needsReconciliation: true } : current);
 			if (scope) setDialogScope((current) => current === scope ? undefined : current);
 		} catch {
+			setSwitchIntent((current) => current?.owner === owner ? undefined : current);
 			if (requestId !== undefined) setChatLeaveLock((current) =>
 				current?.requestId === requestId ? { ...current, needsReconciliation: true } : current);
 		}
-	}, [chatToTerminal, confirmUnsafeDraftLeave, interfaceSwitch, owner, session, sessionId]);
+	}, [chatToTerminal, confirmUnsafeDraftLeave, interfaceSwitch, isCloud, owner, session, sessionId, sourceBusy]);
+	// The click-time intent hands over to the real transition once the committed
+	// mode catches up, or is dropped when the switch fails or the session changes.
+	useEffect(() => {
+		if (!switchIntent) return;
+		const phase = interfaceSwitch.transition?.phase;
+		if (switchIntent.owner !== owner || session?.mode === switchIntent.target ||
+			phase === "failed" || phase === "cancelled" || phase === "recovery_required") {
+			setSwitchIntent(undefined);
+		}
+	}, [interfaceSwitch.transition?.phase, owner, session?.mode, switchIntent]);
 	const request = useCallback(() => {
 		interfaceSwitch.resetStartError();
+		if (session?.provider === "hermes") {
+			setDialogScope({ owner, targetMode: target });
+			return;
+		}
 		if (cloudTerminalToChat && !busy && session?.cloud) {
 			// The Cloud list can lag terminal input. Confirm the current activity
 			// before stopping a controller without asking the user first.
@@ -373,40 +449,67 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 			defaultValue: "This agent can't switch a running terminal session to chat. Start a new chat session instead.",
 		})
 		: undefined;
+	// Switching a cloud session's interface is its workspace's: a guest of a
+	// shared session is always refused, so it isn't offered.
 	const showAction = Boolean(!unsupported && (isCloud
-		? cloudEnabled && sessionId
+		? cloudEnabled && sessionId && session?.cloud?.shared !== true
 		: interfaceSwitch.status || interfaceSwitch.isLoading || interfaceSwitch.statusError));
 	const disabledReason = interfaceSwitch.isLoading
 		? "Checking whether this agent can switch interfaces…"
 		: blockedReason || interfaceSwitch.status?.reason || interfaceSwitch.statusError;
-	const inlineStatus = session && showAction && (cloudDrainWaiting || (!isCloud && activeTransition)) ? <SessionInterfaceSwitchButton
+	// While a switch runs, the control is its status, with cancel on hover. Only
+	// a Cloud session's creator may cancel its agent switch or its move to
+	// another account, both of which run on the creator's logins; anyone else
+	// sees the switch's progress without a cancel.
+	const showStatus = cloudDrainWaiting || (!isCloud && activeTransition);
+	const cancelRefused = isCloud && !cloudCreator &&
+		Boolean(agentSwitchTarget(interfaceSwitch.transition) || interfaceSwitch.transition?.targetAccountId);
+	const switchControl = session && showAction ? <span className="group inline-flex shrink-0"><SessionInterfaceSwitchButton
 		target={target}
-		supported
+		mayStartFresh={session.provider === "hermes"}
+		supported={showStatus || (Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked))}
 		disabledReason={disabledReason}
-		pending={interfaceSwitch.starting || activeTransition}
-		transition={interfaceSwitch.transition}
+		pending={interfaceSwitch.starting || activeTransition || chatLeaveLocked}
+		transition={showStatus ? interfaceSwitch.transition : undefined}
 		cancelling={interfaceSwitch.cancelling}
 		cancelError={interfaceSwitch.cancelError}
 		onClick={request}
-		onCancel={() => { void interfaceSwitch.cancel().catch(() => {}); }}
-	/> : null;
-	const menuItem = session && showAction && !activeTransition ? <SessionInterfaceSwitchMenuItem
-		target={target}
-		supported={Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)}
-		disabledReason={disabledReason}
-		pending={interfaceSwitch.starting || chatLeaveLocked}
-		onClick={request}
-	/> : null;
+		onCancel={cancelRefused ? undefined : () => { void interfaceSwitch.cancel().catch(() => {}); }}
+	/></span> : null;
+	const startError = dialogOpen || historyRecoveryNotice || restartRequiredNotice ? undefined : interfaceSwitch.startError;
+	// A local chat shows this above its message box instead.
+	const startErrorInComposer = session?.mode === "chat" && !isCloud;
 	const notice = <>
-		{interfaceSwitch.startError && !dialogOpen && !historyRecoveryNotice && !restartRequiredNotice ? <div
+		{startError && !startErrorInComposer ? <div
 			role="alert"
 			className="absolute left-1/2 top-3 z-20 flex w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-3 rounded-lg border border-destructive/40 bg-popover px-3 py-2.5 text-xs shadow-md"
 		>
 			<div className="min-w-0 flex-1">
 				<p className="font-medium">{t("session.interfaceSwitchFailed")}</p>
-				<p className="mt-1 break-words text-muted-foreground">{interfaceSwitch.startError}</p>
+				<p className="mt-1 break-words text-muted-foreground">{startError}</p>
 			</div>
-			<button type="button" aria-label={t("session.dismissInterfaceSwitchError")} className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground" onClick={interfaceSwitch.resetStartError}>{t("session.dismissInterfaceSwitchNotice")}</button>
+			<Button type="button" aria-label={t("session.dismissInterfaceSwitchError")} className="px-1" onClick={interfaceSwitch.resetStartError} size="xs" variant="quiet">{t("session.dismissInterfaceSwitchNotice")}</Button>
+		</div> : null}
+		{cloudDrainUnconfirmed && !hasNotice && !interfaceSwitch.startError ? <div
+			role="alert"
+			className="absolute left-1/2 top-3 z-20 flex w-[min(34rem,calc(100%-1.5rem))] -translate-x-1/2 items-start gap-3 rounded-lg border border-warning/30 bg-popover px-3 py-2.5 text-xs shadow-md"
+		>
+			<div className="min-w-0 flex-1">
+				<p className="font-medium">{t("session.interfaceSwitchDrainUnconfirmedTitle")}</p>
+				<p className="mt-1 break-words text-muted-foreground">{t("session.interfaceSwitchDrainUnconfirmed")}</p>
+			</div>
+			<Button
+				type="button"
+				aria-label={t("session.dismissInterfaceSwitchError")}
+				className="px-1"
+				size="xs"
+				variant="quiet"
+				disabled={interfaceSwitch.acknowledgingNotice}
+				onClick={() => {
+					const transitionId = interfaceSwitch.transition?.id;
+					if (transitionId) void interfaceSwitch.acknowledgeNotice(transitionId).catch(() => {});
+				}}
+			>{t("session.dismissInterfaceSwitchNotice")}</Button>
 		</div> : null}
 		{(!interfaceSwitch.startError || historyRecoveryNotice || restartRequiredNotice) && hasNotice ? <SessionInterfaceTransitionNotice
 			transition={interfaceSwitch.transition}
@@ -432,6 +535,7 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 		<SessionInterfaceSwitchDialog
 			open={dialogOpen}
 			target={dialogScope?.targetMode ?? target}
+			mayStartFresh={session?.provider === "hermes"}
 			requireExplicitTerminalStop={cloudTerminalToChat && !(busy || dialogScope?.sourceBusy)}
 			waitingForInput={waitingForInput || dialogScope?.sourceWaitingForInput}
 			busy={interfaceSwitch.starting}
@@ -451,19 +555,36 @@ export function useSessionInterfaceSwitch(sessionId: string, session: WorkspaceS
 	</>;
 
 	return {
+		accountMoveQueues,
+		accountMoveTarget,
 		activeTransition,
+		agentSwitchTo,
 		agentInputDisabled: Boolean((interfaceSwitch.starting || activeTransition) && !cloudDrainWaiting && session?.mode === "tui"),
 		cloudLoader,
 		confirmUnsafeDraftLeave,
 		controllerTransitioning,
 		dialogs,
 		draftBoundaries,
-		inlineStatus,
-		menuItem,
 		newWorkDisabled,
 		notice,
 		onConversationWorkChange,
-		renderedMode: interfaceSwitch.transition?.phase === "failed" ? interfaceSwitch.transition.sourceMode : session?.mode,
+		switchControl,
+		// A switch is being requested, reconciled or running, so its control shows its progress.
+		switchPending: Boolean(switchControl && (interfaceSwitch.starting || showStatus || chatLeaveLocked)),
+		// For a menu: the same switch as a plain action, absent while one is running.
+		switchAction: session && showAction && !showStatus ? {
+			disabled: !(Boolean(interfaceSwitch.status?.supported) && (isCloud || !chatLeaveLocked)) || interfaceSwitch.starting || activeTransition || chatLeaveLocked,
+			reason: disabledReason,
+			run: request,
+		} : undefined,
+		switchErrorNotice: startErrorInComposer && startError ? <ComposerErrorNotice
+			title={t("session.interfaceSwitchFailed")}
+			message={startError}
+			dismissLabel={t("session.dismissInterfaceSwitchError")}
+			onDismiss={interfaceSwitch.resetStartError}
+		/> : undefined,
+		optimisticTarget,
+		renderedMode: optimisticTarget ?? (interfaceSwitch.transition?.phase === "failed" ? interfaceSwitch.transition.sourceMode : session?.mode),
 		target,
 		unsupported,
 	};

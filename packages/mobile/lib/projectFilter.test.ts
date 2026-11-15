@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
 import {
 	ALL_PROJECTS,
+	STANDALONE_PROJECT,
 	NO_PROJECTS_KNOWN,
 	activeProjectLabel,
 	filteredEmptyCopy,
@@ -65,6 +66,10 @@ describe("resolveActiveProject", () => {
 });
 
 describe("resolveSpawnProject", () => {
+	it("keeps an explicit standalone choice when the project list changes", () => {
+		expect(resolveSpawnProject(STANDALONE_PROJECT, "scratch", "ao", listed, true)).toBe(STANDALONE_PROJECT);
+		expect(resolveSpawnProject(STANDALONE_PROJECT, undefined, ALL_PROJECTS, [], true)).toBe(STANDALONE_PROJECT);
+	});
 	it("drops a selected project after the daemon confirms it was deleted", () => {
 		expect(resolveSpawnProject("removed", undefined, ALL_PROJECTS, listed, true)).toBeNull();
 	});
@@ -79,6 +84,26 @@ describe("resolveSpawnProject", () => {
 
 	it("prefers a valid route project when the sheet has no selection", () => {
 		expect(resolveSpawnProject(null, "scratch", ALL_PROJECTS, listed, true)).toBe("scratch");
+	});
+
+	it("starts in the project last worked in when nothing is routed", () => {
+		expect(resolveSpawnProject(null, undefined, ALL_PROJECTS, listed, true, "scratch")).toBe("scratch");
+		expect(resolveSpawnProject(null, undefined, "ao", listed, true, "scratch")).toBe("scratch");
+		expect(resolveSpawnProject(null, "ao", ALL_PROJECTS, listed, true, "scratch")).toBe("ao");
+	});
+
+	it("skips a last project the daemon no longer lists", () => {
+		expect(resolveSpawnProject(null, undefined, ALL_PROJECTS, listed, true, "removed")).toBeNull();
+		expect(resolveSpawnProject("removed", undefined, "ao", listed, true, "removed")).toBe("ao");
+	});
+
+	it("prefers the route and last project over the board filter before the project list is known", () => {
+		expect(resolveSpawnProject(null, undefined, "ao", [], false, "scratch")).toBe("scratch");
+		expect(resolveSpawnProject(null, "scratch", "ao", [], false, "ao")).toBe("scratch");
+	});
+
+	it("drops a routed project the list turns out not to name", () => {
+		expect(resolveSpawnProject("removed", "removed", "ao", listed, true)).toBe("ao");
 	});
 });
 

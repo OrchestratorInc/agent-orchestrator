@@ -1,10 +1,13 @@
 package pr
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -62,6 +65,20 @@ type fakeActionWriter struct {
 	comments         []domain.PullRequestComment
 	writeErr         error
 	threadWriteErr   error
+	mergedURL        string
+	mergeCommitSHA   string
+	mergedAt         time.Time
+}
+
+func (f *fakeActionWriter) MarkPRMerged(_ context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error {
+	f.writeCalls++
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	f.mergedURL = prURL
+	f.mergeCommitSHA = mergeCommitSHA
+	f.mergedAt = mergedAt
+	return nil
 }
 
 func (f *fakeActionWriter) WriteSCMObservation(_ context.Context, _ domain.PullRequest, _ []domain.PullRequestCheck, _ []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, _ ports.ReviewWriteMode) error {
@@ -93,6 +110,20 @@ type fakeSCMAction struct {
 	resolveErrs     []error
 	resolveCalls    int
 	resolveRequests []ports.SCMReviewResolveRequest
+}
+
+type fakeActionLifecycle struct {
+	calls     int
+	sessionID domain.SessionID
+	obs       ports.SCMObservation
+	err       error
+}
+
+func (f *fakeActionLifecycle) ApplySCMObservation(_ context.Context, sessionID domain.SessionID, obs ports.SCMObservation) error {
+	f.calls++
+	f.sessionID = sessionID
+	f.obs = obs
+	return f.err
 }
 
 func (f *fakeSCMAction) FetchPullRequests(context.Context, []ports.SCMPRRef) ([]ports.SCMObservation, error) {
@@ -145,11 +176,70 @@ func TestActionServiceMerge_GuardsAndSquashMergesExactHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.PRNumber != 42 || result.Method != "squash" || result.MergeCommitSHA != "merge-sha" {
+	if result.PRNumber != 42 || result.Method != "squash" || result.State != domain.PRStateMerged || result.MergeCommitSHA != "merge-sha" {
 		t.Fatalf("result = %#v", result)
 	}
 	if scm.mergeCalls != 1 || scm.request.ExpectedHeadSHA != pr.HeadSHA || scm.request.Method != ports.SCMMergeSquash {
 		t.Fatalf("request = %#v, calls = %d", scm.request, scm.mergeCalls)
+	}
+}
+
+func TestActionServiceMerge_PersistsMergedStateImmediately(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	pr.SessionID = "session-1"
+	mergedAt := time.Date(2026, 10, 19, 11, 6, 22, 0, time.UTC)
+	writer := &fakeActionWriter{}
+	lifecycle := &fakeActionLifecycle{}
+	svc := NewActionService(ActionDeps{
+		Store:       &fakeActionStore{pr: pr, ok: true},
+		Reader:      scm,
+		Merger:      scm,
+		MergeWriter: writer,
+		Lifecycle:   lifecycle,
+		Clock:       func() time.Time { return mergedAt },
+	})
+
+	result, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if writer.writeCalls != 1 {
+		t.Fatalf("writes=%d, want one merged-state write", writer.writeCalls)
+	}
+	if writer.mergedURL != pr.URL || writer.mergeCommitSHA != "merge-sha" || !writer.mergedAt.Equal(mergedAt) {
+		t.Fatalf("persisted merge url=%q sha=%q at=%s", writer.mergedURL, writer.mergeCommitSHA, writer.mergedAt)
+	}
+	if !result.StateChangedAt.Equal(mergedAt) {
+		t.Fatalf("result stateChangedAt = %s, want %s", result.StateChangedAt, mergedAt)
+	}
+	if lifecycle.calls != 1 || lifecycle.sessionID != pr.SessionID || !lifecycle.obs.PR.Merged || lifecycle.obs.PR.State != string(domain.PRStateMerged) || lifecycle.obs.PR.MergeCommitSHA != "merge-sha" || !lifecycle.obs.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("lifecycle calls=%d session=%q observation=%+v", lifecycle.calls, lifecycle.sessionID, lifecycle.obs)
+	}
+}
+
+func TestActionServiceMerge_LocalWriteFailureStillReturnsRemoteSuccess(t *testing.T) {
+	pr, scm := mergeableActionFixture()
+	writer := &fakeActionWriter{writeErr: errors.New("database locked")}
+	lifecycle := &fakeActionLifecycle{}
+	var logs bytes.Buffer
+	svc := NewActionService(ActionDeps{
+		Store:       &fakeActionStore{pr: pr, ok: true},
+		Reader:      scm,
+		Merger:      scm,
+		MergeWriter: writer,
+		Lifecycle:   lifecycle,
+		Logger:      slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+
+	result, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA})
+	if err != nil || result.State != domain.PRStateMerged {
+		t.Fatalf("result=%+v err=%v, want authoritative merge success", result, err)
+	}
+	if !strings.Contains(logs.String(), "local state persistence failed") || !strings.Contains(logs.String(), pr.URL) {
+		t.Fatalf("missing persistence diagnostic: %s", logs.String())
+	}
+	if lifecycle.calls != 0 {
+		t.Fatalf("lifecycle calls=%d, want 0 without a durable merge state", lifecycle.calls)
 	}
 }
 
@@ -182,6 +272,77 @@ func TestActionServiceMerge_FailsClosedForStaleHeadOrReadiness(t *testing.T) {
 	_, err = svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA})
 	if !errors.Is(err, ErrPRPreconditions) || scm.mergeCalls != 0 {
 		t.Fatalf("pending CI error = %v, calls = %d", err, scm.mergeCalls)
+	}
+}
+
+// fakeHeadChecks answers what a provider knows about a head's checks.
+type fakeHeadChecks struct {
+	facts ports.SCMHeadChecks
+	err   error
+	shas  []string
+}
+
+func (f *fakeHeadChecks) HeadChecks(_ context.Context, _ ports.SCMRepo, sha string) (ports.SCMHeadChecks, error) {
+	f.shas = append(f.shas, sha)
+	return f.facts, f.err
+}
+
+var mergeNow = time.Date(2026, 11, 12, 10, 0, 0, 0, time.UTC)
+
+// An app that never runs here leaves a queued suite, and nothing else checks
+// the head: settled for longer than noChecksSettle.
+func settledNoChecks() *fakeHeadChecks {
+	return &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: mergeNow.Add(-3 * time.Minute)}}
+}
+
+// GitHub reports no status rollup for a head nothing checks, and also for one
+// pushed seconds ago whose checks haven't registered. Only a merge that asks
+// for it (the PR view's), on a head the provider confirms has had nothing
+// checking it for a while, treats no checks as passing.
+func TestActionServiceMerge_NoChecksMergesOnlyWhenAskedAndSettled(t *testing.T) {
+	noChecks := func(pr domain.PullRequest, scm *fakeSCMAction) {
+		scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA}
+	}
+	for _, tc := range []struct {
+		name   string
+		allow  bool
+		checks *fakeHeadChecks
+		setup  func(domain.PullRequest, *fakeSCMAction)
+		merges bool
+	}{
+		{name: "asked and settled", allow: true, checks: settledNoChecks(), setup: noChecks, merges: true},
+		{name: "not asked, as the CLI", allow: false, checks: settledNoChecks(), setup: noChecks},
+		{name: "pushed seconds ago", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3, Since: mergeNow.Add(-10 * time.Second)}}, setup: noChecks},
+		// An agent pushes and runs `ao pr merge` at once, before Actions registers its runs.
+		{name: "ao pr merge right after a push", allow: false, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 1, Since: mergeNow.Add(-3 * time.Second)}}, setup: noChecks},
+		{name: "a suite has started", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 4, Started: 1, Since: mergeNow.Add(-time.Hour)}}, setup: noChecks},
+		{name: "a status was posted", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Statuses: 1, Since: mergeNow.Add(-time.Hour)}}, setup: noChecks},
+		{name: "unknown since when", allow: true, checks: &fakeHeadChecks{facts: ports.SCMHeadChecks{Suites: 3}}, setup: noChecks},
+		{name: "provider unreadable", allow: true, checks: &fakeHeadChecks{err: errors.New("rate limited")}, setup: noChecks},
+		{name: "no provider", allow: true, setup: noChecks},
+		{name: "a cancelled run", allow: true, checks: settledNoChecks(), setup: func(pr domain.PullRequest, scm *fakeSCMAction) {
+			scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA, FailedChecks: []ports.SCMCheckObservation{{Name: "test", Status: "cancelled"}}}
+		}},
+		{name: "blocked by the provider", allow: true, checks: settledNoChecks(), setup: func(pr domain.PullRequest, scm *fakeSCMAction) {
+			noChecks(pr, scm)
+			scm.observation.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked)}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pr, scm := mergeableActionFixture()
+			tc.setup(pr, scm)
+			deps := ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm, Clock: func() time.Time { return mergeNow }}
+			if tc.checks != nil {
+				deps.HeadChecks = tc.checks
+			}
+			_, err := NewActionService(deps).Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA, AllowNoChecks: tc.allow})
+			if tc.merges != (err == nil) || tc.merges != (scm.mergeCalls == 1) {
+				t.Fatalf("err = %v, calls = %d, want merged = %v", err, scm.mergeCalls, tc.merges)
+			}
+			if tc.merges && (len(tc.checks.shas) != 1 || tc.checks.shas[0] != pr.HeadSHA) {
+				t.Fatalf("head checks read for %v, want the PR's head", tc.checks.shas)
+			}
+		})
 	}
 }
 

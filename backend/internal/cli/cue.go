@@ -12,13 +12,12 @@ import (
 
 // These DTOs mirror the daemon's Cue API without importing controller types.
 type cueDTO struct {
-	ID          string `json:"id"`
-	ProjectID   string `json:"projectId"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Type        string `json:"type"`
-	Command     string `json:"command"`
-	Prompt      string `json:"prompt"`
+	ID        string `json:"id"`
+	ProjectID string `json:"projectId"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Command   string `json:"command"`
+	Prompt    string `json:"prompt"`
 }
 
 type cueEnvelopeDTO struct {
@@ -30,11 +29,10 @@ type cueListDTO struct {
 }
 
 type cueCreateDTO struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Type        string `json:"type"`
-	Command     string `json:"command,omitempty"`
-	Prompt      string `json:"prompt,omitempty"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Command string `json:"command,omitempty"`
+	Prompt  string `json:"prompt,omitempty"`
 }
 
 func newCueCommand(ctx *commandContext) *cobra.Command {
@@ -49,7 +47,7 @@ func newCueCommand(ctx *commandContext) *cobra.Command {
 }
 
 func newCueCreateCommand(ctx *commandContext) *cobra.Command {
-	var project, name, description, command, prompt string
+	var project, name, command, prompt string
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -66,7 +64,7 @@ func newCueCreateCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			body := cueCreateDTO{Name: name, Description: description}
+			body := cueCreateDTO{Name: name}
 			if strings.TrimSpace(command) != "" {
 				body.Type, body.Command = "command", command
 			} else {
@@ -85,7 +83,6 @@ func newCueCreateCommand(ctx *commandContext) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&project, "project", "", "Project id (default: AO_PROJECT_ID, current session, or current registered repo)")
 	cmd.Flags().StringVar(&name, "name", "", "Cue name")
-	cmd.Flags().StringVar(&description, "description", "", "Optional Cue description")
 	cmd.Flags().StringVar(&command, "command", "", "Exact shell command for a command Cue")
 	cmd.Flags().StringVar(&prompt, "prompt", "", "Reusable agent instruction for an agent Cue")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print JSON")
@@ -113,9 +110,9 @@ func newCueListCommand(ctx *commandContext) *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), response)
 			}
 			writer := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			_, _ = fmt.Fprintln(writer, "ID\tNAME\tTYPE\tDESCRIPTION")
+			_, _ = fmt.Fprintln(writer, "ID\tNAME\tTYPE")
 			for _, cue := range response.Cues {
-				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\t%s\n", cue.ID, cue.Name, cue.Type, cue.Description)
+				_, _ = fmt.Fprintf(writer, "%s\t%s\t%s\n", cue.ID, cue.Name, cue.Type)
 			}
 			return writer.Flush()
 		},

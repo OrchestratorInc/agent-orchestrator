@@ -220,6 +220,45 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	return result, nil
 }
 
+// ListOpenPRsByBranch lists the open merge requests whose source branch is
+// branch in repo itself, so MRs from forks are not returned, matching the
+// GitHub listing. GitLab filters by branch on the server, so a project's
+// other MRs are never paged through; a fork MR (source project differs from
+// the target project) is dropped here, and each returned MR carries repo as
+// both head and base.
+func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	q := url.Values{
+		"state":         {"opened"},
+		"source_branch": {branch},
+		"per_page":      {"100"},
+	}
+	path := fmt.Sprintf("/projects/%s/merge_requests", projectPath(repo.Owner, repo.Name))
+	hc, err := p.clientForRepoErr(repo)
+	if err != nil {
+		return nil, err
+	}
+	var result []ports.SCMPRObservation
+	_, err = hc.doGETPaginated(ctx, path, q, func(body []byte) error {
+		var mrs []restMR
+		if err := json.Unmarshal(body, &mrs); err != nil {
+			return fmt.Errorf("gitlab scm: unmarshal branch MR list: %w", err)
+		}
+		for i := range mrs {
+			if mrs[i].SourceProjectID != 0 && mrs[i].SourceProjectID != mrs[i].TargetProjectID {
+				continue
+			}
+			obs := mrToSCMPRObservation(repo, &mrs[i])
+			obs.BaseRepo = repo.Repo
+			result = append(result, obs)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 type restMR struct {
 	ID                  int64  `json:"id"`
 	IID                 int    `json:"iid"`
@@ -635,6 +674,11 @@ func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, headSHA stri
 		return ports.SCMCIObservation{}, fmt.Errorf("fetch pipeline jobs: %w", err)
 	}
 
+	// Canceling a pipeline does not undo a required job that already failed.
+	if latest.Status == "canceled" && len(failedChecks) > 0 {
+		ciState = domain.CIFailing
+	}
+
 	fp := gitlabFailedFingerprint(headSHA, failedChecks)
 
 	return ports.SCMCIObservation{
@@ -877,11 +921,12 @@ func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (
 			}
 			if j < reviewCommentLimitPerThread {
 				comments = append(comments, ports.SCMReviewCommentObservation{
-					ID:     strconv.Itoa(n.ID),
-					Author: n.Author.Username,
-					Body:   n.Body,
-					URL:    n.noteURL(ref),
-					IsBot:  isBot,
+					ID:        strconv.Itoa(n.ID),
+					Author:    n.Author.Username,
+					Body:      n.Body,
+					URL:       n.noteURL(ref),
+					IsBot:     isBot,
+					CreatedAt: safeTime(n.CreatedAt),
 				})
 			}
 		}
@@ -957,7 +1002,8 @@ type restNote struct {
 	Author     struct {
 		Username string `json:"username"`
 	} `json:"author"`
-	Position *restNotePosition `json:"position"`
+	Position  *restNotePosition `json:"position"`
+	CreatedAt *time.Time        `json:"created_at"`
 }
 
 type restNotePosition struct {
@@ -977,7 +1023,7 @@ func pipelineStatusToCI(status string) domain.CIState {
 	switch status {
 	case "success":
 		return domain.CIPassing
-	case "failed", "canceled":
+	case "failed":
 		return domain.CIFailing
 	case "running", "pending", "created", "waiting_for_resource", "preparing", "scheduled":
 		return domain.CIPending
@@ -1006,7 +1052,7 @@ func jobStatusToCheckStatus(status string) domain.PRCheckStatus {
 }
 
 func isFailingCheckStatus(s domain.PRCheckStatus) bool {
-	return s == domain.PRCheckFailed || s == domain.PRCheckCancelled
+	return s == domain.PRCheckFailed
 }
 
 func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMergeabilityObservation {
