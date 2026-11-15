@@ -60,9 +60,9 @@ describe("host update flow", () => {
 
 	it("stops waiting for a host that never answers again", async () => {
 		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(null);
-		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10"), updating: { from: "0.14.10", since: Date.now() - 11 * 60_000 } });
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10", "updating"), updating: { from: "0.14.10", since: Date.now() - 11 * 60_000 } });
 		await refreshHostUpdate(URL);
-		expect(useHostUpdateStore.getState().byUrl[URL]?.updating).toBeUndefined();
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toBeNull();
 	});
 
 	it("keeps the host's reason when its update fails", async () => {
@@ -93,6 +93,25 @@ describe("host update flow", () => {
 		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10"));
 		await refreshHostUpdate(URL);
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "update", version: "0.14.10" });
+	});
+
+	it("keeps the known version through one failed read", async () => {
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(null);
+		await refreshHostUpdate(URL);
+		expect(useHostUpdateStore.getState().byUrl[URL]?.view?.version).toBe("0.14.10");
+	});
+
+	it("shows a retry as running even when an older failed read lands first", async () => {
+		useHostUpdateStore.getState().patch(URL, { view: { ...view("0.14.10", "failed"), error: "disk full" } });
+		let resolve!: (value: HostUpdateView) => void;
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockReturnValue(new Promise((done) => { resolve = done; }));
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue({ ...view("0.14.10", "failed"), error: "disk full" });
+		const started = startHostUpdate(URL);
+		await refreshHostUpdate(URL);
+		resolve(view("0.14.10", "updating"));
+		await started;
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
 	});
 
 	it("forgets hosts that went offline unless they are mid-update", () => {

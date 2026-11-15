@@ -27,7 +27,11 @@ func mobileControlOriginMiddleware(allowedOrigins []string) func(http.Handler) h
 				_, trusted = allowed[origins[0]]
 			}
 			if !trusted {
-				envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN", "Origin is not allowed to manage mobile access", nil)
+				message := "Origin is not allowed to manage mobile access"
+				if r.URL.Path == "/api/v1/remote-host/update" {
+					message = "Origin is not allowed to update this host"
+				}
+				envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN", message, nil)
 				return
 			}
 			next.ServeHTTP(w, r)

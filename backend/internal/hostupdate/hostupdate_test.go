@@ -34,11 +34,17 @@ func (f *fakeSystemd) run(_ context.Context, name string, args ...string) ([]byt
 	f.calls = append(f.calls, append([]string{name}, args...))
 	switch name {
 	case "systemctl":
+		if args[1] == "show" && args[2] == "--property=InvocationID" {
+			return []byte("4b1d\n"), nil
+		}
 		if args[1] == "show" {
 			return []byte(f.state + "\n"), nil
 		}
 		return nil, nil
 	case "journalctl":
+		if args[1] != "_SYSTEMD_INVOCATION_ID=4b1d" {
+			return []byte("Updated Orchestrator host to 0.14.0\n"), nil
+		}
 		return []byte(f.log), nil
 	}
 	return nil, nil

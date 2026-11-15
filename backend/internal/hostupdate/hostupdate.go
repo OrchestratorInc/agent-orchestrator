@@ -142,7 +142,11 @@ func (u *Updater) activeState(ctx context.Context) string {
 }
 
 func (u *Updater) lastLine(ctx context.Context) string {
-	out, err := u.run(ctx, "journalctl", "--user", "_SYSTEMD_USER_UNIT="+updateUnit, "--lines=20", "--output=cat", "--no-pager")
+	invocation, err := u.run(ctx, "systemctl", "--user", "show", "--property=InvocationID", "--value", updateUnit)
+	if err != nil || strings.TrimSpace(string(invocation)) == "" {
+		return ""
+	}
+	out, err := u.run(ctx, "journalctl", "--user", "_SYSTEMD_INVOCATION_ID="+strings.TrimSpace(string(invocation)), "--lines=20", "--output=cat", "--no-pager")
 	if err != nil {
 		return ""
 	}

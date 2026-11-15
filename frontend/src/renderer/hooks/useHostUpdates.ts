@@ -63,12 +63,13 @@ function settle(url: string, view: HostUpdateView | null) {
 	const { byUrl, patch } = useHostUpdateStore.getState();
 	const updating = byUrl[url]?.updating;
 	if (!updating) {
+		if (!view) return;
 		patch(url, { view, error: undefined, ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
 		return;
 	}
 	if (!view || view.state === "updating") {
 		if (Date.now() - updating.since < UPDATING_LIMIT_MS) return;
-		patch(url, { updating: undefined });
+		patch(url, { view: null, updating: undefined });
 		requestRemoteHostsRefresh();
 		return;
 	}
@@ -77,19 +78,18 @@ function settle(url: string, view: HostUpdateView | null) {
 }
 
 export async function refreshHostUpdate(url: string): Promise<void> {
-	let view: HostUpdateView | null = null;
-	try { view = await aoBridge.remotes.hostUpdate(url); } catch { /* Signed out or changed account: no version to show. */ }
-	settle(url, view);
+	settle(url, await aoBridge.remotes.hostUpdate(url).catch(() => null));
 }
 
 export async function startHostUpdate(url: string): Promise<void> {
 	const { byUrl, patch } = useHostUpdateStore.getState();
-	patch(url, { updating: { from: byUrl[url]?.view?.version ?? "", since: Date.now() }, error: undefined });
+	const updating = { from: byUrl[url]?.view?.version ?? "", since: Date.now() };
+	patch(url, { updating, error: undefined });
 	try {
-		patch(url, { view: await aoBridge.remotes.startHostUpdate(url) });
+		patch(url, { view: await aoBridge.remotes.startHostUpdate(url), updating, error: undefined });
 	} catch (cause) {
 		const view = await aoBridge.remotes.hostUpdate(url).catch(() => null);
-		if (view?.state === "updating") patch(url, { view });
+		if (view?.state === "updating") patch(url, { view, updating, error: undefined });
 		else patch(url, { updating: undefined, error: cause instanceof Error ? cause.message : String(cause) });
 	}
 }
