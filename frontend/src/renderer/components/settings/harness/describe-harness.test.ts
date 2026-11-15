@@ -32,6 +32,26 @@ describe("configured harness authentication summary", () => {
 	});
 });
 
+// The Account and Health tabs both read this tone, so they never disagree.
+describe("harness sign-in tone", () => {
+	it("is green only for a fresh, successful sign-in check", () => {
+		expect(tone({ authentication: "authorized" })).toBe("ok");
+		expect(tone({ authentication: "authorized", freshness: "stale" })).toBe("off");
+		expect(tone({ authentication: "authorized", freshness: "checking" })).toBe("off");
+		expect(tone({ authentication: "authorized" }, true)).toBe("off");
+		expect(tone({ authentication: "unauthorized" })).toBe("error");
+		expect(tone({ authentication: "configured" })).toBe("off");
+	});
+});
+
+function tone(options: Parameters<typeof agentReadiness>[2], authCheckFailed = false) {
+	return describeHarness({
+		agentId: "codex", readinessAgent: agentReadiness("codex", "codex", options), t: ((key: string) => key) as TFunction, language: "en",
+		installed: true, pending: false, readinessPending: false, readinessFailed: false,
+		authPlansPending: false, authPlansFailed: false, authWorkflow: null, authCheckFailed,
+	}).authTone;
+}
+
 function summary(agentId: AgentId, method?: string, code?: string) {
 	const readinessAgent = agentReadiness(agentId, agentId, { authentication: "configured" });
 	if (method && code) readinessAgent.authentication.diagnostics = [{

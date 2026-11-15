@@ -206,6 +206,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -447,6 +448,12 @@ export interface ChatWorkspaceProps {
 	loadingQuietly?: boolean;
 	/** The history hasn't been read yet and may hold messages: arrive as in a chat that has some, never greet it as a new one. */
 	historyPending?: boolean;
+	/**
+	 * The chat opens on a stand-in while an existing session's conversation is
+	 * read. Read at mount: the composer starts docked at its final size and stays
+	 * there, without the arrival chrome historyPending brings.
+	 */
+	historyUnread?: boolean;
 	/**
 	 * A stopped agent is being resumed after the chat opened. Unlike a mode
 	 * handoff, the history is final, so it stays readable; only sending waits.
@@ -825,6 +832,7 @@ function ChatWorkspaceContent({
 	accountMoveQueues = false,
 	loadingQuietly,
 	historyPending = false,
+	historyUnread = false,
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
@@ -1993,7 +2001,16 @@ function ChatWorkspaceContent({
 	});
 	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !openingTurnSettled(snapshot, controllerStopped) &&
 		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
-	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
+	// An existing session opens docked before its history is read, never centered
+	// and then dropped once it loads. One that turns out empty stays docked: only a
+	// chat known to be new (the new chat page, a session still being created) centers.
+	// Settled the first time the chat itself shows: behind a shell tab the surface
+	// holds a fallback, and the stand-in only arrives once Chat is picked. Until
+	// then it counts as docked, so nothing glides in when Chat appears.
+	const [settledDocked, setSettledDocked] = useState<boolean | undefined>(shellActive ? undefined : historyUnread);
+	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
+	const openedDocked = settledDocked !== false;
+	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
 		() => sessionRole === "orchestrator"
@@ -2199,7 +2216,7 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy || importBlock ? null : (
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -2228,7 +2245,7 @@ function ChatWorkspaceContent({
 						agentStopped={controllerStopped}
 					/>
 					<div
-						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
+						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", (arrivingWithHistory || openedDocked) && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
@@ -6367,7 +6384,7 @@ function TimelineItem({
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
 				) : (
-					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
 				)}
 			</FromAgent>
 		);

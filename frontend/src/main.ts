@@ -66,6 +66,7 @@ import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
 import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
+import { createLaunchTiming } from "./main/launch-timing";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -100,6 +101,8 @@ import {
 } from "./shared/daemon-startup-status";
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
+import { purgeRootCachesOnce, sweepTemporaryBrowserPartitions } from "./main/browser-storage-cleanup";
+import { createUserBrowser } from "./main/user-browser";
 import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
 import { appShortcutDelivery, attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
@@ -357,6 +360,7 @@ app.setPath(
 // Resolve once against the launch cwd, before the daemon can chdir. The exact
 // absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
+const launchTiming = createLaunchTiming(process.getCreationTime() ?? performance.timeOrigin);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
@@ -874,6 +878,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready") launchTiming.mark("daemonReady");
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -1003,9 +1008,17 @@ function browserProfileStateDir(): string {
 	return path.dirname(runFile ?? path.join(os.homedir(), ".ao", "running.json"));
 }
 
+// The person's own browser, for pages that refuse AO's Browser panel.
+const userBrowser = createUserBrowser({
+	platform: process.platform,
+	openExternal: (url) => shell.openExternal(url),
+	defaultBrowserName: () => app.getApplicationNameForProtocol("https://"),
+});
+
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
 	const browserSession = session.fromPartition(partition);
-	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()]);
+	// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
+	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
 }
 
 async function disposeAllBrowserViewHosts(): Promise<void> {
@@ -1294,6 +1307,8 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
+		openInUserBrowser: (url) => userBrowser.open(url),
+		describeUserBrowser: () => userBrowser.describe(),
 		prepareBrowserPartition: (partition) =>
 			applyBrowserIdentity(session.fromPartition(partition), {
 				chromeVersion: process.versions.chrome,
@@ -1341,6 +1356,7 @@ async function createWindowInternal(): Promise<void> {
 		establishBrowserStreamLink();
 	}
 
+	mainWindow.once("show", () => launchTiming.mark("windowShown"));
 	showWhenRendererLoaded(mainWindow, shellWebContents);
 	void shellWebContents.loadURL(rendererUrl());
 
@@ -4129,6 +4145,16 @@ ipcMain.handle(
 
 // The renderer could not decode or start the bundled sound. Beep so the
 // notification still makes a sound where the OS beep works at all.
+// The shell reports the first frame that shows the workspace, which ends the
+// launch. Logged once: a reload reports the frame again.
+let launchTimingLogged = false;
+ipcMain.on("app:sessionsShown", (event) => {
+	if (event.sender !== getShellWebContents() || launchTimingLogged) return;
+	launchTimingLogged = true;
+	launchTiming.mark("sessionsShown");
+	console.info(launchTiming.line());
+});
+
 ipcMain.on("notifications:soundFailed", (event) => {
 	if (event.sender !== getShellWebContents()) return;
 	shell.beep();
@@ -4537,6 +4563,14 @@ async function writeAppStateOnLaunch(): Promise<void> {
 
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
+	launchTiming.mark("appReady");
+	// Before any browser partition exists; both run in the background.
+	void sweepTemporaryBrowserPartitions(app.getPath("userData")).then(({ removed, failed }) => {
+		if (removed || failed) console.info(`browser storage: removed ${removed} leftover temporary profiles${failed ? `, ${failed} failed` : ""}`);
+	});
+	void purgeRootCachesOnce(session.defaultSession, app.getPath("userData")).catch((error: unknown) => {
+		console.warn("browser storage: root cache purge failed; retrying next launch:", error);
+	});
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	void refreshGitHubOwners();
