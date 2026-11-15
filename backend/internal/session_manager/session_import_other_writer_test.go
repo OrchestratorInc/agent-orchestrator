@@ -1,8 +1,11 @@
 package sessionmanager
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,14 +33,56 @@ func TestClaudeTurnsWrittenElsewhere(t *testing.T) {
 	terminalAfter := `{"type":"assistant","cwd":"/src/repo","timestamp":"` + after + `"}`
 
 	write(terminalBefore, ours, terminalTitle, `{"type":"user","cwd":"/src/re`)
-	if claudeTurnsWrittenElsewhere(path, workspace, since) {
+	if claudeTurnsWrittenElsewhere(context.Background(), path, workspace, since) {
 		t.Fatal("turns from before the start, our own turns and metadata counted as another writer")
 	}
 	write(terminalBefore, ours, terminalAfter)
-	if !claudeTurnsWrittenElsewhere(path, workspace, since) {
+	if !claudeTurnsWrittenElsewhere(context.Background(), path, workspace, since) {
 		t.Fatal("a turn another process wrote after the start was not found")
 	}
-	if claudeTurnsWrittenElsewhere(path, workspace, time.Now().Add(time.Hour)) {
+	if claudeTurnsWrittenElsewhere(context.Background(), path, workspace, time.Now().Add(time.Hour)) {
 		t.Fatal("a transcript unchanged since the start counted as written elsewhere")
+	}
+}
+
+func TestClaudeTurnsWrittenElsewhereBeyondTranscriptTail(t *testing.T) {
+	for _, kind := range []string{"user", "assistant", "older than large local turn"} {
+		t.Run(kind, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "chat.jsonl")
+			since := time.Now().Add(-time.Minute)
+			record := map[string]any{"type": kind, "cwd": "/source", "timestamp": since.Add(time.Second).UTC().Format(time.RFC3339Nano), "message": strings.Repeat("x", (1<<20)+100)}
+			var body []byte
+			if kind == "older than large local turn" {
+				body = []byte(`{"type":"user","cwd":"/source","timestamp":"` + since.Add(time.Second).UTC().Format(time.RFC3339Nano) + `"}` + "\n")
+				record["type"], record["cwd"] = "assistant", "/ao/worktree"
+			}
+			line, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = append(body, line...)
+			if err := os.WriteFile(path, append(body, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if !claudeTurnsWrittenElsewhere(context.Background(), path, "/ao/worktree", since) {
+				t.Fatal("external turn outside the final MiB was missed")
+			}
+			if kind == "older than large local turn" {
+				if err := os.WriteFile(path, append(line, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if claudeTurnsWrittenElsewhere(context.Background(), path, "/ao/worktree", since) {
+					t.Fatal("a large local turn was mistaken for another writer")
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeTurnsWrittenElsewhereCannotProveTranscriptUnchanged(t *testing.T) {
+	for _, path := range []string{"", filepath.Join(t.TempDir(), "missing.jsonl"), t.TempDir()} {
+		if !claudeTurnsWrittenElsewhere(context.Background(), path, "/ao/worktree", time.Now()) {
+			t.Fatalf("unknown transcript %q was treated as unchanged", path)
+		}
 	}
 }

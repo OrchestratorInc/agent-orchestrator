@@ -136,6 +136,47 @@ func TestSendKeepsProviderWhenNoOtherProcessWrites(t *testing.T) {
 	}
 }
 
+func TestAcceptedSendRetryReplaysWhenAnotherProcessWrites(t *testing.T) {
+	for _, scenario := range []struct{ delivery, state string }{
+		{"send", "open"}, {"send", "wrote and left"}, {"relay", "open"}, {"relay", "wrote and left"},
+	} {
+		t.Run(scenario.delivery+"/"+scenario.state, func(t *testing.T) {
+			h, conv := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+				opts.HibernationEnabled = func() bool { return false }
+			})
+			ctx := context.Background()
+			deliver := func(msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
+				if scenario.delivery == "relay" {
+					id, err := h.svc.RelayChatTurnWithID(ctx, testSession, msg.Text, msg.ClientMessageID)
+					return domain.ConversationTurn{ID: id}, err
+				}
+				return h.svc.Send(ctx, testSession, msg)
+			}
+			msg := ports.ChatUserMessage{Text: "already accepted", ClientMessageID: "accepted-send"}
+			if _, err := deliver(msg); err != nil {
+				t.Fatal(err)
+			}
+			h.svc.SetOtherWriterCheck(func(context.Context, domain.SessionRecord, time.Time) (bool, bool) {
+				return scenario.state == "open", scenario.state != "open"
+			})
+			if turn, err := deliver(msg); err != nil || turn.ID != "" {
+				t.Fatalf("accepted retry = %+v, %v; want a successful no-op", turn, err)
+			}
+			changed := msg
+			changed.Text = "different payload"
+			if _, err := deliver(changed); !errors.Is(err, domain.ErrClientMessageConflict) {
+				t.Fatalf("changed retry = %v; want client message conflict", err)
+			}
+			if _, err := deliver(ports.ChatUserMessage{Text: "new message", ClientMessageID: "new-send"}); !errors.Is(err, chatsvc.ErrChatOpenElsewhere) {
+				t.Fatalf("new send = %v; want open elsewhere", err)
+			}
+			if sent := conv.sentTexts(); len(sent) != 2 || conv.calls.Load() != 0 {
+				t.Fatalf("provider received %v after %d stops; want no redelivery or restart", sent, conv.calls.Load())
+			}
+		})
+	}
+}
+
 func TestSendRefusedWhenTheProviderCannotStopToReloadTurns(t *testing.T) {
 	for name, refuse := range map[string]func(*hibernationConversation){
 		"background work": func(c *hibernationConversation) { c.backgroundRunning = true },

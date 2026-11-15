@@ -674,29 +674,8 @@ func steerOrSendReceipt(
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (SteerOrSendResult, bool, error) {
-	if existing, found, err := st.ConversationMessageByClientID(
-		ctx, conversationID, msg.ClientMessageID,
-	); err != nil {
-		return SteerOrSendResult{}, true, fmt.Errorf("recover sent message: %w", err)
-	} else if found {
-		if !recoverOnly {
-			hash, err := clientPayloadHash(msg)
-			if err != nil {
-				return SteerOrSendResult{}, true, err
-			}
-			if existing.ClientPayloadHash != "" {
-				if existing.ClientPayloadHash != hash {
-					return SteerOrSendResult{}, true, domain.ErrClientMessageConflict
-				}
-			} else if !legacyMessageMatches(existing, msg) {
-				return SteerOrSendResult{}, true, domain.ErrClientMessageConflict
-			}
-		}
-		turn, err := st.TurnByID(ctx, existing.TurnID)
-		if err != nil {
-			return SteerOrSendResult{}, true, fmt.Errorf("recover sent turn: %w", err)
-		}
-		return SteerOrSendResult{Duplicate: true, Turn: turn}, true, nil
+	if turn, found, err := sentMessageReceipt(ctx, st, conversationID, msg, recoverOnly); found || err != nil {
+		return SteerOrSendResult{Duplicate: found, Turn: turn}, true, err
 	}
 
 	requestJSON, err := encodeSteerDeliveryRequest(msg)

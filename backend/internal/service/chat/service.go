@@ -1382,6 +1382,9 @@ func (s *Service) Send(
 	}
 	restarting, writerErr := s.checkOtherWriter(ctx, record)
 	if writerErr != nil {
+		if found, err := s.sentMessageRetry(ctx, id, msg); found || err != nil {
+			return domain.ConversationTurn{}, err
+		}
 		return domain.ConversationTurn{}, writerErr
 	}
 	if restarting {
@@ -2982,9 +2985,12 @@ func (s *Service) relayChatTurn(
 		if err != nil {
 			return "", err
 		}
-		restarting, err := s.checkOtherWriter(ctx, record)
-		if err != nil {
-			return "", err
+		restarting, writerErr := s.checkOtherWriter(ctx, record)
+		if writerErr != nil {
+			if found, err := s.sentMessageRetry(ctx, id, msg); found || err != nil {
+				return "", err
+			}
+			return "", writerErr
 		}
 		if restarting {
 			stoppedForOtherWriter = true

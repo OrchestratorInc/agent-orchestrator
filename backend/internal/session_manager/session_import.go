@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -306,8 +307,6 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	return false
 }
 
-const claudeTranscriptTail = 1 << 20
-
 // ImportedChatWrittenElsewhere reports whether another Claude Code process has
 // an imported chat open, and otherwise whether one wrote turns to its
 // transcript after since.
@@ -318,28 +317,41 @@ func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.S
 	if adoptedOwnedElsewhere(ctx, rec) {
 		return true, false
 	}
-	return false, !since.IsZero() && claudeTurnsWrittenElsewhere(rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
+	return false, !since.IsZero() && claudeTurnsWrittenElsewhere(ctx, rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
 }
 
-func claudeTurnsWrittenElsewhere(path, workspace string, since time.Time) bool {
+func claudeTurnsWrittenElsewhere(ctx context.Context, path, workspace string, since time.Time) bool {
+	// Unknown transcript state cannot prove the live provider is current.
 	if path == "" || workspace == "" {
-		return false
+		return true
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return false
+		return true
 	}
 	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
-	if err != nil || !info.ModTime().After(since) {
+	if err != nil || !info.Mode().IsRegular() {
+		return true
+	}
+	if !info.ModTime().After(since) {
 		return false
 	}
-	start := max(info.Size()-claudeTranscriptTail, 0)
-	tail := make([]byte, info.Size()-start)
-	if _, err := file.ReadAt(tail, start); err != nil && !errors.Is(err, io.EOF) {
-		return false
-	}
-	for line := range bytes.SplitSeq(tail, []byte{'\n'}) {
+	// A tool result or image can exceed a fixed tail window, and our own
+	// output can push an external turn out of it. Read complete records from
+	// the changed file, keeping only one record in memory at a time.
+	reader := bufio.NewReader(file)
+	for {
+		if ctx.Err() != nil {
+			return true
+		}
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return true
+		}
+		if len(line) == 0 {
+			return false
+		}
 		var record struct {
 			Type      string    `json:"type"`
 			CWD       string    `json:"cwd"`
@@ -352,7 +364,6 @@ func claudeTurnsWrittenElsewhere(path, workspace string, since time.Time) bool {
 			return true
 		}
 	}
-	return false
 }
 
 // claudeSessionLive reads Claude Code's live-session registry. A launch inside
