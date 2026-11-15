@@ -258,7 +258,7 @@ describe("resumeOrchestrator", () => {
 		const launcherResume = resumeOrchestrator("proj-1-orch");
 		answer({ data: undefined, error: { code: "AGENT_NOT_EXITED", message: "still running" }, response: { status: 409 } });
 		await expect(launcherResume).resolves.toBeUndefined();
-		await expect(chatResume).resolves.toBeUndefined();
+		await expect(chatResume).rejects.toMatchObject({ code: "AGENT_NOT_EXITED" });
 		expect(postMock).toHaveBeenCalledOnce();
 	});
 });

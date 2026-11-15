@@ -659,7 +659,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
 		if (hostId && remoteConnection.current.base !== remoteBase) {
 			remoteConnection.current = { base: remoteBase, at: remoteBase ? Date.now() : 0 };
-			if (remoteBase) void refetchRemoteSession({ cancelRefetch: false });
+			if (remoteBase && !openedSession.current.checked) void refetchRemoteSession();
 		}
 		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? hostUnreachable || remoteSessionQuery.isFetching || remoteReadAt < remoteConnection.current.at : daemonStatus.state !== "ready") ||
 			(session.statusReadiness && session.statusReadiness !== "ready") || openedSession.current.checked) return;

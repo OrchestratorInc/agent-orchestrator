@@ -111,7 +111,9 @@ export async function spawnOrchestrator(
  */
 export function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
 	// A resume joins the one SessionView starts when it opens the session.
-	return resumeOnce(sessionUiKey(sessionId, hostId), () => requestOrchestratorResume(sessionId, hostId));
+	return resumeOnce(sessionUiKey(sessionId, hostId), () => requestOrchestratorResume(sessionId, hostId)).catch((error: unknown) => {
+		if (apiErrorCode(error) !== "AGENT_NOT_EXITED") throw error;
+	});
 }
 
 async function requestOrchestratorResume(sessionId: string, hostId?: string): Promise<void> {
