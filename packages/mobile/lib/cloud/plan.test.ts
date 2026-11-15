@@ -116,7 +116,7 @@ describe("what a plan pays for", () => {
 
 describe("cloudPlanBlock", () => {
 	it("blocks a new cloud task on Free, with nothing to wait for, and says where plans are managed", () => {
-		expect(cloudPlanBlock(free, NOW)).toEqual({ reason: "plan", message: "Your organization's Free plan doesn't include cloud agents. Plans are managed in Orchestrator on your computer." });
+		expect(cloudPlanBlock(free, NOW)).toEqual({ reason: "plan", message: "Your organization's Free plan doesn't include cloud agents. Plans are managed in Orchestrator on your desktop." });
 	});
 
 	it("leaves nothing to set up on Free, while a spent window still lets the task be set up", () => {
@@ -167,7 +167,7 @@ describe("cloudAgentsOffered", () => {
 
 describe("plan copy", () => {
 	it("points to the desktop without a link, price, or upgrade", () => {
-		expect(PLAN_DESKTOP_NOTE).toBe("Plans are managed in Orchestrator on your computer.");
+		expect(PLAN_DESKTOP_NOTE).toBe("Plans are managed in Orchestrator on your desktop.");
 		expect(PLAN_DESKTOP_NOTE).not.toMatch(/https?:|\$|upgrade|buy|subscribe/i);
 	});
 

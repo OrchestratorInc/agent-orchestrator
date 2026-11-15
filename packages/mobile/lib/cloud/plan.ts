@@ -8,7 +8,7 @@ import type { CloudBillingSummary, CloudOffering, CloudPlanLimits } from "./type
 // (PLAN_DESKTOP_NOTE), with no link.
 
 /** Where a plan is chosen or fixed, said wherever the plan stops someone. */
-export const PLAN_DESKTOP_NOTE = "Plans are managed in Orchestrator on your computer.";
+export const PLAN_DESKTOP_NOTE = "Plans are managed in Orchestrator on your desktop.";
 
 /** How full a meter is: the desktop's thresholds, 80% and the limit. */
 export type PlanSeverity = "normal" | "warn" | "critical";
