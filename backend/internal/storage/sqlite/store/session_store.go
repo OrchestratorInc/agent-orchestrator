@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -549,10 +550,56 @@ func (s *Store) UpdateSessionFromActivitySignal(
 	rec domain.SessionRecord,
 	expectedRevision int64,
 ) (bool, error) {
-	activity := normalActivity(rec.Activity, rec.UpdatedAt)
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, activitySignalProjectionParams(rec, expectedRevision))
+}
+
+// UpdateSessionFromActivitySignalAndAcceptSemanticDelivery is
+// UpdateSessionFromActivitySignal that also records deliveryID as accepted by
+// the session's runtime launch. It is one fenced write, so acceptance lands
+// only with a projection that still owns that launch.
+func (s *Store) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	expectedRevision int64,
+	deliveryID string,
+) (bool, error) {
+	if deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
+		return false, fmt.Errorf("semantic delivery id %q is invalid", deliveryID)
+	}
+	params := activitySignalProjectionParams(rec, expectedRevision)
+	params.AcceptedDeliveryID = deliveryID
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, params)
+}
+
+func (s *Store) updateSessionFromActivitySignal(ctx context.Context, id domain.SessionID, params gen.UpdateSessionFromActivitySignalParams) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, gen.UpdateSessionFromActivitySignalParams{
+	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, params)
+	if err != nil {
+		return false, fmt.Errorf("update session %s from activity signal: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// SemanticDeliveryAccepted reports whether runtimeLaunchID of session id
+// accepted deliveryID, even if later prompts replaced the conversation
+// checkpoint.
+func (s *Store) SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error) {
+	if runtimeLaunchID == "" || deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
+		return false, nil
+	}
+	accepted, err := s.qr.SessionAcceptedDelivery(ctx, gen.SessionAcceptedDeliveryParams{
+		ID: id, DeliveryID: deliveryID, RuntimeLaunchID: runtimeLaunchID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("read accepted delivery %s for session %s: %w", deliveryID, id, err)
+	}
+	return accepted, nil
+}
+
+func activitySignalProjectionParams(rec domain.SessionRecord, expectedRevision int64) gen.UpdateSessionFromActivitySignalParams {
+	activity := normalActivity(rec.Activity, rec.UpdatedAt)
+	return gen.UpdateSessionFromActivitySignalParams{
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
@@ -579,11 +626,7 @@ func (s *Store) UpdateSessionFromActivitySignal(
 		ExpectedSessionMode:              domain.NormalizeSessionMode(rec.Mode),
 		ExpectedRuntimeLaunchID:          rec.Metadata.RuntimeLaunchID,
 		ExpectedControllerGeneration:     rec.Metadata.ControllerGeneration,
-	})
-	if err != nil {
-		return false, fmt.Errorf("update session %s from activity signal: %w", rec.ID, err)
 	}
-	return rows > 0, nil
 }
 
 // RecordSessionLatestUserPrompt persists pane-delivered user direction without

@@ -793,6 +793,17 @@ describe("BrowserPanel", () => {
 		writeText.mockRestore();
 	});
 
+	it("never hands an agent tab's host-local page to the person's browser", async () => {
+		const url = "http://localhost:5173/";
+		hookState.navState = { ...hookState.navState, url };
+		const agentTab = { id: "a1", url, title: "", active: true, remote: { tabId: "R1" } };
+		hookState.tabs = [agentTab];
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={{ ...session, hostId: "h_workbox" }} />);
+
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
+	});
+
 	it("opens an agent tab's public page in the system browser", async () => {
 		const url = "https://github.com/aoagents/ao";
 		hookState.navState = { ...hookState.navState, url };
@@ -834,6 +845,26 @@ describe("BrowserPanel", () => {
 			expect(useUiStore.getState().globalToast?.title).toBe("Screenshot copied to clipboard"),
 		);
 		expect(useUiStore.getState().globalToast?.placement).toBe("top-center");
+	});
+
+	it("opens the page in the person's own browser from the controls menu", async () => {
+		hookState.navState = { ...hookState.navState, url: "https://shop.test/cart" };
+		vi.spyOn(window.ao!.browser, "openInUserBrowser").mockResolvedValue({ name: "Chrome", chrome: true });
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await openBrowserControls();
+		await userEvent.click(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ }));
+
+		expect(window.ao!.browser.openInUserBrowser).toHaveBeenCalledWith("42:sess-1");
+		await waitFor(() => expect(useUiStore.getState().globalToast?.title).toBe("Opened in Chrome"));
+	});
+
+	it("offers to open a page elsewhere only for ordinary web pages", async () => {
+		hookState.navState = { ...hookState.navState, url: "" };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		await openBrowserControls();
+		expect(screen.getByRole("menuitem", { name: /^Open in (your browser|Chrome)$/ })).toHaveAttribute("data-disabled");
 	});
 
 	it("disables screenshots until the active tab has a page", async () => {

@@ -590,6 +590,11 @@ export interface SystemEventDetail {
 		uri?: string;
 		name?: string;
 		text?: string;
+		excerpt?: {
+			reference?: { id?: string; order?: number; conversationId?: string; messageId?: string; revision?: number; text?: string; comment?: string; snapshot?: ChatExcerptSnapshot };
+			selectedText?: string;
+		};
+		fileReference?: ChatFileReference;
 	}>;
 }
 
