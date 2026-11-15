@@ -59,7 +59,7 @@ import { closeAuthTerminal, HarnessAuthTerminalPanel } from "../settings/harness
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { startGuidedTour } from "./GuidedTour";
-import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useOnboardingLogin, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
+import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
@@ -84,7 +84,6 @@ const STEP_STORAGE_KEY = "ao.firstRun.step";
 const SUGGESTED_AGENTS = ["claude-code", "codex"];
 // Where to get the GitHub CLI when it can't be installed from here.
 const GITHUB_CLI_URL = "https://cli.github.com/";
-const READINESS_POLL_MS = 3_000;
 // --duration-normal and --ease-out, for motion's JS-driven transitions.
 const FADE = { duration: 0.15, ease: [0.23, 1, 0.32, 1] } as const;
 /** The copy column's width beside the stage. */
@@ -980,18 +979,15 @@ function ToolsStep({ onNext, onSkip, login }: {
 	// Any harness can be signed in to here, the ones under "more" included.
 	const signingInReady = [...agents, ...more].some((row) => row.agent.id === signingInAgent && row.state === "ready");
 
-	// While a login terminal is open, re-check that agent until it is ready,
-	// then close the terminal on the user's behalf.
+	// While a login terminal is open, verify that agent's sign-in until it is
+	// ready (a login can finish while its terminal stays open), then close the
+	// terminal on the user's behalf.
+	useVerifyWhileSigningIn(signingInAgent, signingInReady, verify);
 	useEffect(() => {
-		if (!signingInAgent) return;
-		if (signingInReady) {
-			void closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
-			setWorkflow(null);
-			return;
-		}
-		const timer = window.setInterval(() => void refresh([signingInAgent]), READINESS_POLL_MS);
-		return () => window.clearInterval(timer);
-	}, [refresh, signingInAgent, signingInReady, workflow]);
+		if (!signingInAgent || !signingInReady) return;
+		void closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
+		setWorkflow(null);
+	}, [signingInAgent, signingInReady, workflow]);
 
 	const signIn = async (agentId: string) => {
 		setAuthError(null);
