@@ -34,11 +34,9 @@ import {
 } from "@/components/app-icons";
 import { useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import type { Options } from "react-markdown";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 import type { MessageKey } from "../../i18n/messages";
+import { GITHUB_HTML_REHYPE_NO_IMAGES } from "../../lib/github-html";
 import { cn } from "../../lib/utils";
 import type { SessionGitActionKind } from "../../stores/session-git-action-store";
 import { Pressable } from "../ui/pressable";
@@ -495,12 +493,7 @@ function ForgeLink({ url, className, children }: { url?: string; className?: str
 	);
 }
 
-const GITHUB_HTML: Options["rehypePlugins"] = [rehypeRaw, [rehypeSanitize, {
-	...defaultSchema,
-	tagNames: defaultSchema.tagNames?.filter((tag) => tag !== "picture" && tag !== "source"),
-	protocols: { ...defaultSchema.protocols, href: [...(defaultSchema.protocols?.href ?? []), "ao"] },
-	attributes: { ...defaultSchema.attributes, img: [], code: [["className", /^language-./, "math-inline", "math-display"]] },
-}]];
+const GITHUB_HTML = GITHUB_HTML_REHYPE_NO_IMAGES;
 
 /** What GitHub reported on the session's PR, in the PR glyph tinted by what it means. */
 function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {

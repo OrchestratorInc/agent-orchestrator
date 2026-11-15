@@ -47,6 +47,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetFX:          "https://fx.sh/docs",
 	TargetUnreal:      "https://github.com/unreallabsai/unreal-agent",
 	TargetMiMoCode:    "https://github.com/XiaomiMiMo/MiMo-Code",
+	TargetMiniMaxCode: "https://agent.minimax.io/docs/cli/quick-start",
 	TargetDeepSeek:    "https://github.com/deepseek-ai/deepseek-harness",
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
@@ -257,6 +258,14 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			Target: target, Unsupported: true, Method: "manual",
 			Reason: "Unreal Agent is built into Orchestrator; update Orchestrator to update the harness.",
 		}}
+	case TargetMiniMaxCode:
+		// The official installers install npm latest into ~/.minimax-code
+		// (%USERPROFILE%\.minimax-code on Windows) with a private Node runtime
+		// when needed, so they work without a system Node.js.
+		plans = []Plan{
+			s.officialByOS(target, "https://filecdn.minimax.chat/public/install.sh", "bash", "https://filecdn.minimax.chat/public/install.ps1", agentDocumentationURLs[target]),
+			s.planNPM(target, "@minimax-ai/code"),
+		}
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
 	case TargetDeepSeek:

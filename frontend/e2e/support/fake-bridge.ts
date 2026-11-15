@@ -121,6 +121,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					showPrivacyGuide: async () => undefined,
 					updatePrivacyGuide: async () => false,
 					closePrivacyGuide: async () => undefined,
+					getAppPrivacy: async () => undefined,
+					requestAppPrivacy: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",
@@ -1129,6 +1131,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					showPrivacyGuide: async () => undefined,
 					updatePrivacyGuide: async () => false,
 					closePrivacyGuide: async () => undefined,
+					getAppPrivacy: async () => undefined,
+					requestAppPrivacy: async () => undefined,
 				},
 				terminal: {
 					saveDroppedFile: async () => "",

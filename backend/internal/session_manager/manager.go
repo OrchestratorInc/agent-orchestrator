@@ -213,6 +213,11 @@ const (
 	// session. AO_DATA_DIR is durable storage, not daemon discovery; custom and
 	// isolated daemons therefore need this coordinate explicitly.
 	EnvRunFile = "AO_RUN_FILE"
+	// EnvDesktopApp is "1" when the Orchestrator desktop app started the
+	// daemon, so macOS charges the session's privacy checks to Orchestrator.
+	// A daemon started from a terminal (`ao start`) leaves it unset: macOS
+	// then checks that terminal, and AO must not send the user to Orchestrator.
+	EnvDesktopApp = "AO_DESKTOP_APP"
 	// EnvBrowserCapability proves ownership of the session's browser target.
 	EnvBrowserCapability = "AO_BROWSER_CAPABILITY"
 	// EnvAgentBrowserURL names the host's self-hosted agent-browser service
@@ -6497,6 +6502,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
 	}
+	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)
+	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
 	}
@@ -6615,7 +6623,7 @@ func (m *Manager) prepareSystemPromptFile(id domain.SessionID, harness domain.Ag
 
 func systemPromptFileRequired(harness domain.AgentHarness) bool {
 	switch harness {
-	case domain.HarnessGemini, domain.HarnessAider,
+	case domain.HarnessMiniMaxCode, domain.HarnessGemini, domain.HarnessAider,
 		domain.HarnessAgy,
 		domain.HarnessAuggie,
 		domain.HarnessCommandCode,
@@ -6842,6 +6850,10 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	deleteProtectedEnv(env, EnvRunFile, caseInsensitive)
 	if runFilePath != "" {
 		env[EnvRunFile] = runFilePath
+	}
+	deleteProtectedEnv(env, EnvDesktopApp, caseInsensitive)
+	if desktopOwnedDaemon() {
+		env[EnvDesktopApp] = "1"
 	}
 	setProtectedEnv(env, EnvBrowserCapability, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
