@@ -102,6 +102,7 @@ import {
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
 import { purgeRootCachesOnce, sweepTemporaryBrowserPartitions } from "./main/browser-storage-cleanup";
+import { createUserBrowser } from "./main/user-browser";
 import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
 import { appShortcutDelivery, attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
@@ -1007,6 +1008,13 @@ function browserProfileStateDir(): string {
 	return path.dirname(runFile ?? path.join(os.homedir(), ".ao", "running.json"));
 }
 
+// The person's own browser, for pages that refuse AO's Browser panel.
+const userBrowser = createUserBrowser({
+	platform: process.platform,
+	openExternal: (url) => shell.openExternal(url),
+	defaultBrowserName: () => app.getApplicationNameForProtocol("https://"),
+});
+
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
 	const browserSession = session.fromPartition(partition);
 	// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
@@ -1299,6 +1307,8 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
+		openInUserBrowser: (url) => userBrowser.open(url),
+		describeUserBrowser: () => userBrowser.describe(),
 		prepareBrowserPartition: (partition) =>
 			applyBrowserIdentity(session.fromPartition(partition), {
 				chromeVersion: process.versions.chrome,
