@@ -30,7 +30,7 @@ export const GITHUB_HTML_REHYPE_NO_IMAGES: Options["rehypePlugins"] = [rehypeRaw
 
 /**
  * Whether an image is an inline icon (CodeRabbit's 12–16px glyphs beside a
- * heading) rather than content: no alt text and drawn at icon size. Such an
+ * heading) rather than content: no alt text, and every size it is given is icon-sized. Such an
  * image adds nothing to read, so it is left out instead of shown as an
  * "Image" chip in the middle of a sentence.
  */
@@ -40,7 +40,7 @@ export function isDecorativeIcon(alt: string | undefined, width: unknown, height
 		const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
 		return Number.isFinite(parsed) ? parsed : undefined;
 	};
-	const w = size(width);
-	const h = size(height);
-	return (w !== undefined && w <= 32) || (h !== undefined && h <= 32);
+	// Every size it gives is icon-sized: a 600×32 banner is content, not a glyph.
+	const sizes = [size(width), size(height)].filter((value): value is number => value !== undefined);
+	return sizes.length > 0 && sizes.every((value) => value <= 32);
 }

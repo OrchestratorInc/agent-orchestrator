@@ -1279,7 +1279,11 @@ function InlineCommentList({
 export function commentTextLines(body: string): string[] {
 	return body
 		.replace(/<!--[\s\S]*?-->/g, "")
-		.replace(/<[^>]+>/g, "")
+		// Only tag-shaped spans outside inline code are HTML: `Map<string, number>`
+		// and `a < b && c > d` are words to keep.
+		.split(/(`[^`\n]*`)/)
+		.map((part, index) => index % 2 === 1 ? part : part.replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, ""))
+		.join("")
 		.split("\n")
 		.map((line) => line
 			.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|>\s*)/, "")

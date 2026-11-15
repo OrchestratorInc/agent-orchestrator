@@ -1129,4 +1129,10 @@ describe("commentTextLines", () => {
     ].join("\n");
     expect(commentTextLines(body)).toEqual(["Minor · Quick win", "Fix rrule", "keep it"]);
   });
+
+  it("keeps generics and comparisons, in code and in prose", () => {
+    expect(commentTextLines("Use `Map<string, number>` here")).toEqual(["Use Map<string, number> here"]);
+    expect(commentTextLines("Reject when `a < b && c > d`.")).toEqual(["Reject when a < b && c > d."]);
+    expect(commentTextLines("Holds when a < b > c, <b>really</b>.")).toEqual(["Holds when a < b > c, really."]);
+  });
 });

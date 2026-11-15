@@ -7,7 +7,7 @@ import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactP
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
 import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
-import { botThreadReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
+import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -2417,8 +2417,8 @@ function MergedReviewsSection({
 		// A bot's inline comments (CodeRabbit's) come from the PR's review threads:
 		// the summary's lists leave bots out.
 		const botReviewers = github ? botThreadReviewers(github) : { unresolved: [], resolved: [] };
-		const allUnresolvedReviewers = [...(github?.review?.unresolvedBy ?? []), ...botReviewers.unresolved];
-		const allResolvedReviewers = [...(github?.review?.resolvedBy ?? []), ...botReviewers.resolved];
+		const allUnresolvedReviewers = mergeReviewers(github?.review?.unresolvedBy ?? [], botReviewers.unresolved);
+		const allResolvedReviewers = mergeReviewers(github?.review?.resolvedBy ?? [], botReviewers.resolved);
 		const agentReviewIds = new Set(aoRuns.map((run) => run.githubReviewId).filter(Boolean));
 		const agentComments = new Map<string, { inlineComments: InspectorInlineComment[]; resolvedComments: InspectorInlineComment[] }>();
 		const partitionReviewerComments = (

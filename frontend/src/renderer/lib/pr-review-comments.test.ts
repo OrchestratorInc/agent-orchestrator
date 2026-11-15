@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { botThreadReviewers, prConversationComments, prHasReviewActivity } from "./pr-review-comments";
+import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "./pr-review-comments";
 
 const base = {
 	number: 7,
@@ -58,5 +58,35 @@ describe("prHasReviewActivity", () => {
 		const pr = { ...base, author: "aditi", conversation } as unknown as SessionPRSummary;
 		expect(prConversationComments(pr)).toEqual([]);
 		expect(prHasReviewActivity(pr)).toBe(false);
+	});
+});
+
+describe("mergeReviewers", () => {
+	it("keeps one bucket per reviewer, with every comment from both lists", () => {
+		const summary = [{ reviewerId: "coderabbitai[bot]", count: 1, isBot: true, links: [{ autoInjectReview: true, url: "https://example.com/a" }] }];
+		const threads = [{ reviewerId: "coderabbitai", count: 1, isBot: true, links: [{ autoInjectReview: false, url: "https://example.com/b" }] }];
+		const merged = mergeReviewers(summary, threads);
+		expect(merged).toHaveLength(1);
+		expect(merged[0]).toMatchObject({ reviewerId: "coderabbitai[bot]", count: 2 });
+		expect(merged[0].links.map((link) => link.url)).toEqual(["https://example.com/a", "https://example.com/b"]);
+		expect(summary[0].links).toHaveLength(1);
+	});
+});
+
+describe("prHasReviewActivity, for the PR author", () => {
+	it("does not count the author's own reviews, threads or comments", () => {
+		const pr = {
+			...base,
+			author: "aditi",
+			review: { ...base.review, reviews: [{ reviewerId: "aditi" }], unresolvedBy: [{ reviewerId: "Aditi", count: 1, isBot: false, links: [] }] },
+			threads: [thread("t1", "aditi", false)],
+			conversation: [{ id: "1", author: "aditi", isBot: false, body: "note" }],
+		} as unknown as SessionPRSummary;
+		expect(prHasReviewActivity(pr)).toBe(false);
+	});
+
+	it("counts a bot's inline comment", () => {
+		const pr = { ...base, author: "aditi", threads: [thread("t1", "coderabbitai[bot]", true)] } as unknown as SessionPRSummary;
+		expect(prHasReviewActivity(pr)).toBe(true);
 	});
 });
