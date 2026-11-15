@@ -333,6 +333,9 @@ export function describeSchedule(rruleText: string): ScheduleSummary {
 
 /** The next local wall-clock time a form schedule fires, or null when it cannot be read. */
 export function nextScheduledRun(fields: ScheduleFields, from: Date = new Date()): Date | null {
+	// An unfinished time would serialize as midnight, so a draft clock shows no preview.
+	const clock = fields.preset === "custom" ? parseHourMinute(fields.hour, fields.minute) : parseTimeValue(fields.time);
+	if (!clock) return null;
 	const summary = describeSchedule(buildRRuleFromSchedule(fields));
 	if (!summary.time || summary.kind === "other") return null;
 	for (let offset = 0; offset <= 366; offset += 1) {
