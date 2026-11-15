@@ -411,8 +411,8 @@ paths:
         artifact_share_limit_reached for a new or restored document over the
         free plan's link limit. Paid plans have no link limit. An older
         control plane refuses an update with another name with 409
-        artifact_share_name_changed. The images, videos and other files an
-        HTML page refers to by relative path are uploaded under this upload
+        artifact_share_name_changed. The images and other files an HTML
+        page refers to by relative path are uploaded under this upload
         with createArtifactShareFileUpload and listed when finalizing.
       requestBody:
         required: true
@@ -476,9 +476,9 @@ paths:
       description: >-
         Starts uploading one file the page being uploaded (uploadToken, from
         createArtifactShareUpload) refers to by relative path, such as an
-        image or a video. The link serves it at path under its root, so
+        image. The link serves it at path under its root, so
         <img src="images/a.png"> in the page loads the file whose path is
-        images/a.png. Any file type may be included, video too, and there is
+        images/a.png. Any file type but video may be included, and there is
         no file size limit. Its parts go as the page's do
         (presignArtifactShareParts, PUT each, abortArtifactShareUpload to
         cancel); finish it with completeArtifactShareFileUpload. 400
@@ -486,7 +486,9 @@ paths:
         ".." segment, a backslash or a control character, or is reserved
         (raw, or under _ao/ or a first segment starting with ~); 429
         artifact_share_rate_limited past the hourly allowance. A control
-        plane that predates included files answers 404.
+        plane that predates included files answers 404. 415
+        artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm,
+        .ogv, .avi, .mkv), as for a link's own file.
       requestBody:
         required: true
         content:
