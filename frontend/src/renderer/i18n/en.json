@@ -1074,6 +1074,7 @@
 	"inspector.requestRereviewPR": "Request to re-review PR",
 	"inspector.reviewActions": "Review actions",
 	"inspector.reviewedAt": "Reviewed {{time}}",
+	"inspector.commentedAt": "Commented {{time}}",
 	"inspector.resolvedComments": "Resolved comments · {{count}}",
 	"inspector.rereviewRequested": "Asked for re-review",
 	"inspector.rereviewRequestFailed": "Unable to request re-review",
