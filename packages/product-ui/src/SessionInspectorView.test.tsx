@@ -1135,4 +1135,10 @@ describe("commentTextLines", () => {
     expect(commentTextLines("Reject when `a < b && c > d`.")).toEqual(["Reject when a < b && c > d."]);
     expect(commentTextLines("Holds when a < b > c, <b>really</b>.")).toEqual(["Holds when a < b > c, really."]);
   });
+
+  it("previews a suggestion block as its code and drops _emphasis_ but not snake_case", () => {
+    expect(commentTextLines("```suggestion\nconst x = 1;\n```")).toEqual(["const x = 1;"]);
+    expect(commentTextLines("_⚠️ Potential issue_\n\n**Rename `snake_case_name`.**\n\n___")).toEqual(["⚠️ Potential issue", "Rename snake_case_name."]);
+    expect(commentTextLines("Keep my_var and `_private_` as written.")).toEqual(["Keep my_var and _private_ as written."]);
+  });
 });

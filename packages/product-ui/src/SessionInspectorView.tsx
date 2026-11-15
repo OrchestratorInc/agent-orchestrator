@@ -1288,12 +1288,24 @@ export function commentTextLines(body: string): string[] {
 		.map((part, index) => index % 2 === 1 ? part : part.replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g, ""))
 		.join("")
 		.split("\n")
-		.map((line) => line
-			.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|>\s*)/, "")
-			.replace(/\*\*|__|`/g, "")
-			.replace(/\s+/g, " ")
-			.trim())
-		.filter((line) => line && !/^(?:[-*_=]{3,}|```.*|~~~.*)$/.test(line));
+		.map((line) => {
+			const raw = line.trim();
+			// Fences and rules go before any marker is stripped, while they still look like
+			// themselves: a suggestion block previews as its code, not as "suggestion".
+			if (/^(?:```|~~~)/.test(raw) || /^(?:[-*_=]\s*){3,}$/.test(raw)) return "";
+			return raw
+				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|>\s*)/, "")
+				// Emphasis is stripped outside inline code only; `_` must sit at a word edge, so snake_case stays.
+				.split(/(`[^`\n]*`)/)
+				.map((part, index) => index % 2 === 1 ? part.slice(1, -1) : part
+					.replace(/\*\*|__/g, "")
+					.replace(/(^|[^\w])_([^_\n]+?)_(?!\w)/g, "$1$2")
+					.replace(/`/g, ""))
+				.join("")
+				.replace(/\s+/g, " ")
+				.trim();
+		})
+		.filter(Boolean);
 }
 
 function InlineCommentRow({
