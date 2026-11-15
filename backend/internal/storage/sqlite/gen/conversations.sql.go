@@ -523,7 +523,7 @@ func (q *Queries) CancelQueuedConversationTurnByID(ctx context.Context, arg Canc
 const cancelQueuedConversationTurns = `-- name: CancelQueuedConversationTurns :exec
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
-WHERE conversation_id = ? AND state = 'queued' AND requested_at <= ?
+WHERE conversation_id = ? AND state = 'queued' AND requested_at <= ? COLLATE ao_timestamp
 `
 
 type CancelQueuedConversationTurnsParams struct {
@@ -622,7 +622,7 @@ SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
 WHERE id = ?1 AND conversation_id = ?2
   AND handled_by_session_id = ?3
   AND state = 'failed' AND rolled_back_at IS NULL
-  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= ?4
+  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= ?4 COLLATE ao_timestamp
 `
 
 type ConsumeConversationTurnAutoResumeParams struct {
@@ -1613,7 +1613,7 @@ session_conversation AS (
     SELECT wanted_session.session_id, (
         SELECT conversations.id FROM conversations
         WHERE conversations.current_session_id = wanted_session.session_id
-        ORDER BY conversations.scope = 'project' DESC, conversations.created_at DESC, conversations.id DESC
+        ORDER BY conversations.scope = 'project' DESC, conversations.created_at COLLATE ao_timestamp DESC, conversations.id DESC
         LIMIT 1
     ) AS conversation_id
     FROM wanted_session
@@ -1626,7 +1626,7 @@ WHERE (
       AND conversation_turns.promoted_to_turn_id IS NULL
       AND conversation_turns.rolled_back_at IS NULL
       AND conversation_turns.state <> 'cancelled'
-    ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+    ORDER BY conversation_turns.requested_at COLLATE ao_timestamp DESC, conversation_turns.rowid DESC
     LIMIT 1
 ) = 'interrupted'
 `
@@ -1689,7 +1689,7 @@ WHERE conversation_turns.conversation_id = ?1
         AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid
 `
 
 // The running turns visible on the active branch, in the same order as the
@@ -2039,7 +2039,7 @@ func (q *Queries) PostponeConversationTurnAutoResume(ctx context.Context, arg Po
 const recomputeConversationCompactedAt = `-- name: RecomputeConversationCompactedAt :exec
 UPDATE conversations
 SET compacted_at = (
-      SELECT MAX(activity.created_at)
+      SELECT MAX(activity.created_at COLLATE ao_timestamp)
       FROM conversation_activities AS activity
       WHERE activity.conversation_id = conversations.id
         AND activity.kind = 'system'
@@ -2282,7 +2282,7 @@ func (q *Queries) ResolveConversationApproval(ctx context.Context, arg ResolveCo
 const selectAutoResumeConversationTurns = `-- name: SelectAutoResumeConversationTurns :many
 SELECT id, conversation_id, handled_by_session_id, provider_turn_id, controller_generation, state, error_message, requested_at, started_at, completed_at, diff_json, rolled_back_at, plan_json, branch_id, promotion_started_at, promoted_to_turn_id, retry_of_turn_id, handled_by_review_id, usage_limit_resets_at, usage_limit_auto_resume, usage_limit_resume_error, batched_input, provider_input_text, failure_code, batch_delivery_kind, batch_delivery_steer_id, artifacts_json FROM conversation_turns
 WHERE usage_limit_auto_resume = 1
-ORDER BY usage_limit_resets_at, id
+ORDER BY usage_limit_resets_at COLLATE ao_timestamp, id
 `
 
 func (q *Queries) SelectAutoResumeConversationTurns(ctx context.Context) ([]ConversationTurn, error) {
@@ -2787,7 +2787,7 @@ SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.pare
 FROM conversation_branches AS b
 JOIN conversations AS c ON c.id = b.conversation_id
 WHERE b.conversation_id = ?1
-ORDER BY b.created_at, b.id
+ORDER BY b.created_at COLLATE ao_timestamp, b.id
 `
 
 type SelectConversationBranchesRow struct {
@@ -2955,7 +2955,7 @@ func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewI
 
 const selectConversationBySession = `-- name: SelectConversationBySession :one
 SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE current_session_id = ?
-ORDER BY scope = 'project' DESC, created_at DESC, id DESC
+ORDER BY scope = 'project' DESC, created_at COLLATE ao_timestamp DESC, id DESC
 LIMIT 1
 `
 
@@ -4021,7 +4021,7 @@ WHERE conversation_turns.conversation_id = ?1
         AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid
 `
 
 // Turns are read in full, rolled-back ones included. They carry rolled_back_at, so
@@ -4127,7 +4127,7 @@ WHERE conversation_turns.conversation_id = ?1
         AND conversation_activities.sequence < ?3
     )
   )
-ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid
 `
 
 type SelectConversationTurnsPageParams struct {
@@ -4336,7 +4336,7 @@ WHERE conversation_turns.conversation_id = ?1
       WHERE lineage_activity.turn_id = conversation_turns.id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+ORDER BY conversation_turns.requested_at COLLATE ao_timestamp DESC, conversation_turns.rowid DESC
 LIMIT 1
 `
 
@@ -4408,7 +4408,7 @@ WHERE conversation_turns.conversation_id = ?1
         AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+ORDER BY conversation_turns.requested_at COLLATE ao_timestamp DESC, conversation_turns.rowid DESC
 LIMIT 1
 `
 
@@ -4465,7 +4465,7 @@ JOIN conversation_messages
 WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.state = 'queued'
   AND conversation_turns.promotion_started_at IS NULL
-ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid
 LIMIT 1
 `
 
@@ -4553,7 +4553,7 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 const selectProvisioningConversationsForSession = `-- name: SelectProvisioningConversationsForSession :many
 SELECT id, latest_sequence FROM conversations
 WHERE current_session_id = ? AND scope = 'session' AND id <> ?
-ORDER BY created_at, id
+ORDER BY created_at COLLATE ao_timestamp, id
 `
 
 type SelectProvisioningConversationsForSessionParams struct {
@@ -4607,7 +4607,7 @@ JOIN conversation_messages
 WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.state = 'queued'
   AND conversation_turns.promotion_started_at IS NULL
-ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid
 `
 
 type SelectQueuedConversationBatchRow struct {
@@ -4706,7 +4706,7 @@ FROM conversation_turns
 WHERE conversation_id = ?
   AND state = 'queued'
   AND promotion_started_at IS NULL
-ORDER BY requested_at, rowid
+ORDER BY requested_at COLLATE ao_timestamp, rowid
 `
 
 type SelectQueuedConversationTurnOrderRow struct {
@@ -4971,9 +4971,9 @@ WHERE t.conversation_id = ?1
       AND COALESCE(json_extract(e.payload_json, '$.providerConversationId'), '') IN ('', b.provider_conversation_id)
   )
   AND (?3 = '' OR t.provider_turn_id = ?3)
-  AND t.started_at > ?4
-  AND t.completed_at > ?4
-ORDER BY t.completed_at DESC LIMIT 1
+  AND t.started_at > ?4 COLLATE ao_timestamp
+  AND t.completed_at > ?4 COLLATE ao_timestamp
+ORDER BY t.completed_at COLLATE ao_timestamp DESC LIMIT 1
 `
 
 type SelectVerifiedAuthenticationTurnParams struct {

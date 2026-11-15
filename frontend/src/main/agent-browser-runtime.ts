@@ -787,6 +787,8 @@ export function nativeArgumentsForAction(action: string, args: Record<string, un
 			if (["value", "checked"].includes(property) && !target) {
 				throw runtimeError("REFERENCE_REQUIRED", `${property} requires an element ref`);
 			}
+			// agent-browser's `get text` requires a selector; without a ref, read the page.
+			if (property === "text" && !target) return ["get", "text", "body"];
 			return ["get", property, ...(target ? [nativeRef(target)] : [])];
 		}
 		case "wait":

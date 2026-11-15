@@ -1136,7 +1136,7 @@ SELECT id, COALESCE(project_id, ''), harness, kind, display_name, prompt, latest
        workspace_path, branch, session_mode, is_terminated, hibernated_at IS NOT NULL, created_at,
        agent_session_id, native_transcript_path
 FROM sessions
-ORDER BY created_at, id`)
+ORDER BY created_at COLLATE ao_timestamp, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list session search targets: %w", err)
 	}
@@ -1182,14 +1182,14 @@ WHERE
     (c.current_session_id IS NOT NULL AND c.id = (
         SELECT current.id FROM conversations current
         WHERE current.current_session_id = c.current_session_id
-        ORDER BY current.scope = 'project' DESC, current.created_at DESC, current.id DESC
+        ORDER BY current.scope = 'project' DESC, current.created_at COLLATE ao_timestamp DESC, current.id DESC
         LIMIT 1
     ))
     -- A reviewer chat belongs to the session it reviews. Whether it is shown
     -- (archived, or switched to the terminal interface) is decided at query
     -- time, so a review that changes later never needs re-indexing.
     OR (c.current_review_id IS NOT NULL AND r.session_id IS NOT NULL)
-ORDER BY c.created_at, c.id`)
+ORDER BY c.created_at COLLATE ao_timestamp, c.id`)
 	if err != nil {
 		return nil, fmt.Errorf("list session search conversations: %w", err)
 	}

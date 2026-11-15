@@ -182,7 +182,7 @@ FROM pr
 WHERE pr.session_id = ?
 ORDER BY
     CASE WHEN pr.pr_state NOT IN ('merged', 'closed') THEN 0 ELSE 1 END,
-    pr.updated_at DESC
+    pr.updated_at COLLATE ao_timestamp DESC
 LIMIT 1
 `
 
@@ -278,7 +278,7 @@ SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeabilit
 WHERE number = ?
 ORDER BY
     CASE WHEN pr_state NOT IN ('merged', 'closed') THEN 0 ELSE 1 END,
-    updated_at DESC
+    updated_at COLLATE ao_timestamp DESC
 LIMIT 1
 `
 
@@ -534,8 +534,8 @@ external_review AS (
         WHERE newer.pr_url = eligible_external_review.pr_url
           AND newer.author = eligible_external_review.author
           AND (
-              newer.submitted_at > eligible_external_review.submitted_at
-              OR (newer.submitted_at = eligible_external_review.submitted_at AND newer.review_id > eligible_external_review.review_id)
+              newer.submitted_at > eligible_external_review.submitted_at COLLATE ao_timestamp
+              OR (newer.submitted_at = eligible_external_review.submitted_at COLLATE ao_timestamp AND newer.review_id > eligible_external_review.review_id)
           )
     )
 )
@@ -595,12 +595,12 @@ LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
         FROM pr_reviews newer_review
         WHERE newer_review.pr_url = last_review.pr_url
           AND (
-              newer_review.submitted_at > last_review.submitted_at
-              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+              newer_review.submitted_at > last_review.submitted_at COLLATE ao_timestamp
+              OR (newer_review.submitted_at = last_review.submitted_at COLLATE ao_timestamp AND newer_review.review_id > last_review.review_id)
           )
     )
 WHERE pr.session_id = ?1
-ORDER BY pr.updated_at DESC
+ORDER BY pr.updated_at COLLATE ao_timestamp DESC
 `
 
 type ListPRFactsBySessionRow struct {
@@ -713,8 +713,8 @@ external_review AS (
         WHERE newer.pr_url = eligible_external_review.pr_url
           AND newer.author = eligible_external_review.author
           AND (
-              newer.submitted_at > eligible_external_review.submitted_at
-              OR (newer.submitted_at = eligible_external_review.submitted_at AND newer.review_id > eligible_external_review.review_id)
+              newer.submitted_at > eligible_external_review.submitted_at COLLATE ao_timestamp
+              OR (newer.submitted_at = eligible_external_review.submitted_at COLLATE ao_timestamp AND newer.review_id > eligible_external_review.review_id)
           )
     )
 )
@@ -778,11 +778,11 @@ LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
         FROM pr_reviews newer_review
         WHERE newer_review.pr_url = last_review.pr_url
           AND (
-              newer_review.submitted_at > last_review.submitted_at
-              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+              newer_review.submitted_at > last_review.submitted_at COLLATE ao_timestamp
+              OR (newer_review.submitted_at = last_review.submitted_at COLLATE ao_timestamp AND newer_review.review_id > last_review.review_id)
           )
     )
-ORDER BY pr.session_id, pr.updated_at DESC
+ORDER BY pr.session_id, pr.updated_at COLLATE ao_timestamp DESC
 `
 
 type ListPRFactsBySessionsRow struct {
@@ -854,7 +854,7 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 const listPRsBySession = `-- name: ListPRsBySession :many
 SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial FROM pr
 WHERE pr.session_id = ?
-ORDER BY updated_at DESC
+ORDER BY updated_at COLLATE ao_timestamp DESC
 `
 
 func (q *Queries) ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]PR, error) {

@@ -101,7 +101,7 @@ SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
     AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
-    AND activity_last_at <= sqlc.arg(idle_before)
+    AND activity_last_at <= sqlc.arg(idle_before) COLLATE ao_timestamp
     AND trim(provider_conversation_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
     AND stale_binary_launch = controller_generation;
@@ -113,7 +113,7 @@ SELECT id FROM sessions
 WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
     AND kind <> 'orchestrator'
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
-    AND activity_last_at <= sqlc.arg(idle_before)
+    AND activity_last_at <= sqlc.arg(idle_before) COLLATE ao_timestamp
     AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
     AND stale_binary_launch = runtime_launch_id;
@@ -182,7 +182,7 @@ UPDATE sessions SET
     updated_at = sqlc.arg(updated_at)
 WHERE id = sqlc.arg(id)
   AND is_terminated = 0
-  AND updated_at <= sqlc.arg(updated_at);
+  AND updated_at <= sqlc.arg(updated_at) COLLATE ao_timestamp;
 
 -- name: RecordSessionHumanMessage :execrows
 -- Chat message insertion already owns controller/idempotency fencing. Compare
@@ -196,10 +196,10 @@ UPDATE sessions SET
     conversation_checkpoint_generation = '',
     conversation_checkpoint_native_id = '',
     conversation_checkpoint_turn_id = '',
-    updated_at = MAX(updated_at, sqlc.arg(latest_user_prompt_at))
+    updated_at = MAX(updated_at COLLATE ao_timestamp, sqlc.arg(latest_user_prompt_at))
 WHERE id = sqlc.arg(id)
   AND is_terminated = 0
-  AND (latest_user_prompt_at IS NULL OR latest_user_prompt_at <= sqlc.arg(latest_user_prompt_at));
+  AND (latest_user_prompt_at IS NULL OR latest_user_prompt_at <= sqlc.arg(latest_user_prompt_at) COLLATE ao_timestamp);
 
 -- name: ClaimChatControllerGeneration :execrows
 -- A Chat controller claims ownership before its event goroutine starts. Provider

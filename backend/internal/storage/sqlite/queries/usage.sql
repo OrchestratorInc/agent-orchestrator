@@ -38,7 +38,7 @@ WHERE session_id = ? AND harness = ? AND native_root_id = ?;
 SELECT *
 FROM usage_bindings
 WHERE session_id = ?
-ORDER BY updated_at, id;
+ORDER BY updated_at COLLATE ao_timestamp, id;
 
 -- name: FinalizeUsageBindingsForSessionLaunch :many
 UPDATE usage_bindings
@@ -266,7 +266,7 @@ WHERE (s.is_terminated = 0 OR ub.state = 'finalizing')
       ORDER BY latest.generation DESC, latest.id DESC
       LIMIT 1
   )
-ORDER BY ub.updated_at, ub.id;
+ORDER BY ub.updated_at COLLATE ao_timestamp, ub.id;
 
 -- name: GetUsageSourceWithBindingAndSession :one
 SELECT
@@ -687,7 +687,7 @@ WHERE model_usage_events.id = sqlc.arg(id)
         AND source.file_identity = sqlc.arg(expected_file_identity)
         AND source.byte_offset = sqlc.arg(expected_byte_offset)
         AND source.parser_state_json = sqlc.arg(expected_parser_state_json)
-        AND source.updated_at = sqlc.arg(expected_source_updated_at)
+        AND source.updated_at = sqlc.arg(expected_source_updated_at) COLLATE ao_timestamp
         AND NOT (
             source.state = 'complete'
             AND source.last_error_code = 'artifact_replaced'
@@ -807,6 +807,6 @@ FROM model_usage_events
 JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
 JOIN sessions ON sessions.id = usage_bindings.session_id
 WHERE model_usage_events.created_at IS NOT NULL
-  AND substr(model_usage_events.created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
-  AND substr(model_usage_events.created_at, 1, 19) < CAST(sqlc.arg(until_utc) AS TEXT)
+  AND model_usage_events.created_at >= CAST(sqlc.arg(since_utc) AS TEXT) COLLATE ao_timestamp
+  AND model_usage_events.created_at < CAST(sqlc.arg(until_utc) AS TEXT) COLLATE ao_timestamp
 ORDER BY model_usage_events.id;

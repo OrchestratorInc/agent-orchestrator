@@ -14,10 +14,10 @@ WHERE status = 'unread'
   AND dismissed_at IS NULL
   AND (
     CAST(sqlc.arg(before_id) AS TEXT) = ''
-    OR created_at < sqlc.arg(before_created_at)
-    OR (created_at = sqlc.arg(before_created_at) AND id < CAST(sqlc.arg(before_id) AS TEXT))
+    OR created_at < sqlc.arg(before_created_at) COLLATE ao_timestamp
+    OR (created_at = sqlc.arg(before_created_at) COLLATE ao_timestamp AND id < CAST(sqlc.arg(before_id) AS TEXT))
   )
-ORDER BY created_at DESC, id DESC
+ORDER BY created_at COLLATE ao_timestamp DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
 -- Unresolved is the still-actionable set: the underlying issue has not gone
@@ -31,10 +31,10 @@ WHERE resolved_at IS NULL
   AND type IN ('needs_input', 'ready_to_merge')
   AND (
     CAST(sqlc.arg(before_id) AS TEXT) = ''
-    OR created_at < sqlc.arg(before_created_at)
-    OR (created_at = sqlc.arg(before_created_at) AND id < CAST(sqlc.arg(before_id) AS TEXT))
+    OR created_at < sqlc.arg(before_created_at) COLLATE ao_timestamp
+    OR (created_at = sqlc.arg(before_created_at) COLLATE ao_timestamp AND id < CAST(sqlc.arg(before_id) AS TEXT))
   )
-ORDER BY created_at DESC, id DESC
+ORDER BY created_at COLLATE ao_timestamp DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
 -- name: ListNotificationsPage :many
@@ -43,10 +43,10 @@ FROM notifications
 WHERE dismissed_at IS NULL
   AND (
     CAST(sqlc.arg(before_id) AS TEXT) = ''
-    OR created_at < sqlc.arg(before_created_at)
-    OR (created_at = sqlc.arg(before_created_at) AND id < CAST(sqlc.arg(before_id) AS TEXT))
+    OR created_at < sqlc.arg(before_created_at) COLLATE ao_timestamp
+    OR (created_at = sqlc.arg(before_created_at) COLLATE ao_timestamp AND id < CAST(sqlc.arg(before_id) AS TEXT))
   )
-ORDER BY created_at DESC, id DESC
+ORDER BY created_at COLLATE ao_timestamp DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
 -- name: CountUnreadNotifications :one
