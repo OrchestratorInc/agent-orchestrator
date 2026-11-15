@@ -48,6 +48,9 @@ type Service struct {
 
 	approvals       approvalGate
 	approvalTimeout time.Duration
+	// describeTimeout caps how long a runtime may take to describe a target,
+	// so a stuck read (a hidden tab's capture) never delays the prompt.
+	describeTimeout time.Duration
 	remote          RemoteBrowser
 	// approvalsErr is why the gate could not load. While set, actions that
 	// may need approval are refused rather than run unasked.

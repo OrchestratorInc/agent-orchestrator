@@ -25,6 +25,9 @@ const NAVIGATION_TIMEOUT_MS = 30_000;
 const LOAD_GRACE_MS = 1_500;
 const POSTCONDITION_POLL_MS = 150;
 const CONTENT_TIMEOUT_MS = 15_000;
+// The element crop in an approval prompt is optional: a tab Chrome is not
+// painting (hidden behind another tab) must not hold the prompt back.
+const APPROVAL_CAPTURE_TIMEOUT_MS = 2_000;
 export const POLICY_KEY = "aoSitePolicy";
 
 type FrameLink = { frameId: number; parentFrameId: number; ref: string };
@@ -915,7 +918,11 @@ export class Executor {
 			const crop = approvalCropRect(placed.rect, placed.viewport);
 			if (crop) {
 				try {
-					image = bytesToBase64(await cropPng(base64ToBytes(await this.captureTab(ctx, fresh)), crop, placed.dpr || 1));
+					const shot = await Promise.race([
+						this.captureTab(ctx, fresh),
+						sleep(APPROVAL_CAPTURE_TIMEOUT_MS, ctx.signal).then(() => undefined),
+					]);
+					if (shot) image = bytesToBase64(await cropPng(base64ToBytes(shot), crop, placed.dpr || 1));
 				} catch {
 					// The prompt still shows the page, action, and reason.
 				}

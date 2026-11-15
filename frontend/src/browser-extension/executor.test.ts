@@ -908,6 +908,33 @@ describe("Executor", () => {
 		}
 	});
 
+	it("describes for the approval gate without waiting on a capture that never finishes", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const box = Element.prototype.getBoundingClientRect;
+		Element.prototype.getBoundingClientRect = () => ({ x: 10, y: 10, width: 80, height: 20, left: 10, top: 10, right: 90, bottom: 30, toJSON() {} }) as DOMRect;
+		try {
+			const { fake, run, approve } = setup();
+			await approve();
+			await run("open", { url: "https://shop.test/" });
+			const { refs } = (await run("snapshot", { interactive: true })) as { refs: Record<string, { name: string }> };
+			const buy = Object.entries(refs).find(([, info]) => info.name === "Buy now")![0];
+			fake.hangingScreenshots = 1;
+			let settled = false;
+			const pending = run("describe", { action: "click", ref: buy }).finally(() => {
+				settled = true;
+			});
+			await vi.advanceTimersByTimeAsync(2_500);
+			// Settled by the prompt's own 2 s bound, not by any later screenshot timeout.
+			expect(settled).toBe(true);
+			const described = (await pending) as { target: { name: string }; image?: string };
+			expect(described.target.name).toBe("Buy now");
+			expect(described.image).toBeUndefined();
+		} finally {
+			Element.prototype.getBoundingClientRect = box;
+			vi.useRealTimers();
+		}
+	});
+
 	it("never restores a minimized window for a synthetic-input screenshot", async () => {
 		const { fake, run, approve } = setup();
 		await approve();
