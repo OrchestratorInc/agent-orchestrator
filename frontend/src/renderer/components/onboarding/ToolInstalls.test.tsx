@@ -9,8 +9,13 @@ vi.mock("../../lib/api-client", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../lib/api-client")>()),
 	apiClient: api,
 }));
+const auth = vi.hoisted(() => ({ probe: vi.fn() }));
+vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAuth")>()),
+	probeAgentAuth: auth.probe,
+}));
 
-import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall } from "./ToolInstalls";
+import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, verifyAgentSignIn } from "./ToolInstalls";
 
 const plan = (agentId: string, automatic = true) => ({
 	agentId,
@@ -238,5 +243,31 @@ describe("agentRowState", () => {
 	it("reads ready and not installed as they are", () => {
 		expect(agentRowState(agent("installed", "authorized", "fresh", "ready"))).toBe("ready");
 		expect(agentRowState(agent("not_installed", "unknown"))).toBe("missing");
+	});
+});
+
+describe("verifyAgentSignIn", () => {
+	it("verifies sign-in afresh before reading readiness, so a login that just finished counts", async () => {
+		// Readiness last saw Cursor signed out; the probe is what sees the new login.
+		let signedIn = false;
+		auth.probe.mockReset().mockImplementation(async () => {
+			signedIn = true;
+			return {};
+		});
+		const order: string[] = [];
+		const refresh = vi.fn(async () => {
+			order.push(signedIn ? "read: signed in" : "read: signed out");
+		});
+		await verifyAgentSignIn(new QueryClient(), ["cursor"], refresh);
+		expect(auth.probe).toHaveBeenCalledWith("cursor");
+		expect(refresh).toHaveBeenCalledWith(["cursor"]);
+		expect(order).toEqual(["read: signed in"]);
+	});
+
+	it("still reads readiness when the probe can't complete", async () => {
+		auth.probe.mockReset().mockRejectedValue(new Error("daemon unavailable"));
+		const refresh = vi.fn(async () => undefined);
+		await verifyAgentSignIn(new QueryClient(), ["codex"], refresh);
+		expect(refresh).toHaveBeenCalledWith(["codex"]);
 	});
 });
