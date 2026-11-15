@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -85,4 +87,50 @@ func SuppressNoInjectWindowRows(windows []NoInjectReviewWindow, login string, re
 			comments[i].AutoInjectReview = false
 		}
 	}
+}
+
+// NoInjectReviewSource lists the --no-inject AO review passes on a PR: the
+// provider review ids they recorded and when each ran.
+type NoInjectReviewSource interface {
+	NoInjectAOReviewIDs(ctx context.Context, prURL string) (map[string]bool, error)
+	NoInjectAOReviewWindows(ctx context.Context, prURL string) ([]NoInjectReviewWindow, error)
+}
+
+// SuppressNoInjectAOReviews clears AutoInjectReview on the reviews and comments
+// that a --no-inject AO review pass on prURL posted, before they are stored:
+// stored rows keep the value they were written with, so every writer of
+// observed review rows must call it (#6810). Rows are matched by the review id
+// a pass recorded, and by what postingLogin's account wrote while a pass ran,
+// which covers a pass that has not recorded its id yet and a reviewer that
+// exited without submitting. postingLogin is asked only when a pass exists; an
+// error or empty login fails the call so the writer retries rather than store
+// rows that might be delivered. A nil postingLogin matches by id only.
+func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, postingLogin func(context.Context) (string, error), prURL string, reviews []PullRequestReview, comments []PullRequestComment) error {
+	if src == nil || prURL == "" || (len(reviews) == 0 && len(comments) == 0) {
+		return nil
+	}
+	ids, err := src.NoInjectAOReviewIDs(ctx, prURL)
+	if err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		SuppressNoInjectReviewRows(ids, reviews, comments)
+	}
+	if postingLogin == nil {
+		return nil
+	}
+	windows, err := src.NoInjectAOReviewWindows(ctx, prURL)
+	if err != nil || len(windows) == 0 {
+		return err
+	}
+	login, err := postingLogin(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve the account AO reviews post with: %w", err)
+	}
+	login = strings.TrimSpace(login)
+	if login == "" {
+		return fmt.Errorf("resolve the account AO reviews post with: no login")
+	}
+	SuppressNoInjectWindowRows(windows, login, reviews, comments)
+	return nil
 }

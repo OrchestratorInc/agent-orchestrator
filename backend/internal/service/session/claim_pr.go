@@ -43,10 +43,23 @@ type ClaimPROptions struct {
 }
 
 // reviewOnlyStore is the optional part of the PR claimer that knows about
-// review-only attachments and --no-inject AO reviews (#6810).
+// review-only attachments (#6810).
 type reviewOnlyStore interface {
-	NoInjectAOReviewIDs(ctx context.Context, prURL string) (map[string]bool, error)
 	SetPRReviewOnly(ctx context.Context, prURL string, sessionID domain.SessionID, reviewOnly bool) (bool, error)
+}
+
+// claimPostingLogin resolves the account the SCM provider is signed in as for
+// repo, which is the one AO's reviewer posts with. A provider that cannot
+// report it fails the claim when a --no-inject pass needs it (#6810).
+func (s *Service) claimPostingLogin(repo ports.SCMRepo, prURL string) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		resolver, ok := s.scm.(ports.ScopedIdentityResolver)
+		if !ok {
+			return "", fmt.Errorf("the %s provider does not report the signed-in account, needed to keep a --no-inject review on %s from being delivered", repo.Provider, prURL)
+		}
+		identity, err := resolver.AuthenticatedIdentityForProvider(ctx, repo.Provider, repo.Host)
+		return identity.Login, err
+	}
 }
 
 // ClaimPRResult is the session PR read model returned after a claim.
@@ -141,17 +154,16 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	}
 	now := s.clock().UTC()
 	pr, checks, reviews, threads, comments := claimRowsFromSCM(id, obs, reviewMode, now, rec)
-	reviewOnly, hasReviewOnly := s.prClaimer.(reviewOnlyStore)
-	if hasReviewOnly {
-		// Rows snapshot the session's auto-inject setting; a --no-inject AO
-		// review on this PR must still never be delivered.
-		ids, err := reviewOnly.NoInjectAOReviewIDs(ctx, pr.URL)
-		if err != nil {
+	if src, ok := s.prClaimer.(domain.NoInjectReviewSource); ok {
+		// Rows snapshot the session's auto-inject setting and keep it once
+		// stored; a --no-inject AO review on this PR must still never be
+		// delivered, so match its rows the same way the SCM observer does.
+		if err := domain.SuppressNoInjectAOReviews(ctx, src, s.claimPostingLogin(repo, prURL), pr.URL, reviews, comments); err != nil {
 			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 			return ClaimPRResult{}, err
 		}
-		domain.SuppressNoInjectReviewRows(ids, reviews, comments)
 	}
+	reviewOnly, hasReviewOnly := s.prClaimer.(reviewOnlyStore)
 	outcome, err := s.prClaimer.ClaimPR(ctx, pr, checks, reviews, threads, comments, reviewMode, opts.AllowTakeover)
 	if err != nil {
 		s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
