@@ -2067,7 +2067,7 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("docker-agent");
-		expect(await within(row).findByText(authentication === "configured" ? "Configured" : authentication === "unauthorized" ? "Not set up" : "Unknown")).toBeInTheDocument();
+		expect(await within(row).findByText(authentication === "configured" ? "Configured" : authentication === "unauthorized" ? "Not set up" : "Setup status unavailable")).toBeInTheDocument();
 		await userEvent.click(within(row).getByRole("button", { name: "View documentation" }));
 		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
