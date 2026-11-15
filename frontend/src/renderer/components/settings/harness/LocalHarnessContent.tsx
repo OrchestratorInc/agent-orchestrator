@@ -596,12 +596,13 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (authWorkflowRef.current || uiLoginAgentRef.current || isAgentLoginPending(agentId, hostId) || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
 		const authPlan = agentAuthPlans.get(agentId);
+		// Any new login or logout ends the last sign-in's announcement.
+		setSignedInAgent(null);
 		// Any plan with inline methods opens the Account login panel; a plan
 		// without methods falls back to its terminal or documentation flow.
 		if (action === "login" && !terminal && authPlan?.methods?.length) {
 			uiLoginAgentRef.current = agentId;
 			setUiLoginAgent(agentId);
-			setSignedInAgent(null);
 			return true;
 		}
 		authStartPendingRef.current = true;
