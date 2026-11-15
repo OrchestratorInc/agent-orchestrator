@@ -289,8 +289,14 @@ func (e *Engine) markRunNoInject(ctx stdctx.Context, id string) error {
 	if !ok {
 		return fmt.Errorf("review store cannot record --no-inject on restarted run %q", id)
 	}
-	if _, err := marker.MarkReviewRunNoInject(ctx, id); err != nil {
+	marked, err := marker.MarkReviewRunNoInject(ctx, id)
+	if err != nil {
 		return fmt.Errorf("mark restarted run %q no-inject: %w", id, err)
+	}
+	if !marked {
+		// It ended since the trigger read it; relaunching it would only redo a
+		// pass whose result is already recorded.
+		return fmt.Errorf("%w: restarted run %q finished before it could be marked no-inject; trigger again", ErrConflict, id)
 	}
 	return nil
 }
