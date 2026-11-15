@@ -489,6 +489,41 @@ describe("Workers selected-machine reachability", () => {
 		expect(fixtures.refreshHost).toHaveBeenCalledWith("windows");
 		expect(fixtures.refreshAll).not.toHaveBeenCalled();
 	});
+	// iOS's refresh control scrolls the list down by its spinner's height when
+	// `refreshing` turns on without a pull, and never scrolls it back, so each
+	// Retry left the board ~60 pt lower until Retry slid under the tab bar.
+	it("retries the machine with its own spinner, never the pull-to-refresh one", async () => {
+		let answer!: () => void;
+		fixtures.refreshHost.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+		selectWindows();
+		const retry = () => renderer.root.findByProps({ title: "Retry" });
+		await act(async () => { retry().props.onPress(); });
+		expect(fixtures.refreshHost).toHaveBeenCalledWith("windows");
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
+		expect(retry().props.loading).toBe(true);
+		await act(async () => answer());
+		expect(retry().props.loading).toBe(false);
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
+	});
+	it("retries from the stale banner without turning on the pull-to-refresh spinner", async () => {
+		let answer!: () => void;
+		fixtures.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+		fixtures.hostStates = [fixtures.hostStates[0]];
+		act(() => { renderer = create(<FleetScreen />); });
+		await act(async () => { renderer.root.findByType("StaleBanner" as never).props.onRetry(); });
+		expect(fixtures.refreshAll).toHaveBeenCalledTimes(1);
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
+		await act(async () => answer());
+	});
+	it("shows the pull-to-refresh spinner for a pull until the refresh lands", async () => {
+		let answer!: () => void;
+		fixtures.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+		act(() => { renderer = create(<FleetScreen />); });
+		await act(async () => { renderer.root.findByType(WorkerBoardList).props.onRefresh(); });
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(true);
+		await act(async () => answer());
+		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
+	});
 	// The same picker on both platforms; its native menus are tested on their own.
 	it("offers every environment from the unreachable machine's picker and applies a choice immediately", () => {
 		selectWindows();

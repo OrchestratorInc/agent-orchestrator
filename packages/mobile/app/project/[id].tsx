@@ -15,6 +15,7 @@ import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { useBoardTabBeneath } from "../../lib/useBoardTabBeneath";
 import { useOrchestratorLauncher } from "../../lib/useOrchestratorLauncher";
+import { useRefreshActions } from "../../lib/useRefreshActions";
 import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
@@ -51,7 +52,6 @@ function ProjectScreenContent() {
 	const { config, currentHostId, hostStates: machineStates, cloud, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
-	const [refreshing, setRefreshing] = useState(false);
 
 	const row = useMemo(
 		() => hostMatches
@@ -81,15 +81,9 @@ function ProjectScreenContent() {
 	);
 
 	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry banner that also calls this buzzes once.
-	const onRefresh = useCallback(async () => {
-		setRefreshing(true);
-		try {
-			await refresh();
-		} finally {
-			setRefreshing(false);
-		}
-	}, [refresh]);
+	// it gives everywhere, and the Retry banner that runs it too buzzes once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retry } = useRefreshActions(refresh);
 
 	const startTask = useCallback(() => {
 		if (!hostMatches) return;
@@ -143,7 +137,7 @@ function ProjectScreenContent() {
 		<View style={styles.screen}>
 			{headerItems}
 			{bottomCompose}
-			{hostMatches ? <View pointerEvents="box-none" style={glassInset ? [styles.floatingBanner, { top: glassInset }] : undefined}><StaleBanner error={!!error} onRetry={onRefresh} /></View> : null}
+			{hostMatches ? <View pointerEvents="box-none" style={glassInset ? [styles.floatingBanner, { top: glassInset }] : undefined}><StaleBanner error={!!error} onRetry={retry} /></View> : null}
 
 			{!hostMatches ? (
 				loading && !config ? (

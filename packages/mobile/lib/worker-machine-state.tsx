@@ -10,7 +10,7 @@ import { space, type } from "./tokens";
 import { Button } from "./ui";
 import type { WorkerEnvironment } from "./worker-controls";
 
-export function WorkerMachineState({ host, environments, onSelectEnvironment, onRetry, linkHealth = "ok" }: {
+export function WorkerMachineState({ host, environments, onSelectEnvironment, onRetry, retrying = false, linkHealth = "ok" }: {
 	host: Pick<HostSnapshot, "hostId" | "name" | "appearance" | "connection" | "errorStatus">;
 	/**
 	 * This machine's classified link. "phone-offline" means the phone is the one
@@ -20,6 +20,8 @@ export function WorkerMachineState({ host, environments, onSelectEnvironment, on
 	environments: readonly WorkerEnvironment[];
 	onSelectEnvironment: (environmentId: string) => void;
 	onRetry: () => void;
+	/** Retry's own request in flight: its button shows the spinner. */
+	retrying?: boolean;
 }) {
 	const styles = useThemedStyles(makeStyles);
 	const phoneOffline = linkHealth === "phone-offline";
@@ -43,7 +45,7 @@ export function WorkerMachineState({ host, environments, onSelectEnvironment, on
 						: "Check that Orchestrator is running and this machine is reachable to load its workers."}
 			</Text>
 			<View style={styles.actions}>
-				{!connecting && !phoneOffline ? <Button title="Retry" icon="refresh" variant="secondary" onPress={onRetry} /> : null}
+				{!connecting && !phoneOffline ? <Button title="Retry" icon="refresh" variant="secondary" loading={retrying} onPress={onRetry} /> : null}
 				<EnvironmentPicker environments={environments} selectedEnvironmentId={host.hostId} onSelectEnvironment={onSelectEnvironment} />
 			</View>
 		</View>

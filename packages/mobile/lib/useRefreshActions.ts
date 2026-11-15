@@ -1,0 +1,38 @@
+import { useCallback, useRef, useState } from "react";
+
+/**
+ * A page's refresh, run two ways: from the list's pull-to-refresh, and from
+ * its Retry buttons, each with a spinner of its own.
+ *
+ * `refreshing` (the RefreshControl's) only ever turns on for a pull. When it
+ * turns on without one, React Native's iOS refresh control scrolls the list
+ * down by the spinner's height to show it, and never scrolls it back once the
+ * refresh ends, so every Retry tap left the page ~60 pt lower until the empty
+ * state's Retry slid under the tab bar. Buttons call `retry` instead, and can
+ * show `retrying` as their own loading state.
+ */
+export function useRefreshActions(refresh: () => Promise<unknown>) {
+	const [refreshing, setRefreshing] = useState(false);
+	const [retrying, setRetrying] = useState(false);
+	// The latest refresh behind stable handlers, so a memoised list or banner
+	// is not rebuilt each time the page's refresh closes over new state.
+	const latest = useRef(refresh);
+	latest.current = refresh;
+	const onRefresh = useCallback(async () => {
+		setRefreshing(true);
+		try {
+			await latest.current();
+		} finally {
+			setRefreshing(false);
+		}
+	}, []);
+	const retry = useCallback(async () => {
+		setRetrying(true);
+		try {
+			await latest.current();
+		} finally {
+			setRetrying(false);
+		}
+	}, []);
+	return { refreshing, onRefresh, retrying, retry };
+}

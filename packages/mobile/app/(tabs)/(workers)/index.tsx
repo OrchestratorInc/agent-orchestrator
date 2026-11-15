@@ -29,6 +29,7 @@ import { hostedProjectKey } from "../../../lib/hostedRows";
 import { workerFilterMenu } from "../../../lib/worker-filter-menu";
 import { classifyLink, EMPTY_LINK_TRACKER } from "../../../lib/linkHealth";
 import { WorkerMachineState } from "../../../lib/worker-machine-state";
+import { useRefreshActions } from "../../../lib/useRefreshActions";
 import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
 import {
 	ALL_WORKER_ENVIRONMENTS,
@@ -73,7 +74,6 @@ export default function FleetScreen() {
 	const unreadCount = (hostStates.length > 1
 		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
 		: notificationsUnread) + (cloud ? cloudUnread : 0);
-	const [refreshing, setRefreshing] = useState(false);
 	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
 	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
@@ -193,16 +193,13 @@ export default function FleetScreen() {
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry actions that also call this buzz once.
-	const onRefresh = useCallback(async () => {
-		setRefreshing(true);
-		try {
-			if (selectedHost) await refreshHost(selectedHost.hostId);
-			else if (cloudSelected) await refreshHost(CLOUD_HOST_ID);
-			else await refreshAll();
-		}
-		finally { setRefreshing(false); }
-	}, [cloudSelected, refreshAll, refreshHost, selectedHost?.hostId]);
+	// it gives everywhere, and the Retry actions that run it too buzz once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retrying, retry } = useRefreshActions(async () => {
+		if (selectedHost) await refreshHost(selectedHost.hostId);
+		else if (cloudSelected) await refreshHost(CLOUD_HOST_ID);
+		else await refreshAll();
+	});
 
 	// Unpaired only once the stored config has been read: until then an empty
 	// store means "still finding the machine", and the board shows its spinner.
@@ -232,7 +229,7 @@ export default function FleetScreen() {
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
+			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={retry} /> : <StaleBanner networkOnly />}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}
@@ -291,7 +288,8 @@ export default function FleetScreen() {
 							linkHealth={classifyLink(selectedHost.linkTracker ?? EMPTY_LINK_TRACKER, phoneNetwork, Date.now())}
 							environments={environments}
 							onSelectEnvironment={selectEnvironment}
-							onRetry={onRefresh}
+							onRetry={retry}
+							retrying={retrying}
 						/>
 					) : emptyView === "error" ? (
 						<EmptyState
@@ -300,7 +298,7 @@ export default function FleetScreen() {
 							message={hostStates.length > 1 ? undefined : failure.hint}
 							action={
 								<View style={styles.errorActions}>
-									<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />
+									<Button title="Retry" icon="refresh-cw" variant="secondary" loading={retrying} onPress={retry} />
 									{/* Re-scanning is the only fix for a rotated password, and the
 									    fastest one for a moved/renamed host — so it belongs beside
 									    Retry rather than three taps away in Settings. */}
