@@ -298,7 +298,7 @@ function SubagentConversation({
 				{elapsed ? <span className="text-caption tabular-nums text-muted-foreground/70">{elapsed}</span> : null}
 			</div>
 			{/* Scrolls like the chat beside it: no painted track, and long words wrap instead of widening it. */}
-			<div className="cursor-chat-timeline scrollbar-none min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 wrap-break-word">
+			<div className="cursor-chat-timeline scrollbar-none min-h-0 flex-1 select-text overflow-y-auto overflow-x-hidden px-4 py-4 wrap-break-word">
 				<SubagentTranscript
 					agent={agent}
 					disclosureKey={`subagent-panel:${agent.launch.id}`}
