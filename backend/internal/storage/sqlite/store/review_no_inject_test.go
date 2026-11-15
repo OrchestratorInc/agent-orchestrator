@@ -129,3 +129,68 @@ func TestPRReviewOnlyRoundTripAndTakeoverClearsIt(t *testing.T) {
 		t.Fatalf("pr = %+v, want the new owner and review-only cleared", got)
 	}
 }
+
+// #6810: a --no-inject pass without a provider review id is listed with when it
+// ran: open while running, closed once it fails or is cancelled. A pass that
+// recorded its id, and a normal pass, are not listed.
+func TestNoInjectAOReviewWindows(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	url := "https://github.com/acme/repo/pull/2"
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: r.ID, ProjectID: "mer", Harness: "claude-code", PRURL: url, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range []domain.ReviewRun{
+		{ID: "exited", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: url, TargetSHA: "h1", Status: domain.ReviewRunRunning, CreatedAt: now, NoInject: true},
+		{ID: "submitted", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: url, TargetSHA: "h2", Status: domain.ReviewRunRunning, CreatedAt: now, NoInject: true},
+		{ID: "loud", ReviewID: "rev", SessionID: r.ID, Harness: "codex", PRURL: url, TargetSHA: "h1", Status: domain.ReviewRunRunning, CreatedAt: now},
+	} {
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	windows, err := s.NoInjectAOReviewWindows(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 2 || !windows[0].End.IsZero() || !windows[1].End.IsZero() || !windows[0].Start.Equal(now) {
+		t.Fatalf("windows = %+v, want both running --no-inject passes open from %v", windows, now)
+	}
+
+	if _, err := s.UpdateReviewRunResult(ctx, "submitted", domain.ReviewRunComplete, domain.VerdictChangesRequested, "b", "987", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateReviewRunResult(ctx, "exited", domain.ReviewRunFailed, domain.VerdictNone, "reviewer exited", "", false); err != nil {
+		t.Fatal(err)
+	}
+	windows, err = s.NoInjectAOReviewWindows(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 1 || windows[0].End.IsZero() || windows[0].End.Before(now) {
+		t.Fatalf("windows = %+v, want only the exited pass, closed at or after %v", windows, now)
+	}
+
+	// Cancelling a running pass closes its window too.
+	if err := s.InsertReviewRun(ctx, domain.ReviewRun{ID: "cancelled", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: url, TargetSHA: "h3", Status: domain.ReviewRunRunning, CreatedAt: now, NoInject: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CancelRunningReviewRunsBySession(ctx, r.ID, "cancelled by user"); err != nil {
+		t.Fatal(err)
+	}
+	windows, err = s.NoInjectAOReviewWindows(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range windows {
+		if w.End.IsZero() {
+			t.Fatalf("windows = %+v, want every ended pass closed", windows)
+		}
+	}
+}

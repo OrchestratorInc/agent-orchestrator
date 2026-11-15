@@ -614,3 +614,26 @@ func (s *Store) SuppressAOReviewInject(ctx context.Context, prURL, githubReviewI
 		return q.SuppressPRReviewInjectByReview(ctx, gen.SuppressPRReviewInjectByReviewParams{PRURL: prURL, ReviewID: githubReviewID})
 	})
 }
+
+// NoInjectAOReviewWindows returns when each --no-inject AO review pass on prURL
+// without a recorded provider review id was running: still running (zero End),
+// or ended without one. What its reviewer posted then is never delivered
+// (#6810).
+func (s *Store) NoInjectAOReviewWindows(ctx context.Context, prURL string) ([]domain.NoInjectReviewWindow, error) {
+	rows, err := s.qr.ListNoInjectReviewRunWindowsByPR(ctx, prURL)
+	if err != nil {
+		return nil, fmt.Errorf("list no-inject AO review windows for %s: %w", prURL, err)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	out := make([]domain.NoInjectReviewWindow, 0, len(rows))
+	for _, r := range rows {
+		w := domain.NoInjectReviewWindow{Start: r.CreatedAt}
+		if r.FinishedAt.Valid {
+			w.End = r.FinishedAt.Time
+		}
+		out = append(out, w)
+	}
+	return out, nil
+}

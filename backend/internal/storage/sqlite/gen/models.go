@@ -715,6 +715,7 @@ type ReviewRun struct {
 	AutoInjectReview bool
 	TriggerSource    domain.ReviewTriggerSource
 	NoInject         bool
+	FinishedAt       sql.NullTime
 }
 
 type Session struct {
