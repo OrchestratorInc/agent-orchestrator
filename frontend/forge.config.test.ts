@@ -354,6 +354,7 @@ describe("macOS Touch ID passkeys", () => {
 		mkdirSync(join(resources, "wake-helper"), { recursive: true });
 		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
 		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		writeFileSync(join(resources, "Assets.car"), "");
 		const dictationHelper = join(resources, "dictation-helper", "Orchestrator.app", "Contents", "MacOS");
 		mkdirSync(dictationHelper, { recursive: true });
 		writeFileSync(join(dictationHelper, "Orchestrator"), "");
