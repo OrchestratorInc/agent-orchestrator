@@ -116,6 +116,7 @@ export function toWorkspaceSession(
 			? {
 					model: session.reviewerConfig.model ?? undefined,
 					mode: session.reviewerConfig.mode ?? undefined,
+					effort: session.reviewerConfig.effort ?? undefined,
 					permissions: session.reviewerConfig.permissions ?? undefined,
 				}
 			: undefined,
@@ -224,6 +225,7 @@ function toLocalWorkspaceSession(
 			? {
 					model: session.reviewerConfig.model ?? undefined,
 					mode: session.reviewerConfig.mode ?? undefined,
+					effort: session.reviewerConfig.effort ?? undefined,
 					permissions: session.reviewerConfig.permissions ?? undefined,
 				}
 			: undefined,
