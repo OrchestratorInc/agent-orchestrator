@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,12 +10,17 @@ vi.mock("../../lib/api-client", async (importOriginal) => ({
 	apiClient: api,
 }));
 const auth = vi.hoisted(() => ({ probe: vi.fn() }));
+const terminals = vi.hoisted(() => ({ close: vi.fn() }));
+vi.mock("../settings/harness/HarnessAuthTerminalPanel", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../settings/harness/HarnessAuthTerminalPanel")>()),
+	closeAuthTerminal: terminals.close,
+}));
 vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../hooks/useAgentAuth")>()),
 	probeAgentAuth: auth.probe,
 }));
 
-import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, verifyAgentSignIn } from "./ToolInstalls";
+import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useOnboardingLogin, verifyAgentSignIn } from "./ToolInstalls";
 
 const plan = (agentId: string, automatic = true) => ({
 	agentId,
@@ -269,5 +274,37 @@ describe("verifyAgentSignIn", () => {
 		const refresh = vi.fn(async () => undefined);
 		await verifyAgentSignIn(new QueryClient(), ["codex"], refresh);
 		expect(refresh).toHaveBeenCalledWith(["codex"]);
+	});
+});
+
+describe("useOnboardingLogin", () => {
+	const login = (handleId: string) => ({
+		agentId: "cursor",
+		action: "login",
+		terminal: { handleId, title: "Sign in to Cursor", createdAt: "2026-11-15T00:00:00Z" },
+		guidance: "",
+		phase: "running",
+		startedAt: 0,
+	}) as never;
+
+	beforeEach(() => terminals.close.mockReset().mockResolvedValue(undefined));
+
+	it("keeps a login across the step's comings and goings, closing it only when the flow ends", () => {
+		// The flow owns the hook; Your tools reading it can unmount and remount (Back, then forward).
+		const flow = renderHook(() => useOnboardingLogin());
+		act(() => flow.result.current[1](login("term-1")));
+		flow.rerender();
+		expect(flow.result.current[0]).toMatchObject({ terminal: { handleId: "term-1" } });
+		expect(terminals.close).not.toHaveBeenCalled();
+		flow.unmount();
+		expect(terminals.close).toHaveBeenCalledWith("term-1");
+	});
+
+	it("closes a login that comes back after the flow has ended", () => {
+		const flow = renderHook(() => useOnboardingLogin());
+		const setWorkflow = flow.result.current[1];
+		flow.unmount();
+		setWorkflow(login("late"));
+		expect(terminals.close).toHaveBeenCalledWith("late");
 	});
 });

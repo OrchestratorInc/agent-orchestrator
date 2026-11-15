@@ -17,6 +17,7 @@ import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ManualCommand } from "../InstallDependencyDialog";
 import { installPercent } from "../settings/harness/describe-harness";
+import { closeAuthTerminal, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button } from "../ui/button";
 
 // Installs on onboarding's Your tools page. Every click shows something at
@@ -142,6 +143,37 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 	};
 
 	return { plansReady: !plans.isPending, planFor, canInstall, start, view };
+}
+
+/**
+ * A harness login started on Your tools, kept by the onboarding flow rather
+ * than the step: going Back and returning reattaches the same terminal (the
+ * daemon allows one login at a time, so a lost handle would block the next
+ * Sign in). When the flow ends its terminal closes, and a login that comes back
+ * after that has its new terminal closed rather than stranded.
+ */
+export function useOnboardingLogin() {
+	const [workflow, setWorkflowState] = useState<AuthTerminalWorkflow | null>(null);
+	const current = useRef<AuthTerminalWorkflow | null>(null);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+			const open = current.current;
+			current.current = null;
+			if (open) void closeAuthTerminal(open.terminal.handleId).catch(() => undefined);
+		};
+	}, []);
+	const setWorkflow = useCallback((next: AuthTerminalWorkflow | null) => {
+		if (!mounted.current) {
+			if (next) void closeAuthTerminal(next.terminal.handleId).catch(() => undefined);
+			return;
+		}
+		current.current = next;
+		setWorkflowState(next);
+	}, []);
+	return [workflow, setWorkflow] as const;
 }
 
 /**

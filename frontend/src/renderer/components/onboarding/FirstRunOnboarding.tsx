@@ -54,11 +54,11 @@ import { Badge } from "../ui/badge";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { GitHubLoginActions, GitHubLoginTerminal, useGitHubLogin } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
-import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
+import { closeAuthTerminal, HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { startGuidedTour } from "./GuidedTour";
-import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
+import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useOnboardingLogin, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
@@ -241,6 +241,7 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 	};
 	const index = STEPS.indexOf(step);
 	const reduceMotion = useReducedMotion();
+	const harnessLogin = useOnboardingLogin();
 	// The window's width, for the copy column / stage split (stage from 900px).
 	const rowRef = useRef<HTMLDivElement>(null);
 	const [rowWidth, setRowWidth] = useState(0);
@@ -361,7 +362,7 @@ function OnboardingFlow({ onFinish }: { onFinish: (options?: { tour?: boolean })
 						>
 							{step === "welcome" ? <WelcomeStep point={point} onNext={goNext} /> : null}
 							{step === "signin" ? <SignInStep onNext={goNext} /> : null}
-							{step === "tools" ? <ToolsStep onNext={goNext} onSkip={() => onFinish({ tour: false })} /> : null}
+							{step === "tools" ? <ToolsStep onNext={goNext} onSkip={() => onFinish({ tour: false })} login={harnessLogin} /> : null}
 						</motion.div>
 					</AnimatePresence>
 				</div>
@@ -914,7 +915,13 @@ function useToolAgents() {
 	}, [readiness.data]);
 }
 
-function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
+function ToolsStep({ onNext, onSkip, login }: {
+	onNext: () => void;
+	onSkip: () => void;
+	/** The harness login in progress, kept by the flow so it survives Back (useOnboardingLogin). */
+	login: ReturnType<typeof useOnboardingLogin>;
+}) {
+	const [workflow, setWorkflow] = login;
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const gate = useSystemRequirementsGate();
@@ -922,7 +929,6 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 	const readiness = useAgentReadinessQuery();
 	const authPlans = useAgentAuthPlans();
 	const startAuth = useStartAgentAuth();
-	const [workflow, setWorkflow] = useState<AuthTerminalWorkflow | null>(null);
 	const [authError, setAuthError] = useState<string | null>(null);
 	const [checking, setChecking] = useState(false);
 
