@@ -49,8 +49,10 @@ for target in "$@"; do
   fi
   files=$(find "$target" -type f 2>/dev/null | wc -l | tr -d ' ')
   # -a: binary files too (SQLite, LevelDB, crash dumps); -l: names only.
-  # grep exits 0 on a match, 1 on none, 2 when it could not read something.
-  matches=$(grep -a -r -l -F -f "$patterns" "$target")
+  # -D skip: sockets, FIFOs and devices (a data dir's run/*.sock) hold no
+  # stored content; reading them is not possible, so they are not a gap.
+  # grep exits 0 on a match, 1 on none, 2 when it could not read a file.
+  matches=$(grep -a -r -l -D skip -F -f "$patterns" "$target")
   status=$?
   if [ -n "$matches" ]; then
     leaked=1
