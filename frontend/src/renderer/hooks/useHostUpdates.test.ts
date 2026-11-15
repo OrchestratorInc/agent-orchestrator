@@ -79,4 +79,27 @@ describe("host update flow", () => {
 		await startHostUpdate(URL);
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "failed", error: "an update is already running on this host" });
 	});
+
+	it("keeps following an update another client already started", async () => {
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockRejectedValue(new Error("an update is already running on this host"));
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10") });
+		await startHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
+	});
+
+	it("drops a stale failure once the host reports idle", async () => {
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10"), error: "host is offline" });
+		vi.spyOn(aoBridge.remotes, "hostUpdate").mockResolvedValue(view("0.14.10"));
+		await refreshHostUpdate(URL);
+		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "update", version: "0.14.10" });
+	});
+
+	it("forgets hosts that went offline unless they are mid-update", () => {
+		const other = "https://studio.example";
+		useHostUpdateStore.getState().patch(URL, { view: view("0.14.10"), updating: { from: "0.14.10", since: Date.now() } });
+		useHostUpdateStore.getState().patch(other, { view: view("0.14.10") });
+		useHostUpdateStore.getState().retain([]);
+		expect(Object.keys(useHostUpdateStore.getState().byUrl)).toEqual([URL]);
+	});
 });

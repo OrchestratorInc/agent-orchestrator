@@ -28,7 +28,7 @@ export const useHostUpdateStore = create<Store>((set) => ({
 	byUrl: {},
 	urlByHost: {},
 	patch: (url, change) => set((state) => ({ byUrl: { ...state.byUrl, [url]: { ...(state.byUrl[url] ?? { view: null }), ...change } } })),
-	retain: (urls) => set((state) => ({ byUrl: Object.fromEntries(Object.entries(state.byUrl).filter(([url]) => urls.includes(url))) })),
+	retain: (urls) => set((state) => ({ byUrl: Object.fromEntries(Object.entries(state.byUrl).filter(([url, entry]) => urls.includes(url) || entry.updating)) })),
 }));
 
 const PUBLISHED = /^(\d+)\.(\d+)\.(\d+)(?:-nightly\.(\d{12}))?$/;
@@ -63,7 +63,7 @@ function settle(url: string, view: HostUpdateView | null) {
 	const { byUrl, patch } = useHostUpdateStore.getState();
 	const updating = byUrl[url]?.updating;
 	if (!updating) {
-		patch(url, { view, ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
+		patch(url, { view, error: undefined, ...(view?.state === "updating" && view.version ? { updating: { from: view.version, since: Date.now() } } : {}) });
 		return;
 	}
 	if (!view || view.state === "updating") {
@@ -88,7 +88,9 @@ export async function startHostUpdate(url: string): Promise<void> {
 	try {
 		patch(url, { view: await aoBridge.remotes.startHostUpdate(url) });
 	} catch (cause) {
-		patch(url, { updating: undefined, error: cause instanceof Error ? cause.message : String(cause) });
+		const view = await aoBridge.remotes.hostUpdate(url).catch(() => null);
+		if (view?.state === "updating") patch(url, { view });
+		else patch(url, { updating: undefined, error: cause instanceof Error ? cause.message : String(cause) });
 	}
 }
 
@@ -103,7 +105,7 @@ export function useHostUpdatePolling(hosts: RemoteHost[]): void {
 	const key = readable.map((host) => `${host.url}\n${host.status}`).join("\0");
 	useEffect(() => {
 		const urls = readable.map((host) => host.url);
-		useHostUpdateStore.getState().retain(hosts.map((host) => host.url));
+		useHostUpdateStore.getState().retain(urls);
 		useHostUpdateStore.setState({ urlByHost: Object.fromEntries(hosts.map((host) => [host.hostId, host.url])) });
 		const readAll = () => { for (const url of urls) void refreshHostUpdate(url); };
 		readAll();

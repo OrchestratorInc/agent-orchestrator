@@ -2,13 +2,16 @@
 package hostupdate
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -54,6 +57,7 @@ type runner func(ctx context.Context, name string, args ...string) ([]byte, erro
 
 // Updater reads and starts this host's update.
 type Updater struct {
+	mu      sync.Mutex
 	version string
 	root    string
 	run     runner
@@ -96,20 +100,21 @@ func installRoot(exe string) string {
 }
 
 func serviceInstalled() bool {
-	config := os.Getenv("XDG_CONFIG_HOME")
-	if config == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return false
-		}
-		config = filepath.Join(home, ".config")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
 	}
-	_, err := os.Stat(filepath.Join(config, "systemd", "user", serviceUnit))
+	_, err = os.Stat(filepath.Join(home, ".config", "systemd", "user", serviceUnit))
 	return err == nil
 }
 
 func runCommand(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return process.CommandContext(ctx, name, args...).Output()
+	out, err := process.CommandContext(ctx, name, args...).Output()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(bytes.TrimSpace(exitErr.Stderr)) > 0 {
+		return out, fmt.Errorf("%w: %s", err, bytes.TrimSpace(exitErr.Stderr))
+	}
+	return out, err
 }
 
 // Status reads the update unit's state from systemd.
@@ -150,12 +155,26 @@ func (u *Updater) Start(ctx context.Context) error {
 	if u.root == "" {
 		return ErrUnsupported
 	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	if u.Status(ctx).State == StateUpdating {
 		return ErrInProgress
 	}
 	_, _ = u.run(ctx, "systemctl", "--user", "reset-failed", updateUnit)
 	_, err := u.run(ctx, "systemd-run", u.startArgs()...)
 	return err
+}
+
+func (u *Updater) defaultRoot() bool {
+	home := u.getenv("HOME")
+	if home == "" {
+		return false
+	}
+	want := filepath.Join(home, ".ao", "host")
+	if resolved, err := filepath.EvalSymlinks(want); err == nil {
+		want = resolved
+	}
+	return want == u.root
 }
 
 func (u *Updater) startArgs() []string {
@@ -165,7 +184,7 @@ func (u *Updater) startArgs() []string {
 			args = append(args, "--setenv="+name+"="+value)
 		}
 	}
-	if home := u.getenv("HOME"); home == "" || filepath.Join(home, ".ao", "host") != u.root {
+	if !u.defaultRoot() {
 		args = append(args, "--setenv=AO_HOST_INSTALL_DIR="+u.root)
 	}
 	args = append(args, "/bin/bash", "-c", installerRun, "ao-host-update", installerURL, "--upgrade")

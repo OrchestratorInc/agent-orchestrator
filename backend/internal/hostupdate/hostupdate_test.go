@@ -3,6 +3,8 @@ package hostupdate
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -102,5 +104,31 @@ func TestStart(t *testing.T) {
 	run = stable.calls[len(stable.calls)-1]
 	if slices.Contains(run, "--nightly") || !slices.Contains(run, "--setenv=AO_HOST_INSTALL_DIR=/opt/ao") {
 		t.Errorf("stable custom-root args = %v", run)
+	}
+}
+
+func TestDefaultRootThroughSymlinkedHome(t *testing.T) {
+	realHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(realHome, ".ao", "host"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(realHome, link); err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(filepath.Join(realHome, ".ao", "host"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := &Updater{root: root, getenv: func(name string) string { return map[string]string{"HOME": link}[name] }}
+	if slices.ContainsFunc(u.startArgs(), func(arg string) bool { return strings.HasPrefix(arg, "--setenv=AO_HOST_INSTALL_DIR=") }) {
+		t.Errorf("symlinked default root passed explicitly: %v", u.startArgs())
+	}
+}
+
+func TestRunCommandKeepsStderr(t *testing.T) {
+	_, err := runCommand(context.Background(), "sh", "-c", "echo 'Failed to connect to bus' >&2; exit 1")
+	if err == nil || !strings.Contains(err.Error(), "Failed to connect to bus") {
+		t.Fatalf("err = %v", err)
 	}
 }
