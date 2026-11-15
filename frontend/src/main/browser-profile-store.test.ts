@@ -234,6 +234,20 @@ describe("BrowserProfileStore", () => {
 		expect(reloaded.profiles).toEqual([]);
 	});
 
+	it("does not create a default after deleting every pre-existing profile from an older registry", async () => {
+		const stateDir = await makeStateDir();
+		await writeFile(path.join(stateDir, "browser-profiles.json"), JSON.stringify(registryWithProfiles(1)));
+		const store = new BrowserProfileStore({ stateDir });
+		await store.load();
+		await store.ensureDefaultProfile("Personal");
+		await store.deleteProfile(profileId(1));
+
+		const reloaded = new BrowserProfileStore({ stateDir });
+		await reloaded.load();
+		expect(await reloaded.ensureDefaultProfile("Personal")).toBeNull();
+		expect(reloaded.profiles).toEqual([]);
+	});
+
 	it("keeps a registry whose default was deliberately unset without a default", async () => {
 		const stateDir = await makeStateDir();
 		await writeFile(

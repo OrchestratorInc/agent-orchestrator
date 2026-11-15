@@ -337,13 +337,15 @@ export class BrowserProfileStore {
 	async ensureDefaultProfile(rawName: unknown): Promise<BrowserProfileId | null> {
 		await this.load();
 		if (this.loadError) return null;
-		if (this.registry.defaultProfileCreated || this.registry.profiles.length > 0) {
-			return this.registry.defaultProfileId;
-		}
+		if (this.registry.defaultProfileCreated) return this.registry.defaultProfileId;
 		const name = normalizeBrowserProfileName(rawName);
 		if (!name) throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile name is invalid.");
 		return this.enqueueMutation((current) => {
-			if (current.defaultProfileCreated || current.profiles.length > 0) {
+			if (current.defaultProfileCreated) return { registry: current, result: current.defaultProfileId };
+			// Existing profiles already settle first run. Record that, so deleting
+			// them all later stays a choice of Temporary.
+			if (current.profiles.length > 0) {
+				current.defaultProfileCreated = true;
 				return { registry: current, result: current.defaultProfileId };
 			}
 			const now = this.now().toISOString();
