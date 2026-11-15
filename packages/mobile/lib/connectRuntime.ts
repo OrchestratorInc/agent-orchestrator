@@ -31,12 +31,13 @@ function identityHost(body: { hostId?: unknown; apiVersion?: unknown }): string 
 export const PROBE_TIMEOUT_MS = 3_000;
 
 /**
- * How long each endpoint gets when every one of them ran out the short
- * timeout: the same as an ordinary request (see api.ts's REQUEST_TIMEOUT_MS).
+ * How long each endpoint that ran out the short timeout gets in a second race:
+ * the same as an ordinary request (see api.ts's REQUEST_TIMEOUT_MS).
  *
- * Only a timeout earns the second, slower race. A refused connection or a
- * different machine answering is a real answer and still ends the race at
- * once. A link whose round trip is longer than PROBE_TIMEOUT_MS (a weak
+ * Only a timeout earns the second, slower attempt. A refused connection or a
+ * different machine answering is a real answer for that endpoint, so it is not
+ * asked again; but it does not stop a slow endpoint beside it (an old LAN
+ * address next to a working tunnel) from getting its longer try. A link whose round trip is longer than PROBE_TIMEOUT_MS (a weak
  * cellular signal, a congested tunnel) otherwise could never connect, though
  * every request on it would have succeeded, and a working session dropped
  * whenever a periodic re-check landed on a slow moment.
@@ -59,6 +60,10 @@ export async function probeEndpoint(endpoint: Endpoint, signal: AbortSignal, opt
 		} catch (e) {
 			if (signal.aborted) throw e; // The race already has a winner.
 			if (e instanceof IncompatibleHostVersionError) throw e;
+			// Our own timeout is not a hostname still propagating: the slow
+			// race (raceWithSlowLinkRetry) gives this endpoint its one longer
+			// try, so retrying here would only stretch a dead tunnel's attempt.
+			if (e instanceof ProbeTimeoutError) throw e;
 			if (options.retryTunnel === false || !shouldRetryProbe(endpoint.kind, Date.now() - startedAt)) throw e;
 			await waitOrAbort(TUNNEL_PROBE_RETRY_DELAY_MS, signal);
 		}
@@ -204,14 +209,19 @@ export type ConnectOptions = {
 };
 
 /**
- * The race, run once more with SLOW_LINK_PROBE_TIMEOUT_MS when every endpoint
- * timed out the first time (see there). A fast link answers in the first race
- * as before; a dead address that refuses still fails at once.
+ * The race, run once more with SLOW_LINK_PROBE_TIMEOUT_MS over the endpoints
+ * that timed out the first time, when none answered as this machine (see
+ * there). A fast link answers in the first race as before; an address that
+ * refused or answered as another machine is not asked again. The second race
+ * makes one attempt per endpoint (no tunnel propagation retry), so it is
+ * bounded by SLOW_LINK_PROBE_TIMEOUT_MS. Each answer still goes through the
+ * same identity and version checks.
  */
 export async function raceWithSlowLinkRetry(endpoints: readonly Endpoint[], hostId: string, probe: typeof probeEndpoint = probeEndpoint) {
 	const quick = await raceEndpoints(endpoints, hostId, probe);
-	if (quick.ok || !quick.allTimedOut) return quick;
-	return raceEndpoints(endpoints, hostId, (endpoint, signal) => probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS }));
+	if (quick.ok || !quick.timedOut?.length) return quick;
+	return raceEndpoints(quick.timedOut, hostId, (endpoint, signal) =>
+		probe(endpoint, signal, { timeoutMs: SLOW_LINK_PROBE_TIMEOUT_MS, retryTunnel: false }));
 }
 
 /** The production dependency set for connectHost. */

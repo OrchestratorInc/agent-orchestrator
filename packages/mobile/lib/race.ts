@@ -45,8 +45,9 @@ export type RaceOutcome =
 	| {
 		ok: false;
 		reason: "no-candidates" | "none-reachable" | "incompatible";
-		/** Every endpoint failed by timing out (ProbeTimeoutError): the link may only be slow. */
-		allTimedOut?: boolean;
+		/** The endpoints that failed by timing out (ProbeTimeoutError), when
+		 * any did: the link to them may only be slow. Absent when none did. */
+		timedOut?: Endpoint[];
 	};
 
 /**
@@ -91,7 +92,7 @@ export async function raceEndpoints(
 	let bestHostId = "";
 	let settled = 0;
 	let incompatible = false;
-	let timeouts = 0;
+	const timedOut: Endpoint[] = [];
 	let done = false;
 	let graceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -107,7 +108,7 @@ export async function raceEndpoints(
 				? { ok: true, endpoint: best, hostId: bestHostId }
 				: incompatible
 					? { ok: false, reason: "incompatible" }
-					: { ok: false, reason: "none-reachable", ...(timeouts === endpoints.length ? { allTimedOut: true } : {}) };
+					: { ok: false, reason: "none-reachable", ...(timedOut.length > 0 ? { timedOut } : {}) };
 			if (isDev) {
 				console.log("[race] Race finished:", result);
 			}
@@ -146,7 +147,7 @@ export async function raceEndpoints(
 				})
 				.catch((err) => {
 					if (err instanceof IncompatibleHostVersionError && (expectedHostId === "" || err.hostId === expectedHostId)) incompatible = true;
-					if (err instanceof ProbeTimeoutError) timeouts += 1;
+					if (err instanceof ProbeTimeoutError) timedOut.push(endpoint);
 					if (isDev) {
 						console.log("[race] Endpoint failed:", `${endpoint.kind}://${endpoint.host}:${endpoint.port}`, err);
 					}
