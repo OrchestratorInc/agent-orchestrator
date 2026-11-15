@@ -33,6 +33,7 @@ tags:
   - name: Remote Hosts
   - name: Push Devices
   - name: Billing
+  - name: Data Retention
 paths:
   /api/cloud/v1/me:
     get:
@@ -4464,6 +4465,84 @@ paths:
           $ref: "#/components/responses/BadRequest"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/data-retention:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: getOrgDataRetention
+      tags: [Data Retention]
+      description: >-
+        How long the organization keeps its Cloud sessions and their
+        conversation content (any member). The clock runs from a session's
+        creation: once a session is older than retentionDays it is ended, its
+        sandbox is deleted and its content (chat timeline, harness
+        transcripts, terminal output, commands, agent-switch handoffs and
+        prompts) is deleted for good. The session itself remains, without its
+        content, for billing and audit. An organization keeps defaultDays until
+        an owner or admin chooses another of options. canEdit says whether the
+        caller may change it.
+      responses:
+        "200":
+          description: The organization's retention period.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgDataRetention"
+        "404":
+          description: not_found. The caller has no access to the organization.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: putOrgDataRetention
+      tags: [Data Retention]
+      description: >-
+        Choose how long the organization keeps its Cloud sessions and their
+        conversation content (organization owners and admins). Both modes
+        answer sessionsToDelete, the number of the organization's sessions
+        older than the requested period whose content has not been deleted
+        yet: what this change deletes. With dryRun true nothing changes, so a
+        client can show that number and ask for confirmation before it sends
+        the same request with dryRun false. Every change is written to the
+        organization's audit log with the old and new period.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutOrgDataRetentionInput"
+      responses:
+        "200":
+          description: >-
+            The organization's retention period as stored (unchanged by a dry
+            run) and how many sessions the requested period deletes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgDataRetentionChange"
+        "400":
+          description: invalid_retention. retentionDays is not one of the organization's options.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "403":
+          description: forbidden. Only organization owners and admins change the retention period.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: not_found. The caller has no access to the organization.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/notifications:
     get:
       operationId: listCloudNotifications
@@ -5448,6 +5527,93 @@ components:
         defaultProvider:
           type: string
           description: A provider from the organization's offering, or empty to clear the choice.
+    OrgDataRetention:
+      type: object
+      additionalProperties: false
+      description: How long the organization keeps its Cloud sessions and their conversation content.
+      required: [retentionDays, defaultDays, options, canEdit, updatedAt]
+      properties:
+        retentionDays:
+          type: integer
+          minimum: 1
+          description: >-
+            Days the organization keeps a session and its conversation content,
+            counted from the session's creation. defaultDays until an owner or
+            admin chooses another of options.
+        defaultDays:
+          type: integer
+          minimum: 1
+          description: The deployment's default period, in days. Always one of options.
+        options:
+          type: array
+          minItems: 1
+          description: The periods an owner or admin may choose, in days, ascending.
+          items:
+            type: integer
+            minimum: 1
+        canEdit:
+          type: boolean
+          description: The caller is an organization owner or admin, so may change the period.
+        updatedAt:
+          description: When an owner or admin last chose the period; null while the organization has never chosen one.
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+    PutOrgDataRetentionInput:
+      type: object
+      additionalProperties: false
+      required: [retentionDays]
+      properties:
+        retentionDays:
+          type: integer
+          minimum: 1
+          description: The new period in days; one of the organization's options (400 invalid_retention otherwise).
+        dryRun:
+          type: boolean
+          description: Only count the sessions the period would delete and change nothing. Absent means false.
+    OrgDataRetentionChange:
+      type: object
+      additionalProperties: false
+      description: >-
+        The organization's retention period as stored after a PUT (unchanged by
+        a dry run), and how many sessions the requested period deletes.
+      required: [retentionDays, defaultDays, options, canEdit, updatedAt, sessionsToDelete]
+      properties:
+        retentionDays:
+          type: integer
+          minimum: 1
+          description: >-
+            Days the organization keeps a session and its conversation content,
+            counted from the session's creation. defaultDays until an owner or
+            admin chooses another of options.
+        defaultDays:
+          type: integer
+          minimum: 1
+          description: The deployment's default period, in days. Always one of options.
+        options:
+          type: array
+          minItems: 1
+          description: The periods an owner or admin may choose, in days, ascending.
+          items:
+            type: integer
+            minimum: 1
+        canEdit:
+          type: boolean
+          description: The caller is an organization owner or admin, so may change the period.
+        updatedAt:
+          description: When an owner or admin last chose the period; null while the organization has never chosen one.
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        sessionsToDelete:
+          type: integer
+          minimum: 0
+          description: >-
+            The organization's sessions created longer ago than the requested
+            period whose content has not been deleted yet: the sessions the
+            period makes due for deletion. A dry run deletes nothing.
     CloudHarnessVersions:
       type: object
       additionalProperties: false

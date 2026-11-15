@@ -34,7 +34,10 @@ import type {
   Cue,
   CueDefinitionInput,
   InvokeCueResult,
+  OrgDataRetention,
+  OrgDataRetentionChange,
   PutAgentProviderConnectionInput,
+  PutOrgDataRetentionInput,
   RedactedProviderConnection,
   RequestOptions,
   Session,
@@ -1099,6 +1102,21 @@ export class CloudClient {
       },
     );
     await this.throwIfError(response);
+  }
+
+  /** How long the organization keeps its Cloud sessions and their conversation content (any member). */
+  getOrgDataRetention(orgId: string, options: RequestOptions = {}): Promise<OrgDataRetention> {
+    return this.request(this.orgPath(orgId, "/data-retention"), options);
+  }
+
+  /**
+   * Choose the organization's retention period (owners and admins). With
+   * `dryRun` nothing changes; both modes count the sessions the period deletes.
+   */
+  putOrgDataRetention(orgId: string, input: PutOrgDataRetentionInput, options: RequestOptions = {}): Promise<OrgDataRetentionChange> {
+    return this.request(this.orgPath(orgId, "/data-retention"), {
+      method: "PUT", body: input, signal: options.signal,
+    });
   }
 
   private orgPath(orgId: string, path: string): string {

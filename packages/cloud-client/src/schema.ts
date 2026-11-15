@@ -2734,6 +2734,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/data-retention": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description How long the organization keeps its Cloud sessions and their conversation content (any member). The clock runs from a session's creation: once a session is older than retentionDays it is ended, its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts) is deleted for good. The session itself remains, without its content, for billing and audit. An organization keeps defaultDays until an owner or admin chooses another of options. canEdit says whether the caller may change it. */
+        get: operations["getOrgDataRetention"];
+        /** @description Choose how long the organization keeps its Cloud sessions and their conversation content (organization owners and admins). Both modes answer sessionsToDelete, the number of the organization's sessions older than the requested period whose content has not been deleted yet: what this change deletes. With dryRun true nothing changes, so a client can show that number and ask for confirmation before it sends the same request with dryRun false. Every change is written to the organization's audit log with the old and new period. */
+        put: operations["putOrgDataRetention"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/notifications": {
         parameters: {
             query?: never;
@@ -3161,6 +3181,40 @@ export interface components {
         PutOrgSandboxProviderInput: {
             /** @description A provider from the organization's offering, or empty to clear the choice. */
             defaultProvider: string;
+        };
+        /** @description How long the organization keeps its Cloud sessions and their conversation content. */
+        OrgDataRetention: {
+            /** @description Days the organization keeps a session and its conversation content, counted from the session's creation. defaultDays until an owner or admin chooses another of options. */
+            retentionDays: number;
+            /** @description The deployment's default period, in days. Always one of options. */
+            defaultDays: number;
+            /** @description The periods an owner or admin may choose, in days, ascending. */
+            options: number[];
+            /** @description The caller is an organization owner or admin, so may change the period. */
+            canEdit: boolean;
+            /** @description When an owner or admin last chose the period; null while the organization has never chosen one. */
+            updatedAt: string | null;
+        };
+        PutOrgDataRetentionInput: {
+            /** @description The new period in days; one of the organization's options (400 invalid_retention otherwise). */
+            retentionDays: number;
+            /** @description Only count the sessions the period would delete and change nothing. Absent means false. */
+            dryRun?: boolean;
+        };
+        /** @description The organization's retention period as stored after a PUT (unchanged by a dry run), and how many sessions the requested period deletes. */
+        OrgDataRetentionChange: {
+            /** @description Days the organization keeps a session and its conversation content, counted from the session's creation. defaultDays until an owner or admin chooses another of options. */
+            retentionDays: number;
+            /** @description The deployment's default period, in days. Always one of options. */
+            defaultDays: number;
+            /** @description The periods an owner or admin may choose, in days, ascending. */
+            options: number[];
+            /** @description The caller is an organization owner or admin, so may change the period. */
+            canEdit: boolean;
+            /** @description When an owner or admin last chose the period; null while the organization has never chosen one. */
+            updatedAt: string | null;
+            /** @description The organization's sessions created longer ago than the requested period whose content has not been deleted yet: the sessions the period makes due for deletion. A dry run deletes nothing. */
+            sessionsToDelete: number;
         };
         CloudHarnessVersions: {
             /** @description The caller administers the organization, so may change the versions. */
@@ -10802,6 +10856,92 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    getOrgDataRetention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The organization's retention period. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgDataRetention"];
+                };
+            };
+            /** @description not_found. The caller has no access to the organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putOrgDataRetention: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutOrgDataRetentionInput"];
+            };
+        };
+        responses: {
+            /** @description The organization's retention period as stored (unchanged by a dry run) and how many sessions the requested period deletes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrgDataRetentionChange"];
+                };
+            };
+            /** @description invalid_retention. retentionDays is not one of the organization's options. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description forbidden. Only organization owners and admins change the retention period. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description not_found. The caller has no access to the organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
             default: components["responses"]["Error"];
         };
     };
