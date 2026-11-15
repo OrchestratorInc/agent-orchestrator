@@ -31,6 +31,27 @@ type launchRecord struct {
 	// ResolvedID is the conversation a fresh launch started, once found in
 	// Stakpak's session list, so later lookups need no list.
 	ResolvedID string `json:"resolvedId,omitempty"`
+	// Profile is STAKPAK_PROFILE as the launch environment set it, which picks
+	// the store that holds the conversation. nil means the launch environment
+	// left it to the daemon's. Nothing else from that environment is kept: it
+	// can hold API keys.
+	Profile *string `json:"profile,omitempty"`
+}
+
+// launchProfile takes the STAKPAK_PROFILE selector from a launch environment.
+func launchProfile(env map[string]string) *string {
+	if profile, ok := env["STAKPAK_PROFILE"]; ok {
+		return &profile
+	}
+	return nil
+}
+
+// listEnv is the environment the launch's session list must run in.
+func (r launchRecord) listEnv() map[string]string {
+	if r.Profile == nil {
+		return nil
+	}
+	return map[string]string{"STAKPAK_PROFILE": *r.Profile}
 }
 
 // matches reports whether this launch's conversation is nativeID: the one it
@@ -158,7 +179,7 @@ func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSes
 			return known, true, nil
 		}
 	}
-	sessions, err := p.listSessions(ctx, nil)
+	sessions, err := p.listSessions(ctx, record.listEnv())
 	if err != nil {
 		return "", false, err
 	}

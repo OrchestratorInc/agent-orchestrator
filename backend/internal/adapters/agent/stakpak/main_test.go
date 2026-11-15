@@ -37,7 +37,12 @@ func runFakeStakpak(dir string, args []string) int {
 	case len(args) > 0 && args[0] == "--version":
 		fmt.Println("stakpak 0.3.88")
 	case len(args) > 1 && args[0] == "sessions" && args[1] == "list":
-		list, err := os.ReadFile(filepath.Join(dir, "sessions.json")) //nolint:gosec // test-only path
+		// sessions.json, or sessions-<profile>.json under STAKPAK_PROFILE.
+		name := "sessions.json"
+		if profile := os.Getenv("STAKPAK_PROFILE"); profile != "" {
+			name = "sessions-" + profile + ".json"
+		}
+		list, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // test-only path
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			return 1

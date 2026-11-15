@@ -169,7 +169,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
-	if err := p.saveLaunchRecord(cfg.DataDir, cfg.SessionID, launchRecord{Workspace: cfg.WorkspacePath, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest(prompt)}); err != nil {
+	if err := p.saveLaunchRecord(cfg.DataDir, cfg.SessionID, launchRecord{Workspace: cfg.WorkspacePath, LaunchedAt: time.Now().UTC(), PromptDigest: promptDigest(prompt), Profile: launchProfile(cfg.Env)}); err != nil {
 		return nil, err
 	}
 	return argv, nil
@@ -232,7 +232,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if recorded == "" && sameConversation {
 		recorded = previous.PromptDigest
 	}
-	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded}); err != nil {
+	if err := p.saveLaunchRecord(cfg.DataDir, cfg.Session.ID, launchRecord{Workspace: cfg.Session.WorkspacePath, LaunchedAt: time.Now().UTC(), NativeID: nativeID, PromptDigest: recorded, Profile: launchProfile(cfg.Env)}); err != nil {
 		return nil, false, err
 	}
 	return append(argv, "--session", nativeID), true, nil

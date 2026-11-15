@@ -39,6 +39,8 @@ func fakeStakpak(t *testing.T, sessionsJSON string, knownSession string) string 
 	t.Setenv(fakeStakpakDirEnv, dir)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", t.TempDir())
+	// The fake keeps a store per profile; tests choose one explicitly.
+	t.Setenv("STAKPAK_PROFILE", "")
 	return path
 }
 
@@ -483,5 +485,46 @@ func TestResolvedIDNeverOverwritesANewerLaunch(t *testing.T) {
 	}
 	if stored, err := p.recordResolvedID(data, "ao-1", current, nativeA); err != nil || !stored {
 		t.Fatalf("current resolve stored = %t, %v; want it recorded", stored, err)
+	}
+}
+
+// A fresh launch's conversation lives in the launch profile's store, so its
+// discovery lists that profile, never the daemon's. The launch record keeps
+// only the profile selector, not the environment, which can hold API keys.
+func TestResolveNativeSessionIDListsTheLaunchProfile(t *testing.T) {
+	ws := t.TempDir()
+	const defaultConversation = "66666666-6666-4666-8666-666666666666"
+	bin := fakeStakpak(t, `{"sessions":[]}`, "")
+	data := t.TempDir()
+	p := New()
+	if _, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir: data, SessionID: "ao-1", WorkspacePath: ws,
+		Env: map[string]string{"STAKPAK_PROFILE": "other", "ANTHROPIC_API_KEY": "secret-key"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().UTC().Add(time.Second)
+	write := func(name, id string) {
+		t.Helper()
+		list, err := json.Marshal(map[string]any{"sessions": []map[string]any{{"id": id, "cwd": ws, "created_at": started}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(filepath.Dir(bin), name), list, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("sessions.json", defaultConversation)
+	write("sessions-other.json", nativeA)
+	id, ok, err := p.ResolveNativeSessionID(context.Background(), ports.NativeSessionResolveConfig{DataDir: data, SessionID: "ao-1"})
+	if err != nil || !ok || id != nativeA {
+		t.Fatalf("resolved = %q, %t, %v; want the other profile's %s", id, ok, err, nativeA)
+	}
+	raw, err := os.ReadFile(launchRecordPath(data, "ao-1")) //nolint:gosec // test path
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "secret-key") || strings.Contains(string(raw), "ANTHROPIC_API_KEY") {
+		t.Fatalf("launch record kept the launch environment: %s", raw)
 	}
 }
