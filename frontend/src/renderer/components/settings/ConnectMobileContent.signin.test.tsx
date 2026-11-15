@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { apiClient } from "../../lib/api-client";
 import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
@@ -97,6 +97,10 @@ beforeEach(() => {
 	vi.mocked(deleteAccountRemoteHost).mockClear();
 	fake.failRemoteAccess = false;
 	fake.tunnelHost = "";
+});
+
+afterEach(() => {
+	vi.unstubAllEnvs();
 });
 
 const posted = () => (vi.mocked(apiClient.POST).mock.calls as unknown[][]).map(([path]) => path);
@@ -232,5 +236,15 @@ test("a signed-out computer gets a new password without linking", async () => {
 	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/regenerate"]));
+	expect(linkThisComputer).not.toHaveBeenCalled();
+});
+
+test("a development build starts remote access without publishing its temporary identity", async () => {
+	vi.stubEnv("MODE", "development");
+	fake.signedIn = true;
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+
+	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable", "/api/v1/mobile/remote-access"]));
 	expect(linkThisComputer).not.toHaveBeenCalled();
 });

@@ -2,6 +2,16 @@ export function isNightlyBuild(version?: string): boolean {
 	return version?.includes("-nightly.") ?? false;
 }
 
+/**
+ * Whether this is the Vite dev server (`npm run dev`), whose daemon and
+ * credentials live under ~/.ao/dev. Tests (mode "test") and packaged builds
+ * (mode "production") are not development builds: their account links are
+ * real and may be published.
+ */
+export function isDevelopmentBuild(mode: string = import.meta.env.MODE): boolean {
+	return mode === "development";
+}
+
 export function isCommandPaletteEnabled(version?: string, isDev: boolean = import.meta.env.DEV): boolean {
 	return isDev || isNightlyBuild(version);
 }

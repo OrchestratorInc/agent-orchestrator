@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AccountHostSyncError } from "../lib/account-remote-hosts";
 import { apiClient } from "../lib/api-client";
 import { linkThisComputer } from "../lib/link-this-computer";
@@ -10,6 +10,7 @@ import { linkThisComputer } from "../lib/link-this-computer";
 // its fixed address without the user turning on Allow access as well.
 const fake = vi.hoisted(() => ({
 	signedIn: false,
+	failNextStatusRead: false,
 	status: { enabled: true, noPublicTunnel: false, accountLinked: false, hostId: "h_this", password: "pw-1", url: "https://quick.trycloudflare.com:443" },
 }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: fake.signedIn ? { user: { id: "user_01" } } : null }) }));
@@ -17,7 +18,13 @@ vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControl
 vi.mock("../lib/link-this-computer", () => ({ linkThisComputer: vi.fn(async () => ({ hostId: "h_this", added: true })) }));
 vi.mock("../lib/api-client", () => ({ apiClient: { POST: vi.fn(async () => ({ data: {} })) } }));
 vi.mock("../components/settings/ConnectMobileContent", () => ({
-	fetchMobileStatus: async () => ({ ...fake.status }),
+	fetchMobileStatus: async () => {
+		if (fake.failNextStatusRead) {
+			fake.failNextStatusRead = false;
+			throw new Error("daemon is starting");
+		}
+		return { ...fake.status };
+	},
 	tunnelUrl: (status: { url: string }) => status.url,
 }));
 
@@ -29,7 +36,13 @@ beforeEach(() => {
 	vi.mocked(linkThisComputer).mockClear();
 	vi.mocked(apiClient.POST).mockClear();
 	fake.signedIn = false;
+	fake.failNextStatusRead = false;
 	Object.assign(fake.status, { enabled: true, noPublicTunnel: false, accountLinked: false });
+});
+
+afterEach(() => {
+	vi.unstubAllEnvs();
+	vi.useRealTimers();
 });
 
 test("signing in links a computer Connect Mobile already serves", async () => {
@@ -75,4 +88,35 @@ test("a computer without remote access is not linked", async () => {
 	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(linkThisComputer).not.toHaveBeenCalled();
+});
+
+test("a development build does not publish its temporary identity", async () => {
+	vi.stubEnv("MODE", "development");
+	fake.signedIn = true;
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await new Promise((resolve) => setTimeout(resolve, 20));
+	expect(linkThisComputer).not.toHaveBeenCalled();
+});
+
+test("a status read that fails before the daemon is ready is retried", async () => {
+	vi.useFakeTimers();
+	fake.failNextStatusRead = true;
+	fake.signedIn = true;
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	expect(linkThisComputer).not.toHaveBeenCalled();
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { ifUnlisted: true, url: undefined });
+});
+
+test("remote access turned on after signing in is picked up", async () => {
+	vi.useFakeTimers();
+	Object.assign(fake.status, { enabled: false });
+	fake.signedIn = true;
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	expect(linkThisComputer).not.toHaveBeenCalled();
+	Object.assign(fake.status, { enabled: true });
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { ifUnlisted: true, url: undefined });
 });
