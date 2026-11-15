@@ -1523,7 +1523,9 @@ function ReviewMarkdownBody({
 				"[&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1",
 				"[&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:text-foreground",
 				"[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-				clamped && "line-clamp-4",
+				// line-clamp counts lines of text only: a table or a <details> block in a
+				// bot's comment would still show in full, so the height is capped too.
+				clamped && "line-clamp-4 max-h-[6lh] overflow-hidden",
 			)}
 			data-testid={testId}
 			data-overflow-axis="vertical"
