@@ -195,7 +195,7 @@ import type { ComposerPromptSuggestion } from "./ComposerEditor";
 import { ChatTokenSkills } from "./sentComposerTokens";
 import { ChatComposer, type ChatComposerHandle, type StoredComposerAttachment } from "./ChatComposer";
 import { ContextMeter } from "./ContextMeter";
-import { nearQuotaWindow, QuotaMenuNotice, QuotaSign, QuotaStatus } from "./QuotaReadout";
+import { nearQuotaWindow, QuotaSign, QuotaStatus } from "./QuotaReadout";
 import { stagedAttachmentParts, attachmentName } from "./messageAttachments";
 import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
@@ -1798,11 +1798,10 @@ function ChatWorkspaceContent({
 	const compactsAt = snapshot.harness === "claude-code" ? snapshot.settings?.autoCompactWindow : undefined;
 	const stableUsage = useStableValue(snapshot.usage);
 	const { t } = useTranslation();
-	// Near the account's usage limit, a warning sign sits beside the model and the menu repeats it.
+	// Near the account's usage limit, a warning sign sits right of the model; its tooltip says why.
 	const nearQuota = useStableValue(nearQuotaWindow(snapshot.rateLimits));
 	// The running agent's limit; a pending switch names another agent, so the sign steps aside.
 	const quotaSign = nearQuota && !agentSwitch?.pending ? <QuotaSign quota={nearQuota} /> : null;
-	const pickerNotice = useMemo(() => (nearQuota ? <QuotaMenuNotice quota={nearQuota} /> : undefined), [nearQuota]);
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
 	const currentModelReroute =
@@ -1822,7 +1821,6 @@ function ChatWorkspaceContent({
 					agentSwitch={agentSwitch}
 					beforePicker={agentSwitch ? <ContextMeter usage={stableUsage} compactsAt={compactsAt} /> : undefined}
 					afterPicker={quotaSign}
-					pickerNotice={pickerNotice}
 					// While the agent wakes or starts; a chat reads "hibernated" until ready.
 					modelsLoading={settingsLoading}
 					lastModel={lastModel}
@@ -1870,7 +1868,6 @@ function ChatWorkspaceContent({
 			agentSwitch,
 			stableUsage,
 			nearQuota,
-			pickerNotice,
 			newWorkDisabled,
 			session?.provisionState,
 			onChooseConfigOption,

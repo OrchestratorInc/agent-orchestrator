@@ -1,8 +1,7 @@
 /**
  * The account's usage limit beside the model picker. Close to the limit a small
- * warning sign sits next to the model (a clock once the window is full); hovering
- * or focusing it shows the usage and when it resets, and the open model menu
- * repeats the warning under its Agent row.
+ * warning sign sits right of the model (a clock once the window is full);
+ * hovering or focusing it shows the usage and when it resets.
  */
 
 import { useTranslation } from "react-i18next";
@@ -78,18 +77,6 @@ export function QuotaStatus({ quota }: { quota: QuotaWindow | undefined }) {
 	return (
 		<span role="status" aria-live="polite" aria-atomic="true" className="sr-only">
 			{quota ? `${label}${resets ? `. ${t("chat.quota.resetsIn", { time: resets })}` : ""}` : ""}
-		</span>
-	);
-}
-
-/** The line under the Agent row of the open model menu. */
-export function QuotaMenuNotice({ quota }: { quota: QuotaWindow }) {
-	const { t, resets, label, Icon, severity } = useQuotaText(quota);
-	return (
-		<span role="status" data-severity={severity} className="quota-note">
-			<Icon aria-hidden="true" />
-			<span className="quota-note-label">{label}</span>
-			{resets ? <><span aria-hidden="true">·</span><span className="quota-note-meta">{t("chat.quota.resetsIn", { time: resets })}</span></> : null}
 		</span>
 	);
 }

@@ -136,7 +136,6 @@ export function TurnSettingsBar({
 	agentSwitch,
 	beforePicker,
 	afterPicker,
-	pickerNotice,
 	modelsLoading,
 	lastModel,
 	unsetModelLabel,
@@ -192,8 +191,6 @@ export function TurnSettingsBar({
 	beforePicker?: ReactNode;
 	/** Right after the model control, in either picker, such as the usage-limit sign. */
 	afterPicker?: ReactNode;
-	/** A line under the Agent row of the open model menu, such as the usage limit near its end. */
-	pickerNotice?: ReactNode;
 	/** The agent is starting again; the picker names no model until it reports its own. */
 	modelsLoading?: boolean;
 	/** The model the chat's agent last reported running, when none is saved. */
@@ -506,7 +503,6 @@ export function TurnSettingsBar({
 								loading={configPending && !nativeModelMenu}
 								loadingModels={modelsLoading}
 								savedModel={settings.model || lastModel}
-								notice={pickerNotice}
 								title={reroute ? `The provider answered with ${rerouted} instead of ${reroute.fromModel ?? chosenLabel}` : undefined}
 								extras={pickerExtras}
 								onCloseAutoFocus={restoreComposerFocus}
@@ -532,7 +528,6 @@ export function TurnSettingsBar({
 							toggles={grouped.toggles}
 							extraOptions={grouped.extra}
 							onChangeConfigOption={onChangeConfigOption ? applyOption : undefined}
-							notice={pickerNotice}
 						/>
 					) : null}
 
@@ -547,7 +542,6 @@ export function TurnSettingsBar({
 							extraOptions={grouped.extra}
 							disabled={optionDisabled}
 							onChange={applyOption}
-							notice={pickerNotice}
 						/>
 					) : null}
 
@@ -789,9 +783,7 @@ function ModelEffortPicker({
 	toggles = [],
 	extraOptions = [],
 	onChangeConfigOption,
-	notice,
 }: {
-	notice?: ReactNode;
 	models: ChatModel[];
 	settings: TurnSettings;
 	onChange: (next: TurnSettings) => void;
@@ -835,7 +827,7 @@ function ModelEffortPicker({
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
 				<OptionMenuSub closeOnSelect>
-					<OptionMenuSubTrigger label="Model" value={modelLabel} detail={notice} />
+					<OptionMenuSubTrigger label="Model" value={modelLabel} />
 					{/* Scroll on an inner strip: the surface utility caps height but wheel
 					    events do not reliably reach an outer overflow on nested submenus. */}
 					<OptionMenuSubContent scrollable className={CHAT_MENU_CLASS} onFocus={focusModelSearch}>
@@ -900,9 +892,7 @@ function ClubbedConfigPicker({
 	disabled,
 	onChange,
 	groupClaude,
-	notice,
 }: {
-	notice?: ReactNode;
 	groupClaude?: boolean;
 	modelOptions: ChatConfigOption[];
 	effortOptions: ChatConfigOption[];
@@ -952,7 +942,6 @@ function ClubbedConfigPicker({
 				onChange={(value) => onChange(option.id, value)}
 				groupClaude={groupClaude}
 				align="start"
-				header={notice}
 			/>
 		);
 	}
@@ -970,7 +959,6 @@ function ClubbedConfigPicker({
 					<span className="min-w-0 max-w-[38ch] truncate">{groupLabel}</span>
 				</OptionMenuTrigger>
 			<OptionMenuContent align="start" className={CHAT_MENU_CLASS} onCloseAutoFocus={restoreComposerFocus}>
-				{notice ? <div className="px-2 py-1.5">{notice}</div> : null}
 				{modelOptions.map((option) => (
 					<OptionSubmenu key={option.id} option={option} onChange={onChange} scrollable groupClaude={groupClaude} />
 				))}
@@ -1226,7 +1214,6 @@ function ConfigOptionPicker({
 	title,
 	onChange,
 	disabled,
-	header,
 	footer,
 	leadIcon,
 	showCaret,
@@ -1234,8 +1221,6 @@ function ConfigOptionPicker({
 	align,
 }: {
 	option: ChatConfigOption;
-	/** A line above the choices, such as the usage warning. */
-	header?: ReactNode;
 	label?: string;
 	title?: string;
 	onChange: (value: ChatConfigOptionValue) => void;
@@ -1257,7 +1242,6 @@ function ConfigOptionPicker({
 			showCaret={showCaret}
 			onFocus={isModelOption(option) ? focusModelSearch : undefined}
 		>
-			{header ? <div className="px-2 py-1.5">{header}</div> : null}
 			{isModelOption(option) ? (
 				<ConfigModelChoices option={option} onChange={onChange} groupClaude={groupClaude} />
 			) : leadIcon && option.type === "select" ? (

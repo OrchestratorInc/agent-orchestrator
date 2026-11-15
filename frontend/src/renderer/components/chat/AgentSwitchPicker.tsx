@@ -213,11 +213,8 @@ export function AgentModelPicker({
 	extras,
 	terminal = false,
 	pendingFooter,
-	notice,
 	onCloseAutoFocus,
 }: {
-	/** A line under the Agent row of the open menu, such as the running agent's usage limit near its end. */
-	notice?: ReactNode;
 	/** Shown under the settings of the agent picked to switch to, such as its Switch and Cancel buttons. */
 	pendingFooter?: ReactNode;
 	currentHarness: string;
@@ -484,8 +481,7 @@ export function AgentModelPicker({
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
 								<OptionMenuSub closeOnSelect>
-									{/* The running agent's account note sits in its row; a pending switch names another agent. */}
-									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} detail={terminal || pending ? undefined : notice} />
+									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} />
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
 										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
 											{agents.map((agent) => (

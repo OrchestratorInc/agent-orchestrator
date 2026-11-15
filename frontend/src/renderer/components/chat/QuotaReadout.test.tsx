@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { formatQuotaReset, nearQuotaWindow, QuotaMenuNotice, QuotaSign, QuotaStatus, type QuotaWindow } from "./QuotaReadout";
+import { formatQuotaReset, nearQuotaWindow, QuotaSign, QuotaStatus, type QuotaWindow } from "./QuotaReadout";
 import type { ConversationRateLimits } from "../../types/conversation";
 
 function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLimits {
@@ -74,13 +74,4 @@ describe("QuotaReadout", () => {
 		expect(formatQuotaReset(4 * 86_400)).toBe("4d");
 	});
 
-	it("keeps the warning and when it resets at the top of the open menu", () => {
-		const { rerender } = render(<QuotaMenuNotice quota={{ percent: 82, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Approaching limit");
-		expect(screen.getByRole("status")).toHaveTextContent("Resets in 2h 15m");
-
-		rerender(<QuotaMenuNotice quota={{ percent: 100, kind: "session", resetsIn: 8_100 }} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Usage limit reached");
-		expect(screen.getByRole("status")).toHaveAttribute("data-severity", "full");
-	});
 });
