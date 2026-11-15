@@ -6919,6 +6919,23 @@ describe("browser view host credential fills", () => {
 		expect(inserted).toEqual([PASSWORD]);
 	});
 
+	it("refuses agent screenshots while the filler reports a 2FA code on screen", async () => {
+		const runtime = {
+			runAction: vi.fn(async () => ({})),
+			screenshot: vi.fn(async () => ({ data: "cG5n", width: 1, height: 1, untrustedExternalContent: true as const })),
+			closeSession: vi.fn(async () => undefined),
+			dispose: vi.fn(async () => undefined),
+		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
+		const screenshotBlocked = vi.fn((_sessionId: string, _url: string) => "A 2FA code is on screen" as string | undefined);
+		const filler = { screenshotBlocked, scrub: <T,>(_s: string, v: T) => v, forget: () => undefined };
+		const page = setupHost(runtime, { credentialFiller: filler as never });
+		await page.host.execute("sess-1", "tabs");
+		page.setCurrentURL(`${ORIGIN}/2fa`);
+		await expect(page.host.execute("sess-1", "screenshot", {})).rejects.toMatchObject({ code: "BROWSER_SECRET_ON_SCREEN" });
+		expect(screenshotBlocked).toHaveBeenCalledWith("sess-1", `${ORIGIN}/2fa`);
+		expect(vi.mocked(runtime.screenshot)).not.toHaveBeenCalled();
+	});
+
 	it("refuses fills without a daemon-stamped project", async () => {
 		const { host, item, inserted } = await setupVaultHost({});
 		await expect(

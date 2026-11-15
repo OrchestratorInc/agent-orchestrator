@@ -92,7 +92,7 @@ export function originAllowed(itemOrigins: readonly string[], pageURL: string): 
 }
 
 // Values shorter than this are too common to scrub without mangling output.
-const MIN_REDACT_LENGTH = 4;
+export const MIN_REDACT_LENGTH = 4;
 
 export type Redactor = {
   add(secret: string): void;

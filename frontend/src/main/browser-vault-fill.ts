@@ -1,7 +1,8 @@
 // Fills vault secrets into a page at the edge. The plaintext goes from the
 // vault straight into CDP Input.insertText; callers get back only a mask, and
 // the session's redactor scrubs the value from every later result.
-import { SECRET_MASK, createRedactor, normalizeVaultOrigin, type Redactor } from "./browser-vault";
+import { randomBytes } from "node:crypto";
+import { MIN_REDACT_LENGTH, SECRET_MASK, createRedactor, normalizeVaultOrigin, type Redactor } from "./browser-vault";
 import type { VaultField, VaultItemSummary, VaultStore } from "./browser-vault-store";
 
 export type CdpLike = {
@@ -32,21 +33,40 @@ type FocusProbe = { tag: string; type: string; visible?: boolean; hasFocus?: boo
 
 const WORLD = "ao-vault";
 
-// Runs in an isolated world: page scripts cannot patch what it reads.
-const PROBE = `/*ao-vault:probe*/(() => {
+// Runs in an isolated world: page scripts cannot patch what it reads, and the
+// token it sets on the element is a property only this world can see.
+const probeFocus = (token: string) => `/*ao-vault:probe*/(() => {
   const el = document.activeElement;
   if (!el || el === document.body) return null;
+  el.__aoVaultToken = ${JSON.stringify(token)};
   const r = el.getBoundingClientRect();
   const s = getComputedStyle(el);
   const visible = r.width > 0 && r.height > 0 && s.visibility !== "hidden" && s.display !== "none" && Number(s.opacity) > 0 && !el.disabled && !el.readOnly;
   return { tag: el.tagName, type: (el.getAttribute("type") || "").toLowerCase(), visible, hasFocus: document.hasFocus() };
 })()`;
 
-const SELECT = `/*ao-vault:select*/(() => {
+// Right before typing: the element verified by the probe must still hold
+// focus in the same document (a navigation creates a new document, which has
+// no token). Input.insertText has no target node, so this binds it.
+const selectVerified = (token: string) => `/*ao-vault:select*/(() => {
   const el = document.activeElement;
-  if (el && typeof el.select === "function") el.select();
+  if (!el || el.__aoVaultToken !== ${JSON.stringify(token)}) return false;
+  if (typeof el.select === "function") el.select();
   return true;
 })()`;
+
+/** HTTPS, or plain HTTP only to this machine (local development). */
+function secureTransport(origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "https:") return true;
+  const host = url.hostname;
+  return url.protocol === "http:" && (host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127(\.\d{1,3}){3}$/.test(host));
+}
 
 export const FIND = `/*ao-vault:find*/(() => {
   const visible = (el) => {
@@ -99,8 +119,15 @@ class FillRefused extends Error {
 
 export type CredentialFiller = ReturnType<typeof createCredentialFiller>;
 
-export function createCredentialFiller(options: { store: VaultStore }) {
+// A TOTP code is valid for its 30 s step plus the clock skew sites accept.
+const CODE_ON_SCREEN_MS = 90_000;
+
+export function createCredentialFiller(options: { store: VaultStore; now?: () => number }) {
+  const now = options.now ?? Date.now;
   const redactors = new Map<string, Redactor>();
+  // Text redaction cannot reach pixels: while a 2FA code typed into a visible
+  // text field may still be on the page, agent screenshots are refused.
+  const codesOnScreen = new Map<string, { url: string; until: number }>();
   const redactorFor = (sessionId: string) => {
     let redactor = redactors.get(sessionId);
     if (!redactor) redactors.set(sessionId, (redactor = createRedactor()));
@@ -147,13 +174,13 @@ export function createCredentialFiller(options: { store: VaultStore }) {
   };
 
   /** The one frame whose document holds focus on a form control. */
-  const focusedFrame = async (cdp: CdpLike): Promise<{ frame: Frame; probe: NonNullable<FocusProbe> }> => {
+  const focusedFrame = async (cdp: CdpLike, token: string): Promise<{ frame: Frame; probe: NonNullable<FocusProbe> }> => {
     const hits: { frame: Frame; probe: NonNullable<FocusProbe> }[] = [];
     const all = await frames(cdp);
     for (const [index, frame] of all.entries()) {
       let probe: FocusProbe;
       try {
-        probe = await evaluate<FocusProbe>(cdp, frame.id, PROBE);
+        probe = await evaluate<FocusProbe>(cdp, frame.id, probeFocus(token));
       } catch {
         // Out-of-process frames cannot be checked from here; never fill into them.
         continue;
@@ -178,7 +205,8 @@ export function createCredentialFiller(options: { store: VaultStore }) {
     if (!item.origins.includes(originOf(topURL))) {
       throw new FillRefused("Page origin does not match this credential", "origin mismatch");
     }
-    const { frame, probe } = await focusedFrame(target.cdp);
+    const token = randomBytes(16).toString("hex");
+    const { frame, probe } = await focusedFrame(target.cdp, token);
     if (!item.origins.includes(originOf(frame.url))) {
       throw new FillRefused("The focused field's frame origin does not match this credential", "frame origin mismatch");
     }
@@ -198,6 +226,9 @@ export function createCredentialFiller(options: { store: VaultStore }) {
     if (origin !== target.approvedOrigin) {
       throw new FillRefused(`The page is on ${origin}, not the approved ${target.approvedOrigin}`, "origin changed");
     }
+    if (field !== "username" && (!secureTransport(origin) || !secureTransport(originOf(frame.url)))) {
+      throw new FillRefused(`Saved secrets are only filled over HTTPS (or on this computer); ${origin} is not`, "insecure transport");
+    }
     const ensureLive = () => {
       if (target.signal?.aborted) throw new FillRefused("The command was cancelled before the fill", "cancelled");
     };
@@ -212,10 +243,22 @@ export function createCredentialFiller(options: { store: VaultStore }) {
       pageURL: frame.url,
       projectId: target.projectId,
     });
+    if (field !== "username" && secret.length < MIN_REDACT_LENGTH) {
+      throw new FillRefused("This secret is too short to mask in later output, so it is not filled", "secret too short");
+    }
+    ensureLive();
+    if (originOf(target.pageURL()) !== origin) {
+      throw new FillRefused("Page origin changed before the fill", "origin changed");
+    }
     if (field !== "username") redactorFor(target.sessionId).add(secret);
-    await evaluate(target.cdp, frame.id, SELECT);
+    if (!(await evaluate<boolean>(target.cdp, frame.id, selectVerified(token)))) {
+      throw new FillRefused("The verified field changed before typing; nothing was typed", "field changed");
+    }
     ensureLive();
     await target.cdp.sendCommand("Input.insertText", { text: secret });
+    if (field === "totp" && probe.type !== "password") {
+      codesOnScreen.set(target.sessionId, { url: target.pageURL(), until: now() + CODE_ON_SCREEN_MS });
+    }
     return origin;
   };
 
@@ -348,12 +391,24 @@ export function createCredentialFiller(options: { store: VaultStore }) {
       });
     },
 
+    /** Why an agent screenshot of this session must wait, if it must. */
+    screenshotBlocked(sessionId: string, pageURL: string): string | undefined {
+      const shown = codesOnScreen.get(sessionId);
+      if (!shown) return undefined;
+      if (shown.url !== pageURL || now() >= shown.until) {
+        codesOnScreen.delete(sessionId);
+        return undefined;
+      }
+      return "A 2FA code Orchestrator typed is on screen, so screenshots are paused. Submit the form (or wait for the code to expire) and try again.";
+    },
+
     scrub<T>(sessionId: string, value: T): T {
       return redactors.get(sessionId)?.scrub(value) ?? value;
     },
 
     forget(sessionId: string) {
       redactors.delete(sessionId);
+      codesOnScreen.delete(sessionId);
     },
   };
 }

@@ -215,8 +215,11 @@ export class VaultStore {
     let sealed: string;
     try {
       sealed = await readFile(path.join(this.dir, "items.sealed"), "utf8");
-    } catch {
-      return { items: [] };
+    } catch (error) {
+      // Only a missing file is an empty vault. Any other read error must stop
+      // a save, or it would overwrite every saved item with just the new one.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { items: [] };
+      throw error;
     }
     const key = await this.dataKey(false);
     if (!key) throw new Error("Vault key is missing");

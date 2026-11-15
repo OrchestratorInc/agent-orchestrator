@@ -64,5 +64,7 @@ Negative checks, same session:
 ```
 
 It searches every file (binary included) for the password, the seed and their
-URL, form, JSON and base64 encodings, prints only file names, and exits 1 on
-any hit. A pass means zero hits.
+URL, form, JSON and base64 encodings, and prints only file names. Exit 0 means
+every requested path was fully searched and nothing was found; 1 means a hit;
+2 means the scan was incomplete (a missing path or an unreadable file), which
+is not a pass. `sh test/credential-vault/check-no-leak.test.sh` self-tests it.

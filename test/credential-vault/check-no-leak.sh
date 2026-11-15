@@ -1,48 +1,71 @@
 #!/bin/sh
 # Proves a vault secret never left the edge: searches every file under the
-# given directories (AO data dir, agent transcripts, logs) for the password,
-# the TOTP seed and the common encodings of both. Exits 1 on any hit.
+# given paths (AO data dir, agent transcripts, logs) for the password, the TOTP
+# seed and the common encodings of both. Prints only file names.
 #
-#   check-no-leak.sh <secret.env> <dir> [<dir>...]
+#   check-no-leak.sh <secret.env> <path> [<path>...]
 #
-# secret.env holds DEMO_PASSWORD=... and DEMO_SEED=... (see run-e2e.md). The
-# values are read from the file and never printed.
-set -eu
-[ $# -ge 2 ] || { echo "usage: $0 <secret.env> <dir>..." >&2; exit 2; }
+# secret.env holds DEMO_PASSWORD=... and DEMO_SEED=... (see run-e2e.md). It is
+# parsed, never executed, so any characters are safe in the values.
+#
+# Exit status: 0 every path was searched and nothing was found; 1 a secret was
+# found; 2 the scan was incomplete (missing path, unreadable file, bad input).
+# Self-test: check-no-leak.test.sh.
+set -u
+[ $# -ge 2 ] || { echo "usage: $0 <secret.env> <path>..." >&2; exit 2; }
 env_file=$1
 shift
-# shellcheck disable=SC1090
-. "$env_file"
-: "${DEMO_PASSWORD:?missing DEMO_PASSWORD}" "${DEMO_SEED:?missing DEMO_SEED}"
 
 patterns=$(mktemp)
 trap 'rm -f "$patterns"' EXIT
 node -e '
-const [pw, seed] = process.argv.slice(1);
+const fs = require("fs");
+const env = {};
+for (const line of fs.readFileSync(process.argv[1], "utf8").split("\n")) {
+  const at = line.indexOf("=");
+  if (at > 0) env[line.slice(0, at).trim()] = line.slice(at + 1);
+}
+const values = [env.DEMO_PASSWORD, env.DEMO_SEED];
+if (values.some((v) => !v)) { console.error("secret.env needs DEMO_PASSWORD and DEMO_SEED"); process.exit(2); }
 const out = new Set();
-for (const v of [pw, seed]) {
+for (const v of values) {
   out.add(v);
   out.add(encodeURIComponent(v));
-  out.add(encodeURIComponent(v).replace(/%20/g, "+"));
+  // application/x-www-form-urlencoded, as a browser posts a login form.
+  out.add(new URLSearchParams({ v }).toString().slice(2));
   out.add(JSON.stringify(v).slice(1, -1));
   out.add(Buffer.from(v).toString("base64"));
 }
 process.stdout.write([...out].join("\n") + "\n");
-' "$DEMO_PASSWORD" "$DEMO_SEED" > "$patterns"
+' "$env_file" > "$patterns" || exit 2
 
-hits=0
-for dir in "$@"; do
-  [ -e "$dir" ] || { echo "skip (missing): $dir"; continue; }
-  files=$(find "$dir" -type f | wc -l | tr -d ' ')
-  # -a: search binary files too (SQLite, LevelDB, crash dumps); -l: names only.
-  matches=$(grep -a -r -l -F -f "$patterns" "$dir" 2>/dev/null || true)
+leaked=0
+incomplete=0
+for target in "$@"; do
+  if [ ! -e "$target" ]; then
+    echo "INCOMPLETE: $target does not exist"
+    incomplete=1
+    continue
+  fi
+  files=$(find "$target" -type f 2>/dev/null | wc -l | tr -d ' ')
+  # -a: binary files too (SQLite, LevelDB, crash dumps); -l: names only.
+  # grep exits 0 on a match, 1 on none, 2 when it could not read something.
+  matches=$(grep -a -r -l -F -f "$patterns" "$target")
+  status=$?
   if [ -n "$matches" ]; then
-    hits=1
-    echo "LEAK in $dir:"
+    leaked=1
+    echo "LEAK in $target:"
     echo "$matches" | sed 's/^/  /'
-  else
-    echo "clean: $dir ($files files searched)"
+  fi
+  if [ "$status" -ge 2 ]; then
+    echo "INCOMPLETE: could not read everything under $target"
+    incomplete=1
+  elif [ -z "$matches" ]; then
+    echo "clean: $target ($files files searched)"
   fi
 done
-[ "$hits" -eq 0 ] && echo "no secret found in any searched file"
-exit "$hits"
+
+if [ "$leaked" -ne 0 ]; then exit 1; fi
+if [ "$incomplete" -ne 0 ]; then echo "scan incomplete: not every requested file was searched"; exit 2; fi
+echo "no secret found in any searched file"
+exit 0

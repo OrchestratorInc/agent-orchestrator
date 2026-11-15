@@ -4962,7 +4962,12 @@ export function createBrowserViewHost(
             ) as BrowserDevToolsInput["operation"];
             return devtoolsAction(session, operation);
           }
-          case "screenshot":
+          case "screenshot": {
+            const codeOnScreen = options.credentialFiller?.screenshotBlocked(
+              sessionId,
+              activeEntry(session).view.webContents.getURL(),
+            );
+            if (codeOnScreen) throw browserError("BROWSER_SECRET_ON_SCREEN", codeOnScreen);
             if (!options.agentBrowserRuntime) {
               throw browserError(
                 "BROWSER_AUTOMATION_UNAVAILABLE",
@@ -5005,6 +5010,7 @@ export function createBrowserViewHost(
               },
               signal,
             );
+          }
           case "network-start":
             return startNetworkCapture(
               session,

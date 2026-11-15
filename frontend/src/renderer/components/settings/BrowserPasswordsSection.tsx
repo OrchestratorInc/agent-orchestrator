@@ -1,5 +1,5 @@
 import { Pencil, Plus, RefreshCw, Trash2 } from "@/components/app-icons";
-import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";
 import { aoBridge } from "../../lib/bridge";
@@ -47,19 +47,24 @@ export function BrowserPasswordsSection({ titleHidden }: { titleHidden?: boolean
 	const [deleting, setDeleting] = useState<Item | null>(null);
 	const [deleteBusy, setDeleteBusy] = useState(false);
 	const [deleteError, setDeleteError] = useState("");
+	// Only the newest refresh may update state; an older one can resolve later.
+	const latestRefresh = useRef(0);
 
 	const refresh = useCallback(async () => {
 		if (!bridge) return;
+		const requestId = ++latestRefresh.current;
 		try {
 			const [list, entries] = await Promise.all([bridge.list(), bridge.audit()]);
+			if (requestId !== latestRefresh.current) return;
 			setItems(list.items);
 			setAvailable(list.available);
 			setAudit(entries.slice(0, AUDIT_ROWS));
 			setError("");
 		} catch (reason) {
+			if (requestId !== latestRefresh.current) return;
 			setError(vaultError(reason, t("settings.passwords.loadFailed")));
 		} finally {
-			setLoading(false);
+			if (requestId === latestRefresh.current) setLoading(false);
 		}
 	}, [bridge, t]);
 

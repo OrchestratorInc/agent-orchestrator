@@ -126,6 +126,22 @@ describe("BrowserPasswordsSection", () => {
 		await waitFor(() => expect(bridge.delete).toHaveBeenCalledWith("item-1"));
 	});
 
+	it("ignores a slower, older refresh that finishes after a newer one", async () => {
+		let releaseFirst: (value: { available: boolean; items: (typeof item)[] }) => void = () => undefined;
+		const list = vi
+			.fn<AoBridge["vault"]["list"]>()
+			.mockImplementationOnce(() => new Promise((resolve) => (releaseFirst = resolve)))
+			.mockImplementation(async () => ({ available: true, items: [item] }));
+		window.ao!.vault = mockBridge({ list });
+		render(<BrowserPasswordsSection />);
+		// Refresh while the first load is still in flight; the newer one lands first.
+		await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+		expect(await screen.findByTestId("vault-item")).toHaveTextContent("Demo login");
+		releaseFirst({ available: true, items: [] });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(screen.getByTestId("vault-item")).toHaveTextContent("Demo login");
+	});
+
 	it("disables adding when the keychain is unavailable", async () => {
 		window.ao!.vault = mockBridge({ list: vi.fn(async () => ({ available: false, items: [] })) });
 		render(<BrowserPasswordsSection />);

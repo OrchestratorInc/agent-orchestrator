@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -101,6 +101,20 @@ describe("VaultStore", () => {
     await store.save({ origins: ["https://a.test"], username: "any", password: "pw-any-123", allowedProjects: [] });
     await store.save({ origins: ["https://a.test"], username: "scoped", password: "pw-scoped-1", allowedProjects: ["proj-a"] });
     expect((await store.candidates("https://a.test/", "")).map((i) => i.username)).toEqual(["any"]);
+  });
+
+  it("does not overwrite saved items when the vault file cannot be read", async () => {
+    await addDemo();
+    const sealed = path.join(dir, "items.sealed");
+    const kept = await readFile(sealed);
+    // Stand-in for an I/O error: a directory where the file should be.
+    await rm(sealed);
+    await mkdir(sealed);
+    await expect(store.save({ origins: ["https://b.test"], username: "b", password: "pw-bbbb-1", allowedProjects: [] })).rejects.toThrow();
+    await expect(store.list()).rejects.toThrow();
+    await rm(sealed, { recursive: true });
+    await writeFile(sealed, kept);
+    expect((await store.list()).map((i) => i.username)).toEqual(["alice"]);
   });
 
   it("deletes an item", async () => {

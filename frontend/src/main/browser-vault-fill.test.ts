@@ -24,6 +24,8 @@ type FakeFrame = {
   oopif?: boolean;
   // document.hasFocus(): false while the app window is in the background.
   hasFocus?: boolean;
+  // The verified field lost focus (or the document changed) before typing.
+  focusMovesBeforeTyping?: boolean;
 };
 
 function fakeCdp(frames: FakeFrame[]) {
@@ -53,6 +55,9 @@ function fakeCdp(frames: FakeFrame[]) {
       if (method === "Runtime.evaluate") {
         const frame = contexts.get(params.contextId as number)!;
         const expression = String(params.expression);
+        if (expression.includes("ao-vault:select")) {
+          return { result: { value: !frame.focusMovesBeforeTyping } };
+        }
         if (expression.includes("ao-vault:probe")) {
           return { result: { value: frame.focused ? { tag: frame.focused.tag, type: frame.focused.type, visible: frame.focused.visible ?? true, hasFocus: frame.hasFocus ?? true } : null } };
         }
@@ -195,6 +200,67 @@ describe("credential filler", () => {
     ]);
     await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/focused/);
     expect(t.inserted).toEqual([]);
+  });
+
+  it.each([
+    ["http://accounts.example.test", true],
+    ["http://10.0.0.5:8080", true],
+    ["http://localhost:4173", false],
+    ["http://127.0.0.1:9000", false],
+    ["http://[::1]:3000", false],
+    ["https://accounts.example.test", false],
+  ])("on %s refuses an unencrypted fill: %s", async (origin, refused) => {
+    const id = (await store.save({ origins: [origin], username: "u", password: "pw-transport-1", allowedProjects: [] })).id;
+    const filler = createCredentialFiller({ store });
+    const t = { ...target([{ id: "top", url: `${origin}/login`, focused: { tag: "INPUT", type: "password" } }]), approvedOrigin: origin };
+    const fill = filler.fillSecret(t, { itemId: id, field: "password" });
+    if (refused) {
+      await expect(fill).rejects.toThrow(/HTTPS/);
+      expect(t.inserted).toEqual([]);
+    } else {
+      await fill;
+      expect(t.inserted).toEqual(["pw-transport-1"]);
+    }
+  });
+
+  it("refuses when the verified field is no longer focused when typing starts", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = target([{ id: "top", url: `${ORIGIN}/login`, focusMovesBeforeTyping: true, focused: { tag: "INPUT", type: "password" } }]);
+    await expect(filler.fillSecret(t, { itemId, field: "password" })).rejects.toThrow(/changed before/);
+    expect(t.inserted).toEqual([]);
+    expect((await store.readAudit())[0]).toMatchObject({ outcome: "denied", reason: "field changed" });
+  });
+
+  it("refuses a password too short to mask in later output", async () => {
+    const id = (await store.save({ origins: [ORIGIN], username: "u", password: "abc", allowedProjects: [] })).id;
+    const filler = createCredentialFiller({ store });
+    const t = target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]);
+    await expect(filler.fillSecret(t, { itemId: id, field: "password" })).rejects.toThrow(/too short/);
+    expect(t.inserted).toEqual([]);
+  });
+
+  it("blocks agent screenshots while a typed 2FA code is on screen", async () => {
+    let now = 1_000_000;
+    let url = `${ORIGIN}/2fa`;
+    const filler = createCredentialFiller({ store, now: () => now });
+    const t = { ...target([{ id: "top", url, focused: { tag: "INPUT", type: "text" } }]), pageURL: () => url };
+    await filler.fillSecret(t, { itemId, field: "totp" });
+    expect(filler.screenshotBlocked("s1", url)).toMatch(/2FA code/);
+    expect(filler.screenshotBlocked("other", url)).toBeUndefined();
+    // Submitting the form moves the page on; the code is gone from view.
+    expect(filler.screenshotBlocked("s1", `${ORIGIN}/welcome`)).toBeUndefined();
+    expect(filler.screenshotBlocked("s1", url)).toBeUndefined();
+    // Or the code expires.
+    await filler.fillSecret(t, { itemId, field: "totp" });
+    now += 91_000;
+    expect(filler.screenshotBlocked("s1", url)).toBeUndefined();
+  });
+
+  it("does not block screenshots for masked password fields", async () => {
+    const filler = createCredentialFiller({ store });
+    const t = target([{ id: "top", url: `${ORIGIN}/login`, focused: { tag: "INPUT", type: "password" } }]);
+    await filler.fillSecret(t, { itemId, field: "password" });
+    expect(filler.screenshotBlocked("s1", `${ORIGIN}/login`)).toBeUndefined();
   });
 
   it("refuses a project the item is not allowed in", async () => {
