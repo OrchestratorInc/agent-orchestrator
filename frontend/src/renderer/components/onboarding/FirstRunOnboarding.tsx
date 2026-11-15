@@ -491,13 +491,16 @@ function Waiting({ children }: { children: ReactNode }) {
 }
 
 /** A group of rows on a step: a short title and what the group is for. */
-function RowGroup({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
+function RowGroup({ title, hint, action, children }: { title: string; hint: string; action?: ReactNode; children: ReactNode }) {
 	const id = useId();
 	return (
 		<section aria-labelledby={id} className="flex flex-col gap-2">
-			<div className="flex flex-col gap-0.5 px-1">
-				<h3 id={id} className="text-sm font-medium text-foreground">{title}</h3>
-				<p className="text-xs text-muted-foreground">{hint}</p>
+			<div className="flex items-center gap-2 px-1">
+				<div className="flex min-w-0 flex-1 flex-col gap-0.5">
+					<h3 id={id} className="text-sm font-medium text-foreground">{title}</h3>
+					<p className="text-xs text-muted-foreground">{hint}</p>
+				</div>
+				{action}
 			</div>
 			{children}
 		</section>
@@ -1093,7 +1096,24 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 							/>
 						</ul>
 					</RowGroup>
-					<RowGroup title={t("firstRun.toolsAgentsHeading")} hint={t("firstRun.agentsBodyNone")}>
+					<RowGroup
+						title={t("firstRun.toolsAgentsHeading")}
+						hint={t("firstRun.agentsBodyNone")}
+						action={
+							// Checks every tool and harness again (one installed outside AO, say).
+							<Button
+								type="button"
+								variant="quiet"
+								size="icon-sm"
+								aria-label={t("firstRun.checkAgain")}
+								title={t("firstRun.checkAgain")}
+								onClick={() => void checkAgain()}
+								disabled={checking}
+							>
+								<RefreshCw className={cn("size-icon-md", checking && "animate-spin")} aria-hidden="true" />
+							</Button>
+						}
+					>
 						<ul className={ROW_LIST}>
 							{agents.map(agentRow)}
 							{more.length > 0 && !showAllAgents ? (
@@ -1113,10 +1133,6 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 							</>
 						) : null}
 					</RowGroup>
-					<Button variant="ghost" size="sm" className="self-end text-muted-foreground" onClick={() => void checkAgain()} disabled={checking}>
-						<RefreshCw className={cn("size-icon-md", checking && "animate-spin")} aria-hidden="true" />
-						{t("firstRun.checkAgain")}
-					</Button>
 				</div>
 			)}
 			{workflow ? (
