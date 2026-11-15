@@ -398,6 +398,8 @@
 	"firstRun.signInPerkMobile": "移动应用",
 	"firstRun.signInPerkCloudDetail": "在托管沙盒中运行智能体，而不是在你的电脑上。",
 	"firstRun.signInPerkCloud": "云端沙盒",
+	"firstRun.signInPerkRemoteDetail": "在你的其他电脑和服务器上运行智能体。",
+	"firstRun.signInPerkRemote": "远程机器",
 	"firstRun.signIn": "登录",
 	"firstRun.toolsTitle": "你的工具",
 	"firstRun.toolsChecking": "正在检查你的工具…",

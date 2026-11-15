@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, RefreshCw, Smartphone, type AppIcon } from "@/components/app-icons";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, Cloud, LoaderCircle, RefreshCw, Server, Smartphone, type AppIcon } from "@/components/app-icons";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	createContext,
@@ -518,6 +518,8 @@ function RowSpinner() {
 /** The steps' row lists: an opaque surface with a hairline edge, so the
  * halftone wallpaper never shows through the rows. */
 const ROW_LIST = "overflow-hidden rounded-xl border border-border bg-(--schematic-solid)";
+/** CheckRows as an open list, without the box or the lines between rows. */
+const OPEN_ROW_LIST = "[&>li]:!border-t-0 [&>li]:!px-0";
 
 function CheckRow({ icon, label, detail, trailing, below }: { icon?: ReactNode; label: ReactNode; detail?: ReactNode; trailing?: ReactNode; below?: ReactNode }) {
 	return (
@@ -768,6 +770,7 @@ function WelcomeStep({ point, onNext }: { point: number; onNext: () => void }) {
 /** Why an account is worth it: what only an account unlocks. */
 const SIGN_IN_PERKS: Array<{ icon: AppIcon; title: MessageKey; detail: MessageKey }> = [
 	{ icon: Cloud, title: "firstRun.signInPerkCloud", detail: "firstRun.signInPerkCloudDetail" },
+	{ icon: Server, title: "firstRun.signInPerkRemote", detail: "firstRun.signInPerkRemoteDetail" },
 	{ icon: Smartphone, title: "firstRun.signInPerkMobile", detail: "firstRun.signInPerkMobileDetail" },
 ];
 
@@ -799,7 +802,7 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 			{cloud.status === "loading" ? (
 				<Waiting>{t("firstRun.signInChecking")}</Waiting>
 			) : account ? (
-				<ul className={ROW_LIST}>
+				<ul className={OPEN_ROW_LIST}>
 					<CheckRow
 						label={accountName}
 						detail={account.user.displayName ? account.user.email : undefined}
@@ -808,7 +811,7 @@ function SignInStep({ onNext }: { onNext: () => void }) {
 				</ul>
 			) : (
 				<>
-				<ul className={ROW_LIST}>
+				<ul className={OPEN_ROW_LIST}>
 					{SIGN_IN_PERKS.map(({ icon: Icon, title, detail }) => (
 						<CheckRow
 							key={title}

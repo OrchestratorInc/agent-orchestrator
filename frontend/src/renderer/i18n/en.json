@@ -360,6 +360,8 @@
 	"firstRun.signInPerkMobile": "Mobile app",
 	"firstRun.signInPerkCloudDetail": "Run agents in hosted sandboxes.",
 	"firstRun.signInPerkCloud": "Cloud sandboxes",
+	"firstRun.signInPerkRemoteDetail": "Run agents on your other computers and servers.",
+	"firstRun.signInPerkRemote": "Remote machines",
 	"firstRun.signIn": "Sign in",
 	"firstRun.toolsTitle": "Your tools",
 	"firstRun.toolsChecking": "Checking your tools…",
