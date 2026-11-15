@@ -55,11 +55,11 @@ import { Badge } from "../ui/badge";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { GitHubLoginActions, GitHubLoginTerminal, useGitHubLogin } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
-import { closeAuthTerminal, HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
+import { HarnessAuthTerminalPanel } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { startGuidedTour } from "./GuidedTour";
-import { agentRowState, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
+import { agentRowState, closeLoginWorkflow, InstallDocsLink, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useLoginLifetime, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn, type AgentRowState } from "./ToolInstalls";
 import { PreviewStage, type PreviewCard, type ScenePage } from "./OnboardingPreviews";
 import { SchematicPhoneScreen, SchematicScene, type SceneFocus } from "./OnboardingSchematic";
 
@@ -975,7 +975,8 @@ function ToolsStep({ onNext, onSkip, login }: {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const wasInSettings = useRef(false);
 	const [showAllAgents, setShowAllAgents] = useState(false);
-	const signingInAgent = workflow?.agentId;
+	// A login in progress (not one that timed out or is being cleaned up).
+	const signingInAgent = workflow?.phase === "running" ? workflow.agentId : undefined;
 	// Any harness can be signed in to here, the ones under "more" included.
 	const signingInReady = [...agents, ...more].some((row) => row.agent.id === signingInAgent && row.state === "ready");
 
@@ -984,10 +985,9 @@ function ToolsStep({ onNext, onSkip, login }: {
 	// terminal on the user's behalf.
 	useVerifyWhileSigningIn(signingInAgent, signingInReady, verify);
 	useEffect(() => {
-		if (!signingInAgent || !signingInReady) return;
-		void closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
-		setWorkflow(null);
-	}, [signingInAgent, signingInReady, workflow]);
+		if (!signingInAgent || !signingInReady || !workflow) return;
+		void closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed"));
+	}, [signingInAgent, signingInReady, workflow, setWorkflow, t]);
 
 	const signIn = async (agentId: string) => {
 		setAuthError(null);
@@ -996,7 +996,8 @@ function ToolsStep({ onNext, onSkip, login }: {
 			await aoBridge.app.openExternal(plan.documentationUrl);
 			return;
 		}
-		if (workflow) await closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
+		// The daemon allows one login at a time: a previous one must close first.
+		if (workflow && !(await closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed")))) return;
 		try {
 			const result = await startAuth.mutateAsync(agentId);
 			setWorkflow({
@@ -1014,10 +1015,10 @@ function ToolsStep({ onNext, onSkip, login }: {
 	};
 
 	const closeLogin = () => {
-		if (workflow) void closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
-		setWorkflow(null);
 		void refresh();
+		if (workflow) void closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed"));
 	};
+	useLoginLifetime(workflow, setWorkflow, { timedOut: t("settings.harness.authTimedOut"), failed: t("settings.harness.authFailed") }, (agentId) => void verify([agentId]));
 
 	// A harness from the full list that's installed, waiting to be signed in,
 	// installing or failed joins the main list, so it never hides behind
