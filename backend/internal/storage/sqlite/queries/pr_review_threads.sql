@@ -18,7 +18,7 @@ DELETE FROM pr_review_threads WHERE pr_url = ? AND thread_id = ?;
 
 -- name: ListPRReviewThreads :many
 SELECT pr_url, thread_id, path, line, resolved, is_bot, semantic_hash, updated_at
-FROM pr_review_threads WHERE pr_url = ? ORDER BY updated_at COLLATE ao_timestamp, thread_id;
+FROM pr_review_threads WHERE pr_url = ? ORDER BY updated_at, thread_id;
 
 -- name: MarkPRReviewThreadResolved :execrows
 UPDATE pr_review_threads

@@ -25,7 +25,7 @@ SELECT * FROM conversations WHERE current_review_id = ? LIMIT 1;
 -- session is still bound to two rows, the project row is the live one.
 -- name: SelectConversationBySession :one
 SELECT * FROM conversations WHERE current_session_id = ?
-ORDER BY scope = 'project' DESC, created_at COLLATE ao_timestamp DESC, id DESC
+ORDER BY scope = 'project' DESC, created_at DESC, id DESC
 LIMIT 1;
 
 -- Sessions in the batch whose latest Chat turn the person interrupted. The
@@ -40,7 +40,7 @@ session_conversation AS (
     SELECT wanted_session.session_id, (
         SELECT conversations.id FROM conversations
         WHERE conversations.current_session_id = wanted_session.session_id
-        ORDER BY conversations.scope = 'project' DESC, conversations.created_at COLLATE ao_timestamp DESC, conversations.id DESC
+        ORDER BY conversations.scope = 'project' DESC, conversations.created_at DESC, conversations.id DESC
         LIMIT 1
     ) AS conversation_id
     FROM wanted_session
@@ -53,7 +53,7 @@ WHERE (
       AND conversation_turns.promoted_to_turn_id IS NULL
       AND conversation_turns.rolled_back_at IS NULL
       AND conversation_turns.state <> 'cancelled'
-    ORDER BY conversation_turns.requested_at COLLATE ao_timestamp DESC, conversation_turns.rowid DESC
+    ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
     LIMIT 1
 ) = 'interrupted';
 
@@ -62,7 +62,7 @@ WHERE (
 -- name: SelectProvisioningConversationsForSession :many
 SELECT id, latest_sequence FROM conversations
 WHERE current_session_id = ? AND scope = 'session' AND id <> ?
-ORDER BY created_at COLLATE ao_timestamp, id;
+ORDER BY created_at, id;
 
 -- Delivery content that may hold excerpt references to the conversation it is
 -- moving out of.
@@ -316,7 +316,7 @@ SELECT b.*, b.id = c.active_branch_id AS active,
 FROM conversation_branches AS b
 JOIN conversations AS c ON c.id = b.conversation_id
 WHERE b.conversation_id = sqlc.arg(conversation_id)
-ORDER BY b.created_at COLLATE ao_timestamp, b.id;
+ORDER BY b.created_at, b.id;
 
 -- The selected human prompt must belong to the active lineage. Its immutable
 -- sequence determines one ancestry boundary for turns, messages, activities and
@@ -846,7 +846,7 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
         AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid;
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 
 -- Overwrite the turn's changed-file summary. The provider re-sends the whole diff
 -- on every update, so the latest payload is the complete answer and there is
@@ -919,7 +919,7 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
         AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid;
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 
 -- The latest non-discarded turn uses the same active lineage and ordering as
 -- SelectConversationTurns, independently of where late timeline items occur.
@@ -955,7 +955,7 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
         AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at COLLATE ao_timestamp DESC, conversation_turns.rowid DESC
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
 
 -- Turns represented by one bounded timeline page. Active turns are included
@@ -1007,7 +1007,7 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
         AND conversation_activities.sequence < sqlc.arg(before_sequence)
     )
   )
-ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid;
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 
 -- Everything from the named turn to the end of the conversation, which is the range
 -- an undo discards. Inclusive of the named turn: the state a person wants back is
@@ -1071,7 +1071,7 @@ WHERE conversation_activities.conversation_id = sqlc.arg(target_conversation_id)
 -- name: RecomputeConversationCompactedAt :exec
 UPDATE conversations
 SET compacted_at = (
-      SELECT MAX(activity.created_at COLLATE ao_timestamp)
+      SELECT MAX(activity.created_at)
       FROM conversation_activities AS activity
       WHERE activity.conversation_id = conversations.id
         AND activity.kind = 'system'
@@ -1122,7 +1122,7 @@ JOIN conversation_messages
 WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.state = 'queued'
   AND conversation_turns.promotion_started_at IS NULL
-ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 LIMIT 1;
 
 -- name: SelectQueuedConversationBatch :many
@@ -1141,7 +1141,7 @@ JOIN conversation_messages
 WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.state = 'queued'
   AND conversation_turns.promotion_started_at IS NULL
-ORDER BY conversation_turns.requested_at COLLATE ao_timestamp, conversation_turns.rowid;
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 
 -- Claim one selected queue item before contacting the provider. execrows is the
 -- compare-and-set result: zero means the turn is absent, settled, or already being
@@ -1237,7 +1237,7 @@ WHERE id = ? AND state IN ('queued', 'running', 'completed') AND provider_input_
 -- name: CancelQueuedConversationTurns :exec
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
-WHERE conversation_id = ? AND state = 'queued' AND requested_at <= ? COLLATE ao_timestamp;
+WHERE conversation_id = ? AND state = 'queued' AND requested_at <= ?;
 
 -- An interrupt interface handoff closes intake under the controller's dispatch
 -- lock before this runs. There can be no later accepted row to preserve, so the
@@ -1296,7 +1296,7 @@ FROM conversation_turns
 WHERE conversation_id = ?
   AND state = 'queued'
   AND promotion_started_at IS NULL
-ORDER BY requested_at COLLATE ao_timestamp, rowid;
+ORDER BY requested_at, rowid;
 
 -- Reassign one queued turn's dispatch position without changing its state.
 -- name: UpdateQueuedConversationTurnRequestedAt :execrows
@@ -1951,12 +1951,12 @@ SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
 WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
   AND handled_by_session_id = sqlc.arg(session_id)
   AND state = 'failed' AND rolled_back_at IS NULL
-  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= sqlc.arg(now) COLLATE ao_timestamp;
+  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= sqlc.arg(now);
 
 -- name: SelectAutoResumeConversationTurns :many
 SELECT * FROM conversation_turns
 WHERE usage_limit_auto_resume = 1
-ORDER BY usage_limit_resets_at COLLATE ao_timestamp, id;
+ORDER BY usage_limit_resets_at, id;
 
 -- Retry attempts outside the active branch still consume their source action.
 -- name: SelectConversationRetriedSourceTurnIDs :many
@@ -2117,9 +2117,9 @@ WHERE t.conversation_id = sqlc.arg(conversation_id)
       AND COALESCE(json_extract(e.payload_json, '$.providerConversationId'), '') IN ('', b.provider_conversation_id)
   )
   AND (sqlc.arg(provider_turn_id) = '' OR t.provider_turn_id = sqlc.arg(provider_turn_id))
-  AND t.started_at > sqlc.arg(after_at) COLLATE ao_timestamp
-  AND t.completed_at > sqlc.arg(after_at) COLLATE ao_timestamp
-ORDER BY t.completed_at COLLATE ao_timestamp DESC LIMIT 1;
+  AND t.started_at > sqlc.arg(after_at)
+  AND t.completed_at > sqlc.arg(after_at)
+ORDER BY t.completed_at DESC LIMIT 1;
 
 -- Session conversations still waiting for the user to sign in again, with the
 -- harness each session runs, so a confirmed login can be matched to them.
@@ -2162,7 +2162,7 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
       WHERE lineage_activity.turn_id = conversation_turns.id
         AND lineage_activity.sequence <= path.max_sequence
   ))
-ORDER BY conversation_turns.requested_at COLLATE ao_timestamp DESC, conversation_turns.rowid DESC
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
 
 -- The queued turns AO batched into another turn's provider input, and how: a

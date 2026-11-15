@@ -1,7 +1,7 @@
 -- Subscription accounts AO launches Claude Code and Codex with.
 
 -- name: ListAgentAccounts :many
-SELECT * FROM agent_accounts ORDER BY provider, created_at COLLATE ao_timestamp, id;
+SELECT * FROM agent_accounts ORDER BY provider, created_at, id;
 
 -- name: CreateAgentAccount :exec
 INSERT INTO agent_accounts (id, provider, home, email, plan, created_at)
@@ -28,7 +28,7 @@ ON CONFLICT (session_id, provider, bound_at) DO UPDATE SET account_id = excluded
 -- name: GetSessionAgentAccount :one
 SELECT account_id FROM session_agent_accounts
 WHERE session_id = ? AND provider = ?
-ORDER BY bound_at COLLATE ao_timestamp DESC
+ORDER BY bound_at DESC
 LIMIT 1;
 
 -- Only a known source-time binding can prove that a turn used another account.
@@ -39,14 +39,14 @@ SELECT EXISTS (
       AND source.provider = CASE s.harness WHEN 'claude-code' THEN 'claude' WHEN 'codex' THEN 'codex' ELSE '' END
     WHERE s.id = sqlc.arg(session_id)
       AND source.bound_at = (
-          SELECT MAX(a.bound_at COLLATE ao_timestamp) FROM session_agent_accounts a
+          SELECT MAX(a.bound_at) FROM session_agent_accounts a
           WHERE a.session_id = s.id AND a.provider = source.provider
-            AND a.bound_at <= sqlc.arg(requested_at) COLLATE ao_timestamp
+            AND a.bound_at <= sqlc.arg(requested_at)
       )
       AND source.account_id <> (
           SELECT a.account_id FROM session_agent_accounts a
           WHERE a.session_id = s.id AND a.provider = source.provider
-          ORDER BY a.bound_at COLLATE ao_timestamp DESC LIMIT 1
+          ORDER BY a.bound_at DESC LIMIT 1
       )
 );
 
@@ -71,12 +71,12 @@ SELECT
         (SELECT a.account_id FROM session_agent_accounts a
          WHERE a.session_id = b.session_id
            AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
-           AND a.bound_at <= e.created_at COLLATE ao_timestamp
-         ORDER BY a.bound_at COLLATE ao_timestamp DESC LIMIT 1),
+           AND a.bound_at <= e.created_at
+         ORDER BY a.bound_at DESC LIMIT 1),
         (SELECT a.account_id FROM session_agent_accounts a
          WHERE a.session_id = b.session_id
            AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
-         ORDER BY a.bound_at COLLATE ao_timestamp ASC LIMIT 1),
+         ORDER BY a.bound_at ASC LIMIT 1),
         'device-' || CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
     ) AS TEXT) AS account_id,
     CAST(substr(e.created_at, 1, 10) AS TEXT) AS day,
@@ -87,7 +87,7 @@ SELECT
     CAST(COALESCE(SUM(e.estimated_cost_nanos), 0) AS INTEGER) AS estimated_cost_nanos
 FROM model_usage_events e
 JOIN usage_bindings b ON b.id = e.binding_id
-WHERE e.created_at >= sqlc.arg(since) COLLATE ao_timestamp
+WHERE e.created_at >= sqlc.arg(since)
   AND b.harness IN ('claude-code', 'codex')
   AND (CAST(sqlc.arg(session_id) AS TEXT) = '' OR b.session_id = CAST(sqlc.arg(session_id) AS TEXT))
 GROUP BY 1, 2, 3

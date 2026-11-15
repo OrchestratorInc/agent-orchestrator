@@ -24,7 +24,7 @@ SELECT id, source_account_id, target_account_id, idempotency_key,
 	   credentials_committed_at, created_at, updated_at, completed_at, source_kind
 FROM codex_account_switches
 WHERE phase NOT IN ('completed', 'failed')
-ORDER BY created_at COLLATE ao_timestamp LIMIT 1;
+ORDER BY created_at LIMIT 1;
 
 -- name: UpdateCodexAccountSwitchPhase :execrows
 UPDATE codex_account_switches

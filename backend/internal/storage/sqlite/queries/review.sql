@@ -17,7 +17,7 @@ ON CONFLICT (session_id, harness) DO UPDATE SET
 
 -- name: GetReviewBySession :one
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
-FROM review WHERE session_id = ? ORDER BY updated_at COLLATE ao_timestamp DESC, created_at COLLATE ao_timestamp DESC, id DESC LIMIT 1;
+FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1;
 
 -- name: GetReviewBySessionAndHarness :one
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
@@ -29,7 +29,7 @@ FROM review WHERE id = ?;
 
 -- name: ListReviewsBySession :many
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
-FROM review WHERE session_id = ? ORDER BY updated_at COLLATE ao_timestamp DESC, created_at COLLATE ao_timestamp DESC, id DESC;
+FROM review WHERE session_id = ? ORDER BY updated_at DESC, created_at DESC, id DESC;
 
 -- name: ListLiveReviewerHandles :many
 -- Every review row that currently owns a live TUI reviewer pane, across the
@@ -63,7 +63,7 @@ UPDATE review SET controller_generation = '', updated_at = ? WHERE id = ? AND in
 
 -- name: ListRecoverableChatReviews :many
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
-FROM review WHERE interface_mode = 'chat' AND is_archived = FALSE AND provider_conversation_id != '' ORDER BY updated_at COLLATE ao_timestamp, id;
+FROM review WHERE interface_mode = 'chat' AND is_archived = FALSE AND provider_conversation_id != '' ORDER BY updated_at, id;
 
 -- name: ClearReviewerHandle :exec
 UPDATE review SET reviewer_handle_id = '', updated_at = CURRENT_TIMESTAMP WHERE session_id = ?;
@@ -105,23 +105,23 @@ FROM review_run WHERE id = ?;
 
 -- name: GetReviewRunBySessionPRAndSHA :one
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at COLLATE ao_timestamp DESC LIMIT 1;
+FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: GetReviewRunBySessionPRSHAAndHarness :one
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at COLLATE ao_timestamp DESC LIMIT 1;
+FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: ListReviewRunsBySession :many
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? ORDER BY created_at COLLATE ao_timestamp DESC;
+FROM review_run WHERE session_id = ? ORDER BY created_at DESC;
 
 -- name: ListRunningReviewRunsBySession :many
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND status = 'running' AND verdict = '' ORDER BY created_at COLLATE ao_timestamp DESC;
+FROM review_run WHERE session_id = ? AND status = 'running' AND verdict = '' ORDER BY created_at DESC;
 
 -- name: ListReviewRunsByBatch :many
 SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
-FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at COLLATE ao_timestamp ASC, id ASC;
+FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, id ASC;
 
 -- name: ListCurrentHeadReviewRunsBySession :many
 -- AO review passes recorded against each PR's CURRENT head commit. Passes for
@@ -164,8 +164,8 @@ WHERE review_run.session_id = ?
         AND newer.target_sha = review_run.target_sha
         AND newer.harness = review_run.harness
         AND (
-            newer.created_at > review_run.created_at COLLATE ao_timestamp
-            OR (newer.created_at = review_run.created_at COLLATE ao_timestamp AND newer.id > review_run.id)
+            newer.created_at > review_run.created_at
+            OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
         )
   );
 
@@ -209,8 +209,8 @@ WHERE pr.head_sha != ''
         AND newer.target_sha = review_run.target_sha
         AND newer.harness = review_run.harness
         AND (
-            newer.created_at > review_run.created_at COLLATE ao_timestamp
-            OR (newer.created_at = review_run.created_at COLLATE ao_timestamp AND newer.id > review_run.id)
+            newer.created_at > review_run.created_at
+            OR (newer.created_at = review_run.created_at AND newer.id > review_run.id)
         )
   );
 

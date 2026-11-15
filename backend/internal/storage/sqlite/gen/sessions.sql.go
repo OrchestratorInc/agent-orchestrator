@@ -1342,7 +1342,7 @@ SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
     AND provision_state IN ('', 'ready') AND hibernated_at IS NULL
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
-    AND activity_last_at <= ?1 COLLATE ao_timestamp
+    AND activity_last_at <= ?1
     AND trim(provider_conversation_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
     AND stale_binary_launch = controller_generation
@@ -1378,7 +1378,7 @@ SELECT id FROM sessions
 WHERE session_mode = 'tui' AND is_terminated = 0 AND is_task_preparation = 0
     AND kind <> 'orchestrator'
     AND activity_state = 'idle' AND activity_last_at IS NOT NULL
-    AND activity_last_at <= ?1 COLLATE ao_timestamp
+    AND activity_last_at <= ?1
     AND trim(agent_session_id) <> '' AND trim(runtime_handle_id) <> ''
     AND stale_binary_since IS NOT NULL AND stale_binary_switch_failed_at IS NULL
     AND stale_binary_launch = runtime_launch_id
@@ -1553,10 +1553,10 @@ UPDATE sessions SET
     conversation_checkpoint_generation = '',
     conversation_checkpoint_native_id = '',
     conversation_checkpoint_turn_id = '',
-    updated_at = MAX(updated_at COLLATE ao_timestamp, ?2)
+    updated_at = MAX(updated_at, ?2)
 WHERE id = ?3
   AND is_terminated = 0
-  AND (latest_user_prompt_at IS NULL OR latest_user_prompt_at <= ?2 COLLATE ao_timestamp)
+  AND (latest_user_prompt_at IS NULL OR latest_user_prompt_at <= ?2)
 `
 
 type RecordSessionHumanMessageParams struct {
@@ -1588,7 +1588,7 @@ UPDATE sessions SET
     updated_at = ?2
 WHERE id = ?3
   AND is_terminated = 0
-  AND updated_at <= ?2 COLLATE ao_timestamp
+  AND updated_at <= ?2
 `
 
 type RecordSessionLatestUserPromptParams struct {

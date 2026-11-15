@@ -300,10 +300,10 @@ FROM notifications
 WHERE dismissed_at IS NULL
   AND (
     CAST(?1 AS TEXT) = ''
-    OR created_at < ?2 COLLATE ao_timestamp
-    OR (created_at = ?2 COLLATE ao_timestamp AND id < CAST(?1 AS TEXT))
+    OR created_at < ?2
+    OR (created_at = ?2 AND id < CAST(?1 AS TEXT))
   )
-ORDER BY created_at COLLATE ao_timestamp DESC, id DESC
+ORDER BY created_at DESC, id DESC
 LIMIT ?3
 `
 
@@ -403,10 +403,10 @@ WHERE status = 'unread'
   AND dismissed_at IS NULL
   AND (
     CAST(?1 AS TEXT) = ''
-    OR created_at < ?2 COLLATE ao_timestamp
-    OR (created_at = ?2 COLLATE ao_timestamp AND id < CAST(?1 AS TEXT))
+    OR created_at < ?2
+    OR (created_at = ?2 AND id < CAST(?1 AS TEXT))
   )
-ORDER BY created_at COLLATE ao_timestamp DESC, id DESC
+ORDER BY created_at DESC, id DESC
 LIMIT ?3
 `
 
@@ -460,10 +460,10 @@ WHERE resolved_at IS NULL
   AND type IN ('needs_input', 'ready_to_merge')
   AND (
     CAST(?1 AS TEXT) = ''
-    OR created_at < ?2 COLLATE ao_timestamp
-    OR (created_at = ?2 COLLATE ao_timestamp AND id < CAST(?1 AS TEXT))
+    OR created_at < ?2
+    OR (created_at = ?2 AND id < CAST(?1 AS TEXT))
   )
-ORDER BY created_at COLLATE ao_timestamp DESC, id DESC
+ORDER BY created_at DESC, id DESC
 LIMIT ?3
 `
 

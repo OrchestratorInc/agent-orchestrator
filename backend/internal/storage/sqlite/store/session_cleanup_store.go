@@ -97,7 +97,7 @@ WHERE s.is_terminated = 1
       OR f.session_generation < s.cleanup_generation
       OR (
           f.workspace_disposition = 'pending'
-          AND (f.next_attempt_at IS NULL OR f.next_attempt_at <= ? COLLATE ao_timestamp)
+          AND (f.next_attempt_at IS NULL OR f.next_attempt_at <= ?)
       )
   )
 ORDER BY s.project_id, s.num;`

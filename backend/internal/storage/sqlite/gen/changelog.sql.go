@@ -26,8 +26,8 @@ DELETE FROM change_log
 WHERE seq IN (
     SELECT cl.seq
     FROM change_log AS cl
-    WHERE cl.created_at < ? COLLATE ao_timestamp
-    ORDER BY cl.created_at COLLATE ao_timestamp ASC, cl.seq ASC
+    WHERE cl.created_at < ?
+    ORDER BY cl.created_at ASC, cl.seq ASC
     LIMIT ?
 )
 `

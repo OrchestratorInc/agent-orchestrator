@@ -26,7 +26,7 @@ SELECT id, session_id, source_mode, target_mode, policy, phase,
 FROM session_interface_transitions
 WHERE session_id = ?
   AND phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required')
-ORDER BY created_at COLLATE ao_timestamp DESC
+ORDER BY created_at DESC
 LIMIT 1;
 
 -- name: GetLatestSessionInterfaceTransition :one
@@ -39,7 +39,7 @@ WHERE session_id = ?
 -- Tests and injected clocks can assign multiple sagas the same timestamp.
 -- This rowid table is append-only for a surviving session, so descending rowid
 -- is the unique insertion-order tie-break that identifies the newer saga.
-ORDER BY created_at COLLATE ao_timestamp DESC, rowid DESC
+ORDER BY created_at DESC, rowid DESC
 LIMIT 1;
 
 -- name: ListActiveSessionInterfaceTransitions :many
@@ -49,7 +49,7 @@ SELECT id, session_id, source_mode, target_mode, policy, phase,
        source_account_id, target_account_id
 FROM session_interface_transitions
 WHERE phase NOT IN ('completed', 'failed', 'cancelled', 'recovery_required')
-ORDER BY created_at COLLATE ao_timestamp;
+ORDER BY created_at;
 
 -- name: ListDeliverableSessionInterfaceTransitions :many
 SELECT t.id, t.session_id, t.source_mode, t.target_mode, t.policy, t.phase,
@@ -63,7 +63,7 @@ WHERE t.phase IN ('completed', 'failed', 'cancelled', 'recovery_required')
       FROM session_interface_transition_messages AS m
       WHERE m.transition_id = t.id AND m.delivered_at IS NULL
   )
-ORDER BY t.updated_at COLLATE ao_timestamp, t.id;
+ORDER BY t.updated_at, t.id;
 
 -- name: AdvanceSessionInterfaceTransition :execrows
 UPDATE session_interface_transitions

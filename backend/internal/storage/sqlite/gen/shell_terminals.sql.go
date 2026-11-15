@@ -95,7 +95,7 @@ func (q *Queries) InsertShellTerminal(ctx context.Context, arg InsertShellTermin
 const selectRestorableShellTerminals = `-- name: SelectRestorableShellTerminals :many
 SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title FROM shell_terminals
 WHERE transient = FALSE OR app_run_id = ?
-ORDER BY created_at COLLATE ao_timestamp
+ORDER BY created_at
 `
 
 func (q *Queries) SelectRestorableShellTerminals(ctx context.Context, appRunID string) ([]ShellTerminal, error) {
@@ -164,7 +164,7 @@ const selectShellTerminalsByAppRunID = `-- name: SelectShellTerminalsByAppRunID 
 SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
 FROM shell_terminals
 WHERE app_run_id = ?
-ORDER BY created_at COLLATE ao_timestamp
+ORDER BY created_at
 `
 
 func (q *Queries) SelectShellTerminalsByAppRunID(ctx context.Context, appRunID string) ([]ShellTerminal, error) {
@@ -207,7 +207,7 @@ const selectShellTerminalsBySessionID = `-- name: SelectShellTerminalsBySessionI
 SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
 FROM shell_terminals
 WHERE session_id = ?
-ORDER BY created_at COLLATE ao_timestamp
+ORDER BY created_at
 `
 
 func (q *Queries) SelectShellTerminalsBySessionID(ctx context.Context, sessionID sql.NullString) ([]ShellTerminal, error) {
@@ -250,7 +250,7 @@ const selectShellTerminalsFromPreviousAppRuns = `-- name: SelectShellTerminalsFr
 SELECT handle_id, project_id, working_dir, title, app_run_id, created_at, session_id, transient, preview_capability_verifier, command_owner, title_explicit, app_title
 FROM shell_terminals
 WHERE app_run_id <> ?
-ORDER BY created_at COLLATE ao_timestamp
+ORDER BY created_at
 `
 
 func (q *Queries) SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) ([]ShellTerminal, error) {

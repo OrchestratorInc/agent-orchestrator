@@ -21,7 +21,7 @@ JOIN agent_native_sessions n ON n.id = sw.target_native_session_ref
 WHERE sw.session_id = ? AND sw.target_harness = ? AND sw.final_handoff_path <> ''
   AND sw.state IN ('target_ready', 'delivering_context', 'completed', 'failed')
   AND n.ao_session_id = sw.session_id AND n.harness = sw.target_harness AND n.native_session_id = ?
-ORDER BY sw.requested_at COLLATE ao_timestamp DESC LIMIT 1`, string(sessionID), string(harness), nativeID).Scan(&path)
+ORDER BY sw.requested_at DESC LIMIT 1`, string(sessionID), string(harness), nativeID).Scan(&path)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}

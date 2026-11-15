@@ -46,7 +46,7 @@ func (s *Store) GetSessionFork(ctx context.Context, forkID domain.SessionID) (do
 
 // ListSessionForks returns a session's direct forks, oldest first.
 func (s *Store) ListSessionForks(ctx context.Context, sourceID domain.SessionID) ([]domain.SessionFork, error) {
-	rows, err := s.readDB.QueryContext(ctx, sessionForkSelect+` WHERE source_session_id = ? ORDER BY fork_number, created_at COLLATE ao_timestamp`, string(sourceID))
+	rows, err := s.readDB.QueryContext(ctx, sessionForkSelect+` WHERE source_session_id = ? ORDER BY fork_number, created_at`, string(sourceID))
 	if err != nil {
 		return nil, fmt.Errorf("list session forks of %s: %w", sourceID, err)
 	}

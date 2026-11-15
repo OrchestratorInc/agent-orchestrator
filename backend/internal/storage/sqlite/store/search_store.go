@@ -33,7 +33,7 @@ WITH hits AS MATERIALIZED (
         OR (owner.current_review_id IS NULL AND owner_session.session_mode = 'chat' AND owner.id = (
             SELECT current.id FROM conversations AS current
             WHERE current.current_session_id = owner_session.id
-            ORDER BY current.scope = 'project' DESC, current.created_at COLLATE ao_timestamp DESC, current.id DESC
+            ORDER BY current.scope = 'project' DESC, current.created_at DESC, current.id DESC
             LIMIT 1
         )))
       AND (candidate.turn_id IS NULL OR candidate_turn.id IS NULL OR (

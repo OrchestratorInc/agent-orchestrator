@@ -16,7 +16,7 @@ SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
 FROM automations
 WHERE (sqlc.arg(project_id) = '' OR project_id = sqlc.arg(project_id))
   AND (sqlc.arg(enabled_filter) < 0 OR enabled = sqlc.arg(enabled_filter))
-ORDER BY created_at COLLATE ao_timestamp, id
+ORDER BY created_at, id
 LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CountAutomations :one
@@ -37,14 +37,14 @@ DELETE FROM automations WHERE id = ?;
 -- name: AdvanceAutomationSchedule :execrows
 UPDATE automations
 SET last_run_at = ?, next_run_at = ?, updated_at = ?
-WHERE id = ? AND enabled = 1 AND next_run_at = ? COLLATE ao_timestamp;
+WHERE id = ? AND enabled = 1 AND next_run_at = ?;
 
 -- name: ListDueAutomations :many
 SELECT id, project_id, display_name, prompt, kind, harness, rrule_text,
     timezone, enabled, next_run_at, last_run_at, created_at, updated_at, model, mode, effort, template_id, use_case
 FROM automations
-WHERE enabled = 1 AND next_run_at <= ? COLLATE ao_timestamp
-ORDER BY next_run_at COLLATE ao_timestamp, id
+WHERE enabled = 1 AND next_run_at <= ?
+ORDER BY next_run_at, id
 LIMIT ?;
 
 -- name: InsertAutomationRun :execrows
@@ -68,7 +68,7 @@ SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
     created_at, updated_at
 FROM automation_runs
 WHERE status IN ('spawning', 'running')
-ORDER BY scheduled_for COLLATE ao_timestamp, id;
+ORDER BY scheduled_for, id;
 
 -- name: GetAutomationRunByOccurrence :one
 SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
@@ -84,7 +84,7 @@ SELECT id, automation_id, scheduled_for, session_id, status, attempt_count,
 FROM automation_runs
 WHERE automation_id = sqlc.arg(automation_id)
   AND (sqlc.arg(status_filter) = '' OR status = sqlc.arg(status_filter))
-ORDER BY scheduled_for COLLATE ao_timestamp DESC, id DESC
+ORDER BY scheduled_for DESC, id DESC
 LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
 -- name: CountAutomationRuns :one
@@ -103,7 +103,7 @@ WHERE r.automation_id IN (sqlc.slice('automation_ids'))
       SELECT newest.id
       FROM automation_runs newest
       WHERE newest.automation_id = r.automation_id
-      ORDER BY newest.scheduled_for COLLATE ao_timestamp DESC, newest.id DESC
+      ORDER BY newest.scheduled_for DESC, newest.id DESC
       LIMIT 1
   )
 ORDER BY r.automation_id;
@@ -121,7 +121,7 @@ WHERE r.status = 'pending'
       WHERE active.automation_id = r.automation_id
         AND active.status IN ('spawning', 'running')
   )
-ORDER BY r.scheduled_for COLLATE ao_timestamp, r.id
+ORDER BY r.scheduled_for, r.id
 LIMIT 1;
 
 -- name: ClaimAutomationRun :execrows

@@ -120,7 +120,7 @@ func (q *Queries) InsertSessionArtifact(ctx context.Context, arg InsertSessionAr
 const listRegisteredSessionArtifactPaths = `-- name: ListRegisteredSessionArtifactPaths :many
 SELECT path FROM session_artifacts
 WHERE session_id = ?1 AND registered_at IS NOT NULL
-ORDER BY registered_at COLLATE ao_timestamp, path
+ORDER BY registered_at, path
 `
 
 func (q *Queries) ListRegisteredSessionArtifactPaths(ctx context.Context, sessionID domain.SessionID) ([]string, error) {

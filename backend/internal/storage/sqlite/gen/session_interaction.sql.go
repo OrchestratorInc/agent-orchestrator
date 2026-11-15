@@ -15,10 +15,10 @@ import (
 const recordSessionInteraction = `-- name: RecordSessionInteraction :execrows
 UPDATE sessions SET
     latest_interaction_at = ?1,
-    updated_at = MAX(updated_at COLLATE ao_timestamp, ?1)
+    updated_at = MAX(updated_at, ?1)
 WHERE id = ?2
   AND is_terminated = 0
-  AND (latest_interaction_at IS NULL OR latest_interaction_at < ?1 COLLATE ao_timestamp)
+  AND (latest_interaction_at IS NULL OR latest_interaction_at < ?1)
 `
 
 type RecordSessionInteractionParams struct {

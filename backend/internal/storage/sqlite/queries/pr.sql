@@ -117,7 +117,7 @@ SELECT * FROM pr
 WHERE number = ?
 ORDER BY
     CASE WHEN pr_state NOT IN ('merged', 'closed') THEN 0 ELSE 1 END,
-    updated_at COLLATE ao_timestamp DESC
+    updated_at DESC
 LIMIT 1;
 
 -- name: CountActivePRsByNumber :one
@@ -225,7 +225,7 @@ DELETE FROM review_run WHERE pr_url = ?;
 -- name: ListPRsBySession :many
 SELECT * FROM pr
 WHERE pr.session_id = ?
-ORDER BY updated_at COLLATE ao_timestamp DESC;
+ORDER BY updated_at DESC;
 
 -- name: GetPRLastNudgeSignature :one
 SELECT last_nudge_signature FROM pr WHERE url = ?;
@@ -271,7 +271,7 @@ FROM pr
 WHERE pr.session_id = ?
 ORDER BY
     CASE WHEN pr.pr_state NOT IN ('merged', 'closed') THEN 0 ELSE 1 END,
-    pr.updated_at COLLATE ao_timestamp DESC
+    pr.updated_at DESC
 LIMIT 1;
 
 -- name: ListPRFactsBySession :many
@@ -316,8 +316,8 @@ external_review AS (
         WHERE newer.pr_url = eligible_external_review.pr_url
           AND newer.author = eligible_external_review.author
           AND (
-              newer.submitted_at > eligible_external_review.submitted_at COLLATE ao_timestamp
-              OR (newer.submitted_at = eligible_external_review.submitted_at COLLATE ao_timestamp AND newer.review_id > eligible_external_review.review_id)
+              newer.submitted_at > eligible_external_review.submitted_at
+              OR (newer.submitted_at = eligible_external_review.submitted_at AND newer.review_id > eligible_external_review.review_id)
           )
     )
 )
@@ -377,12 +377,12 @@ LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
         FROM pr_reviews newer_review
         WHERE newer_review.pr_url = last_review.pr_url
           AND (
-              newer_review.submitted_at > last_review.submitted_at COLLATE ao_timestamp
-              OR (newer_review.submitted_at = last_review.submitted_at COLLATE ao_timestamp AND newer_review.review_id > last_review.review_id)
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
           )
     )
 WHERE pr.session_id = sqlc.arg(session_id)
-ORDER BY pr.updated_at COLLATE ao_timestamp DESC;
+ORDER BY pr.updated_at DESC;
 
 -- name: ListPRFactsBySessions :many
 -- Batch form of ListPRFactsBySession for board/session-list reads. The JSON
@@ -431,8 +431,8 @@ external_review AS (
         WHERE newer.pr_url = eligible_external_review.pr_url
           AND newer.author = eligible_external_review.author
           AND (
-              newer.submitted_at > eligible_external_review.submitted_at COLLATE ao_timestamp
-              OR (newer.submitted_at = eligible_external_review.submitted_at COLLATE ao_timestamp AND newer.review_id > eligible_external_review.review_id)
+              newer.submitted_at > eligible_external_review.submitted_at
+              OR (newer.submitted_at = eligible_external_review.submitted_at AND newer.review_id > eligible_external_review.review_id)
           )
     )
 )
@@ -496,11 +496,11 @@ LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
         FROM pr_reviews newer_review
         WHERE newer_review.pr_url = last_review.pr_url
           AND (
-              newer_review.submitted_at > last_review.submitted_at COLLATE ao_timestamp
-              OR (newer_review.submitted_at = last_review.submitted_at COLLATE ao_timestamp AND newer_review.review_id > last_review.review_id)
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
           )
     )
-ORDER BY pr.session_id, pr.updated_at COLLATE ao_timestamp DESC;
+ORDER BY pr.session_id, pr.updated_at DESC;
 
 -- name: ClaimPRForSession :exec
 INSERT INTO pr (url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, state_changed_at, auto_inject_ci)
