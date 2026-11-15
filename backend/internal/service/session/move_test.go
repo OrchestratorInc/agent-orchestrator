@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/nativetransfer"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionmove"
 )
@@ -323,34 +324,59 @@ func TestImportMoveStartsFromTheNoteWhenTheConversationCannotBeRead(t *testing.T
 	_ = zw.Close()
 	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
 	for _, tc := range []struct {
-		name       string
-		gzip       []byte
-		wantResume bool
+		name           string
+		gzip, sidecar  []byte
+		placed         bool
+		wantResume     bool
+		wantWarning    string
+		wantIncomplete bool
 	}{
-		{"readable", gz.Bytes(), true},
-		{"not gzip", []byte("plain"), false},
+		{name: "placed", gzip: gz.Bytes(), placed: true, wantResume: true},
+		{name: "not placed", gzip: gz.Bytes(), wantResume: true, wantWarning: "could not be placed", wantIncomplete: true},
+		{name: "sidecar unreadable", gzip: gz.Bytes(), sidecar: []byte("plain"), placed: true, wantResume: true, wantWarning: "stayed in Orchestrator Cloud", wantIncomplete: true},
+		{name: "not gzip", gzip: []byte("plain"), wantWarning: "conversation could not be read", wantIncomplete: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newFakeStore()
 			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
-			fc := &fakeCommander{}
+			// The spawn records the conversation id once it placed the conversation.
+			fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				rec := domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+				if cfg.Transfer != nil && tc.placed {
+					rec.Metadata.AgentSessionID = id
+				}
+				return rec
+			}}
 			out, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
-				ProjectID: "mer", MoveID: "m-" + tc.name, Manifest: importManifest(tip), HandoffNote: "NOTE",
-				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: tc.gzip},
+				ProjectID: "mer", MoveID: "m-" + strings.ReplaceAll(tc.name, " ", "-"), Manifest: importManifest(tip), HandoffNote: "NOTE",
+				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: tc.gzip, SidecarGzip: tc.sidecar},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The fake store has no spawned session, so copying its settings warns too.
+			var conversation []string
+			for _, w := range out.Warnings {
+				if !strings.HasPrefix(w, "Could not copy a session setting") {
+					conversation = append(conversation, w)
+				}
+			}
+			warnings := strings.Join(conversation, "\n")
+			if (tc.wantWarning == "") != (warnings == "") || !strings.Contains(warnings, tc.wantWarning) {
+				t.Fatalf("warnings %q, want %q", warnings, tc.wantWarning)
+			}
+			if out.ConversationIncomplete != tc.wantIncomplete {
+				t.Fatalf("ConversationIncomplete = %v, want %v", out.ConversationIncomplete, tc.wantIncomplete)
+			}
 			cfg := fc.spawnedCfg
-			warned := strings.Contains(strings.Join(out.Warnings, "\n"), "conversation could not be read")
 			if tc.wantResume {
-				if cfg.Transfer == nil || cfg.Transfer.FallbackPrompt != "NOTE" || cfg.Prompt != "" || warned {
-					t.Fatalf("spawn = %+v, warnings %v; want a transfer with the note as fallback", cfg, out.Warnings)
+				if cfg.Transfer == nil || cfg.Transfer.FallbackPrompt != "NOTE" || cfg.Prompt != "" {
+					t.Fatalf("spawn = %+v; want a transfer with the note as fallback", cfg)
 				}
 				return
 			}
-			if cfg.Transfer != nil || cfg.Prompt != "NOTE" || !warned {
-				t.Fatalf("spawn = %+v, warnings %v; want the note and a warning", cfg, out.Warnings)
+			if cfg.Transfer != nil || cfg.Prompt != "NOTE" {
+				t.Fatalf("spawn = %+v; want the note", cfg)
 			}
 		})
 	}

@@ -5235,6 +5235,7 @@
 	"moveHere.submit": "이 컴퓨터로 이동",
 	"moveHere.done": "이 컴퓨터로 이동했습니다",
 	"moveHere.doneBody": "{{title}}이(가) {{project}}에서 계속됩니다.",
+	"moveHere.doneKeptInCloud": "대화의 일부가 여기로 이동되지 않아 Cloud 세션은 에이전트가 중지된 상태로 유지됩니다.",
 	"moveHere.deleteFailed": "{{title}}이(가) 이 컴퓨터에서 실행 중입니다. Orchestrator Cloud가 아직 사본을 삭제하지 않았습니다. Orchestrator가 계속 재시도하며, Cloud 사본의 에이전트는 중지된 상태로 유지됩니다.",
 	"moveHere.failedPushedWip": "커밋되지 않은 파일은 이제 Orchestrator Cloud와 GitHub에서 {{branch}}의 커밋 {{commit}}입니다.",
 	"moveHere.failedRestarted": "세션은 Orchestrator Cloud에서 계속되며 에이전트가 다시 실행 중입니다.",

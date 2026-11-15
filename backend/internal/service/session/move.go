@@ -102,6 +102,10 @@ type MoveImportTranscript struct {
 type MoveImportOutcome struct {
 	Session  domain.Session
 	Warnings []string
+	// ConversationIncomplete says the conversation, or its sidecar folder,
+	// came with the move but was not placed here, so the source holds the
+	// only full copy.
+	ConversationIncomplete bool
 }
 
 // MoveCompleteInput records the AO Cloud session a session moved to.
@@ -265,7 +269,8 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		return MoveImportOutcome{}, err
 	} else if found {
 		sess, err := s.toSession(ctx, rec)
-		return MoveImportOutcome{Session: sess}, err
+		// A replay cannot tell whether the sidecar folder was placed, only the conversation.
+		return MoveImportOutcome{Session: sess, ConversationIncomplete: conversationNotPlaced(in, sess)}, err
 	}
 	project, found, err := s.store.GetProject(ctx, string(in.ProjectID))
 	if err != nil {
@@ -296,6 +301,7 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		DisplayName:     m.DisplayName, KeepDisplayName: m.DisplayName != "",
 	}
 	var warnings []string
+	incomplete := false
 	if t := in.Transcript; t != nil && m.Harness == domain.HarnessClaudeCode {
 		dir, err := os.MkdirTemp("", "ao-move-import-*")
 		if err != nil {
@@ -305,9 +311,11 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		archive, sidecarWarning, err := writeImportArchive(ctx, dir, *t)
 		if sidecarWarning != "" {
 			warnings = append(warnings, sidecarWarning)
+			incomplete = true
 		}
 		if err != nil {
 			warnings = append(warnings, "The conversation could not be read, so the session starts from the handoff note: "+err.Error())
+			incomplete = true
 		} else {
 			// The resumed conversation holds the task; the note is only its fallback.
 			cfg.Transfer = &ports.SpawnTransfer{NativeArchive: archive, FallbackPrompt: prompt}
@@ -318,7 +326,11 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 	if err != nil {
 		return MoveImportOutcome{}, err
 	}
-	out := MoveImportOutcome{Session: sess, Warnings: warnings}
+	if cfg.Transfer != nil && conversationNotPlaced(in, sess) {
+		warnings = append(warnings, "The conversation could not be placed here, so the session starts from the handoff note.")
+		incomplete = true
+	}
+	out := MoveImportOutcome{Session: sess, Warnings: warnings, ConversationIncomplete: incomplete}
 	for _, url := range m.PullRequests {
 		if _, err := s.ClaimPR(ctx, sess.ID, url, ClaimPROptions{AllowTakeover: true}); err != nil {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("Could not claim %s: %v", url, err))
@@ -583,6 +595,13 @@ func (s *Service) moveTargetRefusal(ctx context.Context, project domain.ProjectR
 		return refusal
 	}
 	return apierr.Conflict("MOVE_CHECK_FAILED", "Could not check the branch here: "+err.Error(), nil)
+}
+
+// conversationNotPlaced reports a moved Claude Code conversation the session
+// does not resume: the spawn records the conversation id only once it placed it.
+func conversationNotPlaced(in MoveImportInput, sess domain.Session) bool {
+	t := in.Transcript
+	return t != nil && in.Manifest.Harness == domain.HarnessClaudeCode && sess.Metadata.AgentSessionID != t.AgentSessionID
 }
 
 // writeImportArchive unzips a transcript from AO Cloud, and its sidecar

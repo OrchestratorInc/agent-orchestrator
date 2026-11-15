@@ -180,14 +180,16 @@ export interface MoveHereResult {
 	warnings: string[];
 	/** Set when the session runs here but Orchestrator Cloud did not delete its copy. */
 	deleteError?: string;
+	/** The Cloud session is kept: it holds the only full copy of a conversation that did not all move here. */
+	keptInCloud?: true;
 }
 
 /**
  * Moves an Orchestrator Cloud session to a project on this computer: Cloud
  * stops its agent and pushes its branch, this computer starts the session on
- * that branch, then the Cloud session is deleted. Until this computer has the
- * session a failure starts the Cloud agent again. moveId makes each call safe
- * to retry.
+ * that branch, then the Cloud session is deleted, unless part of its
+ * conversation did not move here. Until this computer has the session a
+ * failure starts the Cloud agent again. moveId makes each call safe to retry.
  */
 export async function moveSessionHere(
 	input: { orgId: string; cloudSessionId: string; projectId: string; moveId: string; settings: MoveHereSettings },
@@ -228,6 +230,13 @@ export async function moveSessionHere(
 		);
 	}
 
+	const moved = {
+		sessionId: imported.data.session.id,
+		conversation: exported.transcript ? "transcript" : "note",
+		warnings: imported.data.warnings ?? [],
+	} as const;
+	if (imported.data.conversationIncomplete) return { ...moved, keptInCloud: true };
+
 	deps.onStep?.("complete");
 	let deleteError: string | undefined;
 	try {
@@ -237,12 +246,7 @@ export async function moveSessionHere(
 			deleteError = error instanceof Error ? error.message : String(error);
 		}
 	}
-	return {
-		sessionId: imported.data.session.id,
-		conversation: exported.transcript ? "transcript" : "note",
-		warnings: imported.data.warnings ?? [],
-		...(deleteError ? { deleteError } : {}),
-	};
+	return { ...moved, ...(deleteError ? { deleteError } : {}) };
 }
 
 function errorCode(error: unknown): string | undefined {

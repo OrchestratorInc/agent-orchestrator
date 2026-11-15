@@ -5217,6 +5217,7 @@
 	"moveHere.submit": "移动到此电脑",
 	"moveHere.done": "已移动到此电脑",
 	"moveHere.doneBody": "{{title}} 在 {{project}} 中继续。",
+	"moveHere.doneKeptInCloud": "由于部分对话未能移动到此处，Cloud 会话会保留，其智能体保持停止。",
 	"moveHere.deleteFailed": "{{title}} 正在此电脑上运行。Orchestrator Cloud 尚未删除其副本；Orchestrator 会继续重试，Cloud 副本的智能体保持停止。",
 	"moveHere.failedPushedWip": "未提交的文件现在是 {{branch}} 上的提交 {{commit}}，位于 Orchestrator Cloud 和 GitHub 上。",
 	"moveHere.failedRestarted": "会话在 Orchestrator Cloud 中继续，其智能体已重新运行。",

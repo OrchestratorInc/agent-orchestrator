@@ -261,6 +261,27 @@ describe("moveSessionHere", () => {
 		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
 	});
 
+	it("keeps the Cloud session when part of the conversation did not move here", async () => {
+		const cp = cloudFake();
+		const warning = "Subagent transcripts and saved tool output stayed in Orchestrator Cloud: bad tar";
+		const steps: string[] = [];
+		const result = await moveSessionHere(input, {
+			daemon: daemon(ok({ session: { id: "local-9" }, warnings: [warning], conversationIncomplete: true })),
+			cloud: cp,
+			onStep: (step) => steps.push(step),
+		});
+		expect(result).toEqual({ sessionId: "local-9", conversation: "transcript", warnings: [warning], keptInCloud: true });
+		expect(steps).toEqual(["stop", "import"]);
+		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("deletes the Cloud session when only a pull request or setting did not carry over", async () => {
+		const cp = cloudFake();
+		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" }, warnings: ["Could not claim https://github.com/acme/app/pull/1: gone"] })), cloud: cp });
+		expect(result.keptInCloud).toBeUndefined();
+		expect(cp.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1");
+	});
+
 	it("treats a Cloud session that is already gone as deleted", async () => {
 		const cp = cloudFake({ deleteSession: async () => { throw new CloudCpError("not found", { status: 404 }); } });
 		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" } })), cloud: cp });

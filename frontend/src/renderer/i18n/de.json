@@ -5235,6 +5235,7 @@
 	"moveHere.submit": "Auf diesen Computer verschieben",
 	"moveHere.done": "Auf diesen Computer verschoben",
 	"moveHere.doneBody": "{{title}} geht in {{project}} weiter.",
+	"moveHere.doneKeptInCloud": "Die Cloud-Sitzung bleibt mit gestopptem Agenten erhalten, weil ein Teil ihrer Unterhaltung nicht hierher verschoben wurde.",
 	"moveHere.deleteFailed": "{{title}} läuft auf diesem Computer. Die Orchestrator Cloud hat ihre Kopie noch nicht gelöscht; Orchestrator versucht es weiter, und der Agent der Cloud-Kopie bleibt gestoppt.",
 	"moveHere.failedPushedWip": "Die nicht committeten Dateien sind jetzt Commit {{commit}} auf {{branch}}, in der Orchestrator Cloud und auf GitHub.",
 	"moveHere.failedRestarted": "Die Sitzung geht in der Orchestrator Cloud weiter, und ihr Agent läuft wieder.",

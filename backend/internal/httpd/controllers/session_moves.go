@@ -161,7 +161,7 @@ func (c *SessionMovesController) importMove(w http.ResponseWriter, r *http.Reque
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, MoveImportResponse{Session: sessionView(r, out.Session), Warnings: out.Warnings})
+	envelope.WriteJSON(w, http.StatusOK, MoveImportResponse{Session: sessionView(r, out.Session), Warnings: out.Warnings, ConversationIncomplete: out.ConversationIncomplete})
 }
 
 func (c *SessionMovesController) complete(w http.ResponseWriter, r *http.Request) {

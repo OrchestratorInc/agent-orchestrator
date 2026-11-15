@@ -5525,6 +5525,7 @@
 	"moveHere.submit": "Перенести на этот компьютер",
 	"moveHere.done": "Перенесено на этот компьютер",
 	"moveHere.doneBody": "{{title}} продолжается в {{project}}.",
+	"moveHere.doneKeptInCloud": "Сессия в Cloud сохранена с остановленным агентом, потому что часть её разговора не перенеслась сюда.",
 	"moveHere.deleteFailed": "{{title}} работает на этом компьютере. Orchestrator Cloud ещё не удалил свою копию; Orchestrator продолжает попытки, а агент копии в Cloud остаётся остановленным.",
 	"moveHere.failedPushedWip": "Незакоммиченные файлы теперь коммит {{commit}} в {{branch}}, в Orchestrator Cloud и на GitHub.",
 	"moveHere.failedRestarted": "Сессия продолжается в Orchestrator Cloud, и её агент снова работает.",

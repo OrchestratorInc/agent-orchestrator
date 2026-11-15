@@ -5235,6 +5235,7 @@
 	"moveHere.submit": "このコンピュータに移動",
 	"moveHere.done": "このコンピュータに移動しました",
 	"moveHere.doneBody": "{{title}} は {{project}} で続行します。",
+	"moveHere.doneKeptInCloud": "会話の一部をここに移動できなかったため、Cloud セッションはエージェントを停止したまま残されます。",
 	"moveHere.deleteFailed": "{{title}} はこのコンピュータで実行中です。Orchestrator Cloud はまだコピーを削除していません。Orchestrator が再試行を続け、Cloud 側のエージェントは停止したままです。",
 	"moveHere.failedPushedWip": "未コミットのファイルは、Orchestrator Cloud と GitHub の両方で {{branch}} のコミット {{commit}} になりました。",
 	"moveHere.failedRestarted": "セッションは Orchestrator Cloud で続行し、エージェントは再び実行中です。",

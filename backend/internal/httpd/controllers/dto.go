@@ -4878,8 +4878,9 @@ type MoveRefusal struct {
 // MoveImportResponse is the new session. Warnings list what did not carry
 // over, such as a pull request this machine could not claim.
 type MoveImportResponse struct {
-	Session  SessionView `json:"session"`
-	Warnings []string    `json:"warnings,omitempty"`
+	Session                SessionView `json:"session"`
+	Warnings               []string    `json:"warnings,omitempty"`
+	ConversationIncomplete bool        `json:"conversationIncomplete,omitempty" description:"The conversation, or its subagent transcripts and saved tool output, came with the move but was not placed here. The source holds the only full copy, so keep it."`
 }
 
 // MoveCompleteRequest records the AO Cloud session the session moved to.

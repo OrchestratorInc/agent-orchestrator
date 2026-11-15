@@ -321,6 +321,18 @@ describe("moving a Cloud session to this computer", () => {
 		expect(cloud.deleteSession).not.toHaveBeenCalled();
 	});
 
+	it("keeps the Cloud session and says so when part of the conversation did not move", async () => {
+		daemon.posts = { "/api/v1/sessions/move/import": { data: { session: { id: "local-9" }, conversationIncomplete: true } } };
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app", "local-9"));
+		expect(cloud.deleteSession).not.toHaveBeenCalled();
+		expect(useUiStore.getState().globalToast?.body).toBe(
+			"Fix login continues in app. The Cloud session is kept, with its agent stopped, because part of its conversation did not move here.",
+		);
+	});
+
 	it("keeps deleting the Cloud copy when that last step fails", async () => {
 		useUnfinishedMoveStore.setState({ moves: [] });
 		cloud.deleteSession.mockRejectedValue(new CloudCpError("busy", { status: 503 }));

@@ -7855,6 +7855,8 @@ export interface components {
             transcript?: components["schemas"]["ControllersMoveImportTranscript"];
         };
         MoveImportResponse: {
+            /** @description The conversation, or its subagent transcripts and saved tool output, came with the move but was not placed here. The source holds the only full copy, so keep it. */
+            conversationIncomplete?: boolean;
             session: components["schemas"]["ControllersSessionView"];
             warnings?: string[];
         };

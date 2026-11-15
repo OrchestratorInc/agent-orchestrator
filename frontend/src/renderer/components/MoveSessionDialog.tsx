@@ -449,7 +449,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 			}
 			onClose();
 			navigateToSession(target.projectId, moved.sessionId);
-			showGlobalToast(t("moveHere.done"), [t("moveHere.doneBody", { title: session.title, project: target.name }), ...moved.warnings].join(" "), { tone: "success" });
+			const body = [t("moveHere.doneBody", { title: session.title, project: target.name }), ...(moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
+			showGlobalToast(t("moveHere.done"), body.join(" "), { tone: "success" });
 		} catch (failure) {
 			setError(failure instanceof Error ? failure : new Error(String(failure)));
 		} finally {

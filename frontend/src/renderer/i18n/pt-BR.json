@@ -5384,6 +5384,7 @@
 	"moveHere.submit": "Mover para este computador",
 	"moveHere.done": "Movida para este computador",
 	"moveHere.doneBody": "{{title}} continua em {{project}}.",
+	"moveHere.doneKeptInCloud": "A sessão do Cloud é mantida, com o agente parado, porque parte da conversa não foi movida para cá.",
 	"moveHere.deleteFailed": "{{title}} está rodando neste computador. O Orchestrator Cloud ainda não excluiu sua cópia; o Orchestrator continua tentando, e o agente da cópia no Cloud continua parado.",
 	"moveHere.failedPushedWip": "Os arquivos não commitados agora são o commit {{commit}} em {{branch}}, no Orchestrator Cloud e no GitHub.",
 	"moveHere.failedRestarted": "A sessão continua no Orchestrator Cloud e seu agente está rodando de novo.",
