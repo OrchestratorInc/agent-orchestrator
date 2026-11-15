@@ -26,14 +26,12 @@ const MARKDOWN_PAGE_WIDTH = 700;
 
 const PLAIN_TEXT = /\.(?:txt|json|jsonl|yaml|yml|toml|ini|conf|log|xml|css|js|jsx|ts|tsx|sql|sh|py|go|rs|diff|patch)$/i;
 
-/** Gallery previews load near the viewport; pages keep the isolated inline origin. */
-export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_HEIGHT }: { row: ArtifactRow; previewLive?: boolean; /** Layout height of an HTML page, for tiles taller than 16:10. */ pageHeight?: number }) {
+export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_HEIGHT }: { row: ArtifactRow; previewLive?: boolean; pageHeight?: number }) {
 	const { t } = useTranslation();
 	const container = useRef<HTMLSpanElement>(null);
 	const [visible, setVisible] = useState(false);
 	const [width, setWidth] = useState(0);
 	const [failed, setFailed] = useState(false);
-	// A Cloud page's frame, by the URL it reported for: a frame for another URL is still loading.
 	const [frame, setFrame] = useState<{ url?: string; state: "loading" | "failed" | "ready" }>({ state: "loading" });
 	const cloud = Boolean(row.cloud);
 	const imagePath = isRasterImagePath(row.path) || isSvgPath(row.path);
@@ -51,17 +49,9 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
 		: undefined;
 	const image = imagePath ? contentUrl : undefined;
-	// A local photo or screenshot shows a small copy: the original is decoded once, off the main
-	// thread, rather than in full by every card each time it scrolls into view. An SVG stays
-	// vector, and a Cloud image is shown as it is served.
 	const smallImage = useDownscaledImage(visible && !cloud && image && isRasterImagePath(row.path) ? image : undefined, row.updatedAt);
 	const downscaling = visible && !cloud && Boolean(image) && isRasterImagePath(row.path) && smallImage === undefined;
 	const imageSrc = smallImage && smallImage !== "failed" ? smallImage : image;
-	// A cross-origin iframe fires load even for a 404 JSON response, so the readable artifact
-	// route is checked before the page is framed, without keeping the HTML. The answer is kept
-	// for this version of the file: a card scrolling back into view does not ask again. Only a
-	// file that is not there is kept as unavailable; any other failure may pass, so it is an
-	// error, which the next card to mount asks about again.
 	const pageCheck = useQuery({
 		queryKey: ["artifact-page-available", contentUrl ?? "", row.updatedAt],
 		queryFn: async ({ signal }) => {
@@ -79,11 +69,7 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	const pageAvailable = !cloud && page && contentUrl ? (pageCheck.isError ? false : pageCheck.data) : undefined;
 	const onFrameState = useCallback((state: "loading" | "failed" | "ready") => setFrame({ url: page, state }), [page]);
 	const frameState = cloud && page ? (frame.url === page ? frame.state : "loading") : undefined;
-	// A local video shows the frame Chromium paints after a metadata preload,
-	// which reads only the ranges it needs rather than the whole file.
 	const video = !cloud && fileMediaKind(row.path) === "video" ? contentUrl : undefined;
-	// A cloud PDF card keeps the link it loaded with, so an access renewal does
-	// not download and parse the whole file again.
 	const pinnedPdf = usePinnedArtifactUrl(cloud && pdfPath ? access.data : undefined, cloud && pdfPath ? row.path : undefined, row.updatedAt);
 	const pdf = previewLive && pdfPath ? cloud ? pinnedPdf.url : contentUrl : undefined;
 	const readText = visible && Boolean(contentUrl) && textPreview && (!cloud || (cloudPreviewable && !imagePath));
@@ -129,8 +115,6 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element) return;
-		// The observer reports a card already in view before it is painted. Measuring here instead
-		// would force a layout of the whole page for every card mounted, as each one scrolls in.
 		const observer = new IntersectionObserver(([entry]) => {
 			if (!entry?.isIntersecting) return;
 			setVisible(true);
@@ -142,7 +126,6 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element || (!page && !isMarkdown)) return;
-		// The first observation brings the width, before the card is painted, without forcing a layout.
 		const observer = new ResizeObserver(([entry]) => {
 			if (entry && entry.contentRect.width > 0) setWidth(entry.contentRect.width);
 		});
@@ -159,9 +142,7 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 		|| (cloud && !cloudPreviewable) || pageAvailable === false || (page && !contentUrl) || (textPreview && !contentUrl)
 		|| (!page && !image && !video && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
-	// A preview that failed to load for a reason that may pass (the network, an expired access link, a read error).
 	const loadFailed = failed || access.isError || (!cloud && Boolean(page) && pageCheck.isError) || (readText && file.isError) || (checkImage && (imageStatus.isError || (imageStatus.data !== undefined && imageStatus.data >= 400))) || frameState === "failed";
-	// What a snapshot of this card may wait for: the preview drawn, nothing worth drawing for good, or a failure to try again later.
 	const previewState = accessPending || imagePending || downscaling || !visible || (readText && file.isPending) || (page && !cloud && pageAvailable === undefined) || frameState === "loading"
 		? "loading"
 		: loadFailed ? "error" : unavailable ? "unavailable" : "content";
@@ -192,7 +173,6 @@ export function ArtifactThumbnail({ row, previewLive = true, pageHeight = PAGE_H
 				) : null
 			) : pdf ? (
 				<div className="flex h-full min-h-0 flex-col overflow-hidden">
-					{/* A cloud file's URL already carries its version. */}
 					<PdfPreview cloud={cloud} firstPageOnly onError={() => {
 						setFailed(true);
 						if (!cloud) return;

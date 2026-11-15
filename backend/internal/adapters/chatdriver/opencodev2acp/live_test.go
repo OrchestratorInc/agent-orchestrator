@@ -25,26 +25,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestLiveOpenCodeV2ACPSteering proves AO's Steer against the real `opencode
-// acp` (2.2.7 or later). Run explicitly with AO_LIVE_OPENCODE_V2=1; set
-// AO_LIVE_OPENCODE_V2_BIN to pick a binary, otherwise AO's own resolver picks
-// the installed OpenCode 2. The model is a scripted OpenAI-compatible server and
-// HOME and the XDG directories are temporary, so it needs no account and never
-// touches the operator's OpenCode data. CI never depends on it. It runs on
-// macOS and Linux only.
-//
-// It proves: the handshake turns Steer on; guidance sent while a command runs
-// joins that turn, reaches the model right after the tool result and the turn
-// completes once with nothing left to start on its own; an image in the
-// guidance reaches the model; and a steer after the turn ended is refused as
-// "send it as a new turn" without starting work.
 func TestLiveOpenCodeV2ACPSteering(t *testing.T) {
 	if os.Getenv("AO_LIVE_OPENCODE_V2") != "1" {
 		t.Skip("set AO_LIVE_OPENCODE_V2=1 to run against the local OpenCode 2 with a scripted model")
 	}
 	if runtime.GOOS == "windows" {
-		// The fixture symlinks the binary as `opencode`, sets a POSIX PATH and has
-		// the model run `sleep`, so it only runs on macOS and Linux.
 		t.Skip("POSIX-only live fixture; run it on macOS or Linux")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -104,7 +89,6 @@ func TestLiveOpenCodeV2ACPSteering(t *testing.T) {
 				break
 			}
 		}
-		// The steer must not leave work behind that starts on its own.
 		time.Sleep(2 * time.Second)
 		if after := model.count(); after != before+2 {
 			t.Fatalf("model requests for one steered turn = %d, want 2 (command, then the reply to the guidance)", after-before)
@@ -151,9 +135,7 @@ func TestLiveOpenCodeV2ACPSteering(t *testing.T) {
 type scriptedRequest struct {
 	lastUser           string
 	toolBeforeLastUser bool
-	// images holds the decoded bytes of each image_url data URL in the newest
-	// user message, so a test can require the exact PNG it sent.
-	images [][]byte
+	images             [][]byte
 }
 
 type scriptedModel struct {
@@ -177,10 +159,6 @@ func (m *scriptedModel) request(index int) scriptedRequest {
 	return m.requests[index]
 }
 
-// newScriptedModel answers OpenAI-compatible chat completions. "Run the slow
-// check first." gets one six-second shell command; guidance marked STEER-ME
-// gets a reply that proves the model saw it. Requests without tools are AO's
-// and OpenCode's helper calls (titles) and are not counted.
 func newScriptedModel(t *testing.T) *scriptedModel {
 	t.Helper()
 	model := &scriptedModel{}
@@ -250,8 +228,6 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 	return model
 }
 
-// isolateOpenCodeV2 gives OpenCode a temporary HOME and XDG directories holding
-// only the scripted provider, and puts the chosen binary first on PATH.
 func isolateOpenCodeV2(t *testing.T, binary, modelURL string) {
 	t.Helper()
 	root := t.TempDir()
@@ -352,10 +328,6 @@ func waitForTurnEnd(ctx context.Context, t *testing.T, conversation ports.ChatCo
 	}
 }
 
-// dataURLImages decodes the base64 payload of every image_url part in an
-// OpenAI chat message's content. A part that is not a base64 data URL, or
-// whose payload does not decode, contributes an empty entry, so a lost or
-// corrupted image never matches the PNG a test sent.
 func dataURLImages(content json.RawMessage) [][]byte {
 	var parts []struct {
 		Type     string `json:"type"`
@@ -364,7 +336,7 @@ func dataURLImages(content json.RawMessage) [][]byte {
 		} `json:"image_url"`
 	}
 	if json.Unmarshal(content, &parts) != nil {
-		return nil // plain string content has no images
+		return nil
 	}
 	var images [][]byte
 	for _, part := range parts {
@@ -381,7 +353,6 @@ func dataURLImages(content json.RawMessage) [][]byte {
 	return images
 }
 
-// tinyPNG is a valid 8x8 red PNG.
 func tinyPNG() []byte {
 	chunk := func(kind string, data []byte) []byte {
 		var out bytes.Buffer

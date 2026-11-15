@@ -13,8 +13,6 @@ export function useWindowZoomFactor(): number {
 			version += 1;
 			setZoomFactor(value);
 		});
-		// Native menu zoom roles do not emit zoom-changed. Chromium does resize
-		// the CSS viewport, so refresh the native placement and reserve here too.
 		const refresh = () => {
 			const requestVersion = ++version;
 			void aoBridge.window.getZoomFactor().then((value) => {
@@ -29,9 +27,6 @@ export function useWindowZoomFactor(): number {
 			window.removeEventListener("resize", refresh);
 		};
 	}, []);
-	// Set tokens on their declaration scope: inherited custom properties have
-	// already resolved var() references, so a shell-only override cannot update
-	// the dependent native-control/content clearances (including body portals).
 	useLayoutEffect(() => {
 		if (!isMacPlatform()) return;
 		const style = document.documentElement.style;

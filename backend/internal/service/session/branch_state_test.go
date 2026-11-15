@@ -25,7 +25,6 @@ func (s *branchStateStore) SetSessionBranchState(_ context.Context, id domain.Se
 	return true, nil
 }
 
-// newPushableRepo returns a repo whose main is pushed to a bare origin.
 func newPushableRepo(t *testing.T) string {
 	t.Helper()
 	remote := t.TempDir()
@@ -44,7 +43,6 @@ func commitFile(t *testing.T, repo, name string) {
 	runGit(t, repo, "commit", "-m", "add "+name)
 }
 
-// headed sets want's Head to dir's checked-out commit.
 func headed(t *testing.T, dir string, want domain.SessionBranchState) domain.SessionBranchState {
 	t.Helper()
 	want.Head = strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
@@ -73,7 +71,6 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 		}
 	}
 
-	// Tracking origin/main is not a push: the branch itself is not on the remote.
 	runGit(t, repo, "branch", "--set-upstream-to", "origin/main")
 	reconcile(domain.SessionBranchState{Branch: "feat/x", Commits: 2, Unpushed: 2, Base: "main", BaseRef: "origin/main"})
 
@@ -95,7 +92,6 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	repo := newPushableRepo(t)
 	worktree := filepath.Join(t.TempDir(), "wt")
 	runGit(t, repo, "worktree", "add", "-b", "ao/s1/root", worktree)
-	// The agent moved to its own branch; the recorded branch is stale.
 	runGit(t, worktree, "checkout", "-b", "ao/s1/feature")
 	commitFile(t, worktree, "a.go")
 
@@ -147,8 +143,6 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 		return gitCalls() - before
 	}
 
-	// One for-each-ref for the shared repository, then one commit count per
-	// session; neither branch is on the remote, so no unpushed count.
 	if got := pass(); got != 3 {
 		t.Fatalf("first pass ran %d git processes, want 3", got)
 	}
@@ -177,7 +171,6 @@ func TestReconcileSessionBranchStateCountsHowFarBehindTheBase(t *testing.T) {
 	repo := newPushableRepo(t)
 	runGit(t, repo, "checkout", "-b", "feat/x")
 	commitFile(t, repo, "a.go")
-	// The base moves on after the branch split: two commits land on main.
 	runGit(t, repo, "checkout", "main")
 	commitFile(t, repo, "m1.go")
 	commitFile(t, repo, "m2.go")
@@ -207,7 +200,6 @@ func TestReconcileSessionBranchStateReportsConflictsWithTheBase(t *testing.T) {
 	}
 	runGit(t, repo, "checkout", "-b", "feat/x")
 	edit("package main\n\nconst side = \"branch\"\n")
-	// main edits the same lines after the split.
 	runGit(t, repo, "checkout", "main")
 	edit("package main\n\nconst side = \"main\"\n")
 	runGit(t, repo, "push", "origin", "main")
@@ -239,8 +231,6 @@ func TestReconcileSessionBranchStateLabelsALocalBase(t *testing.T) {
 	}
 }
 
-// A base known only as a recorded commit has no branch to be behind, so the
-// state must not claim "0 behind".
 func TestReconcileSessionBranchStateLeavesBaseUnsetForARecordedCommit(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	runGit(t, repo, "branch", "-M", "main")
@@ -283,8 +273,6 @@ func TestReconcileSessionBranchStateSkipsTerminatedSessions(t *testing.T) {
 	}
 }
 
-// countGitCalls puts a logging git first on PATH and returns a counter of the
-// git processes started since.
 func countGitCalls(t *testing.T) func() int {
 	t.Helper()
 	realGit, err := exec.LookPath("git")

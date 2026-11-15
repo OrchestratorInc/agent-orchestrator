@@ -18,27 +18,14 @@ import (
 
 const previewHostLabel = "ao-preview"
 
-// previewArtifactHostLabel is the reserved first label for an artifact
-// preview origin. Using a distinct host label — rather than a path prefix
-// shared with workspace asset paths — gives an artifact link an unambiguous
-// source identity: scope is decided by which origin the browser is talking
-// to, not by a string marker that a real workspace path could also contain.
 const previewArtifactHostLabel = "ao-preview-artifact"
 
-// inlineArtifactHostLabel is the reserved first label for the origin an HTML
-// artifact is framed from inside the chat thread. Unlike the preview origins
-// it is refused by the daemon's CORS check, so a page framed there keeps a
-// real origin for its own files yet cannot call the daemon API.
 const inlineArtifactHostLabel = "ao-inline-artifact"
 
-// ErrPreviewHostUnsupported indicates that a session ID cannot be represented
-// by a standards-compliant localhost hostname.
 var ErrPreviewHostUnsupported = errors.New("session ID is too long for a preview hostname")
 
 var entryCandidates = []string{"index.html", "public/index.html", "dist/index.html", "build/index.html"}
 
-// previewableExts are the file extensions the browser panel can render: HTML
-// verbatim and Markdown converted to HTML by the preview/files route.
 var previewableExts = map[string]struct{}{
 	".html":     {},
 	".htm":      {},
@@ -46,11 +33,8 @@ var previewableExts = map[string]struct{}{
 	".markdown": {},
 }
 
-// maxPreviewWalkFiles bounds the most-recent fallback scan so a pathological
-// workspace cannot stall the preview poller.
 const maxPreviewWalkFiles = 5000
 
-// Entry is a workspace-local static frontend entrypoint.
 type Entry struct {
 	Path    string
 	AbsPath string
@@ -58,11 +42,6 @@ type Entry struct {
 	Size    int64
 }
 
-// DiscoverEntry returns the entry the browser panel should preview for a
-// workspace. A conventional index.html (or its public/dist/build variants)
-// always wins; when none exists it falls back to the most-recently-modified
-// previewable file (.html/.htm/.md/.markdown) anywhere in the workspace, so a
-// freshly generated report or document shows up automatically.
 func DiscoverEntry(workspacePath string) (Entry, bool) {
 	if entry, ok := DiscoverWebEntrypoint(workspacePath); ok {
 		return entry, true
@@ -70,13 +49,6 @@ func DiscoverEntry(workspacePath string) (Entry, bool) {
 	return mostRecentPreviewable(workspacePath)
 }
 
-// DiscoverWebEntrypoint returns a conventional static-frontend entrypoint
-// (index.html or its public/dist/build variants) if one exists in the
-// workspace. Unlike DiscoverEntry it does NOT fall back to the most-recent
-// previewable document, so it is the right choice when auto-previewing a
-// brand-new session the user has never explicitly previewed: surfacing an
-// arbitrary repo README or generated report as the initial browser target is
-// noise, not the intended preview. See issue #2859.
 func DiscoverWebEntrypoint(workspacePath string) (Entry, bool) {
 	if strings.TrimSpace(workspacePath) == "" {
 		return Entry{}, false
@@ -89,10 +61,6 @@ func DiscoverWebEntrypoint(workspacePath string) (Entry, bool) {
 	return Entry{}, false
 }
 
-// mostRecentPreviewable walks the workspace and returns the newest previewable
-// file. Ties (equal mod times) break on the slash path so the result is
-// deterministic. Hidden directories and node_modules are skipped, and the scan
-// is bounded by maxPreviewWalkFiles.
 func mostRecentPreviewable(workspacePath string) (Entry, bool) {
 	root, err := filepath.Abs(workspacePath)
 	if err != nil {
@@ -153,8 +121,6 @@ func skipPreviewDir(name string) bool {
 	return strings.HasPrefix(name, ".") || name == "node_modules"
 }
 
-// IsMarkdownPath reports whether p names a Markdown file the preview/files
-// route should render to HTML rather than serve verbatim.
 func IsMarkdownPath(p string) bool {
 	switch strings.ToLower(filepath.Ext(p)) {
 	case ".md", ".markdown":
@@ -163,8 +129,6 @@ func IsMarkdownPath(p string) bool {
 	return false
 }
 
-// ConfinedPath maps an asset path into workspacePath and rejects paths that
-// escape the workspace root.
 func ConfinedPath(workspacePath, assetPath string) (string, bool) {
 	root, err := filepath.Abs(workspacePath)
 	if err != nil || root == "" {
@@ -189,19 +153,10 @@ func ConfinedPath(workspacePath, assetPath string) (string, bool) {
 	return absFile, true
 }
 
-// FileURL builds an isolated localhost origin for a workspace-local entry.
-// Mounting the entry directory at the origin root makes both relative and
-// root-relative browser requests resolve inside the preview instead of falling
-// through to the daemon's API origin.
 func FileURL(baseURL string, id domain.SessionID, entry string) (string, error) {
 	return labeledFileURL(baseURL, previewHostLabel, id, entry)
 }
 
-// ArtifactFileURL builds an isolated localhost origin for a session's
-// artifact-directory entry, on a distinct host from FileURL. The artifact
-// entry path is never prefixed with a scope marker: the host alone says
-// "serve from ArtifactDir," so a real workspace file can never collide with
-// an artifact link the way a shared path-prefix marker could.
 func ArtifactFileURL(baseURL string, id domain.SessionID, entry string) (string, error) {
 	return labeledFileURL(baseURL, previewArtifactHostLabel, id, entry)
 }
@@ -213,36 +168,24 @@ func labeledFileURL(baseURL, label string, id domain.SessionID, entry string) (s
 		return "", err
 	}
 	u.Host = host
-	// URL.String escapes Path exactly once. Supplying an already-escaped path
-	// here would turn spaces into %2520 and make otherwise valid workspace files
-	// impossible to resolve.
 	u.Path = path.Clean("/" + entry)
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
 }
 
-// InlineArtifactFileURL builds the origin that frames a session's HTML
-// artifact inline in the chat thread, on a host distinct from both preview
-// origins.
 func InlineArtifactFileURL(baseURL string, id domain.SessionID, entry string) (string, error) {
 	return labeledFileURL(baseURL, inlineArtifactHostLabel, id, entry)
 }
 
-// SessionIDFromInlineArtifactHost decodes the session identity carried by an
-// InlineArtifactFileURL host.
 func SessionIDFromInlineArtifactHost(rawHost string) (domain.SessionID, bool) {
 	return sessionIDFromLabeledHost(rawHost, inlineArtifactHostLabel)
 }
 
-// SessionIDFromHost decodes the session identity carried by a FileURL host.
-// The labels use unpadded base32 so arbitrary session IDs remain DNS-safe.
 func SessionIDFromHost(rawHost string) (domain.SessionID, bool) {
 	return sessionIDFromLabeledHost(rawHost, previewHostLabel)
 }
 
-// SessionIDFromArtifactHost decodes the session identity carried by an
-// ArtifactFileURL host.
 func SessionIDFromArtifactHost(rawHost string) (domain.SessionID, bool) {
 	return sessionIDFromLabeledHost(rawHost, previewArtifactHostLabel)
 }

@@ -67,13 +67,6 @@ func TestLiveCodexBackgroundTaskNaming(t *testing.T) {
 	}
 }
 
-// TestLiveCodexAppServer drives a real `codex app-server`. It is skipped unless
-// AO_CODEX_LIVE=1, because it needs a local Codex install, working auth, and it
-// makes real model calls. Everything else in this package runs against pipes.
-//
-// Run it after changing the protocol layer:
-//
-//	AO_CODEX_LIVE=1 go test ./internal/adapters/chatdriver/codexappserver/ -run Live -v
 func TestLiveCodexAppServer(t *testing.T) {
 	if os.Getenv("AO_CODEX_LIVE") != "1" {
 		t.Skip("set AO_CODEX_LIVE=1 to run against a real codex app-server")
@@ -148,8 +141,6 @@ collect:
 			case ports.ChatEventMessageDelta:
 				sawDelta = true
 			case ports.ChatEventApprovalRequested:
-				// Default posture is never-ask, so an approval here means the
-				// permission mapping regressed.
 				t.Errorf("unexpected approval request under default permissions: %s", ev.Summary)
 				_ = conv.ResolveRequest(ctx, ev.RequestID, ports.ChatDecision{ID: "accept"})
 			case ports.ChatEventTurnCompleted:
@@ -172,8 +163,6 @@ collect:
 		t.Errorf("turn state = %q, want completed", state)
 	}
 
-	// Resume on a fresh process must recover the same thread — this is the
-	// daemon-restart path.
 	if err := conv.(ports.ChatProviderHibernator).Hibernate(); err != nil {
 		t.Fatalf("Hibernate: %v", err)
 	}
@@ -237,8 +226,6 @@ collect:
 	}
 }
 
-// livePlugin stands in for AO's Codex agent plugin so this test exercises the
-// driver rather than binary discovery.
 type livePlugin struct{ bin string }
 
 func (p livePlugin) ResolveBinary(context.Context) (string, error) { return p.bin, nil }

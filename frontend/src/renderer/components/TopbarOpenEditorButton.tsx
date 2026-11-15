@@ -20,9 +20,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { OpenTargetIcon } from "./OpenTargetIcon";
 export { OpenTargetIcon as TargetIcon } from "./OpenTargetIcon";
 
-// Electron main owns the complete handoff: it resolves the loopback-only
-// workspace path, launches the native target, and persists editor preference.
-// This renderer receives only safe target metadata and availability status.
 export function TopbarOpenEditorButton({
 	sessionId,
 	projectId,
@@ -36,7 +33,6 @@ export function TopbarOpenEditorButton({
 	sessionCreatedAt?: string;
 	sessionTerminated?: boolean;
 	style?: React.CSSProperties;
-	/** Set when mounted in a session top bar, so its clicks are counted. */
 	telemetryView?: TopbarView;
 }) {
 	const { t } = useTranslation();
@@ -49,8 +45,6 @@ export function TopbarOpenEditorButton({
 	const targets = state?.targets ?? [];
 	const editors = targets.filter((target) => target.kind === "editor");
 	const preferred = editors.find((target) => target.id === state?.preferredEditorId);
-	// With no installed editor chosen, the main button opens the workspace in the
-	// platform file manager (Finder, File Explorer, xdg-open) instead of sitting empty.
 	const fileManager = targets.find((target) => target.kind === "file_manager");
 	const mainTarget = preferred ?? fileManager;
 	const openInTargets = targets.filter((target) => target.kind === "file_manager" || target.kind === "terminal");
@@ -73,15 +67,11 @@ export function TopbarOpenEditorButton({
 	};
 	const launch = (targetId?: OpenTargetId) => {
 		const target = targetId ? targets.find((entry) => entry.id === targetId) : preferred;
-		// Report from the promise: mutate callbacks are dropped if the button
-		// unmounts (e.g. a session switch) while the launch is in flight.
 		open.mutateAsync({ sessionId, projectId, ...(targetId ? { targetId } : {}) }).catch((error: unknown) => {
 			showGlobalToast(t("editor.openInTarget", { name: target?.name ?? "" }), error instanceof Error ? error.message : undefined, "error");
 		});
 	};
-	// Without an explicit target, main opens the preferred editor.
 	const launchMain = () => (preferred ? launch() : mainTarget && launch(mainTarget.id));
-	// ⌘O does what the main button does.
 	useSessionShortcut("open-in-editor", () => {
 		if (busy || !workspaceAvailable) return;
 		launchMain();

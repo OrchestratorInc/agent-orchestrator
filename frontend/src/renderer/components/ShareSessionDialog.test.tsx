@@ -14,11 +14,9 @@ const mocks = vi.hoisted(() => ({
 		listShareLinks: vi.fn(),
 		createShareLink: vi.fn(),
 		revokeShareLink: vi.fn(),
-		// The people half of the dialog: nobody has access yet, no teams.
 		getShareAccess: vi.fn(async (): Promise<unknown> => ({ entries: [] })),
 		listTeams: vi.fn(async () => ({ teams: [] })),
 		listShareCandidates: vi.fn(async () => ({ candidates: [] })),
-		// Three people in the workspace.
 		listOrgMembers: vi.fn(async () => ({ members: [{ userId: "a" }, { userId: "b" }, { userId: "c" }] })),
 	},
 	org: { id: "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b", displayName: "Northwind", offering: { kind: "b2b" } } as Record<string, unknown>,
@@ -66,7 +64,6 @@ async function chooseAudience(name: string) {
 	await userEvent.click(await screen.findByRole("menuitemradio", { name: new RegExp(name) }));
 }
 
-/** A confirmation's button, once the links it counts from have been read again. */
 async function confirmAction(confirm: HTMLElement, name: string): Promise<HTMLElement> {
 	const button = within(confirm).getByRole("button", { name });
 	await waitFor(() => expect(button).toBeEnabled());
@@ -74,10 +71,6 @@ async function confirmAction(confirm: HTMLElement, name: string): Promise<HTMLEl
 }
 
 describe("general access", () => {
-	// Radix's focus scope moves focus from a 0 ms timer when a dialog unmounts.
-	// Unmount, then wait one tick so that timer fires while this file's DOM
-	// still exists; left pending, it fires into the next test file's jsdom
-	// window on a shared CI worker and fails the run as an unhandled error.
 	afterEach(async () => {
 		cleanup();
 		await new Promise((resolve) => setTimeout(resolve, 0));
@@ -97,7 +90,6 @@ describe("general access", () => {
 		expect(await screen.findByRole("heading", { name: "Share “Fix flaky auth test”" })).toBeInTheDocument();
 		expect(screen.getByText("Session in acme/web")).toBeInTheDocument();
 		expect(await sentence()).toBe("Only members of your workspace and people added above can open this session.");
-		// Disabled for screen readers too, with the reason, but still focusable.
 		expect(copyButton()).toHaveAttribute("aria-disabled", "true");
 		expect(copyButton()).not.toBeDisabled();
 		expect(copyButton()).toHaveAccessibleDescription("Turn on link access to copy a link. People you add above find this session under Shared with you.");
@@ -112,7 +104,6 @@ describe("general access", () => {
 		["an enterprise workspace", { displayName: "Northwind", kind: "enterprise" }, false],
 		["a personal workspace", { displayName: "Northwind", kind: "personal" }, true],
 		["a team workspace named like someone's", { displayName: "Pritom's organization", kind: "team" }, false],
-		// An older control plane names no kind: a name or an offering never makes one personal.
 		["one named \"<name>'s organization\" by an older control plane", { displayName: "Pritom's organization", offering: { kind: "both" } }, false],
 		["one named after the account by an older control plane", { displayName: "asha@northwind.dev", offering: { kind: "b2c" } }, false],
 		["one still loading", undefined, false],
@@ -148,7 +139,6 @@ describe("general access", () => {
 		mocks.org = org as Record<string, unknown>;
 		renderDialog();
 		expect(await sentence()).toBe("Only people with access can open this session.");
-		// The workspace's people still have access, so they still show.
 		await waitFor(() => expect(document.querySelector("[data-share-workspace-row]")).not.toBeNull());
 	});
 
@@ -170,7 +160,6 @@ describe("general access", () => {
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
 		expect(await screen.findByRole("button", { name: "Link copied" })).toBeInTheDocument();
 		expect(document.querySelector("[data-share-announcement]")).toHaveTextContent("Link copied. Anyone signed in to Orchestrator.inc with the link can watch this session");
-		// Copying never makes a second link.
 		expect(mocks.client.createShareLink).toHaveBeenCalledTimes(1);
 	});
 
@@ -182,12 +171,10 @@ describe("general access", () => {
 		await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
 		expect(copyButton()).toHaveTextContent("Copy new link");
 		fireEvent.click(copyButton());
-		// Another link that can write: it asks, as turning writing on does.
 		const confirm = await screen.findByRole("dialog", { name: "Let anyone with the link write?" });
 		expect(confirm).toHaveTextContent("your repository access and its secrets");
 		expect(mocks.client.createShareLink).not.toHaveBeenCalled();
 		fireEvent.click(await confirmAction(confirm, "Allow writing"));
-		// Rounded down: the copy never outlasts the link it stands in for.
 		await waitFor(() => expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", {
 			sessionId: "s1", role: "editor", accessScope: "anyone", interaction: "interact", modeCap: "standard", expiresInHours: 47,
 		}));
@@ -209,7 +196,6 @@ describe("general access", () => {
 		const region = await card();
 		expect(region).toHaveTextContent("Never expires");
 		expect(region).toHaveTextContent("and 1 more link");
-		// Standard is what writing means, so the trigger names only the level.
 		expect(within(region).getByRole("button", { name: "Change access: Can write" })).toHaveTextContent(/^Can write$/);
 	});
 
@@ -235,7 +221,6 @@ describe("general access", () => {
 		expect(mocks.client.createShareLink).not.toHaveBeenCalled();
 		fireEvent.click(await confirmAction(confirm, "Allow writing"));
 		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_A, undefined));
-		// The new link is made first, so a failure leaves the old one working.
 		expect(mocks.client.createShareLink.mock.invocationCallOrder[0]).toBeLessThan(mocks.client.revokeShareLink.mock.invocationCallOrder[0]!);
 		expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", {
 			sessionId: "s1", role: "editor", accessScope: "anyone", interaction: "interact", modeCap: "standard", expiresInHours: 71,
@@ -247,7 +232,6 @@ describe("general access", () => {
 		mocks.client.listShareLinks.mockResolvedValue({
 			links: [shareLink({ id: LINK_A, sessionId: "s1", joinedCount: 2 }), shareLink({ id: LINK_B, sessionId: "s1", joinedCount: 1 })],
 		});
-		// The control plane's own count, which may differ from the list's.
 		mocks.client.revokeShareLink.mockImplementation(async (_org: string, _project: string, id: string) => ({ removedGrants: id === LINK_A ? 3 : 1 }));
 		renderDialog();
 		await waitFor(async () => expect((await card()).dataset.shareGeneralAccess).toBe("anyone"));
@@ -255,12 +239,10 @@ describe("general access", () => {
 		const confirm = await screen.findByRole("dialog", { name: "Turn off link access?" });
 		expect(confirm).toHaveTextContent("2 links stop working.");
 		const turnOff = await confirmAction(confirm, "Turn off");
-		// Never ticked for the owner: until they tick it, the people who joined keep access.
 		expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
 		expect(confirm).toHaveTextContent("People who already opened them keep their access.");
 		fireEvent.click(within(confirm).getByRole("checkbox"));
 		expect(confirm).not.toHaveTextContent("keep their access");
-		// Several links: the people joined by one of them or another.
 		expect(confirm).toHaveTextContent("Also remove the 3 people who joined via link");
 		fireEvent.click(turnOff);
 		await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledWith(ORG, "project", LINK_B, { removeJoined: true }));
@@ -301,7 +283,6 @@ describe("general access", () => {
 	it("shares the whole project instead from the line under the title", async () => {
 		mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ id: LINK_B, role: "editor", interaction: "interact", modeCap: "standard" })] });
 		renderDialog();
-		// The project's link opens this session too.
 		expect(await sentence()).toBe("Only members of your workspace and people added above can open this session. A link to the whole project opens it too.");
 		fireEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
 		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
@@ -314,18 +295,15 @@ describe("general access", () => {
 		const cta = await screen.findByRole("button", { name: "Share the whole project instead" });
 		expect(cta.tagName).toBe("BUTTON");
 		expect(cta).toHaveAttribute("type", "button");
-		// Underlined at rest, dotted, so it reads as something to press, not as plain text.
 		expect(cta.className).not.toContain("no-underline");
 		expect(cta.className).toMatch(/(^|\s)underline(\s|$)/);
 		expect(cta.className).toContain("decoration-dotted");
-		// Hover and keyboard focus brighten it (the app draws no focus rings).
 		expect(cta.className).toContain("hover:text-foreground");
 		expect(cta.className).toContain("focus-visible:text-foreground");
 		cta.focus();
 		expect(cta).toHaveFocus();
 		await userEvent.keyboard("{Enter}");
 		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
-		// The way back reads the same way.
 		expect((await screen.findByRole("button", { name: "Share only this session" })).className).toContain("decoration-dotted");
 	});
 
@@ -334,7 +312,6 @@ describe("general access", () => {
 		expect(await screen.findByRole("heading", { name: "Share “Fix flaky auth test”" })).toBeInTheDocument();
 		expect(screen.getByText("Standalone agent")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Share the whole project instead" })).toBeNull();
-		// Nobody else in the workspace can open it until added.
 		expect(await sentence()).toBe("Only you and people added above can open this session.");
 		expect(document.querySelector("[data-share-workspace-row]")).toBeNull();
 		await waitFor(() => expect(mocks.client.getShareAccess).toHaveBeenCalledWith(ORG, "project", "s1"));
@@ -344,13 +321,11 @@ describe("general access", () => {
 		renderDialog({ sessionId: undefined, sessionName: undefined });
 		expect(await screen.findByRole("heading", { name: "Share project “acme/web”" })).toBeInTheDocument();
 		expect(screen.getByText("Includes every session, also ones started later.")).toBeInTheDocument();
-		// No session to go back to.
 		expect(screen.queryByRole("button", { name: "Share only this session" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Share the whole project instead" })).toBeNull();
 		expect(await sentence()).toBe("Only members of your workspace and people added above can open this project.");
 		await waitFor(() => expect(mocks.client.getShareAccess).toHaveBeenCalledWith(ORG, "project", undefined));
 		expect(mocks.client.getShareAccess).not.toHaveBeenCalledWith(ORG, "project", expect.any(String));
-		// Turning link access on makes a link to the whole project, naming no session.
 		mocks.client.createShareLink.mockResolvedValue({ link: shareLink({ id: NEW_LINK, code: CODE, shortUrl: SHORT }) });
 		await chooseAudience("Anyone with the link");
 		await waitFor(() => expect(mocks.client.createShareLink).toHaveBeenCalledTimes(1));
@@ -366,7 +341,6 @@ describe("general access", () => {
 				</TooltipProvider>
 			</QueryClientProvider>
 		);
-		// Shared from a worker, then closed: the header keeps the dialog mounted as the session changes.
 		const view = render(dialog({ sessionId: "s1", sessionName: "Fix flaky auth test" }));
 		expect(await screen.findByRole("heading", { name: "Share “Fix flaky auth test”" })).toBeInTheDocument();
 		view.rerender(dialog({ open: false, sessionId: "s1", sessionName: "Fix flaky auth test" }));
@@ -391,13 +365,10 @@ describe("general access", () => {
 		await waitFor(() => expect(screen.queryByRole("combobox", { name: "Add people or teams" })).toBeNull());
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(await card()).toBeInTheDocument();
-		// A 404 is the answer, not a failure to retry.
 		expect(mocks.client.getShareAccess).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows a project or session the control plane can't find as an error, and keeps people for every other session", async () => {
-		// A control plane with teams says "not_found" for an archived project or
-		// a session not in the project; that is no reason to drop to links only.
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		mocks.client.getShareAccess.mockReset().mockRejectedValueOnce(new CloudCpError("The requested resource was not found.", { status: 404, code: "not_found" }));
 		const first = render(
@@ -411,7 +382,6 @@ describe("general access", () => {
 		expect(screen.getByRole("combobox", { name: "Add people or teams" })).toBeInTheDocument();
 		first.unmount();
 
-		// Another session's dialog in the same app run offers people from the start.
 		mocks.client.getShareAccess.mockImplementation(() => new Promise(() => undefined));
 		render(
 			<QueryClientProvider client={queryClient}>
@@ -458,7 +428,6 @@ describe("link access, made safe", () => {
 		forgetUrlsMadeHere();
 	});
 	const dialog = () => screen.getByRole("dialog");
-	/** Something outside the dialog that had focus first, as the agent terminal does. */
 	function focusTerminal() {
 		const terminal = document.createElement("textarea");
 		terminal.dataset.testid = "terminal";
@@ -479,7 +448,6 @@ describe("link access, made safe", () => {
 		it("lands on General access when link access is off", async () => {
 			mocks.client.listShareLinks.mockResolvedValue({ links: [] });
 			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-			// Opened a second time, with the links already read.
 			await queryClient.fetchQuery({ queryKey: ["cloud-share-links", "https://cp.example.test", ORG, "project"], queryFn: async () => [] });
 			focusTerminal();
 			render(
@@ -523,7 +491,6 @@ describe("link access, made safe", () => {
 			expect(current.querySelector("svg")).not.toBeNull();
 			await userEvent.click(screen.getByRole("menuitem", { name: "Standard" }));
 			const confirm = await screen.findByRole("dialog", { name: "Make a new link?" });
-			// Narrower access still leaves who joined alone unless the owner ticks it.
 			expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
 			expect(confirm).toHaveTextContent("Also remove the 2 people who joined via link");
 			fireEvent.click(await confirmAction(confirm, "Make new link"));
@@ -537,7 +504,6 @@ describe("link access, made safe", () => {
 			renderDialog();
 			await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "replace"));
 			expect(copyButton()).toHaveAccessibleDescription(/New links can't be Trusted/);
-			// Asking again and again makes nothing.
 			for (let attempt = 0; attempt < 3; attempt += 1) {
 				fireEvent.click(copyButton());
 				const confirm = await screen.findByRole("dialog", { name: "Replace the Trusted link?" });
@@ -548,7 +514,6 @@ describe("link access, made safe", () => {
 			fireEvent.click(copyButton());
 			const confirm = await screen.findByRole("dialog", { name: "Replace the Trusted link?" });
 			expect(confirm).toHaveTextContent("the current one stops working");
-			// The people who joined keep the access the old link gave them unless the owner removes them.
 			expect(within(confirm).getByRole("checkbox")).not.toBeChecked();
 			expect(confirm).toHaveTextContent("People who already opened it keep their access.");
 			fireEvent.click(await confirmAction(confirm, "Make new link"));
@@ -598,7 +563,6 @@ describe("link access, made safe", () => {
 			await waitFor(async () => expect((await card()).dataset.shareGeneralAccess).toBe("anyone"));
 			await chooseAudience("Only people with access");
 			const confirm = await screen.findByRole("dialog", { name: "Turn off link access?" });
-			// Several links: "them", not "it".
 			expect(confirm).toHaveTextContent("3 links stop working. People who already opened them keep their access.");
 			fireEvent.click(await confirmAction(confirm, "Turn off"));
 			await waitFor(() => expect(mocks.client.revokeShareLink).toHaveBeenCalledTimes(3));
@@ -623,7 +587,6 @@ describe("link access, made safe", () => {
 		mocks.client.listShareLinks.mockResolvedValue({ links: [shareLink({ sessionId: "s1", joinedCount: 0 })] });
 		renderDialog();
 		await waitFor(async () => expect((await card()).dataset.shareGeneralAccess).toBe("anyone"));
-		// Someone joined while the dialog was open.
 		let answer!: (value: { links: CloudCpShareLink[] }) => void;
 		mocks.client.listShareLinks.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
 		await chooseAudience("Only people with access");
@@ -727,7 +690,6 @@ describe("link access, made safe", () => {
 			fireEvent.click(copyButton());
 			const confirm = await screen.findByRole("dialog", { name: "Let anyone with the link write?" });
 			expect(confirm).toHaveTextContent("the current one keeps working until it expires");
-			// Nothing stops, so there is nobody to remove.
 			expect(within(confirm).queryByRole("checkbox")).toBeNull();
 			fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
 			await waitFor(() => expect(screen.queryByRole("dialog", { name: "Let anyone with the link write?" })).toBeNull());
@@ -748,8 +710,6 @@ describe("link access, made safe", () => {
 	});
 
 	it("copies the link it made, not another new one, when the control plane's clock is behind this device's", async () => {
-		// The control plane is 3 hours behind, so a copy counted on this
-		// device's clock ends over an hour before the link it stands in for.
 		const skew = 3 * 3_600_000;
 		const broadest = shareLink({
 			sessionId: "s1", createdAt: new Date(Date.now() - DAY - skew).toISOString(),
@@ -773,7 +733,6 @@ describe("link access, made safe", () => {
 		fireEvent.click(copyButton());
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
 		expect(mocks.client.createShareLink).toHaveBeenCalledWith(ORG, "project", expect.objectContaining({ expiresInHours: 47 }));
-		// Once the links are read again (the button still says "Link copied").
 		await waitFor(() => expect(mocks.client.listShareLinks.mock.calls.length).toBeGreaterThan(1));
 		await waitFor(() => expect(copyButton()).not.toHaveAttribute("data-share-copy-busy"));
 		fireEvent.click(copyButton());
@@ -793,7 +752,6 @@ describe("link access, made safe", () => {
 		await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
 		fireEvent.click(copyButton());
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
-		// Once the links are read again (the button still says "Link copied").
 		await waitFor(() => expect(mocks.client.listShareLinks.mock.calls.length).toBeGreaterThan(1));
 		await waitFor(() => expect(copyButton()).not.toHaveAttribute("data-share-copy-busy"));
 		fireEvent.click(copyButton());
@@ -834,7 +792,6 @@ describe("link access, made safe", () => {
 			await waitFor(() => expect(copyButton()).toHaveAttribute("data-share-copy-link", "new"));
 			expect(copyButton()).toHaveTextContent("Copy new link");
 			expect(mocks.client.createShareLink).not.toHaveBeenCalled();
-			// Asked once, not retried.
 			expect(recall).toHaveBeenCalledTimes(1);
 		});
 	});
@@ -933,7 +890,6 @@ describe("share links", () => {
 		const now = Date.parse("2026-11-06T12:00:00Z");
 		expect(remainingHours({ expiresAt: "2026-11-08T12:00:00Z" }, now)).toBe(48);
 		expect(remainingHours({ expiresAt: "2026-11-08T11:59:00Z" }, now)).toBe(47);
-		// Links are made in whole hours: some time left is at least one.
 		expect(remainingHours({ expiresAt: "2026-11-06T12:10:00Z" }, now)).toBe(1);
 		expect(remainingHours({ expiresAt: "2026-11-06T12:00:00Z" }, now)).toBeNull();
 		expect(remainingHours({ expiresAt: "2026-11-05T12:00:00Z" }, now)).toBeNull();
@@ -947,24 +903,20 @@ describe("share links", () => {
 		const links = [broadest, copy, older];
 		expect(broadestLink(links)?.id).toBe(LINK_A);
 		expect(urlForBroadest(broadest, links, { [NEW_LINK]: SHORT })).toBe(SHORT);
-		// One made before it and ending much sooner, or with other access, isn't the same link to copy.
 		expect(urlForBroadest(broadest, links, { [LINK_B]: SHORT })).toBeUndefined();
 		expect(urlForBroadest(broadest, [broadest, { ...copy, role: "viewer", modeCap: "read-only" }], { [NEW_LINK]: SHORT })).toBeUndefined();
 	});
 
 	it("knows a copy made here by the control plane's own times, whatever this device's clock says", () => {
 		const broadest = shareLink({ id: LINK_A, role: "editor", modeCap: "standard", createdAt: "2026-11-01T00:00:00Z", expiresAt: "2026-11-08T12:00:00Z" });
-		// Made after it, ending hours sooner: a copy counted on a clock ahead of the control plane's.
 		const copy = shareLink({ id: NEW_LINK, role: "editor", modeCap: "standard", createdAt: "2026-11-06T09:00:00Z", expiresAt: "2026-11-08T08:00:00Z" });
 		expect(urlForBroadest(broadest, [broadest, copy], { [NEW_LINK]: SHORT })).toBe(SHORT);
-		// Made before it: not a copy of it.
 		const earlier = { ...copy, createdAt: "2026-10-31T00:00:00Z" };
 		expect(urlForBroadest(broadest, [broadest, earlier], { [NEW_LINK]: SHORT })).toBeUndefined();
 	});
 
 	it("copies the link on the public site when the control plane names one for the same code", () => {
 		expect(createdShareLinkUrl("https://cp.example.test", ORG, { code: CODE, shortUrl: SHORT })).toBe(SHORT);
-		// A short URL for another code, not https, or not a share link is ignored.
 		expect(createdShareLinkUrl("https://cp.example.test", ORG, { code: CODE, shortUrl: "https://orchestrator.inc/s/AAAAAAAAAAAAAAAAAAAAAA" })).toBe(`https://cp.example.test/s/${CODE}`);
 		expect(createdShareLinkUrl("https://cp.example.test", ORG, { code: CODE, shortUrl: `http://orchestrator.inc/s/${CODE}` })).toBe(`https://cp.example.test/s/${CODE}`);
 		expect(createdShareLinkUrl("https://cp.example.test", ORG, { code: CODE, shortUrl: "https://orchestrator.inc/" })).toBe(`https://cp.example.test/s/${CODE}`);

@@ -1,5 +1,3 @@
-// Package gitdefault resolves the branch a repository advertises as its
-// default without consulting the currently checked-out branch.
 package gitdefault
 
 import (
@@ -18,30 +16,19 @@ const (
 	legacyDefaultBranch          = "main"
 	legacyInitialCommitSubject   = "initial commit"
 	legacyWorkspaceCommitSubject = "chore: initialize AO workspace root"
-	// ManagedDefaultConfigKey records the branch AO selected when it initialized
-	// a repository itself. It is intentionally repo-local and is only consulted
-	// when the repository has no remote branches yet.
-	ManagedDefaultConfigKey = "ao.defaultBranch"
+	ManagedDefaultConfigKey      = "ao.defaultBranch"
 )
 
-// ErrUnresolved means Git exposes no authoritative default branch. Callers
-// should ask the user to configure one rather than guessing from HEAD.
 var ErrUnresolved = errors.New("git default branch is unresolved")
 
-// Source describes the repository-level signal used for a resolution.
 type Source string
 
 const (
-	// SourceLiveRemoteHead means the branch came from a live symbolic remote HEAD.
-	SourceLiveRemoteHead Source = "live_remote_head"
-	// SourceCachedRemoteHead means the branch came from the selected remote's cached HEAD.
+	SourceLiveRemoteHead   Source = "live_remote_head"
 	SourceCachedRemoteHead Source = "cached_remote_head"
-	// SourceAOInitialized means AO recorded the branch when it initialized the repository.
-	SourceAOInitialized Source = "ao_initialized"
+	SourceAOInitialized    Source = "ao_initialized"
 )
 
-// Resolution is an authoritative branch plus the ref that can safely seed a
-// new worktree. Remote is empty only for repositories initialized by AO.
 type Resolution struct {
 	Branch string
 	Remote string
@@ -49,18 +36,13 @@ type Resolution struct {
 	Source Source
 }
 
-// Runner executes Git. Supplying one keeps the resolver testable at the
-// workspace boundary; nil uses a non-interactive OS command runner.
 type Runner func(ctx context.Context, binary string, args ...string) ([]byte, error)
 
-// Resolver owns remote selection, live remote-HEAD lookup, exact fetching, and
-// cached fallback. Callers only choose the repository and time budget.
 type Resolver struct {
 	binary string
 	run    Runner
 }
 
-// New returns a default-branch resolver. An empty binary uses git from PATH.
 func New(binary string, run Runner) *Resolver {
 	if strings.TrimSpace(binary) == "" {
 		binary = defaultGitBinary
@@ -71,9 +53,6 @@ func New(binary string, run Runner) *Resolver {
 	return &Resolver{binary: binary, run: run}
 }
 
-// RecordInitialBranch records the branch AO is about to give its first commit.
-// Call only while initializing an unborn repository; ordinary default-branch
-// resolution must never infer a default from the current checkout.
 func (r *Resolver) RecordInitialBranch(ctx context.Context, repo string) error {
 	out, err := r.run(ctx, r.binary, "-C", repo, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil {
@@ -89,8 +68,6 @@ func (r *Resolver) RecordInitialBranch(ctx context.Context, repo string) error {
 	return nil
 }
 
-// Inspect resolves from local, durable repository metadata only. It never
-// contacts a remote, so it is suitable for project read models and registration.
 func (r *Resolver) Inspect(ctx context.Context, repo string) (Resolution, error) {
 	remote, remotes, err := r.selectRemote(ctx, repo)
 	if err != nil {
@@ -110,10 +87,6 @@ func (r *Resolver) Inspect(ctx context.Context, repo string) (Resolution, error)
 	)
 }
 
-// FindCachedRemoteBranch returns a fetched branch from the repository's
-// selected primary remote. It does not require that remote to advertise a
-// symbolic HEAD, so callers can resume an explicitly requested remote branch
-// even when the repository default itself is unavailable.
 func (r *Resolver) FindCachedRemoteBranch(ctx context.Context, repo, branch string) (remote, ref string, ok bool, err error) {
 	if err := r.validateBranch(ctx, repo, branch); err != nil {
 		return "", "", false, err
@@ -132,10 +105,6 @@ func (r *Resolver) FindCachedRemoteBranch(ctx context.Context, repo, branch stri
 	return remote, ref, true, nil
 }
 
-// Resolve asks the selected remote for its symbolic HEAD, fetches that exact
-// branch, and records the symbolic remote HEAD locally. If the live lookup or
-// fetch is unavailable, it falls back to the same remote's cached HEAD. The
-// remoteCtx bounds network work independently of local Git operations.
 func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolution, error) {
 	remote, remotes, err := r.selectRemote(ctx, repo)
 	if err != nil {
@@ -162,8 +131,6 @@ func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolut
 				return Resolution{Branch: branch, Remote: remote, Ref: ref, Source: SourceLiveRemoteHead}, nil
 			}
 			liveErr = fmt.Errorf("fetch remote default %q from %q: %w", branch, remote, fetchErr)
-			// The live lookup still authoritatively named the branch. If that
-			// remote-tracking ref already exists, it is the best offline cache.
 			if r.refExists(ctx, repo, ref) {
 				if err := r.setCachedRemoteHead(ctx, repo, remote, branch); err != nil {
 					return Resolution{}, err
@@ -178,8 +145,6 @@ func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolut
 	if cached, ok := r.cachedRemoteHead(ctx, repo, remote); ok {
 		return cached, nil
 	}
-	// A known live default must not be replaced by the initial local branch
-	// merely because fetching it failed.
 	if branch == "" {
 		if initialized, ok := r.initializedBeforeFirstPush(ctx, repo, remote); ok {
 			return initialized, nil
@@ -193,9 +158,6 @@ func (r *Resolver) Resolve(ctx, remoteCtx context.Context, repo string) (Resolut
 	)
 }
 
-// An empty clone can have an AO-created initial commit before its first push.
-// Keep remote HEAD authoritative once available, and never use this fallback
-// when the selected remote already has fetched branches.
 func (r *Resolver) initializedBeforeFirstPush(ctx context.Context, repo, remote string) (Resolution, bool) {
 	out, err := r.run(ctx, r.binary, "-C", repo, "for-each-ref", "--format=%(refname)", "refs/remotes/"+remote+"/")
 	if err != nil || strings.TrimSpace(string(out)) != "" {
@@ -297,10 +259,6 @@ func (r *Resolver) resolveAOInitialized(ctx context.Context, repo string) (Resol
 	return Resolution{Branch: branch, Ref: ref, Source: SourceAOInitialized}, nil
 }
 
-// legacyAOInitializedBranch recognizes the two initial commits written by AO
-// before ManagedDefaultConfigKey existed. Both legacy creation paths selected
-// main explicitly, so this is a compatibility backfill rather than a branch
-// guess. User-created remoteless repositories remain unresolved.
 func (r *Resolver) legacyAOInitializedBranch(ctx context.Context, repo string) (string, bool) {
 	ref := "refs/heads/" + legacyDefaultBranch
 	if !r.refExists(ctx, repo, ref) {

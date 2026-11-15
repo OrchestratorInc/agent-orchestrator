@@ -26,17 +26,8 @@ var _ ports.AgentNativeSessionConfigProvider = (*Plugin)(nil)
 var _ ports.AgentNativeSessionProber = (*Plugin)(nil)
 var _ ports.AgentTranscriptLocator = (*Plugin)(nil)
 
-// kimchiSessionIDPattern mirrors Kimchi's own assertValidSessionId
-// (@kimchi-dev/cli): non-empty, only alphanumerics, '-', '_', '.', beginning
-// and ending with an alphanumeric. It accepts the uuidv7 ids Kimchi mints while
-// rejecting anything with a path separator or a leading dot, so a stored native
-// id can never escape the sessions directory.
 var kimchiSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
-// NativeSessionConfigDir models Kimchi's src/entry.ts: it resets both
-// KIMCHI_CODING_AGENT_DIR and PI_CODING_AGENT_DIR to homedir/.config/kimchi/harness.
-// A different requested root cannot be honored and must not silently resume an
-// empty conversation. This inspects the child environment without changing it.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -88,17 +79,10 @@ func sameKimchiRoot(left, right string) bool {
 	return lerr == nil && rerr == nil && l.IsDir() && r.IsDir() && os.SameFile(l, r)
 }
 
-// ProbeNativeSession uses Kimchi's local JSONL transcript as authoritative
-// backing state for kimchi-acp's session/load. Kimchi stores one
-// <time>_<session-id>.jsonl below a per-cwd directory in <config>/sessions.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
-// LocateTranscript finds Kimchi's provider-owned JSONL by native session id.
-// kimchi-acp resolves a session file by id within the cwd-keyed directory, but
-// AO must find the original across every cwd folder, so this walks the whole
-// sessions tree rather than depending on the lossy dashed-path directory name.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -122,16 +106,11 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	return path, found, nil
 }
 
-// RelocateImportedSession prepares the exact cwd-keyed file Kimchi's ACP loader
-// reads. ResumeCwd persistence and first-open admission belong to the manager.
 func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	_, err := relocateKimchiImportedSession(ctx, r.ConfigDir, r.NativeSessionID, r.TranscriptPath, r.LaunchCWD)
 	return err
 }
 
-// relocateKimchiImportedSession keeps the native basename and identity, rewriting
-// only the session record's cwd. Kimchi encodes ACP params.cwd verbatim:
-// resolving a symlink here makes session/load silently open an empty chat.
 func relocateKimchiImportedSession(ctx context.Context, configDir, nativeID, transcriptPath, launchCWD string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -188,7 +167,6 @@ func relocateKimchiImportedSession(ctx context.Context, configDir, nativeID, tra
 	if err := importcopy.CopyOnce(transcriptPath, dest, rewrite, check); err != nil {
 		return "", fmt.Errorf("kimchi: prepare resume copy: %w", err)
 	}
-	// Existing copies may hold AO turns, but must still be valid native input.
 	if err := validateKimchiResumeCopy(ctx, dest, sessionID, launchCWD); err != nil {
 		return "", err
 	}
@@ -198,8 +176,6 @@ func relocateKimchiImportedSession(ctx context.Context, configDir, nativeID, tra
 	return dest, nil
 }
 
-// checkKimchiLookup rejects another matching basename: Kimchi picks the first
-// file matching an id, so a valid copy alone does not prove it will be loaded.
 func checkKimchiLookup(dir, sessionID, dest string) error {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -261,16 +237,12 @@ func validateKimchiResumeCopy(ctx context.Context, path, sessionID, cwd string) 
 	return nil
 }
 
-// kimchiRecords applies the rules a transcript must meet for kimchi-acp to
-// replay it, one record at a time: the first record is the only session
-// record and carries the native id, and a user or assistant message follows.
 type kimchiRecords struct {
 	sessionID    string
 	sessions     int
 	conversation bool
 }
 
-// observe checks the next record and reports whether it is the session record.
 func (k *kimchiRecords) observe(line []byte) (bool, error) {
 	var rec struct {
 		Type    string `json:"type"`
@@ -296,7 +268,6 @@ func (k *kimchiRecords) observe(line []byte) (bool, error) {
 	return false, nil
 }
 
-// complete reports whether every record seen made a replayable transcript.
 func (k *kimchiRecords) complete() error {
 	if k.sessions != 1 || !k.conversation {
 		return errors.New("kimchi: transcript needs exactly one session record and conversation history to replay")
@@ -304,10 +275,6 @@ func (k *kimchiRecords) complete() error {
 	return nil
 }
 
-// encodeKimchiCwdDir reproduces kimchi-acp's encodeCwdDir exactly: strip a
-// single leading slash or backslash, map every '/', '\\' and ':' to '-', and
-// wrap in '--'. It operates on the raw launch cwd with no symlink resolution,
-// matching the loader, so the folder AO writes to is the folder Kimchi reads.
 func encodeKimchiCwdDir(cwd string) string {
 	if cwd != "" && (cwd[0] == '/' || cwd[0] == '\\') {
 		cwd = cwd[1:]
@@ -315,9 +282,6 @@ func encodeKimchiCwdDir(cwd string) string {
 	return "--" + strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(cwd) + "--"
 }
 
-// canonicalKimchiSessionID validates a native session id against Kimchi's own
-// rule and returns it unchanged. The rule forbids path separators, so the id is
-// safe to join into a filesystem path.
 func canonicalKimchiSessionID(value string) (string, error) {
 	id := strings.TrimSpace(value)
 	if !kimchiSessionIDPattern.MatchString(id) {

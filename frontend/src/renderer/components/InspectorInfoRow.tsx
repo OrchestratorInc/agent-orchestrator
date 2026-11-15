@@ -5,17 +5,11 @@ import { cn } from "../lib/utils";
 import { ProductExternalLink } from "./ProductExternalLink";
 
 const rowBaseClass = "flex min-h-8 min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-sm text-foreground";
-// Interactive controls hover like sidebar rows: the shared growing pill owns the fill.
 const interactiveRowClass = cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60");
 
-/**
- * One inspector row: an icon and a label, with an optional `action` control
- * placed after it (beside the row, never inside it).
- */
 export function InfoRow({ action, icon: Icon, iconClassName, label, title }: {
 	action?: ReactNode;
 	icon: LucideIcon;
-	/** Overrides the icon's muted colour, e.g. for a status tone. */
 	iconClassName?: string;
 	label: ReactNode;
 	title?: string;
@@ -35,10 +29,6 @@ export function InfoRow({ action, icon: Icon, iconClassName, label, title }: {
 	);
 }
 
-/**
- * An inspector row that opens something in the app, such as a PR's tab.
- * `action` sits beside it.
- */
 export function InfoRowButton({ action, icon: Icon, iconClassName, label, onClick, title, trailing }: {
 	action?: ReactNode;
 	icon: LucideIcon;
@@ -46,7 +36,6 @@ export function InfoRowButton({ action, icon: Icon, iconClassName, label, onClic
 	label: ReactNode;
 	onClick: () => void;
 	title?: string;
-	/** Says what the row does, inside the same click target. */
 	trailing?: ReactNode;
 }) {
 	const button = (
@@ -68,7 +57,6 @@ export function InfoRowButton({ action, icon: Icon, iconClassName, label, onClic
 	);
 }
 
-/** A compact external link with the row hover, for a row's `action` slot: a square, like an icon button. */
 export function InfoRowLink({ ariaLabel, href, icon }: { ariaLabel: string; href: string; icon?: ReactNode }) {
 	return (
 		<ProductExternalLink ariaLabel={ariaLabel} className={cn("flex size-8 shrink-0 items-center justify-center rounded-md", interactiveRowClass)} href={href}>

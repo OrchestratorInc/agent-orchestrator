@@ -16,13 +16,7 @@ export const dynamicParams = false;
 
 type Props = { params: Promise<{ slug: string[] }> };
 
-/**
- * Text wrapped to `width`. The image renderer measures Geist words slightly
- * off, so words separated by plain spaces sit unevenly; each line is one run
- * joined by no-break spaces instead, broken at an estimated width.
- */
 function Lines({ text, fontSize, width, style }: { text: string; fontSize: number; width: number; style?: CSSProperties }) {
-  // Geist averages a little under half an em per character.
   const perLine = Math.floor(width / (fontSize * 0.5));
   const lines: string[] = [];
   for (const word of text.split(/\s+/)) {
@@ -41,13 +35,11 @@ function Lines({ text, fontSize, width, style }: { text: string; fontSize: numbe
   );
 }
 
-/** One preview image per English article, at `/og/<path>/image.png`. */
 export function generateStaticParams() {
   return source.getPages(DEFAULT_LOCALE).map((page) => ({ slug: [...page.slugs, "image.png"] }));
 }
 
 const fonts = join(process.cwd(), "node_modules/geist/dist/fonts/geist-sans");
-// The same logo the repository uses everywhere else.
 const logo = join(process.cwd(), "../../assets/ao-logo.svg");
 
 export async function GET(_request: Request, props: Props) {
@@ -62,7 +54,6 @@ export async function GET(_request: Request, props: Props) {
   ]);
   const title = visibleProductName(page.data.title);
   const description = page.data.description && visibleProductName(page.data.description);
-  // The sidebar folder the article sits in, if any.
   const [folder] = getBreadcrumbItems(page.url, docsTree(DEFAULT_LOCALE));
   const section = typeof folder?.name === "string" ? folder.name : undefined;
 

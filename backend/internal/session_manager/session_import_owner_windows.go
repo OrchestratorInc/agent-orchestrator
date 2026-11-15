@@ -11,11 +11,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// ponytail: Windows relies on the provider refusing a second writer; add a
-// LockFileEx probe if imported chats there report races.
 func providerLockHeld(string) bool { return false }
 
-// processStart reads a live process's executable name and start time.
 func processStart(_ context.Context, pid int) (string, time.Time, bool) {
 	if pid <= 0 || pid > math.MaxUint32 {
 		return "", time.Time{}, false

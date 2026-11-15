@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The source has stopped, but Claude writes JSONL asynchronously to its hooks.
-// Retry fresh provider observations for a bounded window before launching Chat.
 func verifyNativeCheckpoint(ctx context.Context, verifier ports.NativeCheckpointVerifier, request ports.NativeCheckpointRequest) (ports.NativeCheckpointBoundary, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

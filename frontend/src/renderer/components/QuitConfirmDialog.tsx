@@ -14,11 +14,6 @@ import {
 	settingsDialogFooterClass,
 } from "./ui/dialog";
 
-// Shown on ⌘Q (macOS). Same frame and tokens as ConfirmDialog, but the footer
-// sits under a hairline and each action names its key — Esc cancels, Return
-// quits — since the dialog is always opened from the keyboard. Quit starts
-// focused so Return confirms. With the menu bar icon up, Quit only closes the
-// window, so the body says AO keeps running instead of asking again.
 export function QuitConfirmDialog({
 	open,
 	keepsRunning = false,

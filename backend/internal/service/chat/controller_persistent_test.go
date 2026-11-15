@@ -39,7 +39,7 @@ func (c *receiptConversation) AcknowledgeProviderEvent(_ context.Context, id str
 
 type flakyReceiptStore struct {
 	chatsvc.Store
-	failures atomic.Int32 // -1 fails permanently; positive counts transient failures.
+	failures atomic.Int32
 }
 
 func (s *flakyReceiptStore) ProjectProviderEvent(

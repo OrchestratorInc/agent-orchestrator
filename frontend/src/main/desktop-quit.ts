@@ -23,10 +23,7 @@ export function createDesktopQuitController(options: {
 
 			event.preventDefault();
 			if (options.hasWindow()) {
-				// Leave the Dock once the window is really gone: the draft guard can
-				// still cancel the close.
 				hideDockOnWindowClosed = true;
-				// close(), not destroy(): the existing unsaved-draft guard still runs.
 				options.closeWindow();
 			} else {
 				options.hideDock();

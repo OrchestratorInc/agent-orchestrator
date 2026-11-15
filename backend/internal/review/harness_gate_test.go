@@ -36,7 +36,6 @@ func TestTriggerHoldsHarnessUntilReviewerIsRecorded(t *testing.T) {
 	eng.harnessUse = harnessGateFunc(func(harness domain.AgentHarness) (func(), bool) {
 		gated = harness
 		return func() {
-			// An update that starts after this must find the reviewer's handle.
 			if store.review == nil || store.review.ReviewerHandleID != "review-mer-1" {
 				t.Errorf("harness released before the reviewer was recorded: %+v", store.review)
 			}

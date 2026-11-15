@@ -90,11 +90,9 @@ describe("daemon failure telemetry", () => {
 		pushStatus({ state: "error", code: "daemon_unreachable" });
 		expect(captureMock).toHaveBeenCalledTimes(1);
 
-		// A different failure is a new event.
 		pushStatus({ state: "stopped", code: "exited", exitCode: 137 });
 		expect(captureMock).toHaveBeenCalledTimes(2);
 
-		// Recovery resets dedupe: the same failure recurring is reported again.
 		pushStatus({ state: "ready", port: 3037 });
 		pushStatus({ state: "error", code: "daemon_unreachable" });
 		expect(captureMock).toHaveBeenCalledTimes(3);

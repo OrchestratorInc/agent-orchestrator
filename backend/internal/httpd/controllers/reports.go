@@ -13,7 +13,6 @@ import (
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
 
-// ReportService is the controller-facing report creation contract.
 type ReportService interface {
 	Create(context.Context, reportsvc.CreateInput) (domain.ReportRecord, error)
 }
@@ -22,10 +21,8 @@ type reportProjectReader interface {
 	ListProject(context.Context, domain.ProjectID) ([]domain.ReportRecord, error)
 }
 
-// ReportsController owns the /reports routes.
 type ReportsController struct{ Svc ReportService }
 
-// Register mounts report routes on r.
 func (c *ReportsController) Register(r chi.Router) {
 	r.Post("/reports", c.create)
 	r.Get("/reports", c.list)

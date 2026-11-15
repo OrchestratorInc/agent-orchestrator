@@ -8,9 +8,6 @@ import (
 	"testing"
 )
 
-// A dirty checkout can replace a tracked folder with an ordinary file: Git then
-// lists the untracked file and the deleted children under the old folder, whose
-// Lstat fails with ENOTDIR rather than "not exist".
 func TestCopyImportedWorkspaceFolderReplacedByFile(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -65,8 +62,6 @@ func TestCopyImportedWorkspaceFolderReplacedByFile(t *testing.T) {
 	}
 }
 
-// Only a non-folder ancestor makes a missing child a deletion; a plain folder
-// above an unreadable path does not hide the error.
 func TestImportAncestorNotDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "folder"), 0o700); err != nil {
@@ -91,8 +86,6 @@ func TestImportAncestorNotDir(t *testing.T) {
 	}
 }
 
-// A subfolder the new worktree lacks, such as a git-ignored scratch folder,
-// falls back to the worktree root rather than a missing working directory.
 func TestImportLaunchPathFallsBackWhenSubdirIsMissing(t *testing.T) {
 	ws := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(ws, "pkg", "api"), 0o700); err != nil {

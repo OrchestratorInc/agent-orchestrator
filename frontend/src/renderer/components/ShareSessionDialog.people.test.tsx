@@ -21,14 +21,11 @@ function gate(): Gate {
 
 const mocks = vi.hoisted(() => ({
 	access: undefined as unknown as CloudCpShareAccess,
-	/** What the whole project's list returns, when it differs from the session's. */
 	projectAccess: undefined as CloudCpShareAccess | undefined,
 	teamMembers: {} as Record<string, CloudCpTeamMemberAccess[]>,
 	candidates: [] as CloudCpShareCandidate[],
 	calls: [] as Array<[string, ...unknown[]]>,
-	/** Hold a call until the test opens its gate. */
 	gates: {} as Record<string, Array<{ promise: Promise<void> }>>,
-	/** What the next createShareGrants answers with. */
 	created: [] as CloudCpShareEntry[],
 	failCreate: false,
 	failUpdate: false,
@@ -177,7 +174,6 @@ describe("ShareSessionDialog people and teams", () => {
 		expect(rows.map((element) => element.getAttribute("data-share-row"))).toEqual([
 			"project::team:t-data", "session:sess:team:t-platform", "session:sess:email:riya@acme.co", "session:sess:email:sam@contractor.io",
 		]);
-		// The project's share applies here but is changed at project level.
 		expect(rows[0]!.textContent).toContain("from project");
 		expect(rows[0]!.querySelector("[data-access-menu]")).toBeNull();
 		expect(rows[0]!.querySelector("[data-share-locked]")).toHaveAttribute("aria-disabled", "true");
@@ -192,7 +188,6 @@ describe("ShareSessionDialog people and teams", () => {
 		renderDialog();
 		const list = await accessList();
 		const button = await within(list).findByRole("button", { name: "from project" });
-		// The email shortens; the link never sits in the part that is cut off.
 		expect(button.closest(".truncate")).toBeNull();
 		expect(within(row(list, "Someone With A Long Name")).getByText(/a{80}@northwind\.dev/).closest(".truncate")).not.toBeNull();
 		await userEvent.click(button);
@@ -236,8 +231,6 @@ describe("ShareSessionDialog people and teams", () => {
 		const list = await accessList();
 		await userEvent.click(menuOf(row(list, "Platform")));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
-		// Still saving: Ben had his access through Platform, so he now watches;
-		// Chen has more through a link and keeps it.
 		await waitFor(async () => expect(await line("Ben Ortiz")).toContain("Can watch"));
 		expect(await line("Chen Wei")).toContain("Trusted");
 		await act(async () => saved.open());
@@ -266,17 +259,14 @@ describe("ShareSessionDialog people and teams", () => {
 		renderDialog();
 		await screen.findByText("Platform");
 		const input = await stageCheckout();
-		// Default level: watch.
 		const summary = await screen.findByText(/Dana Kim and Omar Haddad get Can watch\./);
 		expect(summary.textContent).toContain("Ben Ortiz already has this or more.");
 		expect(summary.textContent).toContain("Farah Nasser already has full access as a workspace member.");
 		expect(summary.textContent).toContain("sam@contractor.io gets Can watch after signing in.");
 		expect(summary.textContent).not.toContain("Asha");
-		// Raise to writing; the limit appears.
 		const field = input.closest("[data-people-field]") as HTMLElement;
 		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
-		// Ben already writes through Platform at the same limit, so he still keeps what he has.
 		const raised = await screen.findByText(/Dana Kim and Omar Haddad get Can write\./);
 		expect(raised.textContent).toContain("Ben Ortiz already has this or more.");
 		expect(screen.getByRole("button", { name: "Agent permissions" })).toHaveTextContent("Standard");
@@ -288,8 +278,6 @@ describe("ShareSessionDialog people and teams", () => {
 	});
 
 	it("names workspace members a team share of a Cloud standalone agent reaches as getting access", async () => {
-		// The control plane weighs a workspace member by what is shared with
-		// them in another person's agent, so Farah has nothing yet.
 		mocks.teamMembers["t-checkout"] = mocks.teamMembers["t-checkout"]!.map((entry) =>
 			entry.member.name === "Farah Nasser" ? { ...entry, access: {} } : entry);
 		renderDialog({ standaloneAgent: true });
@@ -308,7 +296,6 @@ describe("ShareSessionDialog people and teams", () => {
 		const input = await stageCheckout();
 		await screen.findByText(/get Can watch/);
 		await userEvent.click(screen.getByRole("button", { name: "Share" }));
-		// Before the answer: the row is there, waiting, and focus is back in the field.
 		const list = await accessList();
 		const pending = row(list, "Checkout");
 		expect(pending).toHaveAttribute("aria-busy", "true");
@@ -365,11 +352,9 @@ describe("ShareSessionDialog people and teams", () => {
 		await userEvent.click(menuOf(row(list, "Platform")));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't change access.");
-		// The failed change is undone in place.
 		expect(row(list, "Platform").textContent).toContain("Can write");
 		const input = await stageCheckout();
 		const field = input.closest("[data-people-field]") as HTMLElement;
-		// The staged chip renders after the pick; wait for it rather than racing a busy runner.
 		await userEvent.click(await within(field).findByRole("button", { name: /Change access: Can watch/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can write/ }));
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -396,7 +381,6 @@ describe("ShareSessionDialog people and teams", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Share the whole project instead" }));
 		const projectList = await accessList();
 		await within(projectList).findByText("Data infra");
-		// The project's list is never read again, so what it shows is what the cache holds.
 		mocks.holdProjectReads = true;
 		await act(async () => answer.open());
 		await screen.findByRole("alert");
@@ -426,14 +410,12 @@ describe("ShareSessionDialog people and teams", () => {
 
 		await stopSharing(list, "Platform");
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "revokeShareGrant")).toEqual(["revokeShareGrant", "org", "proj", "g-platform"]));
-		// The offer is in the dialog, reachable by keyboard and screen reader, not behind it.
 		const dialog = screen.getByRole("dialog");
 		const notice = await within(dialog).findByRole("status");
 		expect(notice).toHaveTextContent("Removed Platform's access");
 		expect(useUiStore.getState().globalToasts).toHaveLength(0);
 		mocks.created = [entry("g-platform-2", { kind: "team", teamId: "t-platform", teamName: "Platform", memberCount: 6 }, { source: "team" })];
 		await userEvent.click(within(notice).getByRole("button", { name: "Undo" }));
-		// Back at once, then as the new grant, with the same access, limit and denied commands.
 		expect(within(list).getByText("Platform")).toBeInTheDocument();
 		await waitFor(() => expect(mocks.calls.filter((call) => call[0] === "createShareGrants").at(-1)).toEqual([
 			"createShareGrants", "org", "proj", { sessionId: "sess", subjects: [{ teamId: "t-platform" }], role: "viewer", modeCap: "read-only", deniedCommands: ["rm -rf"] },
@@ -474,7 +456,6 @@ describe("ShareSessionDialog people and teams", () => {
 		await stopSharing(list, "sam@contractor.io");
 		const reads = mocks.calls.filter((call) => call[0] === "getShareAccess").length;
 		await act(async () => first.open());
-		// Nothing is read back while the second stop is on its way, so neither row returns.
 		await act(async () => new Promise((resolve) => setTimeout(resolve, 20)));
 		expect(within(list).queryByText("Platform")).toBeNull();
 		expect(within(list).queryByText("sam@contractor.io")).toBeNull();

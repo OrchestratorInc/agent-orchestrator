@@ -153,9 +153,6 @@ func TestNativeConversationExistsRequiresActivePersistedCodexRollout(t *testing.
 	}
 }
 
-// canonicalTempDir returns a t.TempDir() with symlinks resolved so the
-// workspace trust flag collapses to a single predictable entry (macOS TempDir
-// lives under a /var -> /private/var symlink).
 func canonicalTempDir(t *testing.T) string {
 	t.Helper()
 	raw := t.TempDir()
@@ -169,9 +166,6 @@ func canonicalTempDir(t *testing.T) string {
 	return dir
 }
 
-// TestSessionHookFlagsRunTheAppImageLink covers an AppImage daemon: hooks run
-// the link under the data dir instead of this launch's /tmp/.mount_* path, so
-// a Codex session that outlives an app restart still reaches the running AO.
 func TestSessionHookFlagsRunTheAppImageLink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("AppImage is Linux-only")
@@ -192,10 +186,6 @@ func TestSessionHookFlagsRunTheAppImageLink(t *testing.T) {
 	}
 }
 
-// sessionHookFlags mirrors the `-c` hook config appendSessionHookFlags emits,
-// asserted literally so accidental format drift fails loudly: Codex parses
-// these values as TOML. The absolute AO executable is load-bearing because
-// Codex invokes hooks through a login shell, which may replace PATH.
 func sessionHookFlags(t *testing.T) []string {
 	t.Helper()
 	executable, err := os.Executable()
@@ -317,8 +307,6 @@ func TestLocateAndProbeNativeSessionTranscript(t *testing.T) {
 	}
 }
 
-// Codex compresses inactive rollouts and continues long threads in segments;
-// both remain resumable by thread id.
 func TestProbeNativeSessionFindsStoredRolloutForms(t *testing.T) {
 	sessionID := "019f9f7c-53c0-7f10-8d56-a8a979dd7001"
 	for name, file := range map[string]string{
@@ -758,8 +746,6 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 	}
 }
 
-// legacyHooksJSON builds a hooks.json in the shape older AO versions wrote:
-// AO-managed entries plus one user-defined Stop hook.
 func legacyHooksJSON() string {
 	return `{
   "hooks": {
@@ -886,7 +872,6 @@ func TestUninstallHooksRemovesLegacyCodexHooks(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Missing file is a no-op.
 	if err := plugin.UninstallHooks(ctx, workspace); err != nil {
 		t.Fatal(err)
 	}
@@ -1195,8 +1180,6 @@ func TestDoctorLaunchProbesMirrorLaunchFlags(t *testing.T) {
 	}
 }
 
-// An account home links its sessions folder to the computer's own, so the
-// rollout of a conversation started on another account is visible through it.
 func TestNativeConversationExistsFollowsALinkedSessionsFolder(t *testing.T) {
 	p := &Plugin{}
 	id := "019fc430-1234-7abc-8def-0123456789ab"

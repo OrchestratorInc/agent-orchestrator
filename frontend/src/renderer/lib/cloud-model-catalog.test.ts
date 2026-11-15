@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { claudeModelName, cloudCatalogOffers, cloudModelVerdict } from "./cloud-model-catalog";
 
-// The same cases as the control plane's modelcatalog TestOffersMatchesWhatTheHarnessWouldRun,
-// so the desktop and the server agree on what a list offers.
 describe("cloudCatalogOffers", () => {
 	const claude = [{ id: "default" }, { id: "opus" }, { id: "sonnet" }, { id: "claude-opus-5" }, { id: "claude-opus-4-5-20251101" }];
 	const codex = [{ id: "gpt-6-luna" }, { id: "gpt-5.6-terra" }];
@@ -18,9 +16,7 @@ describe("cloudCatalogOffers", () => {
 		["not a date suffix", claude, "claude-opus-4", false],
 		["another harness, listed", codex, "gpt-5.6-terra", true],
 		["another harness, not listed", codex, "gpt-6.1-sol", false],
-		// Matching errs towards keeping a model: a mis-cased ID is kept.
 		["another harness, another case", codex, "GPT-5.6-Terra", true],
-		// The effort is kept apart from the model, so a suffixed ID is not a listed one.
 		["a suffixed form of a listed model", codex, "gpt-5.6-terra/high", false],
 		["a provider-qualified ID, listed", [{ id: "opencode-go/model-1" }], "opencode-go/model-1", true],
 		["an empty list offers only the default", [], "opus", false],
@@ -29,8 +25,6 @@ describe("cloudCatalogOffers", () => {
 	});
 });
 
-// The control plane's TestOffersOnTheRealStagingLists: the lists a staging
-// account's workers reported (Claude Code 2.1.287 and Codex 0.165.0).
 describe("cloudCatalogOffers on the real staging lists", () => {
 	const newer = (id: string, alias: string) => ({ id, description: `Newer version available · select ${alias}` });
 	const claude = [
@@ -73,7 +67,6 @@ describe("cloudCatalogOffers on the real staging lists", () => {
 	});
 });
 
-// The control plane's TestOffersResolvesAnAliasOnlyThroughTheProvidersModel.
 describe("cloudCatalogOffers on a list carrying the provider's models", () => {
 	const providers: Record<string, string> = {
 		sonnet: "claude-sonnet-5-5", fable: "claude-fable-5-1", opus: "claude-opus-5-5", haiku: "claude-haiku-4-5-20251001",
@@ -130,12 +123,10 @@ describe("cloudModelVerdict", () => {
 		expect(cloudModelVerdict({ source: "release", models: listed }, "claude-opus-5-5")).toBe("unverified");
 		expect(cloudModelVerdict({ source: "worker", models: listed }, "opus")).toBe("offered");
 		expect(cloudModelVerdict(undefined, "claude-opus-5-5")).toBe("offered");
-		// The agent's own default (no model) is always offered.
 		expect(cloudModelVerdict({ source: "worker", models: listed }, "")).toBe("offered");
 	});
 
 	it("treats the literal default as the control plane does: offered only by a list that names it", () => {
-		// Claude Code lists "default"; Codex does not, and Cloud refuses it there.
 		expect(cloudModelVerdict({ source: "worker", models: [...listed, { id: "default", displayName: "Default", default: false }] }, "default")).toBe("offered");
 		expect(cloudModelVerdict({ source: "worker", models: [{ id: "gpt-6-luna", displayName: "Luna", default: true }] }, "default")).toBe("unavailable");
 		expect(cloudModelVerdict({ source: "release", models: [{ id: "gpt-6-luna", displayName: "Luna", default: true }] }, "default")).toBe("unverified");

@@ -10,9 +10,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// integrationChatLauncher is the test-side equivalent of daemon.chatLauncher.
-// It keeps the integration tests focused on session-manager boundaries while
-// exercising the real Chat service.
 type integrationChatLauncher struct{ service *chatsvc.Service }
 
 func (l integrationChatLauncher) SupportsChat(harness domain.AgentHarness) bool {

@@ -3,7 +3,6 @@ import { mapOutsideMarkdownCode, markdownCodeRanges } from "./markdown-code";
 
 const code = (text: string) => markdownCodeRanges(text).map(([start, end]) => text.slice(start, end));
 
-// The daemon's markdown_code_test.go runs the same cases against its copy.
 describe("markdownCodeRanges", () => {
 	it.each([
 		["inline", "a `x` b", ["`x`"]],

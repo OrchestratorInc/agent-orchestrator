@@ -6,28 +6,13 @@ import (
 	"unicode/utf8"
 )
 
-// What a tool call, a tool result and reasoning contribute to the index, the
-// same for every source (AO Chat, Claude Code, Codex, OpenCode):
-//
-//   - A tool call is its name and one argument: the first of toolArgumentKeys
-//     that holds text, cut to toolArgumentChars. That is what a person
-//     remembers about a call: the command, the file or the pattern.
-//   - A tool result keeps its first toolOutputChars. Logs and file dumps
-//     would be most of the index while adding little that is searched.
-//   - Reasoning is not indexed. It restates the turn's reply and plan.
-//
-// Messages, plans, titles and file paths are not cut by these rules.
 const (
 	toolArgumentChars = 2000
 	toolOutputChars   = 3072
 )
 
-// toolArgumentKeys are the arguments a tool call is remembered by, in order.
 var toolArgumentKeys = []string{"command", "cmd", "file_path", "path", "pattern", "query", "description"}
 
-// toolArgument is a tool call's argument: the first of toolArgumentKeys that
-// holds text in an object input, or the input itself when it is text. A JSON
-// string that holds an object (Codex function arguments) is read as the object.
 func toolArgument(input json.RawMessage) string {
 	input = json.RawMessage(strings.TrimSpace(string(input)))
 	if len(input) == 0 {
@@ -57,7 +42,6 @@ func toolArgument(input json.RawMessage) string {
 		if json.Unmarshal(raw, &value) == nil && strings.TrimSpace(value) != "" {
 			return value
 		}
-		// Codex records a command as its argv.
 		var argv []string
 		if json.Unmarshal(raw, &argv) == nil && len(argv) > 0 {
 			if command := commandFromArgv(argv); strings.TrimSpace(command) != "" {
@@ -68,8 +52,6 @@ func toolArgument(input json.RawMessage) string {
 	return ""
 }
 
-// commandFromArgv renders a recorded argv: the script after a shell's -c or
-// -lc is what the agent wrote, so only that is kept.
 func commandFromArgv(argv []string) string {
 	if len(argv) >= 3 && (argv[len(argv)-2] == "-lc" || argv[len(argv)-2] == "-c") {
 		return argv[len(argv)-1]
@@ -77,8 +59,6 @@ func commandFromArgv(argv []string) string {
 	return strings.Join(argv, " ")
 }
 
-// toolCallText renders a tool call as "name: argument", with the argument cut
-// to toolArgumentChars; either part alone when the other is empty.
 func toolCallText(name, argument string) string {
 	name = strings.TrimSpace(name)
 	argument = firstChars(strings.TrimSpace(argument), toolArgumentChars)
@@ -92,17 +72,14 @@ func toolCallText(name, argument string) string {
 	}
 }
 
-// toolOutputText keeps the first toolOutputChars of a tool's output.
 func toolOutputText(output string) string {
 	return firstChars(strings.TrimSpace(output), toolOutputChars)
 }
 
-// toolText is one tool row: its call, then the start of its output.
 func toolText(name, argument, output string) string {
 	return joinSections(toolCallText(name, argument), toolOutputText(output))
 }
 
-// joinSections joins the non-empty sections with a blank line.
 func joinSections(sections ...string) string {
 	var out strings.Builder
 	for _, section := range sections {
@@ -118,7 +95,6 @@ func joinSections(sections ...string) string {
 	return out.String()
 }
 
-// firstChars keeps the first limit characters of value, never splitting one.
 func firstChars(value string, limit int) string {
 	if utf8.RuneCountInString(value) <= limit {
 		return value
@@ -133,17 +109,12 @@ func firstChars(value string, limit int) string {
 	return value
 }
 
-// chatTool is what an AO Chat tool activity's detail records about the call.
 type chatTool struct {
 	name     string
 	argument string
 	output   string
 }
 
-// activityTool reads a tool activity's detail: the provider's tool name, the
-// remembered argument of its input (or of the detail itself, where a command
-// is recorded at the top level), and the output the detail carries when the
-// activity's own output column is empty (MCP tools and file changes).
 func activityTool(detail string) chatTool {
 	var fields struct {
 		ProviderToolName string          `json:"providerToolName"`
@@ -183,10 +154,6 @@ func activityTool(detail string) chatTool {
 	return chatTool{name: name, argument: argument, output: output}
 }
 
-// toolResultText is the text of a tool result: a string as is, or the text of
-// each part of a content array ({"type":"text","text":...}). An object with a
-// content array (an MCP result) is read through it. Anything else falls back
-// to its string values.
 func toolResultText(raw json.RawMessage) string {
 	raw = json.RawMessage(strings.TrimSpace(string(raw)))
 	if len(raw) == 0 || string(raw) == "null" {

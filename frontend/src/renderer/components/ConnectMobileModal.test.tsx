@@ -7,8 +7,6 @@ import { apiClient } from "../lib/api-client";
 import { fetchPairingCode } from "../lib/mobile-pairing-code";
 import { useUiStore } from "../stores/ui-store";
 
-// vi.mock is hoisted above module-level consts, so the shared double has to be
-// created inside vi.hoisted to exist by the time the factory runs.
 const { mobileStatus } = vi.hoisted(() => ({
 	mobileStatus: {
 		enabled: true,
@@ -18,9 +16,6 @@ const { mobileStatus } = vi.hoisted(() => ({
 		port: 3011,
 		password: "fake-password-for-testing",
 		requireDeviceCredentials: false,
-		// The daemon always advertises its endpoints now, and a v2 code is built
-		// from that list — there is no v1 form left to fall back to when it is
-		// missing, so a fixture without it is not a realistic daemon.
 		hostId: "h_fixture",
 		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
 		tunnel: undefined as
@@ -49,8 +44,6 @@ const { mobileStatus } = vi.hoisted(() => ({
 	},
 }));
 
-// This suite exercises the mobile UI; shared desktop/mobile ownership is
-// covered with the real useAwake hook in AwakeControl.test.tsx.
 vi.mock("../hooks/useAwake", () => ({
 	awakeQueryKey: ["awake"],
 	useAwake: () => ({ state: { sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: vi.fn().mockResolvedValue({ active: true }), busy: false }),
@@ -66,8 +59,6 @@ vi.mock("../lib/mobile-pairing-code", () => {
 		fetchPairingCode: vi.fn(async () => ({ code: `Next${++made}`, expiresAt: Date.now() + 600_000 })),
 	};
 });
-// An app with no AO sign-in pairs signed out; signing in to pair is covered in
-// settings/ConnectMobileContent.signin.test.tsx.
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({ session: null, status: "unauthenticated", configured: false, signIn: () => undefined }),
 }));
@@ -96,7 +87,6 @@ import {
 function renderMobileSettings(
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
 ) {
-	// Settings prefetches the one-time pairing code with the status.
 	client.setQueryData(["mobile-pairing-code"], { code: "Code1234", expiresAt: Date.now() + 600_000 });
 	return render(
 		<QueryClientProvider client={client}>
@@ -107,13 +97,11 @@ function renderMobileSettings(
 	);
 }
 
-// Read the payload off the wrapper used by the shared styled QR component.
 function qrPayload(): string | null {
 	const qr = document.querySelector("[data-qr-value]");
 	return qr?.getAttribute("data-qr-value") ?? null;
 }
 
-// Mirrors what the phone does with a scanned code.
 function decodeQr(value: string): Record<string, unknown> {
 	const code = value.slice(value.indexOf("#") + 1);
 	const b64 = code.replace(/-/g, "+").replace(/_/g, "/");
@@ -126,7 +114,6 @@ async function selectConnectionMethod(mode: "LAN" | "Tailscale") {
 }
 
 beforeEach(() => {
-	// Keep awake's last-known state is remembered across mounts; start clean.
 	window.localStorage.clear();
 	mobileStatus.enabled = true;
 	mobileStatus.password = "fake-password-for-testing";
@@ -148,8 +135,6 @@ beforeEach(() => {
 	};
 	mobileStatus.keepAwake = undefined;
 	vi.mocked(apiClient.POST).mockClear();
-	// A test that failed before closing Settings must not leave the next one
-	// opened from the sidebar.
 	useUiStore.setState({ settingsModal: null });
 });
 
@@ -236,15 +221,12 @@ test("withholds the QR when tunnel startup fails without advertising an endpoint
 test("vertically aligns the regenerate control with the password row", async () => {
 	renderMobileSettings();
 
-	// The pairing code and its icon actions share one centred flex row.
 	const regenerate = await screen.findByRole("button", { name: "Revoke all devices" });
 	const row = regenerate.closest("dd");
 	expect(row).toHaveClass("flex", "items-center");
 	expect(row).toHaveTextContent("Code1234");
 });
 
-// The blurred placeholder stays behind the spinner, so the code that arrives
-// resolves in place; what matters is that nothing scannable shows yet.
 test("shows a quiet preparing state while startup is incomplete", async () => {
 	mobileStatus.endpoints = [];
 	mobileStatus.tunnel = {
@@ -284,8 +266,6 @@ test.each([
 			return { data: { devices: [] }, error: undefined };
 		}
 		statusReads++;
-		// Each response is a snapshot. Updating the fake server must not mutate
-		// the cached response and conceal a missing status refetch.
 		return { data: { ...mobileStatus }, error: undefined };
 	});
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
@@ -315,10 +295,6 @@ test.each([
 	}
 });
 
-// SKIPPED: drives the connection picker, which is commented out in
-// ConnectMobileContent. Un-skip with it — the behaviour is unchanged, only
-// the way in is gone. TLS coverage does NOT live here any more: it keys off
-// the tailnet address, so those tests run without the picker.
 test.skip("keeps the connection-method dropdown at its fixed width", async () => {
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
@@ -330,9 +306,6 @@ test.skip("keeps the connection-method dropdown at its fixed width", async () =>
 	expect(screen.getByRole("menu")).toHaveClass("!w-44", "!min-w-0");
 });
 
-// A code without a tunnel says so itself (localOnlyReason) and the
-// no-connector case is stated by remoteAccessUnavailable, so the generic
-// intro must not tell everyone to join the same Wi-Fi.
 test("does not tell LAN users to join the same Wi-Fi", async () => {
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
@@ -341,8 +314,6 @@ test("does not tell LAN users to join the same Wi-Fi", async () => {
 	expect(screen.getByText("Scan with the Orchestrator mobile app")).toBeInTheDocument();
 });
 
-// Both stores are listed in step one now. The platform dropdown that used to
-// gate them is gone, so neither link may be behind an interaction.
 test("offers both store links without a platform choice", async () => {
 	renderMobileSettings();
 
@@ -351,8 +322,6 @@ test("offers both store links without a platform choice", async () => {
 	expect(screen.queryByRole("button", { name: "Get the app" })).not.toBeInTheDocument();
 });
 
-// The store links used to be muted text links, easy to read past. They are a
-// filled segmented control now, next to "Get the app".
 test("shows the store links as one segmented control beside Get the app", async () => {
 	renderMobileSettings();
 
@@ -379,15 +348,6 @@ test("shows a QR-only App Store tooltip", async () => {
 	expect(tooltip.querySelector("canvas")).toBeInTheDocument();
 });
 
-// v1 encoded one chosen address, so switching mode had to re-encode the code.
-// A v2 code carries every endpoint the daemon advertises and the phone races
-// them, so the mode selector now only changes which address is *displayed* —
-// the code itself is the same either way. Re-encoding per mode would defeat the
-// race by handing the phone a single path again.
-// SKIPPED: drives the connection picker, which is commented out in
-// ConnectMobileContent. Un-skip with it — the behaviour is unchanged, only
-// the way in is gone. TLS coverage does NOT live here any more: it keys off
-// the tailnet address, so those tests run without the picker.
 test.skip("keeps one code across modes, carrying every advertised endpoint", async () => {
 	mobileStatus.endpoints = [
 		{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
@@ -407,10 +367,6 @@ test.skip("keeps one code across modes, carrying every advertised endpoint", asy
 	expect(decodeQr(before).endpoints).toEqual(decodeQr(qrPayload()!).endpoints);
 });
 
-// SKIPPED: drives the connection picker, which is commented out in
-// ConnectMobileContent. Un-skip with it — the behaviour is unchanged, only
-// the way in is gone. TLS coverage does NOT live here any more: it keys off
-// the tailnet address, so those tests run without the picker.
 test.skip("shows a hint instead of a QR when Tailscale is not running", async () => {
 	mobileStatus.tailscaleHost = "";
 	renderMobileSettings();
@@ -454,10 +410,6 @@ test.each([
 	expect(qrPayload()).toBeNull();
 });
 
-// SKIPPED: drives the connection picker, which is commented out in
-// ConnectMobileContent. Un-skip with it — the behaviour is unchanged, only
-// the way in is gone. TLS coverage does NOT live here any more: it keys off
-// the tailnet address, so those tests run without the picker.
 test.skip("the address line follows the selected mode", async () => {
 	renderMobileSettings();
 	const address = await screen.findByTestId("mobile-pairing-address");
@@ -479,20 +431,6 @@ test("encodes secure:true when secure pairing is active", () => {
 	});
 });
 
-// KNOWN GAP, recorded rather than asserted away: a v2 code is built purely from
-// the daemon's endpoint list, and Endpoints() only ever marks the tunnel
-// secure — tailscale entries are the plain tailnet IP. So the MagicDNS host
-// secure pairing sets up is not carried in the code at all.
-//
-// This predates the v1 removal; it was hidden because the old fixture
-// advertised no endpoints, which forced the v1 branch that did encode it. The
-// tunnel's publicly trusted certificate is what satisfies iOS ATS now, so this
-// may be intentional obsolescence — but the setting is still offered, and a
-// user who enables it gets a code that does not use it.
-// SKIPPED: drives the connection picker, which is commented out in
-// ConnectMobileContent. Un-skip with it — the behaviour is unchanged, only
-// the way in is gone. TLS coverage does NOT live here any more: it keys off
-// the tailnet address, so those tests run without the picker.
 test.skip("does not carry the secure-pairing MagicDNS host in the code", async () => {
 	mobileStatus.securePairing = {
 		enabled: true, available: true, active: true,
@@ -507,10 +445,6 @@ test.skip("does not carry the secure-pairing MagicDNS host in the code", async (
 	expect(hosts).not.toContain("prasads-macbook-pro.tail057d04.ts.net");
 });
 
-// SKIPPED: drives the connection picker, which is commented out in
-// ConnectMobileContent. Un-skip with it — the behaviour is unchanged, only
-// the way in is gone. TLS coverage does NOT live here any more: it keys off
-// the tailnet address, so those tests run without the picker.
 test.skip("shows setup steps and no QR when certs are not enabled", async () => {
 	mobileStatus.securePairing = {
 		enabled: true, available: false, active: false,
@@ -524,8 +458,6 @@ test.skip("shows setup steps and no QR when certs are not enabled", async () => 
 	expect(qrPayload()).toBeNull();
 });
 
-// A failing secure-pairing POST must surface an error rather than silently
-// snapping the switch back on the next status refetch with no explanation.
 test("surfaces an error when enabling secure pairing fails", async () => {
 	mobileStatus.securePairing = {
 		enabled: false, available: true, active: false,
@@ -541,9 +473,6 @@ test("surfaces an error when enabling secure pairing fails", async () => {
 	await waitFor(() => expect(screen.getByText("failed")).toBeInTheDocument());
 });
 
-// TLS is no longer a switch: iOS refuses cleartext to a 100.x address, so a
-// Tailscale pairing with it off works on Android and fails on iPhone with
-// nothing to explain why. Selecting Tailscale turns it on.
 test("turns secure pairing on wherever a tailnet address exists", async () => {
 	mobileStatus.securePairing = {
 		enabled: false, available: true, active: false,
@@ -556,21 +485,15 @@ test("turns secure pairing on wherever a tailnet address exists", async () => {
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/secure-pairing", { body: { enabled: true } }),
 	);
 	expect(screen.queryByRole("switch", { name: "Secure pairing (TLS)" })).not.toBeInTheDocument();
-	// Nothing to report while it works: the panel guarantees TLS, so only a
-	// failure earns space.
 	expect(screen.queryByTestId("secure-pairing-reason")).not.toBeInTheDocument();
 });
 
-// A tailnet with no certificates rejects every attempt. Retrying on each status
-// poll would hammer the daemon; the reason text is what tells the user.
 test("does not retry enabling secure pairing when it is unavailable", async () => {
 	mobileStatus.securePairing = {
 		enabled: false, available: false, active: false,
 		host: "", port: 0, reason: "no_certs",
 	};
 	const { apiClient } = await import("../lib/api-client");
-	// POST is a suite-wide mock; a previous test's secure-pairing call would
-	// otherwise satisfy the negative assertion below.
 	vi.mocked(apiClient.POST).mockClear();
 	renderMobileSettings();
 
@@ -579,7 +502,6 @@ test("does not retry enabling secure pairing when it is unavailable", async () =
 });
 
 
-// The QR value is the wire contract with the phone.
 test("emits a v2 deep link carrying every endpoint once the daemon advertises them", () => {
 	const value = qrValueFor({
 		hostId: "h_b3e07f31",
@@ -601,7 +523,6 @@ test("emits a v2 deep link carrying every endpoint once the daemon advertises th
 	expect(decoded.endpoints).toHaveLength(2);
 });
 
-// The token must never sit in the part of a URL that reaches a server.
 test("keeps the connection token out of everything before the fragment", () => {
 	const value = qrValueFor({
 		hostId: "h_x", host: "192.168.1.42", platform: "darwin", password: "super-secret",
@@ -611,10 +532,6 @@ test("keeps the connection token out of everything before the fragment", () => {
 	expect(value.split("#")[0]).not.toContain("super-secret");
 });
 
-// v1 emission was removed alongside the phone's v1 support: those codes predate
-// the identity probe the race uses, so a daemon old enough to need one could
-// never complete a race. An empty endpoint list is the "preparing" state, not a
-// reason to emit a code the phone will refuse — see qrIsReady.
 test("emits only v2, never a raw JSON v1 payload", () => {
 	const value = qrValueFor({
 		hostId: "h_x", host: "192.168.1.42", platform: "darwin", password: "pw",
@@ -622,14 +539,10 @@ test("emits only v2, never a raw JSON v1 payload", () => {
 	});
 
 	expect(value.startsWith("aomobile://pair#")).toBe(true);
-	// v1 travelled as bare JSON; a v2 link must never parse as one.
 	expect(() => JSON.parse(value)).toThrow();
 	expect(decodeQr(value).v).toBe(2);
 });
 
-// Local pairing should not wait on optional remote access. The status query
-// keeps polling while the tunnel starts, so the rendered offer gains the
-// remote endpoint when it becomes available without blocking the LAN code.
 test("shows the LAN QR while remote access is still starting", () => {
 	expect(
 		qrIsReady({
@@ -653,8 +566,6 @@ test("shows the QR once the tunnel is advertisable", () => {
 	).toBe(true);
 });
 
-// Remote access unavailable entirely (no cloudflared) must not block pairing —
-// LAN-only is a legitimate setup and waiting forever would be worse.
 test("shows the QR when there is no tunnel to wait for", () => {
 	expect(
 		qrIsReady({
@@ -675,8 +586,6 @@ test("shows the LAN QR before a supported tunnel starts", () => {
 	).toBe(true);
 });
 
-// Connect mobile in the sidebar asks to pair a phone, so Connect Mobile turns
-// on as the page opens. Browsing to the page from Settings turns nothing on.
 test("turns Connect Mobile on when opened to pair a phone", async () => {
 	mobileStatus.enabled = false;
 	act(() => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }));
@@ -705,7 +614,6 @@ test("turns Connect Mobile on once per opening, not again when the page comes ba
 	const first = renderMobileSettings();
 	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/enable"));
 	first.unmount();
-	// Another Settings page and back: the same opening, still off.
 	renderMobileSettings();
 	await screen.findByRole("button", { name: "Generate" });
 	await new Promise((resolve) => setTimeout(resolve, 50));
@@ -713,7 +621,6 @@ test("turns Connect Mobile on once per opening, not again when the page comes ba
 });
 
 test("does not turn Connect Mobile on from a cached off status", async () => {
-	// The bridge runs; only the cache still says off. Enabling would give it a new password.
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	client.setQueryData(mobileStatusQueryKey, { ...structuredClone(mobileStatus), enabled: false });
 	act(() => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }));
@@ -731,8 +638,6 @@ test("does not turn Connect Mobile on when browsed to", async () => {
 	act(() => useUiStore.getState().closeSettings());
 });
 
-// While the internet address starts, nothing is said under the code: it
-// already works on this network and gains the address by itself.
 test("says nothing under the code while remote access starts", async () => {
 	mobileStatus.tunnel = {
 		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
@@ -745,9 +650,6 @@ test("says nothing under the code while remote access starts", async () => {
 	expect(screen.queryByText(/Enabling remote access|Until then/)).not.toBeInTheDocument();
 });
 
-// The note under the code comes and goes with the tunnel, but the code itself
-// must stay the same element: a remount would drop PairingQr's crossfade and
-// pop the next code in (or the last one out) with no transition.
 test("keeps the same code element as the remote access note changes", async () => {
 	mobileStatus.tunnel = {
 		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
@@ -759,7 +661,6 @@ test("keeps the same code element as the remote access note changes", async () =
 	const square = screen.getByTestId("mobile-pairing-panel").firstElementChild;
 	const canvas = document.querySelector("[data-qr-value]");
 
-	// starting -> failed: the warning comes, the code is unchanged.
 	act(() => {
 		client.setQueryData(mobileStatusQueryKey, {
 			...structuredClone(mobileStatus),
@@ -770,7 +671,6 @@ test("keeps the same code element as the remote access note changes", async () =
 	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
 	expect(document.querySelector("[data-qr-value]")).toBe(canvas);
 
-	// -> on: the code gains the tunnel and crossfades inside the same square.
 	act(() => {
 		client.setQueryData(mobileStatusQueryKey, {
 			...structuredClone(mobileStatus),
@@ -831,13 +731,10 @@ test("says a LAN-only code stays local when remote access failed", async () => {
 test("reports why a code has no public tunnel", () => {
 	const lan = [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }];
 	const starting = { supported: true, running: true, ready: false, lastError: "" };
-	// Still starting: nothing to say, the code refreshes once the tunnel is up.
 	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: starting })).toBeNull();
 	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, running: false, lastError: "boom" } })).toBe("failed");
-	// Covered by remoteAccessUnavailable, or the user's own choice.
 	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, supported: false, running: false } })).toBeNull();
 	expect(localOnlyReason({ enabled: true, noPublicTunnel: true, endpoints: lan, tunnel: starting })).toBeNull();
-	// Nothing on screen to judge.
 	expect(localOnlyReason({ enabled: true, endpoints: [], tunnel: starting })).toBeNull();
 	expect(localOnlyReason({ enabled: false, endpoints: lan, tunnel: starting })).toBeNull();
 });
@@ -846,19 +743,11 @@ test("holds the QR back when nothing is reachable yet", () => {
 	expect(qrIsReady({ enabled: true, endpoints: [], tunnel: undefined })).toBe(false);
 });
 
-// A v2 code is built from the endpoint list and there is no v1 form left to
-// fall back to, so an absent list is as unready as an empty one: the daemon has
-// not yet said where it can be reached. Emitting a code here would produce one
-// the phone refuses.
 test("withholds the QR from a daemon that reports no endpoints", () => {
 	expect(qrIsReady({ enabled: true, endpoints: undefined, tunnel: undefined })).toBe(false);
 	expect(qrIsReady({ enabled: true, endpoints: [], tunnel: undefined })).toBe(false);
 });
 
-// The QR gate introduced a state the renderer has to wait out. The status query
-// is fetched once on open and refetched only after a mutation, so without
-// polling the modal sits on "Preparing remote access…" forever even though the
-// daemon went advertisable seconds later.
 test("polls while the connector is starting", () => {
 	expect(
 		mobileStatusRefetchInterval({
@@ -876,9 +765,6 @@ test("polls while the connector is starting", () => {
 	).toBeGreaterThan(0);
 });
 
-// Polling only while there is something to wait for: once the tunnel is up
-// there is no transient state left, and the modal should not keep hitting the
-// daemon for the rest of the session.
 test("stops polling once the tunnel is advertisable", () => {
 	expect(
 		mobileStatusRefetchInterval({
@@ -926,10 +812,6 @@ test("polls LAN-only mode for network recovery but not for a disabled public tun
 	})).toBe(false);
 });
 
-// Remote access is optional: nothing installs cloudflared, so on a machine
-// without it there is no connector at all. A zero tunnel status made that
-// indistinguishable from "not started yet", so the QR looked entirely normal
-// and the user discovered the gap only by being away from home.
 test("says so when this machine cannot be reached from elsewhere", async () => {
 	mobileStatus.tunnel = {
 		supported: false, running: false, ready: false, hostname: "", location: "", lastError: "",
@@ -941,8 +823,6 @@ test("says so when this machine cannot be reached from elsewhere", async () => {
 	);
 });
 
-// While the daemon downloads its own connector, the download row says so; the
-// caveat would contradict it.
 test("does not claim cloudflared is missing while it downloads", async () => {
 	mobileStatus.tunnel = {
 		supported: false, installing: true, running: false, ready: false, hostname: "", location: "", lastError: "",
@@ -953,8 +833,6 @@ test("does not claim cloudflared is missing while it downloads", async () => {
 	expect(screen.queryByTestId("mobile-remote-unavailable")).toBeNull();
 });
 
-// A machine that has a connector must not carry the caveat, whether or not the
-// tunnel happens to be up yet.
 test("does not claim unavailability while the connector is merely starting", async () => {
 	mobileStatus.tunnel = {
 		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
@@ -964,9 +842,6 @@ test("does not claim unavailability while the connector is merely starting", asy
 	await waitFor(() => expect(screen.queryByTestId("mobile-remote-unavailable")).toBeNull());
 });
 
-// The install offer belongs with the caveat: the user learns that remote access
-// is unavailable and can act on it in the same place, rather than being told to
-// go and find a terminal.
 test("offers to install the connector when it is missing", async () => {
 	mobileStatus.tunnel = {
 		supported: false, running: false, ready: false, hostname: "", location: "", lastError: "",
@@ -985,8 +860,6 @@ test("does not offer an install when a connector already exists", async () => {
 	await waitFor(() => expect(screen.queryByTestId("mobile-install-cloudflared")).toBeNull());
 });
 
-// macOS only: the daemon reports the option unsupported elsewhere, and an older
-// daemon omits the block entirely. Neither should show a switch that cannot work.
 test.each([
 	{ name: "absent", keepAwake: undefined },
 	{ name: "unsupported", keepAwake: { supported: false, enabled: false, active: false, hasBattery: false } },
@@ -1005,14 +878,12 @@ test("turns the keep-awake option on", async () => {
 	expect(toggle).not.toBeChecked();
 	expect(screen.queryByTestId("mobile-keep-awake-laptop")).not.toBeInTheDocument();
 
-	// The daemon persists the choice, so the refetch after the POST reads it back.
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false, lidSupported: true, lidClosed: true };
 		return { data: structuredClone(mobileStatus), error: undefined } as never;
 	});
 	await userEvent.click(toggle);
 	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: true } });
-	// Flipped immediately and never falls back to off while the refetch lands.
 	expect(toggle).toBeChecked();
 	await waitFor(() => expect(toggle).toBeChecked());
 });
@@ -1182,8 +1053,6 @@ test("the combined switch stays checked and disabled while enabling both wake mo
 	expect(screen.queryByText("Closed-lid keep awake is armed.")).not.toBeInTheDocument();
 });
 
-// Settings prefetches the status, so opening the page reads it from the cache:
-// Keep awake and the code are in their final state in the very first render.
 test("renders cached state on first paint, with no transition on the code", async () => {
 	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false, lidSupported: true, lidClosed: true };
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1196,8 +1065,6 @@ test("renders cached state on first paint, with no transition on the code", asyn
 	expect(screen.getByTestId("mobile-pairing-address")).toHaveTextContent("192.168.1.42:3011");
 	expect(document.querySelector("[data-qr-value]")?.parentElement).toHaveClass("opacity-100", "transition-none");
 
-	// Regenerating is the user's doing, so that change crossfades in: the new
-	// code ends up fully shown on its own, and the old one is cleared.
 	const before = qrPayload();
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		mobileStatus.password = "regenerated-password";
@@ -1211,8 +1078,6 @@ test("renders cached state on first paint, with no transition on the code", asyn
 	});
 });
 
-// A cold open (nothing cached yet) keeps the row in its last-known state,
-// disabled until the daemon answers, instead of popping it in afterwards.
 test("holds Keep awake at its last-known state while the status loads", async () => {
 	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false, lidSupported: true, lidClosed: true };
 	window.localStorage.setItem("ao.mobile.keepAwake", JSON.stringify({ supported: true, enabled: true, hasBattery: false, lidSupported: true, lidClosed: true }));

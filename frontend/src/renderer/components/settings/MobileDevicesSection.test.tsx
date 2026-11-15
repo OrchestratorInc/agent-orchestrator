@@ -45,7 +45,6 @@ describe("MobileDevicesSection", () => {
 
 		expect(await screen.findByText("iPhone")).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Connected devices" })).toBeInTheDocument();
-		// Devices are rows of one grouped settings card, in a list for screen readers.
 		const iphoneRow = screen.getByText("iPhone").closest(".settings-row-bar");
 		expect(iphoneRow).not.toBeNull();
 		expect(iphoneRow).toHaveAttribute("role", "listitem");
@@ -54,7 +53,6 @@ describe("MobileDevicesSection", () => {
 		expect(iphoneRow).not.toHaveClass("rounded-lg", "border", "bg-[var(--color-bg-settings-input)]");
 		expect(screen.getByText("M31s")).toBeInTheDocument();
 		expect(screen.queryByText("Live")).not.toBeInTheDocument();
-		// Push notifications are managed on the phone, so rows have no per-device switch.
 		expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 		expect(screen.queryByText(/2 hours ago/)).not.toBeInTheDocument();
 	});
@@ -62,7 +60,6 @@ describe("MobileDevicesSection", () => {
 	it("removes a device in one click and sends the DELETE once the undo window ends", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const del = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
-		// Once deleted, the daemon stops listing the phone.
 		vi.spyOn(apiClient, "GET").mockImplementation((async () =>
 			del.mock.calls.length === 0
 				? twoDevices
@@ -73,7 +70,6 @@ describe("MobileDevicesSection", () => {
 		expect(removeButton.querySelector(".icon-trash-2")).toBeInTheDocument();
 		fireEvent.click(removeButton);
 
-		// The row turns into a "removed · Undo" row right away; nothing is sent yet.
 		expect(screen.getByText("iPhone removed")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /undo removing iPhone/i })).toHaveFocus();
 		expect(screen.queryByRole("button", { name: /confirm remove/i })).not.toBeInTheDocument();
@@ -121,7 +117,6 @@ describe("MobileDevicesSection", () => {
 	it("keeps Undo disabled for a removal whose DELETE has started, even after another removal starts", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
-		// Neither DELETE settles, so both stay in flight.
 		const del = vi.spyOn(apiClient, "DELETE").mockReturnValue(new Promise(() => {}) as never);
 		renderSection();
 
@@ -145,7 +140,6 @@ describe("MobileDevicesSection", () => {
 
 	it("shows a removed phone again once a later poll lists it (it re-registered)", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
-		// The daemon keeps listing iPhone: it re-registered right after removal.
 		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
 		const del = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
 		const { client } = renderSection();
@@ -208,8 +202,6 @@ describe("MobileDevicesSection", () => {
 		});
 
 		expect(await screen.findByText(/Temporary failure/i)).toBeInTheDocument();
-		// The list stays put — a single failed poll must not blank a roster we
-		// already successfully loaded.
 		expect(screen.getByText("iPhone")).toBeInTheDocument();
 		expect(screen.getByText("M31s")).toBeInTheDocument();
 		expect(screen.queryByText(/No devices paired yet/i)).not.toBeInTheDocument();
@@ -230,14 +222,10 @@ describe("MobileDevicesSection", () => {
 		});
 
 		expect(await screen.findByText(/Device not found/i)).toBeInTheDocument();
-		// The row comes back so the device is still manageable.
 		expect(screen.getByRole("button", { name: /remove iPhone/i })).toBeInTheDocument();
 	});
 
 	it("keeps row order stable across polls instead of following server re-sorts", async () => {
-		// The server sorts live-first then LastSeenAt descending, which can flip
-		// on every 3s poll when 2+ devices are live. Rendering must sort on a
-		// stable field (id) so rows never reorder under the user.
 		const reordered = {
 			data: {
 				devices: [twoDevices.data.devices[1], twoDevices.data.devices[0]],

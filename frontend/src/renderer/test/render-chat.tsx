@@ -4,7 +4,6 @@ import type { ReactElement, ReactNode } from "react";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 
-/** Chat rows resolve worker/session links through the app's query context. */
 export function renderChat(ui: ReactElement) {
 	const client = new QueryClient({
 		defaultOptions: {
@@ -17,7 +16,6 @@ export function renderChat(ui: ReactElement) {
 			},
 		},
 	});
-	// These fixture-only chats have no daemon. Keep their workspace reads local.
 	client.setQueryData(workspaceQueryKey, []);
 	return render(ui, {
 		wrapper: ({ children }: { children: ReactNode }) => (

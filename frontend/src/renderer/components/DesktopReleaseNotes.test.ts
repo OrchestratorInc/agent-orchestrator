@@ -59,8 +59,6 @@ it("cleans release notes published after the repository moved to OrchestratorInc
 	].join("\n"));
 });
 
-// releases.atom delivers the same body as HTML; after normalization the
-// renderer cleanup must give the same result as for the Markdown body.
 it("cleans HTML feed notes the same way as the Markdown release body", () => {
 	const pull = "https://github.com/OrchestratorInc/agent-orchestrator/pull/124";
 	const compare = "https://github.com/OrchestratorInc/agent-orchestrator/compare/v0.14.2...v0.14.3";

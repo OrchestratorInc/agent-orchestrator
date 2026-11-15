@@ -16,9 +16,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// TestChatUIRegressionDraftDeliveryRecoveryIsAtMostOnce selects the ordinary
-// package contracts for both duplicate prevention and eventual recovery across
-// controller restart. The opt-in runner invokes this stable name alongside MQA-04.
 func TestChatUIRegressionDraftDeliveryRecoveryIsAtMostOnce(t *testing.T) {
 	t.Run("steer", TestReservedSteerStaysUncertainAcrossRetryAndRestart)
 	t.Run("inline edit", TestEditCompletionGapStaysUncertainAcrossRetryAndControllerRestart)
@@ -26,9 +23,6 @@ func TestChatUIRegressionDraftDeliveryRecoveryIsAtMostOnce(t *testing.T) {
 	t.Run("completed edit repairs receipt", TestCompletedEditRepairsReceiptAfterControllerRestart)
 }
 
-// The provider-history recovery may replay the same native archive again after
-// a later controller restart. MQA-06 requires stable event identities to remain
-// exactly-once in AO and guarantees that replay never writes to the worktree.
 func TestChatUIRegressionProviderHistoryRecoveryDeduplicatesReplayWithoutWorktreeMutation(t *testing.T) {
 	ctx := context.Background()
 	st := openStore(t)

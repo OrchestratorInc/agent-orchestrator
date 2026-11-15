@@ -15,13 +15,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// These are native catalog snapshots, not credentials. Supplement auth-filtered
-// CLI output without making authenticated requests or inventing provider names.
-// Missing/unsupported snapshots leave the CLI result intact.
 const providerCatalogReadLimit = 32 << 20
 
-// hasLocalProviderCatalog reports whether localProviderCatalog reads a native
-// provider cache for agentID.
 func hasLocalProviderCatalog(agentID string) bool {
 	switch agentID {
 	case "opencode", "kilocode", "mimo-code", "omp", "pi", "kimchi", "prime-agent":
@@ -30,8 +25,6 @@ func hasLocalProviderCatalog(agentID string) bool {
 	return false
 }
 
-// listsRunnableModels reports an agent whose model command lists only the
-// models it can run now, while its provider cache names every model it knows.
 func listsRunnableModels(agentID string) bool {
 	switch agentID {
 	case "opencode", "kilocode", "mimo-code":
@@ -54,7 +47,6 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 		if raw, err := readProviderCatalog(filepath.Join(dir, "models-store.json")); err == nil {
 			result = parseProviderSnapshot(raw)
 		}
-		// User-declared providers remain visible even before their first login.
 		if raw, err := readProviderCatalog(filepath.Join(dir, "models.json")); err == nil {
 			var config struct {
 				Providers json.RawMessage `json:"providers"`
@@ -68,14 +60,11 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 		if agentID == "pi" {
 			result.Models = append(result.Models, piInstalledModels(ctx, binary, workingDir, env)...)
 		} else {
-			// Kimchi's chat has no thinking control.
 			for i := range result.Models {
 				result.Models[i].Efforts = nil
 			}
 		}
 	case "prime-agent":
-		// Prime Agent keeps no provider cache; its installed pi-ai fork lists
-		// every built-in provider's models.
 		result.Models = piInstalledModels(ctx, binary, workingDir, env)
 	}
 	return result
@@ -102,9 +91,6 @@ func catalogHome(env map[string]string) string {
 }
 
 func piCatalogDir(agentID string, env map[string]string) string {
-	// Kimchi runs its embedded Pi runtime from its own harness directory and
-	// overrides PI_CODING_AGENT_DIR to point there, so Pi's directory and that
-	// variable say nothing about Kimchi's providers.
 	if agentID == "kimchi" {
 		return filepath.Join(catalogHome(env), ".config", "kimchi", "harness")
 	}
@@ -130,8 +116,6 @@ func readProviderCatalog(path string) ([]byte, error) {
 	return raw, nil
 }
 
-// Both models.dev caches and Pi's model store key their records by provider.
-// Decode only model metadata; apiKey, headers, URLs and other config stay local.
 func parseProviderSnapshot(raw []byte) ports.AgentModelCatalog {
 	var providers map[string]struct {
 		Models json.RawMessage `json:"models"`
@@ -186,17 +170,12 @@ func parseProviderModelRecords(raw []byte, provider string) []ports.AgentModelIn
 		if label == "" {
 			label = id
 		}
-		// These native catalogs store unqualified model IDs, including org/model.
 		models = append(models, ports.AgentModelInfo{ID: modelProvider + "/" + id, Label: label, Provider: modelProvider,
 			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: piThinkingLevels(record)})
 	}
 	return models
 }
 
-// piThinkingLevels are a reasoning Pi model's thinking levels as effort choices,
-// so a switch to Pi can pick one before Pi runs. thinkingLevelMap sets a level
-// the model lacks to null; only levels pi-acp's bundled runtime takes are
-// offered. Records without the map (OpenCode's cache) name none.
 func piThinkingLevels(record map[string]any) []string {
 	levels, mapped := record["thinkingLevelMap"].(map[string]any)
 	if reasoning, _ := record["reasoning"].(bool); !reasoning || !mapped {
@@ -232,8 +211,6 @@ func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalo
 		if rows.Scan(&raw) != nil {
 			return ports.AgentModelCatalog{}
 		}
-		// Cache keys can include account-specific suffixes: trust model.provider,
-		// never expose the cache key as a provider or infer it from a selector.
 		result.Models = append(result.Models, parseProviderModelRecords(raw, "")...)
 	}
 	if rows.Err() != nil {
@@ -242,9 +219,6 @@ func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalo
 	return result
 }
 
-// Resolve Pi's own installed dependency, never a package from the repository or
-// another global install. Only the static generated catalog is imported: no
-// auth storage, extensions, session creation, or provider request is involved.
 const piInstalledCatalogScript = `
 const {createRequire} = await import('node:module');
 const {pathToFileURL} = await import('node:url');
@@ -285,8 +259,6 @@ func piInstalledModels(ctx context.Context, binary, workingDir string, env map[s
 	if err != nil || !filepath.IsAbs(resolved) {
 		return nil
 	}
-	// A compiled standalone Pi has no resolvable JS package. Keep its CLI/cache
-	// results rather than borrowing a different installation's catalog.
 	if !strings.HasSuffix(resolved, ".js") && !strings.HasSuffix(resolved, ".mjs") {
 		return nil
 	}
@@ -310,8 +282,6 @@ func providerCatalogFingerprint(agentID string, env map[string]string) string {
 		paths = []string{path, path + "-wal"}
 	}
 	if agentID == "pi" || agentID == "kimchi" {
-		// Pi and Kimchi rewrite these files with the same contents on every
-		// --list-models, so a modification time would invalidate every discovery.
 		return ";" + fingerprintConfigPaths(paths)
 	}
 	var stamp strings.Builder
@@ -323,7 +293,6 @@ func providerCatalogFingerprint(agentID string, env map[string]string) string {
 	return stamp.String()
 }
 
-// Preserve explicit JSON provider containers even when their model array is empty.
 func reportedJSONProviders(raw []byte) []string {
 	var root any
 	if json.Unmarshal(raw, &root) != nil {

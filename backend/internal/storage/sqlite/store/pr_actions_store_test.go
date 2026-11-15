@@ -109,7 +109,6 @@ func TestPRDetailsConversationRoundTripAndAppend(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	pr := domain.PullRequest{URL: "https://github.com/o/r/pull/2", SessionID: r.ID, Number: 2, UpdatedAt: now}
 
-	// No details row yet: the comment waits for the observation.
 	ok, err := s.AppendPRConversationComment(ctx, pr.URL, domain.PullRequestConversationComment{ID: "IC_0", Body: "early"})
 	if err != nil || ok {
 		t.Fatalf("append before details: ok=%v err=%v, want skipped", ok, err)

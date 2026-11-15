@@ -48,9 +48,6 @@ func TestCapturedExcerptSurvivesQueueAndSourceDeletion(t *testing.T) {
 	}
 }
 
-// Keep queue writes and settlement real while simulating source changes after
-// the excerpt has been accepted. The invalid case simulates a malformed stored
-// reference, which must use the same terminal queue handling as stale sources.
 type changedExcerptStore struct {
 	chatsvc.Store
 	mode    string
@@ -164,7 +161,6 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				states := turnStateByText(t, s)
 				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning
 			})
-			// Typed messages take one turn each, so the last one waits its turn.
 			if state := turnStateByText(t, snapshot)["last valid"]; state != domain.TurnStateQueued {
 				t.Fatalf("last valid = %s, want queued behind next valid", state)
 			}

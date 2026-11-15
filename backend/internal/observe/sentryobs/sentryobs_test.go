@@ -31,7 +31,7 @@ func TestShouldCaptureStatus(t *testing.T) {
 		404: false,
 		500: true,
 		502: true,
-		503: false, // transient contention (see #4325) — never an issue
+		503: false,
 		504: true,
 	}
 	for status, want := range cases {
@@ -114,7 +114,6 @@ func TestInitNoDSNIsNoOp(t *testing.T) {
 	if Enabled() {
 		t.Fatal("Sentry should be disabled without a DSN")
 	}
-	// Capture calls must be safe no-ops when disabled.
 	CaptureError(context.TODO(), errString("boom"), map[string]string{"path": "/x"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	CapturePanic(context.TODO(), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	Flush(0)
@@ -151,7 +150,6 @@ func TestCaptureWithoutInstallIDSendsOnlyPanics(t *testing.T) {
 	if !Enabled() {
 		t.Fatal("missing installation ID disabled Sentry")
 	}
-	// An unknown install is outside the error sample; a panic still sends.
 	CaptureError(context.Background(), errString("boom"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	CapturePanic(context.Background(), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	select {
@@ -182,7 +180,6 @@ func TestCaptureWithoutInstallIDSendsOnlyPanics(t *testing.T) {
 }
 
 func TestInstallErrorSampleIsOneInTenByInstallID(t *testing.T) {
-	// Pinned against the Electron main implementation of the same hash.
 	if !InstallInErrorSample("ins_sampled_5") || InstallInErrorSample("ins_unsampled_0") || InstallInErrorSample("") {
 		t.Fatal("install sample does not match sha256(install_id) % 10 == 0")
 	}
@@ -657,7 +654,6 @@ func TestErrorFingerprintDailyCapReportsDroppedOnNextSend(t *testing.T) {
 	when := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
 	fingerprint := "aaaaaaaaaaaaaaa1"
 	for i := 0; i < maxErrorsPerFingerprintDay; i++ {
-		// One per minute keeps the per-minute limit out of the way.
 		ok, dropped := admitErrorFingerprint(fingerprint, "", when.Add(time.Duration(i)*time.Minute))
 		if !ok || dropped != 0 {
 			t.Fatalf("event %d: admitted=%v dropped=%d, want admitted with nothing dropped", i, ok, dropped)

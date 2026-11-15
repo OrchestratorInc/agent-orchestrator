@@ -12,11 +12,6 @@ function formatBytes(bytes: number): string {
 	return `${value >= 10 || exponent === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[exponent]}`;
 }
 
-/**
- * Download rows. `compact` is the browser toolbar popover: its own scroll
- * area and dividers. Otherwise (Settings) the rows are direct children of the
- * section's grouped card, which draws the dividers, and the page scrolls.
- */
 export function BrowserDownloadsList({
 	downloads,
 	error,

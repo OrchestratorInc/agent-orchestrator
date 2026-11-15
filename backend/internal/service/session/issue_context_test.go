@@ -20,21 +20,21 @@ func TestCanonicalGitLabIssueURL(t *testing.T) {
 			name:       "gitlab.com simple repo",
 			raw:        "https://gitlab.com/group/project/-/issues/42",
 			wantNative: "group/project#42",
-			wantHost:   "", // gitlab.com → zero value
+			wantHost:   "",
 			wantOk:     true,
 		},
 		{
 			name:       "gitlab.com nested namespace",
 			raw:        "https://gitlab.com/group/subgroup/project/-/issues/42",
 			wantNative: "group/subgroup/project#42",
-			wantHost:   "", // gitlab.com → zero value
+			wantHost:   "",
 			wantOk:     true,
 		},
 		{
 			name:       "www.gitlab.com normalizes to empty host",
 			raw:        "https://www.gitlab.com/group/project/-/issues/42",
 			wantNative: "group/project#42",
-			wantHost:   "", // www.gitlab.com → zero value (same as gitlab.com)
+			wantHost:   "",
 			wantOk:     true,
 		},
 		{
@@ -97,9 +97,6 @@ func TestCanonicalGitLabIssueURL(t *testing.T) {
 	}
 }
 
-// staticSCM is a minimal scmProvider stub that returns a canned SCMRepo for
-// any remote. It lets trackerIDForIssue tests exercise the SCM-backed
-// repoForTracker path without a full provider stack.
 type staticSCM struct {
 	repo ports.SCMRepo
 }

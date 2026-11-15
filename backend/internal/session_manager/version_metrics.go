@@ -8,12 +8,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// EventVersionSwitch records a session moving to a newly installed harness
-// release: how (chat, tui or update_when_idle), whether it worked, and how
-// long the session ran the old release first.
 const EventVersionSwitch = "ao.harnesses.version_switched"
 
-// SetVersionTelemetry late-binds the sink for version-move events.
 func (m *Manager) SetVersionTelemetry(sink ports.EventSink) {
 	m.versionTelemetryMu.Lock()
 	defer m.versionTelemetryMu.Unlock()
@@ -37,8 +33,6 @@ func (m *Manager) emitVersionSwitch(rec domain.SessionRecord, mode, result strin
 	})
 }
 
-// ObserveChatVersionSwitch reports how a Chat session's move to a new release
-// ended. Chat Service calls it once the wake that follows the move settles.
 func (m *Manager) ObserveChatVersionSwitch(id domain.SessionID, _, result string) {
 	rec, err := m.getRecord(context.Background(), id)
 	if err != nil {

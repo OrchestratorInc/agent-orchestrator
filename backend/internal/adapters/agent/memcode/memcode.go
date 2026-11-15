@@ -1,5 +1,3 @@
-// Package memcode integrates the official memcode TUI. Native interactive
-// /resume is deliberately separate from its broken mount-time --resume route.
 package memcode
 
 import (
@@ -21,19 +19,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Plugin implements the official native TUI adapter.
 type Plugin struct{ agentbase.Base }
 
-// New constructs the native TUI adapter.
 func New() *Plugin { return &Plugin{} }
 
-// ExitDetectionMode opts Memcode into AO's process supervisor. Memcode's
-// session-end hook does not reliably report ordinary TUI process exit.
 func (*Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
 
-// Manifest implements the native TUI adapter contract.
 func (*Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{ID: "memcode", Name: "memcode", Description: "Official memcode terminal sessions", Version: "0.0.1", Capabilities: []adapters.Capability{adapters.CapabilityAgent}}
 }
@@ -47,12 +40,10 @@ var binarySpec = binaryutil.BinarySpec{Label: "memcode", Names: []string{"memcod
 	return err == nil && strings.Contains(string(b), "memcode")
 }}
 
-// ResolveBinary implements the native TUI adapter contract.
 func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, binarySpec)
 }
 
-// GetLaunchCommand implements the native TUI adapter contract.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	if cfg.Config.Mode != "" || cfg.Config.Effort != "" {
 		return nil, errors.New("memcode mode/effort overrides are unsupported")
@@ -81,23 +72,19 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return args, nil
 }
 
-// GetPromptDeliveryStrategy implements the native TUI adapter contract.
 func (*Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	return ports.PromptDeliveryAfterStart, ctx.Err()
 }
 
-// GetRestoreCommand rejects restore paths without the verified interactive handshake.
 func (*Plugin) GetRestoreCommand(context.Context, ports.RestoreConfig) ([]string, bool, error) {
 	return nil, false, errors.New("memcode interactive native restore initialization required")
 }
 
-// SessionInfo implements the native TUI adapter contract.
 func (*Plugin) SessionInfo(ctx context.Context, s ports.SessionRef) (ports.SessionInfo, bool, error) {
 	info, ok := agentbase.StandardSessionInfo(s)
 	return info, ok, ctx.Err()
 }
 
-// GetConfigSpec implements the native TUI adapter contract.
 func (*Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Memcode selects the chosen model in its native TUI and remembers it for this project. Custom endpoints keep their own model selection.")
 }
@@ -121,8 +108,6 @@ func validateModel(ctx context.Context, workspace, model string) error {
 	return errors.New("memcode model is not in the supported native catalog")
 }
 
-// UsesCustomEndpoint checks the native endpoint sources used by model validation,
-// including session launch overrides that are absent from the daemon environment.
 func UsesCustomEndpoint(ctx context.Context, workspace string, env map[string]string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -157,8 +142,6 @@ func UsesCustomEndpoint(ctx context.Context, workspace string, env map[string]st
 	return false, nil
 }
 
-// AfterStartCommand applies an AO model choice through Memcode's real TUI
-// command. The task is held until the terminal confirms the selected model.
 func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -172,13 +155,11 @@ func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (s
 	return "/model " + cfg.Config.Model, nil
 }
 
-// AfterStartCommandApplied confirms that Memcode accepted the requested native model.
 func (*Plugin) AfterStartCommandApplied(cfg ports.LaunchConfig, output string) bool {
 	model := cfg.Config.Model
 	if model == "" || !emptyComposer(output) {
 		return false
 	}
-	// Only the newest confirmation in the current viewport is authoritative.
 	confirmed := ""
 	for _, line := range strings.Split(terminalui.PlainTerminalText(output), "\n") {
 		line = strings.TrimSpace(line)

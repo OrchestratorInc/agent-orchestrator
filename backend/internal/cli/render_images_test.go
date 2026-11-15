@@ -20,7 +20,6 @@ func writeImage(t *testing.T, dir, name, data string) string {
 	return path
 }
 
-// sparseImage is a PNG of the given size that takes no disk space.
 func sparseImage(t *testing.T, dir, name string, size int64) string {
 	t.Helper()
 	path := writeImage(t, dir, name, pngSignature)
@@ -76,7 +75,6 @@ func TestFindLocalImages(t *testing.T) {
 			}
 		})
 	}
-	// Inside a JS string a Windows path's backslashes are escaped.
 	if got := imageFilePath(`C:\\shots\\a.png`); got != `C:\shots\a.png` {
 		t.Fatalf("windows file path = %q", got)
 	}
@@ -182,7 +180,6 @@ func TestInlineLocalImagesLeavesUnreadableReferencesAsWritten(t *testing.T) {
 	if err := os.Mkdir(folder, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// Named like an image, but a renamed file or symlink must not carry other data.
 	secret := writeImage(t, dir, "secret.png", "API_KEY=abc123")
 	report := writeImage(t, dir, "report.svg", "<!doctype html><body><svg></svg>API_KEY=abc123")
 	html := `<img src="` + gone + `"><img src='` + folder + `'><script>const p = "C:\\nope\\shot.webp";</script>` +
@@ -224,7 +221,6 @@ func TestInlineLocalImagesEnforcesSizeLimits(t *testing.T) {
 	}
 }
 
-// stubOpenRenderImage routes inlineLocalImages' reads through open.
 func stubOpenRenderImage(t *testing.T, open func(string) (*os.File, error)) {
 	t.Helper()
 	original := openRenderImage

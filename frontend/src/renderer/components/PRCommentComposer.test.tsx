@@ -87,7 +87,6 @@ describe("PRCommentComposer", () => {
 		await userEvent.upload(screen.getByTestId("pr-comment-file"), [one, two, log]);
 		await waitFor(() => expect(box.value).toBe("![one.png](attachment:0)\n![two.png](attachment:1)\n[run.log](attachment:2)\n"));
 
-		// The first link is deleted and the log is linked before the second image.
 		fireEvent.change(box, { target: { value: "Log: [run.log](attachment:2), then ![two.png](attachment:1)" } });
 		fireEvent.click(screen.getByRole("button", { name: "Comment" }));
 		await waitFor(() => expect(onSubmit).toHaveBeenCalledWith("Log: [run.log](attachment:0), then ![two.png](attachment:1)", [log, two]));
@@ -155,7 +154,6 @@ describe("PRCommentComposer", () => {
 		expect(await screen.findByText("A comment can have up to 10 files.")).toBeInTheDocument();
 		expect(box.value.match(/attachment:/g)).toHaveLength(10);
 
-		// Two deleted links make room for two more.
 		fireEvent.change(box, { target: { value: box.value.split("\n").slice(2).join("\n") } });
 		await userEvent.upload(screen.getByTestId("pr-comment-file"), [png("g0.png"), png("g1.png")]);
 		await waitFor(() => expect(box.value).toContain("![g1.png](attachment:11)"));

@@ -11,10 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// TokenIdentity reads the display identity a JWT carries in its payload (an
-// OIDC id_token or a provider access token): the email and a name. It never
-// verifies the token and never returns any part of it; callers use it only to
-// show who a stored login belongs to.
 func TokenIdentity(token string) (email, name string) {
 	parts := strings.Split(strings.TrimSpace(token), ".")
 	if len(parts) != 3 {
@@ -45,8 +41,6 @@ func TokenIdentity(token string) (email, name string) {
 	return strings.TrimSpace(claims.Email), name
 }
 
-// CodexAuthFileIdentity reads who a Codex ChatGPT login belongs to from the
-// id_token in a Codex auth.json. Only display claims are read.
 func CodexAuthFileIdentity(ctx context.Context, path string) (email, name string) {
 	if ctx.Err() != nil {
 		return "", ""
@@ -66,8 +60,6 @@ func CodexAuthFileIdentity(ctx context.Context, path string) (email, name string
 	return TokenIdentity(auth.Tokens.IDToken)
 }
 
-// providerEntries decodes a credential file keyed by provider (OpenCode, Pi
-// and Kilo's auth.json). MCP server entries ("mcp:…") are not providers.
 func providerEntries(data []byte) map[string]json.RawMessage {
 	var entries map[string]json.RawMessage
 	if json.Unmarshal(data, &entries) != nil {
@@ -81,9 +73,6 @@ func providerEntries(data []byte) map[string]json.RawMessage {
 	return entries
 }
 
-// JSONProviderNames returns the provider keys of a provider-keyed credential
-// file's contents, sorted and joined. Only key names are read back, never the
-// stored credentials.
 func JSONProviderNames(data []byte) string {
 	entries := providerEntries(data)
 	names := make([]string, 0, len(entries))
@@ -94,10 +83,6 @@ func JSONProviderNames(data []byte) string {
 	return strings.Join(names, ", ")
 }
 
-// JSONProviderMethod reads how a provider-keyed credential file signs in from
-// each entry's "type": "api" entries are API keys, "oauth" or "wellknown"
-// entries are account logins. An account login anywhere wins; "" when no
-// entry says.
 func JSONProviderMethod(data []byte) domain.AgentAccountMethod {
 	method := domain.AgentAccountMethod("")
 	for _, raw := range providerEntries(data) {

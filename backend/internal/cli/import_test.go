@@ -60,8 +60,6 @@ func TestImportCommand_ImportsProjectJSON(t *testing.T) {
 
 func TestImportCommand_SurfacesParseErrorOnce(t *testing.T) {
 	setConfigEnv(t)
-	// A tab-indented line is a YAML syntax error (not a *yaml.TypeError), so
-	// loadLegacyConfig surfaces it exactly like issue #2186 describes.
 	root := filepath.Join(t.TempDir(), ".agent-orchestrator")
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		t.Fatal(err)
@@ -78,9 +76,6 @@ func TestImportCommand_SurfacesParseErrorOnce(t *testing.T) {
 	if got := ExitCode(err); got != 1 {
 		t.Fatalf("ExitCode = %d, want 1 (runtime failure)", got)
 	}
-	// The parse error must reach the user exactly once. main.go prints the
-	// returned error, so the command itself must not also Fprintf it; that
-	// doubled the output before this fix.
 	count := strings.Count(stderr, "parse legacy config.yaml") + strings.Count(err.Error(), "parse legacy config.yaml")
 	if count != 1 {
 		t.Fatalf("parse error appeared %d time(s) (stderr=%q, err=%q), want exactly 1", count, stderr, err)
@@ -91,7 +86,6 @@ func TestImportCommand_RefusesWhenDaemonRunning(t *testing.T) {
 	cfg := setConfigEnv(t)
 	root := writeLegacyProject(t)
 
-	// A run-file owned by this (alive) process makes the daemon look live.
 	if err := runfile.Write(cfg.runFile, runfile.Info{PID: os.Getpid(), Port: 3001, StartedAt: time.Now()}); err != nil {
 		t.Fatalf("write run-file: %v", err)
 	}
@@ -102,9 +96,6 @@ func TestImportCommand_RefusesWhenDaemonRunning(t *testing.T) {
 	}
 }
 
-// A daemon with its own run-file (or one still starting, before it writes the
-// run-file) passes the PID check above, but it holds the data-dir lock, so
-// import must refuse before opening or migrating ao.db.
 func TestImportCommand_RefusesWhenDataDirLocked(t *testing.T) {
 	cfg := setConfigEnv(t)
 	root := writeLegacyProject(t)
@@ -118,7 +109,6 @@ func TestImportCommand_RefusesWhenDataDirLocked(t *testing.T) {
 	if !errors.Is(err, datadirlock.ErrLocked) || ExitCode(err) != 2 {
 		t.Fatalf("err = %v (exit %d), want a data-dir-locked usage error", err, ExitCode(err))
 	}
-	// `ao stop` only reaches the daemon in this AO_RUN_FILE; point at the holder's PID instead.
 	if msg := err.Error(); !strings.Contains(msg, "pid "+strconv.Itoa(os.Getpid())) || strings.Contains(msg, "ao stop") {
 		t.Fatalf("refusal should name the holder pid %d and not suggest ao stop: %v", os.Getpid(), err)
 	}

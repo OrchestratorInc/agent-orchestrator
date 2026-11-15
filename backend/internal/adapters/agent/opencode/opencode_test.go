@@ -338,9 +338,6 @@ func writeOpenCodeAuthFile(t *testing.T, content string) {
 	}
 }
 
-// opencodeAuthStatusWithoutCLI runs the production auth check with an
-// opencode executable that cannot start, so only stored credentials and the
-// environment can answer.
 func opencodeAuthStatusWithoutCLI(ctx context.Context, t *testing.T) (ports.AgentAuthStatus, error) {
 	t.Helper()
 	return (&Plugin{resolvedBinary: filepath.Join(t.TempDir(), "opencode")}).AuthStatus(ctx)
@@ -532,8 +529,6 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 			permission: ports.PermissionModeAcceptEdits,
 			want:       map[string]string{"edit": "allow"},
 		},
-		// Auto is OpenCode's own --auto, so the launch carries the flag and no
-		// rules of AO's: the provider decides what "not explicitly denied" means.
 		{name: "auto", permission: ports.PermissionModeAuto, wantFlag: "--auto"},
 		{name: "bypass-permissions", permission: ports.PermissionModeBypassPermissions, wantFlag: "--dangerously-skip-permissions"},
 	}
@@ -568,9 +563,6 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 	}
 }
 
-// OPENCODE_CONFIG_CONTENT is the highest-precedence config source and callers
-// own it: the reviewer harness passes its read-only policy there. A launch
-// prefix setting the same variable would replace that policy at exec time.
 func TestGetLaunchCommandNeverSetsInlineConfigContent(t *testing.T) {
 	versionBinary(t, "echo 1.18.33\n")
 	for _, mode := range []ports.PermissionMode{
@@ -636,7 +628,6 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	workspace := t.TempDir()
 
-	// A user's own plugin in the same dir must survive AO's install untouched.
 	pluginDir := filepath.Dir(opencodePluginPath(workspace))
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -652,7 +643,6 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must be idempotent (overwrite with identical content).
 	if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -669,23 +659,17 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if !strings.Contains(body, opencodePluginSentinel) {
 		t.Fatalf("installed plugin missing AO sentinel:\n%s", body)
 	}
-	// Every normalized activity event must be wired via `ao hooks opencode <event>`.
 	for _, event := range opencodeManagedEvents {
 		want := opencodeHookCommandPrefix + event
 		if !strings.Contains(body, want) {
 			t.Fatalf("installed plugin missing hook command %q:\n%s", want, body)
 		}
 	}
-	// The opencode-native lifecycle events the plugin subscribes to. Stop maps
-	// to session.status(idle) — NOT the deprecated session.idle — and the user
-	// prompt is detected from message.updated/message.part.updated.
 	for _, marker := range []string{"session.created", "message.updated", "message.part.updated", "session.status"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("installed plugin missing opencode event %q:\n%s", marker, body)
 		}
 	}
-	// Tool execution is exposed as named plugin hooks. Permission approvals and
-	// explicit questions are emitted through opencode's generic event callback.
 	for _, hook := range []string{`"tool.execute.before":`, `"tool.execute.after":`} {
 		if !strings.Contains(body, hook) {
 			t.Fatalf("installed plugin missing opencode hook %q:\n%s", hook, body)
@@ -696,23 +680,14 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("installed plugin missing opencode event handler %q:\n%s", eventCase, body)
 		}
 	}
-	// A reply must be reported as the turn-boundary permission-resolved event,
-	// not generic active: active is suppressed while the session is blocked,
-	// which leaves the session stuck on Needs You until the turn ends.
 	if !strings.Contains(body, `callHookSync("permission-resolved"`) {
 		t.Fatalf("installed plugin does not emit permission-resolved for replies:\n%s", body)
 	}
-	// With several dialogs open, the first reply must NOT resolve the block:
-	// the plugin tracks open asks by request id and reports only once none
-	// remain, or the first `ao send` types into the still-open dialog.
 	for _, marker := range []string{"openAsks", "askID"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("installed plugin does not track open permission asks (%q missing):\n%s", marker, body)
 		}
 	}
-	// Subagent sessions arrive on the same bus. The plugin must track them from
-	// session.created(parentID) and never report a child id as the identity:
-	// AO persists that id as the native restore handle.
 	for _, marker := range []string{"parentID", "childSessions", "isChildSession", "reportSessionID"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("installed plugin does not filter child sessions (%q missing):\n%s", marker, body)
@@ -723,8 +698,6 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 			t.Fatalf("plugin subscribes to unsupported opencode event %q:\n%s", unsupported, body)
 		}
 	}
-	// The plugin must carry the runtime launch id in hook payloads so the CLI
-	// can fence signals even when child-process env inheritance is trimmed.
 	if !strings.Contains(body, "launch_id:") {
 		t.Fatalf("installed plugin missing launch_id in hook payload:\n%s", body)
 	}
@@ -737,19 +710,13 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if !strings.Contains(body, "AO_RUNTIME_LAUNCH_ID") {
 		t.Fatalf("installed plugin missing AO_RUNTIME_LAUNCH_ID reference:\n%s", body)
 	}
-	// Guard against regressing back to subscribing to the deprecated/unreliable
-	// session.idle event (the quoted event string is how a `case` would name it;
-	// the explanatory comment mentions it unquoted, which is fine).
 	if strings.Contains(body, `"session.idle"`) {
 		t.Fatalf("plugin subscribes to deprecated session.idle; use session.status(idle):\n%s", body)
 	}
-	// A hung `ao hooks` call must not block opencode forever, so each spawn is
-	// time-boxed (parity with the claude/codex 30s hook timeout).
 	if !strings.Contains(body, "timeout:") {
 		t.Fatalf("plugin spawn has no timeout; a hung hook would block opencode:\n%s", body)
 	}
 
-	// The user's plugin is untouched.
 	got, err := os.ReadFile(userPlugin)
 	if err != nil {
 		t.Fatalf("user plugin removed by install: %v", err)
@@ -758,7 +725,6 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 		t.Fatalf("user plugin modified by install: %q", got)
 	}
 
-	// using-ao must land where opencode's skill tool discovers project skills.
 	skillMD := filepath.Join(opencodeSkillDir(workspace), "SKILL.md")
 	skillBody, err := os.ReadFile(skillMD)
 	if err != nil {
@@ -780,7 +746,6 @@ func TestGetAgentHooksRefusesToClobberForeignFile(t *testing.T) {
 	workspace := t.TempDir()
 	ctx := context.Background()
 
-	// A non-AO file occupying AO's exact path must NOT be silently overwritten.
 	pluginPath := opencodePluginPath(workspace)
 	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -843,7 +808,6 @@ func TestUninstallHooksRemovesPlugin(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own plugin; it must survive uninstall.
 	pluginDir := filepath.Dir(opencodePluginPath(workspace))
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -896,7 +860,6 @@ func TestGetAgentHooksRecoversPartialSkillInstall(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a crash after the marker was written but before Materialize finished.
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# partial\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -912,9 +875,6 @@ func TestGetAgentHooksRecoversPartialSkillInstall(t *testing.T) {
 	}
 }
 
-// opencode npm-installs its plugin package into every .opencode it loads; AO's
-// own .opencode gets a stub that skips that 4-7s install, while a repository's
-// own plugins keep the real install.
 func TestGetAgentHooksSeedsPluginDependencyStub(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "opencode"}
 	ctx := context.Background()
@@ -1054,7 +1014,6 @@ func TestUninstallHooksLeavesForeignFile(t *testing.T) {
 	workspace := t.TempDir()
 	ctx := context.Background()
 
-	// A non-AO file occupying AO's filename must NOT be deleted by uninstall.
 	pluginPath := opencodePluginPath(workspace)
 	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -1150,10 +1109,6 @@ func TestGetRestoreCommandReappliesSystemPromptConfig(t *testing.T) {
 	}
 }
 
-// TestGetRestoreCommandAppendsResumeTimePrompt covers resuming a reviewer
-// after it was killed and re-triggered: the new task must be embedded in the
-// resume argv (mirroring GetLaunchCommand's --prompt), or the resumed session
-// would sit idle with no work to act on.
 func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 	binary := versionBinary(t, "echo 1.18.33\n")
 	plugin := New()
@@ -1272,9 +1227,6 @@ func contains(values []string, needle string) bool {
 	return false
 }
 
-// Bypass promises full access on both surfaces. A config-level rule would lose
-// to a project policy and the native flag is an alias of --auto, which still
-// enforces explicit denies, so the rule rides the agent, which outranks both.
 func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
 	versionBinary(t, "echo 1.18.33\n")
 	plugin := &Plugin{resolvedBinary: "opencode"}
@@ -1282,9 +1234,6 @@ func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspace, ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// An explicit deny, which the flag alone would still enforce: OpenCode
-	// treats --dangerously-skip-permissions as an alias of --auto, and a denied
-	// tool never becomes a request to auto-approve.
 	if err := os.WriteFile(filepath.Join(workspace, "opencode.json"),
 		[]byte(`{"permission":{"bash":"deny"}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -1304,7 +1253,6 @@ func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	// Agent rules outrank every config layer, so the deny above cannot survive.
 	if got := config.Agent["ao-sess-1"].Permission; got != "allow" {
 		t.Fatalf("agent permission = %#v, want OpenCode's scalar full access", got)
 	}
@@ -1313,8 +1261,6 @@ func TestGetLaunchCommandBypassesEvenAWorktreePolicy(t *testing.T) {
 	}
 }
 
-// The hook client reads the turn's final assistant text from this payload
-// field on stop. The plugin is the only thing that can supply it for opencode.
 func TestOpenCodePluginReportsFinalAssistantTextOnStop(t *testing.T) {
 	for _, want := range []string{"last_assistant_message: lastAssistantText", `callHookSync("stop"`} {
 		if !strings.Contains(opencodePluginSource, want) {

@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { droppedPathsText, posixShellQuote } from "./terminal-drop";
 
-// File names a person may drop, each carrying something a shell would act on.
 const hostileNames = [
 	"it's a test.txt",
 	'say "hi".txt',

@@ -4,23 +4,12 @@ import type { CloudCpMergeRequest } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudSessionLive } from "./useCloudSessionLive";
 
-/**
- * A fallback re-read for while a live stream is reconnecting; a request
- * asked for or decided arrives at once through the session's live state.
- */
 export const MERGE_REQUESTS_REFRESH_MS = 60_000;
 
 export function projectMergeRequestsQueryKey(baseUrl: string, orgId: string, projectId: string) {
 	return ["cloud-merge-requests", baseUrl, orgId, projectId] as const;
 }
 
-/**
- * A shared cloud project's merge requests: all of them for its owner, a
- * guest's own for the guest. Pending ones come first. They are re-read the
- * moment one is asked for or decided, from the live state of liveSessionId,
- * the session on screen (its stream is already open, so watching it adds no
- * presence anywhere else).
- */
 export function useProjectMergeRequests(orgId: string | undefined, projectId: string | undefined, enabled = true, liveSessionId?: string) {
 	const { client, baseUrl, ready } = useCloudCp();
 	const queryClient = useQueryClient();
@@ -39,12 +28,10 @@ export function useProjectMergeRequests(orgId: string | undefined, projectId: st
 	});
 }
 
-/** The pending request for a pull request, if any. */
 export function pendingMergeRequestFor(requests: readonly CloudCpMergeRequest[] | undefined, prUrl: string): CloudCpMergeRequest | undefined {
 	return requests?.find((request) => request.status === "pending" && request.pullRequest.url === prUrl);
 }
 
-/** Ask, approve and reject, each refreshing the project's requests afterwards. */
 export function useMergeRequestActions(orgId: string | undefined, projectId: string | undefined) {
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();

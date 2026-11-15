@@ -5,17 +5,12 @@ import (
 	"strings"
 )
 
-// NativeCheckpointEvidence retains observations, not an inferred prompt/answer
-// pair. Provider hooks may be delayed, duplicated, or emitted when queuing input.
-// It is persisted atomically with the activity projection and its revision CAS.
 type NativeCheckpointEvidence struct {
 	NativeID string                        `json:"nativeId"`
 	Events   []NativeCheckpointObservation `json:"events"`
 	Invalid  bool                          `json:"invalid,omitempty"`
 }
 
-// NativeCheckpointObservation names the native execution boundary reported by
-// one owned hook. PromptID on a submission may identify its queue anchor.
 type NativeCheckpointObservation struct {
 	Generation   string `json:"generation"`
 	PromptID     string `json:"promptId"`
@@ -25,9 +20,6 @@ type NativeCheckpointObservation struct {
 	Coordination bool   `json:"coordination,omitempty"`
 }
 
-// AppendNativeCheckpoint preserves every unresolved observation. In particular,
-// a later Stop must not overwrite an unknown newer Stop. The bound fails closed
-// rather than evicting evidence that a truncated transcript could omit.
 func AppendNativeCheckpoint(encoded, nativeID string, observation NativeCheckpointObservation) string {
 	evidence := NativeCheckpointEvidence{NativeID: nativeID}
 	if encoded != "" && json.Unmarshal([]byte(encoded), &evidence) != nil {
@@ -54,19 +46,14 @@ func AppendNativeCheckpoint(encoded, nativeID string, observation NativeCheckpoi
 			}
 		}
 	}
-	data, _ := json.Marshal(evidence) // Only strings/bools: encoding cannot fail.
+	data, _ := json.Marshal(evidence)
 	return string(data)
 }
 
-// NativeSubmissionContext is metadata carried by the provider's prompt hook.
-// Its exact attachment to the native user UUID, not hook prompt_id or text,
-// identifies a queued submission. It grants no instructions or permissions.
 func NativeSubmissionContext(id string) string {
 	return "AO transcript correlation ID: " + id + "."
 }
 
-// NativeCheckpointTextMatches understands the bounded head/tail representation
-// used by hook clients without treating repeated text as a turn identity.
 func NativeCheckpointTextMatches(checkpoint, replayed string) bool {
 	checkpoint = strings.TrimSpace(checkpoint)
 	replayed = strings.TrimSpace(SanitizeControlChars(replayed))

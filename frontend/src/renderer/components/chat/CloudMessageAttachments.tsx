@@ -1,11 +1,3 @@
-/**
- * Files a cloud chat message carries, shown under the message: images in
- * place (opening full size like any chat image), PDFs as their first page
- * (opening the whole document), and any other file as a chip that saves it.
- * The bytes come from the control plane through the main process, so they are
- * shown as data URLs or read straight into the PDF viewer.
- */
-
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -25,12 +17,10 @@ type CloudAttachmentSource = { baseUrl: string; orgId: string; sessionId: string
 
 const CloudAttachmentSourceContext = createContext<CloudAttachmentSource | undefined>(undefined);
 
-/** Where a cloud chat's attachments are read from. */
 export function CloudAttachmentSourceProvider({ source, children }: { source: CloudAttachmentSource | undefined; children: ReactNode }) {
 	return <CloudAttachmentSourceContext.Provider value={source}>{children}</CloudAttachmentSourceContext.Provider>;
 }
 
-/** An SVG stays a file chip; it is never rendered as an image. */
 function rendersAsImage(attachment: CloudAttachment): boolean {
 	return attachment.contentType.startsWith("image/") && attachment.contentType !== "image/svg+xml";
 }
@@ -39,7 +29,6 @@ function useAttachmentBytes(source: CloudAttachmentSource | undefined, attachmen
 	return useQuery({
 		queryKey: ["cloud-attachment", source?.orgId, source?.sessionId, attachment.id],
 		enabled: Boolean(source) && enabled,
-		// An attachment never changes once uploaded.
 		staleTime: Infinity,
 		gcTime: 10 * 60_000,
 		retry: 1,
@@ -60,8 +49,6 @@ function dataUrl(bytes: Uint8Array, contentType: string): string {
 }
 
 function CloudImageAttachment({ source, attachment }: { source: CloudAttachmentSource | undefined; attachment: CloudAttachment }) {
-	// A file this person just sent is still in memory: shown from there, not read
-	// back, unless that copy fails to draw.
 	const local = useSentAttachmentPreview(cloudAttachmentReference(attachment));
 	const bytes = useAttachmentBytes(source, attachment, !local.url);
 	return <ChatImage src={local.url ?? (bytes.data ? dataUrl(bytes.data, attachment.contentType) : undefined)} alt={attachment.fileName} onError={local.onError} />;
@@ -72,14 +59,11 @@ function CloudPdfAttachment({ source, attachment }: { source: CloudAttachmentSou
 	const [failed, setFailed] = useState(false);
 	const { url: local, onError: onLocalError } = useSentAttachmentPreview(cloudAttachmentReference(attachment));
 	const bytes = useAttachmentBytes(source, attachment, !local);
-	// The PDF viewer takes ownership of the bytes it is given, so each viewer
-	// gets a copy and the cached bytes stay readable for the next one.
 	const load = async () => {
 		if (local) {
 			try {
 				return new Uint8Array(await (await fetch(local)).arrayBuffer());
 			} catch {
-				// The local copy is gone or blocked: let it go, and read the control plane's copy below.
 				onLocalError?.();
 			}
 		}

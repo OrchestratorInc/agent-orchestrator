@@ -14,7 +14,6 @@ import {
 	type AppStateMarker,
 } from "./app-state";
 
-// The exact key set the Go reader (start.go `appState`) unmarshals.
 const GO_READER_KEYS = ["schemaVersion", "appPath", "version", "installedAt", "lastReconciledAt", "installSource"];
 
 async function readMarker(dir: string): Promise<AppStateMarker> {
@@ -83,7 +82,6 @@ describe("writeAppStateMarker", () => {
 		const options = { stateDir: dir, appPath: "/Applications/AO.app", version: "1.2.3", now: () => new Date() };
 		await writeAppStateMarker({ ...options, updateRestartProtocol: 1 });
 		expect((await readMarker(dir)).updateRestartProtocol).toBe(1);
-		// An older marker writer reconstructs the object and drops unknown fields.
 		await writeAppStateMarker(options);
 		expect((await readMarker(dir)).updateRestartProtocol).toBeUndefined();
 	});
@@ -97,7 +95,6 @@ describe("writeAppStateMarker", () => {
 			now: () => new Date("2026-06-26T10:00:00.000Z"),
 		});
 
-		// Second launch: app relocated, version bumped, different install arg.
 		await writeAppStateMarker({
 			stateDir: dir,
 			appPath: "/Applications/Agent Orchestrator.app",
@@ -107,10 +104,8 @@ describe("writeAppStateMarker", () => {
 		});
 
 		const m = await readMarker(dir);
-		// Preserved from first creation.
 		expect(m.installedAt).toBe("2026-06-26T10:00:00.000Z");
 		expect(m.installSource).toBe("npm-bootstrap");
-		// Refreshed.
 		expect(m.appPath).toBe("/Applications/Agent Orchestrator.app");
 		expect(m.version).toBe("1.2.3");
 		expect(m.lastReconciledAt).toBe("2026-06-26T11:30:00.000Z");
@@ -128,7 +123,6 @@ describe("writeAppStateMarker", () => {
 		const raw = await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8");
 		const keys = Object.keys(JSON.parse(raw) as Record<string, unknown>);
 		expect(keys.sort()).toEqual([...GO_READER_KEYS, "firstRunProjectPrompt"].sort());
-		// Trailing newline, mirroring runfile.Write.
 		expect(raw.endsWith("}\n")).toBe(true);
 	});
 
@@ -164,7 +158,6 @@ describe("writeAppStateMarker", () => {
 		try {
 			await writeAppStateMarker({ ...options, stateDir: viaDir, installedVia: "npm-bootstrap", detectedInstallSource: "dmg" });
 			expect((await readMarker(viaDir)).installSource).toBe("npm-bootstrap");
-			// Sticky: a later launch with a detected format keeps the recorded source.
 			await writeAppStateMarker({ ...options, stateDir: viaDir, detectedInstallSource: "brew-cask" });
 			expect((await readMarker(viaDir)).installSource).toBe("npm-bootstrap");
 		} finally {
@@ -209,8 +202,6 @@ describe("writeAppStateMarker", () => {
 		expect(m.appPath).toBe("/Applications/Agent Orchestrator.app");
 	});
 });
-
-// ---- migration marker tests (B1) ----
 
 const fixedNow = () => new Date("2026-06-26T10:00:00.000Z");
 

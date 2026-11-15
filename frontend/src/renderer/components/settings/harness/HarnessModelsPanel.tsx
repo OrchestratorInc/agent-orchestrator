@@ -17,15 +17,12 @@ import { HARNESS_CARD_CLASS, HARNESS_CARD_ROW_CLASS, HarnessStatusDot } from "./
 
 const MODELS_PAGE_SIZE = 10;
 
-// Multi-provider catalogs can be browsed before credentials are configured.
-// Account-scoped harnesses retain their sign-in gate.
 export const MULTI_PROVIDER_HARNESSES = new Set<string>([
 	"opencode", "opencode-v2", "kilocode", "pi", "omp", "kimchi", "prime-agent",
 	"crush", "mimo-code", "command-code", "aider", "kimi", "codewhale",
 	"continue", "goose", "vibe", "cline", "autohand", "qwen", "fx",
 ]);
 
-/** The harness catalog, browsed by provider. */
 export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onOpenAccount }: {
 	agentId: AgentId;
 	hostId?: string;
@@ -36,8 +33,6 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const { i18n, t } = useTranslation();
 	const options = agentModelsQueryOptions(agentId, "", hostId, true);
 	const loginBlocksCatalog = needsLogin && !MULTI_PROVIDER_HARNESSES.has(agentId);
-	// The saved catalog lists without waiting on readiness; only its refresh
-	// (refreshModelsOnOpen) and the daemon's discovery wait for readiness.
 	const catalog = useQuery(options);
 	const [page, setPage] = useState(0);
 	const [modelSearch, setModelSearch] = useState("");
@@ -47,36 +42,28 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const allModels = catalog.data?.models;
 	const providers = useMemo(() => groupModelProviders(allModels ?? [], catalog.data?.configuredProviders), [allModels, catalog.data?.configuredProviders]);
 	const showProviders = providers.some((provider) => provider.id !== "");
-	// Switched-off models leave the project, New Task, and chat pickers; models the
-	// catalog adds later are offered.
 	const { update: updateHarnessDefault, error: disabledModelsError } = useUpdateHarnessDefault(hostId);
-	// The list being saved shows at once; the saved settings replace it once no save is left waiting.
 	const [disabledDraft, setDisabledDraft] = useState<{ scope: string; ids: string[] }>();
 	const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 	const queuedSaves = useRef(0);
 	const savedDisabledIds = disabledDraft?.scope === scope ? disabledDraft.ids : settings?.harnessDefaults?.[agentId]?.disabledModels ?? [];
 	const allModelIds = useMemo(() => (allModels ?? []).map((model) => model.id).filter(isConcreteModelID), [allModels]);
-	// A list that switches off every catalog model filters nothing, like the pickers.
 	const savedDisabledSet = new Set(savedDisabledIds);
 	const allDisabled = allModelIds.length > 0 && allModelIds.every((id) => savedDisabledSet.has(id));
 	const disabledIds = allDisabled ? [] : savedDisabledIds;
 	const disabledSet = allDisabled ? new Set<string>() : savedDisabledSet;
 	const isModelEnabled = (id: string) => !disabledSet.has(id);
 	const enabledCount = allModelIds.filter(isModelEnabled).length;
-	// `keepOn` stays switched on, so Disable all leaves the pickers one model.
 	const setModelsEnabled = (ids: string[], on: boolean, keepOn?: string) => {
-		// Ids the catalog no longer lists stay saved in case it lists them again.
 		const next = new Set(disabledIds);
 		for (const id of ids) {
 			if (on) next.delete(id); else next.add(id);
 		}
 		if (keepOn) next.delete(keepOn);
-		// Pickers need a model, so keep at least one on.
 		if (allModelIds.every((id) => next.has(id))) return;
 		const saved = [...next];
 		setDisabledDraft({ scope, ids: saved });
 		queuedSaves.current += 1;
-		// One request at a time, in click order, so an older list never lands last.
 		saveQueue.current = saveQueue.current
 			.then(() => updateHarnessDefault({ agentId, disabledModels: saved }))
 			.catch(() => undefined)
@@ -91,7 +78,6 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const selectedProvider = (providerChoice?.scope === scope ? providers.find((provider) => provider.id === providerChoice.id) : undefined) ?? initialProvider;
 	useEffect(() => { setPage(0); setModelSearch(""); }, [scope, selectedProvider?.id]);
 	const agent = agentLabel(agentId);
-	// Readiness explains an empty list; a saved list still shows while it runs.
 	if ((!installed || loginBlocksCatalog) && !catalog.data?.models?.length) {
 		return <div className="space-y-3">
 			<div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
@@ -100,10 +86,8 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		</div></div>;
 	}
 	const data = catalog.data;
-	// Claude uses the New Task family order, with older models included in the same paginated list.
 	const catalogModels = (showProviders ? selectedProvider?.models : allModels) ?? [];
 	const claude = agentId === "claude-code" ? splitClaudeModels(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
-	// Cursor lists one id per model setting; each model shows once and switches all its variants.
 	const families = listsModelVariants(agentId) ? collapseModelVariants(catalogModels.filter((model) => isConcreteModelID(model.id))) : undefined;
 	const familyIds = new Map(families?.map((family) => [family.id, family.variants.map((variant) => variant.id)]));
 	const idsOf = (id: string) => familyIds.get(id) ?? [id];
@@ -115,11 +99,8 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		? providerModels.filter((model) => `${model.label} ${model.id}`.toLocaleLowerCase().includes(normalizedModelSearch))
 		: providerModels;
 	const switchableModels = models.filter((model) => isConcreteModelID(model.id));
-	// Enable all and Disable all cover every provider's models, or only the search results.
 	const bulkModelIds = normalizedModelSearch ? switchableModels.flatMap((model) => idsOf(model.id)) : allModelIds;
 	const bulkModelIdSet = new Set(bulkModelIds);
-	// Pickers need at least one model, so Disable all keeps one on when nothing it leaves
-	// alone is: the one already on in view, else the default.
 	const keptOnDisable = allModelIds.some((id) => isModelEnabled(id) && !bulkModelIdSet.has(id))
 		? undefined
 		: (switchableModels.find((model) => model.isDefault && isModelEnabled(model.id))
@@ -137,8 +118,6 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 		const count = provider?.models.length ?? 0;
 		const configured = provider?.configured && !data?.stale;
 		const configuredLabel = t("settings.harness.models.configuredProvider");
-		// Configured providers get only the status slot's dot and full-strength text so
-		// the few with credentials stand out among hundreds of catalog providers.
 		return <span className="flex min-w-0 flex-1 items-center gap-2">
 			<span className="sr-only">{`${label} · ${count}${configured ? ` · ${configuredLabel}` : ""}`}</span>
 			<span aria-hidden="true" className="flex size-1.5 shrink-0">{configured ? <HarnessStatusDot tone="ok" /> : null}</span>
@@ -152,7 +131,6 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 			<SettingsOptionMenu
 				aria-label={t("settings.harness.models.provider")} value={selectedProvider?.id ?? ""}
 				options={providers.map((provider) => ({ value: provider.id, label: provider.id || t("settings.harness.models.unknownProvider"),
-					// Configured providers sort first; head both runs only when there are some.
 					group: showConfiguredGroups ? t(provider.configured ? "settings.harness.models.configuredProvider" : "settings.harness.models.otherProviders") : undefined }))}
 				onChange={(id) => { setProviderChoice({ scope, id }); setPage(0); }}
 				renderTrigger={(option) => option ? renderProviderOption(option.value, option.label, false) : null}
@@ -194,7 +172,6 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 							{agentModelDisplayLabel(agentId, model.label)}
 							{model.isDefault ? <span className="rounded-sm bg-(--color-bg-settings-input) px-1.5 py-0.5 text-caption text-settings-muted">{t("settings.harness.models.default")}</span> : null}
 						</span>
-						{/* Only facts the harness reports; nothing is shown in place of a missing value. */}
 						{model.contextWindow ? <span className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-settings-muted">
 							{model.contextWindow ? <span>{t("settings.harness.models.context")}: {new Intl.NumberFormat(i18n.resolvedLanguage).format(model.contextWindow)}</span> : null}
 						</span> : null}

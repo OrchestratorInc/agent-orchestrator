@@ -1,5 +1,3 @@
-// Package qwenacp binds the user's own Qwen Code installation to AO's reusable
-// ACP Chat transport.
 package qwenacp
 
 import (
@@ -14,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches `qwen --acp` from the binary resolved by the Qwen Code agent
-// plugin. Login, models, settings, and updates stay with the user's install.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return newDriver(plugin, versionProbe, log)
 }
@@ -29,7 +25,6 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		VersionProbe:   probe,
 		SteerDrain:     steerDrain,
 		Capabilities: ports.ChatCapabilities{
-			// Qwen enforces approval modes over session/request_permission.
 			ports.ChatCapabilityApprovals: true,
 		},
 	}, log)
@@ -44,8 +39,6 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	return args, nil, nil
 }
 
-// sessionMode maps AO's permission vocabulary onto Qwen Code's ACP mode ids.
-// Qwen's own default is auto, so AO's default selects Ask Permissions.
 func sessionMode(permission ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(permission) {
 	case ports.PermissionModeDefault:

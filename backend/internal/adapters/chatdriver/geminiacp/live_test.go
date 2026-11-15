@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestLiveGeminiACPContract is intentionally a registration gate. The full
-// initialize/new/load/stream/permission/cancel/replay matrix must replace this
-// executable probe and pass before a Gemini Chat driver is registered.
 func TestLiveGeminiACPContract(t *testing.T) {
 	if os.Getenv("AO_LIVE_GEMINI") != "1" {
 		t.Skip("set AO_LIVE_GEMINI=1 to test the installed Gemini CLI")

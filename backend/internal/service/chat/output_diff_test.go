@@ -10,14 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// Projection of streamed command output and the turn's running diff.
-//
-// Against the real SQLite store, like the rest of this file: the interesting
-// claims are about what the rows end up looking like after a stream of events, and
-// a mock store can only restate the assertion.
-
-// startedCommand is the activity a command's output deltas append to. Output
-// arrives against an item id, so the row has to exist first.
 func startedCommand(turn, item, summary string) ports.ChatEvent {
 	return ports.ChatEvent{
 		Kind:           ports.ChatEventActivityStarted,
@@ -49,8 +41,6 @@ func findActivity(t *testing.T, s store.ConversationSnapshot, item string) domai
 	return domain.ConversationActivity{}
 }
 
-// Deltas accumulate onto the command's own row. The alternative -- a timeline
-// entry per delta -- would bury the conversation under one chatty command.
 func TestCommandOutputDeltasAccumulateOntoOneActivity(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -78,7 +68,6 @@ func TestCommandOutputDeltasAccumulateOntoOneActivity(t *testing.T) {
 		return false
 	})
 
-	// One row, not four.
 	if len(snapshot.Activities) != 1 {
 		t.Fatalf("activities = %d, want 1: %+v", len(snapshot.Activities), snapshot.Activities)
 	}
@@ -89,8 +78,6 @@ func TestCommandOutputDeltasAccumulateOntoOneActivity(t *testing.T) {
 	if activity.CommandOutputTruncated {
 		t.Error("short output reported as truncated")
 	}
-	// The row is still the running command, and a reader must be able to show
-	// output for it: an activity that never completes has no aggregate at all.
 	if activity.Status != domain.ActivityStatusRunning {
 		t.Errorf("status = %q, want running", activity.Status)
 	}
@@ -99,9 +86,6 @@ func TestCommandOutputDeltasAccumulateOntoOneActivity(t *testing.T) {
 	}
 }
 
-// Some providers report turn/interrupted after killing a process but omit the
-// command's item/completed notification. The turn is the authoritative terminal
-// boundary, so its command must stop spinning even when that item event is lost.
 func TestInterruptedTurnCancelsItsStillRunningActivities(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -137,8 +121,6 @@ func TestInterruptedTurnCancelsItsStillRunningActivities(t *testing.T) {
 		t.Errorf("command output = %q, want the output received before stop", activity.CommandOutput)
 	}
 
-	// A killed process may report its own completion after the provider has already
-	// acknowledged the interrupt. That late item cannot resurrect stopped work.
 	h.conv.emit(
 		ports.ChatEvent{
 			Kind: ports.ChatEventActivityCompleted, ProviderTurnID: "provider-turn-1",
@@ -158,8 +140,6 @@ func TestInterruptedTurnCancelsItsStillRunningActivities(t *testing.T) {
 	}
 }
 
-// Output is capped, and the cap is stated rather than applied silently. A build
-// that prints for an hour must not put megabytes into a row every snapshot reads.
 func TestCommandOutputIsCappedAndSaysSo(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -176,7 +156,6 @@ func TestCommandOutputIsCappedAndSaysSo(t *testing.T) {
 	)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 1 })
 
-	// Comfortably past the cap, in chunks, the way a real runaway command arrives.
 	chunk := strings.Repeat("x", 8*1024)
 	for i := 0; i < 16; i++ {
 		h.conv.emit(outputDelta("provider-turn-1", "exec-1", chunk))
@@ -201,9 +180,6 @@ func TestCommandOutputIsCappedAndSaysSo(t *testing.T) {
 	}
 }
 
-// A delta whose activity does not exist is dropped, not turned into a row of its
-// own. The provider can emit output before the item/started that names the command,
-// and an activity invented from a delta would have no command on it.
 func TestOutputDeltaForUnknownActivityIsDropped(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -217,8 +193,6 @@ func TestOutputDeltaForUnknownActivityIsDropped(t *testing.T) {
 	h.conv.emit(
 		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"},
 		outputDelta("provider-turn-1", "exec-orphan", "output with no command\n"),
-		// A later real activity proves the projector kept running rather than
-		// stopping on the orphan.
 		startedCommand("provider-turn-1", "exec-1", "ls"),
 	)
 
@@ -234,8 +208,6 @@ func TestOutputDeltaForUnknownActivityIsDropped(t *testing.T) {
 	}
 }
 
-// The turn diff is per-turn state. The provider re-sends it whole on every update,
-// so repeats overwrite and never stack up as timeline entries.
 func TestTurnDiffOverwritesAndAddsNoTimelineRows(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -265,7 +237,6 @@ func TestTurnDiffOverwritesAndAddsNoTimelineRows(t *testing.T) {
 	h.conv.emit(
 		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"},
 		first,
-		// The same payload twice, exactly as the provider was observed sending it.
 		grown,
 		grown,
 	)
@@ -274,7 +245,6 @@ func TestTurnDiffOverwritesAndAddsNoTimelineRows(t *testing.T) {
 		return len(s.Turns) == 1 && s.Turns[0].Diff != nil && len(s.Turns[0].Diff.Files) == 2
 	})
 
-	// Three diff notifications, zero timeline entries.
 	if len(snapshot.Activities) != 0 {
 		t.Fatalf("turn diffs became %d timeline activities: %+v",
 			len(snapshot.Activities), snapshot.Activities)
@@ -284,8 +254,6 @@ func TestTurnDiffOverwritesAndAddsNoTimelineRows(t *testing.T) {
 	if diff.Truncated {
 		t.Error("small diff reported as truncated")
 	}
-	// The latest payload wins whole: the counts from the first update must be gone
-	// rather than merged with the second.
 	if diff.Files[0].Path != "a.txt" || diff.Files[0].Additions != 3 || diff.Files[0].Deletions != 1 {
 		t.Errorf("first file = %+v, want the latest counts", diff.Files[0])
 	}
@@ -294,8 +262,6 @@ func TestTurnDiffOverwritesAndAddsNoTimelineRows(t *testing.T) {
 	}
 }
 
-// A driver that had to cut the file list says so, and the flag survives the round
-// trip through storage: a partial list presented as whole understates the change.
 func TestTruncatedTurnDiffKeepsItsFlag(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -326,8 +292,6 @@ func TestTruncatedTurnDiffKeepsItsFlag(t *testing.T) {
 	}
 }
 
-// An empty diff clears a stale file list. A turn that reverted its own edits has
-// changed nothing, and the previous answer must not linger.
 func TestEmptyTurnDiffClearsThePreviousOne(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -364,9 +328,6 @@ func TestEmptyTurnDiffClearsThePreviousOne(t *testing.T) {
 	}
 }
 
-// A diff naming a turn AO never recorded is dropped rather than attributed to
-// whichever turn happened to be nearby. This is the post-restart case, where a
-// controller reattaches to a provider turn that predates it.
 func TestTurnDiffForUnknownTurnIsDropped(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -385,7 +346,6 @@ func TestTurnDiffForUnknownTurnIsDropped(t *testing.T) {
 				{Path: "elsewhere.txt", Additions: 9, Status: "modified"},
 			}},
 		},
-		// Ordered after, so waiting on it proves the diff was already handled.
 		ports.ChatEvent{
 			Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-1",
 			ProviderItemID: "msg-1", Text: "done",

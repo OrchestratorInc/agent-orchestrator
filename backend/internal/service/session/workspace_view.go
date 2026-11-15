@@ -15,16 +15,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// maxRecentCommits caps a recent-mode view, which lists a branch's newest
-// first-parent commits because it has no base to measure from.
 const maxRecentCommits = 50
 
-// WorkspaceView selects whose changes a review reads. The zero value is the
-// checked-out worktree. Branch names a local branch, and PRNumber (narrowed by
-// SourceURL when PRs share a number) a pull request associated with the
-// session; both are read from revisions only, so nothing is checked out. A
-// non-empty ExpectedTipSHA or ExpectedBaseSHA fences a branch or pull request
-// view against its refs having moved since the client listed it.
 type WorkspaceView struct {
 	Branch          string
 	PRNumber        int
@@ -33,30 +25,21 @@ type WorkspaceView struct {
 	ExpectedBaseSHA string
 }
 
-// WorkspaceViewKind names what a WorkspaceView resolved to.
 type WorkspaceViewKind string
 
-// Workspace view kinds.
 const (
 	WorkspaceViewCheckedOut  WorkspaceViewKind = "checked_out"
 	WorkspaceViewBranch      WorkspaceViewKind = "branch"
 	WorkspaceViewPullRequest WorkspaceViewKind = "pull_request"
 )
 
-// WorkspaceRangeMode says how a view's commit range was chosen.
 type WorkspaceRangeMode string
 
 const (
-	// WorkspaceRangeSinceBase lists the commits since the view's base.
 	WorkspaceRangeSinceBase WorkspaceRangeMode = "since_base"
-	// WorkspaceRangeRecent lists the newest first-parent commits of a branch
-	// that is the default branch, or that has no default branch to measure
-	// from.
-	WorkspaceRangeRecent WorkspaceRangeMode = "recent"
+	WorkspaceRangeRecent    WorkspaceRangeMode = "recent"
 )
 
-// WorkspaceViewInfo describes a resolved view. BaseSHA is set only in
-// since_base mode.
 type WorkspaceViewInfo struct {
 	Kind      WorkspaceViewKind
 	Name      string
@@ -66,24 +49,14 @@ type WorkspaceViewInfo struct {
 	RangeMode WorkspaceRangeMode
 }
 
-// resolvedWorkspaceView is a view resolved to immutable revisions.
 type resolvedWorkspaceView struct {
 	WorkspaceViewInfo
-	// root is the repository the reads run in. It is empty for a checked-out
-	// scratch or workspace-project session, which has no single history.
-	root string
-	// rangeBefore is the "before" side of All commits: the base, or in recent
-	// mode the oldest listed commit's first parent (the empty tree past a root
-	// commit). Empty means the range is empty.
+	root        string
 	rangeBefore string
-	// logArgs select the listed commits: base..tip, or --first-parent tip.
-	logArgs    []string
-	maxCommits int
+	logArgs     []string
+	maxCommits  int
 }
 
-// resolveWorkspaceView validates v and resolves it to revisions. Branch and
-// pull request views are fenced by v's expected SHAs; the checked-out view
-// keeps the workspaceVersion fence its callers already apply.
 func (s *Service) resolveWorkspaceView(ctx context.Context, id domain.SessionID, v WorkspaceView) (resolvedWorkspaceView, error) {
 	if err := validateWorkspaceView(v); err != nil {
 		return resolvedWorkspaceView{}, err
@@ -142,9 +115,6 @@ func fenceWorkspaceView(view resolvedWorkspaceView, v WorkspaceView) error {
 	return nil
 }
 
-// validWorkspaceBranchName applies git check-ref-format's branch rules in Go,
-// so a name is accepted or refused before any Git process sees it. It also
-// refuses a leading "-", so a name can never read as an option.
 func validWorkspaceBranchName(name string) bool {
 	if name == "" || len(name) > 255 || name == "@" {
 		return false
@@ -168,9 +138,6 @@ func validWorkspaceBranchName(name string) bool {
 	return true
 }
 
-// resolveCheckedOutView ranges the checked-out worktree from the session's
-// compare base to HEAD, the range its committed section and Commits menu have
-// always used. head_fallback mode has no base, so its range is empty.
 func (s *Service) resolveCheckedOutView(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, projectOK, singleRepo bool) (resolvedWorkspaceView, error) {
 	view := resolvedWorkspaceView{
 		WorkspaceViewInfo: WorkspaceViewInfo{Kind: WorkspaceViewCheckedOut, Name: rec.Metadata.Branch, RangeMode: WorkspaceRangeSinceBase},
@@ -202,12 +169,7 @@ func (s *Service) resolveCheckedOutView(ctx context.Context, rec domain.SessionR
 	return view, nil
 }
 
-// resolveBranchView ranges a local branch, checked out or not, from its merge
-// base with the default branch. The default branch itself, or any branch with
-// no default to measure from, lists its newest first-parent commits instead.
-// Every Git argument after the tip lookup is a SHA.
 func resolveBranchView(ctx context.Context, root, name string, project domain.ProjectRecord, projectOK bool) (resolvedWorkspaceView, error) {
-	// The argument starts with refs/, so Git can never read it as an option.
 	ref := "refs/heads/" + name
 	if strings.HasPrefix(name, "refs/remotes/") {
 		ref = name
@@ -242,11 +204,6 @@ func resolveBranchView(ctx context.Context, root, name string, project domain.Pr
 	return view, nil
 }
 
-// viewDefaultBranch names the default branch a branch view measures from,
-// with the first of its refs that resolves in root and that ref's commit. The
-// project setting wins; otherwise only local repository metadata is read (a
-// cached remote HEAD, or the branch AO recorded when it created the
-// repository), so this never contacts a remote.
 func viewDefaultBranch(ctx context.Context, root string, project domain.ProjectRecord, projectOK bool) (name, ref, sha string) {
 	name, inspectedRef, ok := viewDefaultBranchName(ctx, root, project, projectOK)
 	if !ok {
@@ -264,9 +221,6 @@ func viewDefaultBranch(ctx context.Context, root string, project domain.ProjectR
 	return name, "", ""
 }
 
-// viewDefaultBranchName names the default branch without resolving its refs:
-// the project setting, or else the branch and ref git's local metadata
-// advertise. ok is false when neither names one.
 func viewDefaultBranchName(ctx context.Context, root string, project domain.ProjectRecord, projectOK bool) (name, inspectedRef string, ok bool) {
 	if name := workspaceDefaultBranch(defaultBranchForProject(project, projectOK)); name != "" {
 		return name, "", true
@@ -278,10 +232,6 @@ func viewDefaultBranchName(ctx context.Context, root string, project domain.Proj
 	return resolution.Branch, resolution.Ref, true
 }
 
-// recentRangeBefore is the "before" side of a recent-mode range: the first
-// parent of the oldest of tip's newest maxRecentCommits first-parent commits,
-// which is the next commit along that walk. A walk that ends sooner reached a
-// root commit, so the range starts from the empty tree.
 func recentRangeBefore(ctx context.Context, root, tip string) (string, error) {
 	out, err := gitWorkspaceOutput(ctx, root, "rev-list", "--first-parent", "--max-count="+strconv.Itoa(maxRecentCommits+1), tip)
 	if err != nil {
@@ -296,10 +246,6 @@ func recentRangeBefore(ctx context.Context, root, tip string) (string, error) {
 	return "", fmt.Errorf("resolve the empty tree in %s", root)
 }
 
-// resolvePRView ranges a pull request associated with the session from the
-// merge base of its base and head to its head: the commits ListPRFiles lists.
-// prFileSource picks the matching repository and fetches the PR's revisions
-// only when they are missing; HEAD, the index and the worktree are untouched.
 func (s *Service) resolvePRView(ctx context.Context, id domain.SessionID, number int, sourceURL string) (resolvedWorkspaceView, error) {
 	rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
 	if err != nil {
@@ -319,9 +265,6 @@ func (s *Service) resolvePRView(ctx context.Context, id domain.SessionID, number
 	}, nil
 }
 
-// workspaceViewHistory lists a branch or pull request view's commits and
-// totals its whole range. Both read revisions only, so nothing in the session
-// worktree (sizes included) leaks into another branch's history.
 func workspaceViewHistory(ctx context.Context, id domain.SessionID, view resolvedWorkspaceView) (WorkspaceHistory, error) {
 	var commits []CommitSummary
 	var truncated bool
@@ -332,7 +275,6 @@ func workspaceViewHistory(ctx context.Context, id domain.SessionID, view resolve
 		return err
 	})
 	g.Go(func() error {
-		// diff --raw lists binary files too, which numstat alone leaves out.
 		statuses, _, counts, err := workspaceDiffStats(gctx, view.root, view.rangeBefore, view.TipSHA)
 		if err != nil {
 			return err

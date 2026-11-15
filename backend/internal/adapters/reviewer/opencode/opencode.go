@@ -1,4 +1,3 @@
-// Package opencode adapts the opencode worker agent for code-review sessions.
 package opencode
 
 import (
@@ -15,23 +14,18 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Reviewer is the opencode code-review adapter.
 type Reviewer struct {
 	agent ports.Agent
 }
 
-// New builds the opencode reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{agent: workeragent.New()}
 }
 
-// Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerOpenCode
 }
 
-// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
-// the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {
 	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
 		invalidator.InvalidateBinaryResolution()
@@ -42,10 +36,6 @@ var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 
-// ReviewCommand launches the reviewer with an inline permission policy that
-// permits inspection and the two reporting commands while denying edits and
-// every other tool. Production launches provide the system role through an
-// AO-owned prompt file; direct callers without one retain the inline fallback.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	prompt := inv.Prompt
 	if inv.SystemPromptFile == "" {
@@ -72,10 +62,6 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}, nil
 }
 
-// buildReviewerConfig keeps OpenCode read-only while allowing it to read the
-// AO-owned task prompts outside the worker checkout. The exception is scoped
-// to the stable reviewer prompt root so a long-lived process can read future
-// request-scoped tasks; every other external path remains denied.
 func buildReviewerConfig(taskPromptRoot string) (string, error) {
 	permission := map[string]any{
 		"*":    "deny",
@@ -105,13 +91,10 @@ func buildReviewerConfig(taskPromptRoot string) (string, error) {
 	return string(data), nil
 }
 
-// ReviewMessage returns the centrally-authored task for an existing pane.
 func (r *Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewRestoreCommand resumes the reviewer OpenCode conversation captured
-// from hooks, reapplying the same read-only reviewer config as a fresh launch.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{Permissions: ports.PermissionModeAuto})
 	if err != nil || !ok {
@@ -125,10 +108,6 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 	return cmd, true, nil
 }
 
-// ReviewCancel stops the active OpenCode reviewer turn while preserving the
-// terminal pane for inspection. OpenCode uses Escape to stop active execution;
-// unlike a queued message this reaches the busy TUI immediately and does not
-// append Enter.
 func (r *Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{
 		Mode:       ports.ReviewCancelInput,

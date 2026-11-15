@@ -1,13 +1,3 @@
-/**
- * The active organization's AO Cloud offering (GET /me `offering`): which
- * sandbox providers it may use, its default provider, its product kind and how
- * it pays. Every B2B/B2C gate in the renderer reads this one hook.
- *
- * A control plane that predates `offering` is read through a fallback: the
- * providers come from `/me` sandboxProviders and the billing mode from the
- * `/billing` summary (enabled/exempt), so the app keeps working against it.
- */
-
 import { useQuery } from "@tanstack/react-query";
 import type { CloudCpBillingSummary, CloudCpMeResponse, CloudCpOrganization } from "../lib/cloud-cp/types";
 import {
@@ -25,27 +15,17 @@ export const cloudBillingQueryKey = ["cloud-billing"] as const;
 
 export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "source"> {
 	source: ResolvedCloudOffering["source"] | undefined;
-	/** The org's providers include coder: Coder project options apply. */
 	hasCoder: boolean;
-	/** More than one server-sent provider: a project picks where its sessions run. */
 	offersProviderChoice: boolean;
-	/** Billing UI (plans, usage, plan badge, plan prompts) applies. */
 	selfServeBilling: boolean;
-	/** The signed-in user may buy, change or reset the org's plan. */
 	canManageBilling: boolean;
-	/** Harnesses a session can start in Chat with (`/me` chatHarnesses). */
 	chatHarnesses: string[];
-	/** Harnesses a running session can switch its agent to (`/me` agentSwitchHarnesses). */
 	agentSwitchHarnesses: string[];
-	/** Each agent can hold several accounts and a session can move between them (`/me` agentAccounts). */
 	agentAccounts: boolean;
 	org: CloudCpOrganization | undefined;
-	/** Mirrors useCloudCp().ready so callers can gate on one hook. */
 	ready: boolean;
-	/** The offering has resolved (including the fallback's billing read). */
 	loaded: boolean;
 	isLoading: boolean;
-	/** `/me` failed; the offering cannot resolve until it is retried. */
 	isError: boolean;
 }
 
@@ -62,10 +42,6 @@ const EMPTY: ResolvedCloudOffering = {
 	source: "fallback",
 };
 
-// enabled=false keeps a caller that may not need the offering (a remote host's
-// board) from reading this machine's settings, as useCloudCp(enabled) does.
-// forOrgId resolves that organization's offering instead of the active one's
-// (a session's own organization).
 export function useCloudOffering(enabled = true, forOrgId?: string): UseCloudOfferingResult {
 	const { client, ready, baseUrl, userId } = useCloudCp(enabled);
 	const { org } = useCloudOrg(enabled);
@@ -73,15 +49,11 @@ export function useCloudOffering(enabled = true, forOrgId?: string): UseCloudOff
 	const me = useQuery<CloudCpMeResponse>({
 		queryKey: [...cloudMeQueryKey, baseUrl, userId],
 		enabled: ready,
-		// Matches useCloudOrg: entitlements can change while the app is open
-		// (an org gains coder, moves to a contract), so refresh on focus.
 		staleTime: 30_000,
 		refetchOnWindowFocus: true,
 		retry: 1,
 		queryFn: ({ signal }) => client.me({ signal }),
 	});
-	// Only an older control plane without `offering` needs /billing to learn the
-	// billing mode. It shares useCloudBilling's cache entry.
 	const needsBillingFallback = resolveCloudOffering(me.data, undefined, false, orgId)?.source === "fallback";
 	const billing = useQuery<CloudCpBillingSummary>({
 		queryKey: [...cloudBillingQueryKey, orgId],

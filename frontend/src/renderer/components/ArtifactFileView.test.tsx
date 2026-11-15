@@ -101,7 +101,6 @@ describe("ArtifactFileView", () => {
 		const rawUrl = `http://ao-preview-artifact.abc123.localhost:3001/${path}?raw=true`;
 		const cancel = vi.fn();
 		const response = new Response(new ReadableStream({ cancel }), { headers: { "Content-Length": "104857600" } });
-		// The daemon's preview/files route only registers GET, including for media.
 		fetchMock.mockImplementation((_url, init?: RequestInit) => Promise.resolve(
 			init?.method && init.method !== "GET" ? new Response(null, { status: 405 }) : response,
 		));
@@ -267,13 +266,11 @@ describe("ArtifactFileView", () => {
 				params: { path: { sessionId: "sess-1" } },
 				body: {
 					content: "# Notes\n\nhello there",
-					// SHA-256 of the loaded content.
 					expectedFileFingerprint: "8308cc372b77cd665969724964a425bea33928d861f3b23eb66b76b834442eac",
 					path: "notes.md",
 				},
 			}),
 		);
-		// Back to the rendered preview, showing the saved text.
 		expect(await screen.findByText("hello there")).toBeInTheDocument();
 		expect(screen.queryByRole("textbox", { name: "Markdown source" })).not.toBeInTheDocument();
 	});

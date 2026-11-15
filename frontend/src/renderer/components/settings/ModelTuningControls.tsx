@@ -11,7 +11,6 @@ export type ModelTuningControlsProps = {
 	models?: Model[];
 	model: string;
 	effort: string;
-	/** Supported launch efforts when no model override is selected. */
 	effortsWithoutModel?: readonly string[];
 	onEffortChange: (value: string) => void;
 	onEffortReset?: (value: string) => void;
@@ -38,9 +37,6 @@ export function useModelTuning(props: Omit<ModelTuningControlsProps, "variant" |
 		(concreteModel ? models?.find((item) => item.id === concreteModel) : undefined) ??
 		(concreteModel === "" ? models?.find((item) => item.isDefault && isConcreteModelID(item.id)) : undefined) ??
 		(concreteModel === "" && effortsWithoutModel ? { id: "", label: "", efforts: [...effortsWithoutModel] } : undefined);
-	// A model the catalog does not list is still validated against its (empty)
-	// capabilities. Only a listed model whose provider never reports efforts is
-	// treated as unknown, so a saved effort is kept rather than flagged.
 	const capabilitiesKnown = models !== undefined && (!selected || selected.efforts !== undefined);
 	const invalidEffort = Boolean(effort && capabilitiesKnown && !selected?.efforts?.includes(effort));
 

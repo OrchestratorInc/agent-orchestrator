@@ -5,12 +5,6 @@ import { randomInt, randomUUID } from "node:crypto";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
 import { detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
 
-/**
- * Segmentation the renderer cannot see for itself: CPU architecture, the real
- * OS version (Chromium freezes the macOS version in its user agent), how the
- * app was installed (~/.ao/app-state.json), and whether this is a CI or
- * container run. The daemon stamps the same values on its own events.
- */
 export type TelemetryInstallContext = {
 	arch: string;
 	osVersion?: string;
@@ -24,38 +18,19 @@ export type TelemetryBootstrap = {
 	distinctId: string;
 	installId: string;
 	daysSinceInstall?: number;
-	/** Install ID file mtime, used to refresh event age in a long-lived renderer. */
 	installTimestampMs?: number;
 	lifetimeSessions?: number;
-	/**
-	 * The signed-in AO Cloud user ID, present only when the stored WorkOS session
-	 * belongs to the account the daemon recorded in telemetry_bound_user. The
-	 * renderer then starts identified as that ID instead of an anonymous one.
-	 */
 	cloudUserId?: string;
 	appVersion: string;
 	platform: NodeJS.Platform;
-	/**
-	 * Event streams the renderer must not send, from
-	 * `AO_TELEMETRY_DISABLED_EVENTS`.
-	 *
-	 * The daemon enforces the same list on its own billed sink, but renderer
-	 * events go straight to PostHog and never pass through it. Without carrying
-	 * the policy across the boundary, denying `ao.v2.app.active` would silence
-	 * the CLI producer while the renderer kept sending under the same exported
-	 * name, which is a kill switch that only half works.
-	 */
 	disabledEvents: string[];
 	eventsEnabled: boolean;
 	consentGeneration: string;
 	install?: TelemetryInstallContext;
-	/** This install's fixed 0-99 experiment bucket; absent when unreadable. */
 	experimentCohort?: number;
 };
 
-/** Reads the install context for the bootstrap. Never throws. */
 export async function readTelemetryInstallContext(input: {
-	/** Directory holding app-state.json (dirname of running.json); null if unknown. */
 	stateDir: string | null;
 	arch: string;
 	osVersion: string;
@@ -68,7 +43,6 @@ export async function readTelemetryInstallContext(input: {
 			const parsed: unknown = JSON.parse(await readFile(path.join(input.stateDir, "app-state.json"), "utf8"));
 			if (parsed && typeof parsed === "object") state = parsed as typeof state;
 		} catch {
-			// Absent or unreadable: report unknown rather than block the bootstrap.
 		}
 	}
 	const ci = detectCiEnvironment(input.env, input.exists);
@@ -84,7 +58,6 @@ export async function readTelemetryInstallContext(input: {
 	};
 }
 
-/** Parses the comma-separated deny list. Never throws: an unusable entry is inert. */
 export function parseDisabledEvents(raw: string | undefined): string[] {
 	if (!raw) return [];
 	return raw
@@ -93,13 +66,6 @@ export function parseDisabledEvents(raw: string | undefined): string[] {
 		.filter((name) => name !== "");
 }
 
-/**
- * Whether the renderer may export to PostHog.
- *
- * Unpackaged builds are off by default so a developer's ordinary session does
- * not land in the production project as a real install. Setting
- * `AO_TELEMETRY_RENDERER=on` opts a dev build back in for deliberate testing.
- */
 export function rendererTelemetryEnabled(
 	env: Record<string, string | undefined>,
 	isPackaged: boolean,
@@ -123,14 +89,6 @@ export function defaultDataDir(
 
 export const EXPERIMENT_COHORT_BUCKETS = 100;
 
-/**
- * This install's experiment bucket, 0-99, assigned once on the first run (by
- * the desktop app or the daemon, whichever gets there first) and never changed.
- * Onboarding tests split installs by bucket range without PostHog flags. The
- * daemon reads and creates the same file
- * (backend/internal/adapters/telemetry/cohort.go). Never throws: an unreadable
- * or unwritable bucket is reported as absent rather than guessed.
- */
 export async function loadOrAssignExperimentCohort(dataDir: string): Promise<number | undefined> {
 	const file = path.join(dataDir, "telemetry_experiment_cohort");
 	for (let attempt = 0; attempt < 3; attempt++) {
@@ -141,8 +99,6 @@ export async function loadOrAssignExperimentCohort(dataDir: string): Promise<num
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
 		}
 		const cohort = randomInt(EXPERIMENT_COHORT_BUCKETS);
-		// A complete temp file linked into place: the link fails if the daemon
-		// won the race, and a reader never sees a half-written file.
 		const temporary = path.join(dataDir, `.telemetry_experiment_cohort_${randomUUID()}`);
 		try {
 			await mkdir(dataDir, { recursive: true });
@@ -160,10 +116,6 @@ export async function loadOrAssignExperimentCohort(dataDir: string): Promise<num
 
 const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
-/**
- * The AO Cloud user the daemon recorded as bound to this install, or null. A
- * symlink, a non-file or a malformed value is ignored rather than trusted.
- */
 export async function boundCloudUserId(dataDir: string): Promise<string | null> {
 	const file = path.join(dataDir, "telemetry_bound_user");
 	try {
@@ -175,20 +127,10 @@ export async function boundCloudUserId(dataDir: string): Promise<string | null> 
 	}
 }
 
-/**
- * Claims ao.app.first_opened for this install: true at most once, ever, and
- * only for a fresh install (install day 0, no session yet). The marker is
- * created exclusively under the data dir, so a reload, a second window or a
- * cleared localStorage cannot claim it again. Installs that ran a build which
- * sent ao.install.created already hold this file, so an upgrade never claims
- * it. A marker that cannot be created is not claimed.
- */
 export type FirstOpenClaim = "claimed" | "ineligible" | "unknown";
 
 export async function claimFirstOpen(dataDir: string, facts: Pick<TelemetryBootstrap, "daysSinceInstall" | "lifetimeSessions">): Promise<FirstOpenClaim> {
 	if (facts.daysSinceInstall !== 0) return "ineligible";
-	// An unreadable session count is not "no sessions": the CLI may already
-	// have started one. The caller asks again once the daemon answers.
 	if (facts.lifetimeSessions === undefined) return "unknown";
 	if (facts.lifetimeSessions > 0) return "ineligible";
 	try {
@@ -226,8 +168,6 @@ export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<s
 	throw new Error("telemetry install id creation did not settle");
 }
 
-// Both the daemon and Electron use this lock before repairing a legacy empty
-// file. Re-read under the lock so a second repair cannot erase the first ID.
 async function recoverEmptyTelemetryInstallId(dataDir: string, file: string): Promise<string> {
 	const lock = `${file}.recovery`;
 	const deadline = Date.now() + 20_000;
@@ -266,25 +206,9 @@ async function recoverEmptyTelemetryInstallId(dataDir: string, file: string): Pr
 	}
 }
 
-/**
- * The ID the renderer's PostHog client starts on. The daemon keeps
- * `telemetry_bound_user` while the install ID may be linked to an AO Cloud
- * account (identify() merged it into that person). Whether that account is still
- * signed in is only known once the session resolves, after init has already
- * captured its first events, so a linked (or uninspectable) ID is withheld: the
- * client starts on a throwaway anonymous ID, and a signed-in user's identify()
- * merges it into the person anyway.
- *
- * The marker is checked before the anonymous ID is read. The daemon writes a
- * replacement anonymous ID before removing the marker. The installation ID
- * remains fixed for event attribution and must not be reused as a linked
- * anonymous distinct ID after sign-out.
- */
 export async function bootstrapDistinctId(
 	dataDir: string,
 	io: { markerMissing: (file: string) => Promise<boolean>; loadId: (dir: string) => Promise<string> } = {
-		// Only a confirmed missing marker proves the ID is unlinked; any other
-		// failure (EACCES, EIO, ELOOP) means it could not be inspected, so fail closed.
 		markerMissing: (file) =>
 			access(file).then(
 				() => false,
@@ -314,16 +238,10 @@ export async function buildTelemetryBootstrap(
 	policy?: TelemetryPolicySnapshot,
 	install?: TelemetryInstallContext,
 ): Promise<TelemetryBootstrap | null> {
-	// Returning null is the whole switch: initTelemetry() bails on a null
-	// bootstrap, so the renderer never constructs a PostHog client at all. That
-	// is stronger than gating each capture, because it also removes the SDK's
-	// own background requests.
 	if (!rendererTelemetryEnabled(env, isPackaged)) return null;
 	const dataDir = defaultDataDir(platform, env, homeDir);
 	if (!dataDir) return null;
 	if (!policy) return null;
-	// This policy controls failure reporting only. Existing anonymous PostHog
-	// product analytics retain their own packaged/env gate above.
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
 	const experimentCohort = await loadOrAssignExperimentCohort(dataDir);
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
@@ -336,7 +254,6 @@ export async function buildTelemetryBootstrap(
 			daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
 		}
 	} catch {
-		// An unreadable creation time is unknown.
 	}
 	return {
 		distinctId: await bootstrapDistinctId(dataDir),

@@ -16,7 +16,6 @@ vi.mock("../lib/host-clients", async (importOriginal) => ({
 	clientForHost: () => ({ GET: remote.get, POST: remote.post }),
 }));
 
-// The create flow reads the daemon's intake gate and passes it in.
 const trackerIntakeGate = { enabled: true };
 
 beforeEach(() => {
@@ -125,10 +124,6 @@ describe("CreateProjectAgentSheet", () => {
 		expect(screen.getByRole("dialog")).toHaveClass("modal-shake");
 	});
 
-	// Under the auth ladder an agent whose credentials AO cannot validate
-	// reports "configured", never "authorized". If that dropped out of the
-	// preselection pool, a working Claude Code install would silently stop
-	// being the default agent on this sheet.
 	it("still preselects an agent whose credentials are configured but unverified", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(agentReadinessQueryKey, {
@@ -138,7 +133,6 @@ describe("CreateProjectAgentSheet", () => {
 		await waitFor(() => expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0));
 	});
 
-	// I2: only a definite rejection removes an agent from the pool.
 	it("does not preselect an agent the provider definitely rejected", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		queryClient.setQueryData(agentReadinessQueryKey, {
@@ -381,8 +375,6 @@ describe("CreateProjectAgentSheet", () => {
 		await chooseOption(screen.getByLabelText("Orchestrator agent"), "codex");
 
 		await userEvent.click(screen.getByLabelText("Automatically work on assigned issues"));
-		// Enabled with no eligibility rule → submit stays disabled (compact sheet
-		// carries no inline guard prose; gating is the disabled button).
 		expect(screen.getByRole("button", { name: "Create and start" })).toBeDisabled();
 
 		await userEvent.type(screen.getByLabelText("Assignee"), "octocat");
@@ -410,7 +402,6 @@ describe("CreateProjectAgentSheet", () => {
 
 	it("keeps the create sheet minimal: no repo row or credential hint", async () => {
 		renderSheet();
-		// The compact setup control uses the shared switch styling; descriptive prose is not shown.
 		expect(screen.getByLabelText("Automatically work on assigned issues")).toBeInTheDocument();
 		expect(screen.queryByText(/Auto-spawn worker sessions from matching tracker issues/)).not.toBeInTheDocument();
 
@@ -420,8 +411,6 @@ describe("CreateProjectAgentSheet", () => {
 	});
 });
 
-// Developer Mode: the project starts on the most preferred ready agent, so the
-// sheet asks for no agents and only appears for intake, setup, or an error.
 describe("CreateProjectAgentSheet without agent pickers", () => {
 	function renderAutomaticSheet(
 		options: { intakeVisible?: boolean; error?: string; repositorySetupNeeded?: boolean; settingsLoading?: boolean } = {},

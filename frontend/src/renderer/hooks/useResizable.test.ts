@@ -68,7 +68,6 @@ describe("useResizable", () => {
 		});
 	}
 
-	// The live cap follows the window; 300 is a narrow window (or a zoomed one).
 	let cap = 300;
 	const max = () => cap;
 	const min = () => Math.min(300, cap);
@@ -100,7 +99,6 @@ describe("useResizable", () => {
 		);
 		expect(widthVar()).toBe("300px");
 
-		// A profile switch hands in new constraint callbacks and re-runs the restore.
 		rerender({ maxWidth: () => cap });
 		expect(widthVar()).toBe("300px");
 
@@ -110,7 +108,6 @@ describe("useResizable", () => {
 		await waitFor(() => expect(widthVar()).toBe("900px"));
 		expect(window.localStorage.getItem("test-resizable-w")).toBeNull();
 
-		// Grow only: narrowing leaves the var to the consumer's CSS max-width.
 		resizeWindow(300);
 		await new Promise((resolve) => window.requestAnimationFrame(resolve));
 		expect(widthVar()).toBe("900px");
@@ -200,7 +197,6 @@ describe("useResizable", () => {
 		pointer("pointerup", 40);
 		expect(window.localStorage.getItem("test-resizable-w")).toBeNull();
 
-		// Neither pinned the narrow width: the preference still wins once there is room.
 		resizeWindow(1200);
 		await waitFor(() => expect(widthVar()).toBe("900px"));
 	});

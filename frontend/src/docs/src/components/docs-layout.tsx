@@ -14,8 +14,6 @@ function translateName(i18n: I18n, name: ReactNode): ReactNode {
   return typeof name === "string" ? navLabel(i18n, name) : name;
 }
 
-// Section and folder titles follow the interface language. Page titles come
-// from the articles, in the article's language.
 function translateNode(i18n: I18n, node: Node): Node {
   if (node.type === "page") return node;
   if (node.type === "separator") return { ...node, name: translateName(i18n, node.name) };
@@ -29,7 +27,6 @@ function translateNode(i18n: I18n, node: Node): Node {
 function translateTree(i18n: I18n, tree: PageTree.Root): PageTree.Root {
   return {
     ...tree,
-    // The layout caches the tree by id, so each language needs its own.
     $id: `${tree.$id ?? "root"}:${i18n.locale}`,
     children: tree.children.map((child) => translateNode(i18n, child)),
     fallback: tree.fallback && translateTree(i18n, tree.fallback),

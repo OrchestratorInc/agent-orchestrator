@@ -26,7 +26,6 @@ function mockStatus(status: CliShadowStatus) {
 	return vi.spyOn(aoBridge.cliShadow, "inspect").mockResolvedValue(status);
 }
 
-// The row's own button and the confirm dialog's share a label; the dialog's is last.
 function confirmReplace() {
 	const buttons = screen.getAllByRole("button", { name: "Use this app's ao" });
 	fireEvent.click(buttons[buttons.length - 1] as HTMLElement);
@@ -50,7 +49,6 @@ describe("CliShadowSettingsRow", () => {
 		expect(container).toBeEmptyDOMElement();
 	});
 
-	// "unknown" is also what the main process answers in dev and isolated builds.
 	it.each(["match", "absent", "unknown"] as const)("renders nothing on %s", async (kind) => {
 		const inspect = mockStatus({ kind });
 		const { container } = render(<CliShadowSettingsRow />);

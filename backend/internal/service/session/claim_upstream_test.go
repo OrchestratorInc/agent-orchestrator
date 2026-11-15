@@ -79,8 +79,6 @@ func TestClaimPRRejectsInvalidPersistedCanonicalIdentity(t *testing.T) {
 		t.Run(canonical, func(t *testing.T) {
 			st := newFakeStore()
 			st.sessions["demo-1"] = domain.SessionRecord{ID: "demo-1", ProjectID: "demo", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: "/ws"}}
-			// Native imports copy durable config without running the project service's
-			// validation. Claims must validate it again before any provider access.
 			st.projects["demo"] = domain.ProjectRecord{ID: "demo", RepoOriginURL: "https://github.com/alice/repo", Config: domain.ProjectConfig{CanonicalRepoURL: canonical}}
 			scm := &claimTargetSCM{}
 			claimer := &fakePRClaimer{}

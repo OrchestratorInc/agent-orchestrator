@@ -10,8 +10,6 @@ import (
 	"testing"
 )
 
-// deleteCommandServer answers the routes `ao session delete` uses. A delete of
-// demo-dirty is refused the way the daemon refuses an uncleaned worktree.
 func deleteCommandServer(t *testing.T) (*httptest.Server, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
@@ -161,9 +159,6 @@ func TestSessionDelete_RequiresID(t *testing.T) {
 	}
 }
 
-// The dry-run preview leaves out sessions whose workspace is already released
-// or never existed: cleanup skips them, so listing them again is the phantom
-// candidate list the issue reported.
 func TestSessionCleanup_DryRunSkipsReleasedWorkspaces(t *testing.T) {
 	cfg := setConfigEnv(t)
 	session := func(id, cleanup string) string {

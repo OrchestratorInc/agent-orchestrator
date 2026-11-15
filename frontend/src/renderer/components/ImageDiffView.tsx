@@ -9,13 +9,8 @@ import type { WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 type WorkspaceFileStatus = WorkspaceFileSummary["status"];
 type ImageDiffSide = "before" | "after";
 
-/** Matches the image extensions supported by the daemon's blob endpoint. */
 export const isWorkspaceImagePath = isRasterImagePath;
 
-// workspaceImageUrl points an <img> straight at the daemon's blob route. The
-// route sets no-store, so `version` — the file detail's load timestamp — is what
-// makes an edited image reload: without a changing URL the element never
-// refetches at all.
 function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide, version: number | string, hostId?: string, remoteBaseUrl?: string): string | undefined {
 	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
 	if (base === undefined) return undefined;
@@ -23,16 +18,6 @@ function workspaceImageUrl(sessionId: string, path: string, side: ImageDiffSide,
 	return `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/file/blob?${query}`;
 }
 
-/**
- * ImageDiffView renders an image file's change as the images themselves —
- * before and after — instead of the "binary file" placeholder a text diff falls
- * back to. Added files have no before side and deleted files have no after
- * side, so those render a single pane.
- *
- * Each pane is keyed by the source it points at, so re-saving a broken image
- * remounts the pane instead of leaving its failed/dimension state stuck on the
- * previous load.
- */
 export function ImageDiffView({
 	path,
 	sessionId,
@@ -49,9 +34,6 @@ export function ImageDiffView({
 	version: number | string;
 }) {
 	const { t } = useTranslation();
-	// A file with no change on this side has nothing to compare against: an added
-	// file has no base revision, a deleted one has no worktree copy, and an
-	// unmodified one would just render the same image twice.
 	const showBefore = status !== "added" && status !== "unmodified";
 	const showAfter = status !== "deleted";
 	const bothSides = showBefore && showAfter;

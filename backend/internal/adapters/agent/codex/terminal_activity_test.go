@@ -154,8 +154,6 @@ func TestInspectTerminalSurfaceSeparatesCodexWorkFromComposer(t *testing.T) {
 			wantWork:   ports.TerminalSurfaceWorkIdle,
 			wantEditor: ports.TerminalComposerEmpty,
 		},
-		// Codex v0.162 draws the current composer as "»" and keeps "›" for
-		// submitted prompts and picker rows (frames captured from v0.162.1).
 		{
 			name: "v0.162 idle empty composer below a submitted prompt",
 			output: "› Remember the code word FOXTROT for later.\n\n• OK\n\n" +
@@ -259,9 +257,6 @@ func TestInspectTerminalSurfaceOnlyProvesAnUnstartedConversationOnInitialFrame(t
 	}
 }
 
-// Captured from Codex 0.161.0: with a warnings badge the hint row under the
-// model row carries a " · " of its own. The dim placeholder must still read as
-// an empty composer, or the session can never be switched away from Codex.
 func TestInspectTerminalSurfaceIgnoresWarningsBadgeBelowComposer(t *testing.T) {
 	screen := strings.Join([]string{
 		"• The second codeword is KIWI-42.",

@@ -16,15 +16,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// neverStartedChatOrchestrator is an orchestrator whose Chat controller never
-// started (for example its start failed), so it holds no provider id and has
-// no conversation row. The store and controller epoch are the real SQLite ones.
 func neverStartedChatOrchestrator(
 	t *testing.T,
 	lifecycle func(*sqlite.Store) lifecycleRecorder,
 ) (*Manager, *sqlite.Store, *transitionChat, *[]string, domain.SessionID) {
 	t.Helper()
-	// The fake runtime never executes Claude, but preflight uses its real adapter.
 	binDir := t.TempDir()
 	binary := "claude"
 	if runtime.GOOS == "windows" {
@@ -88,10 +84,6 @@ func settleSQLiteTransition(t *testing.T, store *sqlite.Store, id string) domain
 	}
 }
 
-// A Chat that never started has nothing to hand over, so switching it to the
-// terminal must start a fresh terminal. It used to fail the commit with "empty
-// root proof changed" and then fail the rollback with an incomplete teardown
-// handle, leaving the session stuck in recovery.
 func TestInterfaceTransitionNeverStartedChatSwitchesToTerminal(t *testing.T) {
 	manager, store, _, log, id := neverStartedChatOrchestrator(t, func(store *sqlite.Store) lifecycleRecorder {
 		return &sqliteTransitionLifecycle{store: store}
@@ -118,9 +110,6 @@ func TestInterfaceTransitionNeverStartedChatSwitchesToTerminal(t *testing.T) {
 	}
 }
 
-// When the epoch does not commit, a Chat that never started has no provider id
-// to resume. Rollback must start it fresh instead of failing with an
-// incomplete teardown handle and leaving the switch in recovery.
 func TestInterfaceTransitionRollbackStartsNeverStartedChatFresh(t *testing.T) {
 	manager, store, chat, _, id := neverStartedChatOrchestrator(t, func(store *sqlite.Store) lifecycleRecorder {
 		return failingEpochLifecycle{&sqliteTransitionLifecycle{store: store}}
@@ -147,9 +136,6 @@ func TestInterfaceTransitionRollbackStartsNeverStartedChatFresh(t *testing.T) {
 	}
 }
 
-// A start that failed before the workspace existed leaves nothing for either
-// controller to run in. The switch is refused up front, with the reason shown
-// on the control, instead of stopping the source and failing into recovery.
 func TestInterfaceTransitionRefusesSessionWithoutWorkspace(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

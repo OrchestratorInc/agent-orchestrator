@@ -8,10 +8,6 @@ import { articleLocales, articlePath } from "@/lib/translations";
 
 export const dynamic = "force-static";
 
-/**
- * One entry per article URL. Untranslated articles have one URL; a translated
- * article has one per language, each listing the others as alternates.
- */
 export default function sitemap(): MetadataRoute.Sitemap {
   return source.getPages(DEFAULT_LOCALE).flatMap((page) => {
     const englishPath = articlePath(page.slugs);

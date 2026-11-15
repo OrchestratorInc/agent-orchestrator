@@ -33,7 +33,6 @@ type SidebarContextProps = {
 	setOpenMobile: (open: boolean) => void;
 	isMobile: boolean;
 	toggleSidebar: () => void;
-	/** False until after the first paint — suppresses open/close transitions on initial load. */
 	isReady: boolean;
 };
 
@@ -66,16 +65,11 @@ function SidebarProvider({
 	const isMobile = useIsMobile();
 	const [openMobile, setOpenMobile] = React.useState(false);
 
-	// This is the internal state of the sidebar.
-	// We use openProp and setOpenProp for control from outside the component.
 	const [_open, _setOpen] = React.useState(defaultOpen);
 	const open = openProp ?? _open;
 
 	const [isReady, setIsReady] = React.useState(false);
 	React.useEffect(() => {
-		// Only arm animations after the sidebar has been open at least once.
-		// This keeps the startup open (from isStartupLoading=false) instant
-		// while subsequent open/close transitions use the spring.
 		if (!open) return;
 		setIsReady(true);
 	}, [open]);
@@ -88,18 +82,15 @@ function SidebarProvider({
 				_setOpen(openState);
 			}
 
-			// This sets the cookie to keep the sidebar state.
 			document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`;
 		},
 		[setOpenProp, open],
 	);
 
-	// Helper to toggle the sidebar.
 	const toggleSidebar = React.useCallback(() => {
 		return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open);
 	}, [isMobile, setOpen, setOpenMobile]);
 
-	// Adds a keyboard shortcut to toggle the sidebar.
 	React.useEffect(() => {
 		if (!keyboardShortcut) return;
 		const handleKeyDown = (event: KeyboardEvent) => {
@@ -113,8 +104,6 @@ function SidebarProvider({
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [keyboardShortcut, toggleSidebar]);
 
-	// We add a state so that we can do data-state="expanded" or "collapsed".
-	// This makes it easier to style the sidebar with Tailwind classes.
 	const state = open ? "expanded" : "collapsed";
 
 	const contextValue = React.useMemo<SidebarContextProps>(
@@ -215,8 +204,6 @@ function Sidebar({
 	const activeTransition: typeof SHELL_PANEL_SPRING | { duration: number } =
 		!isReady || prefersReducedMotion ? { duration: 0 } : SHELL_PANEL_SPRING;
 
-	// Target width for the gap placeholder. Animating the actual width lets the
-	// flex sibling <main> follow in real time instead of snapping separately.
 	const gapTargetWidth =
 		isOffcanvasCollapsed
 			? 0
@@ -226,8 +213,6 @@ function Sidebar({
 					: "var(--sidebar-width-icon)"
 				: "var(--ao-sidebar-w, var(--sidebar-width))";
 
-	// Several React HTML event types conflict with Motion's overloaded versions.
-	// Cast once so callers can keep passing through plain div props.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const motionSafeProps = props as any;
 	const childList = React.Children.toArray(children);
@@ -244,8 +229,6 @@ function Sidebar({
 			data-slot="sidebar"
 			ref={resizeScopeRef}
 		>
-			{/* Layout gap follows the sidebar width so <main> expands and contracts
-			    smoothly with the shell instead of snapping on a separate CSS timer. */}
 			<motion.div
 				data-slot="sidebar-gap"
 				ref={gapRef}
@@ -254,8 +237,6 @@ function Sidebar({
 				transition={activeTransition}
 				className="relative shrink-0 bg-transparent"
 			/>
-			{/* Offcanvas open/close rides a Motion x-transform so the whole shell
-			    uses the same curve as the section animations. */}
 			<motion.div
 				data-slot="sidebar-container"
 				ref={containerRef}
@@ -263,12 +244,8 @@ function Sidebar({
 				animate={{ x: containerX }}
 				transition={activeTransition}
 				className={cn(
-					// Prefer top/bottom over inset-y so callers can clear titlebar chrome
-					// with `top-(--sidebar-chrome-offset)` without fighting inset-y-0.
-					// DO NOT restore `inset-y-0` + `h-svh` — under-topbar offset then clips wrong.
 					"fixed top-0 bottom-0 z-chrome hidden w-(--ao-sidebar-w,var(--sidebar-width)) md:flex",
 					side === "left" ? "left-0" : "right-0",
-					// Adjust the padding for floating and inset variants.
 					variant === "floating" || variant === "inset"
 						? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
 						: "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
@@ -281,9 +258,6 @@ function Sidebar({
 					data-slot="sidebar-inner"
 					className="flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
 				>
-					{/* The expand rail stays live while the rest is off-screen: a collapsed
-					    sidebar's controls must not be tabbable or readable, but its edge
-					    strip is how the pointer reopens it. */}
 					{rail}
 					<div aria-hidden={isOffcanvasCollapsed ? true : undefined} className="contents" inert={isOffcanvasCollapsed}>
 						{rest}
@@ -459,7 +433,6 @@ function SidebarGroupAction({
 			data-sidebar="group-action"
 			className={cn(
 				"absolute top-4 right-3 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground outline-hidden transition-transform hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&>svg]:size-icon-base [&>svg]:shrink-0",
-				// Increases the hit area of the button on mobile.
 				"after:absolute after:-inset-2 md:after:hidden",
 				"group-data-[collapsible=icon]:hidden",
 				className,
@@ -568,9 +541,6 @@ function SidebarMenuButton({
 	);
 }
 
-// Reads the sidebar state here rather than in SidebarMenuButton, so collapsing
-// or expanding the sidebar re-renders only each tooltip's content, not every
-// row button with its trigger.
 function SidebarMenuButtonTooltipContent(props: React.ComponentProps<typeof TooltipContent>) {
 	const { isMobile, state } = useSidebar();
 	return <TooltipContent side="right" align="center" hidden={state !== "collapsed" || isMobile} {...props} />;
@@ -593,7 +563,6 @@ function SidebarMenuAction({
 			data-sidebar="menu-action"
 			className={cn(
 				"absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground outline-hidden transition-transform peer-hover/menu-button:text-sidebar-accent-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground [&>svg]:size-icon-base [&>svg]:shrink-0",
-				// Increases the hit area of the button on mobile.
 				"after:absolute after:-inset-2 md:after:hidden",
 				"peer-data-[size=sm]/menu-button:top-1",
 				"peer-data-[size=default]/menu-button:top-1.5",
@@ -634,7 +603,6 @@ function SidebarMenuSkeleton({
 }: React.ComponentProps<"div"> & {
 	showIcon?: boolean;
 }) {
-	// Random width between 50 to 90%.
 	const width = React.useMemo(() => {
 		return `${Math.floor(Math.random() * 40) + 50}%`;
 	}, []);

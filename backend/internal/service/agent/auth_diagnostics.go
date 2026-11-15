@@ -2,7 +2,6 @@ package agent
 
 import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
 
-// Diagnostics describe the evidence; they never change the authentication verdict.
 func completeAuthenticationDiagnostics(observation *domain.AgentAuthenticationObservation) {
 	codes := make(map[string]bool)
 	for _, step := range observation.Diagnostics {
@@ -15,8 +14,6 @@ func completeAuthenticationDiagnostics(observation *domain.AgentAuthenticationOb
 		observation.Diagnostics = append(observation.Diagnostics, domain.NewAgentAuthDiagnostic("authentication", "probe_timeout"))
 		return
 	}
-	// Keep detailed adapter failures intact. Only supply a fallback when the
-	// adapter did not report why the check could not establish authentication.
 	for code := range codes {
 		if code != "credential_file_read" && code != "credential_present" && code != "account_context" {
 			return

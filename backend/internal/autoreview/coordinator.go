@@ -1,5 +1,3 @@
-// Package autoreview decides when the daemon may automatically review a
-// worker's current pull-request heads.
 package autoreview
 
 import (
@@ -13,17 +11,11 @@ import (
 )
 
 const (
-	// DefaultIdleThreshold is how long a worker must remain idle before an
-	// automatic review may start.
-	DefaultIdleThreshold = time.Minute
-	// DefaultSweepInterval is the cadence for reevaluating live sessions.
-	DefaultSweepInterval = time.Minute
-	// autoReviewFailedRetryLimit bounds retries for the same current PR head.
+	DefaultIdleThreshold       = time.Minute
+	DefaultSweepInterval       = time.Minute
 	autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
 )
 
-// Store provides the durable session, project, PR, and review facts used by
-// the coordinator.
 type Store interface {
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
 	ListAllSessions(context.Context) ([]domain.SessionRecord, error)
@@ -32,20 +24,15 @@ type Store interface {
 	ListReviewRunsBySession(context.Context, domain.SessionID) ([]domain.ReviewRun, error)
 }
 
-// Trigger starts a source-tagged automatic review through the normal review
-// engine.
 type Trigger interface {
 	TriggerAuto(context.Context, domain.SessionID, domain.ReviewerHarness) (reviewcore.TriggerResult, error)
 }
 
-// Result describes whether an evaluation started a review and why it skipped
-// or triggered.
 type Result struct {
 	Triggered bool
 	Reason    string
 }
 
-// Coordinator evaluates auto-review policy and owns the periodic sweep.
 type Coordinator struct {
 	store         Store
 	reviews       Trigger
@@ -55,7 +42,6 @@ type Coordinator struct {
 	logger        *slog.Logger
 }
 
-// Config customizes coordinator timing and logging.
 type Config struct {
 	Clock         func() time.Time
 	IdleThreshold time.Duration
@@ -63,7 +49,6 @@ type Config struct {
 	Logger        *slog.Logger
 }
 
-// New constructs an auto-review coordinator.
 func New(store Store, reviews Trigger, cfg Config) *Coordinator {
 	c := &Coordinator{store: store, reviews: reviews, clock: cfg.Clock, idleThreshold: cfg.IdleThreshold, sweepInterval: cfg.SweepInterval, logger: cfg.Logger}
 	if c.clock == nil {
@@ -81,8 +66,6 @@ func New(store Store, reviews Trigger, cfg Config) *Coordinator {
 	return c
 }
 
-// EvaluateSession evaluates one worker against the current project, activity,
-// PR, and review-run facts.
 func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) (Result, error) {
 	session, ok, err := c.store.GetSession(ctx, id)
 	if err != nil || !ok {
@@ -256,7 +239,6 @@ func sessionGate(session domain.SessionRecord, now time.Time, threshold time.Dur
 	return ""
 }
 
-// Sweep evaluates every known session, isolating per-session failures.
 func (c *Coordinator) Sweep(ctx context.Context) error {
 	sessions, err := c.store.ListAllSessions(ctx)
 	if err != nil {
@@ -273,8 +255,6 @@ func (c *Coordinator) Sweep(ctx context.Context) error {
 	return nil
 }
 
-// Start evaluates persisted session and PR facts on the configured cadence
-// until ctx is cancelled.
 func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {

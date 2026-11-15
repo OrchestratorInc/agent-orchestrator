@@ -1,7 +1,5 @@
 import type { ReactNode } from "react";
 
-// The board subhead (mc-board .dashboard-main__subhead): a 21px bold title with
-// a muted one-line subtitle, optionally a trailing count.
 export function DashboardSubhead({
 	title,
 	subtitle,

@@ -31,7 +31,6 @@ interface ChatAnnotationSummaryProps {
 	className?: string;
 }
 
-/** Compact, keyboard-accessible annotation count with an interactive list. */
 export function ChatAnnotationSummary({
 	annotations,
 	onSelect,
@@ -47,7 +46,6 @@ export function ChatAnnotationSummary({
 	const interactedOutside = useRef(false);
 	const removeRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const pendingRemoval = useRef<{ annotation: ChatAnnotationSummaryItem; index: number } | null>(null);
-	// Wait for the caller to remove the item before focusing the updated list.
 	useLayoutEffect(() => {
 		const pending = pendingRemoval.current;
 		if (!pending || annotations.some((item) => (pending.annotation.id ? item.id === pending.annotation.id : item === pending.annotation))) return;
@@ -102,8 +100,6 @@ export function ChatAnnotationSummary({
 				className="w-[min(22rem,90vw)] p-2"
 				onInteractOutside={() => { interactedOutside.current = true; }}
 				onCloseAutoFocus={(event) => {
-					// Outside interaction already chose a focus target. Stealing it back
-					// would dismiss another annotation popover that is just opening.
 					event.preventDefault();
 					if (!interactedOutside.current) triggerRef.current?.focus({ preventScroll: true });
 					interactedOutside.current = false;

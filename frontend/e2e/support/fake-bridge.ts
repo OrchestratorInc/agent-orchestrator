@@ -5,39 +5,11 @@ import type { AoBridge } from "../../src/preload";
 import type { DaemonStatus } from "../../src/shared/daemon-status";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-locale";
 
-// The e2e suite runs the renderer under `dev:web` (VITE_NO_ELECTRON=1) with no
-// Electron preload, so `window.ao` is undefined and lib/bridge.ts falls back to
-// a browser stub that reports the daemon as permanently "stopped" and the app
-// version as "0.0.0-preview". The daemon/version smoke cases (DMN-*, INS-004)
-// need a deterministic *ready* daemon and a known version string, so we inject
-// a complete `window.ao` before any page script runs — the same seam the real
-// Electron preload fills. This is a fake *bridge*, not a fake agent: no worker
-// process and no GitHub repo are involved, matching the T0 POD constraints.
-//
-// In a real Linux pod running the packaged Electron build, `window.ao` is the
-// live preload; the injected bridge is only the deterministic stand-in for the
-// browser harness.
-//
-// SCOPE / CAVEAT — renderer smoke, not full e2e. Because `window.ao`,
-// `EventSource`, and the workspace snapshot are all faked here, this harness
-// CANNOT catch daemon, storage, API, preload, PTY, or filesystem regressions —
-// those are the packaged-app pod gate's job (#2697). In particular,
-// `useWorkspaceQuery` reads an already-shaped `WorkspaceSummary` straight from
-// `window.__aoFakeAgent.snapshot()`, BYPASSING the generated API client + DTO
-// mapping; DTO/client coverage comes from the pod gate + unit tests, never from
-// these specs. Treat green here as "the renderer renders the injected state,"
-// not "the boundary works."
-
 export type FakeBridgeOptions = {
-	/** Version string surfaced by app.getVersion() (Settings > Updates). */
 	version?: string;
-	/** Daemon lifecycle state the renderer should observe. */
 	daemonState?: "ready" | "starting" | "stopped" | "error";
-	/** REST port advertised when ready (mock data is served regardless). */
 	daemonPort?: number;
-	/** Desktop updater state surfaced in Settings > Updates. */
 	updateStatus?: UpdateStatus;
-	/** Persisted automatic-update policy surfaced in Settings > Updates. */
 	updateSettings?: UpdateSettings;
 };
 
@@ -70,9 +42,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				isLoading: false,
 			});
 
-			// Full AoBridge surface (mirrors src/preload.ts) so any renderer call
-			// resolves — an incomplete object would throw the moment the app touched
-			// a missing method.
 			const ao = {
 				triage: {
 					launch: async () => ({ ok: true }),
@@ -196,8 +165,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 				},
 				agentLogin: { request: async () => null },
-				// This emulates the main-owned protocol for renderer tests; HTTP is
-				// still intercepted by each spec's fake daemon, never assumed successful.
 				sideChats: (() => {
 					let revision = 0;
 					const epoch = "fake-daemon";
@@ -349,9 +316,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onClosePanel: unsubscribe,
 					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
-					// Annotation contract (mirrors src/preload.ts): useBrowserView subscribes
-					// to these whenever SessionView mounts with window.ao.browser present, so
-					// an incomplete browser shape would crash the session-detail/preview specs.
 					setAnnotationMode: async () => undefined,
 					completeAnnotation: async () => undefined,
 					discardAnnotations: async () => undefined,
@@ -452,8 +416,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 					onTelemetry: unsubscribe,
 				},
-				// UpdatesSection calls featureBuilds.getActive() immediately on mount; an
-				// omitted namespace would surface as a swallowed React Query error.
 				featureBuilds: {
 					list: async () => [],
 					getActive: async () => null,
@@ -514,29 +476,6 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 	);
 }
 
-// ── Fake-agent timeline harness (FAKE tier) ─────────────────────────────────
-//
-// The FAKE cases in #2483 need an agent to *do* something over time (spawn a
-// session, go active, hit waiting_input, move board columns, stream a terminal,
-// raise a needs-input notification). Under the browser harness there is no Go
-// daemon and no agent, so we simulate that timeline at the bridge:
-//
-//   1. A `window.ao` whose daemon is ready on a port — so the renderer sets its
-//      REST base URL and opens its SSE streams (the same seam the packaged app
-//      fills). The `browser.*` IPC is driven off a shared in-page state so the
-//      preview surface is controllable.
-//   2. A fake `window.EventSource` — the daemon's CDC (`/api/v1/events`) and
-//      notification (`/api/v1/notifications/stream`) SSE streams. The controller
-//      pushes `session_updated` / `notification_created` frames into it, which is
-//      exactly what drives the renderer's cache-invalidation → refetch path (no
-//      manual refresh), matching the real daemon's behaviour.
-//   3. A mutable workspace snapshot read by `useWorkspaceQuery` via
-//      `window.__aoFakeAgent.snapshot()` (dev:web seam). Controller mutations +
-//      an SSE push = the card the renderer repaints.
-//
-// The real Go fake-agent plugin drives the same states in the later real-daemon
-// pod run; here the same specs run against this bridge-level simulation.
-
 export type FakeWorker = {
 	id: string;
 	title: string;
@@ -555,20 +494,11 @@ export type FakeAgentOptions = {
 	daemonPort?: number;
 	projectId?: string;
 	projectName?: string;
-	/** Override navigator.platform (e.g. "Linux …") so platform-gated UI mounts. */
 	platform?: string;
-	/** Worker sessions present at first paint. */
 	workers?: FakeWorker[];
-	/** Persist the fixture project's disclosure as expanded before the app mounts. */
 	expandProject?: boolean;
 };
 
-/**
- * The in-page fake-agent controller, callable from specs via `page.evaluate`.
- * Normal mutations change the snapshot and push the matching SSE frame, so the
- * renderer repaints through its real invalidation path. Diagnostic controls
- * can deliberately defer or omit a frame to inspect the cache boundary.
- */
 export type FakeAgentController = {
 	snapshot: () => unknown[];
 	createWorker: (worker: FakeWorker) => void;
@@ -577,14 +507,12 @@ export type FakeAgentController = {
 	removeWorker: (id: string) => void;
 	setStatus: (id: string, status: string, activity?: string) => void;
 	setTerminalHandle: (id: string, handleId: string) => void;
-	/** Moves a session to another agent, as a provider switch does. */
 	setProvider: (id: string, provider: string) => void;
 	setPreview: (id: string, previewUrl: string, previewRevision?: number) => void;
 	setBrowserError: (message: string | null) => void;
 	reconnectEventsWithReplayBacklog: (count: number) => void;
 	replayProgress: () => FakeReplayProgress;
 	closeEventsStream: () => void;
-	/** `openedAt` is the `Date.now()` at which the stream last fired `open`. */
 	eventStreams: () => Array<{ url: string; readyState: number; openedAt: number | null }>;
 	startContinuousWorkspaceEvents: (intervalMs: number, eventsPerTick?: number) => void;
 	stopContinuousWorkspaceEvents: () => void;
@@ -594,9 +522,6 @@ export type FakeAgentController = {
 	notify: (n: { id: string; type: string; title: string; body?: string; sessionId?: string }) => void;
 };
 
-/** The current (or last) CDC gap replay: `remaining` frames are still queued,
- *  `abandoned` frames (deferred events included) were dropped when the app
- *  replaced the stream. The counters reset when a new replay starts. */
 export type FakeReplayProgress = {
 	phase: "idle" | "connecting" | "replaying";
 	remaining: number;
@@ -604,8 +529,6 @@ export type FakeReplayProgress = {
 	abandoned: number;
 };
 
-/** Continuous SSE pressure: frames the daemon has `sent` by elapsed time, and
- *  how many of them the renderer has been handed so far. */
 export type FakePressureProgress = {
 	sent: number;
 	delivered: number;
@@ -622,11 +545,6 @@ declare global {
 	}
 }
 
-/**
- * Install the fake-agent bridge + SSE + snapshot seam before any page script.
- * Drive the timeline from specs with
- * `page.evaluate(() => window.__aoFakeAgent!.setStatus(...))`.
- */
 export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}): Promise<void> {
 	const version = opts.version ?? "9.9.9-test";
 	const daemonPort = opts.daemonPort ?? 8080;
@@ -635,7 +553,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 	const platform = opts.platform ?? null;
 	const workers = opts.workers ?? [];
 	const expandProject = opts.expandProject ?? false;
-	// Renderer reload does not create a new daemon session incarnation.
 	const nowIso = new Date().toISOString();
 
 	await page.addInitScript(
@@ -649,19 +566,15 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					}
 				}
 			} catch {
-				/* storage can be unavailable in restricted browser contexts */
 			}
 			if (platform) {
 				try {
 					Object.defineProperty(navigator, "platform", { get: () => platform, configurable: true });
 				} catch {
-					/* ignore */
 				}
 			}
 
 			type Session = Record<string, unknown>;
-			// The daemon derives the board lane; the fake stands in for it so
-			// driving a spec's status through setStatus still moves the card.
 			const kanbanColumnFor = (status: string): string => {
 				switch (status) {
 					case "merged":
@@ -795,8 +708,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				constructor(url: string) {
 					this.url = String(url);
 					state.eventSources.push(this);
-					// event-transport assigns `.onopen` right after construction; fire on
-					// the next tick so it is already wired.
 					setTimeout(() => {
 						if (this.readyState !== 1 || !this.onopen) return;
 						this.openedAt = Date.now();
@@ -822,7 +733,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						try {
 							cb(ev);
 						} catch {
-							/* ignore */
 						}
 					}
 				}
@@ -832,25 +742,20 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			const emit = (match: string, type: string, data?: string) => {
 				for (const es of state.eventSources) {
 					if (!es.url.includes(match)) continue;
-					// Events committed while EventSource reconnects reach it through the
-					// Last-Event-ID replay, after the gap it is still catching up on.
 					if (es === state.replay.source && state.replay.phase !== "idle") {
 						state.replay.deferred.push({ type, data });
 						continue;
 					}
-					// A real EventSource delivers nothing while CONNECTING or CLOSED.
 					if (es.readyState !== 1) continue;
 					es._dispatch(type, data);
 				}
 			};
 			const pushWorkspaces = (type = "session_updated") => emit("/api/v1/events", type);
 
-			// The app opens the CDC stream as `/api/v1/events?after=latest`.
 			const liveCdcStream = () =>
 				[...state.eventSources]
 					.reverse()
 					.find((source) => source.url.includes("/api/v1/events") && source.readyState !== 2);
-			// The daemon's SSE `data`: the full CDC envelope (backend/internal/cdc/event.go).
 			const cdcFrame = (type: string, session: Session) =>
 				JSON.stringify({
 					seq: (state.cdcSeq += 1),
@@ -860,12 +765,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					payload: { id: session.id, activity: "active", isTerminated: false },
 					createdAt: nowIso,
 				});
-			// Chromium's EventSource reconnection time; the daemon sends no `retry:`.
 			const BROWSER_RECONNECT_MS = 3_000;
-			// The daemon replays and flushes in 512-event pages (httpd/events.go).
 			const REPLAY_PAGE = 512;
-			// Session events come in runs from the few workers active at a time, not
-			// round-robin over every session: about 10 sessions per daemon page.
 			const ACTIVE_RUN = 50;
 			const activeSession = (sessions: Session[], n: number) => sessions[Math.floor(n / ACTIVE_RUN) % sessions.length];
 			const pressureSent = () => {
@@ -881,10 +782,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				pressure.stoppedAt = performance.now();
 			};
 
-			// Only EventSource's own reconnect replays a gap: it resends Last-Event-ID,
-			// which overrides `?after=latest`. A stream the app constructs (its retry
-			// after CLOSED, or a daemon/base-URL change) starts at head, so when the
-			// app replaces this stream the rest of the gap is never delivered.
 			const reconnectWithReplay = (source: FakeEventSourceLike, count: number) => {
 				const replay = state.replay;
 				if (replay.phase !== "idle") throw new Error("a CDC replay is already in progress");
@@ -894,7 +791,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					replay.deferred = [];
 					replay.phase = "idle";
 				};
-				// The gap holds history from before it began, not sessions created since.
 				const gapSessions = [...(project.sessions as Session[])];
 				replay.phase = "connecting";
 				replay.source = source;
@@ -907,7 +803,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					if (source.readyState !== 0) return abandon();
 					source.readyState = 1;
 					replay.phase = "replaying";
-					// A real EventSource fires `open` before it delivers replayed frames.
 					source.openedAt = Date.now();
 					source.onopen?.({ type: "open" });
 					const drainPage = () => {
@@ -922,7 +817,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 							setTimeout(drainPage, 0);
 							return;
 						}
-						// Events committed after the gap began follow it in sequence order.
 						for (const frame of replay.deferred) source._dispatch(frame.type, frame.data);
 						replay.deferred = [];
 						replay.phase = "idle";
@@ -1004,8 +898,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					const { phase, remaining, delivered, abandoned } = state.replay;
 					return { phase, remaining, delivered, abandoned };
 				},
-				// EventSource gave up (a failed reconnect): CLOSED, then `error`.
-				// event-transport schedules its own retry with a fresh stream.
 				closeEventsStream: () => {
 					const source = liveCdcStream();
 					if (!source) throw new Error("no open CDC stream to close");
@@ -1026,11 +918,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					pressure.delivered = 0;
 					const sessions = [...(project.sessions as Session[])];
 					let draining = false;
-					// The daemon keeps sending while rendering blocks the main thread, so
-					// frames come due by elapsed time, not by how often this timer runs.
-					// EventSource dispatches each event as its own task: hand over the
-					// backlog one tick's worth at a time and yield between chunks, so fetch
-					// resolution and rendering can run in between, as in production.
 					const drain = () => {
 						if (pressure.timer !== timer) {
 							draining = false;
@@ -1202,8 +1089,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					},
 				},
 				agentLogin: { request: async () => null },
-				// This emulates the main-owned protocol for renderer tests; HTTP is
-				// still intercepted by each spec's fake daemon, never assumed successful.
 				sideChats: (() => {
 					let revision = 0;
 					const epoch = "fake-daemon";
@@ -1356,9 +1241,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onClosePanel: unsubscribe,
 					devtools: async (input: { viewId: string }) => ({ viewId: input.viewId, open: false, activeTabId: "" }),
 					destroy: () => undefined,
-					// Annotation contract (mirrors src/preload.ts): useBrowserView subscribes
-					// to these whenever SessionView mounts with window.ao.browser present, so
-					// an incomplete browser shape would crash the session-detail/preview specs.
 					setAnnotationMode: async () => undefined,
 					completeAnnotation: async () => undefined,
 					discardAnnotations: async () => undefined,
@@ -1446,8 +1328,6 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onStatus: unsubscribe,
 					onTelemetry: unsubscribe,
 				},
-				// UpdatesSection calls featureBuilds.getActive() immediately on mount; an
-				// omitted namespace would surface as a swallowed React Query error.
 				featureBuilds: {
 					list: async () => [],
 					getActive: async () => null,

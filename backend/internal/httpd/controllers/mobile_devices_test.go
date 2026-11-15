@@ -30,7 +30,6 @@ func (f *fakeRoster) Delete(installID string) error {
 	return nil
 }
 
-// liveSet mirrors controllers.LiveSet so the helper accepts either fake.
 type liveSet interface {
 	Live() map[string]bool
 	LastSeen(installID string) (time.Time, bool)
@@ -40,7 +39,6 @@ type fakeLive map[string]bool
 
 func (f fakeLive) Live() map[string]bool { return f }
 
-// No recorded timestamps: exercises the fallback to the registry's stored value.
 func (f fakeLive) LastSeen(string) (time.Time, bool) { return time.Time{}, false }
 
 func newRosterServer(t *testing.T, roster *fakeRoster, live liveSet) *httptest.Server {
@@ -93,13 +91,6 @@ func TestListDevicesMergesLiveFlag(t *testing.T) {
 	}
 }
 
-// TestListDevicesFallsBackToPresenceWhenDeviceLiveOmitted exercises the
-// wiring fix end-to-end: a caller (like daemon.go) that sets APIDeps.Presence
-// but leaves DeviceLive nil must still get correct liveness in the roster,
-// because NewRouterWithControl normalizes DeviceLive from Presence before the
-// roster controller is constructed. This is the regression the structural fix
-// in normalizeAPIDeps closes — without it, i1 below would incorrectly report
-// offline.
 func TestListDevicesFallsBackToPresenceWhenDeviceLiveOmitted(t *testing.T) {
 	now := time.Now().UTC()
 	roster := &fakeRoster{devices: []mobilebridge.PushDevice{
@@ -136,9 +127,6 @@ func TestListDevicesFallsBackToPresenceWhenDeviceLiveOmitted(t *testing.T) {
 	}
 }
 
-// TestListDevicesReportsNotificationsEnabled pins the new wire field: a row
-// with a token reports notificationsEnabled true, and a row with none (an
-// identity-only announce) reports false, regardless of live state.
 func TestListDevicesReportsNotificationsEnabled(t *testing.T) {
 	now := time.Now().UTC()
 	roster := &fakeRoster{devices: []mobilebridge.PushDevice{
@@ -177,13 +165,6 @@ func TestListDevicesReportsNotificationsEnabled(t *testing.T) {
 	}
 }
 
-// TestMobileDeviceRoutesUnavailableWithoutRegistry pins the human ruling that
-// supersedes the brief's nil-guard: the roster routes always mount, and when
-// the device registry failed to load (deps.DeviceRoster is nil), each of
-// List/Remove answers 503 with code DEVICE_REGISTRY_UNAVAILABLE rather
-// than 404 (route missing) or a panic (nil dereference). This lets the desktop
-// tell "your registry is broken" apart from "this daemon predates the roster
-// feature".
 func TestMobileDeviceRoutesUnavailableWithoutRegistry(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log,
@@ -251,8 +232,6 @@ func TestDeleteDevice(t *testing.T) {
 	}
 }
 
-// Per-device mute was removed: the roster no longer accepts PATCH on a device,
-// so an old client gets 405 rather than a silent success.
 func TestMuteRouteIsGone(t *testing.T) {
 	srv := newRosterServer(t, &fakeRoster{}, fakeLive{})
 	req, _ := http.NewRequest(http.MethodPatch, srv.URL+"/api/v1/mobile/devices/i1", strings.NewReader(`{"muted":true}`))
@@ -267,16 +246,6 @@ func TestMuteRouteIsGone(t *testing.T) {
 	}
 }
 
-// TestRosterRoutesBlockedOnLANListener pins isLANControlBlockedPath's decision
-// for these two literal paths, so it catches deletion of the "/api/v1/mobile"
-// entry from lanControlBlockedPrefixes. It is intentionally decoupled from
-// what mountMobileDevices actually mounts, so it CANNOT catch the roster
-// routes being moved or aliased off the /api/v1/mobile prefix (e.g. to
-// /api/v1/devices) — that class of regression is covered instead by
-// TestRosterMountedRoutesAreLANBlocked below, which walks the live router.
-// It also never drives lanControlBlock or authMiddleware ordering on a real
-// socket — TestLANManagerBlocksLoopbackOnlyControlRoutes in
-// lan_listener_test.go covers that end-to-end.
 func TestRosterRoutesBlockedOnLANListener(t *testing.T) {
 	for _, path := range []string{"/api/v1/mobile/devices", "/api/v1/mobile/devices/i1"} {
 		if !httpd.IsLANControlBlockedPathForTest(path) {
@@ -285,13 +254,6 @@ func TestRosterRoutesBlockedOnLANListener(t *testing.T) {
 	}
 }
 
-// TestRosterMountedRoutesAreLANBlocked walks the actual routes
-// mountMobileDevices registers on the real router and asserts every one of
-// them is reported blocked by isLANControlBlockedPath. Unlike
-// TestRosterRoutesBlockedOnLANListener (which restates two path literals),
-// this test fails if the roster routes are ever moved or aliased off the
-// /api/v1/mobile prefix, since it derives its path list from the router
-// itself rather than from a hardcoded string.
 func TestRosterMountedRoutesAreLANBlocked(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router := httpd.NewRouterWithControl(config.Config{}, log, nil,
@@ -317,10 +279,6 @@ func TestRosterMountedRoutesAreLANBlocked(t *testing.T) {
 	}
 }
 
-// A phone foregrounded for hours only registers/announces at the start, so the
-// stored LastSeenAt goes stale. Presence sees every poll, and the roster must
-// report that instead — otherwise backgrounding now reads "last seen 3 hours
-// ago", which is the wrong answer to the question the label asks.
 type fakeLiveWithTimes struct {
 	live  map[string]bool
 	times map[string]time.Time
@@ -339,7 +297,6 @@ func TestListPrefersPresenceLastSeenOverStoredValue(t *testing.T) {
 		{InstallID: "i1", Token: "ExponentPushToken[a]", DeviceName: "iPhone", CreatedAt: registered, LastSeenAt: registered},
 		{InstallID: "i2", Token: "ExponentPushToken[b]", DeviceName: "M31s", CreatedAt: registered, LastSeenAt: registered},
 	}}
-	// i1 has been polling; i2 has not been seen since it registered.
 	presence := fakeLiveWithTimes{
 		live:  map[string]bool{},
 		times: map[string]time.Time{"i1": polledJustNow},

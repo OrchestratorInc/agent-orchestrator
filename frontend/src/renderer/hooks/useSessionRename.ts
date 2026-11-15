@@ -8,8 +8,6 @@ export const MAX_SESSION_DISPLAY_NAME_LEN = 100;
 type RenameableSession = Pick<WorkspaceSession, "id" | "title" | "hostId" | "cloud">;
 
 export function useSessionRename(session?: RenameableSession, onRenamed?: () => void | Promise<void>) {
-  // Only a Cloud rename needs the query cache (for the control plane and the
-  // session lists); a tab outside a query provider still renames locally.
   const queryClient = useContext(QueryClientContext);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(session?.title ?? "");

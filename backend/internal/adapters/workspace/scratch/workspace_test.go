@@ -133,8 +133,6 @@ func TestWorkspaceRejectsUnsafeSessionIDs(t *testing.T) {
 	}
 }
 
-// A path outside the managed root is never removed, and the refusal names that
-// so cleanup can report it instead of a generic teardown failure.
 func TestWorkspaceDestroyRefusesPathOutsideManagedRoot(t *testing.T) {
 	ws, err := scratch.New(scratch.Options{ManagedRoot: t.TempDir()})
 	if err != nil {
@@ -150,11 +148,6 @@ func TestWorkspaceDestroyRefusesPathOutsideManagedRoot(t *testing.T) {
 	}
 }
 
-// TestWorkspaceDestroyReclaimReportsAlreadyAbsentDirectory covers the scratch
-// half of the cleanup accounting. os.Remove is deliberately tolerated on a
-// missing path, so a scratch directory that was already gone tears down without
-// error while releasing nothing. Counting that as reclaimed reports space that
-// was never freed.
 func TestWorkspaceDestroyReclaimReportsAlreadyAbsentDirectory(t *testing.T) {
 	ws, err := scratch.New(scratch.Options{ManagedRoot: t.TempDir()})
 	if err != nil {
@@ -177,7 +170,6 @@ func TestWorkspaceDestroyReclaimReportsAlreadyAbsentDirectory(t *testing.T) {
 		t.Fatalf("reclaim = %q, want %q", reclaim, ports.WorkspaceReclaimRemoved)
 	}
 
-	// Second pass: the directory is gone, so there is nothing left to release.
 	reclaim, err = ws.DestroyReclaim(context.Background(), info)
 	if err != nil {
 		t.Fatalf("DestroyReclaim absent: %v", err)

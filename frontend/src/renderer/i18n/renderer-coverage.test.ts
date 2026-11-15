@@ -6,8 +6,6 @@ import { describe, expect, it } from "vitest";
 const rendererDirectory = path.resolve(process.cwd(), "src/renderer");
 const displayAttributes = new Set(["alt", "aria-label", "placeholder", "title"]);
 
-// These are content/data, product names, technical units, or keyboard chords—not
-// English UI copy. Keeping this allowlist exact makes newly introduced chrome fail.
 const approvedLiterals: Record<string, readonly string[]> = {
 	"components/BrowserPanel.tsx": [
 		"Orchestrator Preview",
@@ -25,9 +23,7 @@ const approvedLiterals: Record<string, readonly string[]> = {
 		"https://github.com/owner/repo",
 	],
 	"components/DaemonStartupLoader.tsx": ["Orchestrator"],
-	// Technical branch/prefix examples moved with the common settings fields.
 	"components/ProjectSettingsEditor.tsx": ["auto", "ao"],
-	// Key-cap hint beside Cancel.
 	"components/QuitConfirmDialog.tsx": ["Esc"],
 	"components/RemoteDirectoryPicker.tsx": ["/home/you/code"],
 	"components/SessionInspector.tsx": ["PR #"],
@@ -50,9 +46,6 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	"components/settings/UpdatesSection.tsx": ["PR #"],
 };
 
-// The Chat surface predates this coverage gate and is intentionally being
-// localized as a follow-up. Keep the deferral scoped to the new surface so
-// hardcoded chrome elsewhere in the renderer still fails this test.
 const deferredLocalizationFiles = new Set([
 	"components/SessionInterfaceSwitch.tsx",
 	"components/chat/ActivityRun.tsx",

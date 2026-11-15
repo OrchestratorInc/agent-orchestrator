@@ -18,14 +18,9 @@ const { zipSync } = require("cross-zip");
 const temporaryDirectories = [];
 const sha512 = bytes => createHash("sha512").update(bytes).digest("base64");
 
-// Replace only Electron's network transport with Node's loopback transport.
-// The dependency still owns blockmap fetch/parse, reconstruction, digest checks,
-// fallback, temporary files and cache promotion. Never catch and retry here.
 class LoopbackExecutor extends HttpExecutor {
 	createRequest(options, callback) { return request({ ...options, agent: false }, callback); }
 	download(...args) {
-		// Occupy a released descriptor before full fallback starts. Late cleanup
-		// from the failed differential transfer must not close this unrelated file.
 		this.sentinel = openSync(this.sentinelPath, "w+");
 		return ElectronHttpExecutor.prototype.download.apply(this, args);
 	}
@@ -71,7 +66,6 @@ async function runDownload(arch, failure = "none", disabled = false, cycle = {})
 	await writeBlockmap(oldFile);
 	const targetInfo = await writeBlockmap(newFile);
 	if (failure === "digest-mismatch") {
-		// Corrupt only cached bytes. The authoritative target digest stays valid.
 		const damaged = Buffer.from(oldBytes);
 		damaged.fill(0);
 		writeFileSync(oldFile, damaged);
@@ -122,8 +116,6 @@ async function runDownload(arch, failure = "none", disabled = false, cycle = {})
 			getBlockMapFiles: async () => [new URL(`${base}/old.blockmap`), new URL(`${base}/new.blockmap`)],
 			isUseMultipleRangeRequest: false,
 		};
-		// Avoid native Squirrel construction. Exercise real MacUpdater methods,
-		// replacing only the OS handoff after successful verified download.
 		const updater = new EventEmitter();
 		Object.setPrototypeOf(updater, MacUpdater.prototype);
 		updater.app = { version: "1.0.0" };
@@ -226,17 +218,12 @@ describe("MacUpdater reconstruction and full fallback", () => {
 	});
 
 	it("documents that sidecar presence activates an unpatched legacy client", async () => {
-		// This is why suppression is mandatory. A new binary's policy cannot
-		// retroactively guard an older MacUpdater with implicit differential allow.
 		const result = await runDownload("arm64", "none", false, { cachedMap: true });
 		expect(result.error).toBeUndefined();
 		expect(result.requests.some(req => req.range)).toBe(true);
 		expect(result.handedOff).toHaveLength(1);
 	});
 
-	// Stock 6.8.9 remains unsafe on 416. Current AO cannot enter that worker;
-	// the separate v2 MacUpdater suite tests real range failures through its
-	// declared subclass extension, with no stock differential call.
 	it("keeps stock HTTP 416 unreachable for the current disabled client", async () => {
 		const rollout = JSON.parse(readFileSync(new URL("./mac-differential-rollout.json", import.meta.url), "utf8"));
 		expect(rollout.enabled).toBe(false);

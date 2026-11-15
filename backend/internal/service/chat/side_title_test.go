@@ -51,7 +51,6 @@ func TestSideFirstQuestionTitle(t *testing.T) {
 			if tc.want != "Side Chat" && !got.UpdatedAt.Equal(now) {
 				t.Fatalf("title timestamp = %v, want %v", got.UpdatedAt, now)
 			}
-			// Retries, edits, cancellation, and subsequent messages never rename it.
 			if _, created, err := store.ReserveSideTurn(ctx, turn, "run"); err != nil || created {
 				t.Fatalf("duplicate = %v, %v", created, err)
 			}

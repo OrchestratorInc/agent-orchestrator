@@ -44,15 +44,12 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 				if (element || alreadyRevealed) {
 					setSelectedLines(null);
 					highlightedRows.current = [];
-					// A stale first render must not consume an unverified request.
 				}
 				return;
 			}
 			elements.push(element);
 		}
 		if (!elements.length) return;
-		// Pierre highlights an interval of render indexes, including both split
-		// columns. Matching only the requested endpoints can include other code.
 		const first = elements[0], last = elements[elements.length - 1];
 		const root = first.getRootNode();
 		const rows = [...(root as ShadowRoot).querySelectorAll<HTMLElement>("[data-line][data-line-type]")];
@@ -74,7 +71,7 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 			highlightedRows.current = [];
 			return;
 		}
-		if (new Set(interval.map(index)).size < end - start + 1) return; // Virtualized rows are not ready yet.
+		if (new Set(interval.map(index)).size < end - start + 1) return;
 		highlightedRows.current = interval;
 		const side = oldSide(expected[0]) ? "deletions" : "additions";
 		const endSide = oldSide(expected[expected.length - 1]) ? "deletions" : "additions";
@@ -82,8 +79,6 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 		const endLine = oldSide(expected[expected.length - 1]) ? expected[expected.length - 1].oldNo! : expected[expected.length - 1].newNo!;
 		setChanged(false);
 		setUnverified(false);
-		// Post-render verification can recover a redraw without starting another
-		// render cycle when Pierre already has the same verified selection.
 		setSelectedLines(current => current?.start === startLine && current.end === endLine && current.side === side && current.endSide === endSide
 			? current
 			: { start: startLine, end: endLine, side, endSide });
@@ -115,8 +110,6 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
   return () => cancelAnimationFrame(frame);
  }, [ready, contentKey]);
 	const verified = Boolean(range && selectedLines && consumed.current === range.requestKey);
-	// Transport/hydration delays have no render deadline. Late rows can still
-	// verify this same request after the advisory deadline, without polling.
 	useEffect(() => {
 		if (!range || !ready || verified || changed || dismissedRequest === range.requestKey) return;
 		const key = range.requestKey;
@@ -134,10 +127,7 @@ export function useFileAnnotationReveal(container: RefObject<HTMLElement | null>
 			setSelectedLines(null);
 		};
 		const onPointerDown = (event: PointerEvent) => {
-			// Retry continues this navigation; it is not an outside-click dismissal.
 			if (event.composedPath().some(node => node instanceof HTMLElement && node.dataset.fileAnnotationRetry === String(range.requestKey))) return;
-			// composedPath reaches the row inside Pierre's shadow root. Do not
-			// interfere with selecting/copying text within the highlighted code.
 			if (event.button === 0 && !highlightedRows.current.some(row => event.composedPath().includes(row))) dismiss();
 		};
 		const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") dismiss(); };

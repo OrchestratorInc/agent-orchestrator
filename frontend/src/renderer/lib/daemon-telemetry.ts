@@ -1,7 +1,3 @@
-// Daemon failures happen in the Electron main process, which has no PostHog
-// client. Main stamps a machine-readable `code` on every failing DaemonStatus
-// (shared/daemon-status.ts); this module rides the existing daemon:status IPC
-// push and reports those failures through the renderer's telemetry client.
 import type { DaemonStatus } from "../../shared/daemon-status";
 import { aoBridge } from "./bridge";
 import { captureRendererEvent } from "./telemetry";
@@ -18,7 +14,6 @@ function failureKey(status: DaemonStatus): string | null {
 function reportStatus(status: DaemonStatus): void {
 	const key = failureKey(status);
 	if (!key) {
-		// Healthy status resets dedupe so a repeat failure after recovery is a new event.
 		lastFailureKey = null;
 		return;
 	}
@@ -32,7 +27,6 @@ function reportStatus(status: DaemonStatus): void {
 	});
 }
 
-/** Idempotent; returns a stop function (used by tests). */
 export function startDaemonFailureTelemetry(): () => void {
 	if (started) return () => undefined;
 	started = true;
@@ -44,7 +38,6 @@ export function startDaemonFailureTelemetry(): () => void {
 	try {
 		stopListener = aoBridge.daemon.onStatus(reportStatus);
 	} catch {
-		// Preload bridge unavailable (browser preview): initial getStatus already handled.
 	}
 	return () => {
 		started = false;

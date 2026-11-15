@@ -34,27 +34,17 @@ import (
 )
 
 const (
-	artifactFilePath  = "/api/v1/sessions/{sessionId}/artifact-files/*"
-	artifactFilesPath = "/api/v1/sessions/{sessionId}/artifact-files"
-	// Not under artifact-files/, where it would shadow a file named "events".
-	artifactEventsPath = "/api/v1/sessions/{sessionId}/artifact-events"
-	// artifactRegistrationsPath is the only way a path gets registered as a
-	// deliverable: it is what ao artifact add calls.
+	artifactFilePath          = "/api/v1/sessions/{sessionId}/artifact-files/*"
+	artifactFilesPath         = "/api/v1/sessions/{sessionId}/artifact-files"
+	artifactEventsPath        = "/api/v1/sessions/{sessionId}/artifact-events"
 	artifactRegistrationsPath = "/api/v1/sessions/{sessionId}/artifact-registrations"
 )
 
-// artifactFile serves a file from the session's artifact directory in the
-// render sandbox, so the chat thread can frame an HTML artifact the way it
-// frames a render. A page gets the theme bootstrap; the files next to it
-// (images, CSS) load through this same route. Only regular files inside the
-// directory are served: os.Root refuses ".." and symlinks that leave it.
 func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodGet, artifactFilePath)
 		return
 	}
-	// The session read fills in the default artifact directory for a row
-	// stored without one.
 	sess, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -68,10 +58,6 @@ func (c *SessionsController) artifactFile(w http.ResponseWriter, r *http.Request
 	serveArtifactFile(w, r, renderContentSecurityPolicy, sess.Metadata.ArtifactDir, asset)
 }
 
-// wildcardPath returns the route's "*" tail unescaped. chi matches the escaped
-// path whenever the request carried a non-default escape, as a page's link to
-// "chart (1).png" or Turbopack's "%40swc" chunk names do; escaped is that
-// tail as sent then, and empty otherwise.
 func wildcardPath(r *http.Request) (tail, escaped string, err error) {
 	tail = chi.URLParam(r, "*")
 	if r.URL.RawPath == "" {
@@ -82,10 +68,6 @@ func wildcardPath(r *http.Request) (tail, escaped string, err error) {
 	return tail, escaped, err
 }
 
-// serveArtifactFile serves asset from the artifact directory root in the
-// sandbox csp names: a page with the theme bootstrap, anything else as it is.
-// Only regular files inside root are served: os.Root refuses ".." and
-// symlinks that leave it.
 func serveArtifactFile(w http.ResponseWriter, r *http.Request, csp, root, asset string) {
 	file, info, clean, err := previewutil.OpenWorkspaceFile(root, asset)
 	if err != nil {
@@ -97,8 +79,6 @@ func serveArtifactFile(w http.ResponseWriter, r *http.Request, csp, root, asset 
 		writeArtifactFileNotFound(w, r)
 		return
 	}
-	// An artifact can change, so its tag is its size and modification time
-	// (and, for a page, the bootstrap version), known before any read.
 	ext := strings.ToLower(path.Ext(clean))
 	isPage := ext == ".html" || ext == ".htm"
 	tag := fmt.Sprintf("%d-%d", info.Size(), info.ModTime().UnixNano())
@@ -111,7 +91,6 @@ func serveArtifactFile(w http.ResponseWriter, r *http.Request, csp, root, asset 
 		_ = file.Close()
 		return
 	}
-	// Capped again in the read: the file can grow after the stat.
 	data, err := io.ReadAll(io.LimitReader(file, attachmentstore.MaxFileBytes+1))
 	_ = file.Close()
 	if err != nil {
@@ -133,10 +112,6 @@ func serveArtifactFile(w http.ResponseWriter, r *http.Request, csp, root, asset 
 	serveSandboxed(w, r, csp, data, contentType, tag)
 }
 
-// streamArtifactChanges tells a client viewing a session's artifacts that a
-// file in its artifact directory changed, so an open view rereads it instead
-// of showing what it opened with. Each event is only an invalidation edge: a
-// burst of writes coalesces, and the client rereads through the usual routes.
 func (c *SessionsController) streamArtifactChanges(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodGet, artifactEventsPath)
@@ -169,8 +144,6 @@ func (c *SessionsController) streamArtifactChanges(w http.ResponseWriter, r *htt
 	h.Set("Connection", "keep-alive")
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	// The watch cannot report a write made before it existed, so a client
-	// rereads once on ready.
 	if _, err := fmt.Fprint(w, "event: ready\ndata: {}\n\n"); err != nil {
 		return
 	}
@@ -203,8 +176,6 @@ func writeArtifactFileNotFound(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "ARTIFACT_FILE_NOT_FOUND", "artifact file not found", nil)
 }
 
-// deleteArtifactFile removes one listed file from the session's artifact
-// directory along with its kept versions, and returns the session with its refreshed artifact list.
 func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodDelete, artifactFilesPath)
@@ -246,8 +217,6 @@ func (c *SessionsController) deleteArtifactFile(w http.ResponseWriter, r *http.R
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }
 
-// registerArtifacts registers files in the session's artifact directory as its
-// deliverables.
 func (c *SessionsController) registerArtifacts(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodPost, artifactRegistrationsPath)
@@ -283,8 +252,6 @@ func listsArtifactFile(files []domain.SessionArtifactFile, relPath string) bool 
 	return false
 }
 
-// removeArtifactFile removes a regular file beneath dir. os.Root refuses ".."
-// and symlinks that leave dir; a symlink itself is never removed.
 func removeArtifactFile(dir, relPath string) error {
 	if dir == "" {
 		return fs.ErrNotExist
@@ -305,13 +272,8 @@ func removeArtifactFile(dir, relPath string) error {
 	return root.Remove(name)
 }
 
-// artifactEditMu serialises artifact writes so two saves cannot both pass the
-// fingerprint check against the same content. saveArtifactContent and
-// restoreArtifactContent hold it.
 var artifactEditMu sync.Mutex
 
-// updateArtifactFile replaces the content of one listed artifact file when
-// the file still holds the content the edit started from.
 func (c *SessionsController) updateArtifactFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, http.MethodPut, artifactFilesPath)
@@ -360,17 +322,11 @@ func (c *SessionsController) updateArtifactFile(w http.ResponseWriter, r *http.R
 	})
 }
 
-// artifactFingerprint is the hex SHA-256 of an artifact's content.
 func artifactFingerprint(content []byte) string {
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:])
 }
 
-// writeArtifactFile replaces a regular file beneath dir with content when its
-// current content hashes to expected. The content goes to a temporary file
-// beside it that is then renamed over it, so a failed save leaves the
-// original intact. os.Root refuses ".." and symlinks that leave dir; a
-// symlink itself is never written.
 func writeArtifactFile(dir, relPath, expected string, content []byte) error {
 	if dir == "" {
 		return fs.ErrNotExist
@@ -418,9 +374,6 @@ func readArtifactFile(root *os.Root, name string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(file, attachmentstore.MaxFileBytes+1))
 }
 
-// writeArtifactTemp writes content to a new hidden file beside name, with
-// name's permissions, and returns its root-relative path. The file is
-// removed again if the write fails.
 func writeArtifactTemp(root *os.Root, name string, perm fs.FileMode, content []byte) (string, error) {
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {

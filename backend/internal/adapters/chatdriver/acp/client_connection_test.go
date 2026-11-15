@@ -157,17 +157,15 @@ func TestExtensionMethodReaderRoutesOnlyConfiguredLegacyMethodsThroughSDK(t *tes
 	if err := conv.ResolveRequest(context.Background(), approval.RequestID, ports.ChatDecision{ID: "accept"}); err != nil {
 		t.Fatalf("approve plan: %v", err)
 	}
-	_ = nextEvent(t, conv.Events()) // approval.resolved
+	_ = nextEvent(t, conv.Events())
 	if response := readWireResponse(t, reader); response.ID != 2 || response.Outcome != "accepted" {
 		t.Fatalf("plan wire response = %#v", response)
 	}
 
-	// JSON-RPC cancellation must unblock the provider request and return Cursor's
-	// cancelled outcome instead of leaving the agent parked indefinitely.
 	if _, err := agentToClientW.Write([]byte(`{"jsonrpc":"2.0","id":3,"method":"cursor/create_plan","params":{}}` + "\n")); err != nil {
 		t.Fatalf("write cancellable plan request: %v", err)
 	}
-	_ = nextEvent(t, conv.Events()) // plan.updated
+	_ = nextEvent(t, conv.Events())
 	cancellable := nextEvent(t, conv.Events())
 	if _, err := agentToClientW.Write([]byte(`{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":3}}` + "\n")); err != nil {
 		t.Fatalf("write cancel notification: %v", err)

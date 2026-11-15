@@ -17,7 +17,6 @@ const (
 	killWaitGrace        = 2 * time.Second
 )
 
-// ProcessConfig controls one agent child process.
 type ProcessConfig struct {
 	Argv          []string
 	Dir           string
@@ -28,13 +27,11 @@ type ProcessConfig struct {
 	ShutdownGrace time.Duration
 }
 
-// ProcessResult is the terminal result of an agent process.
 type ProcessResult struct {
 	ExitCode int
 	Err      error
 }
 
-// Process owns one process group and reaps it exactly once.
 type Process struct {
 	cmd           *exec.Cmd
 	done          chan struct{}
@@ -43,8 +40,6 @@ type Process struct {
 	result        ProcessResult
 }
 
-// StartProcess starts an agent process. Cancelling ctx gracefully terminates
-// the process group, then kills it after ShutdownGrace.
 func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	if len(cfg.Argv) == 0 {
 		return nil, errors.New("agentruntime: empty process argv")
@@ -81,7 +76,6 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	return process, nil
 }
 
-// PID returns the process id, or zero before a process has started.
 func (p *Process) PID() int {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return 0
@@ -89,8 +83,6 @@ func (p *Process) PID() int {
 	return p.cmd.Process.Pid
 }
 
-// Wait waits for the process to exit or for ctx to end. A wait timeout does not
-// stop the process; callers use Stop when cancellation should terminate it.
 func (p *Process) Wait(ctx context.Context) (ProcessResult, error) {
 	if p == nil {
 		return ProcessResult{}, errors.New("agentruntime: nil process")
@@ -105,7 +97,6 @@ func (p *Process) Wait(ctx context.Context) (ProcessResult, error) {
 	}
 }
 
-// Signal sends a signal to the complete process group.
 func (p *Process) Signal(signal os.Signal) error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return errors.New("agentruntime: process is not running")
@@ -118,9 +109,6 @@ func (p *Process) Signal(signal os.Signal) error {
 	}
 }
 
-// Stop requests graceful termination and waits up to ShutdownGrace before
-// killing the process group. Cancelling ctx shortens, but never extends, that
-// grace period.
 func (p *Process) Stop(ctx context.Context) error {
 	if p == nil {
 		return errors.New("agentruntime: nil process")

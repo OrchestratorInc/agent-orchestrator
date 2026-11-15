@@ -30,7 +30,6 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 	const url = new URL(input instanceof Request ? input.url : String(input));
 	const prefixIndex = url.pathname.indexOf(API_PREFIX);
 	const mount = prefixIndex > 0 ? url.pathname.slice(0, prefixIndex) : "";
-	// An aborted caller sends nothing, as with fetch.
 	if (init?.signal?.aborted) throw init.signal.reason;
 	const pending = request({
 		baseUrl: url.origin + mount,
@@ -39,16 +38,12 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 		headers: Object.fromEntries(new Headers(init?.headers).entries()),
 		body: typeof init?.body === "string" ? init.body : undefined,
 	});
-	// The main process finishes the request regardless; the caller stops
-	// waiting when its signal fires, as with fetch.
 	const result = init?.signal ? await raceAbort(pending, init.signal) : await pending;
 	const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
 	return new Response(body, { status: result.status, headers: result.headers });
 };
 
 export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
-	// Funnel telemetry (cloud-telemetry.ts) wraps the client; it passes results
-	// and errors through unchanged.
 	return instrumentCloudClient(createCloudCpClient({
 		baseUrl,
 		getToken: async () => MAIN_PROCESS_TOKEN,
@@ -61,16 +56,9 @@ export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 	}));
 }
 
-/** How often a plan refusal may open the Upgrade page; retries must not keep reopening it. */
 const PLAN_REFUSAL_COOLDOWN_MS = 60_000;
 let lastUpgradePrompt = 0;
 
-/**
- * The control plane refused work because of the org's plan. A self-serve org
- * gets its plan refreshed and Settings opened on Upgrade, where the plans and
- * usage explain why. Any other org (contract, billing off, or not yet known)
- * has no plans to buy, so it gets a neutral notice to ask its admin instead.
- */
 export function openUpgradeAfterPlanRefusal(now = Date.now()): boolean {
 	const selfServe = cachedCloudBillingMode(queryClient) === "self_serve";
 	if (selfServe) void queryClient.invalidateQueries({ queryKey: ["cloud-billing"] });

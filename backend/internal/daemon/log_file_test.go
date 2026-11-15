@@ -18,9 +18,6 @@ func readLog(t *testing.T, path string) string {
 	return string(data)
 }
 
-// The desktop app keeps only a small in-memory copy of the daemon's stderr, so
-// a field failure was undiagnosable after a restart (#6200). The daemon's own
-// log must land in its data dir and survive the process.
 func TestNewLoggerPersistsToDataDir(t *testing.T) {
 	dataDir := t.TempDir()
 	log, openFile := newDaemonLogger()
@@ -32,7 +29,6 @@ func TestNewLoggerPersistsToDataDir(t *testing.T) {
 	if !strings.Contains(got, "reconcile: live pass failed, skipping") || !strings.Contains(got, "sessionID=mer-1") {
 		t.Fatalf("daemon.log = %q, want the logged record", got)
 	}
-	// Before the data-dir lock, a predecessor may still rotate daemon.log.
 	if strings.Contains(got, "waiting for another AO process") {
 		t.Fatalf("daemon.log = %q, want nothing logged before the file was opened", got)
 	}

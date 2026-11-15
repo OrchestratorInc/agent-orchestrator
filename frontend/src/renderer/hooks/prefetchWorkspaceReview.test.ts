@@ -21,7 +21,6 @@ function file(path: string, overrides: Partial<WorkspaceFileSummary> = {}): Work
 	return { path, status: "modified", additions: 1, deletions: 1, size: 40, binary: false, fileFingerprint: `fp:${path}`, ...overrides };
 }
 
-// An older daemon's manifest: no Uncommitted section, so the review opens on combined Changes.
 function workspace(unstaged: WorkspaceFileSummary[], extra: Partial<WorkspaceFilesResponse> = {}): WorkspaceFilesResponse {
 	return {
 		sessionId: "sess-1",
@@ -39,7 +38,6 @@ function manifest(sections: Partial<WorkspaceFilesResponse["sections"]>): Worksp
 	return workspace([], { sections: { uncommitted: [], committed: [], staged: [], unstaged: [], untracked: [], ...sections } });
 }
 
-// What the Files review reads while nothing is picked, built as the pane builds it.
 function paneTarget(data: WorkspaceFilesResponse) {
 	const legacy = isLegacyManifest(data);
 	return buildReviewTarget({ branch: CHECKED_OUT_BRANCH, changes: normalizeChanges(DEFAULT_FILES_SELECTION, data, legacy), manifest: data, legacy });

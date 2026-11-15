@@ -30,7 +30,6 @@ var (
 
 const maxImportedGeminiBytes = 128 << 20
 
-// NativeSessionConfigDir returns Gemini's state root for the launch environment.
 func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -49,7 +48,6 @@ func (*Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string
 	return filepath.Join(home, ".gemini"), nil
 }
 
-// ProbeNativeSession checks for readable local history with the exact native id.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
@@ -74,7 +72,6 @@ func geminiSessionHeader(ctx context.Context, root *os.Root, path string) (strin
 	return header.SessionID, err
 }
 
-// LocateTranscript finds a matching session header within Gemini's state root.
 func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -114,11 +111,6 @@ func (*Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef)
 	return found, found != "", err
 }
 
-// RelocateImportedSession copies only the selected session to the project
-// directory the CLI will use. Legacy Gemini uses sha256(cwd); current Gemini
-// discovers that same directory through .project_root without AO rewriting its
-// registry. Existing registered slugs take priority. CLI mode uses getcwd, so
-// symlink launch paths are resolved here, unlike an ACP cwd argument.
 func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -164,7 +156,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 		if existing, err := geminiSessionHeader(ctx, root, destination); err != nil || existing != r.NativeSessionID {
 			return errors.New("gemini destination does not hold the imported conversation")
 		}
-		return nil // a retry must never overwrite AO's later turns
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -208,7 +200,7 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 				encoded, err := rewrite(line)
 				if err != nil {
 					if errors.Is(readErr, io.EOF) {
-						break // a torn final record is not part of persisted history
+						break
 					}
 					return err
 				}
@@ -251,7 +243,6 @@ func geminiProjectDirectory(root *os.Root, cwd, hash string, windows bool) strin
 			}
 		}
 	}
-	// A marker can predate a registry entry (the provider heals these itself).
 	if entries, err := fs.ReadDir(root.FS(), "tmp"); err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() {

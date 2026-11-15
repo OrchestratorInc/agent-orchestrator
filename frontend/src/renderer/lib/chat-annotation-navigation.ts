@@ -1,12 +1,10 @@
 import type { ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 import { renderedExcerptRange } from "./chat-excerpt-snapshot";
-/** Find a rendered selection across Markdown spans without changing DOM or selection. */
 export function annotationTextRange(root: HTMLElement, text: string): Range | undefined {
 	const nodes: Text[] = [];
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
 	while (walker.nextNode()) nodes.push(walker.currentNode as Text);
 	const raw = nodes.map((node) => node.data).join("");
-	// Browser selections collapse whitespace differently around rendered Markdown.
 	const positions: number[] = [];
 	let normalized = "";
 	for (let i = 0; i < raw.length; i++) {
@@ -38,16 +36,9 @@ export function annotationTextRange(root: HTMLElement, text: string): Range | un
 	return undefined;
 }
 
-/** Sent from navigated text so whatever folds it (a long user message) can open. */
 export const CHAT_REVEAL_RANGE_EVENT = "chat-reveal-range";
 export type ChatRevealRangeDetail = { range: Range };
 
-/**
- * Asks whatever folds the range to open. A long user message folds behind Show
- * more; navigation that centers a match below the fold would land on clipped
- * text. Returns true when something opened, so the caller measures once the new
- * layout has rendered instead of centering text the fold still hides.
- */
 export function revealFoldedRange(range: Range): boolean {
 	const node = range.startContainer;
 	const element = node instanceof Element ? node : node.parentElement;
@@ -63,7 +54,6 @@ export function annotationBody(source: HTMLElement): HTMLElement {
 	return source.querySelector<HTMLElement>("[data-chat-message-body]") ?? source;
 }
 
-/** Match a source even when Markdown rendering cannot produce an exact Range. */
 export function annotationTextMatches(root: HTMLElement, text: string): boolean {
 	if (annotationTextRange(root, text)) return true;
 	const selected = text.replace(/\s+/g, " ").trim();
@@ -71,7 +61,6 @@ export function annotationTextMatches(root: HTMLElement, text: string): boolean 
 	return Boolean(selected && rendered.includes(selected));
 }
 
-/** Resolve a captured selection only against its unchanged source revision. */
 export function annotationReferenceRange(source: HTMLElement, reference: { text: string; revision?: number; snapshot?: ChatExcerptSnapshot }): Range | undefined {
 	const currentRevision = Number(source.dataset.chatMessageRevision);
 	if (reference.revision !== undefined && reference.revision !== currentRevision) return undefined;
@@ -82,11 +71,9 @@ export function annotationReferenceRange(source: HTMLElement, reference: { text:
 	return annotationTextRange(annotationBody(source), reference.text);
 }
 
-/** Resolve a diagram by its original block positions, never by its label text. */
 export function annotationDiagramBlock(source: HTMLElement, reference: { revision?: number; snapshot?: ChatExcerptSnapshot }): HTMLElement | undefined {
 	const snapshot = reference.snapshot;
 	if (!snapshot?.containsFlowchart || reference.revision === undefined || reference.revision !== Number(source.dataset.chatMessageRevision)) return undefined;
-	// Older chart-only captures already have the exact block as their raw range.
 	const range = snapshot.diagramRange ?? snapshot.sourceRange;
 	if (!range || range.offsetUnit !== "utf-16") return undefined;
 	const blocks = Array.from(annotationBody(source).querySelectorAll<HTMLElement>("[data-excerpt-flowchart]"))
@@ -94,7 +81,6 @@ export function annotationDiagramBlock(source: HTMLElement, reference: { revisio
 	return blocks.length === 1 ? blocks[0] : undefined;
 }
 
-/** Returns cleanup so a later jump/unmount cannot clear another highlight. */
 export function highlightChatAnnotation(source: HTMLElement, text: string, revision?: number, snapshot?: ChatExcerptSnapshot): () => void {
 	const body = annotationBody(source);
 	const range = annotationReferenceRange(source, { text, revision, snapshot });
@@ -112,10 +98,6 @@ export function highlightChatAnnotation(source: HTMLElement, text: string, revis
 	};
 }
 
-/**
- * A search snippet is one raw Markdown line; the transcript shows it rendered.
- * Drop the inline markup so the line can be found in the rendered message.
- */
 export function renderedSnippetText(line: string): string {
 	return line
 		.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")

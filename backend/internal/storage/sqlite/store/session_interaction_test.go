@@ -82,7 +82,6 @@ func TestSessionInteractionValidatesStoredSenderAndPreservesHumanFacts(t *testin
 			if len(events) != len(before)+extra {
 				t.Fatalf("CDC delta=%d want=%d", len(events)-len(before), extra)
 			}
-			// Replay and out-of-order facts never refresh age; full row writers cannot clobber it.
 			if err := st.RecordSessionInteraction(ctx, id, sender, at.Add(-time.Minute)); err != nil {
 				t.Fatal(err)
 			}
@@ -126,7 +125,6 @@ func TestChatQueuedOrchestrationInteractionUsesOriginalAcceptance(t *testing.T) 
 	if len(snapshot.Messages) != 1 || snapshot.Messages[0].Origin != domain.MessageOriginAutomation || snapshot.Messages[0].SenderSessionID != string(sender.ID) {
 		t.Fatalf("history=%+v", snapshot.Messages)
 	}
-	// Routine automation with neither sender nor user authorship cannot advance age.
 	msg.ID = "routine-message"
 	msg.ClientMessageID = "routine"
 	msg.SenderSessionID = ""

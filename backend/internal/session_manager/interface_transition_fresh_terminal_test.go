@@ -180,8 +180,6 @@ func TestInterfaceTransitionReservedTranscriptRechecksAfterFencing(t *testing.T)
 	store.sessions[rec.ID] = rec
 	runtime.outputForCall = func(call int) string {
 		if call == 1 {
-			// Persistence starts after admission's missing-file check. The
-			// provider probe still cannot resume it, so stopping would lose work.
 			if err := os.WriteFile(rec.Metadata.NativeTranscriptPath, []byte("new turn"), 0o600); err != nil {
 				t.Fatal(err)
 			}

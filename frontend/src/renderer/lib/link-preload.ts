@@ -10,21 +10,13 @@ import { queryClient } from "./query-client";
 import { artifactAtPath } from "../../../../packages/shared/artifacts/deliverables";
 import { parseArtifactLink, type ArtifactLinkTarget } from "./session-links";
 
-// Long enough that links scrolled past or streamed in partially never fetch.
 const DWELL_MS = 250;
-// Leaves the renderer's few daemon connections free for the app's own reads.
 const MAX_CONCURRENT = 2;
-// A failed preview is not cached, so without this every scroll would ask again.
 const RETRY_AFTER_MS = 5 * 60_000;
 const MAX_REMEMBERED = 500;
 
 const PULL_REQUEST_PATH = /^\/[^/]+\/[^/]+\/pull\/\d+\/?$/;
 
-/**
- * Whether a link is a plain GitHub pull request URL. Preloading contacts the
- * target without a hover, so it must not reach arbitrary URLs an agent wrote:
- * those can carry data in a query string, or act on a GET.
- */
 export function isPullRequestLink(href: string): boolean {
 	let url: URL;
 	try {
@@ -49,7 +41,6 @@ function warmImage(src: string, crossOrigin?: "anonymous") {
 
 async function preloadPullRequest(href: string) {
 	const preview = await preloadLinkPreview(href);
-	// Same request modes as the card, so its images come from the HTTP cache.
 	if (preview?.imageUrl) warmImage(preview.imageUrl);
 	if (preview?.faviconUrl) warmImage(preview.faviconUrl, "anonymous");
 }
@@ -66,13 +57,10 @@ function findLocalArtifact(target: ArtifactLinkTarget) {
 async function preloadArtifact(href: string, target: ArtifactLinkTarget) {
 	const found = findLocalArtifact(target);
 	if (!found) {
-		// The artifact can reach the workspace list after the message linking it.
 		attempted.delete(href);
 		return;
 	}
 	const { artifact, session } = found;
-	// The card loads images and pages from the local daemon and revalidates
-	// them, so warming would save only a local read.
 	if (!artifact.rawUrl || isRasterImagePath(artifact.path) || isSvgPath(artifact.path)) return;
 	if (artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl)) return;
 	await queryClient.prefetchQuery(sessionArtifactFileQueryOptions(session.id, artifact.path, artifact.rawUrl));
@@ -139,20 +127,11 @@ function onIntersection(entries: IntersectionObserverEntry[]) {
 	}
 }
 
-// An IP literal, a single label (localhost, an intranet name) or a local
-// suffix names a machine, not a public site with an icon worth asking for.
 const MACHINE_HOST = /^(\[.*\]|[\d.]+|[^.]+|.+\.(local|localhost|internal|lan|home\.arpa))$/i;
-// Favicons load as soon as a link appears, so they get their own small queue
-// rather than waiting behind the hover-card warmers.
 const MAX_CONCURRENT_FAVICONS = 3;
 const DRAFT_SETTLE_MS = 400;
 const DRAFT_URL = /\bhttps?:\/\/[^\s<>"'`)\]]+/gi;
 
-/**
- * The HTTPS site root a link's favicon is read from. Only the root is asked
- * for, never the link: its path and query can carry data or act on a GET, as
- * above. An http link's root is asked for over HTTPS, never in the clear.
- */
 function faviconOrigin(href: string): string | undefined {
 	let url: URL;
 	try {
@@ -169,7 +148,6 @@ let faviconsActive = 0;
 
 async function preloadFavicon(origin: string) {
 	const preview = await preloadLinkPreview(origin);
-	// Same request mode as the icon's first load, so it comes from the HTTP cache.
 	const icon = (useUiStore.getState().resolvedTheme === "dark" && preview?.faviconDarkUrl) || preview?.faviconUrl;
 	if (icon) warmImage(icon, "anonymous");
 }
@@ -194,22 +172,15 @@ function queueFavicon(origin: string) {
 	drainFavicons();
 }
 
-/** Whether a link's site icon can be asked for at all (a public web site). */
 export function canLoadLinkFavicon(href: string): boolean {
 	return faviconOrigin(href) !== undefined;
 }
 
-/** Loads a web link's site icon now, once per site, for a link on screen. */
 export function preloadLinkFavicon(href: string) {
 	const origin = faviconOrigin(href);
 	if (origin) queueFavicon(origin);
 }
 
-/**
- * Warms the site icons of the links typed into a draft, so a sent link shows
- * its icon at once. A link erased before its turn in the queue is dropped; one
- * already asked for finishes, since the daemon caches it either way.
- */
 export function createDraftFaviconWarmer() {
 	let origins = new Set<string>();
 	let timer: number | undefined;
@@ -236,11 +207,6 @@ export function createDraftFaviconWarmer() {
 	};
 }
 
-/**
- * Warms a link's hover card once the link has stayed on screen, so the card
- * opens with its content. Any other link keeps loading on hover and costs
- * nothing here. Returns the function that stops watching the element.
- */
 export function observeLinkForPreload(element: Element | null, href: string | undefined): (() => void) | undefined {
 	if (!element || !href || typeof IntersectionObserver === "undefined") return undefined;
 	const run = preloadTask(href);

@@ -43,7 +43,6 @@ const session = {
 	cloud: { orgId: "org-1" },
 } as WorkspaceSession;
 
-/** The inspector's and the header's share of an open session view. */
 function SessionViewParts() {
 	useCloudSessionLive("org-1", session.id, true);
 	useSessionScmSummary(session.id, true, "org-1");
@@ -54,7 +53,6 @@ function SessionViewParts() {
 let streams: Array<{ path: string; streamId: string; closed: boolean; emit?: (event: CloudCpStreamEvent) => void }>;
 let openFails = false;
 
-/** The stream that carries the chat's events (not one for live state only). */
 function chatStream() {
 	return streams.find((stream) => stream.path.includes("after="));
 }
@@ -105,7 +103,6 @@ describe("CloudSessionChatSurface event stream", () => {
 		const view = renderView(<CloudSessionChatSurface session={session} />);
 		await waitFor(() => expect(chatStream()).toBeDefined());
 		expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1);
-		// An idle chat: the stream is open and sends nothing.
 		await act(async () => { await vi.advanceTimersByTimeAsync(CHAT_EVENTS_SAFETY_POLL_MS - 1_000); });
 		expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1);
 		await act(async () => { await vi.advanceTimersByTimeAsync(1_500); });
@@ -151,7 +148,6 @@ describe("CloudSessionChatSurface event stream", () => {
 		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(cloudMocks.listChatEvents).toHaveBeenCalledTimes(1);
-		// The newest page first.
 		expect(cloudMocks.listChatEvents).toHaveBeenCalledWith("org-1", session.id, { before: 9007199254740991, limit: 150 });
 		view.unmount();
 	});

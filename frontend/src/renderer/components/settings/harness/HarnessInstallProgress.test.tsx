@@ -21,7 +21,6 @@ afterEach(() => {
 describe("install stage", () => {
 	it("follows the installer's phase, then verification", () => {
 		expect(installStage(job({}))).toBeUndefined();
-		// Output that names no phase (npm's warnings, a silent script's banner) marks no stage.
 		expect(installStage(job({ progress: { detail: "npm warn deprecated glob@7.2.3" } }))).toBeUndefined();
 		expect(installStage(job({ progress: { phase: "downloading" } }))).toBe("downloading");
 		expect(installStage(job({ progress: { phase: "installing" } }))).toBe("installing");
@@ -32,7 +31,6 @@ describe("install stage", () => {
 
 	it("reports a percentage only while the installer stated one", () => {
 		expect(installPercent(job({ progress: { phase: "downloading", percent: 45.6 } }))).toBe(46);
-		// A script printing only a curl-style bar names no phase, but its percentage still counts.
 		expect(installPercent(job({ progress: { percent: 45 } }))).toBe(45);
 		expect(installPercent(job({ progress: { phase: "downloading" } }))).toBeUndefined();
 		expect(installPercent(job({ status: "verifying", progress: { phase: "installing", percent: 80 } }))).toBeUndefined();
@@ -77,7 +75,6 @@ describe("useInstallJustFinished", () => {
 		expect(screen.getByText("not done")).toBeInTheDocument();
 		rerender(<DoneProbe value={job({ status: "succeeded" })} />);
 		expect(screen.getByText("done")).toBeInTheDocument();
-		// A later poll of the same finished job keeps the timer.
 		rerender(<DoneProbe value={job({ status: "succeeded", output: "codex 1.2.3" })} />);
 		act(() => vi.advanceTimersByTime(INSTALL_DONE_VISIBLE_MS));
 		expect(screen.getByText("not done")).toBeInTheDocument();

@@ -63,8 +63,6 @@ describe("applyUserAgentFallback", () => {
 		expect(target.userAgentFallback).toBe(fake.calls[0]?.[0]);
 	});
 
-	// Without this call Cloudflare sign-in fails in the Browser panel, and no
-	// other test notices.
 	it("runs at startup, before any window exists", () => {
 		const main = readFileSync(path.join(process.cwd(), "src/main.ts"), "utf8");
 		expect(main).toMatch(/app\.whenReady\(\)\.then\(async \(\) => \{\s*applyUserAgentFallback\(app\);/);
@@ -86,9 +84,6 @@ describe("applyUserAgentFallback", () => {
 });
 
 describe("chromiumBrands", () => {
-	// Chromium's GREASE brand and order are seeded by the major version
-	// (components/embedder_support/user_agent_utils.cc). 130 and 152 are the
-	// values Electron 33 and 44 report in navigator.userAgentData.brands.
 	it("matches the brand list Chromium exposes to pages", () => {
 		expect(chromiumBrands(130)).toEqual([
 			{ brand: "Not?A_Brand", version: "99" },

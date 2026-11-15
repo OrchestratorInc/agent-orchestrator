@@ -105,9 +105,9 @@ func rawAccountHomeTestDACL(t *testing.T, aceType, aceFlags uint8, mask uint32, 
 	extraPrefix := 0
 	aclRevision := byte(2)
 	switch aceType {
-	case 0x04: // ACCESS_ALLOWED_COMPOUND_ACE_TYPE
+	case 0x04:
 		extraPrefix = 4
-	case 0x05, 0x06, 0x0b, 0x0c: // object ACE layouts
+	case 0x05, 0x06, 0x0b, 0x0c:
 		extraPrefix = 4
 		aclRevision = 4
 	}
@@ -122,7 +122,7 @@ func rawAccountHomeTestDACL(t *testing.T, aceType, aceFlags uint8, mask uint32, 
 	binary.LittleEndian.PutUint16(raw[10:12], uint16(aceSize))
 	binary.LittleEndian.PutUint32(raw[12:16], mask)
 	if aceType == 0x04 {
-		binary.LittleEndian.PutUint16(raw[16:18], 1) // COMPOUND_ACE_IMPERSONATION
+		binary.LittleEndian.PutUint16(raw[16:18], 1)
 	}
 	sidOffset := 16 + extraPrefix
 	copy(raw[sidOffset:], unsafe.Slice((*byte)(unsafe.Pointer(sid)), sid.Len()))
@@ -134,10 +134,6 @@ func protectManagedHomeForTest(t *testing.T, path string) {
 	applyOwnerOnlyDACL(t, path)
 }
 
-// TestManagedHomePrivateOnWindows pins the Windows meaning of "private managed
-// home". os.Mkdir(path, 0o700) reports mode 0777 back through Lstat on Windows,
-// so a POSIX permission comparison can never accept a directory AO just
-// created; the owner-only protected DACL is what actually makes it private.
 func TestManagedHomePrivateOnWindows(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "home")
 	if err := os.Mkdir(dir, 0o700); err != nil {
@@ -164,8 +160,6 @@ func TestManagedHomePrivateOnWindows(t *testing.T) {
 	}
 }
 
-// applyOwnerOnlyDACL mirrors the protection AO applies when it creates a
-// managed credential home.
 func applyOwnerOnlyDACL(t *testing.T, path string) {
 	t.Helper()
 	token, err := windows.OpenCurrentProcessToken()

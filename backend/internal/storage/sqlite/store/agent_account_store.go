@@ -14,7 +14,6 @@ import (
 
 var _ ports.AgentAccountStore = (*Store)(nil)
 
-// ListAgentAccounts returns the saved accounts; the device accounts are implicit.
 func (s *Store) ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, error) {
 	rows, err := s.qr.ListAgentAccounts(ctx)
 	if err != nil {
@@ -30,7 +29,6 @@ func (s *Store) ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, e
 	return out, nil
 }
 
-// CreateAgentAccount saves a signed-in account folder.
 func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -42,9 +40,6 @@ func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) e
 	return nil
 }
 
-// DeleteAgentAccount removes an account and any default that named it. Session
-// bindings stay for usage history; a session bound to a removed account falls
-// back to the provider's default at its next launch.
 func (s *Store) DeleteAgentAccount(ctx context.Context, id string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -56,7 +51,6 @@ func (s *Store) DeleteAgentAccount(ctx context.Context, id string) error {
 	})
 }
 
-// GetAgentAccountDefault returns the account new sessions of the provider use.
 func (s *Store) GetAgentAccountDefault(ctx context.Context, p domain.AgentAccountProvider) (string, bool, error) {
 	id, err := s.qr.GetAgentAccountDefault(ctx, string(p))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -68,7 +62,6 @@ func (s *Store) GetAgentAccountDefault(ctx context.Context, p domain.AgentAccoun
 	return id, true, nil
 }
 
-// SetAgentAccountDefault makes accountID the provider's account for new sessions.
 func (s *Store) SetAgentAccountDefault(ctx context.Context, p domain.AgentAccountProvider, accountID string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -78,7 +71,6 @@ func (s *Store) SetAgentAccountDefault(ctx context.Context, p domain.AgentAccoun
 	return nil
 }
 
-// BindSessionAgentAccount records the account a session uses from at on.
 func (s *Store) BindSessionAgentAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider, accountID string, at time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -109,7 +101,6 @@ func (s *Store) BindSessionAgentAccount(ctx context.Context, id domain.SessionID
 	})
 }
 
-// GetSessionAgentAccount returns the account the session uses now for the provider.
 func (s *Store) GetSessionAgentAccount(ctx context.Context, id domain.SessionID, p domain.AgentAccountProvider) (string, bool, error) {
 	accountID, err := s.qr.GetSessionAgentAccount(ctx, gen.GetSessionAgentAccountParams{SessionID: string(id), Provider: string(p)})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -121,10 +112,6 @@ func (s *Store) GetSessionAgentAccount(ctx context.Context, id domain.SessionID,
 	return accountID, true, nil
 }
 
-// AgentAccountUsageSince sums model usage per account, UTC day and model,
-// including the spend of sessions deleted since. Callers pass the start of a
-// UTC day, so the deleted sessions' day totals line up with the live events.
-// An account, day and model may appear twice (live and deleted); callers sum.
 func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]domain.AgentAccountUsage, error) {
 	since = since.UTC()
 	rows, err := s.qr.AgentAccountUsageSince(ctx, gen.AgentAccountUsageSinceParams{Since: sql.NullTime{Time: since, Valid: true}})
@@ -153,10 +140,6 @@ func (s *Store) AgentAccountUsageSince(ctx context.Context, since time.Time) ([]
 	return out, nil
 }
 
-// foldDeletedSessionAccountUsage adds a session's usage, attributed to its
-// accounts exactly as AgentAccountUsageSince does, to the deleted-session
-// totals. It runs inside the delete's transaction, before the session row (and
-// with it the usage events and account bindings) cascades away.
 func foldDeletedSessionAccountUsage(ctx context.Context, q *gen.Queries, id domain.SessionID) error {
 	rows, err := q.AgentAccountUsageSince(ctx, gen.AgentAccountUsageSinceParams{
 		Since: sql.NullTime{Time: time.Time{}, Valid: true}, SessionID: string(id),

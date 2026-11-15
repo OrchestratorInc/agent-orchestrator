@@ -10,7 +10,6 @@ export async function toggleAppDevTools(
 		const state = await browserHost?.toggleDevToolsForLastFocused();
 		if (state) return;
 	} catch {
-		// Development may fall back to the shell when the Browser is unavailable.
 	}
 	if (allowShellDebugging) getShell()?.toggleDevTools();
 }

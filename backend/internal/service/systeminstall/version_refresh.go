@@ -9,27 +9,19 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// HarnessUpdateObserver learns which sessions an update left on the replaced
-// release, so they can move to the new one, and reports how many still run it.
 type HarnessUpdateObserver interface {
 	MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error
 	CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error)
 }
 
-// harnessUpdateObserverTimeout bounds the mark written while the update still
-// holds the harness, so a slow database cannot keep launches waiting.
 const harnessUpdateObserverTimeout = 5 * time.Second
 
-// SetHarnessUpdateObserver late-binds the session marker after daemon wiring.
 func (s *Service) SetHarnessUpdateObserver(observer HarnessUpdateObserver) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updateObserver = observer
 }
 
-// noteHarnessUpdated marks the sessions an update left behind. It runs while
-// the update still holds the harness, so no launch can start on the new
-// release before the mark is written and be marked by mistake.
 func (s *Service) noteHarnessUpdated(target Target, version string) {
 	s.mu.Lock()
 	observer := s.updateObserver
@@ -39,12 +31,9 @@ func (s *Service) noteHarnessUpdated(target Target, version string) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.backgroundContext), harnessUpdateObserverTimeout)
 	defer cancel()
-	// A failed mark only means those sessions move on their next restart.
 	_ = observer.MarkHarnessUpdated(ctx, domain.AgentHarness(target), version, time.Now().UTC())
 }
 
-// deferHomebrewCleanup remembers a formula whose old keg an update kept for
-// live sessions. RunDeferredCleanups removes it once they have moved on.
 func (s *Service) deferHomebrewCleanup(target Target, formula string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -54,9 +43,6 @@ func (s *Service) deferHomebrewCleanup(target Target, formula string) {
 	s.deferredCleanups[target] = formula
 }
 
-// RunDeferredCleanups runs `brew cleanup <formula>` for every formula whose
-// kept keg no live session still runs. A harness that is being launched or
-// updated is left for the next call.
 func (s *Service) RunDeferredCleanups(ctx context.Context) {
 	s.mu.Lock()
 	pending := make(map[Target]string, len(s.deferredCleanups))
@@ -80,14 +66,11 @@ func (s *Service) RunDeferredCleanups(ctx context.Context) {
 		if !gate.TryLock() {
 			continue
 		}
-		// Counted under the gate: an update that finished just before it
-		// may have left new sessions on the keg this cleanup removes.
 		stale, err := observer.CountStaleBinarySessions(ctx)
 		if err != nil || stale[domain.AgentHarness(target)] > 0 {
 			gate.Unlock()
 			continue
 		}
-		// Reviewers are not sessions, so the stale count above misses them.
 		if _, reviewers, err := s.harnessInUse(ctx, target); err != nil || len(reviewers) > 0 {
 			gate.Unlock()
 			continue

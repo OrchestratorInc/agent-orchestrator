@@ -1,35 +1,3 @@
-// Package auggie implements the Auggie (Augment Code) agent adapter: launching
-// new headless Auggie sessions and resuming sessions when a native Auggie
-// session id is known.
-//
-// Auggie is Augment Code's terminal coding agent (binary "auggie", installed via
-// `npm install -g @augmentcode/auggie`). It exposes a headless one-shot mode via
-// `--print` (alias `-p`) which runs a single instruction and exits -- the mode AO
-// uses to drive it unattended.
-//
-// Launch shape:
-//
-//	auggie --print [--rules <f>] [-- <prompt>]
-//
-// The prompt is the print-mode positional, passed after `--` so a prompt
-// beginning with "-" is not mistaken for a flag. A system prompt, when supplied
-// as an AO-owned file, is injected via Auggie's `--rules` flag, which appends
-// guidance to the workspace rules.
-//
-// Permissions: Auggie has no single "approve everything" flag. It governs
-// unattended tool/file approval through granular `--permission <tool>:<allow|deny>`
-// rules (and a read-only `--ask` mode), not a 4-mode bypass like Claude Code.
-// Because there is no verifiable blanket auto-approve flag, every AO permission
-// mode emits no flag and defers to the user's Auggie configuration, rather than
-// guessing a flag that does not exist.
-//
-// Resume: Auggie supports `--resume <sessionId>` (alias `-r`), usable with
-// `--print` for headless resume. AO only has a native session id to resume from
-// when one was captured into session metadata. AO's managed SessionStart hook
-// records Auggie's conversation_id as that native resume handle.
-//
-// Hooks/activity: AO merges Auggie's native workspace hooks into
-// .augment/settings.local.json and reports session/tool/stop lifecycle events.
 package auggie
 
 import (
@@ -45,15 +13,12 @@ import (
 
 const adapterID = "auggie"
 
-// Plugin is the Auggie agent adapter. It is safe for concurrent use; the binary
-// path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Auggie adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -61,7 +26,6 @@ func New() *Plugin {
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -74,7 +38,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys Auggie understands.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -90,14 +53,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// GetLaunchCommand builds the argv to start a new headless Auggie session:
-//
-//	auggie --print [--rules <f>] [-- <prompt>]
-//
-// The prompt is passed after `--` so a prompt beginning with "-" is not mistaken
-// for a flag. Auggie's `--instruction` flags are the task input, not a rule or
-// system-prompt surface; AO standing instructions use `--rules` when the
-// manager provides a prompt file.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -118,13 +73,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Auggie session
-// when a native session id is available in metadata:
-//
-//	auggie --print --resume <sessionId>
-//
-// Auggie has no hook surface to capture that id automatically yet, so in practice
-// the id is empty and ok is false, letting callers fall back to a fresh launch.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -147,8 +95,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo surfaces the Auggie conversation id captured from native hook
-// payloads, along with any other standard hook-derived metadata.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -157,19 +103,11 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// appendModelFlag treats the configured model as opaque: it trims and forwards
-// non-empty values for Auggie to validate. Invalid models intentionally surface
-// Auggie's error; AO does not silently retry with Auggie's default model.
 func appendModelFlag(cmd *[]string, cfg ports.AgentConfig) {
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		*cmd = append(*cmd, "--model", model)
 	}
 }
-
-// Auggie has no single blanket auto-approve/bypass flag; unattended tool/file
-// approval is governed by granular `--permission <tool>:<allow|deny>` rules, so
-// AO emits no approval flag and defers every mode to the user's Auggie config.
-// There is therefore no appendApprovalFlags helper for this adapter.
 
 var auggieBinarySpec = binaryutil.BinarySpec{
 	Label:         "auggie",
@@ -184,9 +122,6 @@ var auggieBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveAuggieBinary finds the `auggie` binary, searching PATH then common
-// install locations. It returns a wrapped ports.ErrAgentBinaryNotFound when
-// Auggie is absent.
 func ResolveAuggieBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, auggieBinarySpec)
 }
@@ -207,8 +142,6 @@ func (p *Plugin) auggieBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

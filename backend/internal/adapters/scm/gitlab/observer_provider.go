@@ -26,26 +26,6 @@ const (
 	fetchConcurrency            = 5
 )
 
-// ---------------------------------------------------------------------------
-// ParseRepository
-// ---------------------------------------------------------------------------
-
-// ParseRepository parses a Git remote URL and returns an SCMRepo if the host
-// belongs to a GitLab instance the provider is configured to trust. gitlab.com
-// is always accepted; self-managed hosts must appear in the provider's
-// AllowedHosts list. A host that is neither gitlab.com nor allowlisted is
-// rejected so credentials are never attached to an untrusted host (review
-// Item 5).
-//
-// Supported remote formats:
-//
-//   - SSH:   git@gitlab.com:owner/repo.git
-//   - SSH:   ssh://git@gitlab.internal:8443/group/repo.git  (port preserved)
-//   - HTTPS: https://gitlab.com/owner/repo.git
-//   - HTTPS: https://gitlab.internal:8443/group/repo.git      (port preserved)
-//
-// ssh:// remotes parse to the same host:port as their https:// equivalents
-// (review S1).
 func (p *Provider) ParseRepository(remote string) (ports.SCMRepo, bool) {
 	return p.parseGitLabRepo(remote)
 }
@@ -56,14 +36,12 @@ func (p *Provider) parseGitLabRepo(remote string) (ports.SCMRepo, bool) {
 		return ports.SCMRepo{}, false
 	}
 
-	// ssh://git@host[:port]/owner/repo.git — the host:port is extracted from
-	// the URL's Host field so it matches the https:// form exactly.
 	if strings.HasPrefix(remote, "ssh://") {
 		u, err := url.Parse(remote)
 		if err != nil || u.Host == "" {
 			return ports.SCMRepo{}, false
 		}
-		host := u.Host // includes port if present, e.g. "gitlab.internal:8443"
+		host := u.Host
 		if !p.isHostAllowed(host) {
 			return ports.SCMRepo{}, false
 		}
@@ -76,7 +54,6 @@ func (p *Provider) parseGitLabRepo(remote string) (ports.SCMRepo, bool) {
 		return makeGitLabRepo(host, owner, name), true
 	}
 
-	// SSH scp-like: git@gitlab.com:owner/repo.git
 	if m := sshRemoteRe.FindStringSubmatch(remote); m != nil {
 		host := m[1]
 		if !p.isHostAllowed(host) {
@@ -89,10 +66,9 @@ func (p *Provider) parseGitLabRepo(remote string) (ports.SCMRepo, bool) {
 		return makeGitLabRepo(host, owner, name), true
 	}
 
-	// HTTPS: https://gitlab.com/owner/repo.git
 	u, err := url.Parse(remote)
 	if err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
-		host := u.Host // includes port if present, e.g. "gitlab.internal:8443"
+		host := u.Host
 		if !p.isHostAllowed(host) {
 			return ports.SCMRepo{}, false
 		}
@@ -110,11 +86,6 @@ func (p *Provider) parseGitLabRepo(remote string) (ports.SCMRepo, bool) {
 
 var sshRemoteRe = regexp.MustCompile(`^git@([^:]+):(.+)$`)
 
-// splitOwnerRepo splits a GitLab project path into owner (namespace, possibly
-// nested like "group/subgroup") and name (the final repo segment). A bare
-// "owner/repo" yields owner="owner", name="repo"; a nested
-// "group/subgroup/repo" yields owner="group/subgroup", name="repo". Single
-// segments or empty parts are rejected.
 func splitOwnerRepo(p string) (string, string, bool) {
 	parts := strings.Split(p, "/")
 	if len(parts) < 2 {
@@ -140,12 +111,6 @@ func makeGitLabRepo(host, owner, name string) ports.SCMRepo {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// RepoPRListGuard
-// ---------------------------------------------------------------------------
-
-// RepoPRListGuard returns an ETag-based guard for the open merge-request list
-// of a project, allowing the observer to skip unchanged data.
 func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag string) (ports.SCMGuardResult, error) {
 	path := fmt.Sprintf("/projects/%s/merge_requests", projectPath(repo.Owner, repo.Name))
 	q := url.Values{
@@ -169,14 +134,6 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// ListPRsByRepo
-// ---------------------------------------------------------------------------
-
-// ListPRsByRepo lists merge requests in a project, optionally filtered to
-// those updated after updatedAfter (zero = full listing). Uses state=all so
-// closed/merged MRs are also discovered for state-transition tracking, and
-// follows Link rel=next to paginate all pages.
 func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
 	var result []ports.SCMPRObservation
 	q := url.Values{
@@ -200,15 +157,6 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 			return fmt.Errorf("gitlab scm: unmarshal MR list: %w", err)
 		}
 		for i := range mrs {
-			// Store the full restMR into the MR-detail cache (ticket 03). The
-			// list and detail MR responses share the same shape for the fields
-			// AO uses, so the cached restMR is a valid substitute for the detail
-			// response when fetchSingleMR consults the cache seconds later in the
-			// same cycle. diff_refs.base_sha is populated from the list response
-			// via the nested-struct field (ticket 02's fix), so the cached entry
-			// carries the base SHA correctly. The pointer targets this page's
-			// backing array, which is not reused on the next page (each page
-			// gets a fresh `mrs` slice), so the cached pointer is safe to retain.
 			p.cache.setMRDetail(repo.Host, repo.Repo, mrs[i].IID, &mrs[i])
 			result = append(result, mrToSCMPRObservation(repo, &mrs[i]))
 		}
@@ -220,12 +168,6 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	return result, nil
 }
 
-// ListOpenPRsByBranch lists the open merge requests whose source branch is
-// branch in repo itself, so MRs from forks are not returned, matching the
-// GitHub listing. GitLab filters by branch on the server, so a project's
-// other MRs are never paged through; a fork MR (source project differs from
-// the target project) is dropped here, and each returned MR carries repo as
-// both head and base.
 func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
 	q := url.Values{
 		"state":         {"opened"},
@@ -279,10 +221,6 @@ type restMR struct {
 	SourceProjectID int `json:"source_project_id"`
 	TargetProjectID int `json:"target_project_id"`
 
-	// DiffRefs is populated from the nested diff_refs object in the MR
-	// response. GitLab returns the same shape from both the list and detail
-	// endpoints, so the cached restMR from ListPRsByRepo carries the base
-	// SHA without any manual second-pass unmarshal.
 	DiffRefs       restDiffRefs `json:"diff_refs"`
 	MergeCommitSHA string       `json:"merge_commit_sha"`
 
@@ -294,9 +232,6 @@ type restMR struct {
 	BlockingDiscussionsResolved bool `json:"blocking_discussions_resolved"`
 }
 
-// restProject is the subset of the GitLab "GET /projects/:id" response that
-// the provider needs: path_with_namespace is used to resolve a fork MR's head
-// repository (review Item 4).
 type restProject struct {
 	PathWithNamespace string `json:"path_with_namespace"`
 }
@@ -366,11 +301,6 @@ func effectiveMergeStatus(mr *restMR) string {
 	return mr.MergeStatus
 }
 
-// changesRequested reports whether the MR's effective merge status is
-// "requested_changes" — GitLab's signal that a reviewer explicitly asked for
-// changes (the direct equivalent of GitHub's CHANGES_REQUESTED). Both
-// fetchSingleMR and FetchReviewThreads use this to override the approvals-
-// based review decision.
 func changesRequested(mr *restMR) bool {
 	return effectiveMergeStatus(mr) == "requested_changes"
 }
@@ -382,12 +312,6 @@ func safeTime(t *time.Time) time.Time {
 	return *t
 }
 
-// ---------------------------------------------------------------------------
-// CommitChecksGuard
-// ---------------------------------------------------------------------------
-
-// CommitChecksGuard returns a hash-based guard for the latest pipeline status
-// of a commit, allowing the observer to skip unchanged CI state.
 func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, headSHA, etag string) (ports.SCMGuardResult, error) {
 	if headSHA == "" {
 		return ports.SCMGuardResult{}, fmt.Errorf("gitlab scm: empty head SHA: %w", ErrNotFound)
@@ -416,18 +340,6 @@ func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, he
 	}, nil
 }
 
-// ---------------------------------------------------------------------------
-// FetchPullRequests
-// ---------------------------------------------------------------------------
-
-// FetchPullRequests fetches detailed observations for a batch of merge requests,
-// including MR metadata, CI status, approvals, and mergeability.
-//
-// A transient failure (timeout, 429, 5xx, malformed payload) on any sub-fetch
-// is propagated as a non-nil error AND a Fetched=false placeholder observation
-// at the same index. The observer rejects Fetched=false observations so the
-// last durable state is preserved and ETags/cursors are not advanced (review
-// finding #1).
 func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
 	if len(refs) > 25 {
 		return nil, fmt.Errorf("gitlab scm: batch size %d exceeds limit 25", len(refs))
@@ -453,9 +365,6 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 				if firstErr == nil {
 					firstErr = err
 				}
-				// Placeholder with Fetched=false so the observer can reject it
-				// without advancing durable state. The non-nil return error is
-				// the primary signal; Fetched=false is the defensive belt.
 				results[idx] = ports.SCMObservation{
 					Fetched:  false,
 					Provider: "gitlab",
@@ -482,19 +391,6 @@ func (p *Provider) fetchSingleMR(ctx context.Context, ref ports.SCMPRRef) (ports
 		return ports.SCMObservation{}, err
 	}
 
-	// 1. Fetch MR detail. Consult the MR-detail cache first (ticket 03): if
-	// ListPRsByRepo populated a fresh entry for this (host, repo, iid) within
-	// the 60s TTL, reuse the cached restMR directly and skip the HTTP GET
-	// entirely. On a miss (entry expired, or the MR was not in the listing —
-	// e.g. a brand-new MR that appeared between listing and fetch), fall back
-	// to the HTTP fetch. GitLab's list and detail MR responses share the same
-	// shape for the fields AO uses, so the cached restMR is a valid
-	// substitute.
-	//
-	// diff_refs guard (finding #2): GitLab's project MR listing does not
-	// guarantee diff_refs in the response — only the single-MR endpoint
-	// documents it. If the cached entry lacks diff_refs.base_sha, fall through
-	// to the HTTP GET rather than emitting an empty BaseSHA.
 	var mr restMR
 	if cached, ok := p.cache.getMRDetail(repo.Host, repo.Repo, ref.Number); ok && cached.DiffRefs.BaseSHA != "" {
 		mr = *cached
@@ -520,22 +416,6 @@ func (p *Provider) fetchSingleMR(ctx context.Context, ref ports.SCMPRRef) (ports
 	prObs.BaseSHA = mr.DiffRefs.BaseSHA
 	prObs.MergeCommitSHA = mr.MergeCommitSHA
 
-	// Fork MR: resolve the head repository to the source project's
-	// path_with_namespace so the head-repository ownership guard validates
-	// fork MRs against the correct project (review Item 4). When
-	// source_project_id differs from target_project_id, the MR head branch
-	// lives in a different project; without resolution, HeadRepo would be the
-	// target project and a fork MR with a matching branch name could pass the
-	// guard against the wrong project.
-	//
-	// The source-project path is cached across poll cycles with a 5-min TTL
-	// (ticket 05): the path is stable for minutes in practice (it only changes
-	// on group rename or project transfer), so across ~10 poll cycles the
-	// source-project endpoint is hit once instead of 10 times per fork MR. On
-	// failure (404, 5xx, timeout) the error propagates so FetchPullRequests
-	// leaves a Fetched=false placeholder with the error attached (fail closed,
-	// do not falsify HeadRepo). The cache only short-circuits the happy path;
-	// it does not mask failures.
 	if mr.SourceProjectID != 0 && mr.SourceProjectID != mr.TargetProjectID {
 		path, err := p.fetchSourceProjectCached(ctx, hc, repo.Host, mr.SourceProjectID)
 		if err != nil {
@@ -546,30 +426,20 @@ func (p *Provider) fetchSingleMR(ctx context.Context, ref ports.SCMPRRef) (ports
 		}
 	}
 
-	// 2. Fetch CI (pipelines + jobs). A transient failure here must propagate
-	// as an error so the observer preserves the last durable CI state rather
-	// than overwriting it with "unknown"
 	ciObs, err := p.fetchCI(ctx, repo, mr.SHA)
 	if err != nil {
 		return ports.SCMObservation{}, fmt.Errorf("gitlab scm: fetch CI: %w", err)
 	}
 
-	// 3. Fetch approvals for review decision. A transient failure here must
-	// propagate so the observer preserves the last durable review state
-	// rather than overwriting it with "none"
 	reviewDecision, err := p.fetchApprovalDecision(ctx, repo, ref.Number)
 	if err != nil {
 		return ports.SCMObservation{}, fmt.Errorf("gitlab scm: fetch approvals: %w", err)
 	}
 
-	// Override the review decision when the MR has requested_changes —
-	// see changesRequested for rationale. The approvals endpoint alone
-	// does not capture this signal, so we override regardless of approvals.
 	if changesRequested(&mr) {
 		reviewDecision = domain.ReviewChangesRequest
 	}
 
-	// 4. Build mergeability
 	mergeObs := mergeabilityFromMR(&mr, ciObs.Summary, string(reviewDecision))
 
 	return ports.SCMObservation{
@@ -599,19 +469,6 @@ func canonicalRepoFromMRURL(host, rawURL, fallback string) string {
 	return fallback
 }
 
-// fetchSourceProjectCached resolves a fork MR source project's
-// path_with_namespace, consulting the fork-project cache (5-min TTL, keyed by
-// host+source_project_id) before issuing an HTTP request (ticket 05). On a cache
-// hit, returns the cached path without an HTTP round-trip. On a miss, fetches
-// GET /projects/:source_project_id, caches the path_with_namespace, and returns
-// it.
-//
-// Errors propagate exactly as the uncached fetch did — a 404/5xx/timeout still
-// returns the error so the caller fails closed (Fetched=false with the error
-// attached, preserving the durable-state rule). The cache only short-circuits
-// the happy path; it does not mask failures. A cached empty path is treated as
-// a valid resolution (a project with no path is unusual but not a failure), so
-// an empty path is stored and returned on subsequent hits.
 func (p *Provider) fetchSourceProjectCached(ctx context.Context, hc *Client, host string, sourceProjectID int) (string, error) {
 	if path, ok := p.cache.getForkProject(host, sourceProjectID); ok {
 		return path, nil
@@ -635,12 +492,6 @@ func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, headSHA stri
 	}
 
 	path := fmt.Sprintf("/projects/%s/pipelines", projectPath(repo.Owner, repo.Name))
-	// per_page=1 matches CommitChecksGuard so both call sites produce the same
-	// cache key in Client.doGET's ETag cache. When the guard runs first (the
-	// cheap pre-check) and fetchCI runs second, doGET sends If-None-Match and
-	// receives a 304 — no body transfer, no JSON parse. Only pipelines[0] (the
-	// latest pipeline) is used, so per_page=1 is sufficient. Pipeline-jobs
-	// pagination (per_page=100, doGETPaginated) is intentionally untouched.
 	q := url.Values{
 		"sha":      {headSHA},
 		"per_page": {"1"},
@@ -668,13 +519,11 @@ func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, headSHA stri
 	latest := pipelines[0]
 	ciState := pipelineStatusToCI(latest.Status)
 
-	// Fetch jobs from the latest pipeline
 	checks, failedChecks, partial, err := p.fetchPipelineJobs(ctx, repo, latest.ID)
 	if err != nil {
 		return ports.SCMCIObservation{}, fmt.Errorf("fetch pipeline jobs: %w", err)
 	}
 
-	// Canceling a pipeline does not undo a required job that already failed.
 	if latest.Status == "canceled" && len(failedChecks) > 0 {
 		ciState = domain.CIFailing
 	}
@@ -729,11 +578,6 @@ func (p *Provider) fetchPipelineJobs(ctx context.Context, repo ports.SCMRepo, pi
 			ProviderID: strconv.Itoa(j.ID),
 		}
 		checks = append(checks, check)
-		// Optional failed jobs (allow_failure: true) are classified separately
-		// from required failures and must NOT become actionable failed
-		// checks when the pipeline succeeds (review Item 13). They still
-		// appear in Checks (full CI snapshot) but are not promoted to
-		// FailedChecks — their failure is informational, not blocking.
 		if isFailingCheckStatus(status) && !j.AllowFailure {
 			failed = append(failed, check)
 		}
@@ -757,25 +601,6 @@ func (p *Provider) fetchApprovalDecision(ctx context.Context, repo ports.SCMRepo
 	return approvalDecision(*approvals), nil
 }
 
-// fetchApprovalsCached returns the approvals state for (repo, mrIID),
-// consulting the provider-level approvals cache first (keyed by
-// host+repo+IID, TTL 60s). On a cache hit, returns the cached *restApprovals
-// without an HTTP call — eliminating the duplicate
-// GET /merge_requests/:iid/approvals round-trip that would otherwise occur
-// when both fetchApprovalDecision (inside FetchPullRequests) and the approvals
-// fetch in FetchReviewThreads run for the same MR in the same observer cycle.
-//
-// On a miss (entry expired, or not yet fetched this cycle), fetches via doGET,
-// caches the result, and returns it. This is the single highest-impact
-// deduplication: one eliminated HTTP round-trip per active MR per
-// review-refresh cycle. The 304 from the ETag cache (which still counts
-// against rate limits) is avoided entirely — the second call is a memory
-// lookup with zero network I/O.
-//
-// Maximum staleness: ~60s. The approvals state within a single cycle is
-// already implicitly stale (the observer fetches it once per cycle), so
-// serving a cached copy within the same cycle introduces no new staleness
-// relative to the observer's existing behavior.
 func (p *Provider) fetchApprovalsCached(ctx context.Context, repo ports.SCMRepo, mrIID int) (*restApprovals, error) {
 	if cached, ok := p.cache.getApprovals(repo.Host, repo.Repo, mrIID); ok {
 		return cached, nil
@@ -799,16 +624,8 @@ func (p *Provider) fetchApprovalsCached(ctx context.Context, repo ports.SCMRepo,
 	return &approvals, nil
 }
 
-// approvalDecision derives the review decision from parsed approval state.
-// It trusts the `approved` bool rather than comparing len(approved_by) with
-// approvals_required, because approved_by can contain approvals that do not
-// satisfy the applicable rules.
 func approvalDecision(a restApprovals) domain.ReviewDecision {
 	if a.Approved {
-		// GitLab reports approved=true even when approvals_required=0 and
-		// nobody has actually approved. Treat that as no review signal,
-		// matching GitHub's behavior where APPROVED only fires when a real
-		// approval review is submitted.
 		if a.ApprovalsRequired > 0 || len(a.ApprovedBy) > 0 {
 			return domain.ReviewApproved
 		}
@@ -831,11 +648,6 @@ type restApprovals struct {
 	} `json:"approved_by"`
 }
 
-// ---------------------------------------------------------------------------
-// FetchFailedCheckLogTail
-// ---------------------------------------------------------------------------
-
-// FetchFailedCheckLogTail returns the last N lines of a failed CI job's trace.
 func (p *Provider) FetchFailedCheckLogTail(ctx context.Context, repo ports.SCMRepo, check ports.SCMCheckObservation) (string, error) {
 	jobID := check.ProviderID
 	if jobID == "" {
@@ -854,17 +666,9 @@ func (p *Provider) FetchFailedCheckLogTail(ctx context.Context, repo ports.SCMRe
 	return tailLines(string(body), ciFailureLogTailLines), nil
 }
 
-// ---------------------------------------------------------------------------
-// FetchReviewThreads
-// ---------------------------------------------------------------------------
-
-// FetchReviewThreads fetches discussion threads and approval state for a merge
-// request.
 func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (ports.SCMReviewObservation, error) {
 	repo := ref.Repo
 
-	// Fetch discussions, following Link rel=next to fetch ALL pages (review
-	// finding #8: previously only the first 100 discussions were fetched).
 	path := fmt.Sprintf("/projects/%s/merge_requests/%d/discussions", projectPath(repo.Owner, repo.Name), ref.Number)
 	q := url.Values{"per_page": {strconv.Itoa(reviewDiscussionPageSize)}}
 	var discussions []restDiscussion
@@ -941,12 +745,6 @@ func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (
 		})
 	}
 
-	// Fetch approvals via the shared cache (ticket 04). When FetchPullRequests
-	// has already run for this MR in the same cycle, fetchApprovalDecision
-	// populated the approvals cache and this call is a memory lookup with zero
-	// network I/O — eliminating the duplicate /merge_requests/:iid/approvals
-	// round-trip. The cached *restApprovals is reused for both the review
-	// decision and the review summaries.
 	approvalsPtr, err := p.fetchApprovalsCached(ctx, repo, ref.Number)
 	if err != nil {
 		return ports.SCMReviewObservation{}, fmt.Errorf("gitlab scm: %w", err)
@@ -954,19 +752,12 @@ func (p *Provider) FetchReviewThreads(ctx context.Context, ref ports.SCMPRRef) (
 	approvals := *approvalsPtr
 	decision := approvalDecision(approvals)
 
-	// Override the review decision when the cached MR detail has
-	// requested_changes — see changesRequested for rationale. When the cache
-	// is cold (e.g. FetchReviewThreads runs before FetchPullRequests in a
-	// cycle), the override is skipped and the approvals-based decision stands
-	// — no crash, no false override.
 	if cached, ok := p.cache.getMRDetail(repo.Host, repo.Repo, ref.Number); ok {
 		if changesRequested(cached) {
 			decision = domain.ReviewChangesRequest
 		}
 	}
 
-	// Build review summaries with stable, unique IDs so multiple approvers
-	// don't overwrite each other in persistence
 	var reviews []ports.SCMReviewSummaryObservation
 	for _, ab := range approvals.ApprovedBy {
 		username := ab.User.Username
@@ -1015,10 +806,6 @@ func (n *restNote) noteURL(ref ports.SCMPRRef) string {
 	return fmt.Sprintf("%s#note_%d", ref.URL, n.ID)
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 func pipelineStatusToCI(status string) domain.CIState {
 	switch status {
 	case "success":
@@ -1060,8 +847,6 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 	var blockers []string
 
 	switch ms {
-	// Mergeable (current + legacy aliases). GitLab reports these when the
-	// branch can merge cleanly; AO still layers CI/review/draft blockers on top.
 	case "mergeable", "can_be_merged":
 		mergeable := true
 		if ciState == string(domain.CIFailing) {
@@ -1087,7 +872,6 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 			Blockers: blockers,
 		}
 
-	// Conflicting (current + legacy aliases).
 	case "conflict", "cannot_be_merged", "cannot_be_merged_recheck":
 		return ports.SCMMergeabilityObservation{
 			State:    string(domain.MergeConflicting),
@@ -1095,13 +879,11 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 			Blockers: []string{"conflicts"},
 		}
 
-	// Unknown — mergeability is being computed or the diff is being prepared.
 	case "checking", "preparing", "unchecked", "approvals_syncing", "":
 		return ports.SCMMergeabilityObservation{
 			State: string(domain.MergeUnknown),
 		}
 
-	// Need rebase — head is behind base; a fast-forward merge is not possible.
 	case "need_rebase":
 		return ports.SCMMergeabilityObservation{
 			State:      string(domain.MergeBlocked),
@@ -1109,7 +891,6 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 			Blockers:   []string{"behind_base"},
 		}
 
-	// CI blockers (current + legacy).
 	case "ci_must_pass", "ci_still_running":
 		return ports.SCMMergeabilityObservation{
 			State:    string(domain.MergeBlocked),
@@ -1128,26 +909,18 @@ func mergeabilityFromMR(mr *restMR, ciState, reviewDecision string) ports.SCMMer
 			Blockers: []string{"draft"},
 		}
 
-	// Review blockers.
 	case "requested_changes":
-		// A reviewer explicitly requested changes — the direct equivalent
-		// of GitHub's CHANGES_REQUESTED. The blocker label differs from
-		// not_approved so downstream status logic can distinguish "someone
-		// asked for changes" from "nobody has approved yet".
 		return ports.SCMMergeabilityObservation{
 			State:    string(domain.MergeBlocked),
 			Blockers: []string{"changes_requested"},
 		}
 
 	case "not_approved":
-		// Approvals are required and have not been granted. The approvals
-		// endpoint is authoritative for this case.
 		return ports.SCMMergeabilityObservation{
 			State:    string(domain.MergeBlocked),
 			Blockers: []string{"review_required"},
 		}
 
-	// Provider-blocked / non-mergeable states without a more specific cause.
 	case "not_open", "merge_request_blocked", "merge_time", "commits_status",
 		"jira_association_missing", "status_checks_must_pass",
 		"security_policy_pipeline_check", "security_policy_violations",

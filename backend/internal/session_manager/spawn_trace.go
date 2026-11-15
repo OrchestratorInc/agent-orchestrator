@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Spawn steps reported by spawn telemetry. The vocabulary is closed: it names
-// where a start spent its time and where it failed, never what it worked on.
 const (
 	SpawnStepModelCheck  = "model_check"
 	SpawnStepBranchFetch = "branch_fetch"
@@ -21,10 +19,6 @@ const (
 	SpawnStepAgentStart  = "agent_start"
 )
 
-// SpawnTrace collects one start's step timings and the facts its outcome event
-// reports. The session service attaches it to the spawn context; an
-// asynchronous Chat start carries it into the background, so the trace is
-// written from two goroutines and guards itself.
 type SpawnTrace struct {
 	mu         sync.Mutex
 	steps      map[string]int64
@@ -36,7 +30,6 @@ type SpawnTrace struct {
 
 type spawnTraceKey struct{}
 
-// WithSpawnTrace returns ctx carrying a new trace.
 func WithSpawnTrace(ctx context.Context) (context.Context, *SpawnTrace) {
 	trace := &SpawnTrace{steps: map[string]int64{}}
 	return context.WithValue(ctx, spawnTraceKey{}, trace), trace
@@ -47,7 +40,6 @@ func spawnTraceFrom(ctx context.Context) *SpawnTrace {
 	return trace
 }
 
-// carrySpawnTrace copies from's trace onto to (a background context).
 func carrySpawnTrace(from, to context.Context) context.Context {
 	if trace := spawnTraceFrom(from); trace != nil {
 		return context.WithValue(to, spawnTraceKey{}, trace)
@@ -55,8 +47,6 @@ func carrySpawnTrace(from, to context.Context) context.Context {
 	return to
 }
 
-// BeginSpawnStep times one step. The returned func records its duration and,
-// on the first failing step, which step failed. Safe without a trace.
 func BeginSpawnStep(ctx context.Context, step string) func(error) {
 	trace := spawnTraceFrom(ctx)
 	if trace == nil {
@@ -73,8 +63,6 @@ func BeginSpawnStep(ctx context.Context, step string) func(error) {
 	}
 }
 
-// NoteSpawnLaunch records the launch's mode and whether it went on in the
-// background. An empty mode is ignored and async is sticky-true.
 func NoteSpawnLaunch(ctx context.Context, mode domain.SessionMode, async bool) {
 	trace := spawnTraceFrom(ctx)
 	if trace == nil {
@@ -88,12 +76,8 @@ func NoteSpawnLaunch(ctx context.Context, mode domain.SessionMode, async bool) {
 	trace.async = trace.async || async
 }
 
-// customSpawnModel buckets all concrete model IDs, whether typed or discovered.
-// Gateway and custom-provider catalogs can list private org-internal names.
 const customSpawnModel = "custom"
 
-// NoteSpawnModel reports only a fixed Claude family alias (optionally [1m])
-// confirmed by resolution. Every concrete or unknown ID becomes "custom".
 func NoteSpawnModel(ctx context.Context, model string, listed bool) {
 	trace := spawnTraceFrom(ctx)
 	if trace == nil || model == "" {
@@ -108,9 +92,7 @@ func NoteSpawnModel(ctx context.Context, model string, listed bool) {
 	trace.model = model
 }
 
-// SpawnTraceFacts is a snapshot of a trace.
 type SpawnTraceFacts struct {
-	// StepMs holds only the steps that ran, keyed "<step>_ms".
 	StepMs     map[string]int64
 	FailedStep string
 	Model      string
@@ -118,7 +100,6 @@ type SpawnTraceFacts struct {
 	Async      bool
 }
 
-// Facts snapshots the trace. A nil trace reports nothing.
 func (t *SpawnTrace) Facts() SpawnTraceFacts {
 	if t == nil {
 		return SpawnTraceFacts{}
@@ -132,15 +113,8 @@ func (t *SpawnTrace) Facts() SpawnTraceFacts {
 	return SpawnTraceFacts{StepMs: steps, FailedStep: t.failedStep, Model: t.model, Mode: t.mode, Async: t.async}
 }
 
-// SpawnTraceFrom returns the trace ctx carries, or nil.
 func SpawnTraceFrom(ctx context.Context) *SpawnTrace { return spawnTraceFrom(ctx) }
 
-// ClassifySpawnFailure names the step a spawn failed in and why, from closed
-// vocabularies only: failed_step is a SpawnStep* value, "prompt" or "other";
-// cause is timeout, a git cause (branch_exists, path_exists, locked,
-// permission, path_too_long, not_a_repo, killed), an agent cause (exited,
-// no_response, not_logged_in, killed) or other. Error text is read here and
-// never leaves the daemon.
 func ClassifySpawnFailure(err error, facts SpawnTraceFacts) (step, cause string) {
 	step = facts.FailedStep
 	if step == "" {
@@ -195,8 +169,6 @@ func agentStartCause(err error) string {
 	return "other"
 }
 
-// ClassifiedSpawnError carries a spawn failure's step and cause to Sentry as
-// tags while reading exactly like the error it wraps.
 type ClassifiedSpawnError struct {
 	Err         error
 	Step, Cause string
@@ -211,15 +183,12 @@ func (e *ClassifiedSpawnError) Error() string {
 
 func (e *ClassifiedSpawnError) Unwrap() error { return e.Err }
 
-// SentryTags implements the sentryobs tagged-error hook.
 func (e *ClassifiedSpawnError) SentryTags() map[string]string {
 	return map[string]string{"failed_step": e.Step, "cause": e.Cause}
 }
 
-// ClassifySpawnError wraps err with its step and cause from ctx's trace.
 func ClassifySpawnError(ctx context.Context, err error) error { return classifySpawnError(ctx, err) }
 
-// classifySpawnError wraps err with its step and cause from ctx's trace.
 func classifySpawnError(ctx context.Context, err error) error {
 	var already *ClassifiedSpawnError
 	if err == nil || errors.As(err, &already) {

@@ -10,7 +10,6 @@ export function isWebLink(url: string): boolean {
 	}
 }
 
-/** Schemes the renderer hands to the OS: web pages and mail, never file:, javascript: or app routes. */
 export function isSystemBrowserLink(url: string): boolean {
 	try {
 		const { protocol } = new URL(url);
@@ -30,8 +29,6 @@ function decodedPath(url: string): string {
 			return "";
 		}
 	}
-	// A malformed percent escape stays as written; the preview endpoint will
-	// reject anything it cannot resolve inside the session workspace.
 	return decodePath(path).replace(/\\/g, "/");
 }
 
@@ -43,7 +40,6 @@ function comparableWorkspacePath(path: string): string {
 	return path.replace(/^(?:(?:\.\/)+|\/+)/, "");
 }
 
-/** Resolve a displayed path to the workspace-relative path returned by Files. */
 export function workspaceFilePath(url: string, workspacePaths: string[]): string | undefined {
 	const path = decodedPath(url);
 	if (!path || hasParentTraversal(path)) return undefined;
@@ -62,11 +58,6 @@ export function isWorkspaceFileLink(url: string, workspacePaths: string[]): bool
 	return workspaceFilePath(url, workspacePaths) !== undefined;
 }
 
-/**
- * Whether a chat href looks like a local file path worth asking the daemon to
- * resolve. This does not grant filesystem access: the session preview endpoint
- * still confines the result to the workspace before serving it.
- */
 export function isPotentialWorkspaceFileLink(url: string): boolean {
 	const trimmed = url.trim();
 	if (!trimmed || trimmed.startsWith("#") || isWebLink(trimmed)) return false;

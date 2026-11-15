@@ -381,8 +381,6 @@ func TestKillCancelsBackgroundTitle(t *testing.T) {
 
 func runInline(work func()) { work() }
 
-// ao spawn, including orchestrator-owned workers, uses generic Spawn rather than
-// the desktop's DelegateTask route. Both must enable the same naming pipeline.
 func TestSpawnNamesImplicitWorkerBranchesFromEveryEntryPoint(t *testing.T) {
 	for _, tt := range []struct {
 		name                    string

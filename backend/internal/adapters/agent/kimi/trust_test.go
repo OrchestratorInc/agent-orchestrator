@@ -86,7 +86,6 @@ func TestPreLaunchSkipsBlankInputs(t *testing.T) {
 }
 
 func TestKimiWorkdirKeyMatchesKimiCodeLayout(t *testing.T) {
-	// Vectors captured from Kimi Code 0.34.0 trust records on this machine.
 	cases := []struct {
 		workspace string
 		want      string
@@ -108,8 +107,6 @@ func TestKimiWorkdirKeyMatchesKimiCodeLayout(t *testing.T) {
 }
 
 func TestEnsureWorkspaceTrustedSeedsRealKimiHome(t *testing.T) {
-	// Not parallel: isolates HOME/KIMI_CODE_HOME so the seed lands in a
-	// throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("KIMI_CODE_HOME", "")
@@ -137,7 +134,6 @@ func TestEnsureWorkspaceTrustedSeedsRealKimiHome(t *testing.T) {
 }
 
 func TestEnsureWorkspaceTrustedHonorsKimiCodeHomeEnv(t *testing.T) {
-	// Not parallel: isolates KIMI_CODE_HOME.
 	home := t.TempDir()
 	t.Setenv("KIMI_CODE_HOME", home)
 

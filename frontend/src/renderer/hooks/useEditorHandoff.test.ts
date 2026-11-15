@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { editorHandoffErrorMessage } from "./useEditorHandoff";
 
-// Electron wraps ipcMain rejections; the topbar used to render the wrapper
-// verbatim, so a missing worktree read as "Error invoking remote method
-// 'editorHandoff:open': Error: Session workspace is not available".
 describe("editorHandoffErrorMessage", () => {
 	it("strips the Electron remote-method wrapper", () => {
 		const raw = new Error(

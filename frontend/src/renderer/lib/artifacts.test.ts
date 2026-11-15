@@ -205,8 +205,6 @@ describe("filterArtifactGroups", () => {
 		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["shared"] }))).toEqual(["notes.md"]);
 		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public"] }))).toEqual(["chart.png"]);
 		expect(names(filterArtifactGroups(withAccess, { query: "", sharings: ["public", "shared"] }))).toEqual(["notes.md", "chart.png"]);
-		// Before the list is read, who a published file's link opens for is not
-		// known: it counts under neither Public nor Shared privately.
 		expect(withShareAccess(shared, new Map())).toEqual(shared);
 		expect(filterArtifactGroups(shared, { query: "", sharings: ["public", "shared"] })).toEqual([]);
 		expect(artifactSharing({ shareUrl: "https://share.test/x" })).toBeUndefined();
@@ -219,7 +217,6 @@ describe("filterArtifactGroups", () => {
 	});
 
 	it("keeps cloud artifacts, whose publishing is unknown, out of both Public and Not shared", () => {
-		// The cloud file list carries no public link, so chart.png may well be published.
 		expect(names(filterArtifactGroups(groups, { query: "", sharings: ["private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md"]);
 		expect(names(filterArtifactGroups(groups, { query: "", sharings: ["public", "private"] }))).toEqual(["metrics.html", "artifacts-user-flow.html", "notes.md"]);
 		expect(names(filterArtifactGroups(groups, { query: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);

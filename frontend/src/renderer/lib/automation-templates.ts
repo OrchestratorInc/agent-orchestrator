@@ -3,7 +3,6 @@ import type { CreateAutomationInput } from "../hooks/useAutomations";
 export type AutomationUseCase = NonNullable<CreateAutomationInput["useCase"]>;
 export type AutomationTemplateID = NonNullable<CreateAutomationInput["templateId"]>;
 
-// Bundled prompts are editable starting points. Selecting one never creates an automation.
 export const AUTOMATION_TEMPLATES = [
 	{
 		id: "daily_pr_review_v1",

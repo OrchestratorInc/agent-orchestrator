@@ -397,10 +397,6 @@ func TestPollLeavesOtherHarnessesUntouched(t *testing.T) {
 	}
 }
 
-// claudeStuckActiveScreen is the rendered Claude Code surface after a turn
-// aborted without its Stop hook (expired login): idle composer holding an
-// unsent draft, provider footer below, no active chrome. This is the screen a
-// session stranded in durable "active" actually shows.
 const claudeStuckActiveScreen = "⏺ Login expired · Please run /login\n" +
 	"\n" +
 	"✻ Worked for 0s\n" +

@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// completedReplay is what ACP session/load reproduces for a settled provider
-// thread: one completed turn, its user prompt, and its answer.
 func completedReplay() []ports.ChatEvent {
 	return []ports.ChatEvent{
 		{
@@ -28,9 +26,6 @@ func completedReplay() []ports.ChatEvent {
 	}
 }
 
-// poisonedRows mirrors a session whose newest hook fact came from a turn the
-// provider never settled: the prompt is durable in AO, but session/load replays
-// only the completed turn before it.
 func poisonedRows(state domain.TurnState) ([]domain.ConversationTurn, []domain.ConversationMessage) {
 	base := time.Date(2026, 9, 7, 14, 33, 20, 0, time.UTC)
 	turns := []domain.ConversationTurn{
@@ -61,11 +56,9 @@ const testCheckpointSession = domain.SessionID("checkpoint-session")
 
 func TestCheckpointKeepsReorderedQueueExecutionOrder(t *testing.T) {
 	turns, messages := poisonedRows(domain.TurnStateCompleted)
-	// A was enqueued before B, then reordered to run after B. Reordering updates
-	// RequestedAt but leaves the already-allocated user-message sequence intact.
 	turns[0].RequestedAt = turns[1].RequestedAt.Add(time.Second)
 	turns[1].ProviderTurnID = "native-turn-2"
-	messages[1].Sequence = 4 // A's final answer arrives after B's answer.
+	messages[1].Sequence = 4
 	messages[2].Sequence = 2
 	messages = append(messages, domain.ConversationMessage{TurnID: turns[1].ID,
 		Sequence: 3, Role: domain.MessageRoleAssistant, Text: "B answer"})
@@ -80,7 +73,7 @@ func TestCheckpointTiedQueueUsesSettledEvidence(t *testing.T) {
 	turns, messages := poisonedRows(domain.TurnStateCompleted)
 	turns[1].RequestedAt = turns[0].RequestedAt
 	turns[1].ProviderTurnID = "native-turn-2"
-	messages[1].Sequence = 4 // A finishes after B, despite being enqueued first.
+	messages[1].Sequence = 4
 	messages[2].Sequence = 2
 	messages = append(messages, domain.ConversationMessage{TurnID: turns[1].ID,
 		Sequence: 3, Role: domain.MessageRoleAssistant, Text: "B answer"})
@@ -189,8 +182,6 @@ func TestCheckpointTiedTurnsRequireEachAnswer(t *testing.T) {
 	if got := checkpoint.mismatches(events, turns, messages, activities); len(got) != 0 {
 		t.Fatalf("complete tied replay rejected: %v", got)
 	}
-	// Keep A's completed marker, but drop its actual answer. Empty item IDs
-	// must not accidentally compare equal and admit the truncated history.
 	events = append(events[:1], events[2:]...)
 	if got := checkpoint.mismatches(events, turns, messages, activities); len(got) == 0 {
 		t.Fatal("AO-only activity displaced the missing native answer")
@@ -245,7 +236,7 @@ func BenchmarkCheckpointSettleWindow(b *testing.B) {
 
 func TestCheckpointCompletedCoordinationStillAnchorsNewProvider(t *testing.T) {
 	turns, messages := poisonedRows(domain.TurnStateCompleted)
-	turns[0].RequestedAt = turns[1].RequestedAt // Wall-clock timestamps need not be unique.
+	turns[0].RequestedAt = turns[1].RequestedAt
 	turns[1].ProviderTurnID = "coordination"
 	messages[2].Text = "AO transferred the previous agent's context in hidden system instructions. Continue the task."
 	checkpoint := nativeHistoryCheckpoint{}
@@ -270,7 +261,6 @@ func TestCheckpointRepeatedPairDoesNotAdmitOlderPrefix(t *testing.T) {
 		latestUserPrompt: "continue", latestAssistantUpdate: "Done", completedUserPrompt: true,
 		userMismatch: ports.ChatHistoryMismatchTrustedUserText, assistantMismatch: ports.ChatHistoryMismatchTrustedAssistantText,
 	}
-	// The real latest turn C repeats A. The supplied prefix ends at B, before C.
 	events := []ports.ChatEvent{
 		{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "A", Text: "continue"},
 		{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "A", Text: "Done"},
@@ -284,10 +274,6 @@ func TestCheckpointRepeatedPairDoesNotAdmitOlderPrefix(t *testing.T) {
 	}
 }
 
-// A prompt AO recorded on a cancelled or interrupted turn is not something the
-// provider promises to replay, so gating the native-history import on it can
-// never be satisfied: the settle loop burns its full budget and the interface
-// transition rolls back to Terminal for good. See #4424.
 func TestCheckpointIgnoresPromptFromUnsettledTurn(t *testing.T) {
 	for _, state := range []domain.TurnState{
 		domain.TurnStateCancelled,
@@ -309,8 +295,6 @@ func TestCheckpointIgnoresPromptFromUnsettledTurn(t *testing.T) {
 	}
 }
 
-// The guard must stay narrow: a prompt from a completed turn is still a hard
-// gate, so a replay that has not caught up with settled work is rejected.
 func TestCheckpointStillGatesOnCompletedPrompt(t *testing.T) {
 	base := time.Date(2026, 9, 7, 14, 33, 20, 0, time.UTC)
 	turns := []domain.ConversationTurn{{

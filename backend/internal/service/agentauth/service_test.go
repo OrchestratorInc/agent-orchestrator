@@ -193,7 +193,6 @@ func TestGeminiReadyStateMatchesRenderedEditor(t *testing.T) {
 func TestGeminiReadyStateSkipsOpenAuthDialog(t *testing.T) {
 	t.Parallel()
 
-	// The picker wins even when scrollback still contains the editor marker.
 	output := "Type your message or @path/to/file\nGet started\nHow would you like to authenticate for this project?"
 	got := shellterm.MatchInitialInputReadyState(output, planByAgentID["gemini"].initialInputReadyStates)
 	if got == nil || !got.SkipInput {
@@ -224,8 +223,6 @@ func TestStartOMPOpensNativeProviderSetupWithoutInjectingInput(t *testing.T) {
 	}
 }
 
-// Screens captured from Pi 0.85.1 in an AO auth terminal (120 columns), so the
-// reviewed markers are checked against what Pi actually renders.
 const (
 	piDefaultStartupScreen = ` pi v0.85.1
  escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
@@ -349,8 +346,6 @@ func TestStartPinsClaudeDataDirectoryAcrossAuthWorkspaceChange(t *testing.T) {
 	if got := opener.input.Env["AO_DATA_DIR"]; got != cfg.DataDir || !filepath.IsAbs(got) {
 		t.Fatalf("launcher data directory = %q, want absolute %q", got, cfg.DataDir)
 	}
-	// Reproduce the launcher's cwd and inherited environment without starting
-	// a process. The login command uses config.Load to find its token file.
 	authWorkspace := filepath.Join(cfg.DataDir, "auth-workspace", "shellterm-test")
 	if err := os.MkdirAll(authWorkspace, 0o700); err != nil {
 		t.Fatal(err)
@@ -383,8 +378,6 @@ func TestStartPrefersAdapterResolvedBinaryOverGenericPATHMatch(t *testing.T) {
 }
 
 func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
-	// Not parallel: isolates HOME/KIMI_CODE_HOME so the kimi adapter's trust
-	// seed lands in a throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -427,8 +420,6 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 }
 
 func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
-	// Not parallel: isolates HOME/COPILOT_HOME so the copilot adapter's trust
-	// seed lands in a throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)

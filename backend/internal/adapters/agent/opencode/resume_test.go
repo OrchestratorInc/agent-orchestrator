@@ -21,7 +21,6 @@ func TestNativeResumeRequiresExportOfExactConversation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			versionBinary(t, "if [ \"$1\" = --version ]; then echo 1.2.27; exit 0; fi\n[ \"$AO_RESUME_STORAGE_TEST\" = preserved ] || exit 98\n[ \"$1\" = export ] && [ \"$2\" = ses_original ] || exit 99\nprintf '%s' '"+tc.output+"'\nexit "+fmt.Sprint(tc.status)+"\n")
-			// Use the same directory/config environment as the resumed terminal.
 			exists, err := New().NativeConversationExists(context.Background(), ports.SessionRef{WorkspacePath: t.TempDir()}, "ses_original", map[string]string{"AO_RESUME_STORAGE_TEST": "preserved"})
 			if tc.want {
 				if err != nil || !exists {

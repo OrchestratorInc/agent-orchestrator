@@ -1,12 +1,3 @@
-/**
- * The per-turn undo control and the honesty of its confirmation.
- *
- * ChatWorkspace takes props only, so these render it directly with a fixture and a
- * spy. What is asserted is deliberately about behaviour a user would notice: the
- * control appears only when an undo can actually work, the confirmation says what is
- * lost, and the turn id that reaches the daemon is the one that was clicked.
- */
-
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -18,7 +9,6 @@ import { renderChat as render } from "../../test/render-chat";
 
 type RollbackPreview = components["schemas"]["RollbackPreviewResponse"];
 
-/** A conversation with nothing in flight, which is when an undo is offered. */
 function idleSnapshot(): ConversationSnapshot {
 	return {
 		...chatFixture,
@@ -43,9 +33,6 @@ describe("ChatWorkspace rollback", () => {
 		const dialog = screen.getByRole("dialog");
 		await userEvent.click(within(dialog).getByRole("button", { name: "Roll back" }));
 
-		// The first settled turn in the fixture is turn-1; the daemon must be given
-		// AO's own turn id, which is what the snapshot exposes. Without a preview the
-		// dialog promised only the conversation, so files are not restored.
 		expect(onRollback).toHaveBeenCalledWith("turn-1", undefined);
 	});
 
@@ -84,7 +71,6 @@ describe("ChatWorkspace rollback", () => {
 		expect(dialog.textContent).not.toContain("left exactly as they are");
 
 		await userEvent.click(within(dialog).getByRole("button", { name: "Roll back" }));
-		// The daemon restores files only against the list the user saw.
 		expect(onRollback).toHaveBeenCalledWith("turn-1", "plan-1");
 	});
 
@@ -136,8 +122,6 @@ describe("ChatWorkspace rollback", () => {
 		expect(onRollback).toHaveBeenCalledWith("turn-1", undefined);
 	});
 
-	// An older daemon has no preview route; the dialog must then promise only what
-	// that daemon does.
 	it("falls back to a conversation-only rollback when the preview fails", async () => {
 		const onRollback = vi.fn();
 		const onPreviewRollback = vi.fn(() => Promise.reject(new Error("Method Not Allowed")));
@@ -157,8 +141,6 @@ describe("ChatWorkspace rollback", () => {
 
 		const dialog = screen.getByRole("dialog");
 		expect(dialog.textContent).toContain("forget this exchange and everything after it");
-		// The provider does not revert files, so a confirmation that implied otherwise
-		// would be the one thing a user could not recover from believing.
 		expect(dialog.textContent).toContain("left exactly as they are");
 		expect(dialog.textContent).toContain("cannot be undone");
 	});
@@ -174,22 +156,16 @@ describe("ChatWorkspace rollback", () => {
 		expect(onRollback).not.toHaveBeenCalled();
 	});
 
-	// Keep the action slot stable while a turn is in flight; it becomes available
-	// when the response settles without shifting the message footer.
 	it("keeps the rollback control mounted but disabled while a turn is in flight", () => {
 		render(<ChatWorkspace snapshot={chatFixture} onRollback={vi.fn()} />);
 		expect(screen.getAllByRole("button", { name: "Roll back to here" })[0]).toBeDisabled();
 	});
 
-	// Feature detection reaches the UI as an absent callback, following how the model
-	// picker already hides itself for a provider that offers no choice.
 	it("draws no control when the agent cannot undo", () => {
 		render(<ChatWorkspace snapshot={idleSnapshot()} />);
 		expect(screen.queryByRole("button", { name: "Roll back to here" })).toBeNull();
 	});
 
-	// A turn the provider never accepted holds no history to discard, and the daemon
-	// refuses it.
 	it("draws no control on a turn the provider never accepted", () => {
 		const snapshot = idleSnapshot();
 		render(

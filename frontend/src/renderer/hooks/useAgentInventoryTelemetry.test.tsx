@@ -39,13 +39,11 @@ describe("useSetupCheckedTelemetry", () => {
 		expect(capture).toHaveBeenLastCalledWith("ao.setup.checked", expect.objectContaining({ git: true, gh: false, agents_installed: 1, agents_signed_in_ids: "codex" }));
 		first.unmount();
 
-		// Next launch, same machine state: nothing.
 		const relaunch = renderHook(() => useSetupCheckedTelemetry(), { wrapper: wrapper(new QueryClient()) });
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(capture).toHaveBeenCalledTimes(1);
 		relaunch.unmount();
 
-		// gh installed and the GitHub probe has answered: one more.
 		state.requirements = [{ id: "git", satisfied: true }, { id: "tmux", satisfied: true }, { id: "gh", satisfied: true }];
 		const changedClient = new QueryClient();
 		changedClient.setQueryData(["github-auth-requirement"], { id: "github-auth", satisfied: true });
@@ -60,7 +58,6 @@ describe("useSetupCheckedTelemetry", () => {
 		const first = renderHook(() => useSetupCheckedTelemetry(), { wrapper: wrapper(answered) });
 		await waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
 		first.unmount();
-		// Relaunch: same machine, GitHub probe not answered yet, then answered.
 		const relaunch = new QueryClient();
 		const second = renderHook(() => useSetupCheckedTelemetry(), { wrapper: wrapper(relaunch) });
 		await new Promise((resolve) => setTimeout(resolve, 0));

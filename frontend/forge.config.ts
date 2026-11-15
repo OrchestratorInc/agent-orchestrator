@@ -17,18 +17,8 @@ import path from "node:path";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
 import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
 
-// Default GitHub release target (production). Releases land on Untrivial-ai
-// (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
-// are prior homes). Builds cut by CI must NOT rely on this fallback: the
-// workflows set AO_RELEASE_REPO to the repo they run in, and build-artifacts.yml
-// asserts the baked app-update.yml matches it, so a future org/repo rename
-// fails the build instead of stranding the fleet on a redirect (#3523).
 const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 
-// The packaged binary name (no extension). Single source of truth: the packager
-// names the exe/ELF from this, and the NSIS + deb makers must point their
-// shortcut/launcher at the SAME name. Drift here means a broken Start menu
-// shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
 export const WINDOWS_DISPLAY_NAME = "Orchestrator.inc";
 const AUTH_PROTOCOL = {
@@ -44,7 +34,6 @@ const PACKAGED_EXTERNAL_DEPENDENCIES = [
 
 function ignoreFromVitePackage(file: string): boolean {
 	if (!file) return false;
-	// Release source maps are uploaded to Sentry, never shipped (vite.sentry.ts).
 	if (file.startsWith("/.vite")) return file.endsWith(".map");
 	if (file === "/node_modules") return false;
 	return !PACKAGED_EXTERNAL_DEPENDENCIES.some(
@@ -53,9 +42,6 @@ function ignoreFromVitePackage(file: string): boolean {
 }
 
 async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string): Promise<void> {
-	// Rebuild in the source tree, where prebuild-install and its helper packages
-	// are available. The Vite package intentionally carries only the resulting
-	// native runtime, not the install-time download toolchain.
 	await rebuild({
 		buildPath: process.cwd(),
 		electronVersion: electronPackage.version,
@@ -66,16 +52,8 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 	});
 }
 
-// Packager app name. It sets the bundle filename ("<name>.app"), which the
-// installed path, updater, and `ao start` keep using, so it is not the label
-// people see in Finder.
 const PACKAGER_NAME = "Agent Orchestrator";
 
-// Finder uses the localized label only when the base display name matches the
-// bundle filename, but the packager defaults it to the executable name. Set it,
-// then copy the localized label into every regional lproj Finder might pick.
-// Must run before signing so the plist and localized strings are sealed.
-// Throws on failure so the Forge hook can pass it to its callback.
 export function labelMacBundle(
 	buildPath: string,
 	setDisplayName: (plistPath: string, name: string) => void = setPlistDisplayName,
@@ -100,13 +78,10 @@ function setPlistDisplayName(plistPath: string, name: string): void {
 export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 	return [
 		"daemon",
-		// AO Browser Bridge (Chrome extension); the daemon finds it beside daemon/.
 		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
 		...(platform === "darwin" ? ["update-helper", "wake-helper", "dictation-helper", "cloudflared", "assets/mac/en.lproj"] : []),
-		// macOS 26+ Liquid Glass app icon (CFBundleIconName below), precompiled
-		// from assets/brand/AO.icon by scripts/generate-brand-assets.swift.
 		...(platform === "darwin" ? ["assets/Assets.car"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
@@ -121,26 +96,11 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 }
 
 const ACP_RUNTIME_NODE_PATH = "/Contents/Resources/acp-runtime/node/bin/node";
-// V8 uses MAP_JIT on arm64 and mprotect on x64. electron-osx-sign's default
-// allows only the former, so its re-signing makes the bundled Node crash on
-// Intel (#3879). Which entitlements a file needs is a property of its bytes,
-// not of the signing machine: @electron/osx-sign hands optionsForFile only the
-// path, and one signing host may sign both the arm64 and the x64 artifact —
-// the canonical release signer does exactly that. So the selector below keys
-// off the Mach-O header of the file being signed (thin x64, or a universal
-// carrying an x64 slice), never off process.arch. The public CI build stays
-// unsigned, so this hook runs for locally signed builds and stands as the
-// reference implementation the canonical signer mirrors; see
-// frontend/docs/desktop-release.md.
 const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 	"com.apple.security.cs.allow-jit",
 	"com.apple.security.cs.allow-unsigned-executable-memory",
 ];
 
-// The dictation helper records the microphone itself, and the hardened runtime
-// blocks audio input without this entitlement. Its disclaim only helps dev and
-// terminal launches: signed and nested here, macOS checks the app's usage
-// strings instead (see extendInfo). osx-sign signs its executable, then its bundle.
 const DICTATION_HELPER_PATHS = [
 	"/Contents/Resources/dictation-helper/Orchestrator.app",
 	"/Contents/Resources/dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator",
@@ -149,19 +109,10 @@ const DICTATION_HELPER_ENTITLEMENTS = ["com.apple.security.device.audio-input"];
 
 export function macSignOptionsForFile(filePath: string): { entitlements?: string[] } {
 	if (DICTATION_HELPER_PATHS.some((helper) => filePath.endsWith(helper))) return { entitlements: DICTATION_HELPER_ENTITLEMENTS };
-	// Cheap gate first: optionsForFile is invoked for every Mach-O in the
-	// bundle, and only the nested Node path can need an override.
 	if (!filePath.endsWith(ACP_RUNTIME_NODE_PATH)) return {};
-	// Fail closed: an unreadable or unparseable binary throws out of
-	// optionsForFile and aborts the signing pass. Never fall back to
-	// process.arch or to "no entitlements" — silently signing the Intel Node
-	// without allow-unsigned-executable-memory is exactly the #3879 crash.
 	return machoHasX86_64Slice(filePath) ? { entitlements: ACP_RUNTIME_NODE_ENTITLEMENTS } : {};
 }
 
-// parseReleaseRepo turns an "owner/repo" string (from AO_RELEASE_REPO) into the
-// publisher-github { owner, name } shape, falling back to the production default
-// when unset or malformed.
 function parseReleaseRepo(value: string | undefined): { owner: string; name: string } {
 	const [owner, name] = (value || DEFAULT_RELEASE_REPO).split("/");
 	if (!owner || !name) {
@@ -174,42 +125,24 @@ function parseReleaseRepo(value: string | undefined): { owner: string; name: str
 const config: ForgeConfig = {
 	packagerConfig: {
 		asar: true,
-		// The Vite plugin normally packages only .vite. better-sqlite3 must stay
-		// external so Electron can load its native binary, so include its minimal
-		// runtime dependency tree explicitly; AutoUnpackNativesPlugin then places
-		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
 		appBundleId: "dev.agent-orchestrator.desktop",
 		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
-		// Match the Windows installer without changing the executable name.
 		win32metadata: {
 			FileDescription: WINDOWS_DISPLAY_NAME,
 			InternalName: WINDOWS_DISPLAY_NAME,
 			ProductName: WINDOWS_DISPLAY_NAME,
 		},
 		extendInfo: {
-			// macOS 26+ draws the Icon Composer icon from Resources/Assets.car;
-			// older macOS keeps using CFBundleIconFile (assets/icon.icns).
 			CFBundleIconName: "AppIcon",
 			LSHasLocalizedDisplayName: true,
 			CFBundleDevelopmentRegion: "en",
-			// In a signed build, macOS checks the dictation helper's speech and
-			// microphone requests against this app's Info.plist, despite the
-			// helper's own usage strings and its disclaim. Without the speech key
-			// it kills the helper. The microphone string also covers terminals and
-			// agents, which macOS attributes to this app.
 			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
 			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
 		},
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
-		// App icon. electron-packager appends the per-platform extension
-		// (.icns on macOS, .ico on Windows); Linux menu icons come from the
-		// deb/rpm makers below, and the runtime window icon from src/main.ts.
-		// Keep the .icon bundle out of assets/: packager compiles an
-		// assets/icon.icon itself, which fails on macOS 15 build hosts. The
-		// precompiled Assets.car ships as an extra resource instead.
 		icon: "assets/icon",
 		extraResource: extraResourcesForPlatform(process.platform),
 		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
@@ -221,13 +154,6 @@ const config: ForgeConfig = {
 				callback(error as Error);
 			}
 		}],
-		// Notarization. Two paths:
-		//  - CI: an App Store Connect API key. APPLE_API_KEY is a PATH to the .p8
-		//    (the workflow decodes APPLE_API_KEY_BASE64 to a temp file), plus the
-		//    key id + issuer uuid. Matches the proven local runbook creds.
-		//  - Local: AO_NOTARY_PROFILE, a notarytool keychain profile created with
-		//    `notarytool store-credentials`. See ao-macos-signed-release runbook.
-		// Both are valid NotaryToolCredentials, so no cast is needed.
 		osxSign: process.env.APPLE_SIGNING_IDENTITY
 			? {
 					identity: process.env.APPLE_SIGNING_IDENTITY,
@@ -247,14 +173,6 @@ const config: ForgeConfig = {
 				: undefined,
 	},
 	hooks: {
-		// electron-forge does not generate app-update.yml (electron-builder does);
-		// electron-updater reads it from the app's Resources dir at runtime to know
-		// which GitHub repo to pull from, else it throws ENOENT during download.
-		// Generate it in prePackage (BEFORE osxSign) and ship it via extraResource
-		// above, so it is copied into the bundle and SIGNED as part of the seal.
-		// Writing it after signing (a postPackage hook) adds an unsealed resource
-		// and macOS reports the app as "damaged". owner/repo are baked from
-		// AO_RELEASE_REPO at build time.
 		prePackage: async (_forgeConfig, platform, arch) => {
 			await prepareNativeDependencies(platform as NodeJS.Platform, arch);
 			if (platform === "darwin") {
@@ -291,9 +209,6 @@ const config: ForgeConfig = {
 				throw new Error("Packaged app is missing the better-sqlite3 native runtime");
 			}
 		},
-		// Assert the native resource survived Electron Packager's copy/asar/sign
-		// pipeline. A source build succeeding is not enough: a missing extraResource
-		// would otherwise publish an app that silently fell back to machine tmux.
 		postPackage: async (_forgeConfig, packageResult) => {
 			if (packageResult.platform !== "darwin" && packageResult.platform !== "linux") return;
 			for (const outputPath of packageResult.outputPaths) {
@@ -307,7 +222,6 @@ const config: ForgeConfig = {
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
 					if (!existsSync(path.join(resourcesPath, "Assets.car"))) throw new Error(`packaged macOS app icon catalog missing from ${resourcesPath}`);
 					if (!existsSync(path.join(resourcesPath, "dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator"))) throw new Error(`packaged macOS dictation helper missing from ${resourcesPath}`);
-					// Run it: remote access depends on this signed copy starting, not just existing.
 					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
 					if (!existsSync(cloudflared)) throw new Error(`packaged cloudflared missing from ${cloudflared}`);
 					const cloudflaredVersion = spawnSync(cloudflared, ["--version"], { encoding: "utf8", timeout: 10_000 });
@@ -335,38 +249,6 @@ const config: ForgeConfig = {
 				}
 			}
 		},
-		// The dmg container is NOT signed, notarized or stapled by any maker
-		// (neither Forge's maker-dmg nor app-builder-lib's dmg target does it), and
-		// the .app's own stapled ticket does not propagate through an unsealed
-		// container. So seal it here, after the maker has produced it, reusing the
-		// same credentials packagerConfig already consumes (#3267 decision 3).
-		// The .app inside was already signed + notarized + stapled by
-		// packagerConfig above, before any maker ran; nothing here touches it.
-		//
-		// Then PROVE the seal. sealDmg exiting 0 only says three commands ran on
-		// this machine; it does not say Gatekeeper accepts the published bytes with
-		// a stapled ticket, or that a bundled nested executable (the Intel ACP
-		// Node, #3879) actually runs. verify-mac-artifact.sh is the canonical gate
-		// for both (#3288 workstreams 1 and 2; #3879 for the nested-Node check),
-		// and #3267 decision 3 step 4 asks for exactly this check on the dmg. Run
-		// only when sealDmg actually sealed: an unsigned local or desktop-testing
-		// build has nothing to verify and must keep producing its dmg.
-		//
-		// The zip needs the SAME nested-Node check but no separate sealing step:
-		// its inner .app was already signed/notarized/stapled by packagerConfig
-		// above, so verifying it only needs the same "was this build actually
-		// signed" gate sealDmg uses (isSigningConfigured), not a seal call of its
-		// own. Without this, the dmg-only check left the maker-zip artifact — the
-		// one electron-updater actually installs auto-updates from, per
-		// makers/maker-dmg.ts's ERR_UPDATER_ZIP_FILE_NOT_FOUND note, and per-arch
-		// the artifact CI ships for x64 — completely unverified: a regression of
-		// exactly the crash #3879 fixed could ship without any automated gate
-		// catching it.
-		//
-		// Before any of that, fail the build if the dmg lost its install window
-		// layout (.DS_Store, background, icon positions). Without them Finder
-		// shows a large plain window with two small icons in a corner, and
-		// nothing else would notice. Runs on unsigned builds too.
 		postMake: async (_forgeConfig, makeResults) => {
 			for (const result of makeResults) {
 				if (result.platform !== "darwin") continue;
@@ -384,33 +266,17 @@ const config: ForgeConfig = {
 	},
 	rebuildConfig: {},
 	makers: [
-		// Windows installer: NSIS via electron-builder (see makers/maker-nsis.ts).
-		// Replaces Squirrel.Windows, which only does per-user installs with no
-		// custom install dir or proper uninstaller (issue #401).
 		new MakerNSIS(
 			{
 				appId: "dev.agent-orchestrator.desktop",
-				// The name shown in the installer, the updater, the shortcuts, and
-				// Windows Apps. It matches the app's display name in main.ts.
 				productName: WINDOWS_DISPLAY_NAME,
-				// Match the packaged binary name so the Start menu shortcut targets
-				// the real "agent-orchestrator.exe" (not "Agent Orchestrator.exe").
 				executableName: EXECUTABLE_NAME,
 				icon: "assets/icon.ico",
-				// Keep the installer filename unchanged. electron-builder names it
-				// after productName by default.
 				nsis: { artifactName: "Agent Orchestrator Setup ${version}.${ext}" },
 			},
 			["win32"],
 		),
-		// macOS auto-update artifact. This entry can NEVER be removed:
-		// MacUpdater.doDownloadUpdate looks for a "zip" and explicitly excludes
-		// .pkg/.dmg, throwing ERR_UPDATER_ZIP_FILE_NOT_FOUND otherwise, so the zip
-		// and latest-mac.yml must keep publishing forever (#3267 decision 2).
 		{ name: "@electron-forge/maker-zip", platforms: ["darwin"], config: {} },
-		// macOS FIRST-INSTALL artifact, additive to the zip above: a dmg has no
-		// user-driven extraction step, so a third-party unzip tool can no longer
-		// break the signature seal on the way in (see makers/maker-dmg.ts, #3267).
 		new MakerDMG(
 			{
 				appId: "dev.agent-orchestrator.desktop",
@@ -418,10 +284,6 @@ const config: ForgeConfig = {
 			},
 			["darwin"],
 		),
-		// Linux fetch-and-run artifact for `ao start`: a single self-contained
-		// AppImage the Go bootstrapper downloads and runs directly (see
-		// makers/maker-appimage.ts). The deb/rpm makers below stay for users who
-		// prefer a system package.
 		new MakerAppImage(
 			{
 				appId: "dev.agent-orchestrator.desktop",
@@ -436,9 +298,6 @@ const config: ForgeConfig = {
 			name: "@electron-forge/maker-deb",
 			config: {
 				options: {
-					// Must match packagerConfig.executableName, or the deb maker
-					// looks for the package name and fails with "could not find
-					// the Electron app binary". (Both are "agent-orchestrator".)
 					bin: EXECUTABLE_NAME,
 					icon: "assets/icon.png",
 					maintainer: appPackage.author,
@@ -452,7 +311,6 @@ const config: ForgeConfig = {
 			config: {
 				options: {
 					icon: "assets/icon.png",
-					// rpmbuild rejects a spec with an empty License field.
 					license: "MIT",
 					homepage: "https://github.com/aoagents/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
@@ -463,22 +321,10 @@ const config: ForgeConfig = {
 	publishers: [
 		{
 			name: "@electron-forge/publisher-github",
-			// Release target is build-time overridable so a fork run publishes to the
-			// fork without a source edit. AO_RELEASE_REPO is "owner/repo"; it defaults
-			// to the production target. The dev/test loop sets
-			// AO_RELEASE_REPO=harshitsinghbhandari/agent-orchestrator (spec §1.1, §8).
-			// Note: aoagents/agent-orchestrator and AgentWrapper/agent-orchestrator
-			// are prior homes and intentionally NOT the default; releases land on
-			// Untrivial-ai.
 			config: {
 				repository: parseReleaseRepo(process.env.AO_RELEASE_REPO),
 				prerelease: process.env.AO_RELEASE_PRERELEASE === "true",
 				draft: false,
-				// Ask GitHub to compose the body from the PRs merged since the last
-				// release. Without it the publisher creates the release with an empty
-				// body, and the app's new "what's new" section has nothing to show:
-				// electron-updater reads release notes from the release body, so an
-				// empty body means users get told nothing about what changed.
 				generateReleaseNotes: true,
 			},
 		},
@@ -494,22 +340,11 @@ const config: ForgeConfig = {
 			],
 			renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],
 		}),
-		// Harden the packaged Electron binary. Flipped at package time, so dev
-		// (electron-forge start) and Playwright e2e, which launch the unfused
-		// node_modules/electron binary, are unaffected.
 		new FusesPlugin({
 			version: FuseVersion.V1,
-			// The app never re-execs itself as Node (no ELECTRON_RUN_AS_NODE /
-			// fork / utilityProcess); acp-runtime ships its own Node binary.
 			[FuseV1Options.RunAsNode]: false,
-			// Left on: with this fuse off Electron unsets NODE_OPTIONS from its own
-			// environment at startup, so the daemon, agents and terminals it spawns
-			// would silently lose a user's NODE_OPTIONS (Windows system env,
-			// launchctl setenv). Disabling it needs its own change.
 			[FuseV1Options.EnableNodeOptionsEnvironmentVariable]: true,
 			[FuseV1Options.EnableNodeCliInspectArguments]: false,
-			// Enforced on macOS and Windows; Electron does not validate ASAR
-			// integrity on Linux.
 			[FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
 			[FuseV1Options.OnlyLoadAppFromAsar]: true,
 			[FuseV1Options.GrantFileProtocolExtraPrivileges]: false,

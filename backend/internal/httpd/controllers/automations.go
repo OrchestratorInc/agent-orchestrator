@@ -15,7 +15,6 @@ import (
 	automationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/automation"
 )
 
-// AutomationService defines the automation operations exposed over HTTP.
 type AutomationService interface {
 	Create(context.Context, automationsvc.CreateInput) (domain.Automation, error)
 	Get(context.Context, domain.AutomationID) (domain.Automation, error)
@@ -25,10 +24,8 @@ type AutomationService interface {
 	Runs(context.Context, domain.AutomationRunFilter) (domain.AutomationRunPage, error)
 }
 
-// AutomationsController serves the automation API routes.
 type AutomationsController struct{ Svc AutomationService }
 
-// Register mounts the automation API routes on r.
 func (c *AutomationsController) Register(r chi.Router) {
 	r.Get("/automations", c.list)
 	r.Post("/automations", c.create)

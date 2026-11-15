@@ -32,8 +32,6 @@ describe("encodeQr", () => {
 		expect(short.modules).toBe(modulesForVersion(short.version));
 	});
 
-	// Pinning keeps codes of different payload lengths at one density, which is
-	// what stops the pairing code resizing between generations.
 	it("draws at the pinned version for any payload that fits", () => {
 		expect(encodeQr("aomobile://pair#a", { version: 17 }).modules).toBe(modulesForVersion(17));
 		expect(encodeQr(`aomobile://pair#${"a".repeat(400)}`, { version: 17 }).modules).toBe(modulesForVersion(17));

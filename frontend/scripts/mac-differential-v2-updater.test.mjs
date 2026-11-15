@@ -27,8 +27,6 @@ const semver = require("semver");
 const dirs = [];
 afterEach(() => { vi.restoreAllMocks(); vi.mocked(fsPromises.open).mockReset(); vi.mocked(fsPromises.rm).mockReset(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-// The real dependency full download/digest implementation. Only Electron's
-// network transport and native handoff are substituted with a loopback harness.
 class FullExecutor extends HttpExecutor {
   createRequest(options, callback) { return request({ ...options, agent: false }, callback); }
   download(url, destination, options) {
@@ -126,7 +124,7 @@ async function runCase(fault = "none", { arch = "arm64", progress = true, disabl
     if (req.headers.range) {
       rangeCount++;
       if (fault === "cancel") { token.cancel(); res.destroy(); return; }
-      if (fault === "timeout") return; // Cancellation by the attempt timeout closes this socket.
+      if (fault === "timeout") return;
       if (fault === "416-delayed") {
         res.writeHead(416, { "Content-Length": 20 }); res.flushHeaders();
         const timer = setTimeout(() => res.end("x".repeat(20)), 200);
@@ -228,8 +226,6 @@ async function runCase(fault = "none", { arch = "arm64", progress = true, disabl
         if (secondAttemptFault === "corrupt-cache") writeFileSync(updater.downloadedUpdateHelper.file, "corrupt cached candidate");
         if (secondAttemptFault === "missing-cache") rmSync(updater.downloadedUpdateHelper.file);
         if (!reuseCache) {
-          // Reuse this updater/executor in the same process, with a valid baseline
-          // and no staged target so the next manual attempt exercises transfer.
           await updater.downloadedUpdateHelper.clear();
           copyFileSync(input.baseline.zipPath, join(cache, "update.zip"));
         }
@@ -241,8 +237,6 @@ async function runCase(fault = "none", { arch = "arm64", progress = true, disabl
     }
   } catch (err) { error = err; }
   finally {
-    // Fixture disposal happens only after the updater settles. This cannot make
-    // production cleanup succeed or hide fallback while the injected FD is live.
     for (const owner of injectedOwners) {
       if (owner.handle.fd >= 0) {
         fstatSync(owner.handle.fd);

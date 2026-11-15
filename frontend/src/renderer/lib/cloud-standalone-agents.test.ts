@@ -29,8 +29,6 @@ function session(id: string, workspaceId: string, overrides: Partial<WorkspaceSe
 
 const cloud = { orgId: "org-1" };
 
-// A local project, the local scratchpad, the person's own Cloud standalone
-// agent, and one someone shared with them.
 function workspaces(): WorkspaceSummary[] {
 	return [
 		{ id: "proj-1", name: "app", path: "/repos/app", sessions: [session("w-1", "proj-1")] },
@@ -59,7 +57,6 @@ describe("Cloud standalone agents in the Scratchpad", () => {
 			workspaces: workspaces(),
 			sessionOrders: { [STANDALONE_WORKSPACE_ID]: ["cloud-1", "local-1"] },
 		});
-		// Sessions first in their own order, then projects (a shared agent stays among them).
 		expect(order.map((entry) => [entry.sessionId, entry.projectId])).toEqual([
 			["cloud-1", "agent-1"],
 			["local-1", STANDALONE_WORKSPACE_ID],

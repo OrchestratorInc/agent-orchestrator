@@ -180,17 +180,11 @@ import {
 
 type CenterFileOpenRequest = { path?: string; source?: FileOpenOptions["source"]; annotationRange?: FileOpenOptions["annotationRange"]; previousPath?: string; commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
-// Centre-file open requests take keys from this process-wide counter, not a
-// per-mount one: the display mode remembered for a request (ui-store) outlives a
-// SessionView remount, so a new request must never reuse a recorded key.
 let lastCenterFileRequestKey = 0;
 function nextCenterFileRequestKey(): number {
 	lastCenterFileRequestKey += 1;
 	return lastCenterFileRequestKey;
 }
-// The inspector tab labels respond to the tablist's remaining width. The
-// 239px tablist breakpoint plus the 76px pinned-action reserve and 10px leading
-// inset gives a 325px inspector breakpoint for the animation lock.
 const INSPECTOR_COMPACT_MAX_PX = 325;
 const TOPBAR_SECONDARY_COMPACT_MAX_PX = 759;
 const isMac = isMacPlatform();
@@ -226,9 +220,6 @@ function browserIsVisible(sessionId: string, browserPoppedOut: boolean): boolean
 	return inspectorIsOpen(inspectorSessions, sessionId) && (inspectorSessions[sessionId]?.view ?? "summary") === "browser";
 }
 
-// workingReviewerSurface is the live reviewer to show when the selected one is
-// idle but another is working (an agent asked a different reviewer). The
-// selected reviewer fields keep meaning the session's selected reviewer.
 function workingReviewerSurface(data?: ReviewsResponse): ReviewerSurface | undefined {
 	const active = data?.activeReviewers ?? [];
 	if (active.some((surface) => surface.reviewId === data?.reviewerSurface?.reviewId)) return undefined;
@@ -236,9 +227,6 @@ function workingReviewerSurface(data?: ReviewsResponse): ReviewerSurface | undef
 }
 
 function reviewerTerminalFromReviews(data?: ReviewsResponse, selected?: TerminalTarget): ReviewerTerminalTarget | undefined {
-	// Several reviewers can run on one worker at once. The reviewer tab follows
-	// whichever live reviewer the user opened (from the inspector), and
-	// otherwise shows the selected reviewer, or the working one when it is idle.
 	if (selected?.kind === "reviewer") {
 		const opened = data?.activeReviewers?.find((surface) => surface.mode !== "chat" && surface.handleId === selected.handleId);
 		if (opened?.handleId) return { handleId: opened.handleId, harness: opened.harness || selected.harness };
@@ -277,22 +265,6 @@ type SessionViewProps = {
 	hostId?: string;
 };
 
-// The session detail screen: terminal + git rail, with shared tab-strip chrome
-// and session actions inside the center panel on every desktop platform.
-// Rendered by both the project-scoped and cross-project session routes.
-// The persistent shell cache owns terminal lifetime by logical session + handle:
-// route switches retain the xterm instance and latest output, while a replacement
-// handle gets a clean xterm/mux binding.
-//
-// The inspector uses the same Motion spring as the left sidebar (gap width +
-// x-transform). Summary/Reviews/Files share a utility width, while Browser
-// automatically grows into a co-work canvas. Chat readability clamps either
-// profile before the conversation can become unusably narrow.
-// Startup steps: 0 creating the workspace, 1 connecting to the worker,
-// 2 preparing the repository and agent, 3 connecting the terminal. The
-// workspace exists once the sandbox reaches "bootstrapping" (the provider
-// reports it running and AO is starting its worker inside); "requested" and
-// "provisioning" are still creating it.
 function cloudStartupStage(observedState: string | undefined, workerConnected: boolean, terminalOnly = false): number {
 	return terminalOnly ? 3
 		: workerConnected && (observedState === "bootstrapping" || observedState === "running") ? 2
@@ -300,16 +272,10 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 		: 0;
 }
 
-/** How often the startup screen reads the session's events while their stream is down or still opening. */
 const STARTUP_EVENTS_POLL_MS = 2_000;
 
 const CHAT_VIEW_LEASE_MS = 30_000;
 
-/**
- * The furthest startup step a session's events confirm, with when it was
- * reached. Events from before the cutoff are an earlier epoch's: one can hold
- * agent.ready long before this workspace restarted.
- */
 function startupEventProgress(events: readonly CloudCpClientEvent[], cutoff: number): { index: number; since: string } | undefined {
 	let latest: { index: number; since: string } | undefined;
 	for (const event of events) {
@@ -325,18 +291,10 @@ function startupEventProgress(events: readonly CloudCpClientEvent[], cutoff: num
 
 function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl, eventsFromChat = false, queuedMessage }: {
 	sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string; queuedMessage?: string;
-	/**
-	 * The session's events are the chat's to read: its Chat surface is mounted
-	 * under this screen (it reads them as it opens, then polls only as a safety
-	 * net while the stream is up), or the session has not resolved yet and may
-	 * be one. The steps then follow the chat's list rather than a poll here.
-	 */
 	eventsFromChat?: boolean;
 }) {
 	const { baseUrl, client } = useCloudCp();
 	const queryClient = useQueryClient();
-	// The project's Setup log, fed by this loader's own stream and poll below,
-	// or read from the chat's own list under a Chat session.
 	const scriptRuns = useCloudScriptRuns(orgId || undefined, sessionId, { fetch: false });
 	const latestSetup = terminalOnly ? undefined : latestScriptRun(scriptRuns, "setup");
 	const setupRun = latestSetup?.status === "running" || latestSetup?.status === "failed" ? latestSetup : undefined;
@@ -345,17 +303,10 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	const [remoteProgress, setRemoteProgress] = useState({ index: factIndex, since: createdAt ?? new Date().toISOString() });
 	const [progress, setProgress] = useState({ index: terminalOnly ? 3 : 0, since: createdAt ?? new Date().toISOString() });
 	const replayCutoff = useRef(Date.now() - 60 * 60 * 1_000);
-	// The loader comes down once the sessions list says the worker connected.
-	// Its own stream and poll learn that first, and refresh the list then
-	// instead of leaving the loader up until the list's next poll.
 	const listedConnected = useRef(workerConnected);
 	listedConnected.current = workerConnected;
 	const mountedAt = useRef(Date.now());
-	// The loader's own poll learns the workspace link as soon as the workspace
-	// exists, ahead of the session list's slower refresh.
 	const [polledWorkspaceUrl, setPolledWorkspaceUrl] = useState<string>();
-	// The session's shared event stream, from its start: the Setup log and the
-	// stages need every event.
 	const streamOpen = useCloudSessionEventStream({
 		baseUrl,
 		orgId,
@@ -366,14 +317,10 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			if (event.sessionId === sessionId) recordCloudScriptStepEvents(queryClient, orgId, sessionId, [event]);
 			const occurredAt = Date.parse(event.createdAt);
 			if (event.sessionId !== sessionId || !Number.isFinite(occurredAt) || occurredAt < replayCutoff.current) return;
-			// sandbox.provisioning only marks the start of workspace creation;
-			// the workspace's completion comes from the observed state above.
 			const index = event.type === "worker.connected" || event.type === "worker.ready" ? 2
 				: event.type === "agent.ready" ? 3
 				: undefined;
 			if (index !== undefined) setProgress((current) => index > current.index ? { index, since: event.createdAt } : current);
-			// A connect from before this loader (allowing for clock skew) is an
-			// earlier worker's, not the one it waits for.
 			if (index === 2 && !listedConnected.current && occurredAt >= mountedAt.current - 5_000) void refreshCloudSessionLifecycle(queryClient);
 		},
 	});
@@ -394,7 +341,6 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 				setPolledWorkspaceUrl(session.coderWorkspaceUrl);
 				setRemoteProgress((current) => current.index === index ? current : { index, since: new Date().toISOString() });
 			} catch {
-				// Keep the last confirmed stage and retry while the loader is visible.
 			} finally {
 				if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), 2_000);
 			}
@@ -405,15 +351,11 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 			if (timer !== undefined) window.clearTimeout(timer);
 		};
 	}, [baseUrl, client, orgId, queryClient, sessionId, terminalOnly]);
-	// Under a Chat session the steps follow the chat's own list of the events.
 	const chatEvents = useCachedQueryData<CloudCpClientEvent[]>(cloudChatEventsQueryKey(orgId, sessionId), Boolean(orgId) && !terminalOnly && eventsFromChat);
 	useEffect(() => {
 		const latest = chatEvents && startupEventProgress(chatEvents, replayCutoff.current);
 		if (latest) setProgress((current) => latest.index > current.index ? latest : current);
 	}, [chatEvents]);
-	// Otherwise this screen reads them: once as it opens, then, while the stream
-	// carries them, only as the chat's safety net does, and every two seconds
-	// only while the stream is down. A boot takes minutes.
 	const streamOpenRef = useRef(streamOpen);
 	streamOpenRef.current = streamOpen;
 	const pollEvents = Boolean(orgId) && !terminalOnly && !eventsFromChat;
@@ -437,13 +379,10 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 					after = page.nextAfter;
 					if (!page.hasMore) break;
 				}
-				// The whole replay is read before a stage is painted.
 				const latest = startupEventProgress(events, replayCutoff.current);
 				if (latest) setProgress((current) => latest.index > current.index ? latest : current);
 			} catch {
-				// Keep the current stage and retry while the session is loading.
 			} finally {
-				// Checked every two seconds, so a stream that drops is noticed soon.
 				if (!controller.signal.aborted) timer = window.setTimeout(() => void poll(), STARTUP_EVENTS_POLL_MS);
 			}
 		};
@@ -459,7 +398,6 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 }
 
 function CloudInterfaceSwitchLoader({ target, agent }: { target: "chat" | "tui"; agent?: string }) {
-	// An agent switch keeps the interface and names the agent it switches to.
 	const label = agent ? `Switching to ${agentLabel(agent)}` : `Switching to ${target === "chat" ? "Chat UI" : "Terminal UI"}`;
 	return (
 		<div className="absolute inset-0 z-chrome grid place-items-center bg-background" data-testid="cloud-interface-switch-loader-screen" data-startup-cover="">
@@ -471,7 +409,6 @@ function CloudInterfaceSwitchLoader({ target, agent }: { target: "chat" | "tui";
 	);
 }
 
-/** Paused-sandbox chip. Names Coder only for a Coder session; any other provider reads "Paused". */
 function CloudPausedStatus({ stage }: { stage: "paused" | "paused_by_coder" }) {
 	const { t } = useTranslation();
 	return (
@@ -519,10 +456,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		: undefined;
 	const ambiguousRoute = listedMatches.length > 1 || Boolean(projectId && routedWorkspaces.length > 1 && !listedSession);
 	const isCloudRoute = routedWorkspace?.kind === "cloud";
-	// The unscoped /sessions/:id route is local; Cloud sessions have project routes.
-	// Newly-created Cloud sessions can be routed before the list cache refreshes.
 	const cloudLookupEnabled = Boolean(cloudOrgId && projectId && !ambiguousRoute && (isCloudRoute || (!routedWorkspace && !listedSession)));
-	// A project shared from another organization is looked up in that one.
 	const routeCloudOrgId = routedWorkspace?.cloudOrgId ?? cloudOrgId;
 	const cloudRouteSession = useCloudSessionQuery(
 		routeCloudOrgId,
@@ -530,8 +464,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		cloudLookupEnabled,
 		!listedSession,
 	);
-	// The person's own workspace: a missing session in another one was shared
-	// with them, so it is gone because it no longer is.
 	const { org: ownCloudOrg } = useCloudOrg(Boolean(routeCloudOrgId) && !hostId);
 	const localLookupEnabled = !ambiguousRoute && !isCloudRoute && (
 		!cloudOrgId || !projectId || Boolean(listedSession && !listedSession.cloud) ||
@@ -554,14 +486,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? workspaceSessionQuery.data : undefined;
 	const scopedFallback = routedWorkspace && fallbackSession && Boolean(fallbackSession.cloud) !== isCloudRoute
 		? undefined : fallbackSession;
-	// What a host showed last stays until a read replaces it, also across a failed
-	// read or a reconnect; only a host that refuses this device takes it away.
 	const remoteCode = hostId && remoteSessionQuery.error ? apiErrorCode(remoteSessionQuery.error) : undefined;
 	const hostUnreachable = Boolean(hostId) && (!remoteBase || HOST_UNREACHABLE_CODES.has(remoteCode));
 	const hostRefused = remoteCode === "BAD_PASSWORD" || remoteCode === "HOST_API_INCOMPATIBLE";
 	const session = hostId ? (!hostRefused && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
-	// The Files review offers only what the session's kind of project has.
 	const remoteWorkspaceKind = useRemoteSessionProjectKind(sessionId, hostId);
 	const sessionWorkspace = hostId ? undefined : workspaces.find((workspace) => workspace.id === session?.workspaceId);
 	const sessionWorkspaceKind = hostId ? remoteWorkspaceKind : sessionWorkspace?.kind;
@@ -572,8 +501,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const accountSwitchingLabel = interfaceUi.accountMoveTarget
 		? t("settings.agentAccounts.switching", { email: accountLabel(interfaceUi.accountMoveTarget) })
 		: undefined;
-	// Reading a cloud session counts as using it, so it is not idle-paused
-	// under someone who is watching the agent work.
 	useCloudSessionPresence(session?.cloud?.orgId, session?.cloud ? session.id : undefined, Boolean(session?.cloud));
 	const { draftBoundaries: chatDraftBoundaries, confirmUnsafeDraftLeave } = interfaceUi;
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
@@ -588,9 +515,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				return true;
 			}
 			if (decision.kind === "confirmed") {
-				// Route navigation is the boundary itself, so confirmed in-flight file
-				// work can be invalidated now. Interface switches defer this until the
-				// exact durable transition reports completed.
 				discardCapturedPendingFileAttachments(decision.pendingAttachments);
 			}
 			return false;
@@ -604,7 +528,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[sessionId],
 	);
 	const { client: cloudCpClient, ready: cloudCpReady, baseUrl: cloudCpBaseUrl, userId: cloudCpUserId } = useCloudCp();
-	// The session's own organization decides whether it can be shared (feature=share).
 	const sessionOffering = useCloudOffering(Boolean(session?.cloud), session?.cloud?.orgId);
 	const theme = useResolvedTheme();
 	const browserOnly = Boolean(session && isOrchestratorSession(session));
@@ -643,17 +566,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			]);
 		},
 	});
-	// True while a background resume owns the chat surface: hide the stopped
-	// banner and disable sending, but keep history readable. Covers the initial
-	// check (before the mutation fires) and the mutation in flight. Once checked
-	// is set, only the in-flight mutation keeps it true — switching back to an
-	// already-resumed session no longer flashes "Resuming agent…" while the
-	// workspace query catches up with the new activity state.
 	const quietResume = (autoResume.variables === sessionId && autoResume.isPending) ||
 		(!usesPreviewWorkspaceData && !hostId && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
-	// This session's background resume failed; the chat shows why.
 	const autoResumeFailed = !hostId && autoResume.variables === sessionId && autoResume.isError;
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
@@ -664,8 +580,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return;
 		}
 		if (!canResume || importBlock.block || importBlock.checking) return;
-		// One attempt per route opening; a failed resume or a later agent exit
-		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
 		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id));
 		resumeOnOpen(session.id);
@@ -688,16 +602,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [artifactRequestsBySession, setArtifactRequestsBySession] = useState<Record<string, ArtifactOpenRequest>>({});
 	const [fileTabsBySession, setFileTabsBySession] = useState<Record<string, SessionFileTabState>>({});
 	const fileTabs = fileTabsBySession[uiSessionId] ?? EMPTY_SESSION_FILE_TABS;
-	// PRs opened from the inspector's card, as tabs beside the chat and file tabs.
-	// They belong to the PR view, a Developer mode preview: off, none show.
 	const prView = usePRViewEnabled();
 	const prTabState = usePRTabs(uiSessionId);
 	const prTabs = prView ? prTabState : NO_PR_TABS;
 	const activePRUrl = prTabs.active ?? undefined;
-	// A PR that left the session (moved to another session) takes its tab with it.
-	// The PRs are the ones the inspector shows, its summary as well as the
-	// session's facts, so a PR the summary found first keeps the tab it opened.
-	// Nothing closes until the summary has loaded.
 	const prSummaryQuery = useSessionScmSummary(session?.id, prView && Boolean(session) && !session?.cloud, undefined, false, hostId);
 	const prSummaries = prSummaryQuery.data?.prs;
 	const sessionPRUrls = session && prSummaries ? sessionPRDisplaySummaries(session, prSummaries).map((pr) => pr.url).join("\n") : undefined;
@@ -751,14 +659,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const [browserPopoutTopbarHost, setBrowserPopoutTopbarHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
 		if (browserPopOutPhase !== "mounting" || !browserPopoutTopbarHost) return;
-		// Establish the portal destination before moving the browser. This layout
-		// effect completes before paint, so the user sees one atomic geometry change
-		// and the address/tabs never spend a frame underneath the native view.
 		setBrowserPopOutState({ sessionId, phase: "open" });
 	}, [browserPopOutPhase, browserPopoutTopbarHost, sessionId]);
-	// One SessionView serves every local session, so session-scoped UI state must
-	// reset on a switch. Reset during render, not in an effect: children must never
-	// mount (or fetch) against the previous session's reviewer, popout, or dialog.
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	if (stateSessionId !== sessionId) {
 		setStateSessionId(sessionId);
@@ -799,22 +701,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => stopTerminalLiveResize, [stopTerminalLiveResize]);
 
 	const cloudStage = cloudLifecycleStage(session);
-	// The first message this device sent to a new Chat session. The startup
-	// screen shows it while it covers the chat the message went to; the session
-	// may not have resolved yet, so the interface comes from the send.
 	const cloudOpening = useCloudOpening(session?.cloud?.orgId ?? cloudOrgId, sessionId);
 	const startupQueuedMessage = cloudOpening && (session ? session.mode === "chat" : cloudOpening.interfaceMode === "chat")
 		? cloudOpening.text
 		: undefined;
-	// A startup failure AO gave up on (or a runtime that ended without one)
-	// replaces the pane; while AO still retries, the loader carries the reason.
 	const startupProblem = cloudStartupProblem(session);
 	const startupFailure = startupProblem && startupProblem.phase !== "retrying" ? startupProblem : undefined;
-	// Set by a restore and cleared only by the session's terminal pane once the
-	// fresh worker's terminal exists, so it means anything only while that pane
-	// can mount: a Chat-mode session never mounts one, and would otherwise keep
-	// the "Connecting your terminal" loader up for good. Its own lifecycle stage
-	// still raises the loader while the restored workspace comes up.
 	const cloudReconnectRequested = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
 	const [terminalAttachment, setTerminalAttachment] = useState({ sessionId: "", attached: false });
 	const terminalAttached = terminalAttachment.sessionId === sessionId && terminalAttachment.attached;
@@ -823,17 +715,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			? current
 			: { sessionId, attached });
 	}, [sessionId]);
-	// Latch the session that has reached "connected" at least once (keyed on
-	// sessionId so it resets cleanly when the view switches sessions). After the
-	// first successful connect, a transient runtime-connection drop while the
-	// sandbox is still running (stage flips to "restoring_agent", e.g. the worker
-	// relay row cycles mid-turn) or a terminal reconnect must NOT re-raise the
-	// full-screen lifecycle loader over the terminal for the rest of the turn.
-	// Only a genuine workspace (re)start — VM stopped/resuming/provisioning/
-	// bootstrapping — should block after the session has connected once.
-	// Checkout and agent startup continue after the worker connects. Wait for
-	// the actual terminal attachment before dismissing the startup view.
-	// browserOnly limits the orchestrator's inspector tabs, not its terminal.
 	const expectsTerminal = session?.mode !== "chat" && (!browserOnly || Boolean(session?.cloud));
 	const cloudReconnecting = cloudReconnectRequested && expectsTerminal;
 	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
@@ -849,24 +730,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const workspaceRestarting = cloudStage === "resuming_workspace"
 		|| cloudStage === "waiting_for_coder_agent"
 		|| cloudStage === "starting_ao_worker";
-	// After the first connect, the ONLY case we stop blocking on is
-	// "restoring_agent" while the sandbox is still running (a transient runtime
-	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
-	// flash) and a genuine workspace restart still raise the loader.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	// A Freestyle Chat session starting or waking stays on its conversation, not
-	// the startup screen: its composer shimmers and its messages queue until the
-	// worker connects (cloudChatStartingInPlace). Latched until it connects, so
-	// the moment its sandbox reports running before the worker does never
-	// flashes the screen in. Other providers keep the startup screen: a Coder
-	// start shows its steps and its workspace link there.
 	const chatStartingInPlaceRef = useRef("");
 	const freestyleChat = session?.mode === "chat" && session.cloud?.sandboxProvider === FREESTYLE_PROVIDER;
 	if (cloudChatStartingInPlace(session)) chatStartingInPlaceRef.current = sessionId;
 	else if (!freestyleChat || cloudStage === "connected" || isCloudPausedStage(cloudStage)) chatStartingInPlaceRef.current = "";
 	const chatStartingInPlace = chatStartingInPlaceRef.current === sessionId;
-	// Waking an idle-paused session keeps its paused badge until the worker is
-	// back, rather than raising the startup screen over the conversation.
 	const chatWakingRef = useRef("");
 	if (freestyleChat && (isCloudPausedStage(cloudStage) || cloudStage === "resuming_workspace")) chatWakingRef.current = sessionId;
 	else if (!chatStartingInPlace) chatWakingRef.current = "";
@@ -899,20 +768,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(() => {
 		if (!session?.cloud || cloudResumeRef.current === session.id) return;
 		cloudResumeRef.current = session.id;
-		// Opening the session asks the worker to prepare its workspace, which
-		// retries a failed checkout. A failed Setup is not re-run just because
-		// the session is viewed: its scripts can have side effects, so only the
-		// failure card's Retry runs it again.
 		const problem = cloudStartupProblem(session);
 		const setupFailed = problem?.phase === "failed" && problem.code === "project_setup_failed";
-		// Only a connected worker can prepare its workspace again. A session
-		// still waking has none (the request is refused), and the worker it
-		// wakes prepares the workspace as it starts. A recorded checkout failure
-		// still asks, in case the list has not yet seen its worker connect.
 		const workerCanPrepare = session.runtimeConnected === true || (problem?.phase === "failed" && isWorkspaceStartupError(problem.code));
 		void requestCloudResume(!setupFailed && workerCanPrepare).catch(() => {
-			// Keep the paused lifecycle projection visible. A later message, shell
-			// open, or route visit can issue a fresh explicit resume intent.
 		});
 	}, [requestCloudResume, session]);
 	const reviewerQuery = useQuery({
@@ -935,7 +794,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const reviewerSwitchPending = useIsMutating({
 		mutationKey: [...sessionReviewsQueryKey(sessionId, hostId), "switch-reviewer"],
 	}) > 0;
-	// Cloud reviews come from the control plane; local reviews stay on the daemon path above.
 	const cloudReviewerQuery = useQuery({
 		queryKey: ["cloud-session-reviews", cloudCpBaseUrl, session?.cloud?.orgId, sessionId],
 		enabled: Boolean(session?.cloud && cloudCpReady && sessionIsActive(session)),
@@ -944,8 +802,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return cloudCpClient.getSessionReviewState(session.cloud.orgId, sessionId);
 		},
 		retry: 1,
-		// The agent (`ao review trigger`) and automatic review start reviews too, so
-		// keep watching while the session has a PR; a running review polls faster.
 		refetchInterval: (query) =>
 			query.state.data?.reviews.some((review) => review.status === "running")
 				? 2500
@@ -968,13 +824,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const reviewerTerminal = session && sessionIsActive(session)
 		? availableReviewerTerminal ?? retainedCloudReviewerTerminal
 		: undefined;
-	// A Cloud review that runs in Chat shows as a reviewer chat tab, as a local one does.
 	const availableReviewerChat = session?.cloud
 		? cloudReviewerChatFromReviews(cloudReviewerQuery.data)
 		: reviewerChatFromReviews(reviewerQuery.data);
 	const reviewerChat = session && sessionIsActive(session) ? availableReviewerChat : undefined;
-	// The selected reviewer chat: a Cloud review's conversation lives on the
-	// control plane, a local one on this session's daemon.
 	const renderReviewerChat = (reviewId: string) => session?.cloud ? (
 		<CloudReviewerChatSurface hideHeader session={session} reviewId={reviewId} harness={reviewerChat?.harness ?? "claude-code"} />
 	) : (
@@ -984,16 +837,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			hostUnreachable={hostUnreachable}
 			workerSessionId={sessionId}
 			reviewId={reviewId}
-			// The reviewer runs in this session's worktree, so its stopped banner's
-			// Open shell opens the same shell the worker's banner does.
 			onOpenShell={addShellTerminal}
 			openingShell={openShellTerminal.isPending}
 			shellError={openShellTerminal.error ? apiErrorMessage(openShellTerminal.error) : undefined}
 		/>
 	);
 
-	// Shell terminals opened inside a session live beside its pane as extra tabs,
-	// scoped to the session on screen so each session has its own shell set.
 	const shellTerminalsQuery = useShellTerminals(hostId);
 	const allShellTerminals = shellTerminalsQuery.data ?? [];
 	const shellTerminals = useMemo(
@@ -1011,7 +860,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			...openShellKeys,
 		];
 		const availableKeys = new Set(available);
-		// A pending shell tab keeps its place once it becomes its shell.
 		const resolved = [
 			...new Set(auxiliaryTabOrder.map((key) => adoptedShellHandle(key) ?? key)),
 		].filter((key) => availableKeys.has(key));
@@ -1034,35 +882,18 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [resolvedAuxiliaryTabOrder, uiSessionId]);
 
 	const openShellTerminal = useOpenShellTerminal(hostId);
-	// Split panes are a Developer mode preview; off, no split is shown and
-	// turning it off mid-split puts every tab back in the strip.
 	const splitPanes = useSplitPanesEnabled();
-	// Tabs can be shown together: they merge into one group tab in the strip and
-	// the screen splits into one pane per member, where any pane can split
-	// again. Every view stays mounted where it is and is only placed into its
-	// pane, so terminals, chats and editors survive each move.
-	// Layouts live in the split panes store and are remembered across reloads;
-	// members that did not come back (a file tab, a closed shell) drop out
-	// when the tabs are reconciled.
 	const storedGroups = useSessionSplitGroups(uiSessionId);
-	// A Cloud session shows one file view at a time, so its files are never split.
-	// A PR's tab covers the whole center area, so it is never split either.
 	const splittableKeys = useMemo(
 		() => new Set([SESSION_TAB_KEY, ...resolvedAuxiliaryTabOrder.filter((key) => !prTabUrl(key) && !(session?.cloud && key.startsWith("file:")))]),
 		[resolvedAuxiliaryTabOrder, session?.cloud],
 	);
-	// Until the shell list loads, an absent shell is unknown rather than closed.
 	const shellListKnown = shellTerminalsQuery.data !== undefined;
-	// Placeholders of shells being opened that the shell list has shown.
 	const seenPendingShellsRef = useRef(new Set<string>());
 	for (const key of splittableKeys) if (key.startsWith(PENDING_SHELL_KEY_PREFIX)) seenPendingShellsRef.current.add(key);
 	const groups = useMemo(() => {
 		if (!splitPanes) return EMPTY_TAB_GROUPS;
 		if (!shellListKnown) return storedGroups;
-		// A shell opened into a split is a placeholder until the daemon answers:
-		// keep its pane until the list shows it, then follow it to the shell it
-		// becomes. One that left the list without becoming a shell failed to
-		// open, and is dropped like a closed shell.
 		let available: ReadonlySet<string> = splittableKeys;
 		for (const group of storedGroups) {
 			for (const key of leafKeys(group.root)) {
@@ -1077,8 +908,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(update: (current: TabGroup[]) => TabGroup[]) => useSplitPanesStore.getState().updateGroups(uiSessionId, update),
 		[uiSessionId],
 	);
-	// A closed member leaves its group; a group of one becomes a plain tab.
-	// While split panes are off the stored layouts are kept for when they return.
 	useEffect(() => {
 		if (splitPanes && groups !== storedGroups) updateGroups(() => groups);
 	}, [groups, splitPanes, storedGroups, updateGroups]);
@@ -1087,8 +916,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		() => new Set(groupedKeysSignature ? groupedKeysSignature.split("\n") : []),
 		[groupedKeysSignature],
 	);
-	// The tab the selection points at. A grouped tab shows its whole group,
-	// with its own pane focused.
 	const selectedTabKey = activePRUrl
 		? prTabKey(activePRUrl)
 		: fileTabs.activePath
@@ -1103,8 +930,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		() => resolvedAuxiliaryTabOrder.filter((key) => !groupedKeySet.has(key)),
 		[groupedKeySet, resolvedAuxiliaryTabOrder],
 	);
-	// Strip order: a group stands where its first member stood, or first when
-	// it holds the session's own tab.
 	const mainAuxiliaryTabOrder = useMemo(() => {
 		if (groups.length === 0) return resolvedAuxiliaryTabOrder;
 		const placed = new Set<string>();
@@ -1127,8 +952,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(order: string[]) => setAuxiliaryTabOrder(expandGroupTabOrder(order, groups)),
 		[groups, setAuxiliaryTabOrder],
 	);
-	// While a group is on screen, the session's own surface shows its own view
-	// (chat or agent terminal); the other members have panes of their own.
 	const mainActiveFilePath = shownGroup || !fileTabs.activePath ? null : fileTabs.activePath;
 	const mainReviewerChatId = shownGroup ? null : reviewerChatId;
 	const closeShellTerminal = useCloseShellTerminal(hostId);
@@ -1142,9 +965,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[renameShellTerminal],
 	);
 
-	// Scoped to the session on screen so the daemon roots the shell in that
-	// session's worktree (the project id is only the fallback when the session's
-	// workspace can no longer be resolved).
 	const addShellTerminal = useCallback(() => {
 		const shell = openShellTerminal.open({ projectId: session?.workspaceId, sessionId, cloud: session?.cloud });
 		if (!shell) return;
@@ -1174,7 +994,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const prUrl = prTabUrl(key);
 			if (prUrl) {
 				setReviewerChatId(null);
-				// As for a file tab: a shell left selected would take the view back when it changes.
 				setActiveShellTerminal(null);
 				setTerminalTarget({ kind: "worker" });
 				setFileTabsBySession((current) => ({
@@ -1275,12 +1094,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[sessionId, shellTerminals, setActiveShellTerminal, uiSessionId],
 	);
 
-	// Closes a terminal and settles when the daemon has, rejecting if it
-	// refused. The tab is removed at once; the strip follows on success.
 	const closeShellTerminalAsync = useCallback(
 		async (handleId: string): Promise<void> => {
 			if (terminalTarget.kind === "shell" && terminalTarget.handleId === handleId) {
-				// Match the visible mixed strip, not the shell-only creation order.
 				activateAuxiliaryTab(adjacentAuxiliaryTab(handleId));
 			} else if (activeShellTerminalHandleId === handleId) {
 				setActiveShellTerminal(null);
@@ -1305,16 +1121,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 	const closeShellTerminalByHandle = useCallback(
 		(handleId: string) => {
-			// A refusal leaves the terminal listed, which is what the user sees.
 			void closeShellTerminalAsync(handleId).catch(() => undefined);
 		},
 		[closeShellTerminalAsync],
 	);
 
-	// Selecting the session's own pane also drops the active shell, so the effect
-	// above does not immediately pull the view back to that shell.
 	const selectSessionTerminal = useCallback(() => {
-		// Bringing any tab forward puts an open PR description away.
 		deactivatePRTab(uiSessionId);
 		setActiveShellTerminal(null);
 		setTerminalTarget({ kind: "worker" });
@@ -1324,7 +1136,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
-	// "Ask in chat" from a file tab brings the session's Chat surface forward.
 	useEffect(() => subscribeChatReveal(uiSessionId, selectSessionTerminal), [selectSessionTerminal, uiSessionId]);
 	const selectReviewerTerminal = useCallback((target: ReviewerTerminalTarget) => {
 		deactivatePRTab(uiSessionId);
@@ -1346,7 +1157,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, null),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
-	// Reveal the requested transcript before it scrolls to the palette hit.
 	const chatFocusRequest = useUiStore((state) => {
 		const request = state.chatMessageFocusRequest;
 		return request?.sessionId === uiSessionId ? request : undefined;
@@ -1358,7 +1168,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const openCenterFile = useCallback(
 		(path: string, options?: FileOpenOptions) => {
 			const filePath = path;
-			// Live paths retain their existing identities; snapshots coexist with them.
 			path = sessionFileTabKey(path, options?.source);
 			deactivatePRTab(uiSessionId);
 			setReviewerChatId(null);
@@ -1424,7 +1233,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			[uiSessionId]: activateSessionFile(current[uiSessionId] ?? EMPTY_SESSION_FILE_TABS, path),
 		}));
 	}, [setActiveShellTerminal, uiSessionId]);
-	// Closed file tabs, newest last, so ⌘⇧T can bring them back.
 	const closedFilePathsRef = useRef<Record<string, string[]>>({});
 	const closeCenterFile = useCallback((path: string) => {
 		const closed = (closedFilePathsRef.current[uiSessionId] ??= []);
@@ -1439,10 +1247,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 		removeAuxiliaryTab(`file:${path}`);
 	}, [activateAuxiliaryTab, adjacentAuxiliaryTab, fileTabs.activePath, removeAuxiliaryTab, uiSessionId]);
-	// The shell layout owns opening (it is mounted on every route, so the button
-	// and ⌘T / Ctrl+T work everywhere); this view only follows the result. When a new
-	// shell becomes active while a session is on screen, switch the pane to it —
-	// that is what makes the shortcut feel like it opened a terminal *here*.
 	useEffect(() => {
 		if (!activeShellTerminalHandleId) return;
 		const shell = shellTerminals.find((s) => s.handleId === activeShellTerminalHandleId);
@@ -1452,9 +1256,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			!fileTabs.activePath && !reviewerChatId) return;
 		selectShellTerminal(shell.handleId);
 	}, [activeShellTerminalHandleId, fileTabs.activePath, reviewerChatId, selectShellTerminal, shellTerminals, terminalTarget]);
-	// A tab selected while it was pending follows it to the shell it became.
-	// Only what still points at the pending tab moves: the user may have
-	// selected another tab in the meantime.
 	useEffect(() => {
 		const adoptedActive = activeShellTerminalHandleId ? adoptedShellHandle(activeShellTerminalHandleId) : undefined;
 		if (adoptedActive) {
@@ -1468,10 +1269,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		}
 	}, [activeShellTerminalHandleId, selectShellTerminal, setActiveShellTerminal, shellTerminals, terminalTarget]);
 
-	// If the pane is pointed at a shell that is not in THIS session's strip — e.g.
-	// after navigating to a different session whose globally-active shell belongs
-	// elsewhere — fall back to the session's own pane rather than render a tab
-	// that isn't shown here.
 	useEffect(() => {
 		setTerminalTarget((current) =>
 			current.kind === "shell" && !shellTerminals.some((s) => s.handleId === current.handleId)
@@ -1479,8 +1276,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				: current,
 		);
 	}, [shellTerminals]);
-	// Reviewer selection belongs to the tab, not its replaceable controller.
-	// Keep it through switch teardown, then follow the replacement surface.
 	useEffect(() => {
 		if (session?.cloud) return;
 		if ((!reviewerChatId && terminalTarget.kind !== "reviewer") || !reviewerQuery.isFetched || reviewerSwitchPending) return;
@@ -1514,16 +1309,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return { ...current, reviewStatus: run.status };
 		});
 	}, [cloudReviewerQuery.data, session?.cloud]);
-	// A Cloud trigger can replace a previously ended reviewer with a new terminal
-	// while the inspector remains mounted. Make that replacement visible even if
-	// the trigger response raced the inspector callback: the shared Cloud review
-	// query is the durable source of truth for the active reviewer handle.
 	const cloudReviewIsRunning = Boolean(
 		session?.cloud && cloudReviewerQuery.data?.reviews.some((review) => review.status === "running"),
 	);
-	// Open each newly started reviewer once, then leave the tab choice to the
-	// user so Chat stays reachable while it runs. Automatic reviews only add
-	// the Reviewer tab, as they do in local sessions.
 	const openedCloudReviewersRef = useRef(new Set<string>());
 	const cloudReviewerHandleId = reviewerTerminal?.handleId;
 	const cloudReviewerHarness = reviewerTerminal?.harness;
@@ -1551,9 +1339,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const sizing = useMemo(() => inspectorSizing(inspectorView), [inspectorView]);
 	const browserEntryWidthFloorRef = useRef<number | null>(null);
 
-	// Arm the shared width transition before the selected inspector surface
-	// changes its CSS variable. Browser becomes a co-work canvas; utility views
-	// return to their stable rail width on the same spring as the shell sidebar.
 	const armWorkspaceTransition = useCallback(() => {
 		const split = sessionSplitRef.current;
 		if (!split) return;
@@ -1699,8 +1484,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		],
 		[activateAuxiliaryTab, activePRUrl, centerFileTabs, closeCenterPR, hostId, prTabs.open, session],
 	);
-	// Opening a PR's tab from the card puts the file tab in front away, and
-	// lets go of a selected shell, which would take the view back when it changes.
 	useEffect(() => {
 		if (!activePRUrl) return;
 		setReviewerChatId(null);
@@ -1711,9 +1494,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return tabs?.activePath ? { ...current, [uiSessionId]: activateSessionFile(tabs, null) } : current;
 		});
 	}, [activePRUrl, setActiveShellTerminal, uiSessionId]);
-	// A group without the session's tab is selected like a workspace tab. With
-	// it, the session surface is on screen and stays the selected tab there. A
-	// PR's tab is never in a group.
 	const activeWorkspaceTabKey = activePRUrl
 		? prTabKey(activePRUrl)
 		: mainActiveFilePath
@@ -1732,9 +1512,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (hostId && remoteBase && browserSlotVisible) void remoteSessionQuery.refetch();
 	}, [hostId, remoteBase, browserSlotVisible, remoteSessionQuery.refetch]);
 	const terminated = session ? !sessionIsActive(session) : false;
-	// A completed session's HTML artifact is static output the daemon keeps
-	// serving, so an artifact preview the user opened stays visible; every other
-	// preview of a terminated session is a stale DB fact and is still torn down.
 	const browserTerminated = sessionBrowserUnavailable(session, hostId);
 	const browserView = useBrowserView({
 		sessionId: uiSessionId,
@@ -1764,34 +1541,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[browserViewId, sessionId, uiSessionId, setInspectorOpenForSession],
 	);
 	const browserUrl = browserView.navState.url.trim();
-	// A terminated session's `previewUrl` is a stale DB fact; useBrowserView
-	// suppresses and destroys the live preview for it, so it must not count as
-	// content here either — otherwise a merged/terminated session with an old
-	// preview auto-opens Browser onto a view the hook has already torn down.
 	const hasBrowserContent = !browserTerminated && Boolean(previewUrl || browserUrl);
 
-	// Entering a session for the first time ever always starts on Summary. This
-	// must fire exactly once per session's *lifetime*, not once per "was this
-	// the last session I looked at" or "is this view currently mounted" — so
-	// the initialized flag lives in the ui-store (inspectorSessions[sessionId])
-	// rather than a component-local ref, and survives both re-entering a
-	// different previously-visited session and unmounting/remounting this view
-	// entirely (e.g. across route transitions). Treat browser content that
-	// already existed when the route resolved as the baseline for that visit;
-	// only preview work arriving afterward may reveal Browser automatically.
 	useLayoutEffect(() => {
 		if (!session) return;
 		initializeInspectorSession(uiSessionId, hasBrowserContent, hasInspector);
 	}, [hasBrowserContent, hasInspector, session, uiSessionId, initializeInspectorSession]);
 
-	// Keep rejecting another session's shell/reviewer handle here as well, so it
-	// can never be cached under the destination session.
 	const routedTerminalTarget = terminalTargetBelongsToSession(terminalTarget, sessionId) && !shownGroup
 		? terminalTarget
 		: ({ kind: "worker" } satisfies TerminalTarget);
-	// Chat surface stays mounted in chat mode for worker, reviewer, and shell
-	// targets. A terminal pane (reviewer or shell) renders as a tab inside the
-	// chat surface, so opening one never costs the user the conversation.
 	const chatTargetKind = routedTerminalTarget.kind;
 	const renderedSessionMode = interfaceUi.renderedMode;
 	const showChatSurface =
@@ -1810,17 +1569,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		!mainActiveFilePath &&
 		!activePRUrl;
 
-	// Routes the selection to a tab; a grouped tab brings its group with it.
 	const selectTab = useCallback(
 		(key: string) => (key === SESSION_TAB_KEY ? selectSessionTerminal() : activateAuxiliaryTab(key)),
 		[activateAuxiliaryTab, selectSessionTerminal],
 	);
-	// ⌘D's action, set further down; tab menus reuse it.
-	// An agent's `ao pane split terminal` uses it too, with its own anchor.
 	const splitNewTerminalRef = useRef<(side: SplitSide, anchorKey?: string) => string | undefined>(() => undefined);
-	// Tab menus split their tab beside the one on screen, as dropping it on
-	// that pane's edge does; the tab on screen splits off a new terminal, as
-	// ⌘D does. Only while split panes are on.
 	const splitTabMenu = useMemo(() => {
 		if (!splitPanes) return undefined;
 		return (key: string): TabSplitActions => {
@@ -1842,10 +1595,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		};
 	}, [isOrchestrator, selectTab, selectedTabKey, session, splitPanes, splittableKeys, updateGroups]);
 	const splitScreenRef = useRef<HTMLDivElement | null>(null);
-	// Clicking into a pane focuses its member, as clicking its name does. This
-	// listens natively: terminals are portaled from the shared cache, so React
-	// would deliver their events elsewhere, while the topbar strip (portaled
-	// the other way) is outside this element and never counts.
 	const focusPaneRef = useRef<(key: string) => void>(() => undefined);
 	focusPaneRef.current = (key) => {
 		if (shownLayout?.leaves.has(key) && key !== selectedTabKey) selectTab(key);
@@ -1873,8 +1622,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useEffect(
 		() =>
 			!splitPanes ? undefined : registerPaneDropTarget({
-				// Other tabs come to the tab on screen; it never leaves itself. A
-				// member of the group on screen can still move within or out of it.
 				canDrag: (key) => {
 					const state = splitDropStateRef.current;
 					if (!splitScreenRef.current || !state?.splittableKeys.has(key)) return false;
@@ -1908,14 +1655,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const shownLayout = useMemo(() => (shownGroup ? layoutCss(shownGroup.root) : null), [shownGroup]);
 	const paneStyle = (key: string): CSSProperties => {
 		const box = shownLayout?.leaves.get(key);
-		// Each pane keeps a title bar on top; the content takes what is below it.
 		return box
 			? { position: "absolute", left: box.left, width: box.width, top: `calc(${box.top} + ${PANE_HEADER_PX}px)`, height: `calc(${box.height} - ${PANE_HEADER_PX}px)` }
 			: FULL_PANE_STYLE;
 	};
-	// The reviewer chat stays mounted while it is a member of a split, so it
-	// survives moving between panes and leaving its group's tab. Otherwise it
-	// is only mounted while selected, as before split panes.
 	const groupedReviewerChatId = reviewerChat && groupedKeySet.has(`reviewer-chat:${reviewerChat.reviewId}`) ? reviewerChat.reviewId : null;
 	const retainedReviewerChatId = reviewerChatId ?? groupedReviewerChatId;
 	const reviewerPaneKey = retainedReviewerChatId ? `reviewer-chat:${retainedReviewerChatId}` : undefined;
@@ -1936,16 +1679,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			? { kind: "shell", handleId: shell.handleId, generation: shell.createdAt, sessionId, title: shell.title }
 			: undefined;
 	};
-	// A group remembers the member last focused, so its tab names that member
-	// and selecting it returns there.
 	useEffect(() => {
 		if (!shownGroup || shownGroup.focus === selectedTabKey) return;
 		const id = shownGroup.id;
 		updateGroups((current) => current.map((group) => (group.id === id ? { ...group, focus: selectedTabKey } : group)));
 	}, [selectedTabKey, shownGroup, updateGroups]);
-	// Closing a pane (⌘W, or the ✕ on its group tab) keeps the rest of the
-	// split on screen. The session's own pane and reviewers are not closable,
-	// so they return to the strip as tabs of their own.
 	const closePaneRef = useRef<(key: string) => Promise<void>>(async () => undefined);
 	closePaneRef.current = async (key) => {
 		const group = groupContaining(groups, key);
@@ -1965,8 +1703,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			removeAuxiliaryTab(key);
 		} else if (shellTerminals.some((shell) => shell.handleId === key)) {
 			if (activeShellTerminalHandleId === key) setActiveShellTerminal(null);
-			// The rest of the split takes the selection at once; the caller
-			// waits for the daemon to close the terminal.
 			if (sibling) selectTab(sibling);
 			try {
 				await closeShellTerminal.mutateAsync(key);
@@ -1986,8 +1722,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const closePane = useCallback((key: string) => void closePaneRef.current(key).catch(() => undefined), []);
 	const closeFocusedPane = useCallback(() => void closePaneRef.current(selectedTabKeyRef.current).catch(() => undefined), []);
 
-	// The group tabs only change with the groups, the selection and the
-	// members' names, so the strips do not redo their work on every render.
 	const sessionLabel = session ? (isOrchestrator ? t("shell.orchestrator") : session.title) : t("terminal.noSession");
 	const sessionProvider = session?.provider;
 	const reviewerHarness = reviewerTerminal?.harness ?? reviewerChat?.harness;
@@ -2020,8 +1754,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				};
 			}
 			const shell = shellTerminals.find((candidate) => candidate.handleId === key);
-			// Like a strip tab, a local shell shows the agent running in it; the
-			// group tab looks the agent up.
 			const tracksAgent = shell && !shell.optimistic && !shell.cloud && !shell.hostId;
 			return {
 				key,
@@ -2032,15 +1764,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				agentHandleId: tracksAgent ? key : undefined,
 			};
 	}, [centerFileRequestsBySession, closePane, reviewerHarness, selectTab, sessionLabel, sessionProvider, shellTerminals, t, uiSessionId]);
-	// Pressing a file pane's title bar moves keyboard focus into that file.
 	const [paneFocusRequests, setPaneFocusRequests] = useState<Record<string, number>>({});
 	const groupWorkspaceTabs = useMemo(() => {
 		const groupFocus = (group: TabGroup) => {
 			const members = leafKeys(group.root);
 			return group.focus && members.includes(group.focus) ? group.focus : members[0]!;
 		};
-		// The focused member's own tab menu, below the group's Ungroup. A
-		// member's title is not edited in the group tab, so it has no rename.
 		const memberMenu = (key: string, shown: boolean): TabMenuSpec | undefined => {
 			const filePath = key.startsWith("file:") ? key.slice("file:".length) : undefined;
 			const request = filePath ? centerFileRequestsBySession[uiSessionId]?.[filePath] : undefined;
@@ -2093,8 +1822,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	]);
 
 
-	// ⌘D opens a new terminal to the right of the focused pane and ⌘⇧D one
-	// below it, splitting the tab on screen if it is not split yet.
 	splitNewTerminalRef.current = (side, anchorKey) => {
 		if (!session || isOrchestrator || !splitPanes) return undefined;
 		const anchor = anchorKey ?? (splittableKeys.has(selectedTabKey) ? selectedTabKey : SESSION_TAB_KEY);
@@ -2115,9 +1842,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	useSessionShortcut("split-shell-terminal", () => splitNewTerminalRef.current("right"), splitPanes && Boolean(session) && !isOrchestrator);
 	useSessionShortcut("split-shell-terminal-down", () => splitNewTerminalRef.current("bottom"), splitPanes && Boolean(session) && !isOrchestrator);
 
-	// Agents split this session's panes with `ao pane` (where split panes are
-	// on, local sessions only). While this view is on screen the relay hands it their
-	// requests, and it reports what it shows whenever that changes.
 	const paneRelayEnabled = splitPanes && Boolean(session) && !hostId && !session?.cloud;
 	const describePaneTab = (key: string): PaneTabDescription => {
 		if (key === SESSION_TAB_KEY) return { key, kind: "session", title: sessionLabel };
@@ -2152,12 +1876,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		lastPaneReportRef.current = signature;
 		reportPaneLayout(sessionId, layout);
 	};
-	// Changes whenever this view's relay registration starts or ends (the session
-	// changed, or the relay was switched off), so a command that waited on a slow
-	// lookup can tell the view it was sent to is gone.
 	const paneRegistrationRef = useRef(0);
-	// A command that waits across renders must select with the latest callback,
-	// which knows the terminals listed by then.
 	const selectTabRef = useRef(selectTab);
 	selectTabRef.current = selectTab;
 	const paneCommandRef = useRef<PaneCommandHandler>(async () => describeSessionPanesRef.current());
@@ -2177,9 +1896,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				if (isOrchestrator) throw new PaneCommandError("UNSUPPORTED", "The orchestrator's view does not open split terminals.");
 				const opened = splitNewTerminalRef.current(side, anchor);
 				if (!opened) throw new PaneCommandError("TERMINAL_NOT_OPENED", "The AO window could not open a terminal.");
-				// A new shell is a placeholder until the daemon creates it. Wait for
-				// the real terminal to be listed: its key is the one later commands
-				// must use, and a failed creation must not read as success.
 				let seen = false;
 				let confirmed: string | undefined;
 				for (let waited = 0; waited < 15_000 && !confirmed; waited += 100) {
@@ -2195,15 +1911,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					}
 				}
 				if (!confirmed) throw new PaneCommandError("TERMINAL_TIMEOUT", "The terminal did not open in time.");
-				// Selection can still name the placeholder; the agent types into the
-				// selected terminal, so point it at the real one.
 				selectTabRef.current(confirmed);
 			} else if (tab.startsWith("file:")) {
 				const registration = paneRegistrationRef.current;
 				const path = await resolvePaneFile(tab.slice("file:".length));
 				if (anchor === `file:${path}`) throw new PaneCommandError("INVALID_PANE_COMMAND", "A tab cannot be split beside itself.");
-				// Opening a file resets this view's selection, so it must still be
-				// the view the command was sent to.
 				if (paneRegistrationRef.current !== registration) {
 					throw new PaneCommandError("VIEW_CHANGED", "The AO window moved to another session before the file could be split.");
 				}
@@ -2225,13 +1937,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			}
 			updateGroups((current) => ungroupById(current, groupId));
 		} else if (request.action === "close") {
-			// Close a terminal as its tab's ✕ does, so the strip, the split and
-			// the selection all follow. Other tabs are left to the user.
 			if (!shellTerminals.some((shell) => shell.handleId === tab)) {
 				throw new PaneCommandError("TAB_NOT_FOUND", `"${tab}" is not one of this session's terminal tabs.`);
 			}
-			// Wait for the daemon, so a refused close is the agent's error and the
-			// layout it gets back no longer lists the terminal.
 			if (groupContaining(groups, tab)) await closePaneRef.current(tab);
 			else await closeShellTerminalAsync(tab);
 		} else if (request.action === "focus") {
@@ -2240,12 +1948,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		} else {
 			throw new PaneCommandError("INVALID_PANE_COMMAND", `Unknown pane action "${String(request.action)}".`);
 		}
-		// The new layout is reported once React has rendered the change.
 		await new Promise((resolve) => setTimeout(resolve, 60));
 		return latestPaneLayout(sessionId) ?? describeSessionPanesRef.current();
 	};
-	// A file named by an agent: workspace-relative, or absolute inside this
-	// session's workspace.
 	const resolvePaneFile = async (rawPath: string): Promise<string> => {
 		if (session?.cloud) throw new PaneCommandError("UNSUPPORTED", "Files of a Cloud session are not split.");
 		const reference = normalizeWorkspaceFileReference(rawPath);
@@ -2266,8 +1971,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			unregister();
 		};
 	}, [paneRelayEnabled, sessionId]);
-	// Report after every render (only a changed layout is sent), and when a
-	// terminal's agent changes, which this view does not render on.
 	useEffect(() => reportSessionPanesRef.current());
 	useEffect(() => (paneRelayEnabled ? useShellAgentStore.subscribe(() => reportSessionPanesRef.current()) : undefined), [paneRelayEnabled]);
 
@@ -2290,10 +1993,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				});
 				if (error) throw error;
 				if (active) renewedAt = Date.now();
-				// Remote conversations already refresh every two seconds. A ready or
-				// working chat hears every change through events, and a wake emits
-				// one, so only a chat still waking or stopped is refreshed here;
-				// refreshing a settled one reloaded every page it had on each return.
 				if (active && !left && !refreshed && !hostId) {
 					refreshed = true;
 					if (!conversationSettled(queryClient, sessionId)) {
@@ -2302,7 +2001,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				}
 			} finally {
-				// Release a late registration too; leaving must not wait on wake.
 				if (active && left) void setViewActive(false).catch(() => {});
 			}
 		};
@@ -2333,29 +2031,21 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			void setViewActive(false).catch(() => {});
 		};
 	}, [chatViewActive, hostId, queryClient, sessionId]);
-	// A session's tab menus hold the interface switch and, in a terminal, its agent: a Cloud
-	// terminal's where its control plane can switch the session's agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
 	const cloudAgentSwitch = useCloudAgentSwitch(session?.cloud ? session : undefined);
-	// The agent rows apply while there is a switch to offer, or a local
-	// terminal's agent to pick and no switch running.
 	const sessionTabAgentMenu = useMemo<SessionTabAgentMenu | undefined>(() => {
 		if (!session) return undefined;
 		const picksAgent = (!session.cloud || cloudAgentSwitch.available) && interfaceUi.target === "chat";
 		if (!interfaceUi.switchAction && !(picksAgent && !interfaceUi.switchControl)) return undefined;
 		return { session, hostId, blocked: agentWorking || cloudAgentSwitch.switching, picksAgent, switchTarget: interfaceUi.target, switchAction: interfaceUi.switchAction };
 	}, [agentWorking, cloudAgentSwitch.available, cloudAgentSwitch.switching, hostId, interfaceUi.switchAction, interfaceUi.switchControl, interfaceUi.target, session]);
-	// Cmd+K offers the same switch for the session on screen.
 	useEffect(() => {
 		if (!session) return;
 		const id = session.id;
 		useSessionSwitchStore.getState().publish(id, sessionTabAgentMenu);
 		return () => useSessionSwitchStore.getState().publish(id, undefined);
 	}, [session?.id, sessionTabAgentMenu]);
-	// The session tab always shows its ⋮ menu after the title; the other tabs
-	// show a close button on hover. While an interface switch is requested or
-	// running, the switch's status (cancel on hover) takes the ⋮'s place.
 	const sessionTabActionPinned = Boolean(session);
 	const sessionTabActions = !session
 		? null
@@ -2368,25 +2058,20 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			data-compact-session-chrome="false"
 		>
 			{hostLabel ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel}</span> : null}
-			{/* On a session shared with this person: what they can do in it, and through which team. */}
 			{session ? <SessionAccessTag session={session} /> : null}
-			{/* A shared project's pull requests and merge requests, on its orchestrator. */}
 			{isOrchestrator && session?.cloud && routedWorkspace ? (
 				<SharedProjectPanel hostId={hostId} orchestrator={session} sessions={routedWorkspace.sessions} />
 			) : null}
-			{/* Who else is here, or Share; only the session's own organization can share it, and only once WorkOS enables sharing for it. */}
 			{session?.cloud && session.isTerminated !== true ? (
 				<SessionPeopleControl
 					orgId={session.cloud.orgId}
 					projectId={session.workspaceId}
 					sessionId={session.id}
-					// A standalone agent shared with this person is its owner's to share.
 					canShare={session.cloud.orgId === cloudOrgId && sessionOffering.features.includes(SHARE_FEATURE) &&
 						!(sessionWorkspace?.standaloneAgent && sessionWorkspace.shared)}
 					sessionName={session.title}
 					projectName={sessionWorkspace?.name}
 					standaloneAgent={sessionWorkspace?.standaloneAgent}
-					// The orchestrator is the project's: sharing it shares the whole project.
 					shareProject={isOrchestrator && !sessionWorkspace?.standaloneAgent}
 				/>
 			) : null}
@@ -2394,10 +2079,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		</div>
 	);
 
-	// The pane shows one terminal at a time, so selecting a shell or the reviewer
-	// takes the agent's terminal off screen while the route still points here.
-	// Publish which one is showing: the notification runtime lives outside this
-	// subtree and must not treat "on the session route" as "watching the agent".
 	useEffect(() => {
 		setVisibleTerminalKind(uiSessionId, reviewerChatId ? "reviewer" : routedTerminalTarget.kind);
 		return () => clearVisibleTerminalKind(uiSessionId);
@@ -2432,21 +2113,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		[sessionId, setInspectorOpenForSession, transitionInspectorView, uiSessionId],
 	);
 
-	// A deliverable the agent registers with `ao artifact add` while the user
-	// watches opens in the Artifacts tab, whatever its file type; agents no
-	// longer hand artifacts to the Browser panel. Artifacts already registered
-	// when the session is entered are the baseline and never reveal anything.
-	// While the user is watching a live page in Browser or reviewing Files,
-	// docked or popped out, a registration only badges Artifacts instead of
-	// taking the view, so an agent registering screenshots as it iterates on a
-	// UI does not steal the running app.
-	// A remote host's session can first show what the sidebar kept from an
-	// earlier read, which can predate artifacts registered since. Fresh data is
-	// authoritative at once; stale data is refetched on mount, and until that
-	// read lands the baseline keeps absorbing what it sees. A cloud session's
-	// artifact list loads after the session itself, so it waits for that too.
-	// A local session whose listing failed reads as having none; the next good
-	// read can then open an existing artifact, which is harmless.
 	const registeredArtifactsBaselineRef = useRef<{ sessionId: string; keys: Set<string>; settled: boolean } | null>(null);
 	const artifactFiles = session?.artifactFiles;
 	const artifactListUnsettled = (Boolean(hostId) && remoteSessionQuery.isStale) || Boolean(session?.artifactFilesPending);
@@ -2464,7 +2130,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			baseline.settled = !artifactListUnsettled;
 			return;
 		}
-		// A rename keeps its id; a file without one counts as known under an old path.
 		const added = registered.filter(
 			(file) => !baseline.keys.has(keyOf(file)) && !(file.previousPaths ?? []).some((previous) => baseline.keys.has(previous)),
 		);
@@ -2476,10 +2141,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const newest = added.reduce((latest, file) => ((Date.parse(file.updatedAt) || 0) > (Date.parse(latest.updatedAt) || 0) ? file : latest));
 		if (busy) {
 			setArtifactsUnseen(uiSessionId, true);
-			// The badge sits on the rail, which a maximized Browser covers and a
-			// screen reader does not announce; the toast stays above overlays and
-			// is a polite status. One per session, so a burst of screenshots
-			// replaces it rather than stacking.
 			showGlobalToast(t("artifacts.newArtifact", { name: newest.name }), undefined, {
 				tone: "info",
 				dedupeKey: `artifact-registered:${uiSessionId}`,
@@ -2490,17 +2151,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		handleOpenArtifact({ path: newest.path });
 	}, [artifactFiles, browserPoppedOut, filesPoppedOut, handleOpenArtifact, hasBrowserContent, artifactListUnsettled, hasInspector, setArtifactsUnseen, showGlobalToast, t, terminated, uiSessionId]);
 
-	// The toast's Open writes this session's inspector state through its own
-	// closure, so it must not outlive the session it was raised for.
 	useEffect(() => () => {
 		const dedupeKey = `artifact-registered:${uiSessionId}`;
 		const { dismissGlobalToast, globalToasts } = useUiStore.getState();
 		for (const toast of globalToasts) if (toast.dedupeKey === dedupeKey) dismissGlobalToast(toast.nonce);
 	}, [uiSessionId]);
 
-	// A file written moments ago, or one past the artifact list cap, is not in
-	// the cached session, and the Files inspector can only show listed
-	// artifacts. Refresh once before deciding it cannot be opened.
 	const revealResolvedArtifact = useCallback(
 		async (path: string) => {
 			const listed = (artifacts: SessionArtifact[] | undefined) => artifactAtPath(artifacts, path) !== undefined;
@@ -2525,17 +2181,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				openCenterFile(matchWorkspaceFilePath(rawPath, data.files ?? []), options);
 				return;
 			}
-			// The renderer is never told where a session's worktree lives, so the
-			// daemon decides which root an absolute path belongs to.
 			const resolved = await resolveSessionWorkspacePath(sessionId, reference, hostId);
 			if (resolved?.kind === "workspace") {
 				openCenterFile(resolved.path, options);
 				return;
 			}
 			if (resolved?.kind === "artifact" && await revealResolvedArtifact(resolved.path)) return;
-			// Outside the session, or the daemon could not say. Nothing shows the
-			// path belongs here, so open it as written and let the file pane say
-			// so, rather than a workspace file that happens to share its name.
 			openCenterFile(reference, options);
 		},
 		[fetchWorkspaceFiles, hostId, openCenterFile, revealResolvedArtifact, sessionId],
@@ -2543,8 +2194,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 
 	const handleOpenFiles = useCallback(() => {
 		markFileViewerPerformance("files-click");
-		// Opens on the checked-out branch's default review: its uncommitted
-		// changes, or its commits when the worktree is clean.
 		resetFilesSelection(uiSessionId);
 		prepareFilesInspector();
 		void fetchWorkspaceFiles();
@@ -2675,8 +2324,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		if (baseline.key === previewKey) return;
 		previewBaselineRef.current = { sessionId: uiSessionId, key: previewKey };
 		if (!previewKey || terminated) return;
-		// Only the routed session mounts SessionView. A new explicit preview
-		// reveals its panel; entering a session with an existing target does not.
 		revealBrowserPanel();
 	}, [
 		hasInspector,
@@ -2687,12 +2334,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		revealBrowserPanel,
 	]);
 
-	// Explicit open commands reveal once per command. A fast command's start
-	// and finish can share a React render, so either event can consume its ID.
-	// Later completion and UI changes must not override a user's close. Only a
-	// command whose start arrived while this session was on screen counts: one
-	// begun while the user was elsewhere would otherwise pop Browser open a
-	// moment after they switch in.
 	useEffect(() => {
 		if (revealedBrowserCommandsRef.current.sessionId !== uiSessionId) {
 			revealedBrowserCommandsRef.current = { sessionId: uiSessionId, commands: new Set() };
@@ -2707,13 +2348,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const commands = revealedBrowserCommandsRef.current.commands;
 			if (commands.has(activity.commandId)) return;
 			commands.add(activity.commandId);
-			// Bound deduplication memory while retaining recent overlapping commands.
 			if (commands.size > 64) commands.delete(commands.values().next().value!);
 			revealBrowserPanel();
 			return;
 		}
 		if (!browserView.agentBrowserActive) return;
-		// Passive activity only badges Browser, including an orchestrator's.
 		if (browserOnly && !useUiStore.getState().inspectorSessions[uiSessionId]?.browserContentRevealed) {
 			setBrowserContentRevealed(uiSessionId, true);
 		}
@@ -2734,8 +2373,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		revealBrowserPanel,
 	]);
 
-	// Opening Browser consumes the pending activity indicator, including the
-	// case where the inspector was collapsed while already parked on Browser.
 	useEffect(() => {
 		if (hasInspector && browserIsVisible(uiSessionId, browserPoppedOut)) {
 			setBrowserUnseen(uiSessionId, false);
@@ -2747,9 +2384,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		toggleInspector(uiSessionId);
 	}, [browserOnly, inspectorView, uiSessionId, toggleInspector, setBrowserContentRevealed]);
 
-	// Keyboard commands scoped to the session on screen. The main process matches
-	// the chord (see main/app-shortcuts.ts), so these also work from xterm and the
-	// native Browser view.
 	useSessionShortcut("toggle-inspector", handleToggleInspector, hasInspector);
 	useSessionMenuAvailable("toggle-inspector", hasInspector);
 	useSessionMenuAvailable("new-shell-terminal", Boolean(session) && !isOrchestrator);
@@ -2849,18 +2483,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			inspectorMotionReadyRef.current = null;
 		};
 	}, [hasInspector, uiSessionId]);
-	// A Cloud tab may arrive before the paginated workspace cache contains its
-	// row. Keep the session surface (and its switch control) mounted while the
-	// direct control-plane lookup is in flight; only show "not found" after
-	// both sources have settled.
 	if (!session && (hostId ? !remoteSessionQuery.isLoading : !workspaceQuery.isLoading && !workspaceSessionQuery.isLoading && !cloudSessionResolving)) {
 		const remoteError = hostId ? t(remoteCode === "BAD_PASSWORD" ? "remote.hostUnauthorized"
 			: remoteCode === "HOST_API_INCOMPATIBLE" ? "remote.hostIncompatible"
 			: hostUnreachable
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
-		// A shared session's route names no organization, and once its sharing
-		// ends it is gone from the shared list too: it reads as shared because
-		// the list showed it earlier in this run.
 		const routeError = cloudRouteSession.error;
 		const noLongerShared = !hostId && (
 			sessionWasSharedWithYou(cloudCpBaseUrl, cloudCpUserId, sessionId) ||
@@ -2921,12 +2548,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							style={shownLayout?.vars as CSSProperties | undefined}
 						>
 							{isCloudPausedStage(cloudStage) ? <CloudPausedStatus stage={cloudStage} /> : chatWaking ? <CloudPausedStatus stage="paused" /> : null}
-							{/* In Chat, a failed checkout or Setup shows in the conversation, as a failed local start does. */}
 							{startupFailure && session?.cloud && !(showChatSurface && startupFailure.phase === "failed" && isWorkspaceStartupError(startupFailure.code)) ? (
 								<CloudSessionStartupError coderWorkspaceUrl={session.cloud.coderWorkspaceUrl} ended={terminated} orgId={session.cloud.orgId} problem={startupFailure} sessionId={session.id} />
 							) : null}
-							{/* The committed mode owns the agent surface. Auxiliary shell and
-							    reviewer targets remain terminal surfaces in either mode. */}
 							<SplitCloseFocusedContext.Provider value={shownGroup ? closeFocusedPane : undefined}>
 							<SplitHiddenTabKeysContext.Provider value={groupedKeySet}>
 							<TabSplitMenuContext.Provider value={splitTabMenu}>
@@ -2937,9 +2561,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								inert={mainActiveFilePath || mainReviewerChatId || sessionPaneHidden || activePRUrl ? true : undefined}
 								style={paneStyle(SESSION_TAB_KEY)}
 							>
-							{/* Every Cloud Chat target stays on the Cloud surface: the local one
-							    asks this machine's daemon, which has never heard of a Cloud
-							    session and answers "session not found". */}
 							{showChatSurface && session?.cloud ? (
 								<>
 								<CloudSessionChatSurface
@@ -3125,9 +2746,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									{fileTabs.openPaths.map((fileKey) => {
 										const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
 										const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
-										// A file view stays mounted here and is only placed over its pane,
-										// for a Cloud session as for a local one: switching tabs keeps
-										// each file's mode, scroll and unsaved edit.
 										const paneKey = `file:${fileKey}`;
 										const inPane = Boolean(shownLayout?.leaves.has(paneKey));
 										const visible = inPane || mainActiveFilePath === fileKey;
@@ -3150,7 +2768,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 														initialRequestKey={request?.key ?? 0}
 														onDirtyChange={setCenterFileDirty}
 														path={request?.path ?? fileKey}
-														// Uncommitted is local-only; a cloud review's nearest scope is combined.
 														scope={request?.scope === "uncommitted" ? "combined" : request?.scope}
 														session={session}
 														split={filesSplit}
@@ -3183,8 +2800,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									})}
 								</div>
 							) : null}
-							{/* Every pane of a split has a title bar: it names the pane as the
-							    tab it is, is the handle to drag it. */}
 							{shownGroup && shownLayout
 								? [...shownLayout.leaves.entries()].map(([key, box]) => (
 									<SplitPaneHeader
@@ -3195,16 +2810,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 										menu={{ kind: "group", onUngroup: () => updateGroups((current) => ungroupById(current, shownGroup.id)) }}
 										onPress={() => {
 											setPaneFocusRequests((current) => ({ ...current, [key]: (current[key] ?? 0) + 1 }));
-											// A terminal or chat composer only autofocuses when it becomes
-											// selected, so a press on a selected pane puts the caret in it.
 											requestAnimationFrame(() => {
 												for (const pane of document.querySelectorAll<HTMLElement>("[data-split-pane]")) {
 													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']")?.focus({ preventScroll: true });
 												}
 											});
 										}}
-										// The top row reaches 2px above the screen so no sliver of the
-										// panel shows over its title bar.
 										style={box.top === "0%"
 											? { left: box.left, top: -2, width: box.width, height: PANE_HEADER_PX + 2, paddingTop: 2 }
 											: { left: box.left, top: box.top, width: box.width, height: PANE_HEADER_PX }}
@@ -3221,7 +2832,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									/>
 								))
 								: null}
-							{/* Like a file tab, a PR's tab stays mounted behind the others: coming back finds the same section, scroll and half-written comment. */}
 							{session && !session.cloud ? prTabs.open.map((url) => (
 								<div className={cn("absolute inset-0 z-10", url !== activePRUrl && "invisible pointer-events-none [content-visibility:hidden]")} key={url}>
 									<PRTabPane
@@ -3353,10 +2963,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					/>
 					: null}
 			{interfaceUi.dialogs}
-			{/* Maximized files wear the maximized browser's chrome: a backdrop, the
-          filter pinned in the titlebar band where the browser's address bar
-          sits, and an inset frame for the explorer. The explorer mounts once
-          the band exists so the filter never renders inline first. */}
 			{filesPoppedOut && session
 				? createPortal(
 						<SessionFilesPopOut onClose={() => handleToggleFilesPopOut(false)}>{(topbarHost) =>
@@ -3381,11 +2987,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						document.body,
 					)
 				: null}
-			{/* Maximized browser: a fixed overlay across the app workspace,
-          portaled to <body> so it escapes the shell layout (covering the
-          sidebar + topbar, not just the session area) and sits outside any
-          `[data-panel]` column, so the native WebContentsView is not clamped
-          and fills the window below any native titlebar overlay. */}
 			{browserPopOutMounted && session
 				? createPortal(
 						<SessionBrowserPopOut onClose={() => handleToggleBrowserPopOut(false)} onTopbarHost={setBrowserPopoutTopbarHost} phase={browserPopOutPhase === "open" ? "open" : "mounting"}>
@@ -3406,7 +3007,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	);
 }
 
-/** The key a terminal target's tab has in the strips and the split layout. */
 function terminalTabKey(target: TerminalTarget): string {
 	if (target.kind === "shell") return target.handleId;
 	if (target.kind === "reviewer") return `reviewer:${target.handleId}`;
@@ -3414,7 +3014,6 @@ function terminalTabKey(target: TerminalTarget): string {
 }
 
 const EMPTY_TAB_GROUPS: TabGroup[] = [];
-/** The PR tabs while the PR view is off: none. */
 const NO_PR_TABS: PRTabsState = { open: [], active: null };
 const PENDING_SHELL_KEY_PREFIX = "pending-shell:";
 const FULL_PANE_STYLE: CSSProperties = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
@@ -3426,16 +3025,9 @@ type SplitDropState = {
 	splittableKeys: ReadonlySet<string>;
 	selectTab: (key: string) => void;
 	updateGroups: (update: (current: TabGroup[]) => TabGroup[]) => void;
-	/** What releasing says, named inside the drop preview. */
 	labels: { split: string; join: string; unsplit: string };
 };
 
-/**
- * Where a dragged tab would land. Over the screen: beside the pane under the
- * pointer, on the edge it points at (an ungrouped screen counts as one pane).
- * Over the strip: onto another tab to show both together, or off its group
- * to make it a tab of its own again.
- */
 function resolveSplitDrop(
 	state: SplitDropState,
 	screen: HTMLElement | null,
@@ -3445,8 +3037,6 @@ function resolveSplitDrop(
 	y: number,
 ): PaneDropResolution | null {
 	if (!screen) return null;
-	// A plain box: a DOMRect's fields are prototype getters, so spreading one
-	// (as halfOf does) would drop them.
 	const bounds = screen.getBoundingClientRect();
 	const rect: ClientRect = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
 	if (y < rect.top) return resolveStripDrop(state, column, rect, key, x, y);
@@ -3506,7 +3096,6 @@ function resolveStripDrop(
 		: undefined;
 	if (sourceGroup && targetGroup === sourceGroup) return null;
 	if (sourceGroup && !over) {
-		// Off its group: the tab stands alone again and the rest stays on screen.
 		const remaining = leafKeys(sourceGroup.root).find((candidate) => candidate !== key);
 		return {
 			rect: screen,
@@ -3519,7 +3108,6 @@ function resolveStripDrop(
 	}
 	if (!over || over.key === key) return null;
 	if (targetGroup) {
-		// Joining a group adds the tab as a new column beside its layout.
 		return {
 			rect: over.rect,
 			label: state.labels.join,

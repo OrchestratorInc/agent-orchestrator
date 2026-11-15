@@ -13,7 +13,6 @@ function lexicalEditor(field: HTMLElement): LexicalEditor {
 	return editor;
 }
 
-/** JSDOM does not perform native contenteditable insertion, so drive Lexical directly. */
 export async function typeInLexicalEditor(field: HTMLElement, text: string): Promise<void> {
 	const editor = lexicalEditor(field);
 	await act(async () => {
@@ -25,7 +24,6 @@ export async function typeInLexicalEditor(field: HTMLElement, text: string): Pro
 	});
 }
 
-/** Reproduce a key pressed before React paints Lexical's latest text update. */
 export async function typeAndPressInLexicalEditor(
 	field: HTMLElement,
 	text: string,
@@ -56,7 +54,6 @@ export async function placeLexicalCaret(field: HTMLElement, offset: number): Pro
 	});
 }
 
-/** Put a collapsed caret at `offset` in one line (paragraph) of a multiline draft. */
 export async function placeLexicalCaretInLine(field: HTMLElement, line: number, offset: number): Promise<void> {
 	const editor = lexicalEditor(field);
 	await act(async () => {
@@ -72,7 +69,6 @@ export async function placeLexicalCaretInLine(field: HTMLElement, line: number, 
 	});
 }
 
-/** Put a collapsed caret after the last character of the whole draft. */
 export async function placeLexicalCaretAtEnd(field: HTMLElement): Promise<void> {
 	const editor = lexicalEditor(field);
 	await act(async () => {

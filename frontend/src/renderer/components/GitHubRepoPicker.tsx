@@ -8,10 +8,7 @@ import { Pressable } from "./ui/pressable";
 
 type Repo = Awaited<ReturnType<typeof aoBridge.app.listGitHubRepos>>[number];
 
-// `gh` takes a couple of seconds per call, so the user's own repositories load
-// once up front and filter instantly; GitHub-wide search fills in behind it.
 let ownRepoRequest: Promise<Repo[]> | null = null;
-// Held so the browser keeps the decoded avatars until the rows render them.
 const preloadedAvatars = new Map<string, HTMLImageElement>();
 function preloadAvatars(rows: Repo[]) {
 	for (const { avatarUrl } of rows) {
@@ -24,7 +21,6 @@ function preloadAvatars(rows: Repo[]) {
 	}
 }
 
-/** Starts loading the user's repositories and their avatars. Safe to call repeatedly. */
 export function preloadGitHubRepos(): Promise<Repo[]> {
 	ownRepoRequest ??= aoBridge.app.listGitHubRepos("").catch(() => []).then((rows) => {
 		if (rows.length === 0) ownRepoRequest = null;

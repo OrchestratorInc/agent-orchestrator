@@ -8,23 +8,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// claudeAliasFamilies are the Claude Code model aliases that name a family
-// rather than a version ("opus" runs the newest Opus Claude Code knows).
 var claudeAliasFamilies = []string{"fable", "opus", "sonnet", "haiku"}
 
-// claudeAliasPattern matches a bare family alias, optionally with a context
-// suffix such as "opus[1m]".
 var claudeAliasPattern = regexp.MustCompile(`^(fable|opus|sonnet|haiku)(\[[^\]]+\])?$`)
 
-// claudeDisplayVersionPattern reads "5.5" out of a provider display name such
-// as "Claude Opus 5.5".
 var claudeDisplayVersionPattern = regexp.MustCompile(`\b(\d{1,2}(?:\.\d{1,2})?)\b`)
 
-// LabelClaudeAliasVersions adds the resolved version to Claude Code family
-// aliases ("Opus" becomes "Opus 5.5") using the newest model of that family in
-// reference, which must be a catalog the provider itself reported. Aliases
-// whose family is absent from reference, or whose label already names a
-// version, keep their label: a guessed version is worse than none.
 func LabelClaudeAliasVersions(models, reference []ports.AgentModelInfo) []ports.AgentModelInfo {
 	if len(models) == 0 || len(reference) == 0 {
 		return models
@@ -59,9 +48,6 @@ func LabelClaudeAliasVersions(models, reference []ports.AgentModelInfo) []ports.
 		label := strings.TrimSpace(item.Label)
 		if label == "" || strings.EqualFold(label, item.ID) {
 			label = strings.ToUpper(match[1][:1]) + match[1][1:]
-			// A configured alias arrives labeled with its own ID. Keep its
-			// context variant ("opus[1m]") apart from the family's plain
-			// model, or the picker lists "Opus 5.5" twice.
 			if window := strings.Trim(match[2], "[]"); window != "" {
 				label += " (" + strings.ToUpper(window) + " context)"
 			}
@@ -76,9 +62,6 @@ func LabelClaudeAliasVersions(models, reference []ports.AgentModelInfo) []ports.
 	return out
 }
 
-// claudeFamilyVersion reads the family and major.minor version of a concrete
-// provider model, preferring its display name and falling back to the ID
-// ("claude-opus-5-5-20260901"). Snapshot dates are never versions.
 func claudeFamilyVersion(item ports.AgentModelInfo) (string, []int) {
 	label := strings.ToLower(item.Label)
 	id := strings.ToLower(item.ID)

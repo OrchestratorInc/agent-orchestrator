@@ -15,7 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Connection names an adapter-resolved route. APIKey must never enter diagnostics.
 type Connection struct {
 	Provider string
 	BaseURL  string
@@ -23,8 +22,6 @@ type Connection struct {
 	APIKey   string
 }
 
-// VerifyConnection makes one bounded, one-token request without tools or a native
-// agent session. A model listing alone can be public and cannot verify a key.
 func VerifyConnection(ctx context.Context, route Connection, client *http.Client) (ports.AgentAuthStatus, domain.AgentAuthDiagnostic) {
 	started := time.Now()
 	step := domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported")
@@ -48,7 +45,6 @@ func VerifyConnection(ctx context.Context, route Connection, client *http.Client
 	}
 	req.Header.Set("Authorization", "Bearer "+route.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	// Never forward a credential to a redirect target, including the same host.
 	transport := http.DefaultTransport
 	if client != nil && client.Transport != nil {
 		transport = client.Transport

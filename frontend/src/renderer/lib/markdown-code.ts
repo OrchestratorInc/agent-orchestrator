@@ -1,18 +1,3 @@
-/**
- * A Markdown text's code, as [start, end) offsets: fenced blocks and inline
- * code spans. Text inside code is shown as written: an attachment link there is
- * an example, not a file, and HTML there is not cleaned up.
- *
- * A fence is a line that starts, after any indent, with three or more
- * backticks or tildes (a backtick fence's line has no other backtick); it runs
- * to the next line of at least as many of the same character, or to the end.
- * A code span opens with a run of backticks and closes at the next run of
- * exactly as many, within its paragraph; a run with no such partner is plain
- * text. A backslash before a backtick makes that backtick plain text.
- *
- * The daemon's markdownCodeRanges (backend/internal/service/pr/markdown_code.go)
- * mirrors this, so the app and the daemon agree on which files a comment links.
- */
 export function markdownCodeRanges(text: string): [number, number][] {
 	const ranges: [number, number][] = [];
 	let lineStart = true;
@@ -50,7 +35,6 @@ export function markdownCodeRanges(text: string): [number, number][] {
 	return ranges;
 }
 
-/** Where a fenced block opened by the line at start ends, if that line opens one. */
 function fencedBlockEnd(text: string, start: number): number | undefined {
 	const [line, next] = lineAt(text, start);
 	const indent = line.length - line.replace(/^[ \t]+/, "").length;
@@ -68,7 +52,6 @@ function fencedBlockEnd(text: string, start: number): number | undefined {
 	return text.length;
 }
 
-/** Where a code span opened by a run of size backticks ends: after the next run of exactly size, before a blank line. */
 function codeSpanEnd(text: string, from: number, size: number): number | undefined {
 	for (let i = from; i < text.length;) {
 		if (text[i] === "`") {
@@ -85,7 +68,6 @@ function codeSpanEnd(text: string, from: number, size: number): number | undefin
 	return undefined;
 }
 
-/** The line starting at start, without its newline, and where the next line starts. */
 function lineAt(text: string, start: number): [string, number] {
 	const end = text.indexOf("\n", start);
 	return end < 0 ? [text.slice(start), text.length] : [text.slice(start, end), end + 1];
@@ -97,7 +79,6 @@ function runLength(text: string, start: number, c: string): number {
 	return n;
 }
 
-/** The text with fn applied to each stretch outside code; code is left exactly as written. */
 export function mapOutsideMarkdownCode(text: string, fn: (prose: string) => string): string {
 	let out = "";
 	let last = 0;

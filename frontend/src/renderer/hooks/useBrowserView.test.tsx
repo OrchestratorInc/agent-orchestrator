@@ -159,7 +159,7 @@ function setupBridge() {
 			list: vi.fn(async () => ({ downloads: [] })),
 			action: vi.fn(async () => ({ downloads: [] })),
 			clear: vi.fn(async () => ({ downloads: [] })),
-			onChanged: vi.fn(() => () => { /* no-op test subscription */ }),
+			onChanged: vi.fn(() => () => { }),
 		},
 		destroy: vi.fn(),
 		setAnnotationMode: vi.fn(async () => undefined),
@@ -219,9 +219,6 @@ function setupBridge() {
 	return bridge;
 }
 
-// jsdom does not implement the Fullscreen API, so `document.fullscreenElement`
-// has no property descriptor to spy on. Define it directly, and clear it after
-// each test so state never leaks between cases.
 function setFullscreenElement(element: Element | null): void {
 	Object.defineProperty(document, "fullscreenElement", {
 		configurable: true,
@@ -245,8 +242,6 @@ describe("useBrowserView", () => {
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 
 		await waitFor(() => expect(bridge.ensure).toHaveBeenCalledWith("sess-1", false));
-		// Simulate the real IPC flow: after ensure, a navigate call sends a nav
-		// state with a URL so the positioning effect considers the view visible.
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -287,11 +282,9 @@ describe("useBrowserView", () => {
 		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "seen" }));
 		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "seen", phase: "finished", startObserved: true });
 
-		// Started while the user was on another session: only the finish arrives here.
 		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "unseen" }));
 		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "unseen", startObserved: false });
 
-		// A start seen before switching away does not carry over to a later visit.
 		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: true, action: "open", phase: "started", commandId: "left" }));
 		rerender({ sessionId: "sess-2" });
 		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
@@ -311,7 +304,6 @@ describe("useBrowserView", () => {
 		await act(async () => {});
 		const settled = result.current;
 
-		// A parent render with nothing new hands the panel the same object.
 		rerender({ sessionId: "sess-1" });
 		expect(result.current).toBe(settled);
 
@@ -336,13 +328,10 @@ describe("useBrowserView", () => {
 		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
 		act(() => bridge.emit(live("42:sess-2")));
 
-		// Hold the lookup so only the cached view can be on screen.
 		bridge.ensure.mockImplementationOnce(() => new Promise<BrowserNavState>(() => undefined));
 		bridge.setBounds.mockClear();
 		rerender({ sessionId: "sess-1" });
 
-		// The panel keeps showing the live page, and the first frame's native swap
-		// shows the destination before hiding the departing view.
 		expect(result.current.viewId).toBe("42:sess-1");
 		expect(result.current.navState.url).toBe("http://localhost:3000/");
 		await waitFor(() =>
@@ -416,7 +405,6 @@ describe("useBrowserView", () => {
 		rerender({ sessionId: "sess-2" });
 		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
 
-		// An agent navigates sess-1's page while the user is on sess-2.
 		act(() => bridge.emit(live("42:sess-1", "http://localhost:3000/next")));
 		bridge.ensure.mockImplementationOnce(() => new Promise<BrowserNavState>(() => undefined));
 		rerender({ sessionId: "sess-1" });
@@ -439,7 +427,6 @@ describe("useBrowserView", () => {
 		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
 		act(() => bridge.emit(live("42:sess-2")));
 
-		// sess-1's view was recreated while the user was away.
 		bridge.ensure.mockImplementationOnce(async () => live("43:sess-1"));
 		bridge.setBounds.mockClear();
 		rerender({ sessionId: "sess-1" });
@@ -456,7 +443,6 @@ describe("useBrowserView", () => {
 		renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
 		await act(async () => undefined);
 
-		// SessionView owns this hook; a flapping link must not re-render it.
 		expect(bridge.onRuntimeState).not.toHaveBeenCalled();
 		expect(bridge.getRuntimeState).not.toHaveBeenCalled();
 	});
@@ -773,7 +759,6 @@ describe("useBrowserView", () => {
 		await act(() => result.current.closeTab("t2"));
 		expect(result.current.closedTabs).toHaveLength(1);
 
-		// Simulate many other tabs having opened since (e.g. via agent activity).
 		act(() =>
 			bridge.emitTabs({
 				viewId: "42:sess-1",
@@ -796,9 +781,6 @@ describe("useBrowserView", () => {
 		expect(result.current.closedTabs).toHaveLength(0);
 	});
 
-	// Regression: the same drop-before-await bug also loses the entry on any
-	// other openTab failure (e.g. a race where the cap is hit between the row
-	// rendering and the click) — restore it instead.
 	it("restores a closed-tab entry if reopening it fails", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
@@ -835,8 +817,6 @@ describe("useBrowserView", () => {
 		expect(result.current.tabNotice).toBe("Couldn't reopen that tab");
 	});
 
-	// Closing from the tab strip is fire-and-forget, so a rejected close
-	// must be handled without becoming an unhandled rejection.
 	it("surfaces a notice instead of throwing when closing a tab fails", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
@@ -868,11 +848,6 @@ describe("useBrowserView", () => {
 		expect(result.current.tabNotice).toBe("");
 	});
 
-	// Regression: the main process can mutate its own tab state (e.g. the
-	// automation runtime's closeTarget callback removes the tab) before still
-	// reporting the close as failed. Without a resync, the renderer kept
-	// showing the already-closed tab's row forever — every retry re-failed
-	// identically since the main process had nothing left to close.
 	it("resyncs tab state from the main process after a failed close, instead of leaving a ghost row", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
@@ -899,8 +874,6 @@ describe("useBrowserView", () => {
 			}),
 		);
 
-		// The close call rejects, but the main process actually removed t2
-		// already — getTabs reflects that reality.
 		bridge.closeTab.mockRejectedValueOnce(new Error("agent-browser lost the connection mid-command"));
 		bridge.getTabs.mockResolvedValueOnce({
 			viewId: "42:sess-1",
@@ -920,10 +893,6 @@ describe("useBrowserView", () => {
 		await waitFor(() => expect(result.current.tabs.map((tab) => tab.id)).toEqual(["t1"]));
 	});
 
-	// Regression: closeTab can silently no-op — the underlying native close
-	// fails and the tab stays in session.tabs — and the recently-closed
-	// capture used to run before ever checking the response, so a tab that
-	// visibly failed to close still showed up as "closed" anyway.
 	it("does not remember a tab as closed when the main process reports it is still open", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
@@ -1013,11 +982,6 @@ describe("useBrowserView", () => {
 		expect(result.current.closedTabs).toEqual([]);
 	});
 
-	// Regression: the main process reports a freshly-opened tab as the literal
-	// string "about:blank" once its initial load settles (see
-	// isBlankBrowserEntry in browser-view-host.ts), not an empty string. A
-	// plain truthiness check on the url treated that as "real" content, so
-	// closing a tab nobody had navigated in showed up in Recently Closed.
 	it("does not remember a closed about:blank tab, since there is nothing to reopen", async () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
@@ -1056,10 +1020,6 @@ describe("useBrowserView", () => {
 		expect(result.current.closedTabs).toEqual([]);
 	});
 
-	// Regression: unlike live tabs (kept alive in the main process and simply
-	// re-fetched), Recently Closed was built up purely from this hook's own
-	// state — so switching sessions and back lost the list for good, even
-	// though nothing about that session actually changed.
 	it("keeps a session's Recently Closed list across switching away and back", async () => {
 		const bridge = setupBridge();
 		const { result, rerender } = renderHook(
@@ -1202,9 +1162,6 @@ describe("useBrowserView", () => {
 
 	it("clamps the native view to its resizable-panel column when the slot overspills", async () => {
 		const bridge = setupBridge();
-		// The slot is wider than its column (e.g. the `min-w-[280px]` wrapper on a
-		// narrower inspector panel). The native overlay isn't clipped by DOM
-		// overflow, so the reported bounds must be intersected with the column.
 		const column = document.createElement("div");
 		column.setAttribute("data-panel", "");
 		column.getBoundingClientRect = vi.fn(() => ({
@@ -1239,9 +1196,6 @@ describe("useBrowserView", () => {
 		await waitFor(() =>
 			expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({
 				viewId: "42:sess-1",
-				// Left edge is inset by the resize handle's reserved 6px (see
-				// RESIZE_HANDLE_RESERVE_PX in useBrowserView.ts) so the handle's
-				// hit area, inside this same column, is never covered by the view.
 				rect: { x: 106, y: 34, width: 144, height: 240 },
 				visible: true,
 			})),
@@ -1284,11 +1238,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("re-measures after a layout transition settles, catching a position-only shift", async () => {
-		// A ResizeObserver fires on size changes only; entering pop-out / opening the
-		// inspector moves the slot to a new x without resizing it, so the transition
-		// itself must drive a settle re-measure or the native overlay keeps stale
-		// (spilled) bounds. This is the regression behind the preview covering the
-		// terminal until an unrelated window resize fixed it.
 		vi.useFakeTimers();
 		try {
 			const bridge = setupBridge();
@@ -1297,11 +1246,9 @@ describe("useBrowserView", () => {
 				({ poppedOut }) => useBrowserView({ sessionId: "sess-1", active: true, poppedOut }),
 				{ initialProps: { poppedOut: false } },
 			);
-			// ensure() resolves on a microtask; flush it without advancing timers.
 			await act(async () => {
 				await Promise.resolve();
 			});
-			// Simulate a real nav state with URL so the positioning effect shows the view.
 			act(() =>
 				bridge.emit({
 					viewId: "42:sess-1",
@@ -1313,14 +1260,11 @@ describe("useBrowserView", () => {
 				}),
 			);
 			act(() => result.current.slotRef(slot));
-			// Flush the mount measure (immediate frame + settle timer).
 			await act(async () => {
 				vi.advanceTimersByTime(300);
 			});
 			expect(bridge.setBounds).toHaveBeenCalled();
 
-			// Pop-out transition: the immediate frame captures the still-animating
-			// geometry; the final position only lands once the panel has settled.
 			act(() => rerender({ poppedOut: true }));
 			await act(async () => {
 				vi.advanceTimersByTime(20);
@@ -1527,10 +1471,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("tracks a reused portal when its data-state flips in place", async () => {
-		// Radix reuses its portal node and flips data-state="open"↔"closed" without
-		// adding/removing a body child. A childList-only observer misses this, so the
-		// view stays un-parked while the dropdown is open. The hardened observer must
-		// catch the in-place attribute flip and re-park.
 		const bridge = setupBridge();
 		const slot = createSlot();
 		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
@@ -1548,7 +1488,6 @@ describe("useBrowserView", () => {
 		);
 		act(() => result.current.slotRef(slot));
 
-		// The portal node is present the whole time; only its data-state flips.
 		const portal = document.createElement("div");
 		portal.setAttribute("role", "menu");
 		portal.setAttribute("data-browser-native-overlay", "true");
@@ -1640,16 +1579,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("never exposes a departed session's leftover navState, even transiently, once sessionId changes", async () => {
-		// `navState` is component state, not derived from `sessionId` — without a
-		// synchronous ownership guard, the hook returns the PREVIOUS session's
-		// stale url for one render before its own reset effect lands. A
-		// consumer that decides whether to auto-open a browser tab from
-		// `navState.url` (e.g. SessionView) could read that stale render and
-		// wrongly treat a departed session's leftover URL as this session's own
-		// content. An effect that observes every committed render, not just the
-		// final settled one, is the only way to catch a transient wrong value —
-		// checking `result.current` after `rerender` proves nothing here, since
-		// testing-library's `act` flushes any reset effect before returning.
 		const bridge = setupBridge();
 		const observedUrls: string[] = [];
 		function useProbe(sid: string) {
@@ -1712,17 +1641,12 @@ describe("useBrowserView", () => {
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
 
-		// CDC replays the session payload on an unrelated update (revision
-		// unchanged) — the panel must not reload.
 		rerender({ previewUrl: "http://localhost:5173/", previewRevision: 1 });
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
 
-		// Re-running `ao preview` with the SAME url bumps the revision and must
-		// re-navigate (refresh) — the regression this issue fixes.
 		rerender({ previewUrl: "http://localhost:5173/", previewRevision: 2 });
 		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(2));
 
-		// A changed target with a fresh revision navigates to the new URL.
 		rerender({
 			previewUrl: "file:///tmp/preview/index.html",
 			previewRevision: 3,
@@ -1813,7 +1737,6 @@ describe("useBrowserView", () => {
 			const browser = setupBridge();
 			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
 			vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue(appPreview);
-			// Before its viewer reports, an agent tab is still empty.
 			const agentTab = { id: "t1", url: "", title: "", active: true, remote: { tabId: "" } };
 			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "t1", tabs: [agentTab] });
 			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
@@ -1847,7 +1770,6 @@ describe("useBrowserView", () => {
 			vi.useFakeTimers();
 			try {
 				const browser = setupBridge();
-				// Redeploying, then up.
 				const lookup = vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValueOnce("").mockResolvedValueOnce("").mockResolvedValue(agentUrl);
 				renderHook(() => useBrowserView(remote));
 				await act(() => vi.advanceTimersByTimeAsync(0));
@@ -1872,8 +1794,6 @@ describe("useBrowserView", () => {
 				const view = renderHook(() => useBrowserView(remote));
 				await act(() => vi.advanceTimersByTimeAsync(0));
 				await act(() => vi.advanceTimersByTimeAsync(10 * 60_000));
-				// At 0, 2, 6 and 14 s, then every 15 s: an agent may first use its
-				// browser long after the view opened.
 				expect(lookup).toHaveBeenCalledTimes(43);
 				view.unmount();
 				lookup.mockClear();
@@ -1904,7 +1824,6 @@ describe("useBrowserView", () => {
 		it("opens a link in the person's own tab, never in an agent tab", async () => {
 			const browser = setupBridge();
 			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue("");
-			// An agent tab on about:blank reports no URL, and another is already on the link.
 			const blankAgent = { id: "a1", url: "", title: "", active: true, remote: { tabId: "R1" } };
 			const sameAgent = { id: "a2", url: "https://example.com/", title: "Example", active: false, remote: { tabId: "R2" } };
 			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [blankAgent, sameAgent] });
@@ -1937,9 +1856,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("keeps the user's manual navigation on session switch-back and only re-navigates on a new preview", async () => {
-		// Regression for #3536: the native view survives a session switch in the
-		// main process with the user's last URL (e.g. google.com), but the preview
-		// effect used to re-fire on remount and navigate it back to previewUrl.
 		const bridge = setupBridge();
 		const { result, rerender } = renderHook(
 			({ sessionId, previewUrl, previewRevision }) =>
@@ -1966,7 +1882,6 @@ describe("useBrowserView", () => {
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
 
-		// The user browses elsewhere; the main-process view now holds google.com.
 		act(() =>
 			bridge.emit({
 				viewId: "42:sess-1",
@@ -1978,7 +1893,6 @@ describe("useBrowserView", () => {
 			}),
 		);
 
-		// Switch to another session, then back.
 		rerender({
 			sessionId: "sess-2",
 			previewUrl: undefined,
@@ -1992,12 +1906,9 @@ describe("useBrowserView", () => {
 		});
 		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
 
-		// The already-consumed preview must not be re-asserted: the view keeps
-		// whatever the user navigated to.
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
 		expect(bridge.clear).not.toHaveBeenCalled();
 
-		// A genuine new `ao preview` (revision bump) still takes over.
 		rerender({
 			sessionId: "sess-1",
 			previewUrl: "http://localhost:5217/",
@@ -2011,8 +1922,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("does not re-navigate to the preview when the hook fully remounts for the same session", async () => {
-		// SessionView may unmount entirely on a session switch; the consumed
-		// trigger must outlive the hook instance, not just a prop change.
 		const bridge = setupBridge();
 		const first = renderHook(() =>
 			useBrowserView({
@@ -2059,7 +1968,6 @@ describe("useBrowserView", () => {
 		await waitFor(() => expect(bridge.destroy).toHaveBeenCalledWith("42:sess-1"));
 		first.unmount();
 
-		// A fresh worker reusing the session ID gets its own preview navigation.
 		const second = renderHook(() =>
 			useBrowserView({
 				sessionId: "sess-1",
@@ -2074,8 +1982,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("re-applies the preview on remount without a native browser, whose view state does not survive", async () => {
-		// In web/mock mode navState is component-local, so remounting with an
-		// already-consumed trigger must still restore the static preview.
 		const original = window.ao;
 		window.ao = undefined;
 		try {
@@ -2194,7 +2100,6 @@ describe("useBrowserView", () => {
 		);
 		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
 
-		// `ao preview clear` empties previewUrl and bumps the revision.
 		rerender({ previewUrl: undefined, previewRevision: 2 });
 		await waitFor(() => expect(bridge.clear).toHaveBeenCalledWith("42:sess-1"));
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
@@ -2277,17 +2182,14 @@ describe("useBrowserView", () => {
 				}),
 			{ initialProps: { terminated: false } },
 		);
-		// The preview drives a navigate on mount.
 		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
 
-		// Terminate the session – the view must be cleared and no re-navigate.
 		rerender({ terminated: true });
 		await waitFor(() => expect(bridge.destroy).toHaveBeenCalledWith("42:sess-1"));
 		expect(bridge.clear).not.toHaveBeenCalled();
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
 		expect(result.current.viewId).toBe("");
 
-		// Restoring re-creates the target without a route change or remount.
 		rerender({ terminated: false });
 		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
 		expect(bridge.ensure).toHaveBeenCalledTimes(2);
@@ -2295,11 +2197,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("hides the native view while an element outside the slot is fullscreen, and restores it on exit", async () => {
-		// The terminal pane's fullscreen button promotes it into the DOM top layer,
-		// which covers every DOM node but not the native view — Chromium composites
-		// that above the page regardless. The transition also leaves the slot's box
-		// untouched, so no observer fires and the view kept painting its stale
-		// bounds over the fullscreen terminal, toolbar-less. Fullscreen must hide it.
 		vi.useFakeTimers();
 		try {
 			const bridge = setupBridge();
@@ -2332,8 +2229,6 @@ describe("useBrowserView", () => {
 				}),
 			);
 
-			// Terminal pane enters fullscreen: the slot is not inside it, so the
-			// view must go hidden even though the slot's own box never changed.
 			bridge.setBounds.mockClear();
 			setFullscreenElement(terminalPane);
 			act(() => document.dispatchEvent(new Event("fullscreenchange")));
@@ -2346,7 +2241,6 @@ describe("useBrowserView", () => {
 				visible: false,
 			}));
 
-			// Exiting fullscreen restores the view at its measured bounds.
 			bridge.setBounds.mockClear();
 			setFullscreenElement(null);
 			act(() => document.dispatchEvent(new Event("fullscreenchange")));
@@ -2365,8 +2259,6 @@ describe("useBrowserView", () => {
 	});
 
 	it("keeps the native view visible when the slot itself is inside the fullscreen element", async () => {
-		// Guards the `contains` check: if the browser subtree is the thing going
-		// fullscreen, the slot is still on screen and must keep painting.
 		const bridge = setupBridge();
 		const host = document.createElement("div");
 		document.body.appendChild(host);
@@ -2422,7 +2314,6 @@ describe("useBrowserView scroll geometry", () => {
 		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
 		act(() => result.current.slotRef(slot));
 		await waitFor(() => expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ visible: true })));
-		// Let the ref-handoff and settle measures finish.
 		await new Promise((resolve) => setTimeout(resolve, 350));
 		bridge.setBounds.mockClear();
 		const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
@@ -2483,7 +2374,6 @@ describe("useBrowserView scroll geometry while hidden", () => {
 		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
 		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
 		await new Promise((resolve) => setTimeout(resolve, 350));
-		// The view is hidden by now; scrolling must not keep saying so.
 		bridge.setBounds.mockClear();
 		for (let i = 0; i < 5; i++) {
 			act(() => { chat.dispatchEvent(new Event("scroll")); });
@@ -2505,7 +2395,6 @@ describe("useBrowserView scroll geometry while hidden", () => {
 		rerender({ active: false });
 		await nextFrame();
 		bridge.setBounds.mockClear();
-		// Hiding again (another deactivation path) is never deduplicated.
 		rerender({ active: true });
 		rerender({ active: false });
 		await nextFrame();

@@ -12,9 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// newRetryTestSink builds a sink whose HTTP client is driven by respond, which
-// receives the 1-based attempt number and returns the response (or error) for
-// that attempt. It also returns a pointer to the live attempt counter.
 func newRetryTestSink(t *testing.T, respond func(attempt int) (*http.Response, error)) (*PostHogSink, *int) {
 	t.Helper()
 	attempts := 0
@@ -59,7 +56,6 @@ func TestPostHogSinkRetriesTransientServerErrorThenSucceeds(t *testing.T) {
 }
 
 func TestPostHogSinkRetriesRateLimited429ThenSucceeds(t *testing.T) {
-	// 429 is a distinct transient branch from 5xx and must also retry.
 	sink, attempts := newRetryTestSink(t, func(attempt int) (*http.Response, error) {
 		if attempt == 1 {
 			return statusResponse(http.StatusTooManyRequests), nil
@@ -73,7 +69,6 @@ func TestPostHogSinkRetriesRateLimited429ThenSucceeds(t *testing.T) {
 }
 
 func TestPostHogSinkStopsAfterMaxAttemptsOn429(t *testing.T) {
-	// A sustained 429 must stay bounded, not retry forever.
 	sink, attempts := newRetryTestSink(t, func(_ int) (*http.Response, error) {
 		return statusResponse(http.StatusTooManyRequests), nil
 	})
@@ -97,8 +92,6 @@ func TestPostHogSinkRetriesNetworkErrorThenSucceeds(t *testing.T) {
 }
 
 func TestPostHogSinkDoesNotRetryPermanentRejection(t *testing.T) {
-	// A 4xx (other than 429) will fail identically on retry, so retrying only
-	// wastes a call; it must send exactly once.
 	sink, attempts := newRetryTestSink(t, func(_ int) (*http.Response, error) {
 		return statusResponse(http.StatusBadRequest), nil
 	})
@@ -119,7 +112,6 @@ func TestPostHogSinkStopsAfterMaxAttemptsOnSustainedFailure(t *testing.T) {
 }
 
 func TestPostHogSinkSucceedsFirstTryMakesOneRequest(t *testing.T) {
-	// The healthy path must add no extra billable request.
 	sink, attempts := newRetryTestSink(t, func(_ int) (*http.Response, error) {
 		return okResponse(), nil
 	})
@@ -130,9 +122,6 @@ func TestPostHogSinkSucceedsFirstTryMakesOneRequest(t *testing.T) {
 }
 
 func TestPostHogSinkRetryReusesSameEventUUID(t *testing.T) {
-	// Idempotency: both the first attempt and the retry must carry the same
-	// non-empty uuid so PostHog dedupes a first request it may already have
-	// ingested, rather than double-counting it.
 	var uuids []string
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://example.test", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
 		raw, _ := io.ReadAll(req.Body)
@@ -161,8 +150,6 @@ func TestPostHogSinkRetryReusesSameEventUUID(t *testing.T) {
 }
 
 func TestPostHogSinkCancelledContextStopsRetry(t *testing.T) {
-	// An already-cancelled context must not perform a retry after the first
-	// transient failure: shutdown cancellation stops pending retry work.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	sink, attempts := newRetryTestSink(t, func(_ int) (*http.Response, error) {

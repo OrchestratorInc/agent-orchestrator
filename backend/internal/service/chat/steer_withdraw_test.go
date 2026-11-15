@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// waitingSteerer is a provider whose Steer waits for the agent to collect the
-// guidance, the way a drain agent such as Qwen Code does, until it is withdrawn.
 type waitingSteerer struct {
 	*steerRecorder
 	parked    chan struct{}
@@ -46,8 +44,6 @@ func (w *waitingSteerer) WithdrawPendingSteers() func() {
 	return nil
 }
 
-// A steer waiting on the agent holds the dispatch lock. Stop must withdraw it
-// rather than wait for it to time out.
 func TestInterruptWithdrawsASteerWaitingForTheAgent(t *testing.T) {
 	provider := &waitingSteerer{
 		steerRecorder: newSteerRecorder(),
@@ -91,8 +87,6 @@ func TestInterruptWithdrawsASteerWaitingForTheAgent(t *testing.T) {
 	}
 }
 
-// failingStopSteerer refuses to interrupt, as a provider whose cancel did not
-// get through does, and records whether Stop gave steering back.
 type failingStopSteerer struct {
 	*waitingSteerer
 	restored chan struct{}
@@ -113,8 +107,6 @@ func (f *failingStopSteerer) WithdrawPendingSteers() func() {
 	}
 }
 
-// Stop withdraws the turn's steers before it interrupts. When the interrupt
-// fails the turn keeps running, so Stop gives steering back.
 func TestInterruptThatFailsRestoresSteering(t *testing.T) {
 	provider := &failingStopSteerer{
 		waitingSteerer: &waitingSteerer{

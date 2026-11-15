@@ -21,9 +21,6 @@ func TestClineConfiguredProvidersReadsStoredCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired := strconv.FormatInt(time.Now().Add(-time.Hour).UnixMilli(), 10)
-	// An account login with a refresh token and a stored API key count; an
-	// expired access token alone, an empty key and a provider with only a
-	// model do not.
 	if err := os.WriteFile(filepath.Join(dir, "providers.json"), []byte(`{
 		"lastUsedProvider":"zai-coding-plan",
 		"providers":{
@@ -64,12 +61,10 @@ func TestClineConfiguredProvidersHonorsOverridesAndAPIKeyEnv(t *testing.T) {
 	if want := []string{"cline", "deepseek"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("configured providers = %v, want %v", got, want)
 	}
-	// The discovery env takes precedence over the daemon's own environment.
 	if got := clineConfiguredProviders("", map[string]string{"CLINE_API_KEY": ""}); !reflect.DeepEqual(got, []string{"deepseek"}) {
 		t.Fatalf("configured providers with env override = %v", got)
 	}
 
-	// CLINE_DATA_DIR replaces the data directory under CLINE_DIR.
 	t.Setenv("CLINE_PROVIDER_SETTINGS_PATH", "")
 	t.Setenv("CLINE_API_KEY", "")
 	dataDir := filepath.Join(root, "data")

@@ -11,11 +11,8 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: () => "request failed",
 }));
 
-// The hook caches per URL in the shared module-level queryClient, so each test
-// hovers a distinct URL to stay isolated.
 const url = "https://example.com/docs/getting-started";
 
-/** A 16x16 RGBA image with an opaque glyph on half its width. */
 function glyph(r: number, g: number, b: number): Uint8ClampedArray {
 	const pixels = new Uint8ClampedArray(16 * 16 * 4);
 	for (let index = 0; index < pixels.length; index += 4) {
@@ -83,7 +80,6 @@ describe("AppLink link preview", () => {
 		});
 		expect(screen.getByText("Getting Started")).toBeInTheDocument();
 		expect(screen.getByText("How to install and run the thing.")).toBeInTheDocument();
-		// The domain is shown rather than the page's self-reported site name.
 		expect(screen.queryByText("Example Docs")).not.toBeInTheDocument();
 		expect(screen.getByText("example.com")).toBeInTheDocument();
 		expect(screen.getByTestId("link-preview-card").querySelectorAll("img")).toHaveLength(2);
@@ -139,7 +135,6 @@ describe("AppLink link preview", () => {
 		getMock.mockResolvedValue({ data: { url: focusUrl, title: "Keyboard reached" } });
 		render(<AppLink href={focusUrl}>docs</AppLink>);
 		const link = screen.getByRole("link");
-		// jsdom never reports :focus-visible; keyboard focus does in the browser.
 		vi.spyOn(link, "matches").mockImplementation((selector) => selector === ":focus-visible");
 
 		act(() => link.focus());
@@ -163,7 +158,6 @@ describe("AppLink link preview", () => {
 	describe("favicon theme handling", () => {
 		const faviconPreview = { url, title: "Page", faviconUrl: "https://example.com/favicon.svg" };
 		const favicon = () => screen.getByTestId("link-preview-card").querySelector("img")!;
-		// Settled icons are remembered per URL for the run; each case starts fresh.
 		beforeEach(forgetSettledFavicons);
 
 		it("loads with CORS and inverts a dark glyph in dark themes", () => {
@@ -181,7 +175,6 @@ describe("AppLink link preview", () => {
 			render(<LinkPreviewCard url={url} preview={faviconPreview} />);
 			fireEvent.error(favicon());
 			expect(favicon()).not.toHaveAttribute("crossorigin");
-			// Lazy loading left the retry unstarted in an open card, showing a blank icon.
 			expect(favicon()).not.toHaveAttribute("loading", "lazy");
 			fireEvent.load(favicon());
 			expect(favicon()).toHaveClass("dark:bg-white/90");

@@ -23,22 +23,8 @@ import {
 	settingsDialogHeaderClass,
 } from "./ui/dialog";
 
-/**
- * Confirmation for restarting into a staged build.
- *
- * The sidebar row and the Settings button used to call updates.install()
- * straight through, so a single click quit the app. That is fine for the
- * sessions that survive a quit and destructive for the ones that do not, and
- * the user had no way to tell which they had. This shows what the build
- * contains and names the sessions that would actually lose a turn.
- */
 export function RestartToUpdateDialog() {
 	const open = useUiStore((state) => state.updateInstallPromptOpen);
-	// Gate before any other hook runs. This is mounted for the whole shell's
-	// lifetime but visible almost never, and the body below subscribes to the
-	// update-status channel and reads the workspace list — neither is worth
-	// paying for on every shell mount, and both would couple every shell test
-	// to bridge mocks it has no reason to provide.
 	if (!open) return null;
 	return <RestartToUpdateDialogBody />;
 }
@@ -55,8 +41,6 @@ function RestartToUpdateDialogBody() {
 	const installing = useRef(false);
 	const installStartedStatus = useRef(status);
 	const mounted = useRef(true);
-	// Keep the confirmed build details visible when preparation emits a status
-	// without release metadata (for example a download progress event).
 	const [confirmedBuild, setConfirmedBuild] = useState<{
 		version?: string;
 		releaseNotes?: string;
@@ -68,15 +52,10 @@ function RestartToUpdateDialogBody() {
 		};
 	}, []);
 
-	// The rejection crosses IPC as English text. When the broadcast status
-	// describes the same failure, show its localized sentence instead (#5755).
 	const failureText = failureDetail && status.state === "error" && status.message === failureDetail
 		? localizedUpdateError(status.message, status.errorInfo, failureDetail, t)
 		: failureDetail;
 	const version = confirmedBuild?.version ?? status.staged?.version ?? status.version;
-	// The top-level notes follow status.version, which can be a newer build
-	// downloading over the staged one; the staged build's own notes ride on
-	// status.staged.
 	const releaseNotes = confirmedBuild
 		? confirmedBuild.releaseNotes
 		: status.staged?.releaseNotes ?? (status.version === version ? status.releaseNotes : undefined);
@@ -98,9 +77,6 @@ function RestartToUpdateDialogBody() {
 	);
 
 	const hasFailed = failureDetail !== null;
-	// Native staging can finish after the watchdog rejected the install request.
-	// A fresh ready status for the displayed target restores explicit install
-	// confirmation instead of leaving a recovered update behind a relaunch action.
 	useEffect(() => {
 		if (
 			status !== installStartedStatus.current &&
@@ -111,7 +87,6 @@ function RestartToUpdateDialogBody() {
 		}
 	}, [status, pending, version]);
 
-	// Start a fresh process when native staging has not recovered.
 	const retry = async () => {
 		if (installing.current) return;
 		installing.current = true;
@@ -119,15 +94,12 @@ function RestartToUpdateDialogBody() {
 		try {
 			await aoBridge.updates.relaunch();
 		} catch {
-			// Relaunch quits this process; a rejection means it didn't, and there
-			// is nothing further to do here.
 			installing.current = false;
 			if (mounted.current) setPending(false);
 		}
 	};
 
 	const confirm = async () => {
-		// A ref guards same-turn clicks before React commits the disabled state.
 		if (installing.current || !version) return;
 		installing.current = true;
 		installStartedStatus.current = status;
@@ -146,10 +118,6 @@ function RestartToUpdateDialogBody() {
 			if (mounted.current) close();
 		} catch (error) {
 			if (mounted.current) {
-				// Electron wraps IPC rejections with transport details. Keep the
-				// actionable main-process message, rendered as plain text, and drop
-				// an updater dump (overlong text counts, as in Settings) in favor of
-				// the heading alone (#5755).
 				setFailureDetail(error instanceof Error
 					? displayableUpdateError(error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim(), "")
 					: "");
@@ -204,8 +172,6 @@ function RestartToUpdateDialogBody() {
 						</div>
 					)}
 
-					{/* The notes are the only region that shrinks, so they grow with their
-					    content up to the dialog's max height and scroll only past that. */}
 					<section className="flex min-h-0 flex-col gap-1.5">
 						<p className="text-caption font-medium uppercase tracking-wide text-settings-muted">
 							{t("update.restart.whatsNew")}
@@ -231,8 +197,6 @@ function RestartToUpdateDialogBody() {
 							{failureDetail && <p className="whitespace-pre-line break-words">{failureText}</p>}
 						</div>
 					)}
-					{/* On failure the main process turns off install-on-quit, so hide
-					    this line rather than contradict the error above. */}
 					{failureDetail === null && (
 						<p className="text-xs leading-4 text-settings-muted">{t("update.restart.installsOnQuit")}</p>
 					)}

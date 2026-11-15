@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Capture buildForge's args without pulling in electron-builder's real machinery.
 const buildForge = vi.fn<(forge: { dir: string }, options: any) => Promise<string[]>>(async () => [
 	"/out/make/Agent Orchestrator Setup.exe",
 ]);
@@ -28,7 +27,6 @@ describe("MakerNSIS", () => {
 
 	it("builds an nsis target for the requested arch and forwards config", async () => {
 		const maker = new MakerNSIS({ appId: "dev.agent-orchestrator.desktop", icon: "assets/icon.ico" }, ["win32"]);
-		// Forge resolves the (possibly arch-dependent) config before make().
 		await maker.prepareConfig(makeOptions.targetArch);
 		const artifacts = await maker.make(makeOptions);
 
@@ -36,13 +34,10 @@ describe("MakerNSIS", () => {
 		const [forgeOptions, options] = buildForge.mock.calls[0];
 		expect(forgeOptions).toEqual({ dir: makeOptions.dir });
 		expect(options.win).toEqual(["nsis:x64"]);
-		// electron-builder must not try to publish; the workflow does that.
 		expect(options.config.publish).toBeNull();
 		expect(options.config.appId).toBe("dev.agent-orchestrator.desktop");
-		// productName falls back to appName when not set on the maker config.
 		expect(options.config.productName).toBe("Agent Orchestrator");
 		expect(options.config.win).toEqual({ icon: "assets/icon.ico" });
-		// A real installer: not Squirrel's silent one-click per-user drop.
 		expect(options.config.nsis.oneClick).toBe(false);
 		expect(options.config.nsis.allowToChangeInstallationDirectory).toBe(true);
 	});
@@ -56,18 +51,11 @@ describe("MakerNSIS", () => {
 		await maker.make(makeOptions);
 
 		const [, options] = buildForge.mock.calls.at(-1)!;
-		// electron-builder derives the exe name — and thus the shortcut's TargetPath
-		// and icon — from win.executableName, falling back to productName otherwise.
-		// It must match Forge's packaged "agent-orchestrator.exe", not the
-		// "Agent Orchestrator.exe" it would infer from productName.
 		expect(options.config.win.executableName).toBe("agent-orchestrator");
 		expect(options.config.win.icon).toBe("assets/icon.ico");
 	});
 });
 
-// envSigningOptions (#4502) is env-driven, so exercise it through make() with
-// buildForge mocked: every credential path, its precedence, and the guarantee
-// that credential-less builds stay unsigned and unforced.
 describe("MakerNSIS Windows code signing (#4502)", () => {
 	const signingEnvKeys = [
 		"WIN_CSC_LINK",
@@ -82,9 +70,6 @@ describe("MakerNSIS Windows code signing (#4502)", () => {
 		"AZURE_RESOURCE_GROUP_NAME",
 		"AZURE_ACCOUNT_NAME",
 		"AZURE_CODE_SIGNING_ACCOUNT_NAME",
-		// CSC_LINK/CSC_KEY_PASSWORD must never be consumed for Windows; kept
-		// here so every test starts from a clean slate even on a machine that
-		// exports the macOS credentials.
 		"CSC_LINK",
 		"CSC_KEY_PASSWORD",
 	] as const;
@@ -118,8 +103,6 @@ describe("MakerNSIS Windows code signing (#4502)", () => {
 	});
 
 	it("ignores the macOS CSC_LINK secret — a stray Apple .p12 must not wedge the Windows build", async () => {
-		// Regression guard: CSC_LINK is the Apple Developer ID .p12. Signing
-		// (and thus forceCodeSigning) must only activate via WIN_CSC_LINK.
 		process.env.CSC_LINK = "/keychain/AppleDeveloperID.p12";
 		process.env.CSC_KEY_PASSWORD = "apple-secret";
 		const options = await makeWithNoConfig();
@@ -138,8 +121,6 @@ describe("MakerNSIS Windows code signing (#4502)", () => {
 	});
 
 	it("trims whitespace around WIN_SIGNING_HASH_ALGORITHMS entries", async () => {
-		// "sha256, sha1" must yield ["sha256", "sha1"] — not a " sha1" element
-		// electron-builder would not recognize (PR review feedback).
 		process.env.WIN_CSC_LINK = "C:\\certs\\windows-codesign.pfx";
 		process.env.WIN_SIGNING_HASH_ALGORITHMS = "sha256, sha1";
 		const options = await makeWithNoConfig();

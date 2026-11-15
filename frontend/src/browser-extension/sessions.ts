@@ -1,9 +1,3 @@
-// AO session ↔ Chrome tab group ownership. Each AO session works only in its
-// own tab group ("Orchestrator · <session>"), opened in the background of the
-// window the user last used, or in a window of its own when there is none. Tabs get AO's
-// logical ids (t1, t2, …). A tab the user drags out of the group is no longer
-// the agent's; a tab the user drags in becomes the agent's.
-
 import type { ChromeApi, Tab } from "./chrome-api";
 import { BridgeError } from "./protocol";
 
@@ -17,7 +11,6 @@ export type SessionTabs = {
 	tabs: Record<string, number>;
 	activeTabId?: string;
 	nextTab: number;
-	/** Tabs the user handed over by dragging them into the group: never closed. */
 	handedTabs?: number[];
 };
 
@@ -36,7 +29,6 @@ export function groupColor(sessionId: string): string {
 export class SessionTabRegistry {
 	private sessions = new Map<string, SessionTabs>();
 	private loaded?: Promise<void>;
-	/** Tabs this registry is creating; their grouping is not a user hand-off. */
 	private readonly creating = new Set<number>();
 	private readonly ownershipListeners = new Set<() => void>();
 
@@ -46,7 +38,6 @@ export class SessionTabRegistry {
 		this.ownershipListeners.add(listener);
 	}
 
-	/** Restore ownership after a service-worker restart and track user changes. */
 	start(): void {
 		this.chrome.tabs.onRemoved.addListener((tabId) => void this.forgetTab(tabId));
 		this.chrome.tabs.onUpdated.addListener((tabId, change) => {
@@ -80,7 +71,6 @@ export class SessionTabRegistry {
 		return [...this.sessions.values()];
 	}
 
-	/** The session's state, creating its tab group on first use. */
 	async ensure(sessionId: string): Promise<SessionTabs> {
 		await this.load();
 		let session = this.sessions.get(sessionId);
@@ -92,7 +82,6 @@ export class SessionTabRegistry {
 		return session;
 	}
 
-	/** The session's active tab, verified to still belong to its group. */
 	async active(session: SessionTabs): Promise<ActiveTab> {
 		const logicalId = session.activeTabId && session.tabs[session.activeTabId] !== undefined ? session.activeTabId : Object.keys(session.tabs)[0];
 		if (!logicalId) throw new BridgeError("BROWSER_TARGET_UNAVAILABLE", "The session has no Chrome tab");
@@ -126,13 +115,10 @@ export class SessionTabRegistry {
 		}
 		let tab: (Tab & { id?: number }) | undefined;
 		if (windowId === undefined) {
-			// Beside the user's tabs, in the background: agents act on a tab that
-			// is not in front, so they never need a window of their own.
 			const user = await this.chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => undefined);
 			if (user?.id !== undefined && !user.incognito) windowId = user.id;
 		}
 		if (windowId === undefined) {
-			// No window to join: open the session's own, unfocused.
 			const created = await this.chrome.windows.create({ type: "normal", focused: false, state: "normal", url: url ?? "about:blank" });
 			windowId = created.id;
 			tab = created.tabs?.[0];
@@ -143,7 +129,6 @@ export class SessionTabRegistry {
 		try {
 			return await this.adopt(session, tab, windowId!);
 		} finally {
-			// Chrome reports the grouping asynchronously; let that event pass.
 			const id = tab.id;
 			setTimeout(() => this.creating.delete(id), 1_000);
 		}
@@ -157,7 +142,6 @@ export class SessionTabRegistry {
 				groupId !== undefined ? { tabIds: tabId, groupId } : { tabIds: tabId, createProperties: { windowId } },
 			);
 		} catch {
-			// The old group is gone (closed or in another window): start a new one.
 			groupId = await this.chrome.tabs.group({ tabIds: tabId, createProperties: { windowId } });
 		}
 		if (groupId !== session.groupId) {
@@ -189,11 +173,6 @@ export class SessionTabRegistry {
 		await this.chrome.tabs.remove(tabId).catch(() => undefined);
 	}
 
-	/**
-	 * Release a session: close its window when everything in it was the
-	 * session's. Otherwise the window also holds something of the user's, so
-	 * close tabs still on about:blank and ungroup the rest for them to keep.
-	 */
 	async destroy(sessionId: string): Promise<void> {
 		await this.load();
 		const session = this.sessions.get(sessionId);
@@ -222,7 +201,6 @@ export class SessionTabRegistry {
 		);
 	}
 
-	/** Find which session owns a Chrome tab, if any. */
 	ownerOf(tabId: number): { session: SessionTabs; logicalId: string } | undefined {
 		for (const session of this.sessions.values()) {
 			for (const [logicalId, id] of Object.entries(session.tabs)) if (id === tabId) return { session, logicalId };
@@ -258,14 +236,12 @@ export class SessionTabRegistry {
 		await this.load();
 		const owner = this.ownerOf(tabId);
 		if (owner && owner.session.groupId !== groupId) {
-			// Dragged out of the AO group: the agent loses it.
 			delete owner.session.tabs[owner.logicalId];
 			if (owner.session.activeTabId === owner.logicalId) owner.session.activeTabId = Object.keys(owner.session.tabs)[0];
 			await this.save();
 			return;
 		}
 		if (!owner && groupId >= 0 && !this.creating.has(tabId)) {
-			// Dragged into an AO group: the user handed the tab to the agent.
 			const session = [...this.sessions.values()].find((candidate) => candidate.groupId === groupId);
 			if (!session) return;
 			session.tabs[`t${session.nextTab++}`] = tabId;

@@ -61,7 +61,6 @@ describe("ReviewChangesMenu", () => {
 		const trigger = screen.getByRole("button", { name: "Changes to review: Uncommitted" });
 		expect(trigger).toHaveAttribute("title", "Uncommitted");
 		expect(trigger).toHaveTextContent("Uncommitted+3−1");
-		// Text only, like the menu's rows: the chevron is its one icon.
 		expect(trigger.querySelectorAll("svg")).toHaveLength(1);
 		expect(trigger.querySelector("svg")).toHaveClass("icon-chevron-down");
 	});
@@ -74,15 +73,12 @@ describe("ReviewChangesMenu", () => {
 			{ scope: "unstaged", stats: zero, empty: false },
 		];
 		const view = renderMenu({ value: { kind: "uncommitted" }, stats: zero, scopes });
-		// No +0 −0 on the trigger or any row.
 		expect(screen.getByRole("button", { name: "Changes to review: Uncommitted" })).toHaveTextContent(/^Uncommitted$/);
 		await openMenu();
-		// Staged has no files, so it goes; a binary-only change counts no lines but is still a change.
 		expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual(["Uncommitted", "Unstaged"]);
 		await userEvent.keyboard("{Escape}");
 		view.view.unmount();
 
-		// The pick stays listed even when it has nothing, so the menu shows what the trigger names.
 		renderMenu({ value: { kind: "staged" }, scopes });
 		await openMenu();
 		expect(screen.getByRole("menuitemradio", { name: /^Staged/ })).toHaveAttribute("aria-checked", "true");
@@ -101,7 +97,6 @@ describe("ReviewChangesMenu", () => {
 		await openMenu();
 		const scopes = await screen.findAllByRole("menuitemradio");
 		expect(scopes.map((item) => item.textContent)).toEqual(["Uncommitted+3−1", "Staged+1−0", "Unstaged+2−1"]);
-		// Plain labels: only the selected row's check is drawn.
 		expect(scopes[0].querySelectorAll("svg")).toHaveLength(1);
 		expect(scopes[1].querySelector("svg")).toBeNull();
 		expect(screen.getByRole("menuitem", { name: /^Commits/ }).querySelectorAll("svg")).toHaveLength(1);
@@ -156,7 +151,6 @@ describe("ReviewChangesMenu", () => {
 		const unticked = screen.getByRole("menuitemcheckbox", { name: /^commit 0/ });
 		const ticked = screen.getByRole("menuitemcheckbox", { name: /^commit 1/ });
 		for (const row of [all, unticked, ticked]) {
-			// Only the checkbox's own check mark is drawn; no row icon, no time.
 			expect(row.querySelectorAll("svg").length).toBeLessThanOrEqual(1);
 			expect(row.lastElementChild).toHaveClass("size-4", "rounded-sm");
 		}
@@ -164,7 +158,6 @@ describe("ReviewChangesMenu", () => {
 		expect(within(unticked).getByText("+0").parentElement).toHaveClass("text-passive");
 		expect(within(ticked).getByText("+1")).toHaveClass("text-success");
 		expect(within(all).getByText("+9").parentElement).toHaveClass("text-passive");
-		// No divider between All commits and the commits.
 		expect(screen.getByRole("menu").querySelector('[role="separator"]')).toBeNull();
 	});
 
@@ -190,7 +183,6 @@ describe("ReviewChangesMenu", () => {
 		expect(screen.queryByText("Older commits aren't listed")).not.toBeInTheDocument();
 		const list = screen.getByRole("menuitemcheckbox", { name: /^commit 0/ }).parentElement;
 		expect(list).toHaveClass("max-h-[12.625rem]", "overflow-y-auto");
-		// Six rows and Show more fill the box; later pages scroll to it.
 		const more = screen.getByRole("menuitem", { name: "Show 6 more" });
 		expect(list?.lastElementChild).toBe(more);
 		expect(more).toHaveClass("justify-center");
@@ -220,8 +212,6 @@ describe("ReviewChangesMenu", () => {
 		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: commitRows(3) });
 		await openMenu();
 		const list = screen.getByRole("menuitemcheckbox", { name: /^commit 0/ }).parentElement;
-		// The list keeps its scrollbar gutter even when it doesn't scroll; All
-		// commits, outside it, is inset by the same gutter and padding.
 		expect(list).toHaveClass("[scrollbar-gutter:stable]", "pr-0.5");
 		expect(screen.getByRole("menuitemcheckbox", { name: /^All commits/ })).toHaveClass("mr-1.5");
 	});
@@ -231,7 +221,6 @@ describe("ReviewChangesMenu", () => {
 		renderMenu({ mode: "view", value: { kind: "commits", shas: [rows[15].sha] } }, { rows });
 		await openMenu();
 		expect(screen.getByRole("menuitemcheckbox", { name: /^commit 15/ })).toHaveAttribute("aria-checked", "true");
-		// Pages of six up to the ticked commit: 18 commits and All commits.
 		expect(screen.getAllByRole("menuitemcheckbox")).toHaveLength(19);
 		expect(screen.getByRole("menuitem", { name: "Show 6 more" })).toBeInTheDocument();
 	});
@@ -246,7 +235,6 @@ describe("ReviewChangesMenu", () => {
 		expect(tooltip).toHaveTextContent("commit 1: a long subject that the row truncates");
 		expect(tooltip).toHaveTextContent(shaOf(1));
 
-		// The open tooltip must not swallow Escape: one press closes the menu.
 		await userEvent.keyboard("{Escape}");
 		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
@@ -291,7 +279,6 @@ describe("ReviewChangesMenu", () => {
 		renderMenu({ mode: "view", value: { kind: "commits", shas: [] } }, { rows: [], rangeMode: "since_base", baseRef: "main" });
 		await openMenu();
 		expect(screen.getByRole("menuitem", { name: "No commits that aren't on main" })).toBeInTheDocument();
-		// There is nothing for All commits to select.
 		expect(screen.queryByRole("menuitemcheckbox", { name: /^All commits/ })).not.toBeInTheDocument();
 	});
 

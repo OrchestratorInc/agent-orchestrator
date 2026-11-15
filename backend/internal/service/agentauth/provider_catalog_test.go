@@ -90,7 +90,6 @@ func TestOpenCodeCatalogKeyIsSavedInNativeStore(t *testing.T) {
 func TestPiLockGivesUpOnAStaleLockItCannotRemove(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	lock := path + ".lock"
-	// A stale lock that is not empty can't be removed, so it can't be taken over.
 	if err := os.MkdirAll(filepath.Join(lock, "held"), 0o700); err != nil {
 		t.Fatal(err)
 	}

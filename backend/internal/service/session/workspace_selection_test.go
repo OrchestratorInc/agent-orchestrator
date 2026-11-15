@@ -13,16 +13,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// checkedOutSelectionService serves a session checked out at repo whose
-// compare range starts at base.
 func checkedOutSelectionService(repo, base string) *Service {
 	st := newFakeStore()
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{Branch: "session", WorkspacePath: repo, DiffBaseSHA: base, DiffBaseRef: "main"}}
 	return &Service{store: st, commitSelections: newCommitSelectionCache(commitSelectionCacheSize)}
 }
 
-// selectionFixture commits three changes on the checked-out session branch,
-// one file each, and returns the base and the three commits oldest first.
 func selectionFixture(t *testing.T) (repo, base string, commits []string) {
 	t.Helper()
 	repo = newWorkspaceRepo(t)
@@ -50,7 +46,6 @@ func TestCommitSelectionAdjacentUsesSimpleRange(t *testing.T) {
 	svc := checkedOutSelectionService(repo, base)
 	ctx := context.Background()
 
-	// Newest first, as the menu lists them; the order sent does not matter.
 	selection, err := svc.GetWorkspaceCommitSelection(ctx, "ao-1", WorkspaceView{}, []string{commits[2], commits[1]}, "")
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +82,6 @@ func TestCommitSelectionNonAdjacentReplaysWithoutTouchingIndexWorktreeOrRefs(t *
 	commitWorkspaceFile(t, repo, "README.md", "hello\nfeature\n", "extend readme")
 	last := commitWorkspaceFile(t, repo, "c.txt", "c\n", "add c")
 	runGit(t, repo, "switch", "-c", "session", "main")
-	// Staged, unstaged and untracked changes the replay must not disturb.
 	writeWorkspaceFile(t, repo, "README.md", "staged\n")
 	runGit(t, repo, "add", "README.md")
 	writeWorkspaceFile(t, repo, "README.md", "staged\nunstaged\n")
@@ -189,8 +183,6 @@ func TestCommitSelectionReportsConflict(t *testing.T) {
 func TestCommitSelectionReplayIgnoresDiffConfig(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	runGit(t, repo, "branch", "-M", "main")
-	// Settings a user may carry that would strip the patch's context or
-	// print submodule bumps as a log the replay cannot apply.
 	runGit(t, repo, "config", "diff.context", "0")
 	runGit(t, repo, "config", "diff.submodule", "log")
 	lines := make([]string, 100)
@@ -282,8 +274,6 @@ func TestCommitSelectionRootCommitUsesEmptyTree(t *testing.T) {
 	second := commitWorkspaceFile(t, repo, "later.txt", "later\n", "later")
 	svc := branchViewService(repo)
 	ctx := context.Background()
-	// main is the default branch, so its view lists its recent commits back
-	// to the root commit.
 	view := WorkspaceView{Branch: "main"}
 
 	selection, err := svc.GetWorkspaceCommitSelection(ctx, "ao-1", view, []string{root}, "")
@@ -305,7 +295,6 @@ func TestCommitSelectionRootCommitUsesEmptyTree(t *testing.T) {
 		t.Fatalf("revisions = before %+v, after %+v", before, after)
 	}
 
-	// A later run without a parent has nothing to replay onto earlier ones.
 	_, conflict, err := replayCommitRuns(ctx, repo, []commitRun{{first: second, last: second, base: root}, {first: root, last: root}})
 	if err != nil {
 		t.Fatal(err)
@@ -382,13 +371,11 @@ func TestCommitShaAndCommitShasAreMutuallyExclusive(t *testing.T) {
 	_, err = svc.GetWorkspaceSelectionFileRevision(ctx, "ao-1", WorkspaceSelectionRevisionInput{Path: "a.txt", Side: WorkspaceBlobAfter, CommitSHA: commits[0], CommitSHAs: []string{commits[1]}})
 	requireAPIError(t, err, apierr.KindInvalid, "WORKSPACE_COMMIT_SELECTION_CONFLICT")
 
-	// A selection reads committed revisions only.
 	_, err = svc.GetWorkspaceDiffs(ctx, "ao-1", WorkspaceDiffInput{Scope: WorkspaceDiffStaged, CommitSHAs: []string{commits[1]}, Paths: []string{"a.txt"}})
 	requireAPIError(t, err, apierr.KindInvalid, "WORKSPACE_COMMIT_SCOPE_REQUIRED")
 	_, err = svc.GetWorkspaceDiffs(ctx, "ao-1", WorkspaceDiffInput{Scope: WorkspaceDiffUncommitted, View: WorkspaceView{Branch: "main"}, Paths: []string{"a.txt"}})
 	requireAPIError(t, err, apierr.KindInvalid, "WORKSPACE_COMMIT_SCOPE_REQUIRED")
 
-	// The legacy single commitSha still reads that one commit.
 	after, err := svc.GetWorkspaceSelectionFileRevision(ctx, "ao-1", WorkspaceSelectionRevisionInput{Path: "b.txt", Side: WorkspaceBlobAfter, Scope: WorkspaceDiffCommitted, CommitSHA: commits[1]})
 	if err != nil {
 		t.Fatal(err)
@@ -414,7 +401,6 @@ func TestCommitSelectionCachesByImmutableInputs(t *testing.T) {
 	if svc.commitSelections.len() != 1 || first.after != again.after || !slices.Equal(selectionPaths(first), selectionPaths(again)) {
 		t.Fatalf("cache entries = %d, selections %+v and %+v; want one shared entry", svc.commitSelections.len(), first, again)
 	}
-	// A new commit moves the tip, so the same ticks resolve under a new key.
 	commitWorkspaceFile(t, repo, "d.txt", "d\n", "add d")
 	if _, err := svc.GetWorkspaceCommitSelection(ctx, "ao-1", WorkspaceView{}, []string{commits[0], commits[2]}, ""); err != nil {
 		t.Fatal(err)

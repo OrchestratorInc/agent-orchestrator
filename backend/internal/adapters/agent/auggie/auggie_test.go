@@ -110,9 +110,6 @@ func TestGetLaunchCommandOmitsBlankConfiguredModel(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandPermissionModesEmitNoFlag documents that Auggie has no
-// blanket auto-approve flag, so every AO permission mode produces the same argv
-// (no permission flag) and defers to the user's Auggie config.
 func TestGetLaunchCommandPermissionModesEmitNoFlag(t *testing.T) {
 	modes := []ports.PermissionMode{
 		ports.PermissionModeDefault,
@@ -364,9 +361,6 @@ func TestSessionInfoReadsHookMetadata(t *testing.T) {
 }
 
 func TestResolveAuggieBinaryFallback(t *testing.T) {
-	// When the binary is not on PATH or any well-known location, the resolver
-	// MUST surface ports.ErrAgentBinaryNotFound rather than a silent string
-	// fallback that lets a missing CLI launch into an empty tmux pane.
 	bin, err := ResolveAuggieBinary(context.Background())
 	if err != nil {
 		if !errors.Is(err, ports.ErrAgentBinaryNotFound) {

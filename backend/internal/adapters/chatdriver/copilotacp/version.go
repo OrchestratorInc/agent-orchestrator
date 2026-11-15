@@ -8,16 +8,11 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 )
 
-// Copilot CLI identifies itself as "Copilot" in the ACP handshake. 1.0.93 is
-// the oldest build AO has verified end to end over ACP.
 const (
 	copilotAgentName      = "Copilot"
 	minimumCopilotVersion = "1.0.93"
 )
 
-// validateInitialize admits only GitHub Copilot CLI at or above the verified
-// version. It reads the version from the handshake rather than running
-// `copilot --version`, which would start a second CLI process per probe.
 func validateInitialize(init acpsdk.InitializeResponse) error {
 	if init.AgentInfo == nil {
 		return fmt.Errorf("ACP agent did not identify itself; Orchestrator requires GitHub Copilot CLI %s or newer",
@@ -41,7 +36,6 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 
 type version [3]int
 
-// parseVersion reads major.minor.patch, ignoring a pre-release or build suffix.
 func parseVersion(value string) (version, bool) {
 	core := strings.TrimPrefix(strings.TrimSpace(value), "v")
 	if i := strings.IndexAny(core, "-+ "); i >= 0 {

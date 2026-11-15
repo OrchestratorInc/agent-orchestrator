@@ -10,12 +10,10 @@ import (
 
 const piSession = "01a11ac8-11e4-7c7b-84ab-e32998fa4fb1"
 
-// piPath is a Pi session file as Pi writes it: sessions/<cwd-dashed>/<ISO>_<uuid>.jsonl.
 func piPath(root, id string) string {
 	return filepath.Join(root, "sessions", "--work-repo--", "2026-10-08T09-11-21-828Z_"+id+".jsonl")
 }
 
-// Shapes below are trimmed from real Pi session JSONL.
 func TestPiTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
@@ -42,7 +40,6 @@ func TestPiTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	}
 }
 
-// piMsg is one Pi `message` record linked into the tree by id/parentId.
 func piMsg(id, parent, role, text string) string {
 	return `{"type":"message","id":"` + id + `","parentId":"` + parent + `","timestamp":"2026-10-08T09:11:30.000Z","message":{"role":"` + role + `","content":[{"type":"text","text":"` + text + `"}]}}`
 }
@@ -62,8 +59,6 @@ func TestPiTranscriptKeepsLinearChatInOrder(t *testing.T) {
 	wantTexts(t, got.messages, "user: first question", "assistant: first answer", "user: second question", "assistant: second answer")
 }
 
-// A rewind sends a new prompt under an earlier parent; the abandoned turns stay
-// in the file but must not appear beside their replacement.
 func TestPiTranscriptFollowsActiveBranchAfterRewind(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
@@ -81,8 +76,6 @@ func TestPiTranscriptFollowsActiveBranchAfterRewind(t *testing.T) {
 	wantTexts(t, got.messages, "user: first question", "assistant: first answer", "user: real followup", "assistant: real answer")
 }
 
-// A session branched at its first prompt shows only the branch the last record
-// belongs to.
 func TestPiTranscriptFollowsActiveBranchFromRoot(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
@@ -98,7 +91,6 @@ func TestPiTranscriptFollowsActiveBranchFromRoot(t *testing.T) {
 	wantTexts(t, got.messages, "user: active opener", "assistant: active reply")
 }
 
-// A record whose parent is missing must not hide the reachable branch.
 func TestPiTranscriptToleratesMissingParent(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}

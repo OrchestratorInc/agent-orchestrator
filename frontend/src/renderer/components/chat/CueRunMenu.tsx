@@ -20,13 +20,8 @@ import {
 import { CreateCueDialog } from "../CuesDialog";
 import { readLastRunCue, rememberLastRunCue } from "../../lib/last-run-cue";
 
-// Hovering the trigger opens the menu immediately — it is the discoverability
-// affordance, not a tooltip. The close delay only lets the pointer cross the
-// gap between the trigger and the menu without the menu vanishing underneath it.
 const CUE_MENU_CLOSE_MS = 150;
 
-// The cue runner requires a selected session; boards never render this control.
-// Keying by target drops in-flight menu state when switching project or session.
 export function CueRunMenu({
 	projectId,
 	sessionId,
@@ -36,10 +31,8 @@ export function CueRunMenu({
 }: {
 	projectId: string;
 	sessionId: string;
-	/** A Cloud session's organization: its project's cues live on the control plane. */
 	cloudOrgId?: string;
 	disabled?: boolean;
-	/** Called once per cue dispatch, from the trigger or the menu. */
 	onRun?: () => void;
 }) {
 	return (
@@ -78,14 +71,8 @@ function CueRunMenuTrigger({
 	const generation = useRef(0);
 	const hoverCloseTimer = useRef<number | null>(null);
 	const buttonRef = useRef<HTMLButtonElement>(null);
-	// The menu is hover-driven, so the pointerdown Radix uses to toggle a menu —
-	// and the dismiss layer that same press wakes up — must not close a menu the
-	// pointer is still inside. Escape is the keyboard escape hatch.
 	const pointerInsideControl = useRef(false);
 	const escapeRequested = useRef(false);
-	// A menu the pointer opened must not hand focus back to the trigger when it
-	// closes: Chromium can mark that returned focus :focus-visible, which keeps
-	// the hover highlight lit after the pointer has left.
 	const openedByPointer = useRef(false);
 	const invokeMutation = useInvokeCueMutation();
 	const cloud = useCueHost(cloudOrgId);
@@ -131,10 +118,6 @@ function CueRunMenuTrigger({
 		cancelHoverClose();
 	};
 
-	// Opening never bumps the generation: with hover opening the menu, a pointer
-	// drifting back over the trigger must not invalidate a dispatch that is still
-	// in flight and drop its toast or navigation. Target changes and unmounts are
-	// what retire stale work — this component is keyed by project and session.
 	const openMenu = () => setOpen(true);
 
 	const handleOpenChange = (next: boolean) => {
@@ -158,10 +141,6 @@ function CueRunMenuTrigger({
 		setInvokingId(cue.id);
 		try {
 			if (cloud) {
-				// A Cloud agent cue was sent to the session; a command cue runs in a
-				// new shell of its sandbox, which types the command once it is up.
-				// The command is queued as the shell is created, before its tab
-				// appears and its terminal connects.
 				const result = await invokeCloudCue(cloud, cue.id, sessionId);
 				rememberLastRunCue(projectId, cue.id);
 				if (result.kind !== "command" || !result.command) return;
@@ -189,7 +168,6 @@ function CueRunMenuTrigger({
 					terminal,
 					...current.filter((item) => item.handleId !== terminal.handleId),
 				]);
-				// A delayed response must not redirect a different project or session.
 				if (origin !== generation.current) return;
 				setActiveShellTerminal(terminal.handleId);
 				return;
@@ -203,8 +181,6 @@ function CueRunMenuTrigger({
 		}
 	};
 
-	// A pointer click repeats the project's last successfully dispatched cue.
-	// Without a valid remembered cue, open the list for an explicit choice.
 	const runLastCue = async () => {
 		if (disabled || spinner || creating) return;
 		const origin = generation.current;
@@ -217,8 +193,6 @@ function CueRunMenuTrigger({
 			});
 			if (origin !== generation.current) return;
 			const lastCue = cues.find((cue) => cue.id === readLastRunCue(projectId));
-			// Nothing to run: leave the hover menu up so its empty state can
-			// offer creating the first cue.
 			if (!lastCue) {
 				openedByPointer.current = true;
 				openMenu();
@@ -244,12 +218,9 @@ function CueRunMenuTrigger({
 						data-priority="secondary"
 						disabled={disabled || spinner}
 						variant="quiet"
-						// Hover opens this menu; an open menu is not a pressed action.
 						className="data-[state=open]:before:opacity-0 data-[state=open]:before:bg-interactive-hover data-[state=open]:text-muted-foreground data-[state=open]:hover:before:opacity-100 data-[state=open]:hover:text-foreground data-[state=open]:focus-visible:before:opacity-100 data-[state=open]:focus-visible:text-foreground"
 						onPointerEnter={handlePointerEnter}
 						onPointerLeave={handlePointerLeave}
-						// Keyboard activation opens the menu (Radix); only pointer
-						// presses run the last cue, so Enter/Space stay safe.
 						onClick={(event) => {
 							if (event.detail === 0) return;
 							void runLastCue();
@@ -321,9 +292,6 @@ function CueMenuItems({
 			showGlobalToast(t("cues.loadFailed"), apiErrorMessage(query.error, t("cues.loadFailed")), { tone: "error", dedupeKey: `cues.load.${projectId}` });
 		}
 	}, [projectId, query.isError, query.isFetching, query.error, showGlobalToast, t]);
-	// The menu refreshes on every open, and hover opens it constantly, so cached
-	// cues render straight away: the background refresh that keeps them fresh must
-	// not blank the list into a loading row first. Loading is only for a cold read.
 	const loading = query.isFetching && query.data === undefined && !query.isError;
 	const canInvoke = query.isFetchedAfterMount && !query.isFetching && !query.isError;
 	return (

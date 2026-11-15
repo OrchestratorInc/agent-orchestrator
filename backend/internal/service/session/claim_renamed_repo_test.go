@@ -31,7 +31,6 @@ func (f *fakeGitHubRepos) ResolveGitHubRepository(_ context.Context, owner, name
 
 func TestClaimPRFollowsGitHubRename(t *testing.T) {
 	renamed := map[string]ports.GitHubRepository{
-		// GitHub resolves the old origin path to the renamed repository.
 		"untrivial-ai/agent-orchestrator":    {ID: 42, FullName: "OrchestratorInc/agent-orchestrator"},
 		"orchestratorinc/agent-orchestrator": {ID: 42, FullName: "OrchestratorInc/agent-orchestrator"},
 		"orchestratorinc/other":              {ID: 99, FullName: "OrchestratorInc/other"},

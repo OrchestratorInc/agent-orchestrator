@@ -4,7 +4,6 @@ import { TrustedInput } from "./trusted-input";
 
 type Call = { method: string; params: Record<string, unknown> };
 
-// A debugger whose commands can be held open, to cancel mid-gesture.
 function fakeDebugger() {
 	const calls: Call[] = [];
 	let attaches = 0;
@@ -40,7 +39,6 @@ function fakeDebugger() {
 		chrome,
 		calls,
 		counts: () => ({ attaches, detaches }),
-		/** Hold the next command matching method/type until release(key). */
 		block(method: string, type = "") {
 			const key = `${method}:${type}`;
 			blocked = { key, wait: gateOn(key) };

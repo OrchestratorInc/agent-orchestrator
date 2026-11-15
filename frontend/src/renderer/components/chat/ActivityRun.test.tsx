@@ -49,8 +49,6 @@ describe("ActivityRun nested agents", () => {
 		expect(await screen.findByText("Search source files")).toBeInTheDocument();
 	});
 
-	// A search match in a subagent's call: every fold above it opens, the
-	// subagent's included, so the matched row mounts and can be marked.
 	it("opens every fold above a search match inside a subagent", async () => {
 		render(
 			<RevealedChatActivity.Provider value="activity-2">
@@ -68,8 +66,6 @@ describe("ActivityRun nested agents", () => {
 		expect(document.querySelector('[data-chat-activity-id="activity-2"]')).not.toBeNull();
 	});
 
-	// The reader closed the subagent after one match, then picked another in it:
-	// the fold must open again for the new row.
 	it("reopens a subagent the reader closed when another match in it is revealed", async () => {
 		const user = userEvent.setup();
 		const activities = [
@@ -167,7 +163,6 @@ describe("ActivityRun disclosure", () => {
 		expect(screen.queryByText("Read package.json")).not.toBeInTheDocument();
 		expect(screen.getByText("Search for SEC-164")).toBeInTheDocument();
 
-		// Opening the run puts the failed call back in its place, once.
 		await user.click(run());
 		expect(await screen.findByText("Read package.json")).toBeInTheDocument();
 		await waitFor(() => expect(screen.getAllByText("Search for SEC-164")).toHaveLength(1));

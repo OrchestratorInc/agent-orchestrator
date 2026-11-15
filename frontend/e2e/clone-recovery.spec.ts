@@ -18,8 +18,6 @@ async function openClone(page: Page) {
 	await page.getByRole("textbox", { name: "Clone into", exact: true }).fill("/clones");
 }
 
-// Renderer integration with deterministic HTTP responses. Service tests cover
-// Git, filesystem preservation, network retries, and cancellation cleanup.
 test.beforeEach(async ({ page }) => {
 	await installFakeAgent(page, { projectId: "existing", projectName: "existing", workers: [] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {

@@ -14,11 +14,10 @@ func TestSteeringAdvertisedReadsKimchiCapabilityMeta(t *testing.T) {
 		meta map[string]any
 		want bool
 	}{
-		"advertised":     {meta: map[string]any{"kimchi.dev": map[string]any{"steering": true}}, want: true},
-		"disabled":       {meta: map[string]any{"kimchi.dev": map[string]any{"steering": false}}},
-		"older kimchi":   {meta: map[string]any{"kimchi.dev": map[string]any{"compact": true}}},
-		"no vendor meta": {},
-		// The ACP extension flag is claude-agent-acp's, not Kimchi's method.
+		"advertised":         {meta: map[string]any{"kimchi.dev": map[string]any{"steering": true}}, want: true},
+		"disabled":           {meta: map[string]any{"kimchi.dev": map[string]any{"steering": false}}},
+		"older kimchi":       {meta: map[string]any{"kimchi.dev": map[string]any{"compact": true}}},
+		"no vendor meta":     {},
 		"acp extension flag": {meta: map[string]any{"steering": map[string]any{"supported": true}}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -87,7 +86,6 @@ func TestSteeringOutcomeMapsKimchiStatus(t *testing.T) {
 			t.Fatalf("steeringOutcome(%s) = %v, %v; want %v", raw, got, err, want)
 		}
 	}
-	// claude-agent-acp's response shape is not Kimchi's; it must not pass as injected.
 	if _, err := steeringOutcome(json.RawMessage(`{"outcome":"injected"}`)); err == nil {
 		t.Fatal("unknown response shape was accepted")
 	}

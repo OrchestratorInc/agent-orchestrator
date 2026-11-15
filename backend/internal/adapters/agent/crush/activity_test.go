@@ -17,9 +17,6 @@ func TestDeriveActivityStateReturnsFalse(t *testing.T) {
 }
 
 func TestDetectTerminalActivity(t *testing.T) {
-	// These snippets mirror tmux capture-pane output from Crush v0.80.0:
-	// the current composer row is prefixed with ">", and Crush paints ":::" rows
-	// below it. Ready... was observed on fresh startup and Ready? after a turn.
 	tests := []struct {
 		name   string
 		output string

@@ -17,8 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// newConductorDB creates root/conductor.db with the schema of a real
-// Conductor 0.94.0 database.
 func newConductorDB(t *testing.T, root string) (*sql.DB, func(string, ...any)) {
 	t.Helper()
 	schema, err := os.ReadFile("testdata/conductor-0.94.sql")
@@ -109,9 +107,6 @@ func TestConductorReadsAClosedWALDatabase(t *testing.T) {
 	}
 }
 
-// TestConductorImportsEveryChat follows the formats of a real Conductor 0.94:
-// session_messages rows from older chats, session_events from newer ones, and
-// the Claude Code and Codex histories its agents keep.
 func TestConductorImportsEveryChat(t *testing.T) {
 	ctx := context.Background()
 	project, conductor, claude, codex := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()

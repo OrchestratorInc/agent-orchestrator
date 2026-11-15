@@ -16,7 +16,6 @@ const { baseUrlForHostMock, subscribeConnectedHostsMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("./api-client", () => ({
-	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
 	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	getApiBaseUrl: getApiBaseUrlMock,
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
@@ -396,8 +395,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 		baseUrlListener?.();
 		expect(EventSourceStub.instances).toHaveLength(0);
 
-		// Backoff, not a flat 5s: the first retry is the initial step scaled by
-		// the mocked jitter (see sse-backoff.ts).
 		const firstRetryMs = computeSseRetryDelayMs(1, () => 0.5);
 		vi.advanceTimersByTime(firstRetryMs - 1);
 		expect(EventSourceStub.instances).toHaveLength(0);
@@ -411,7 +408,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
 		const unsubscribe = subscribeWorkspaceFileChanges("sess-growth", fakeQueryClient());
 
-		// Fail the stream repeatedly and record the gap the retry actually waited.
 		const waits: number[] = [];
 		for (let failure = 1; failure <= 4; failure += 1) {
 			const source = EventSourceStub.instances.at(-1)!;
@@ -420,7 +416,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 
 			const before = EventSourceStub.instances.length;
 			const scheduled = computeSseRetryDelayMs(failure, () => 0.5);
-			// One tick short of the scheduled delay, nothing has reconnected yet.
 			vi.advanceTimersByTime(scheduled - 1);
 			expect(EventSourceStub.instances).toHaveLength(before);
 			vi.advanceTimersByTime(1);
@@ -428,7 +423,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 			waits.push(scheduled);
 		}
 
-		// This is the regression: on the old flat interval every wait was 5s.
 		expect(waits).toEqual([...waits].sort((a, b) => a - b));
 		expect(new Set(waits).size).toBe(waits.length);
 		expect(waits.at(-1)!).toBeGreaterThan(waits[0]);
@@ -440,9 +434,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
 		const unsubscribe = subscribeWorkspaceFileChanges("sess-native", fakeQueryClient());
 
-		// readyState CONNECTING means the browser is retrying by itself; those
-		// errors drive the degraded label but are not rebuilds we scheduled, so
-		// they must not advance the backoff exponent.
 		const source = EventSourceStub.instances.at(-1)!;
 		for (let i = 0; i < 10; i += 1) {
 			source.readyState = 0;
@@ -450,8 +441,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 		}
 		expect(EventSourceStub.instances).toHaveLength(1);
 
-		// The first failure we actually schedule a retry for must still wait the
-		// initial delay, not the 60s ceiling.
 		source.readyState = 2;
 		source.onerror?.();
 		const firstRetryMs = computeSseRetryDelayMs(1, () => 0.5);
@@ -467,7 +456,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 		vi.spyOn(Math, "random").mockReturnValue(0.5);
 		const unsubscribe = subscribeWorkspaceFileChanges("sess-reset", fakeQueryClient());
 
-		// Three failures, so the delay has grown well past the initial step.
 		for (let failure = 1; failure <= 3; failure += 1) {
 			const source = EventSourceStub.instances.at(-1)!;
 			source.readyState = 2;
@@ -475,7 +463,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 			vi.advanceTimersByTime(computeSseRetryDelayMs(failure, () => 0.5));
 		}
 
-		// A successful open must clear the accumulated failures.
 		const recovered = EventSourceStub.instances.at(-1)!;
 		recovered.readyState = 1;
 		recovered.onopen?.();
@@ -500,8 +487,6 @@ describe("subscribeWorkspaceFileChanges", () => {
 			const source = EventSourceStub.instances.at(-1)!;
 			source.readyState = 2;
 			source.onerror?.();
-			// Each retry waits longer than the last, so advance by the delay this
-			// failure count actually schedules rather than a fixed 5s.
 			if (failure < 2) vi.advanceTimersByTime(computeSseRetryDelayMs(failure + 1, () => 0.5));
 		}
 

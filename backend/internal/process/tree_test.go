@@ -26,7 +26,6 @@ func TestCommandTreeCancellation(t *testing.T) {
 	cmd.Stdout, cmd.Stderr = &output, &output
 	done := make(chan error, 1)
 	go func() { done <- cmd.Run() }()
-	// Releasing the child also makes a leaked helper exit after a failed test.
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })
 	ready := filepath.Join(dir, "ready")
 	deadline := time.Now().Add(10 * time.Second)
@@ -56,7 +55,6 @@ func TestCommandTreeCancellation(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("cancellation did not return")
 	}
-	// Child exit notification can follow the parent's Wait returning.
 	deadline = time.Now().Add(5 * time.Second)
 	for processalive.Alive(pid) {
 		if time.Now().After(deadline) {

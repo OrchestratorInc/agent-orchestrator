@@ -1,13 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// A session switch renders the destination in the background while the
-// previous session stays on screen, inert, until the destination commits.
-// These cover what the hook tests cannot reach: replies streaming through
-// switches, typing straight after a keyboard switch, and a quick round trip
-// through the board. The CPU is throttled so the held window is wide enough
-// for a keystroke or a stale frame to land in it.
-
 const sessions = ["alpha", "bravo", "charlie"].map((name) => ({
 	id: `held-${name}`,
 	title: `Held ${name}`,
@@ -16,10 +9,6 @@ const sessions = ["alpha", "bravo", "charlie"].map((name) => ({
 }));
 type HeldSession = (typeof sessions)[number];
 
-// isMacPlatform() reads platform, userAgent and userAgentData together; see
-// cross-platform-focus.spec.ts. The session-jump chord is ⌘ on macOS and Ctrl
-// elsewhere. (Next/previous session arrive through the Electron menu, which a
-// browser run does not have.)
 const PLATFORMS = [
 	{ name: "macOS", navigator: "MacIntel", userAgentData: "macOS", userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", jump: "Meta" },
 	{ name: "Windows", navigator: "Win32", userAgentData: "Windows", userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36", jump: "Control" },
@@ -27,7 +16,6 @@ const PLATFORMS = [
 
 const at = "2026-11-09T10:00:00Z";
 
-/** Every reply grows by one chunk per refetch while `streaming` is on. */
 function conversation(session: HeldSession, chunks: number) {
 	const turns = Array.from({ length: 6 }, (_, i) => ({
 		id: `${session.id}-turn-${i}`,
@@ -61,7 +49,6 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 		Object.defineProperty(window.navigator, "userAgentData", { configurable: true, value: { platform: uad } });
 	}, { nav: platform.navigator, uad: platform.userAgentData, ua: platform.userAgent });
 	await installFakeAgent(page, { workers: sessions, expandProject: true });
-	// Keep the fake CDC streams reachable, to announce new reply chunks on them.
 	await page.addInitScript(() => {
 		const Base = window.EventSource as unknown as new (url: string) => object;
 		const sources: object[] = [];
@@ -105,10 +92,8 @@ async function heldHarness(page: Page, platform: (typeof PLATFORMS)[number] = PL
 	return {
 		drafts,
 		requests,
-		/** Grows every session's reply and tells the app, as the daemon does while agents stream. */
 		startStreaming() {
 			streaming = setInterval(() => {
-				// Bound CDP delivery while the throttled page is busy.
 				if (dispatching) return;
 				dispatching = true;
 				for (const session of sessions) chunks.set(session.id, (chunks.get(session.id) ?? 1) + 1);
@@ -138,11 +123,6 @@ function conversationLog(page: Page) {
 	return page.getByRole("log", { name: "Conversation" });
 }
 
-/**
- * The highest reply chunk the conversation shows, or -1 before any. The last
- * chunk runs into the turn's elapsed time in the log's text ("chunk-128h 7m"),
- * so only chunks followed by a space count.
- */
 async function latestShownChunk(page: Page) {
 	const text = await conversationLog(page).textContent() ?? "";
 	return Math.max(-1, ...Array.from(text.matchAll(/chunk-(\d+) /g), (match) => Number(match[1])));
@@ -154,7 +134,6 @@ async function expectShowing(page: Page, session: HeldSession) {
 	await expect(page.locator("#session-workspace")).not.toHaveAttribute("inert");
 }
 
-/** Samples which session each painted frame shows, until stopped. */
 async function recordShown(page: Page) {
 	await page.evaluate((titles) => {
 		const state = window as unknown as { __heldShown: string[]; __heldStop: boolean };
@@ -176,7 +155,6 @@ async function recordShown(page: Page) {
 
 type SwitchFrame = { at: number; route: string; inert: boolean; log: string };
 
-/** Records, from the next frame on, each change in route, held state and shown session. */
 async function recordSwitch(page: Page): Promise<() => Promise<SwitchFrame[]>> {
 	await page.evaluate((titles) => {
 		const state = window as unknown as { __switchFrames: SwitchFrame[]; __switchStop: boolean };
@@ -207,14 +185,12 @@ async function recordSwitch(page: Page): Promise<() => Promise<SwitchFrame[]>> {
 }
 
 test.afterEach(async ({ page }) => {
-	// Leave the next test an unthrottled browser even if this one failed.
 	await throttle(page, 1).catch(() => undefined);
 });
 
 test("renderer: streaming replies keep updating through rapid session switches @T0", async ({ page }) => {
 	const errors: string[] = [];
 	page.on("pageerror", (error) => errors.push(error.message));
-	// Seven switches on a 4x throttled dev build outlast the default timeout.
 	test.setTimeout(120_000);
 	const harness = await heldHarness(page);
 	harness.startStreaming();
@@ -228,26 +204,15 @@ test("renderer: streaming replies keep updating through rapid session switches @
 			await page.getByRole("button", { name: `Open ${session.title}`, exact: true }).click();
 			await expectShowing(page, session);
 			const frames = await timeline();
-			// A streaming session on screen must not stall the switch: every
-			// streamed update restarts the destination's background render, so
-			// the hold gives way after a bounded time. Routing before the hold
-			// and the destination's own render are a throttled dev build's speed,
-			// not the hold's, so only the hold itself is bounded: its 500 ms limit
-			// plus one forced render, which CI measured at about 1.6 s here. A
-			// stalled hold, the failure this guards, lasted over 15 s.
 			const heldFrom = frames.find((frame) => frame.inert)?.at;
 			const heldUntil = heldFrom === undefined ? undefined : frames.find((frame) => frame.at > heldFrom && !frame.inert)?.at;
 			const fetches = harness.requests.slice(firstRequest)
 				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`);
 			const report = `frames (ms since click | route | inert | log): ${frames.map((frame) => `${frame.at} ${frame.route} ${frame.inert ? "inert" : "-"} ${frame.log}`).join("; ")}; conversation fetches: ${fetches.join(", ")}`;
 			if (heldFrom !== undefined) expect((heldUntil ?? Infinity) - heldFrom, `the hold outlasted its limit; ${report}`).toBeLessThan(5_000);
-			// Once the destination shows, the previous session never comes back.
 			const shownAt = frames.find((frame) => frame.log === session.title)?.at ?? Infinity;
 			expect(frames.filter((frame) => frame.at > shownAt && frame.log === previous.title), report).toEqual([]);
 			previous = session;
-			// The shown session keeps streaming after the switch. Its reply grows
-			// faster than a throttled dev build repaints it, so wait for the
-			// shown reply to advance rather than to catch up with the stream.
 			const shownChunk = await latestShownChunk(page);
 			await expect.poll(() => latestShownChunk(page), { timeout: 10_000 }).toBeGreaterThan(shownChunk);
 		}
@@ -266,12 +231,10 @@ for (const platform of PLATFORMS) {
 		await expect(composer).toHaveText("kept");
 		await throttle(page, 6);
 
-		// ⌘/Ctrl+1–9 opens the nth session in sidebar order; aim at one that is not this one.
 		const order = await page.getByRole("button", { name: /^Open Held / }).evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
 		const target = order.findIndex((label) => label !== `Open ${sessions[0].title}`);
 		expect(target).toBeGreaterThanOrEqual(0);
 		await page.keyboard.press(`${platform.jump}+${target + 1}`);
-		// Straight away, while the destination may still be rendering.
 		await page.keyboard.type("zz");
 		await expect(page).not.toHaveURL(new RegExp(`/sessions/${sessions[0].id}$`));
 		await expect(page.locator("#session-workspace")).not.toHaveAttribute("inert");
@@ -296,7 +259,6 @@ test("renderer: a quick trip through the board never shows the earlier session a
 	const shown = await stop();
 	const destination = shown.indexOf(sessions[2].title);
 	expect(destination).toBeGreaterThanOrEqual(0);
-	// Once the board replaced it, the first session never paints again.
 	const left = shown.indexOf("none");
 	expect(left).toBeGreaterThanOrEqual(0);
 	expect(shown.slice(left)).not.toContain(sessions[0].title);

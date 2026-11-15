@@ -92,7 +92,6 @@ func TestPiCatalogFingerprintIgnoresRewritesWithSameContents(t *testing.T) {
 			start := time.Now().Add(-time.Hour)
 			write(`{"providers":{}}`, start)
 			before := providerCatalogFingerprint(agentID, env)
-			// --list-models rewrites the file with the same contents.
 			write(`{"providers":{}}`, start.Add(time.Minute))
 			if got := providerCatalogFingerprint(agentID, env); got != before {
 				t.Fatalf("same contents changed the fingerprint: %q -> %q", before, got)
@@ -143,8 +142,6 @@ func TestProviderCatalogMissingOrInvalidCacheKeepsDiscoveryUsable(t *testing.T) 
 func TestPiCustomProvidersVisibleWithoutCredentials(t *testing.T) {
 	env := providerTestEnv(t)
 	raw := `{"providers":{"local":{"models":[{"id":"org/model","name":"Local"}]},"empty":{"models":[]}}}`
-	// Kimchi keeps its Pi runtime in its own harness directory, whatever
-	// PI_CODING_AGENT_DIR says.
 	kimchiDir := filepath.Join(env["HOME"], ".config", "kimchi", "harness")
 	if err := os.MkdirAll(kimchiDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -189,10 +186,9 @@ func TestPiInstalledCatalogUsesItsOwnPackageWithoutCredentials(t *testing.T) {
 	files := map[string]string{
 		"pi/package.json": `{"name":"@mariozechner/pi-coding-agent","dependencies":{"@mariozechner/pi-ai":"1"}}`,
 		"pi/dist/cli.js":  "",
-		"pi/node_modules/@mariozechner/pi-ai/package.json":             `{"name":"@mariozechner/pi-ai","type":"module","main":"dist/index.js"}`,
-		"pi/node_modules/@mariozechner/pi-ai/dist/index.js":            "throw new Error('do not initialize the SDK');",
-		"pi/node_modules/@mariozechner/pi-ai/dist/models.generated.js": `export const MODELS = {custom:{model:{id:"org/model",name:"Native",provider:"custom",input:["text"]}}};`,
-		// An unrelated newer global package must not take precedence over Pi's own dependency.
+		"pi/node_modules/@mariozechner/pi-ai/package.json":               `{"name":"@mariozechner/pi-ai","type":"module","main":"dist/index.js"}`,
+		"pi/node_modules/@mariozechner/pi-ai/dist/index.js":              "throw new Error('do not initialize the SDK');",
+		"pi/node_modules/@mariozechner/pi-ai/dist/models.generated.js":   `export const MODELS = {custom:{model:{id:"org/model",name:"Native",provider:"custom",input:["text"]}}};`,
 		"pi/node_modules/@earendil-works/pi-ai/package.json":             `{"name":"@earendil-works/pi-ai","type":"module","main":"dist/index.js"}`,
 		"pi/node_modules/@earendil-works/pi-ai/dist/index.js":            "",
 		"pi/node_modules/@earendil-works/pi-ai/dist/models.generated.js": `export const MODELS = {wrong:{model:{id:"wrong",provider:"wrong"}}};`,
@@ -241,7 +237,6 @@ func TestSharedCatalogIncludesNativeCacheButCredentialScopeDoesNot(t *testing.T)
 	if !reflect.DeepEqual(task.ConfiguredProviders, []string{"anthropic"}) {
 		t.Fatalf("shared catalog configured providers = %v", task.ConfiguredProviders)
 	}
-	// OpenCode lists what it can run; the cached provider is there to browse.
 	if !reflect.DeepEqual(task.RunnableModels, []string{"anthropic/claude-sonnet"}) {
 		t.Fatalf("shared catalog runnable models = %v, want only what OpenCode listed", task.RunnableModels)
 	}
@@ -263,8 +258,6 @@ func TestPiInstalledCatalogReadsImportOnlyPiAIAndPrimeAgentFork(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node unavailable")
 	}
-	// Current pi-ai exports only an "import" condition, which require-style
-	// resolution rejects; Prime Agent ships its fork as "prime-agent-ai".
 	importOnly := `"type":"module","exports":{".":{"types":"./dist/index.d.ts","import":"./dist/index.js"}}`
 	for owner, aiName := range map[string]string{
 		"@earendil-works/pi-coding-agent": "@earendil-works/pi-ai",

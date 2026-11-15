@@ -149,9 +149,6 @@ describe("telemetry sanitizers", () => {
 		});
 	});
 
-	// The daemon enforces the same list on its own sink, but renderer events go
-	// straight to PostHog, so the policy has to be honoured here too or the kill
-	// switch only covers half the producers.
 	it("honours the supervisor deny list, by either internal or exported name", () => {
 		expect(isDeniedEvent("ao.app.active", ["ao.app.active"])).toBe(true);
 		expect(isDeniedEvent("ao.app.active", ["ao.app.active"])).toBe(true);
@@ -164,7 +161,6 @@ describe("telemetry sanitizers", () => {
 
 		expect(isDeniedEvent("ao.session.spawned", ["ao.renderer.*"])).toBe(false);
 		expect(isDeniedEvent("ao.app.active", [])).toBe(false);
-		// A bare "*" must not silence everything by accident.
 		expect(isDeniedEvent("ao.app.active", ["", "  ", "*"])).toBe(false);
 	});
 
@@ -180,7 +176,6 @@ describe("telemetry sanitizers", () => {
 			error_category: "network",
 			phase: "download",
 			trigger: "automatic",
-			// Must be dropped: raw updater text can carry feed URLs and local paths.
 			message: "EACCES /Users/someone/Library/Caches/ao-updater",
 			stack: "at Object.<anonymous>",
 		});
@@ -191,7 +186,6 @@ describe("telemetry sanitizers", () => {
 			trigger: "automatic",
 		});
 
-		// An unrecognized phase is not passed through as-is.
 		const bogus = await sanitizeRendererProperties("ao.updates.failed", { phase: "sideload" });
 		expect(bogus.phase).toBeUndefined();
 	});
@@ -212,8 +206,6 @@ describe("telemetry sanitizers", () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.support_submitted", {
 			destination,
 			outcome: "succeeded",
-			// Everything the dialog collects is passed in deliberately: the user's own
-			// bug report, and the diagnostics block that carries machine state.
 			summary: "crashes when I open my repo",
 			details: "stack trace from /Users/me/work/secret-client",
 			diagnostics: { platform: "darwin", appVersion: "0.11.2" },
@@ -278,7 +270,6 @@ describe("telemetry sanitizers", () => {
 	it("reports the session auto-review switch with only its direction", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.review_auto_review_toggled", {
 			enabled: true,
-			// Must be dropped: the session's id and the title the user typed.
 			session_id: "sess-1",
 			session_name: "fix the login bug",
 		});
@@ -288,8 +279,6 @@ describe("telemetry sanitizers", () => {
 	it("reports the mobile connect open with only the bridge state", async () => {
 		const safe = await sanitizeRendererProperties("ao.mobile.connect_opened", {
 			bridge_enabled: true,
-			// Everything the QR encodes is in scope for leaking here, so it is all
-			// passed in deliberately and must all be dropped.
 			host: "192.168.1.20",
 			port: 3011,
 			password: "hunter2secret",
@@ -318,15 +307,9 @@ describe("telemetry sanitizers", () => {
 	it("disables every billable PostHog product AO does not consume", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
-		// Replay is billed per recording, so it escapes the per-name rate limits
-		// in this module entirely. Disabling it client-side means the project-side
-		// toggle cannot switch it back on for shipped builds.
 		expect(config.disable_session_recording).toBe(true);
-		// Feature flags load (experiments); AO ships no surveys.
-		// Left out so an in-session opt-out can turn flags off through set_config.
 		expect(config).not.toHaveProperty("advanced_disable_flags");
 		expect(config.disable_surveys).toBe(true);
-		// Already-disabled capture paths that would otherwise autocapture volume.
 		expect(config.autocapture).toBe(false);
 		expect(config.capture_pageview).toBe(false);
 		expect(config.capture_exceptions).toBe(false);
@@ -369,7 +352,6 @@ describe("telemetry sanitizers", () => {
 			advanced_disable_flags: true,
 			disable_session_recording: true,
 			disable_surveys: true,
-			// Observe what would be sent; nothing leaves the test.
 			before_send: (event) => {
 				if (event) events.push(event as never);
 				return null;
@@ -387,7 +369,6 @@ describe("telemetry sanitizers", () => {
 			github_login: "octocat",
 		});
 
-		// After identify, ordinary events carry the user and never the email.
 		client.capture("ao.support.opened", withTelemetryContext({}));
 		const after = events.find((e) => e.event === "ao.support.opened");
 		expect(after?.properties).toMatchObject({ distinct_id: "user_01H", $is_identified: true });
@@ -433,7 +414,6 @@ describe("telemetry sanitizers", () => {
 			is_ci: true,
 			is_container: true,
 		});
-		// Without a context (older main process) nothing is invented.
 		expect(buildTelemetryContext("1.2.3", "linux")).not.toHaveProperty("install_source");
 	});
 
@@ -500,7 +480,6 @@ describe("telemetry sanitizers", () => {
 		expect(automationPromptLengthBucket("a".repeat(800))).toBe("m");
 		expect(automationPromptLengthBucket("a".repeat(2000))).toBe("l");
 		expect(automationPromptLengthBucket("a".repeat(2001))).toBe("xl");
-		// Three bytes per character, so 27 of them outrank 27 ASCII ones.
 		expect(automationPromptLengthBucket("每天检查持续集成失败并提交修复".repeat(2))).toBe("s");
 	});
 
@@ -739,7 +718,6 @@ describe("telemetry sanitizers", () => {
 
 		const bogus = await sanitizeRendererProperties("ao.editor.opened", {
 			project_id: "demo-project",
-			// Not a real editor id — must not be forwarded as-is.
 			editor_id: "/Users/alice/bin/notepad",
 			target_kind: "everything",
 		});
@@ -761,7 +739,6 @@ describe("telemetry sanitizers", () => {
 	it("reports open_in_editor_failed with only the hashed project id", async () => {
 		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_failed", {
 			project_id: "demo-project",
-			// Never part of the contract; must not leak through.
 			error: "EDITOR_LAUNCH_FAILED: Could not launch VS Code",
 		});
 		expect(Object.keys(props)).toEqual(["project_id_hash"]);
@@ -848,7 +825,7 @@ describe("reserveCapture", () => {
 		let allowed = 0;
 		for (let i = 0; i < 210; i += 1) {
 			if (reserveCapture(name, start)) allowed += 1;
-			start += 60_000; // one call per simulated minute: never trips the burst cap
+			start += 60_000;
 		}
 		expect(allowed).toBe(200);
 	});
@@ -870,7 +847,6 @@ describe("daily active heartbeat", () => {
 		expect(versionChannelFrom("0.11.3")).toBe("stable");
 		expect(versionChannelFrom("0.11.3-nightly.5")).toBe("nightly");
 		expect(versionChannelFrom("0.12.0-NIGHTLY.1")).toBe("nightly");
-		// A pinned feature build is not nightly, and an absent version is unknown.
 		expect(versionChannelFrom("0.11.3-feature.42")).toBe("stable");
 		expect(versionChannelFrom("")).toBe("unknown");
 		expect(versionChannelFrom("unknown")).toBe("unknown");
@@ -883,7 +859,6 @@ describe("daily active heartbeat", () => {
 
 	it("carries intent and reality as separate context properties", () => {
 		const ctx = buildTelemetryContext("0.11.3", "darwin", "nightly");
-		// opted into nightly, still running a stable binary: the gap is the signal.
 		expect(ctx.release_channel).toBe("nightly");
 		expect(ctx.version_channel).toBe("stable");
 	});
@@ -891,8 +866,6 @@ describe("daily active heartbeat", () => {
 	it("maps the Updates setting to a release channel, not the version string", () => {
 		expect(releaseChannelFrom({ channel: "latest", feature: null })).toBe("stable");
 		expect(releaseChannelFrom({ channel: "nightly", feature: null })).toBe("nightly");
-		// A pinned feature build wins regardless of the underlying channel, which
-		// is what version-string parsing got wrong.
 		expect(releaseChannelFrom({ channel: "latest", feature: 1234 })).toBe("feature");
 		expect(releaseChannelFrom({ channel: "nightly", feature: 1234 })).toBe("feature");
 		expect(releaseChannelFrom(null)).toBe("unknown");
@@ -920,9 +893,6 @@ describe("daily active heartbeat", () => {
 	it("reserves one active capture per UTC day, not per six-hour slot", () => {
 		const storage = memoryStorage();
 		expect(reserveDailyActiveCapture(storage, new Date("2026-07-12T00:05:00.000Z"))).toBe(true);
-		// Every later hour of the same UTC day is refused. Under the old
-		// six-hour slotting, 06:00, 12:00 and 18:00 each reserved again, so one
-		// install could report four times a day.
 		expect(reserveDailyActiveCapture(storage, new Date("2026-07-12T05:59:59.000Z"))).toBe(false);
 		expect(reserveDailyActiveCapture(storage, new Date("2026-07-12T06:00:00.000Z"))).toBe(false);
 		expect(reserveDailyActiveCapture(storage, new Date("2026-07-12T12:00:00.000Z"))).toBe(false);
@@ -932,8 +902,6 @@ describe("daily active heartbeat", () => {
 	});
 
 	it("treats a slot record left by an older build as today already reported", () => {
-		// The upgrade path: a build that emitted per slot wrote { date, slots }.
-		// Reading it must not hand out a fresh reservation for the same day.
 		const storage = memoryStorage();
 		storage.setItem("ao.telemetry.activeSlotsByDate", JSON.stringify({ date: "2026-07-12", slots: [0] }));
 		expect(reserveDailyActiveCapture(storage, new Date("2026-07-12T14:00:00.000Z"))).toBe(false);
@@ -968,15 +936,12 @@ describe("daily active heartbeat", () => {
 			document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
 			expect(captured).toHaveLength(1);
 
-			// Later the same day, focus no longer produces a second event. This is
-			// the four-per-day reduction, and it is the whole point of the change.
 			now = new Date("2026-07-12T12:00:00.000Z");
 			window.dispatchEvent(new Event("focus"));
 			now = new Date("2026-07-12T20:00:00.000Z");
 			window.dispatchEvent(new Event("focus"));
 			expect(captured).toEqual(["2026-07-12T08:00:00.000Z"]);
 
-			// The next UTC day reports again.
 			now = new Date("2026-07-13T09:00:00.000Z");
 			window.dispatchEvent(new Event("focus"));
 			expect(captured).toEqual(["2026-07-12T08:00:00.000Z", "2026-07-13T09:00:00.000Z"]);
@@ -1023,8 +988,6 @@ describe("route view reservation", () => {
 	});
 });
 
-// Uses the real SDK: reset() reloads feature flags, and opt_out_capturing does
-// not stop /flags, so an opt-out has to disable flags through configuration.
 describe("feature flags across an in-session analytics opt-out", () => {
 	it("sends no /flags request after opting out and loads flags again on opt-in", async () => {
 		vi.useFakeTimers();
@@ -1051,8 +1014,6 @@ describe("feature flags across an in-session analytics opt-out", () => {
 	});
 });
 
-// /flags requests bypass before_send, so nothing the SDK stores from the page
-// may ride along: the raw route names projects and sessions.
 describe("feature flag requests carry no page route", () => {
 	it("sends no initial URL or referrer in /flags after a capture and identify", async () => {
 		vi.useFakeTimers();

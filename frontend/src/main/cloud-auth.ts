@@ -11,19 +11,9 @@ import {
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { isWebDistinctId, type CloudAccount, type CloudSignInContext } from "../shared/cloud-account";
-// Static import (not dynamic): the dynamic import created a static+dynamic
-// import cycle with cloud-auth-local that made the bundler split chunks
-// incorrectly and panic. Both modules only use each other's exports inside
-// functions, so the static ES cycle is safe at module-init time.
 import { revokeLocalSession } from "./cloud-auth-local";
 import { providerAuthFlow } from "./provider-auth-flow";
 
-// persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
-// data dir so local claude sessions can authenticate with the SAME credential
-// pushed to the cloud (read back by the daemon's claudecode adapter). Scoped to
-// ~/.ao, never the user's ~/.claude; 0600 file in a 0700 dir. This is not the
-// token chosen in AO's Claude login menu (harnesses/claude-code/setup-token):
-// that one outranks a native login, this one never does.
 async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Promise<void> {
   const dir = path.join(dataDir, "harnesses", "claude-code");
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -32,17 +22,10 @@ async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Pro
   await chmod(file, 0o600);
 }
 
-// The WorkOS AuthKit client id is public configuration (it appears in every
-// sign-in URL), so a baked default keeps sign-in working without build-time
-// setup; VITE_WORKOS_CLIENT_ID overrides it per build when needed.
 const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
 const CLIENT_ID =
   import.meta.env.VITE_WORKOS_CLIENT_ID?.trim() ||
   (process.env.VITEST ? "client_test" : DEFAULT_WORKOS_CLIENT_ID);
-// A loopback redirect is one we service with a local HTTP server: a dev build's
-// http://127.0.0.1 default, or an explicit 127.0.0.1/localhost override. An
-// HTTPS bounce page is NOT a loopback — it returns to the app via the ao-app://
-// deep link, so no local server is armed for it.
 function isLoopbackRedirect(redirectUri: string): boolean {
   try {
     const url = new URL(redirectUri);
@@ -55,36 +38,11 @@ function isLoopbackRedirect(redirectUri: string): boolean {
   }
 }
 
-// The packaged app returns from WorkOS via an HTTPS bounce page on our own domain,
-// which re-emits the result to the ao-app:// deep link the installed app handles.
-// Routing through that page (rather than setting ao-app:// as the WorkOS
-// redirect_uri directly) matters for two reasons: the browser lands on a real
-// HTTPS page instead of hanging forever on an unloadable custom-scheme navigation
-// (no stuck "loading" tab), and the OS "open Agent Orchestrator?" prompt is
-// attributed to our own domain instead of the opaque WorkOS AuthKit subdomain.
-//
-// A build signing in with the production AuthKit client returns through the
-// website's page, orchestrator.inc/app/auth/return/ (the trailing slash is part
-// of the URL WorkOS has registered). Only the production WorkOS environment lists
-// that page, so any other client, such as the baked default, which belongs to
-// the staging environment, keeps the control plane's page at api.aoagents.dev.
-//
-// A development build doesn't claim ao-app:// by default (see
-// registerCloudProtocol): owning it would take the scheme away from the
-// installed app. It signs in through a loopback callback server instead, the
-// standard desktop-OAuth pattern, with zero setup. AO_CLOUD_AUTH_REDIRECT
-// overrides every default (e.g. to point a packaged build at a staging bounce
-// page).
-//
-// The production AuthKit client (auth.orchestrator.inc). Release builds (stable,
-// nightly and preview, all made by build-artifacts.yml) get it from the
-// VITE_WORKOS_CLIENT_ID repository variable.
 const PRODUCTION_WORKOS_CLIENT_ID = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
 const DEFAULT_PACKAGED_REDIRECT_URI = "https://orchestrator.inc/app/auth/return/";
 const CONTROL_PLANE_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
 const LOOPBACK_REDIRECT_URI = "http://127.0.0.1:3000/callback";
 
-/** The redirect_uri a build sends to WorkOS when it starts a sign-in. */
 export function resolveCloudAuthRedirect(
   env: Record<string, string | undefined>,
   isPackaged: boolean,
@@ -105,28 +63,19 @@ const LEGACY_SESSION_FILE = "cloud-session.json";
 const PKCE_TTL_MS = 10 * 60 * 1000;
 const workos = CLIENT_ID ? createWorkOS({ clientId: CLIENT_ID }) : null;
 
-// Set by installCloudIPC so the loopback callback server can push the new
-// session to the renderer exactly like the deep-link path does.
 let notifyRenderersFn: ((session: CloudAccount | null) => void) | null = null;
-// At most one loopback callback server is armed at a time.
 let loopbackServer: Server | null = null;
 
 let activeProviderAuthAbort: AbortController | null = null;
 
 export interface StoredSession extends CloudAccount {
   accessToken: string;
-  // WorkOS sessions carry a rotating refresh token; local (opaque-token)
-  // sessions have none, so it is optional and absent for authProvider "local".
   refreshToken?: string;
-  // Loopback control-plane base URL a local session was minted against, so
-  // sign-out can revoke the opaque token server-side. Local sessions only.
   cpBaseUrl?: string;
 }
 
 export interface AuthStore {
   session: StoredSession | null;
-  // Digest of the verified callback, retained with its session so a browser
-  // return button can be clicked again without replaying a single-use code.
   completedCallback?: string;
   pkce: {
     codeVerifier: string;
@@ -135,7 +84,6 @@ export interface AuthStore {
   } | null;
 }
 
-/** A stored local (opaque-token) session, distinct from the WorkOS/JWT path. */
 export function isLocalSession(
   session: StoredSession | null | undefined,
 ): session is StoredSession & { authProvider: "local" } {
@@ -178,12 +126,6 @@ export async function withAuthMutation<T>(
   }
 }
 
-/**
- * Where the Cloud sign-in is kept. An AO_DATA_DIR override gives that data
- * dir its own sign-in, as it gives it its own daemon data, so two instances
- * with different data dirs never share an account. Otherwise ~/.ao, or
- * ~/.ao/dev for a development build.
- */
 export function resolveCloudAuthDir(
   env: Record<string, string | undefined>,
   homeDir: string,
@@ -199,7 +141,6 @@ function storePath(dataDir: string): string {
   return path.join(dataDir, AUTH_STORE_FILE);
 }
 
-/** Whether safeStorage protects what it encrypts (not Linux's basic_text backend). */
 export function protectedStorageAvailable(): boolean {
   if (!safeStorage.isEncryptionAvailable()) return false;
   if (process.platform !== "linux") return true;
@@ -235,9 +176,6 @@ export async function writeAuthStore(
   store: AuthStore,
 ): Promise<void> {
   if (!protectedStorageAvailable()) {
-    // A rotating refresh token must never fall back to plaintext persistence.
-    // Linux's basic_text backend also reports encryption as available despite
-    // using an unprotected hardcoded password, so keep that process-local too.
     memoryStores.set(dataDir, store);
     await rm(storePath(dataDir), { force: true });
     return;
@@ -343,8 +281,6 @@ export async function getCloudSession(
   dataDir: string,
 ): Promise<CloudAccount | null> {
   const store = await readAuthStore(dataDir);
-  // Local (opaque-token) sessions never refresh and do not require WorkOS to be
-  // configured; return the stored identity directly.
   if (isLocalSession(store.session)) return publicAccount(store.session);
   if (!workos) return null;
   const activeRefresh = refreshes.get(dataDir);
@@ -369,22 +305,10 @@ export async function getCloudSession(
   }
 }
 
-/**
- * Fast, non-blocking variant of getCloudSession for the renderer's initial
- * mount. Returns the on-disk identity immediately (no WorkOS round-trip), so
- * the sidebar and the create-project Cloud tab render right away instead of
- * blanking for seconds while a token refresh runs on cold open. If the stored
- * token is stale, the refresh runs in the background and the corrected result
- * (rotated session, or null on terminal failure) is pushed over
- * cloud:sessionChanged, which the renderer already subscribes to. The CP proxy
- * refreshes independently via getCloudAccessToken, so outbound requests stay
- * authorized regardless.
- */
 export async function getCloudSessionCached(
   dataDir: string,
 ): Promise<CloudAccount | null> {
   const store = await readAuthStore(dataDir);
-  // Local sessions carry no rotating token — return the stored identity as-is.
   if (isLocalSession(store.session)) return publicAccount(store.session);
   if (!workos) return null;
   if (!store.session) return null;
@@ -396,24 +320,13 @@ export async function getCloudSessionCached(
   return publicAccount(store.session);
 }
 
-/**
- * Raw bearer token for the main-process control-plane proxy
- * (cloud-cp-proxy.ts). Runs the same refresh-if-expiring path as
- * getCloudSession, then reads the (possibly rotated) token back out of the
- * store. Main-process only: the token must never be sent to a renderer or
- * exposed over IPC.
- */
 export async function getCloudAccessToken(
   dataDir: string,
 ): Promise<string | null> {
   const store = await readAuthStore(dataDir);
-  // The local opaque token is returned verbatim (no JWT refresh path).
   if (isLocalSession(store.session)) return store.session.accessToken;
   const account = await getCloudSession(dataDir);
   if (account === null) {
-    // The auth store may also have been cleared by another dev-app process.
-    // A proxied request is authoritative evidence that this renderer can no
-    // longer use AO Cloud, so retire any cached signed-in UI.
     notifyRenderersFn?.(null);
     return null;
   }
@@ -426,8 +339,6 @@ async function refreshCloudSession(
   storedSession: StoredSession,
   generation: number,
 ): Promise<CloudAccount | null> {
-  // Only WorkOS sessions carry a refresh token and reach this path; a session
-  // without one cannot be rotated, so surface it unchanged.
   if (!storedSession.refreshToken) return publicAccount(storedSession);
   try {
     const refreshed = await workos!.userManagement.authenticateWithRefreshToken({
@@ -465,10 +376,6 @@ async function refreshCloudSession(
       }
       return false;
     });
-    // Keep every renderer in lockstep with the credential store. Without this
-    // notification, a terminal refresh failure leaves the last public account
-    // (and its cached cloud projects/sessions) visible even though all future
-    // control-plane requests are unauthenticated.
     if (sessionCleared) notifyRenderersFn?.(null);
     return null;
   }
@@ -502,16 +409,11 @@ export async function beginCloudSignIn(dataDir: string): Promise<void> {
   await shell.openExternal(url);
 }
 
-// What a verified callback produced: the signed-in account, and whether this
-// callback exchanged its code (a new sign-in) rather than returning the account
-// an earlier callback had already signed in.
 interface CompletedCloudSignIn {
   account: CloudAccount;
   exchanged: boolean;
 }
 
-// completeCloudSignIn validates the pending PKCE state and exchanges the code
-// for a session. Shared by the deep-link path and the loopback callback server.
 async function completeCloudSignIn(
   code: string | null,
   callbackState: string | null,
@@ -530,8 +432,6 @@ async function completeCloudSignIn(
       !isLocalSession(store.session) &&
       (!store.pkce || store.completedCallback === callbackDigest)
     ) {
-      // With no login pending, returning to an already signed-in app cannot
-      // change its account. This also covers sessions saved before deduping.
       return { account: publicAccount(store.session), exchanged: false };
     }
     if (!store.pkce) throw new Error("No WorkOS sign-in is pending.");
@@ -564,11 +464,6 @@ async function completeCloudSignIn(
 
 export interface CloudDeepLinkSignIn {
   account: CloudAccount;
-  // What the orchestrator.inc return page adds to the sign-in: the website
-  // visitor id (web_distinct_id) for visitors who accepted analytics there.
-  // Present only when it is well formed and this link completed a new sign-in,
-  // so a repeated return link never hands it over twice. Analytics only: it
-  // plays no part in signing in, and nothing stores or logs it.
   signIn?: CloudSignInContext;
 }
 
@@ -590,7 +485,6 @@ export async function handleCloudDeepLink(
     url.searchParams.get("state"),
     dataDir,
   );
-  // Read only once signing in has finished, so it cannot change how that went.
   const webDistinctId = url.searchParams.get("web_distinct_id");
   return exchanged && isWebDistinctId(webDistinctId)
     ? { account, signIn: { webDistinctId } }
@@ -609,10 +503,6 @@ function closeLoopbackServer(): void {
   }
 }
 
-// startLoopbackCallbackServer arms a one-shot local HTTP server that receives
-// the WorkOS redirect for a development build, exchanges the code, and hands the
-// session to the renderer. It closes itself after the first callback or the PKCE
-// window, whichever comes first.
 function startLoopbackCallbackServer(dataDir: string): void {
   const redirect = new URL(REDIRECT_URI);
   closeLoopbackServer();
@@ -704,27 +594,7 @@ export async function showCloudSignInFailure(error: unknown): Promise<void> {
   });
 }
 
-// registerCloudProtocol makes this build the ao-app:// handler, or gives the
-// scheme up when it shouldn't hold it. Call it once this process is the app's
-// single instance, before app.whenReady().
-//
-// A development build signing in through the loopback redirect never needs
-// ao-app://, and claiming it takes the scheme from the installed app: macOS
-// ignores the path/args below and binds it to the stock node_modules
-// Electron.app, Windows points it at a worktree script, and the installed app's
-// sign-in callbacks and billing return links then land in the wrong process. So
-// such a build only releases a claim an earlier dev run left behind. On macOS
-// that hands the scheme back to the installed app at once; on Windows it
-// deletes the stale entry, and the installed app takes the scheme again the
-// next time it starts. Linux has no release (Electron's is a no-op there), and
-// a Linux dev build registers the installed app's own .desktop entry anyway.
-//
-// A development build pointed at a deep-link redirect (AO_CLOUD_AUTH_REDIRECT
-// set to a bounce page or ao-app://callback) does need the scheme. It claims it
-// for as long as it runs and gives it back when it quits.
 export function registerCloudProtocol(): void {
-  // A dev build is launched as `electron <app dir>`; Windows ties the scheme to
-  // that exact command, so every call below names it.
   const devApp: [path?: string, args?: string[]] =
     process.defaultApp && process.argv.length >= 2
       ? [process.execPath, [path.resolve(process.argv[1])]]
@@ -746,9 +616,6 @@ export function registerCloudProtocol(): void {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// The control plane's reason for refusing an account login (the same login is
-// already saved, or a sign-in again used another login), from its error
-// envelope's message. Never the response body itself.
 async function controlPlaneRefusal(response: Response): Promise<string | undefined> {
   if (response.status !== 409 && response.status !== 422) return undefined;
   try {
@@ -759,8 +626,6 @@ async function controlPlaneRefusal(response: Response): Promise<string | undefin
   }
 }
 
-// Whether the control plane saved an account login as its harness's default
-// account, from its answer ({ agentAccount: { isDefault } }).
 async function savedAsDefaultAccount(response: Response): Promise<boolean> {
   try {
     const answer = (await response.json()) as { agentAccount?: { isDefault?: unknown } };
@@ -773,8 +638,6 @@ async function savedAsDefaultAccount(response: Response): Promise<boolean> {
 export function installCloudIPC(
   getDataDir: () => string,
   notifyRenderers: (session: CloudAccount | null) => void,
-  // Runs before an explicit sign-out completes, so its effects are durable even
-  // if the app quits right after.
   onSignedOut: () => Promise<void> = async () => undefined,
 ): void {
   notifyRenderersFn = notifyRenderers;
@@ -794,15 +657,12 @@ export function installCloudIPC(
   });
   ipcMain.handle("cloud:signOut", async () => {
     const dataDir = getDataDir();
-    // A local (opaque-token) session is revoked server-side first, best-effort;
-    // WorkOS sessions skip this. Store removal is uniform via signOutCloud.
     try {
       const store = await readAuthStore(dataDir);
       if (isLocalSession(store.session)) {
         await revokeLocalSession(store.session);
       }
     } catch {
-      // Sign-out must never fail on a revoke round-trip; clear the store anyway.
     }
     await signOutCloud(dataDir);
     await onSignedOut().catch(() => undefined);
@@ -818,8 +678,6 @@ export function installCloudIPC(
     if (typeof input !== "object" || input === null) throw new Error("Invalid Cloud provider login request.");
     const { baseUrl, provider, persistLocalClaudeToken, account } = input as Record<string, unknown>;
     if (typeof baseUrl !== "string" || typeof provider !== "string") throw new Error("Invalid Cloud provider login request.");
-    // account: "new" saves the login as another account, an account id signs
-    // that account in again; absent, the login replaces the agent's default.
     if (account !== undefined && account !== "new" && !(typeof account === "string" && UUID_PATTERN.test(account))) throw new Error("Invalid Cloud provider login request.");
     let base: URL;
     try {
@@ -845,9 +703,6 @@ export function installCloudIPC(
     if (credential.provider !== provider) throw new Error("Cloud provider login returned an unexpected provider.");
 
     if (provider === "github") {
-      // Returned to the renderer, which saves it via the daemon's
-      // PUT /api/v1/github/pat endpoint. Include the OAuth refresh material so
-      // the daemon can renew an expiring GitHub App token without a reconnect.
       return {
         secret: credential.secret,
         refreshToken: credential.refreshToken,
@@ -857,8 +712,6 @@ export function installCloudIPC(
     }
 
     const basePath = base.pathname.replace(/\/+$/, "");
-    // Cloud agent credentials are always personal: the caller's own connection,
-    // usable in every org they belong to.
     const save = account === "new"
       ? { method: "POST", path: "/me/agent-accounts", body: { agent: credential.provider, credentialType: credential.credentialType, secret: credential.secret } }
       : typeof account === "string"
@@ -873,13 +726,6 @@ export function installCloudIPC(
     });
     if (!response.ok) throw new Error(await controlPlaneRefusal(response) ?? "Orchestrator Cloud could not save the provider credential.");
 
-    // Persist the captured Claude setup-token locally as a fallback for local
-    // sessions, only once the cloud copy is saved: a failed cloud save must not
-    // leave a local login behind. The daemon's claudecode adapter injects it only
-    // when no native login is present, so it never shadows an existing login.
-    // Of a harness's several accounts only the default's: the control plane
-    // says which account the login became (an added one is the default when it
-    // is the first, or when the default stopped working).
     if (persistLocalClaudeToken === true && credential.provider === "claude-code" && credential.credentialType === "oauth_token" &&
       (account === undefined || await savedAsDefaultAccount(response))) {
       await persistLocalClaudeOAuthToken(dataDir, credential.secret);

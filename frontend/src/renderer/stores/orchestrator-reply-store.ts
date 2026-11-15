@@ -4,7 +4,6 @@ import type { WorkspaceSession } from "../types/workspace";
 
 const STORAGE_KEY = "ao.orchestrator.replies";
 
-/** Per project: when its orchestrator last finished a reply, and up to when the user has seen them. */
 type Stored = { replyAt: Record<string, number>; seenAt: Record<string, number> };
 
 function load(): Stored {
@@ -33,7 +32,6 @@ export const useOrchestratorReplyStore = create<OrchestratorReplyStore>((set, ge
 	...load(),
 	recordReply: (key, at) => {
 		const { replyAt, seenAt } = get();
-		// Every mounted button observes the same turn end; record it once.
 		if ((replyAt[key] ?? 0) >= at) return;
 		const next = { replyAt: { ...replyAt, [key]: at }, seenAt };
 		persist(next);
@@ -52,14 +50,6 @@ export const orchestratorReplyKey = (projectId: string, hostId?: string) => `${h
 
 export type OrchestratorReplyState = "working" | "unread" | null;
 
-/**
- * What a project's orchestrator buttons should signal: a reply the user has not
- * seen, or a turn in progress. A reply is the orchestrator's activity settling
- * from working back to idle or waiting for input, observed live from the
- * streamed workspace. Resets to idle on restore or resume never count, and tool
- * calls inside a turn keep it working. Viewing the orchestrator marks its
- * replies seen; both facts persist per project across restarts.
- */
 export function useOrchestratorReplyState({ projectId, hostId, orchestrator, viewing }: {
 	projectId?: string;
 	hostId?: string;

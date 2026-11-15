@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// Detached provider hubs can outlive the AO launch that created them. Durable
-// session leases alone cannot prove that their executable/files are unused.
 type managedProcessSnapshot struct {
 	commands []string
 	opaque   []string
@@ -27,7 +25,6 @@ func (s *Service) snapshotManagedProcesses(ctx context.Context) (managedProcessS
 	defer cancel()
 	argv := []string{"ps", "-axww", "-o", "pid=,comm=,args="}
 	if s.goos == "windows" {
-		// InputObject @() preserves an array even in Windows PowerShell 5.1.
 		argv = []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
 			"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object Name,ExecutablePath,CommandLine)"}
 	}
@@ -111,10 +108,8 @@ func (s *Service) managedReleaseHasProcess(snapshot managedProcessSnapshot, targ
 		cli = "opencode-v2"
 	}
 	for _, name := range snapshot.opaque {
-		// A loader's native child, such as copilot-win32-x64.exe, counts too.
 		if name == strings.ToLower(record.CLI)+".exe" || managedRuntimeExecutable(name) ||
 			(strings.HasPrefix(name, strings.ToLower(record.CLI)+"-") && strings.HasSuffix(name, ".exe")) {
-			// An unreadable script command line cannot rule out an old module.
 			return true
 		}
 	}
@@ -123,7 +118,6 @@ func (s *Service) managedReleaseHasProcess(snapshot managedProcessSnapshot, targ
 	if s.goos == "windows" {
 		paths = append(paths, filepath.Join(s.ManagedBinDir(), cli+".cmd"))
 	}
-	// ps may show canonical paths while AO's data directory uses a symlink.
 	if canonical, err := filepath.EvalSymlinks(root); err == nil && canonical != root {
 		paths = append(paths, filepath.Join(canonical, "versions", release), filepath.Join(canonical, "current"), filepath.Join(filepath.Dir(canonical), "bin", cli))
 		if s.goos == "windows" {
@@ -153,7 +147,6 @@ func (s *Service) processSnapshotUsesPaths(snapshot managedProcessSnapshot, path
 	return false
 }
 
-// A formula's Cellar also holds old provider hubs that have no session lease.
 func (s *Service) brewCleanupHasProcess(ctx context.Context, target Target, formula string, snapshot managedProcessSnapshot) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

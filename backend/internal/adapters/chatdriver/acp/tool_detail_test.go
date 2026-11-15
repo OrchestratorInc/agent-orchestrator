@@ -15,7 +15,6 @@ type smallToolCase struct {
 	tool *toolState
 }
 
-// smallToolCases are tool snapshots well under every detail cap.
 func smallToolCases() []smallToolCase {
 	oldText := "a\nb\nc\n"
 	return []smallToolCase{
@@ -55,8 +54,6 @@ func smallToolCases() []smallToolCase {
 	}
 }
 
-// The detail bytes main stored for each small case before the caps existed.
-// Under every cap, nothing about a row may change.
 func TestACPToolDetailSmallPayloadsAreUnchanged(t *testing.T) {
 	want := map[string]string{
 		"terminal command": `{"command":"go test ./...","content":[{"terminalId":"bash-1","type":"terminal"}],"exitCode":0,"input":{"command":"/bin/zsh -lc 'go test ./...'"},"locations":null,"output":"ok  \tpkg\t0.1s\n\u003cdone\u003e \u0026 \u2028\n","protocol":"acp","providerToolName":"Bash","rawCommand":"/bin/zsh -lc 'go test ./...'","terminalId":"bash-1","toolKind":"execute"}`,
@@ -74,10 +71,6 @@ func TestACPToolDetailSmallPayloadsAreUnchanged(t *testing.T) {
 	}
 }
 
-// A long command re-sends its whole accumulated output on every update. The detail
-// keeps the end, where a command reports how it went, and says it was cut. The cap
-// counts characters, as the store's cap on the same output streamed does, so the
-// two copies agree on whether the output was cut.
 func TestACPToolDetailKeepsTailOfLongCommandOutput(t *testing.T) {
 	tail := strings.Repeat("é", commanddetail.MaxOutputChars)
 	for name, tool := range map[string]*toolState{
@@ -102,9 +95,6 @@ func TestACPToolDetailKeepsTailOfLongCommandOutput(t *testing.T) {
 	}
 }
 
-// A command or file change renders from output and files, which its content
-// blocks repeat, so oversized content is replaced by the tool payload marker
-// rather than stored again on every update.
 func TestACPToolDetailMarksOversizedContentItDoesNotRender(t *testing.T) {
 	output := strings.Repeat("x", 256*1024)
 	for name, tool := range map[string]*toolState{
@@ -132,9 +122,6 @@ func TestACPToolDetailMarksOversizedContentItDoesNotRender(t *testing.T) {
 	}
 }
 
-// An MCP-style row (read, search, fetch, other) renders its content: that is the
-// only place the timeline shows what the tool returned, so it is kept whole. Its
-// output repeats the content and is not rendered, so that is still capped.
 func TestACPToolDetailKeepsRenderedContentOfMCPStyleTools(t *testing.T) {
 	file := strings.Repeat("line of a file\n", 6000)
 	tool := &toolState{
@@ -160,11 +147,6 @@ func TestACPToolDetailKeepsRenderedContentOfMCPStyleTools(t *testing.T) {
 	}
 }
 
-// A file change renders files[].patch, which the client prefers over the before
-// and after text whenever a patch is present. Past the per-file cap the patch stops
-// early and says so, the same as a Codex patch, and the full texts are not stored:
-// they would only be read for a file that has no patch at all. The counts describe
-// the whole change, not the part kept.
 func TestACPToolDetailCapsLargeFileChange(t *testing.T) {
 	oldText, newText := largeFullFileEdit()
 	tool := &toolState{
@@ -215,7 +197,6 @@ func TestACPToolDetailCapsLargeFileChange(t *testing.T) {
 	}
 }
 
-// A patch is cut on a character boundary, so the kept part is valid UTF-8.
 func TestACPToolDetailCutsPatchOnCharacterBoundary(t *testing.T) {
 	newText := strings.Repeat("é", commanddetail.MaxPatchChars)
 	tool := &toolState{
@@ -243,8 +224,6 @@ func TestACPToolDetailCutsPatchOnCharacterBoundary(t *testing.T) {
 	}
 }
 
-// largeFullFileEdit is a provider diff that carries the whole file on both sides,
-// as some ACP agents send for any edit: 4000 lines, every tenth one changed.
 func largeFullFileEdit() (oldText, newText string) {
 	var oldLines, newLines []string
 	for i := 0; i < 4000; i++ {
@@ -258,9 +237,6 @@ func largeFullFileEdit() (oldText, newText string) {
 	return strings.Join(oldLines, ""), strings.Join(newLines, "")
 }
 
-// The full ACP patch lists every old line before any new one, so cutting it at the
-// cap would keep only removals and read as though the file had been emptied. A
-// capped patch keeps the start of both sides.
 func TestACPToolDetailCappedPatchShowsRemovalsAndAdditions(t *testing.T) {
 	oldText, newText := largeFullFileEdit()
 	tool := &toolState{
@@ -299,8 +275,6 @@ func TestACPToolDetailCappedPatchShowsRemovalsAndAdditions(t *testing.T) {
 	}
 }
 
-// Lines the two sides share at the start and the end are not the change. Past the
-// cap they are dropped first, and a change that then fits is stored whole.
 func TestACPToolDetailCappedPatchDropsSharedLines(t *testing.T) {
 	shared := strings.Repeat(strings.Repeat("s", 40)+"\n", 2000)
 	oldText := shared + "before\n" + shared

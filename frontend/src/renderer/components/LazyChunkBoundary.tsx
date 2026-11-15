@@ -6,11 +6,6 @@ import { Button } from "./ui/button";
 type Props = { children: React.ReactNode };
 type State = { hasError: boolean };
 
-/**
- * The in-panel crash state: a short message and a full reload. With `reset`,
- * it first offers to re-render just the panel, which keeps the rest of the app
- * (and its terminals) running. A failed chunk import cannot recover that way.
- */
 export function LazyChunkErrorPanel({ reset }: { reset?: () => void }) {
 	const { t } = useTranslation();
 	return (
@@ -47,12 +42,6 @@ class LazyChunkErrorBoundary extends React.Component<Props, State> {
 	}
 }
 
-/**
- * Contains a failed lazy chunk (or a render error inside it) to its own panel.
- * Without it, a rejected import propagates to the route's error screen and takes
- * the whole shell, including every retained terminal, down with it. React.lazy
- * caches the rejection, so recovery is a reload.
- */
 export function LazyChunkBoundary({ children }: Props) {
 	return <LazyChunkErrorBoundary>{children}</LazyChunkErrorBoundary>;
 }

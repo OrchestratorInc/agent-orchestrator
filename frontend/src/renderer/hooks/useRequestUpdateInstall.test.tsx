@@ -15,9 +15,6 @@ vi.mock("../stores/ui-store", () => ({
 
 vi.mock("./useWorkspaceQuery", () => ({ workspaceQueryOptions: { queryKey: ["workspaces"], queryFn: fetchWorkspaces, staleTime: 10_000 } }));
 
-// Which sessions count as at-risk is update-install-risk.test.ts's job (6 cases
-// there). These only need one of each shape to drive the branch below: a chat
-// session mid-turn on a daemon-owned driver is at risk, a TUI session is not.
 const session = (mode: "chat" | "tui") => ({
 	id: mode,
 	title: "Session",
@@ -51,9 +48,6 @@ beforeEach(() => {
 
 describe("useRequestUpdateInstall", () => {
 	it("installs directly when nothing would lose a turn", async () => {
-		// The confirmation existed to warn about lost work. With nothing to warn
-		// about it is a modal on top of the Settings modal saying nothing, and the
-		// build installs on the next quit anyway.
 		await renderTrigger([{ sessions: [session("tui")] }])();
 		expect(install).toHaveBeenCalledTimes(1);
 		expect(openPrompt).not.toHaveBeenCalled();
@@ -66,8 +60,6 @@ describe("useRequestUpdateInstall", () => {
 	});
 
 	it("confirms when the workspace list has not resolved", async () => {
-		// Unknown is not the same as safe: AO cannot rule out a live turn, so it
-		// asks rather than quitting out from under one.
 		await renderTrigger()();
 		expect(openPrompt).toHaveBeenCalledTimes(1);
 		expect(install).not.toHaveBeenCalled();

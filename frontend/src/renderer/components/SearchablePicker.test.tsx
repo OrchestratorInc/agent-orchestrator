@@ -63,15 +63,11 @@ it("gives repository selectors a visibly scrollable result area that fits short 
 	/>);
 	await user.click(screen.getByRole("combobox", { name: "Repository" }));
 	const list = screen.getByRole("listbox", { name: "Repository" });
-	// Capped, not fixed: one repository renders as one row, not an 18rem box.
 	expect(list).toHaveClass("max-h-72", "overflow-y-auto", "repository-picker-scrollbar");
 	expect(list).not.toHaveClass("h-72");
 	expect(screen.getAllByRole("option")).toHaveLength(40);
 });
 
-// The popover is portaled to <body>, so inside a modal Dialog react-remove-scroll
-// preventDefault()s the native wheel scroll. The picker drives the scroll itself
-// from a non-passive wheel listener, which must survive that preventDefault.
 it("scrolls an overflowing result list from the wheel and cancels the native scroll", async () => {
 	const user = userEvent.setup();
 	render(<SearchablePicker
@@ -86,7 +82,6 @@ it("scrolls an overflowing result list from the wheel and cancels the native scr
 	await user.click(screen.getByRole("combobox", { name: "Repository" }));
 	const list = screen.getByRole("listbox", { name: "Repository" });
 
-	// jsdom does no layout, so drive scrollTop/overflow through explicit descriptors.
 	let scrollTop = 0;
 	Object.defineProperty(list, "scrollTop", { configurable: true, get: () => scrollTop, set: (value) => { scrollTop = value; } });
 	Object.defineProperty(list, "scrollHeight", { configurable: true, value: 1000 });
@@ -195,6 +190,5 @@ it("says the list is loading from a status already in the page when it opens", a
 	await user.click(screen.getByRole("combobox", { name: "Repository" }));
 	expect(screen.getByRole("status")).toBe(status);
 	expect(status).toHaveTextContent("Loading repositories...");
-	// The visible line inside the list is not a second live region.
 	expect(screen.getByRole("listbox", { name: "Repository" }).querySelector("[role=status]")).toBeNull();
 });

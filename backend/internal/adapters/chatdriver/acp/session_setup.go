@@ -12,10 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// implicitWorkspaceDirectories marks a binding whose agent reaches the whole
-// workspace root through its own process: child directories need no ACP
-// additional-directories support and are not sent on the wire (see
-// acpdriver.Config.ImplicitWorkspaceDirectories).
 func normalizeAdditionalDirectories(cwd string, directories []string, supported, implicitWorkspace bool) ([]string, error) {
 	if len(directories) == 0 {
 		return nil, nil

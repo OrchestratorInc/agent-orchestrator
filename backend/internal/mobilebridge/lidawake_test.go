@@ -151,14 +151,11 @@ func TestWakeSetupAcceptsDaemonParentAndReusesRegisteredBuild(t *testing.T) {
 				{1, true},
 				{2, true},
 				{3, true},
-				{4, true}, // Before serialized, durable authorization revocation.
+				{4, true},
 				{lidHelperVersion + 1, true},
-				// A protocol-compatible older helper may still reject macOS 27.
 				{lidHelperVersion, false},
 			} {
 				protocol, probeSupported = incompatible.version, incompatible.supported
-				// A leftover client lease must not hide upgrade guidance behind
-				// an unavailable or old-protocol status file.
 				l.id = "previous-lease"
 				for _, attempt := range []struct {
 					name string
@@ -253,7 +250,6 @@ func TestLidStopDoesNotBlockStatus(t *testing.T) {
 func TestDefaultDataDirectoryDoesNotReportIsolated(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// An empty helper path exits without probing or registering any host job.
 	l := NewLidAwake(os.Getpid(), "", filepath.Join(home, ".ao", "data"))
 	_, _, reason := l.Status()
 	if reason == "isolated_data_dir" {
@@ -305,7 +301,7 @@ func TestWakeSetupMissingRegisteredPlistReportsUpgradeRecovery(t *testing.T) {
 			if command != "/bin/launchctl" || len(args) != 2 || args[0] != "print" {
 				t.Fatalf("unexpected command against legacy registration: %s %v", command, args)
 			}
-			return nil, nil // A legacy coordinator is still registered.
+			return nil, nil
 		},
 	}
 	err := l.Setup()
@@ -373,8 +369,6 @@ func TestDesktopLeaseCarriesItsNativePolicy(t *testing.T) {
 	if lease.LidClosed == nil || *lease.LidClosed || !lease.DisplayAwake || lease.ExpiresAt == nil || lease.StopBatteryPercent != 30 || lease.LowPowerBatteryPercent != 40 || !lease.LowPowerOnSeriousHeat || !lease.MuteAudio || !lease.RestoreDisplay || !lease.DarkenKeyboard || len(lease.PauseApps) != 1 {
 		t.Fatalf("policy lost in native lease: %+v", lease)
 	}
-	// Policy reconciliation stops here, while the independent lease writer keeps
-	// advancing its sequence. It must never move the policy-owned expiry.
 	for i := 0; i < 8; i++ {
 		previous := lease.Sequence
 		if err := l.renew(); err != nil {

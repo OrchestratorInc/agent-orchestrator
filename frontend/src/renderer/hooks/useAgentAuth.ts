@@ -16,10 +16,6 @@ export type AgentLoginSnapshot = components["schemas"]["AgentLoginSnapshot"];
 
 type LoginResult<T> = { data?: T; error?: unknown; status?: number };
 
-// Local sign-in goes through the main process so it never queues behind the
-// renderer's per-origin socket limit: event streams and slow readiness probes
-// can hold every slot for many seconds. Remote hosts and the browser preview
-// (no main process) use HTTP.
 async function viaMain<T>(hostId: string | undefined, request: AgentLoginRequest): Promise<LoginResult<T> | null> {
 	if (hostId && hostId !== LOCAL_HOST) return null;
 	const result = await aoBridge.agentLogin?.request(request);
@@ -30,15 +26,10 @@ async function viaMain<T>(hostId: string | undefined, request: AgentLoginRequest
 	return { error, status: result.status };
 }
 
-// Credentials stay out of React Query's mutation cache and terminal replay.
-// An empty secret on a provider-key method reuses the key AO already saved;
-// device publishes the key to the OS user environment or withdraws it; left
-// undefined, the key keeps its current setting.
 export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string, model?: string, device?: boolean): Promise<AgentLoginSnapshot> {
 	return startLogin(agentId, method, hostId, { ...(secret ? { secret } : {}), ...(model ? { model } : {}), ...(device !== undefined ? { device } : {}) });
 }
 
-/** Saves a key for a provider picked from the harness's own catalog, in that harness's own store. */
 export async function startCatalogKeyLogin(agentId: string, provider: string, secret: string, hostId?: string): Promise<AgentLoginSnapshot> {
 	return startLogin(agentId, "provider_key", hostId, { secret, provider });
 }
@@ -48,8 +39,6 @@ async function startLogin(agentId: string, method: string, hostId: string | unde
 		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations", {
 			params: { path: { agent: agentId } }, body: { method, ...options },
 		});
-	// Recover a login whose dialog was lost on reload without starting a second
-	// native process against the same credential store.
 	if (apiErrorCode(error) === "AGENT_AUTH_IN_PROGRESS") {
 		const id = apiErrorDetails(error)?.operationId;
 		if (typeof id === "string") return getAgentUILogin(agentId, id, hostId);
@@ -69,10 +58,6 @@ export async function getAgentUILogin(agentId: string, operationId: string, host
 
 export type { AgentLoginMenuAction };
 
-/**
- * Answers the native sign-in menu. option is the label the user chose; the
- * daemon rejects the action when the menu on screen no longer offers it there.
- */
 export async function actOnAgentUILogin(agentId: string, operationId: string, action: AgentLoginMenuAction, hostId?: string, option?: string): Promise<AgentLoginSnapshot> {
 	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "act", agentId, operationId, menuAction: action, ...(option ? { option } : {}) })
 		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/actions", {
@@ -150,7 +135,6 @@ export async function probeAgentAuth(agentId: string, hostId?: string) {
 
 export type CatalogProvider = components["schemas"]["CatalogProvider"];
 
-/** Key-only providers in the harness's own provider catalog on this host. */
 export async function fetchCatalogProviders(agentId: string, hostId?: string): Promise<CatalogProvider[]> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/providers", { params: { path: { agent: agentId } } });
 	if (error || !data) throw apiErrorException(error, "Could not load providers.");

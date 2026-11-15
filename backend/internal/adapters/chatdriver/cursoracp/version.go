@@ -11,18 +11,11 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// minimumCursorVersion is the oldest Cursor Agent build AO has verified by a
-// local ACP v1 handshake and the ACP Registry build current when this binding
-// was added.
 const minimumCursorVersion = "2026.08.11"
 
 var cursorVersionPattern = regexp.MustCompile(`\b(\d{4})\.(\d{2})\.(\d{2})\b`)
 
 func versionProbe(ctx context.Context, bin string) error {
-	// Cursor's standard installer makes ~/.local/bin/cursor-agent a symlink into
-	// a versioned directory. Prefer that local fact: invoking --version starts
-	// the full Node CLI and can wait on another live Cursor process long enough
-	// to exceed a health probe's deadline.
 	if resolved, err := filepath.EvalSymlinks(bin); err == nil {
 		if installed, ok := parseCursorVersion(resolved); ok {
 			return requireMinimumCursorVersion(installed)

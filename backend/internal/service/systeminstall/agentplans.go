@@ -104,8 +104,6 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCursor:
 		plans = []Plan{s.officialByOS(target, "https://cursor.com/install", "bash", "https://cursor.com/install?win32=true", agentDocumentationURLs[target])}
-	// Aider's installer runs `uv tool install aider-chat`, so uv owns the binary
-	// it leaves behind; listing uv lets updates go through it.
 	case TargetAider:
 		plans = []Plan{s.officialByOS(target, "https://aider.chat/install.sh", "sh", "https://aider.chat/install.ps1", agentDocumentationURLs[target]), s.planUV(target, "aider-chat")}
 	case TargetGrok:
@@ -113,8 +111,6 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetKimi:
 		official := s.officialByOS(target, "https://code.kimi.com/kimi-code/install.sh", "bash", "https://code.kimi.com/kimi-code/install.ps1", agentDocumentationURLs[target])
 		if s.goos == "darwin" {
-			// Homebrew core ships Kimi as the kimi-code formula; listing it lets AO
-			// recognise and update brew-installed copies.
 			plans = []Plan{official, s.planBrew(target, "kimi-code")}
 		} else {
 			plans = []Plan{official}
@@ -269,13 +265,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 	case TargetMiMoCode:
 		plans = []Plan{s.planNPM(target, "@mimo-ai/cli")}
 	case TargetDeepSeek:
-		// DeepSeek Harness ships as one Node CLI that boots every profile
-		// (headless, ACP, web) from the same install, so npm is the only method.
 		plans = []Plan{s.planNPM(target, "@deepseek-ai/dsh")}
 	case TargetOpenHands:
-		// The package pins Requires-Python ==3.12.*, which uv resolves (and
-		// downloads if needed) on its own; pipx would need a 3.12 interpreter
-		// already on PATH, so it is not offered.
 		plans = []Plan{s.planUV(target, "openhands")}
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
@@ -297,8 +288,6 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
 		}
 	case TargetHermes:
-		// Homebrew ships prebuilt release bottles; the official installer clones
-		// the GitHub repository, so it stays the fallback (lastResortInstallers).
 		plans = []Plan{s.planHermesInstaller(target)}
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = []Plan{s.planBrew(target, "hermes-agent"), plans[0]}
@@ -397,9 +386,6 @@ func (s requestPlanner) planKiroInstall() Plan {
 
 func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Plan {
 	if operation == AgentOperationUpdate && plan.Method == "npm" && (plan.daemonRuntimeRejected || plan.daemonPrefixRejected) {
-		// The installed copy may live under another prefix (nvm, fnm, ~/.local)
-		// with its own Node. The update validates that installation once the
-		// owner is known, and applies this reason again if it uses the daemon's.
 		plan.deferredReason = plan.Reason
 		plan.Unsupported, plan.Reason = false, ""
 	}
@@ -418,14 +404,10 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			if managed.Script != nil {
 				script = managed.Script
 			}
-			// A release the vendor's installer put there is reinstalled with
-			// that installer (for a Codex cask, its official one, not brew).
 			if script, ok := s.officialManagedScript(managed, script); ok {
 				managed.Script = script
 			}
 			if s.managedEligible(managed) {
-				// Sessions run AO's managed copy, so a reinstall repairs that one:
-				// the same release, installed fresh beside it.
 				plan = managed
 				plan.managed = true
 				plan.managedPin = record.Version
@@ -468,14 +450,10 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		}
 		switch plan.Method {
 		case "homebrew":
-			// A cask whose upgrade would delete files running sessions load is
-			// updated with the vendor's installer into a release of AO's own.
 			if script, ok := s.officialManagedScript(plan, nil); ok {
 				plan.Script = script
 				break
 			}
-			// The runner sets HOMEBREW_NO_AUTO_UPDATE, and the advisory reads the
-			// live Homebrew API, so refresh local metadata before upgrading.
 			plan.Prepare = [][]string{{"brew", "update"}}
 			plan.Command = []string{"brew", "upgrade"}
 			if plan.PackageCask {
@@ -494,17 +472,11 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		case "bun":
 			plan.Command = []string{"bun", "install", "-g", packageWithoutLatest(plan.Package) + "@latest"}
 		case "official-installer":
-			// A vendor installer AO can run into a release of its own updates
-			// beside the copy sessions run (officialManagedRecipes).
 			if script, ok := s.officialManagedScript(plan, installScript); ok {
 				plan.Command = nil
 				plan.Script = script
 				break
 			}
-			// These self-updaters do not reliably replace the installed binary
-			// headlessly: installerUpdateTargets on every platform, and these
-			// Windows ones. Re-run the vendor's installer instead; ownership and
-			// post-update version checks still guard the operation.
 			if installScript != nil && (installerUpdateTargets[plan.Target] || s.goos == "windows" &&
 				(plan.Target == TargetAutohand || plan.Target == TargetGrok)) {
 				plan.Command = nil
@@ -526,8 +498,6 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 			plan.UpdateWhileRunning = updateWhileRunningLevel(s.goos, plan.Target, plan.Method, plan.PackageCask, plan.Package)
 		}
 		if s.managedEligible(plan) {
-			// Installed side by side, so no session's files are touched, on any
-			// platform: the update is safe while sessions run.
 			plan.managed = true
 			plan.UpdateWhileRunning = UpdateWhileRunningSafe
 			argv, _ := managedInstallCommand(plan.Method, packageWithoutLatest(plan.Package), "", filepath.Join(s.managedTargetDir(plan.Target), "versions", "<next>"))
@@ -539,9 +509,6 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	return plan
 }
 
-// planManagedOMP discloses the standalone installer before a Bun-owned OMP
-// update or managed reinstall is approved. New OMP releases may require a
-// newer Bun; the isolated binary avoids changing the working copy's runtime.
 func (s requestPlanner) planManagedOMP(plan Plan, pin string) Plan {
 	if plan.Target != TargetOMP || plan.Method != "bun" || s.managedRoot == "" || (s.goos != "darwin" && s.goos != "linux") {
 		return plan
@@ -564,13 +531,6 @@ func (s requestPlanner) planManagedOMP(plan Plan, pin string) Plan {
 	return standalone
 }
 
-// vendorUpdateCommands are the harnesses' own self-update commands, used only
-// when the vendor installer, not a package manager, owns the running binary.
-// Each updates the stable channel without a terminal: Kimchi's "self" leaves
-// its extensions alone and --force skips its confirmation prompt, and
-// OpenCode is told the install method AO already proved. Amp's --porcelain
-// prints a one-line result instead of interactive progress, and Pi updates
-// only itself without trusting project-local files.
 var vendorUpdateCommands = map[Target][]string{
 	TargetClaudeCode: {"claude", "update"},
 	TargetCodex:      {"codex", "update"},
@@ -591,21 +551,10 @@ var vendorUpdateCommands = map[Target][]string{
 	TargetPrimeAgent: {"prime-agent", "update"},
 }
 
-// vendorUpdateEnv turns a vendor's own auto-update switch back on for an
-// update the user asked for. `droid update` exits 0 without updating, and
-// prints "Auto-update is not available for npm installations", whenever
-// FACTORY_DROID_AUTO_UPDATE_ENABLED is false or its build (npm's) turns
-// auto-update off, even for the copy at the official installer's location.
 var vendorUpdateEnv = map[Target][]string{
 	TargetDroid: {"FACTORY_DROID_AUTO_UPDATE_ENABLED=true"},
 }
 
-// installerUpdateTargets update by re-running the vendor installer, pinned to
-// the approved release and bound to the confirmed install directory. Kimi's
-// `kimi upgrade` exits 0 without replacing the binary: it reports "already up
-// to date" from its own staged-rollout channel, prints a manual command for
-// installs it does not manage, and on native installs only stages the new
-// binary for a later launch to swap in.
 var installerUpdateTargets = map[Target]bool{
 	TargetKimi: true,
 }
@@ -614,8 +563,6 @@ func packageWithoutLatest(pkg string) string {
 	return strings.TrimSuffix(pkg, "@latest")
 }
 
-// planAgent preserves the legacy single-plan call sites while selecting from
-// the same method registry used by the catalog and execution route.
 func (s *Service) planAgent(target Target) Plan {
 	planner, err := s.newRequestPlanner(context.Background())
 	if err != nil {
@@ -636,9 +583,6 @@ func (s *Service) officialByOS(target Target, unixURL, unixShell, windowsURL, do
 	}
 }
 
-// planHermesInstaller runs Hermes's official installer for the latest release.
-// Its setup and gateway stages need a terminal, so they are skipped; provider
-// setup runs afterwards through the harness's own setup action.
 func (s *Service) planHermesInstaller(target Target) Plan {
 	plan := s.officialByOS(target,
 		"https://hermes-agent.nousresearch.com/install.sh", "bash",
@@ -668,8 +612,6 @@ func (s *Service) planShellInstaller(target Target, url, shell string) Plan {
 }
 
 func (s *Service) planPowerShellInstaller(target Target, url string) Plan {
-	// WindowsApps can expose a pwsh.exe execution alias that LookPath finds but
-	// the daemon cannot launch. Prefer the Windows PowerShell binary instead.
 	for _, shell := range []string{"powershell.exe", "powershell", "pwsh.exe", "pwsh"} {
 		resolved, err := s.executables.LookPath(shell)
 		if err != nil {
@@ -712,9 +654,6 @@ func manualPlan(target Target, reason, docsURL string) Plan {
 	return Plan{Target: target, Unsupported: true, Method: "manual", Reason: reason, DocsURL: docsURL}
 }
 
-// pinVendorUpdate asks OpenCode and Kimi's installer for the exact release
-// the update advisory reported, so the version installed is the one the
-// update badge announced.
 func pinVendorUpdate(plan Plan, latest string) Plan {
 	if plan.Method != "official-installer" || latest == "" {
 		return plan
@@ -730,22 +669,11 @@ func pinVendorUpdate(plan Plan, latest string) Plan {
 	return plan
 }
 
-// openCodeV2HomebrewKeg is the opencode-v2 formula's keg name, and
-// openCodeV1HomebrewKeg the formula it declares conflicts_with.
 const (
 	openCodeV2HomebrewKeg = "opencode-v2"
 	openCodeV1HomebrewKeg = "opencode"
 )
 
-// isolateOpenCodeV2 keeps every OpenCode 2 method from replacing OpenCode 1's
-// `opencode` executable. Both majors ship an executable of that name, and each
-// vendor recipe writes it where OpenCode 1's own recipe does. npm already
-// installs into a private prefix (planNPM). The official installer always
-// writes $HOME/.opencode/bin, so it runs with a private HOME and leaves shell
-// profiles alone. Homebrew links opencode-v2 into <prefix>/bin, so the keg is
-// unlinked afterwards and resolved through its opt link; an OpenCode 1 formula
-// that is linked is unlinked first, because opencode-v2 refuses to install
-// beside it, and linked again whatever the outcome.
 func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
 	if plan.Unsupported {
 		return plan
@@ -770,8 +698,6 @@ func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
 		if len(plan.Command) == 0 {
 			return plan
 		}
-		// Even an absent marker can mean v1 is reinstalling. Reserve its
-		// harness before inspecting linked state in runAgentOperation.
 		plan.alsoChanges = []Target{TargetOpencode}
 		if s.capabilities != nil {
 			plan.homebrewV1Prefix = s.capabilities.Homebrew.Prefix
@@ -781,9 +707,6 @@ func (s requestPlanner) isolateOpenCodeV2(plan Plan) Plan {
 	return plan
 }
 
-// withLinkedOpenCodeV1 inspects linked state only after the run reserves v1.
-// A plan may have been built while a v1 reinstall temporarily removed its
-// marker, or long before a deferred update actually starts.
 func (plan Plan) withLinkedOpenCodeV1() Plan {
 	if plan.homebrewV1Prefix == "" {
 		return plan
@@ -796,9 +719,6 @@ func (plan Plan) withLinkedOpenCodeV1() Plan {
 	return plan
 }
 
-// withInstallerEnv returns a copy of script whose environment sets entries,
-// replacing any earlier value of the same keys. Keys compare case-insensitively
-// because Windows environment names do.
 func withInstallerEnv(script *ports.InstallScriptCommand, entries ...string) *ports.InstallScriptCommand {
 	next := *script
 	next.Env = nil
@@ -816,14 +736,6 @@ func withInstallerEnv(script *ports.InstallScriptCommand, entries ...string) *po
 	return &next
 }
 
-// bindKimiInstallerUpdate binds a Kimi installer update to the Kimi Code
-// native install sessions run. Only the installer's own default root,
-// ~/.kimi-code, is accepted: a kimi in ~/.local, ~/.cargo or /usr/local may
-// belong to another tool (the legacy Python kimi-cli, a cargo build), and the
-// installer would replace it with the native binary. KIMI_NO_MODIFY_PATH and
-// a PATH without <root>/bin keep the installer from editing shell rc files
-// and from its legacy-shim migration, which renames or deletes other kimi
-// commands on PATH; the update only replaces <root>/bin/kimi.
 func bindKimiInstallerUpdate(goos string, plan Plan, binaryPath, home, pathList string) Plan {
 	if plan.Target != TargetKimi || plan.Method != "official-installer" || plan.Script == nil {
 		return plan
@@ -843,9 +755,6 @@ func bindKimiInstallerUpdate(goos string, plan Plan, binaryPath, home, pathList 
 	return plan
 }
 
-// kimiInstallRoot is the KIMI_INSTALL_DIR whose bin/kimi is binaryPath, when
-// that is Kimi Code's default root under home. Windows paths compare
-// case-insensitively with either separator; other platforms compare exactly.
 func kimiInstallRoot(goos, binaryPath, home string) (string, bool) {
 	if home == "" {
 		return "", false
@@ -870,7 +779,6 @@ func kimiPathSeparator(goos string) string {
 	return "/"
 }
 
-// pathWithoutDir removes dir from a PATH list, comparing as the platform does.
 func pathWithoutDir(goos, pathList, dir string) string {
 	separator, clean := ":", path.Clean
 	if goos == "windows" {
@@ -888,14 +796,8 @@ func pathWithoutDir(goos, pathList, dir string) string {
 	return strings.Join(kept, separator)
 }
 
-// targetInstalledCopy points an update at the copy sessions run. A
-// vendor self-update runs from that binary rather than whichever copy PATH
-// finds first, and npm acts on the global prefix that holds the package with
-// that prefix's own Node, which need not be the daemon's npm.
 func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath string) Plan {
 	if goos == "windows" && target == TargetGrok && plan.Method == "official-installer" && plan.Script != nil {
-		// PowerShell's installer defaults to the user's profile. Bind its
-		// destination even when the confirmed copy lives on another drive/share.
 		slashed := strings.ReplaceAll(binaryPath, `\`, "/")
 		driveAbsolute := len(slashed) >= 3 && ((slashed[0] >= 'A' && slashed[0] <= 'Z') || (slashed[0] >= 'a' && slashed[0] <= 'z')) && slashed[1:3] == ":/"
 		uncAbsolute := strings.HasPrefix(slashed, "//") && len(strings.Split(strings.TrimPrefix(slashed, "//"), "/")) >= 3
@@ -906,7 +808,7 @@ func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath strin
 		}
 		end := strings.LastIndex(slashed, "/")
 		if driveAbsolute && end == 2 {
-			end++ // Keep the separator in a drive root such as D:\.
+			end++
 		}
 		plan.Script = withInstallerEnv(plan.Script, "GROK_BIN_DIR="+binaryPath[:end])
 		plan.ExpectedDestination = binaryPath
@@ -938,11 +840,6 @@ func targetInstalledCopy(goos string, plan Plan, target Target, binaryPath strin
 	return plan
 }
 
-// validateNPMUpdateTarget checks the installation an npm update acts on.
-// planNPM validated the daemon's Node/npm and global prefix; an update that
-// targets another prefix, or that deferred a daemon rejection, is validated
-// against the owning prefix and the runtime that will run the update: that
-// prefix's own Node and npm when it has them, else the daemon's.
 func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, plannedPrefix string) Plan {
 	deferred, runtimeRejected, prefixRejected, ownerFound := plan.deferredReason, plan.daemonRuntimeRejected, plan.daemonPrefixRejected, plan.ownerPrefixFound
 	plan.deferredReason, plan.daemonRuntimeRejected, plan.daemonPrefixRejected, plan.ownerPrefixFound = "", false, false, false
@@ -967,7 +864,6 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 		}
 	}
 	if len(plan.Command) > 1 && plan.Command[0] != "npm" {
-		// npmCommandForPrefix chose this prefix's own Node and npm.
 		minimum := minimumNodeVersionForTarget(plan.Target)
 		node, nodeOK := s.toolVersion(ctx, plan.Command[0], "--version")
 		_, npmOK := s.toolVersion(ctx, plan.Command[0], plan.Command[1], "--version")
@@ -978,13 +874,11 @@ func (s *Service) validateNPMUpdateTarget(ctx context.Context, plan Plan, planne
 			return reject(fmt.Sprintf("Node.js %s+ is required to update %s with the Node in %s; found %s.", formatToolVersion(minimum), plan.Target, plan.PackagePrefix, formatToolVersion(node)))
 		}
 	} else if runtimeRejected {
-		// npm from PATH runs the update on the daemon's own Node.
 		return reject(deferred)
 	}
 	return plan
 }
 
-// toolVersion runs a version probe and parses its first line.
 func (s *Service) toolVersion(ctx context.Context, argv ...string) ([3]int, bool) {
 	output, err := runProbe(ctx, s.commands, localProbeTimeout, false, argv)
 	if err != nil {

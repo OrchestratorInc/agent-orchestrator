@@ -4,13 +4,6 @@ import { useSettings } from "./useSettings";
 
 const NO_MODELS: never[] = [];
 
-/**
- * The models a picker offers for one harness: its catalog without the ones
- * switched off in Settings → Harness → Models on that host. Ids in `keep` (a
- * model already chosen or saved) stay listed. `modelID` maps an entry to its
- * catalog id (keep it stable across renders). `skip` offers the catalog as is,
- * for Cloud, whose VMs keep their own catalog.
- */
 export function useOfferedModels<T extends { id: string }>(
 	agentId: string | undefined,
 	models: T[] | undefined,

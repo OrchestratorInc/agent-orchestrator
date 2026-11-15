@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// These DTOs mirror the daemon's Cue API without importing controller types.
 type cueDTO struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"projectId"`

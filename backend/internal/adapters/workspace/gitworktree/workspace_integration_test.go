@@ -173,7 +173,7 @@ func TestWorkspaceIntegrationCancelledPreparedAddLeavesNoWorktreeOrBranch(t *tes
 	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
 		out, err := actualRun(ctx, binary, args...)
 		if err == nil && strings.Contains(strings.Join(args, " "), "worktree add -b "+branch+" ") {
-			return nil, context.Canceled // git succeeded immediately before cancellation surfaced
+			return nil, context.Canceled
 		}
 		return out, err
 	}
@@ -376,8 +376,6 @@ func TestWorkspaceIntegrationCancelledPreparedChildPreservesDirtyPartial(t *test
 	tmp := t.TempDir()
 	rootRepo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
 	childRepo := setupOriginClone(t, git, filepath.Join(tmp, "child"))
-	// The parent can appear clean even while an ignored nested worktree holds
-	// uncommitted user files. Its teardown must never follow a failed child.
 	if err := os.WriteFile(filepath.Join(rootRepo, ".gitignore"), []byte("api/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -492,10 +490,6 @@ func TestWorkspaceIntegrationRestoreExistingBranchDoesNotResolveDefault(t *testi
 		t.Fatalf("destroy: %v", err)
 	}
 
-	// Simulate restoring after the repository's authoritative remote metadata
-	// became unavailable. The session branch still exists locally, so restore
-	// only needs to reattach it and must not attempt automatic default
-	// resolution again.
 	runGit(t, git, repo, "remote", "remove", "origin")
 	_, err = ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "probe", Branch: "feature/new"})
 	if !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
@@ -516,10 +510,6 @@ func TestWorkspaceIntegrationRestoreExistingBranchDoesNotResolveDefault(t *testi
 	}
 }
 
-// TestWorkspaceIntegrationEnablesPerWorktreeConfig verifies the isolation
-// prerequisite for worker instructions: a setting written with Git's explicit
-// --worktree scope is visible only in the linked session worktree, not the
-// human checkout's shared config.
 func TestWorkspaceIntegrationEnablesPerWorktreeConfig(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -578,14 +568,6 @@ func TestWorkspaceIntegrationDestroyRefusesLockedWorktree(t *testing.T) {
 	}
 }
 
-// TestWorkspaceIntegrationDestroyDirtyWorktree proves the two halves of the
-// dirty-teardown contract against real git:
-//
-//  1. A worktree whose only untracked files are covered by a self-ignoring
-//     .gitignore (the shape agent adapters install for their hook files) is
-//     clean in git's eyes, so Destroy succeeds without --force.
-//  2. Real uncommitted work makes Destroy refuse with ports.ErrWorkspaceDirty
-//     and preserves the worktree.
 func TestWorkspaceIntegrationDestroyDirtyWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -601,8 +583,6 @@ func TestWorkspaceIntegrationDestroyDirtyWorktree(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// AO-managed hook files behind a self-ignoring .gitignore: invisible to git
-	// status, so they must not block teardown.
 	hookDir := filepath.Join(info.Path, ".codex")
 	if err := os.MkdirAll(hookDir, 0o750); err != nil {
 		t.Fatalf("mkdir hook dir: %v", err)
@@ -614,7 +594,6 @@ func TestWorkspaceIntegrationDestroyDirtyWorktree(t *testing.T) {
 		t.Fatalf("write .gitignore: %v", err)
 	}
 
-	// Real agent work must keep blocking teardown, typed as ErrWorkspaceDirty.
 	wip := filepath.Join(info.Path, "wip.txt")
 	if err := os.WriteFile(wip, []byte("uncommitted\n"), 0o600); err != nil {
 		t.Fatalf("write wip: %v", err)
@@ -627,8 +606,6 @@ func TestWorkspaceIntegrationDestroyDirtyWorktree(t *testing.T) {
 		t.Fatalf("dirty worktree was not preserved: %v", statErr)
 	}
 
-	// With the real work gone, only the ignored AO files remain — git considers
-	// the worktree clean and Destroy succeeds without --force.
 	if err := os.Remove(wip); err != nil {
 		t.Fatalf("remove wip: %v", err)
 	}
@@ -667,7 +644,6 @@ func TestWorkspaceIntegrationDestroyDeletesOnlyThatSessionsFileSnapshots(t *test
 	if err := ws.Destroy(ctx, ended); err != nil {
 		t.Fatalf("destroy: %v", err)
 	}
-	// A refused teardown keeps the session, so it keeps its snapshots too.
 	if err := os.WriteFile(filepath.Join(dirty.Path, "wip.txt"), []byte("uncommitted\n"), 0o600); err != nil {
 		t.Fatalf("write wip: %v", err)
 	}
@@ -680,8 +656,6 @@ func TestWorkspaceIntegrationDestroyDeletesOnlyThatSessionsFileSnapshots(t *test
 	}
 }
 
-// A session whose worktree went without a Destroy, such as one removed by hand,
-// loses its snapshots the next time a worktree of the repository is created.
 func TestWorkspaceIntegrationCreateDeletesFileSnapshotsOfWorktreesThatAreGone(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -715,21 +689,6 @@ func TestWorkspaceIntegrationCreateDeletesFileSnapshotsOfWorktreesThatAreGone(t 
 	}
 }
 
-// TestWorkspaceIntegrationRestoreRecreatesSiblingsIndependently is the
-// real-git regression test for the sibling-registration-wipe finding on
-// pruneIfWorktreeDirMissing (PR #3098 review, illegalcall): two sessions in
-// the SAME repo each have their worktree directory deleted out of band (their
-// git registrations survive, exactly the #2775 shape). Restoring the first
-// must not touch the second's registration.
-//
-// Verified against real git before the fix: with two worktrees on distinct
-// branches both missing their directories, a single `git worktree prune`
-// removed BOTH stale registrations at once. So restoring session A pruned
-// session B's registration as a side effect, and session B's later Restore
-// then found no record and fell back to whatever branch its caller passed
-// instead of the branch it was actually on: the exact "recreated on the
-// wrong branch" bug recreateBranch exists to prevent, reintroduced for every
-// sibling session that never asked to be touched by A's restore.
 func TestWorkspaceIntegrationRestoreRecreatesSiblingsIndependently(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -750,8 +709,6 @@ func TestWorkspaceIntegrationRestoreRecreatesSiblingsIndependently(t *testing.T)
 		t.Fatalf("create B: %v", err)
 	}
 
-	// Simulate the out-of-band deletion #2775 hit: the directory is gone, the
-	// git registration (and, in production, AO's DB row) is not.
 	if err := os.RemoveAll(infoA.Path); err != nil {
 		t.Fatalf("remove A dir: %v", err)
 	}
@@ -759,11 +716,6 @@ func TestWorkspaceIntegrationRestoreRecreatesSiblingsIndependently(t *testing.T)
 		t.Fatalf("remove B dir: %v", err)
 	}
 
-	// cfg.Branch is deliberately wrong for both restores: if either recreates
-	// on cfg.Branch instead of its own registration's branch, this test
-	// catches it (same shape as TestRestoreRecreatesOnRegisteredBranchNotCfgBranch,
-	// but against real git instead of the fake runner, since this bug lives in
-	// git's own prune semantics).
 	restoredA, err := ws.Restore(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess-a", Branch: "wrong-branch-a", Path: infoA.Path})
 	if err != nil {
 		t.Fatalf("restore A: %v", err)
@@ -772,7 +724,6 @@ func TestWorkspaceIntegrationRestoreRecreatesSiblingsIndependently(t *testing.T)
 		t.Fatalf("restored A branch = %q, want child-a", restoredA.Branch)
 	}
 
-	// The finding's assertion: B's registration must have survived A's restore.
 	restoredB, err := ws.Restore(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess-b", Branch: "wrong-branch-b", Path: infoB.Path})
 	if err != nil {
 		t.Fatalf("restore B: %v", err)
@@ -789,16 +740,6 @@ func TestWorkspaceIntegrationRestoreRecreatesSiblingsIndependently(t *testing.T)
 	}
 }
 
-// TestWorkspaceIntegrationRestoreLockedMissingWorktreeIsTypedError is the
-// real-git regression test for the locked-worktree finding on
-// pruneIfWorktreeDirMissing (PR #3098 review, illegalcall): `git worktree
-// prune` deliberately leaves a locked registration in place even when its
-// directory is gone, and both `git worktree add` and
-// `git worktree remove --force` at that path then fail with an opaque
-// "missing but locked worktree" git error. pruneIfWorktreeDirMissing must
-// detect the lock itself from the registration and fail with the typed
-// ports.ErrWorkspaceLocked before ever calling git to add or remove, rather
-// than relaying that opaque failure downstream.
 func TestWorkspaceIntegrationRestoreLockedMissingWorktreeIsTypedError(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -818,9 +759,6 @@ func TestWorkspaceIntegrationRestoreLockedMissingWorktreeIsTypedError(t *testing
 		t.Fatalf("remove dir: %v", err)
 	}
 
-	// Wrap the real runner (still executes real git for every call) to catch
-	// whether Restore ever attempts `worktree add` at the locked path: it must
-	// not, since attempting it is exactly the opaque failure this fix avoids.
 	var attemptedAdd bool
 	ws.run = func(ctx context.Context, binary string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
@@ -838,28 +776,9 @@ func TestWorkspaceIntegrationRestoreLockedMissingWorktreeIsTypedError(t *testing
 		t.Fatal("Restore attempted `git worktree add` at a locked, missing worktree path")
 	}
 
-	// Clean up: unlock so TempDir teardown (and, defensively, any leftover
-	// registration) does not leave a locked path behind.
 	runGit(t, git, repo, "worktree", "unlock", info.Path)
 }
 
-// TestWorkspaceIntegrationRestoreDoesNotDestroyWorktreeRecreatedMidRecovery is
-// the real-git regression test for the concurrent-restore finding on stale
-// registration recovery (PR #3098 review, illegalcall). The "this registration's
-// directory is missing" observation and the recovery that acts on it cannot be
-// one atomic step, and RestoreWithMode has no per-session restore guard, so a
-// second restore of the same session can recreate the worktree in between. The
-// earlier fix recovered with `git worktree remove --force <path>`, which in that
-// window deletes a live worktree and every uncommitted file in it. Recovery now
-// goes through `git worktree add --force`, git's own override for a
-// missing-but-registered path, which git refuses outright when the directory
-// exists and is non-empty: the losing restore fails loudly and the winner's work
-// survives.
-//
-// The interleaving is forced deterministically rather than raced: the hooked
-// runner recreates the worktree and writes an uncommitted sentinel file just
-// before the first registration-mutating git command Restore issues, which is
-// exactly the window the finding describes.
 func TestWorkspaceIntegrationRestoreDoesNotDestroyWorktreeRecreatedMidRecovery(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -874,7 +793,6 @@ func TestWorkspaceIntegrationRestoreDoesNotDestroyWorktreeRecreatedMidRecovery(t
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// The out-of-band deletion #2775 hit: directory gone, registration intact.
 	if err := os.RemoveAll(info.Path); err != nil {
 		t.Fatalf("remove dir: %v", err)
 	}
@@ -888,9 +806,6 @@ func TestWorkspaceIntegrationRestoreDoesNotDestroyWorktreeRecreatedMidRecovery(t
 			strings.Contains(joined, "worktree prune")
 		if !raced && mutatesRegistration {
 			raced = true
-			// Stand in for the concurrent restore that wins the race: it
-			// recreates the worktree at the same path, and its agent
-			// immediately has uncommitted work there.
 			runGit(t, git, repo, "worktree", "add", "--force", info.Path, "child")
 			if err := os.WriteFile(sentinel, []byte("uncommitted agent work\n"), 0o644); err != nil {
 				t.Fatalf("write sentinel: %v", err)
@@ -906,30 +821,11 @@ func TestWorkspaceIntegrationRestoreDoesNotDestroyWorktreeRecreatedMidRecovery(t
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatalf("uncommitted work in the concurrently recreated worktree did not survive stale-registration recovery: %v", err)
 	}
-	// Losing the race must not be reported as success for a worktree this
-	// restore did not materialize.
 	if restoreErr == nil && restored.Path != info.Path {
 		t.Fatalf("restored = %#v, want a handle to the live worktree at %q", restored, info.Path)
 	}
 }
 
-// TestWorkspaceIntegrationAddNewBranchRecoversStaleRegistration is the real-git
-// regression test for the branch-already-created finding (PR #3098 review,
-// illegalcall): `git worktree add -b <branch> <path> <base>` creates
-// refs/heads/<branch> BEFORE it validates <path>, so an attempt that fails on a
-// stale registration still leaves the branch behind. Retrying the same `-b`
-// form with --force therefore never recovered, it failed with "a branch named
-// ... already exists", leaving the stray ref and no worktree.
-//
-// The fake runner could not catch this: it modelled the failed `-b` invocation
-// as side-effect-free, so the `--force -b` retry "succeeded" there while real
-// git refused it. This drives real git instead, at the same entry point both
-// callers use (force=false against a path git already has a registration for:
-// createWorkspaceProjectRepo's shape before its pre-check existed, and
-// addWorktree's shape when the registration goes stale after its pre-check).
-//
-// Verified to fail on the previous commit with
-// `fatal: a branch named 'child-new' already exists`.
 func TestWorkspaceIntegrationAddNewBranchRecoversStaleRegistration(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -941,7 +837,6 @@ func TestWorkspaceIntegrationAddNewBranchRecoversStaleRegistration(t *testing.T)
 	}
 	ctx := context.Background()
 
-	// A registration whose directory is gone: the #2775 shape.
 	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess", Branch: "child-old"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -950,8 +845,6 @@ func TestWorkspaceIntegrationAddNewBranchRecoversStaleRegistration(t *testing.T)
 		t.Fatalf("remove dir: %v", err)
 	}
 
-	// force=false is what a caller passes when its own pre-check did not see the
-	// registration go stale, so this exercises the recovery, not the pre-check.
 	if err := ws.addNewBranchWorktree(ctx, repo, "child-new", info.Path, "origin/main", false); err != nil {
 		t.Fatalf("addNewBranchWorktree over a stale registration: %v", err)
 	}
@@ -966,8 +859,6 @@ func TestWorkspaceIntegrationAddNewBranchRecoversStaleRegistration(t *testing.T)
 	if got := strings.TrimSpace(string(out)); got != "child-new" {
 		t.Fatalf("recovered worktree branch = %q, want child-new", got)
 	}
-	// The branch must sit on the requested base, i.e. the retry produced what
-	// the `-b` form would have, not some other ref.
 	head, err := exec.Command(git, "-C", repo, "rev-parse", "refs/heads/child-new").Output()
 	if err != nil {
 		t.Fatalf("rev-parse child-new: %v", err)
@@ -981,9 +872,6 @@ func TestWorkspaceIntegrationAddNewBranchRecoversStaleRegistration(t *testing.T)
 	}
 }
 
-// TestWorkspaceIntegrationAutoRejectsUnmarkedRemotelessRepo proves automatic
-// selection never silently treats the active (or conventionally named) local
-// branch as the repository default.
 func TestWorkspaceIntegrationAutoRejectsUnmarkedRemotelessRepo(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -1474,8 +1362,6 @@ func TestFetchDefaultBranchRefreshesRemoteTrackingRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	// Exclude main from remote.origin.fetch. The explicit destination refspec
-	// must still update origin/main instead of succeeding with only FETCH_HEAD.
 	runGit(t, git, repo, "config", "remote.origin.fetch", "+refs/heads/restricted-only:refs/remotes/origin/restricted-only")
 	originURL := gitOutput(t, git, repo, "remote", "get-url", "origin")
 	updater := filepath.Join(tmp, "updater")
@@ -1717,10 +1603,6 @@ func setupOriginClone(t *testing.T, git, tmp string) string {
 	runGit(t, git, origin, "symbolic-ref", "HEAD", "refs/heads/main")
 	run(t, git, "clone", origin, repo)
 	runGit(t, git, repo, "config", "core.autocrlf", "false")
-	// A clone does not copy the seed's local identity, and CI runners have no
-	// global git identity to fall back on, so commit/commit-tree in this repo's
-	// worktrees would fail with "empty ident name". Set it on the clone; worktrees
-	// inherit the common dir config.
 	runGit(t, git, repo, "config", "user.email", "ao@example.com")
 	runGit(t, git, repo, "config", "user.name", "Ao Agents")
 	runGit(t, git, repo, "checkout", "main")
@@ -1788,8 +1670,6 @@ func run(t *testing.T, binary string, args ...string) {
 	}
 }
 
-// BaseRef is the comparison base every spawn carries; only an import's
-// StartRef may move where a fresh branch or workspace root begins.
 func TestWorkspaceIntegrationOnlyStartRefMovesTheSeed(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -1842,15 +1722,10 @@ func TestWorkspaceIntegrationOnlyStartRefMovesTheSeed(t *testing.T) {
 	}
 }
 
-// git locks a worktree "initializing" while `git worktree add` checks it out.
-// One left behind by an add that died is lifted, and the worktree is removed
-// the ordinary, non-forced way.
 func TestWorkspaceIntegrationDestroyLiftsStaleAddLock(t *testing.T) {
 	testDestroyLiftsStaleAddLock(t)
 }
 
-// A translated git (German here, when its catalog is installed) words the
-// locked-remove error differently; the lift must not depend on that text.
 func TestWorkspaceIntegrationDestroyLiftsStaleAddLockUnderTranslatedLocale(t *testing.T) {
 	t.Setenv("LC_ALL", "de_DE.UTF-8")
 	t.Setenv("LANG", "de_DE.UTF-8")
@@ -1882,7 +1757,6 @@ func testDestroyLiftsStaleAddLock(t *testing.T) {
 	}
 }
 
-// Lifting a stale add lock never bypasses the dirty-work refusal.
 func TestWorkspaceIntegrationDestroyStaleAddLockStillPreservesDirtyWork(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()

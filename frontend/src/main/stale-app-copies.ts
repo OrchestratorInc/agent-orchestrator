@@ -100,7 +100,6 @@ export async function findStaleAppCopies(
 				copies.push({ path: candidate, version: candidateVersion, ...identity });
 			}
 		} catch {
-			// Missing or unreadable candidates are left untouched.
 		}
 	}
 	return copies;
@@ -110,9 +109,6 @@ const defaultStagingDependencies: StagingDependencies = {
 	rename: (from, to) => rename(from, to),
 };
 
-// Move the candidate to a sibling path whose name only this process knows, so
-// no other writer can swap the bundle between validation and trashing. Returns
-// the staging path, or null when the candidate could not be moved aside.
 export async function stageStaleAppCopy(
 	copy: StaleAppCopy,
 	dependencyOverrides: Partial<StagingDependencies> = {},
@@ -127,9 +123,6 @@ export async function stageStaleAppCopy(
 	}
 }
 
-// Restore a staged bundle to its original path, e.g. when validation fails or
-// the move to Trash is rejected. Best effort: if a replacement already occupies
-// the original path the rename fails and the staged bundle is left in place.
 export async function restoreStagedAppCopy(
 	copy: StaleAppCopy,
 	stagedPath: string,
@@ -174,9 +167,6 @@ export async function retireStaleAppCopies(dependencies: RetirementDependencies)
 	for (const copy of copies) {
 		let stagedPath: string | null;
 		try {
-			// Bind the object to the operation before validating it: once it is
-			// moved to a private path, a replacement renamed into the original
-			// path can no longer be the thing we trash.
 			stagedPath = await dependencies.stage(copy);
 		} catch {
 			failures.push(copy.path);
@@ -185,7 +175,6 @@ export async function retireStaleAppCopies(dependencies: RetirementDependencies)
 		if (stagedPath === null) continue;
 
 		if (!(await dependencies.revalidate(copy, stagedPath).catch(() => false))) {
-			// The moved object is not the stale copy we captured; put it back.
 			await dependencies.restore(copy, stagedPath).catch(() => undefined);
 			continue;
 		}

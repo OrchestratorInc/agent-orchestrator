@@ -12,14 +12,8 @@ var (
 	aiderPromptLine     = regexp.MustCompile(`^(?:(?:[a-z][a-z0-9-]*)(?: multi)?|multi)?>(?:[ \t](.*))?$`)
 )
 
-// ContinuouslyDetectTerminalActivity opts Aider into terminal reconciliation.
-// Aider has a completion notification command but no prompt-submit hook, so AO
-// observes its submitted prompt while the non-streaming response is in flight.
 func (p *Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
-// ComposerIsEmpty proves that Aider's newest prompt is visible without a
-// submitted message. Activity reconciliation leaves this state to the
-// completion hook, while message delivery uses it as an input-readiness guard.
 func (p *Plugin) ComposerIsEmpty(output string) bool {
 	lines := aiderTerminalLines(output)
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -31,14 +25,8 @@ func (p *Plugin) ComposerIsEmpty(output string) bool {
 	return false
 }
 
-// EmptyComposerProvesWaitingInputReady opts Aider into delivery from its
-// completion-notification state. Aider emits waiting_input after completion,
-// and its empty prompt proves that no native decision boundary is active.
 func (p *Plugin) EmptyComposerProvesWaitingInputReady() bool { return true }
 
-// DetectTerminalActivity reports active when Aider's newest prompt contains a
-// submitted message. A bare prompt emits no signal: startup must remain idle,
-// while the notification hook owns the completed-turn waiting-input state.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := aiderTerminalLines(output)
 	start := len(lines) - 40

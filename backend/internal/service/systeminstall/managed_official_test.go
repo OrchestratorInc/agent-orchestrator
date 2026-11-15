@@ -20,14 +20,12 @@ func envValue(env []string, key string) string {
 	value := ""
 	for _, entry := range env {
 		if name, v, ok := strings.Cut(entry, "="); ok && name == key {
-			value = v // the last entry wins, as it does for the process
+			value = v
 		}
 	}
 	return value
 }
 
-// Every recipe pins the release, installs inside the release directory, keeps
-// the user's HOME and PATH out of the installer, and names where the CLI lands.
 func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 	dir := "/data/harnesses/x/versions/v3"
 	for target, want := range map[Target]struct {
@@ -69,8 +67,6 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 			if path := envValue(env, "PATH"); path != managedInstallerPath {
 				t.Fatalf("PATH = %q, want system tools only", path)
 			}
-			// A fish user's SHELL sends fx's PATH line to a profile folder
-			// the private HOME does not have, and the install fails.
 			if shell := envValue(append([]string{"SHELL=/opt/homebrew/bin/fish"}, env...), "SHELL"); shell != "/bin/sh" {
 				t.Fatalf("SHELL = %q, want a plain sh whatever the user's shell", shell)
 			}
@@ -89,9 +85,6 @@ func TestOfficialManagedRecipesInstallInsideTheRelease(t *testing.T) {
 	}
 }
 
-// An OpenCode installed with its official installer updates while a session
-// runs it: the installer runs into a release of AO's own, and the user's copy
-// and the running session's files are left alone.
 func TestOfficialInstallerUpdatesBesideARunningSession(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("managed launchers are symlinks on Unix")
@@ -115,7 +108,6 @@ func TestOfficialInstallerUpdatesBesideARunningSession(t *testing.T) {
 		mu.Lock()
 		scripts = append(scripts, command)
 		mu.Unlock()
-		// Like opencode.ai/install: $HOME/.opencode/bin/opencode at $VERSION.
 		bin := filepath.Join(envValue(command.Env, "HOME"), ".opencode", "bin")
 		if err := os.MkdirAll(bin, 0o755); err != nil {
 			return ports.InstallScriptResult{}, err
@@ -160,9 +152,6 @@ func TestOfficialInstallerUpdatesBesideARunningSession(t *testing.T) {
 	assertResolvesInto(t, launcher, release)
 }
 
-// assertResolvesInto fails unless launcher resolves to a file inside release.
-// Both sides are resolved: on macOS t.TempDir is under /var, a link to
-// /private/var, and only the launcher's resolved form says so.
 func assertResolvesInto(t *testing.T, launcher, release string) {
 	t.Helper()
 	target, err := filepath.EvalSymlinks(launcher)
@@ -174,8 +163,6 @@ func assertResolvesInto(t *testing.T, launcher, release string) {
 	}
 }
 
-// Droid's own script kills every running droid, so AO downloads the pinned
-// release and its checksum from where the script gets them.
 func TestDroidDownloadsThePinnedReleaseWithoutItsScript(t *testing.T) {
 	argv, err := droidDownloadCommand("/rel/v2", "0.244.0", "darwin", "arm64")
 	if err != nil {
@@ -196,9 +183,6 @@ func TestDroidDownloadsThePinnedReleaseWithoutItsScript(t *testing.T) {
 	}
 }
 
-// Codex's cask upgrade deletes the codex-resources a running session can
-// still load, so AO updates a cask install with Codex's own installer into a
-// release of its own and leaves the cask alone.
 func TestCodexCaskUpdatesWithItsInstallerBesideARunningSession(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("managed launchers are symlinks on Unix")
@@ -224,9 +208,6 @@ func TestCodexCaskUpdatesWithItsInstallerBesideARunningSession(t *testing.T) {
 		mu.Lock()
 		scripts = append(scripts, command)
 		mu.Unlock()
-		// Like chatgpt.com/codex/install.sh: $CODEX_INSTALL_DIR/codex at
-		// $CODEX_RELEASE, and a PATH line appended to a profile in $HOME,
-		// which it never creates.
 		profile, err := os.OpenFile(filepath.Join(envValue(command.Env, "HOME"), ".zprofile"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err != nil {
 			return ports.InstallScriptResult{}, err
@@ -286,10 +267,6 @@ func TestCodexCaskUpdatesWithItsInstallerBesideARunningSession(t *testing.T) {
 	assertResolvesInto(t, launcher, release)
 }
 
-// managedOfficialFixture is a Linux service that updates target with its
-// official installer into AO's releases. The fake installer writes the CLI
-// where the recipe says, reporting the release it was pinned to; sessions run
-// the user's copy until AO's launcher exists.
 type managedOfficialFixture struct {
 	s        *Service
 	root     string
@@ -305,7 +282,6 @@ func newManagedOfficialFixture(t *testing.T, target Target, userCopy, userVersio
 	s := newTestService("linux", "bash", "sh")
 	s.managedRoot = f.root
 	s.releases = &releaseStoreStub{}
-	// No package manager owns the copy.
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
 	s.managedVersion = fixedManagedVersion("9.9.9", nil)
 	s.officialVersion = func(context.Context, Target) (string, error) {
@@ -325,7 +301,6 @@ func newManagedOfficialFixture(t *testing.T, target Target, userCopy, userVersio
 		f.mu.Lock()
 		f.scripts = append(f.scripts, command)
 		f.mu.Unlock()
-		// The release directory is the private HOME's parent.
 		binary := filepath.Join(filepath.Dir(envValue(command.Env, "HOME")), recipe.binRel)
 		if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 			return ports.InstallScriptResult{}, err
@@ -349,9 +324,6 @@ func (f *managedOfficialFixture) setLatest(latest string) {
 	f.latest = latest
 }
 
-// After AO updates Kimi into a release of its own, sessions run AO's
-// launcher, which is not where Kimi's installer puts kimi. The next advisory
-// must still name the official installer, or AO stays on that release.
 func TestManagedOfficialReleaseStaysUpdatable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("managed launchers are symlinks on Unix")
@@ -386,10 +358,6 @@ func TestManagedOfficialReleaseStaysUpdatable(t *testing.T) {
 	}
 }
 
-// Harnesses with a managed recipe but no update command of their own are
-// offered their official installer, which installs into AO's releases
-// wherever the user's copy is, and are compared with the release that
-// installer would install.
 func TestOfficialInstallsOfferTheirManagedRecipe(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("managed launchers are symlinks on Unix")
@@ -415,8 +383,6 @@ func TestOfficialInstallsOfferTheirManagedRecipe(t *testing.T) {
 				advisory.Source != officialReleaseSource || !slices.Equal(looked, []Target{tt.target}) {
 				t.Fatalf("advisory = %+v, %v, looked up %v", advisory, err, looked)
 			}
-			// Without AO's releases only a harness's own update command can
-			// update the user's copy.
 			want := ""
 			if _, ok := vendorUpdateCommands[tt.target]; ok {
 				want = "official-installer"
@@ -430,8 +396,6 @@ func TestOfficialInstallsOfferTheirManagedRecipe(t *testing.T) {
 	}
 }
 
-// Reinstall repairs the Codex copy sessions run: AO's release, installed by
-// Codex's own installer at the recorded release, never brew's cask.
 func TestCodexCaskReinstallRepairsTheManagedRelease(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("managed launchers are symlinks on Unix")

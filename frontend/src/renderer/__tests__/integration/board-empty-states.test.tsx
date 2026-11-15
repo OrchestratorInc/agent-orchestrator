@@ -13,10 +13,6 @@ function render(ui: ReactNode) {
 	};
 }
 
-// Drives the real useWorkspaceQuery + SessionsBoard end to end for the two
-// first-run states, mocking only the HTTP client, the router, and the native
-// folder picker: an empty daemon shows the import chooser (no column shells), a
-// fresh project shows the task invitation, and any session brings the columns back.
 const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipboardWriteMock, spawnOrchestratorMock, terminalPanePropsMock, paramsMock } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	postMock: vi.fn(),
@@ -61,17 +57,13 @@ vi.mock("../../lib/bridge", () => ({
 		app: {
 			chooseDirectory: chooseDirectoryMock,
 			openExternal: vi.fn(),
-			// The starting orchestrator's chat mounts ChatWorkspace in place of the board.
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: vi.fn(),
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
-			// The board and session actions subscribe to the open-orchestrator shortcut.
 			onShortcut: () => () => undefined,
 		},
 		clipboard: { writeText: clipboardWriteMock },
-		// CreateProjectFlow reads the cloud session (Local | Cloud gating);
-		// signed-out keeps these tests on the local-only flow.
 		cloud: {
 			getSession: async () => null,
 			signIn: async () => undefined,
@@ -178,8 +170,6 @@ const createProjectMock = vi.fn().mockResolvedValue(undefined);
 const cloneProjectMock = vi.fn().mockResolvedValue(undefined);
 const initializeProjectRepositoryMock = vi.fn().mockResolvedValue(undefined);
 
-// Kept from the latest renderBoard call so tests can rerender with the same
-// providers (e.g. simulating a projectId route-param change on a mounted board).
 let lastQueryClient: QueryClient | null = null;
 let lastShell: ShellContextValue | null = null;
 
@@ -200,7 +190,6 @@ function renderBoard(ui: ReactNode) {
 	);
 }
 
-// The kanban columns render as <section> elements; the empty states render none.
 const columnCount = () => document.querySelectorAll("section").length;
 
 beforeEach(() => {
@@ -278,7 +267,6 @@ describe("global board first launch", () => {
 		expect(screen.getByRole("button", { name: "Open a workspace" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
 		expect(columnCount()).toBe(0);
-		// The welcome carries its own orientation — no dangling "Board" header.
 		expect(screen.queryByText("Board")).not.toBeInTheDocument();
 	});
 
@@ -337,7 +325,6 @@ describe("global board first launch", () => {
 				? { error: new Error("Terminal list unavailable") }
 				: originalGet(url));
 			renderBoard(<GitHubSetupPanel onReady={vi.fn()} />);
-			// Keep the retry, without racing its default one-second delay against findByRole.
 			lastQueryClient!.setQueryDefaults(shellTerminalsQueryKey, { retryDelay: 0 });
 			await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
 			expect(await screen.findByRole("alert")).toHaveTextContent("Terminal list unavailable");
@@ -490,7 +477,6 @@ describe("project board with no sessions", () => {
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
 		expect(await screen.findByText("No worker sessions yet")).toBeInTheDocument();
-		// Both launchers remain reachable from the empty-state invitation.
 		expect(screen.getAllByRole("button", { name: "Spawn orchestrator agent" }).length).toBeGreaterThan(0);
 		expect(screen.getAllByRole("button", { name: "New task" }).length).toBeGreaterThan(0);
 		expect(screen.queryByText("New project")).not.toBeInTheDocument();
@@ -550,7 +536,6 @@ describe("project board with no sessions", () => {
 			);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
-		// The header copy yields to the center invitation once the empty board resolves.
 		await screen.findByTestId("project-board-empty");
 		expect(await screen.findByText(/Project added, but orchestrator did not start/)).toBeInTheDocument();
 		expect(screen.getByText(/branch is already checked out/)).toBeInTheDocument();
@@ -663,8 +648,6 @@ describe("project board with no sessions", () => {
 	});
 });
 
-// Mount the actual header and board together. Separate component tests cannot
-// catch divergent emptiness decisions or independent in-flight launch state.
 describe("shared project board actions", () => {
 	function board(projectId = "proj-1") {
 		paramsMock.projectId = projectId;
@@ -723,7 +706,6 @@ describe("shared project board actions", () => {
 		act(() => { buttons[0].click(); buttons[1].click(); });
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
 		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
-		// The header actions live inside the board, so they leave with it.
 		expect(screen.queryByRole("button", { name: "Spawn orchestrator agent" })).not.toBeInTheDocument();
 		act(() => rejectSpawn(Object.assign(new Error("Chat driver unavailable"), { code: "CHAT_DRIVER_UNAVAILABLE" })));
 		expect(await screen.findByText("Chat driver unavailable")).toBeInTheDocument();

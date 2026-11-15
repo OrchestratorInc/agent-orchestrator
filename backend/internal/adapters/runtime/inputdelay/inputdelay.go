@@ -1,4 +1,3 @@
-// Package inputdelay computes the pre-Enter pause after terminal text input.
 package inputdelay
 
 import (
@@ -14,10 +13,6 @@ const (
 	maxDelay   = 2 * time.Second
 )
 
-// ForMessage returns the time to let a pasted message settle before Enter.
-// Empty messages are intentional Enter-only nudges and must remain immediate.
-// Multiline and chunked pastes need longer than the ordinary delay to let the
-// target TUI (e.g. Claude Code or Codex) settle its input buffer before Enter.
 func ForMessage(message string, configured time.Duration) time.Duration {
 	if message == "" {
 		return 0

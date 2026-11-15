@@ -26,10 +26,6 @@ func isDeltaMethod(method string) bool {
 	return false
 }
 
-// commitCountingStore counts the write transactions the projector opens for
-// streamed deltas, and how many of them have returned without error. An archive
-// call made inside another one shares its parent's transaction and is not
-// counted.
 type commitCountingStore struct {
 	*sqlite.Store
 	depth          atomic.Int32
@@ -55,9 +51,6 @@ func (s *commitCountingStore) ProjectProviderEvent(
 	return projected, err
 }
 
-// deltaScript is one turn with every streamed column: reasoning past the
-// streamed-text cap, command output past the output cap, terminal input, and a
-// long reply. Each delta stream is followed by the event that settles its item.
 func deltaScript(identified bool) (events []ports.ChatEvent, streamBytes []int) {
 	const turn = "pt-batch"
 	add := func(event ports.ChatEvent) {
@@ -98,8 +91,6 @@ func deltaScript(identified bool) (events []ports.ChatEvent, streamBytes []int) 
 	return events, streamBytes
 }
 
-// transcriptRow is what a reader of the conversation sees for one timeline row:
-// everything except AO-minted ids, timestamps and revision counters.
 type transcriptRow struct {
 	Sequence               int64
 	Role                   domain.MessageRole
@@ -146,9 +137,6 @@ type archivedEvent struct {
 	Method, EventID, Item, Delta string
 }
 
-// archiveOf reads the provider archive. Joined merges consecutive delta rows of
-// one stream, which is how a reader reconstructs the stream whatever the run
-// boundaries were.
 func archiveOf(t *testing.T, st *sqlite.Store, conversationID string, joined bool) []archivedEvent {
 	t.Helper()
 	rows, err := st.ProviderEventsSince(context.Background(), conversationID, 0, 100_000)
@@ -183,8 +171,6 @@ type scriptRun struct {
 	commits    int
 }
 
-// projectScript queues the whole script before the controller starts, the shape
-// of a backlog that built while the writer was busy, and returns what landed.
 func projectScript(t *testing.T, interval time.Duration, script []ports.ChatEvent, joinArchive bool) scriptRun {
 	t.Helper()
 	restore := chatsvc.SetDeltaFlushInterval(interval)
@@ -218,9 +204,6 @@ func projectScript(t *testing.T, interval time.Duration, script []ports.ChatEven
 	}
 }
 
-// A backlog of N deltas costs a transaction per run instead of one per delta,
-// and what lands (timeline rows, sequences, caps, truncation flags, archive
-// order) is exactly what the unbatched projector produced.
 func TestStreamedDeltasCommitInRunsWithTheUnbatchedTranscript(t *testing.T) {
 	for _, identified := range []bool{false, true} {
 		name := "anonymous deltas"
@@ -235,9 +218,6 @@ func TestStreamedDeltasCommitInRunsWithTheUnbatchedTranscript(t *testing.T) {
 					deltas++
 				}
 			}
-			// Anonymous runs are archived as one row each; identified deltas keep a
-			// row apiece so replay dedupe stays exact. Either way, joining each
-			// stream's consecutive rows must give the unbatched archive.
 			batched := projectScript(t, time.Hour, script, !identified)
 			unbatched := projectScript(t, 0, script, !identified)
 
@@ -260,7 +240,6 @@ func TestStreamedDeltasCommitInRunsWithTheUnbatchedTranscript(t *testing.T) {
 			if !slices.Equal(batched.archive, unbatched.archive) {
 				t.Fatalf("archive differs: batched %d rows, unbatched %d rows", len(batched.archive), len(unbatched.archive))
 			}
-			// The caps still bite at the same place.
 			for _, row := range batched.transcript {
 				if row.Item == "rs" && (!row.StreamedTextTruncated || len(row.StreamedText) != store.MaxStreamedTextChars) {
 					t.Fatalf("reasoning row = %d chars truncated=%v, want capped", len(row.StreamedText), row.StreamedTextTruncated)
@@ -274,9 +253,6 @@ func TestStreamedDeltasCommitInRunsWithTheUnbatchedTranscript(t *testing.T) {
 	}
 }
 
-// The persistent Claude ACP path from #4657 stamps every delta with a native
-// identity and needs each one acknowledged once it is durable. A run keeps that
-// contract, in stream order, while the whole reply costs one transaction.
 func TestPersistentDeltaRunAcknowledgesEachEventAfterCommit(t *testing.T) {
 	restore := chatsvc.SetDeltaFlushInterval(time.Hour)
 	defer restore()
@@ -289,8 +265,6 @@ func TestPersistentDeltaRunAcknowledgesEachEventAfterCommit(t *testing.T) {
 	)
 	conv := &receiptConversation{terminatingConversation: &terminatingConversation{fakeConversation: newFakeConversation()}}
 	conv.ack = func(id string) error {
-		// Runs on the projector goroutine. counter is set before Start launches
-		// it; a delta must not be acknowledged before its transaction returned.
 		if strings.HasPrefix(id, "d-") && counter.deltaCommitted.Load() == 0 {
 			early = append(early, id)
 		}
@@ -324,7 +298,6 @@ func TestPersistentDeltaRunAcknowledgesEachEventAfterCommit(t *testing.T) {
 	if got := counter.deltaCommits.Load(); got != 1 {
 		t.Fatalf("%d deltas took %d transactions, want one run", deltas, got)
 	}
-	// Stop waits for the projector, so its acknowledgements are complete.
 	if err := h.svc.Stop(context.Background(), testSession); err != nil {
 		t.Fatal(err)
 	}
@@ -336,10 +309,6 @@ func TestPersistentDeltaRunAcknowledgesEachEventAfterCommit(t *testing.T) {
 	}
 }
 
-// A persistent host replays every frame of an unacknowledged prompt, and the
-// replay may batch differently from the original stream. Deltas the archive
-// already holds are skipped one by one, so a run that mixes replayed and new
-// deltas appends only the new text, exactly once.
 func TestReplayedIdentifiedDeltasProjectExactlyOnce(t *testing.T) {
 	restore := chatsvc.SetDeltaFlushInterval(time.Hour)
 	defer restore()
@@ -357,7 +326,6 @@ func TestReplayedIdentifiedDeltasProjectExactlyOnce(t *testing.T) {
 		return len(s.Messages) == 1 && s.Messages[0].Text == "abcde"
 	})
 
-	// The replay starts from the top of the prompt and carries three new deltas.
 	for i := range 8 {
 		conv.emit(delta(i))
 	}
@@ -381,9 +349,6 @@ func TestReplayedIdentifiedDeltasProjectExactlyOnce(t *testing.T) {
 	}
 }
 
-// ChatEvent.Text documents an empty settle as "the provider settled nothing".
-// A completion without text must stop the streaming marker without erasing the
-// reply the user watched arrive.
 func TestEmptyMessageCompletionKeepsStreamedText(t *testing.T) {
 	h := newHarness(t)
 	h.conv.emit(
@@ -400,10 +365,6 @@ func TestEmptyMessageCompletionKeepsStreamedText(t *testing.T) {
 	}
 }
 
-// Stop can settle a running turn directly when the controller's memory and the
-// durable turn disagree. Deltas still waiting in a run are committed first, so
-// they land before the settle instead of reopening the settled reply as
-// streaming.
 func TestInterruptCommitsBatchedDeltasBeforeSettlingTheTurn(t *testing.T) {
 	restore := chatsvc.SetDeltaFlushInterval(time.Hour)
 	defer restore()

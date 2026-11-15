@@ -19,8 +19,6 @@ vi.mock("../lib/api-client", () => ({
 function renderWithQuery(children: ReactNode) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const view = render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
-	// Give the virtualized tree a measured viewport; the default test
-	// ResizeObserver stub does not invoke its callback.
 	act(() => {
 		for (const callback of resizeCallbacks) callback([{ contentRect: { width: 400, height: 400 } }] as never, {} as ResizeObserver);
 	});
@@ -313,7 +311,6 @@ describe("FileTree", () => {
 		await userEvent.click(await findTreeRow("workspace-file-tree", "src/"));
 		await findTreeRow("workspace-file-tree", "src/app.go");
 
-		// One animation for the new child row, one for README.md moving down.
 		await waitFor(() => expect(animate).toHaveBeenCalledTimes(2));
 		expect(screen.getByTestId("workspace-file-tree")).toHaveAttribute("data-pointer-focus");
 

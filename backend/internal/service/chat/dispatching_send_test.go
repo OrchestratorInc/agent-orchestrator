@@ -15,8 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// probeStore runs a callback right after a user message is recorded, which is the
-// window where the turn row is queued but dispatch has not moved it on.
 type probeStore struct {
 	chatsvc.Store
 	afterAppend func()
@@ -30,8 +28,6 @@ func (s *probeStore) AppendUserMessage(ctx context.Context, conversationID strin
 	return created, err
 }
 
-// newProbeHarness is the shared harness plus a snapshot reader, so the test can read
-// what a client would be told at a precise moment of a send.
 func newProbeHarness(t *testing.T) (*harness, *probeStore) {
 	t.Helper()
 	st := openStore(t)

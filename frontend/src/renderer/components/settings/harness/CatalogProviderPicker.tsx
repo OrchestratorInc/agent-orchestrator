@@ -6,12 +6,6 @@ import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
 import { Skeleton } from "../../ui/skeleton";
 
-/**
- * A harness's provider catalog as a search box over a short scrollable list,
- * inside the form rather than in a popover, so choosing a provider never
- * covers the panel around it. Arrow keys move through the list from the
- * search box and Enter picks; a click picks too.
- */
 export function CatalogProviderPicker({ providers, value, onChange, disabled, labelledBy }: {
 	providers: CatalogProvider[];
 	value: string;
@@ -32,8 +26,6 @@ export function CatalogProviderPicker({ providers, value, onChange, disabled, la
 	const activeIndex = Math.min(active, visible.length - 1);
 	const optionId = (id: string) => `${listId}-${id}`;
 	useEffect(() => { setActive(0); }, [needle]);
-	// Keep the keyboard-highlighted option in view by scrolling the list only,
-	// never the settings page around it.
 	useEffect(() => {
 		const list = listRef.current;
 		const option = list?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`);
@@ -46,7 +38,6 @@ export function CatalogProviderPicker({ providers, value, onChange, disabled, la
 			event.preventDefault();
 			setActive((current) => Math.max(0, Math.min(visible.length - 1, Math.min(current, visible.length - 1) + (event.key === "ArrowDown" ? 1 : -1))));
 		} else if (event.key === "Enter") {
-			// Enter picks the highlighted provider instead of submitting the form.
 			event.preventDefault();
 			const provider = visible[activeIndex];
 			if (provider) onChange(provider.id);
@@ -80,7 +71,6 @@ export function CatalogProviderPicker({ providers, value, onChange, disabled, la
 					role="option"
 					aria-selected={selected}
 					aria-disabled={disabled || undefined}
-					// Keep focus in the search box so typing and arrows keep working.
 					onMouseDown={(event) => event.preventDefault()}
 					onMouseMove={() => setActive(index)}
 					onClick={() => { if (!disabled) onChange(provider.id); }}
@@ -103,11 +93,6 @@ export function CatalogProviderPicker({ providers, value, onChange, disabled, la
 	</div>;
 }
 
-/**
- * Stands in for the picker while the catalog loads: the same search box and
- * list footprint, so nothing moves when the providers arrive. The loading
- * message is for screen readers only; the placeholder rows show it visually.
- */
 export function CatalogProviderPickerSkeleton({ label }: { label: string }) {
 	return <div className="space-y-1.5" aria-busy="true">
 		<span role="status" className="sr-only">{label}</span>

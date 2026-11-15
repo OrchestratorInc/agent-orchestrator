@@ -10,10 +10,6 @@ import (
 
 func init() { browseProviderCredentials["vibe"] = vibeConfiguredProviders }
 
-// vibeConfiguredProviders reports the config.toml providers whose
-// api_key_env_var is set in the environment or in Vibe's own .env. A provider
-// with no api_key_env_var (a local llama.cpp server, say) needs no key, so
-// nothing on disk shows whether it is ready, and it is not marked.
 func vibeConfiguredProviders(workingDir string, env map[string]string) []string {
 	home, _ := os.UserHomeDir()
 	vibeHome := strings.TrimSpace(env["VIBE_HOME"])

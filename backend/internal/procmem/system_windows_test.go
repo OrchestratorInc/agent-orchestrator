@@ -18,7 +18,6 @@ func TestReadSystemOnWindows(t *testing.T) {
 	if sys.CPUCount <= 0 {
 		t.Fatalf("cpu count = %d, want at least 1", sys.CPUCount)
 	}
-	// The sentinel this platform commits to: never a real load figure.
 	if sys.Load1 != -1 {
 		t.Fatalf("load1 = %v, want the -1 sentinel on a platform with no load average", sys.Load1)
 	}

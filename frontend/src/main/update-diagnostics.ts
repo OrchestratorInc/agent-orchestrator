@@ -5,8 +5,6 @@ export const UPDATE_DIAGNOSTICS_FILE = "updater.jsonl";
 export const UPDATE_DIAGNOSTICS_MAX_BYTES = 1024 * 1024;
 type Fields = Record<string, string | number | boolean | null | undefined>;
 
-// Local troubleshooting only: never forwarded to renderer telemetry. Preserve
-// native error detail, but do not persist signed URLs or authorization headers.
 function text(value: string, limit = 4096): string {
   return value
     .replace(/https?:\/\/[^\s<>"']+/gi, "[redacted-url]")
@@ -27,9 +25,6 @@ function errorDetail(error: unknown, depth = 0): unknown {
   };
 }
 
-// Synchronous, bounded writes keep the last failure available even when AO
-// immediately quits. All I/O fails open: diagnostics must never affect updates.
-// Retain one previous file across both rotation and process launches.
 export function createUpdateDiagnostics(stateDir: string, runningVersion: string) {
   const directory = path.join(stateDir, "logs");
   const file = path.join(directory, UPDATE_DIAGNOSTICS_FILE);
@@ -43,8 +38,6 @@ export function createUpdateDiagnostics(stateDir: string, runningVersion: string
         runningVersion: text(runningVersion, 128), platform: process.platform, arch: process.arch,
         event, ...details, ...(error === undefined ? {} : { error: errorDetail(error) }),
       })}\n`;
-      // Call sites use small scalar records; reject an unexpectedly huge record
-      // rather than allow either unbounded storage or a partial JSON line.
       if (Buffer.byteLength(line) > 64 * 1024) return;
       mkdirSync(directory, { recursive: true, mode: 0o700 });
       const open = () => openSync(file, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
@@ -61,10 +54,9 @@ export function createUpdateDiagnostics(stateDir: string, runningVersion: string
       fchmodSync(fd, 0o600);
       writeSync(fd, line);
     } catch {
-      // No console recursion, renderer error, or change to updater control flow.
     } finally {
       if (fd !== undefined) {
-        try { closeSync(fd); } catch { /* Diagnostics are best effort. */ }
+        try { closeSync(fd); } catch { }
       }
     }
   };

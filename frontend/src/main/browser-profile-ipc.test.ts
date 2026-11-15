@@ -124,8 +124,6 @@ describe("browser profile IPC", () => {
 		await getMenuItems()[1]!.click?.();
 		await new Promise<void>((resolve) => setImmediate(resolve));
 		expect(host.switchProfile).toHaveBeenCalledWith("1:worker-1", profile.id);
-		// The menu is native: opening it only builds/pops the menu and never changes
-		// the browser view bounds or paints a renderer overlay over the page.
 		expect(host.isRendererOwned).toHaveBeenCalledWith(expect.objectContaining({ sender: renderer }), "1:worker-1");
 	});
 

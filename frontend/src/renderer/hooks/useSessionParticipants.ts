@@ -4,15 +4,9 @@ import type { CloudCpSessionParticipant } from "../lib/cloud-cp";
 import type { WorkspaceSession } from "../types/workspace";
 import { useCloudCp } from "./useCloudCp";
 
-/** How often a board re-reads who is in its shared sessions. */
 export const SESSION_PARTICIPANTS_REFRESH_MS = 3_000;
 const MAX_PER_REQUEST = 100;
 
-/**
- * Who is in each shared cloud session on a board, keyed by session id. One
- * request per organization (and per hundred sessions); sessions nobody shared
- * are absent. Reading it never marks this person present in a session.
- */
 export function useSessionParticipants(sessions: readonly WorkspaceSession[], enabled = true): ReadonlyMap<string, CloudCpSessionParticipant[]> {
 	const batches = useMemo(() => {
 		if (!enabled) return [];

@@ -1,5 +1,3 @@
-// Package reviewgateway prepares AO-owned runtime directories and immutable
-// task manifests used by interactive reviewer TUIs.
 package reviewgateway
 
 import (
@@ -26,7 +24,6 @@ var (
 	commitSHA = regexp.MustCompile(`^[0-9a-fA-F]{7,64}$`)
 )
 
-// Task is one immutable review capability.
 type Task struct {
 	RunID          string `json:"runId"`
 	PRURL          string `json:"prUrl"`
@@ -34,9 +31,6 @@ type Task struct {
 	TaskPromptFile string `json:"taskPromptFile"`
 }
 
-// Manifest authorizes a reviewer process for one worker and an exact set of
-// review runs. WorkspacePath is host-side gateway state and is never intended
-// to be exposed as the TUI's working directory.
 type Manifest struct {
 	Version         int              `json:"version"`
 	ReviewerID      string           `json:"reviewerId"`
@@ -46,8 +40,6 @@ type Manifest struct {
 	Tasks           []Task           `json:"tasks"`
 }
 
-// Environment is the neutral AO-owned filesystem presented to a reviewer.
-// The source checkout is intentionally absent.
 type Environment struct {
 	DataDir          string
 	Root             string
@@ -59,9 +51,6 @@ type Environment struct {
 	ManifestPath     string
 }
 
-// TUIEnvironment returns provider-neutral directory overrides for an adapter's
-// RuntimeConfig.Env. Provider-specific adapters may add only documented flags;
-// the eventual OS sandbox remains responsible for excluding inherited host state.
 func (e Environment) TUIEnvironment() map[string]string {
 	return map[string]string{
 		"HOME": e.ConfigRoot, "XDG_CONFIG_HOME": e.ConfigRoot,
@@ -70,10 +59,6 @@ func (e Environment) TUIEnvironment() map[string]string {
 	}
 }
 
-// PrepareHostTrustedEnvironment creates AO-owned discovery and state roots for
-// an experimental host-trusted reviewer. It limits where the CLI stores its own
-// files but intentionally does not claim process, filesystem, or network
-// containment.
 func PrepareHostTrustedEnvironment(dataDir, reviewerID string) (Environment, error) {
 	if strings.TrimSpace(dataDir) == "" || !filepath.IsAbs(dataDir) {
 		return Environment{}, errors.New("review gateway: absolute Orchestrator data directory is required")
@@ -96,9 +81,6 @@ func PrepareHostTrustedEnvironment(dataDir, reviewerID string) (Environment, err
 	return env, nil
 }
 
-// PrepareEnvironment creates a private reviewer root under AO_DATA_DIR and an
-// immutable, content-addressed authorization manifest. It never creates files
-// in the project checkout.
 func PrepareEnvironment(dataDir string, manifest Manifest) (Environment, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return Environment{}, errors.New("review gateway: Orchestrator data directory is required")

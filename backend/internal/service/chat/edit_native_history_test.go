@@ -65,8 +65,6 @@ func TestEditedFirstMessageResumesNativeHistoryAfterTerminalHooks(t *testing.T) 
 				t.Fatal(err)
 			}
 			if tc.legacyCheckpoint {
-				// Persist the metadata left by older builds: both identities have moved
-				// to the edited branch, but the earlier Terminal checkpoint survived.
 				rec, found, err := h.st.GetSession(ctx, testSession)
 				if err != nil || !found {
 					t.Fatalf("GetSession: found=%v err=%v", found, err)
@@ -91,8 +89,6 @@ func TestEditedFirstMessageResumesNativeHistoryAfterTerminalHooks(t *testing.T) 
 					t.Fatal(err)
 				}
 				if tc.terminalHook {
-					// A legacy build supplied these later Terminal facts without native
-					// turn provenance. Their age must still gate the replay.
 					rec.Metadata.LatestUserPromptAt = h.clock.Add(time.Minute)
 					rec.Metadata.LatestAssistantUpdateAt = h.clock.Add(time.Minute)
 					if err := h.st.UpdateSession(ctx, rec); err != nil {

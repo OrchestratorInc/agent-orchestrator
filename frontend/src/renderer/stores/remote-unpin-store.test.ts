@@ -26,7 +26,6 @@ describe("remote unpins", () => {
 	});
 
 	it("lets a later pin from the other computer win, whatever this computer's clock says", () => {
-		// The host's clock runs a day ahead of this computer's.
 		const unpin = { hostId: "box-a", sessionId: "s-1", at: Date.parse("2026-10-31T00:00:00Z"), pinnedAt: "2026-11-01T00:00:00Z" };
 		expect(isUnpinnedHere(unpin, "2026-11-01T00:00:00Z")).toBe(true);
 		expect(isUnpinnedHere(unpin, "2026-11-02T00:00:00Z")).toBe(false);

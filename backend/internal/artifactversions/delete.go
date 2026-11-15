@@ -13,28 +13,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// trashDir holds artifact directories moved aside by DeleteSession, relative
-// to the data directory. It sits outside "artifacts" so nothing reads an entry
-// there as a session.
 const trashDir = "artifacts-trash"
 
-// DeleteSession deletes a session's artifact files, version history included,
-// and its version rows, and leaves an empty artifact directory behind so a
-// restored session starts with one.
-//
-// It holds the capture lock, so a capture in flight finishes before the delete
-// and a later one finds no files: neither can write a snapshot or a version row
-// for files that are gone.
-//
-// The directory is first renamed into the trash, which either moves all of it
-// or none of it. A file held open (on Windows, open handles block the rename)
-// fails the delete with every file still in place, rather than partway
-// through. Removing the trash afterwards is best effort; whatever stays is
-// retried on the next delete.
 func (c *Capturer) DeleteSession(ctx context.Context, id domain.SessionID) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Every blob goes with the session's files.
 	c.trackMu.Lock()
 	delete(c.freed, id)
 	c.trackMu.Unlock()
@@ -70,13 +53,6 @@ func (c *Capturer) DeleteSession(ctx context.Context, id domain.SessionID) error
 	return nil
 }
 
-// DeleteVersions deletes the version rows of one artifact path, and each of
-// their blobs that no other version of the session still refers to, after the
-// user deleted that file.
-//
-// It holds the capture lock, so a capture that read the file before it was
-// removed records its version first and that version is deleted here; a later
-// capture finds no file.
 func (c *Capturer) DeleteVersions(ctx context.Context, sess domain.SessionRecord, relPath string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -101,7 +77,6 @@ func (c *Capturer) DeleteVersions(ctx context.Context, sess domain.SessionRecord
 	return nil
 }
 
-// emptyTrash removes what earlier deletes could not.
 func (c *Capturer) emptyTrash(trash string) {
 	entries, err := os.ReadDir(trash)
 	if err != nil {

@@ -34,29 +34,21 @@ type WorkspaceFileStatus = WorkspaceFileSummary["status"];
 
 export type ActiveFileAnnotationTarget = FileAnnotationTarget & {
 	rowIndex?: number;
-	/** Keeps one shared annotation model from rendering the composer in two panes. */
 	surface?: "focused" | "review";
 };
 export type FileAnnotationStatus = "idle" | "sending" | "sent" | "error";
 export type FileAnnotationModel = {
-	/** Every open comment box, oldest first. They can sit on several lines and files at once. */
 	targets: ActiveFileAnnotationTarget[];
-	/** State of the send in progress or just finished, whichever comments it covers. */
 	status: FileAnnotationStatus;
-	/** The same, for one box: idle unless the send covers that comment. */
 	statusFor: (target: ActiveFileAnnotationTarget) => FileAnnotationStatus;
 	error: string;
-	/** Opens a box on `target`, or closes the one already open there. */
 	begin: (target: ActiveFileAnnotationTarget) => void;
 	draftFor: (target: ActiveFileAnnotationTarget) => string;
 	setDraft: (target: ActiveFileAnnotationTarget, draft: string) => void;
-	/** Closes the box on `target`, or every box when no target is given. */
 	cancel: (target?: ActiveFileAnnotationTarget) => void;
-	/** Sends the comment on `target` (`text` is that box's local draft), or every written comment when no target is given. */
 	submit: (target?: ActiveFileAnnotationTarget, text?: string) => Promise<void>;
 };
 
-/** Closes every open box that `match` picks out, leaving comments elsewhere alone. */
 export function cancelFileAnnotations(annotation: FileAnnotationModel, match: (target: ActiveFileAnnotationTarget) => boolean): void {
 	for (const target of annotation.targets.filter(match)) annotation.cancel(target);
 }
@@ -65,10 +57,6 @@ export function fileAnnotationKey(target: ActiveFileAnnotationTarget): string {
 	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path, target.quote ?? ""].join("\u0000");
 }
 
-// Split (old | new) view only means something when both sides have content to
-// compare. Added files have nothing on the old side; deleted files have
-// nothing on the new side — splitting them just wastes half the pane on an
-// empty column, so those always render unified regardless of the toggle.
 export function canSplitCompare(status: WorkspaceFileStatus): boolean {
 	return status === "modified" || status === "renamed";
 }
@@ -105,8 +93,6 @@ export function ReviewDiffBody({
 	const { t } = useTranslation();
 	void filePath;
 	const { rows, pending } = useParsedDiff(detail.diff);
-	// An image has no readable line diff, so it renders as the images themselves
-	// rather than the binary placeholder.
 	if (detail.imageMediaType) {
 		return (
 			<ImageDiffView
@@ -154,33 +140,11 @@ const diffMarkerGlyph: Record<Exclude<DiffRowKind, "hunk">, string> = {
 	context: " ",
 };
 
-// A real (non-collapsed) selection whose
-// anchor lives inside this DiffView's scroll container.
 function isSelectionActiveIn(selection: Selection | null, container: HTMLElement | null): boolean {
 	if (!selection || !container || selection.isCollapsed) return false;
 	return selection.anchorNode !== null && container.contains(selection.anchorNode);
 }
 
-// SessionFilesView has no per-file scroll box — the Files panel is one
-// continuous list, and an expanded file's rows scroll as part of that same
-// shared container (`[data-files-scroll-root]`). Below the threshold every
-// row just renders directly, unchanged from before (the vast majority of
-// diffs never pay for any of this). Above it, only the rows actually
-// scrolled into view are mounted, via @tanstack/react-virtual attached to
-// that SHARED scroll container rather than a container of this file's own —
-// `scrollMargin` is this file's row-list's offset from the top of the shared
-// scrollable content, since the virtualizer needs that to know which of its
-// rows fall inside the current viewport. That offset shifts whenever
-// anything above this file changes height (another file expanding or
-// collapsing, or gaining/losing its own virtualized rows), so it's
-// re-measured via a ResizeObserver on the full file list rather than once.
-// Rows wrap (`whitespace-pre-wrap`) and the panel's available width varies a
-// lot — full window width when the Files view is maximized, much narrower
-// when docked alongside the terminal — so a long line can be one row of
-// height in the maximized view and several wrapped rows tall when docked.
-// ESTIMATED_ROW_HEIGHT is only the initial guess for a row that hasn't
-// rendered yet; `measureElement` corrects it to the row's real height once
-// mounted, which is what keeps rows from overlapping when they wrap.
 const ROW_VIRTUALIZE_THRESHOLD = 150;
 const ESTIMATED_ROW_HEIGHT = 20;
 
@@ -198,15 +162,6 @@ function useSharedScrollRowVirtualizer(
 		setScrollElement(scrollContainerRef.current?.closest<HTMLElement>("[data-files-scroll-root]") ?? null);
 	}, [enabled, scrollContainerRef]);
 
-	// A regular effect, not useLayoutEffect: "Expand All" mounts many DiffView
-	// instances in the same commit, and React runs every layout effect from
-	// that commit synchronously, before the browser is allowed to paint
-	// anything. A read (getBoundingClientRect) here forces a synchronous
-	// layout — N of those back to back, all before first paint, is exactly
-	// what made "Expand All" stall. A plain effect still measures almost
-	// immediately (one frame later at worst), which is an imperceptible
-	// one-time cost for something that self-corrects, in exchange for never
-	// blocking paint on how many files just got expanded at once.
 	useEffect(() => {
 		if (!enabled || !scrollElement || !listRef.current) return;
 		const measure = () => {
@@ -226,13 +181,6 @@ function useSharedScrollRowVirtualizer(
 		count,
 		getScrollElement: () => (enabled ? scrollElement : null),
 		estimateSize: () => ESTIMATED_ROW_HEIGHT,
-		// Every row outside the viewport that overscan pulls in is a row that
-		// still has to pay full first-time cost (render + a real DOM
-		// measurement, see useSharedScrollRowVirtualizer's comment above) the
-		// first time it's scrolled into range. A smaller buffer means fewer
-		// never-before-seen rows get force-measured on each scroll jump,
-		// trading a slightly higher chance of a one-frame blank edge during
-		// very fast scrolling for less of that first-pass cost on big files.
 		overscan: 8,
 		scrollMargin,
 	});
@@ -380,8 +328,6 @@ type DiffRowContentProps = {
 	wrap: boolean;
 };
 
-// One unified-view diff row, shared between the plain (non-virtualized) and
-// virtualized render paths so they can't drift apart from each other.
 function DiffRowContentInner({ annotation, index, path, previousPath, row, runs, t, wrap }: DiffRowContentProps) {
 	if (row.kind === "hunk") return <HunkBand row={row} />;
 	return (
@@ -423,16 +369,6 @@ function DiffRowContentInner({ annotation, index, path, previousPath, row, runs,
 	);
 }
 
-// `annotation` is a fresh object on every SessionFilesView render (its draft
-// text, send status, etc. all live there), so a plain memo would never skip
-// a re-render — every row would see a "changed" prop on every keystroke
-// anywhere in the panel, on top of every scroll tick. Only a row that HAS or
-// HAD an open annotation box actually needs to re-render when
-// `annotation` changes; every other row only cares about `row`/`index`/
-// `path`/`previousPath`/`wrap`, which are stable across scroll-driven
-// re-renders. This is what actually lets scrolling skip re-running the
-// i18next calls, cn() calls, and nested Button for rows that are already
-// mounted and unchanged.
 const DiffRowContent = memo(DiffRowContentInner, (prev, next) => {
 	if (
 		prev.row !== next.row ||
@@ -453,12 +389,6 @@ type SplitRow =
 	| { kind: "hunk"; row: DiffRow }
 	| { kind: "pair"; left: DiffRow | null; leftIndex: number | null; right: DiffRow | null; rightIndex: number | null };
 
-// toSplitRows aligns the unified rows into left (old) / right (new) pairs: each
-// run of deletions lines up index-for-index with the additions that follow it,
-// context appears on both sides, and hunk headers span the full width. Each
-// side also carries its original index into the flat `rows` array (leftIndex /
-// rightIndex) so SplitSide can stamp the same data-row-index the unified view
-// uses, without SplitSide re-deriving it via `rows.indexOf`.
 function toSplitRows(rows: DiffRow[]): SplitRow[] {
 	const out: SplitRow[] = [];
 	let dels: Array<{ row: DiffRow; index: number }> = [];
@@ -626,11 +556,6 @@ function rowAnnotationTargets(targets: ActiveFileAnnotationTarget[], path: strin
 	return targets.filter((target) => target.surface !== "review" && target.path === path && target.side !== "file" && target.rowIndex === rowIndex);
 }
 
-// `t` comes from the caller (which already holds one useTranslation()
-// subscription) rather than calling useTranslation() here: this button is
-// invisible until hover on every diff row, and a virtualized file can mount
-// dozens of them per scroll tick — a separate i18n context subscription per
-// row added up on large files.
 function LineFeedbackButton({
 	active,
 	onClick,
@@ -647,9 +572,6 @@ function LineFeedbackButton({
 	return <LineFeedbackButtonControl expanded={active} label={label} onClick={onClick} />;
 }
 
-// The single AO line-feedback affordance used by both the original diff rows
-// and the Pierre-backed viewers. Pierre only provides the hovered-line slot;
-// the control, styling, and annotation behavior remain AO-owned.
 export function LineFeedbackButtonControl({
 	expanded = false,
 	gutter = false,
@@ -685,28 +607,17 @@ export function LineFeedbackButtonControl({
 	);
 }
 
-// Like the browser's annotation box: one rounded card with a single
-// auto-growing line, and the send shortcut, Cancel and Send underneath so the
-// way out and the way forward are both obvious. ⌘/Ctrl+Enter sends (plain Enter
-// adds a line, as the hint says), Esc cancels.
 const COMPOSER_MAX_HEIGHT_PX = 160;
 
 export function FileAnnotationComposer({ annotation, target }: { annotation: FileAnnotationModel; target: ActiveFileAnnotationTarget }) {
 	const { t } = useTranslation();
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
-	// Typing stays local to the box, so the diffs that read the shared model
-	// don't re-render per keystroke; the model hears the text on send, when the
-	// box loses focus (so a comment started elsewhere, or a send from another
-	// box, sees it), or when the box goes away (a virtualized row can unmount
-	// and remount it).
 	const [text, setText] = useState(() => annotation.draftFor(target));
 	const textRef = useRef(text);
 	textRef.current = text;
 	const saveDraftRef = useRef(() => annotation.setDraft(target, textRef.current));
 	saveDraftRef.current = () => annotation.setDraft(target, textRef.current);
 	useEffect(() => () => saveDraftRef.current(), []);
-	// Only the newest box takes focus, so an older one scrolling back into view
-	// doesn't pull the caret away from the comment being written.
 	const newest = annotation.targets[annotation.targets.length - 1] === target;
 	useEffect(() => {
 		if (!newest) return;
@@ -716,14 +627,11 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	const fitHeight = useCallback(() => {
 		const textarea = textareaRef.current;
 		if (!textarea) return;
-		// Back to one row first; an empty box stays one row, so a placeholder that
-		// wrapped while a popover was still settling its width can't size it.
 		textarea.style.height = "";
 		if (!textarea.value) return;
 		textarea.style.height = `${Math.min(textarea.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`;
 	}, []);
 	useLayoutEffect(fitHeight, [fitHeight, text, target]);
-	// Text rewraps when the box's width changes (popover settling, panel resize).
 	useEffect(() => {
 		const textarea = textareaRef.current;
 		if (!textarea || typeof ResizeObserver === "undefined") return;
@@ -743,7 +651,6 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 			: target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
-	// The quoted page selection, unless the box has its own text selected.
 	const quoteToCopy = (box: HTMLTextAreaElement) => (box.selectionStart === box.selectionEnd ? target.quote : undefined);
 	const status = annotation.statusFor(target);
 	const sending = status === "sending";
@@ -752,8 +659,6 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 		if (!text.trim() || sending || sent) return;
 		void annotation.submit(target, text);
 	};
-	// The button sends this box; the shortcut sends every written comment, so
-	// a review with several boxes open goes out in one keystroke.
 	const writtenCount = annotation.targets.filter((open) => (open === target ? text : annotation.draftFor(open)).trim()).length;
 	const submitAll = () => {
 		if (sending || sent) return;
@@ -774,15 +679,10 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					aria-label={t("files.feedbackLabel", { target: targetLabel })}
 					className={cn(
 						"board-scrollbar block min-h-7 w-full resize-none border-0 bg-transparent py-1 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60",
-						// Empty, a placeholder that wraps in a narrow column is clipped rather
-						// than growing a scrollbar in a one-line box.
 						text ? "overflow-y-auto" : "overflow-hidden",
 					)}
 					disabled={sending || sent}
 					onBlur={() => annotation.setDraft(target, text)}
-					// Focusing the box clears the page selection it was opened from, so
-					// Cmd/Ctrl+C (or Edit > Copy) with nothing selected in the box copies
-					// the quoted selection.
 					onCopy={(event) => {
 						const quote = quoteToCopy(event.currentTarget);
 						if (quote === undefined) return;
@@ -792,8 +692,6 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					onChange={(event) => {
 						const next = event.target.value;
 						setText(next);
-						// The review bar counts written comments, so tell the model when
-						// this box starts or stops having text, not on every keystroke.
 						if (Boolean(next.trim()) !== Boolean(text.trim())) annotation.setDraft(target, next);
 					}}
 					onKeyDown={(event) => {
@@ -822,7 +720,6 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 					</p>
 				) : null}
 				<div className="mt-1 flex items-center justify-end gap-1">
-					{/* Truncates rather than squeezing the buttons in a narrow split column. */}
 					<span className="mr-auto min-w-0 truncate text-caption text-passive">{writtenCount > 1 ? t("files.feedbackShortcutAll") : t("files.feedbackShortcut")}</span>
 					<Button
 						className="px-2"
@@ -851,9 +748,6 @@ export function FileAnnotationComposer({ annotation, target }: { annotation: Fil
 	);
 }
 
-// Each box sends its own comment; once several are written, this bar sends
-// or drops them all together. `surface` keeps it to the pane that holds
-// comments; the send covers every pane's.
 export function FileAnnotationSendBar({ annotation, className, surface }: { annotation: FileAnnotationModel; className?: string; surface: "focused" | "review" }) {
 	const { t } = useTranslation();
 	const written = annotation.targets.filter((target) => annotation.draftFor(target).trim());
@@ -918,11 +812,6 @@ export function PanelMessage({ action, children, compact = false }: { action?: R
 	);
 }
 
-/**
- * A pane with nothing to show: an icon over a short heading and an optional
- * way out, a little above the middle of the space it fills (where the eye
- * lands), so it reads as a state of the pane rather than a stray line at its top.
- */
 export function EmptyMessage({ icon: Icon, title, action }: { icon: AppIcon; title: ReactNode; action?: ReactNode }) {
 	return (
 		<div className="flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 p-6 pb-[15vh] text-center" data-testid="empty-message">

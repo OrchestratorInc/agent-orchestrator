@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 )
 
-// ComputerUse is the controller-facing contract for the Cua Driver integration.
 type ComputerUse interface {
 	Status(ctx context.Context) (computeruse.Status, error)
 	StartDaemon(ctx context.Context) (computeruse.Status, error)
@@ -21,13 +20,10 @@ type ComputerUse interface {
 	Call(ctx context.Context, request computeruse.CallRequest) (computeruse.CallResult, error)
 }
 
-// ComputerUseController owns the /computer-use routes behind Settings and the
-// computer-use tools.
 type ComputerUseController struct {
 	Svc ComputerUse
 }
 
-// Register mounts the computer-use routes on the supplied router.
 func (c *ComputerUseController) Register(r chi.Router) {
 	r.Get("/computer-use/status", c.status)
 	r.Post("/computer-use/daemon/start", c.startDaemon)

@@ -52,8 +52,6 @@ func TestCueInsertAndSelectRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCueListByProject returns cues in name order and only for the requested
-// project.
 func TestCueListByProject(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -84,8 +82,6 @@ func TestCueListByProject(t *testing.T) {
 	}
 }
 
-// TestCueDuplicateNameFailsInProject pins unique (project_id, name) enforcement:
-// the same name may not repeat within a project but may be reused across projects.
 func TestCueDuplicateNameFailsInProject(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -105,8 +101,6 @@ func TestCueDuplicateNameFailsInProject(t *testing.T) {
 	}
 }
 
-// TestCueUpdateReplacesDefinition pins that update overwrites the whole
-// definition (type switch included) and reports missing rows.
 func TestCueUpdateReplacesDefinition(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -136,8 +130,6 @@ func TestCueUpdateReplacesDefinition(t *testing.T) {
 	}
 }
 
-// TestCueUpdateDuplicateNameFails pins rename collisions surfacing as
-// domain.ErrCueNameExists.
 func TestCueUpdateDuplicateNameFails(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -156,7 +148,6 @@ func TestCueUpdateDuplicateNameFails(t *testing.T) {
 	}
 }
 
-// TestCueDelete pins delete-returns-existed semantics.
 func TestCueDelete(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -176,8 +167,6 @@ func TestCueDelete(t *testing.T) {
 	}
 }
 
-// TestCueRejectsUnknownProject pins the migration's project FK: a cue can never
-// outlive or precede its project.
 func TestCueRejectsUnknownProject(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -188,8 +177,6 @@ func TestCueRejectsUnknownProject(t *testing.T) {
 	}
 }
 
-// TestCueRejectsUnknownType pins the migration's CHECK constraint: an
-// unsupported cue type never reaches storage.
 func TestCueRejectsUnknownType(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

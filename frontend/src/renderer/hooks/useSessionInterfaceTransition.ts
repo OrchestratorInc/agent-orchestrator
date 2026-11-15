@@ -42,11 +42,6 @@ function mutationContext(target: InterfaceTransitionMutationTarget): SessionInte
 	return target.targetCloudOrgId ? { orgId: target.targetCloudOrgId } : target.targetHostId ?? null;
 }
 
-/**
- * A transition's start. targetHarness, Cloud only, also switches the session's
- * agent (an agent switch); the local daemon switches agents through its own
- * provider switch instead.
- */
 export type StartInterfaceTransitionRequest = StartInterfaceTransitionInput & { targetHarness?: string };
 
 type StartInterfaceTransitionMutationInput = StartInterfaceTransitionRequest & InterfaceTransitionMutationTarget;
@@ -69,11 +64,6 @@ type InterfaceTransitionMutationState<TInput> = {
 	submittedAt: number;
 };
 
-// Cloud and the local daemon deliberately expose the same state-machine
-// vocabulary. Keep this conversion at the control-plane boundary rather than
-// dropping the Cloud transition: without it, the first status refetch after a
-// successful POST erased the optimistic active state, re-enabled the action,
-// and let a second click race the still-running handoff.
 function toSessionInterfaceTransition(
 	transition: CloudCpInterfaceTransition | undefined,
 ): SessionInterfaceTransition | undefined {
@@ -152,9 +142,6 @@ const cancellablePhases = new Set<SessionInterfaceTransition["phase"]>([
 
 const liveTransitionPoll = 250;
 
-// A missing or not-yet-current native identity is transient while the
-// terminal's session-start hook is arriving, and a missing workspace clears
-// once Retry start sets it up. Only those readiness states are rechecked.
 const readinessReasonCodes = new Set([
 	"NATIVE_SESSION_MISSING",
 	"NATIVE_SESSION_UNVERIFIED",
@@ -171,9 +158,6 @@ type InterfaceTransitionPollQuery = {
 	};
 };
 
-// Budgets are keyed on the Query, not held in a hook ref: every mounted
-// observer of a key runs its own refetchInterval timer, and one count per
-// key is what keeps a second observer from refilling the first one's budget.
 const pollBudgets = new WeakMap<
 	InterfaceTransitionPollQuery,
 	{ dataUpdatedAt: number; failureBase: number; readinessKey: string; readinessBase: number }
@@ -185,15 +169,6 @@ function sessionGone(error: unknown): boolean {
 	return status === 404 || status === 410;
 }
 
-/**
- * The status poll cadence, on the schedule mobile uses (see
- * packages/shared/session/interface-transition-poll.ts): a live handoff polls
- * until it settles, failures back off 1/2/4/8s and stop after five when no
- * handoff is live, and a readiness recheck stops after ten answers per state.
- * Any data that lands (a poll, a manual recheck, or an accepted start)
- * clears the failure count, and a new phase or reason opens a fresh readiness
- * window, so a newly started transition never inherits a spent budget.
- */
 export function interfaceTransitionRefetchInterval(query: InterfaceTransitionPollQuery): number | false {
 	const { state } = query;
 	const status = state.data;
@@ -212,7 +187,6 @@ export function interfaceTransitionRefetchInterval(query: InterfaceTransitionPol
 		budget.readinessBase = state.dataUpdateCount;
 	}
 	const consecutiveFailures = state.errorUpdateCount - budget.failureBase;
-	// Sign-in-required failures cannot recover through timer retries.
 	if (state.error instanceof CloudCpAuthError) return false;
 	const delay = interfaceTransitionPollDelay({
 		blocked: interfaceTransitionNeedsRestart(status?.transition),
@@ -235,8 +209,6 @@ export function interfaceTransitionIsCancellable(transition?: SessionInterfaceTr
 }
 
 export function interfaceTransitionNeedsRestart(transition?: SessionInterfaceTransition): boolean {
-	// The daemon retains the active fence until target shutdown is proven;
-	// this is an actionable recovery state, not ongoing progress.
 	return Boolean(
 		transition &&
 			interfaceTransitionIsActive(transition) &&
@@ -284,9 +256,6 @@ function useSessionInterfaceTransitionStatusQuery(
 				const previousTransition = queryClient.getQueryData<SessionInterfaceTransitionStatus>(
 					sessionInterfaceTransitionQueryKey(sessionId as string, context),
 				)?.transition;
-				// Cloud omits completed transitions from status. Keep the handoff
-				// visible until the workspace session list reflects its target mode;
-				// otherwise the old surface flashes after the loader disappears.
 				const completedTransition = !transitionStatus.transition && previousTransition &&
 					(interfaceTransitionIsActive(previousTransition) || previousTransition.phase === "completed") &&
 					sessionResponse.session.interfaceMode === previousTransition.targetMode
@@ -309,8 +278,6 @@ function useSessionInterfaceTransitionStatusQuery(
 			return data as SessionInterfaceTransitionStatus;
 		},
 		refetchInterval: interfaceTransitionRefetchInterval,
-		// The poll schedule owns retries; a per-fetch retry would double every
-		// attempt the failure budget counts.
 		retry: false,
 	});
 }
@@ -325,16 +292,8 @@ export function useSessionInterfaceTransitionStatus(sessionId: string | undefine
 	};
 }
 
-/**
- * One bounded durable row drives every client. Polling is intentionally only
- * eager while a handoff is active; idle sessions do not create background
- * traffic and the existing session CDC stream still refreshes the committed
- * mode in the workspace model.
- */
 export function useSessionInterfaceTransition(
 	sessionId: string | undefined,
-	// undefined: session row is still resolving; null: resolved local session.
-	// This prevents unresolved Cloud tabs from probing the local daemon.
 	context?: SessionInterfaceContext,
 ) {
 	const queryClient = useQueryClient();
@@ -342,9 +301,6 @@ export function useSessionInterfaceTransition(
 	const cloud = context && typeof context === "object" ? context : undefined;
 	const cloudOrgId = cloud?.orgId;
 	const cloudCp = useCloudCp(Boolean(cloud));
-	// Keep the two-argument call site backwards-compatible for local sessions.
-	// SessionView deliberately passes `undefined` while a tab is unresolved, so
-	// distinguish an omitted context from that explicit unresolved value.
 	const hasSessionContext = arguments.length >= 2;
 	const isCloud = Boolean(cloud);
 	const settledRef = useRef<string>("");
@@ -395,9 +351,6 @@ export function useSessionInterfaceTransition(
 			return data;
 		},
 		onSuccess: (response, variables) => {
-			// The POST response is the durable acceptance boundary. Refreshing may
-			// be a no-op for an inactive query or fail transiently, but neither case
-			// may turn an accepted handoff back into an available Chat composer.
 			if (response?.transition) {
 				queryClient.setQueryData<SessionInterfaceTransitionStatus>(
 					sessionInterfaceTransitionQueryKey(variables.targetSessionId, mutationContext(variables)),
@@ -414,9 +367,6 @@ export function useSessionInterfaceTransition(
 				}),
 			];
 			if (variables.targetCloudOrgId) {
-				// Cloud's session projection owns interfaceMode. Refetch it as soon
-				// as POST accepts the handoff rather than leaving the source TUI
-				// mounted until the ordinary five-second Cloud polling interval.
 				refreshes.push(
 					queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey }),
 					queryClient.invalidateQueries({ queryKey: ["cloud-session"] }),
@@ -519,12 +469,6 @@ export function useSessionInterfaceTransition(
 	const transitionID = transition?.id;
 	const transitionKey =
 		sessionId && transitionID ? JSON.stringify([hostId, cloudOrgId, sessionId, transitionID]) : "";
-	// A completed handoff is not visually settled until the queries invalidated by
-	// it have returned. In particular, switching TUI -> Chat necessarily has a
-	// small interval after mode=chat commits and before the Chat controller is in
-	// the registry. A snapshot fetched in that interval truthfully says "stopped",
-	// but rendering it as a controller failure is a lie: the transition worker is
-	// still starting the target. Keep that state distinct through the final refetch.
 	const settling = Boolean(
 		transitionKey &&
 			!transitionActive &&
@@ -555,9 +499,6 @@ export function useSessionInterfaceTransition(
 			);
 		});
 	}, [isCloud, queryClient, sessionId, hostId, transitionActive, transitionKey]);
-	// A local start refusal records a durable-free error. If any client then opens
-	// a real transition, that newer durable row supersedes the stale refusal: the
-	// switch is running or done, so the "could not switch" notice must not linger.
 	const transitionCreatedAt = transition ? Date.parse(transition.createdAt) : NaN;
 	const startErrorSuperseded = Boolean(
 		startState.errorAt !== undefined &&

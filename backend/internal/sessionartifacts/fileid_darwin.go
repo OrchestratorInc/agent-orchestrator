@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// quickIdentity is the device, inode and birth time in info; macOS reports
-// all three from one stat.
 func quickIdentity(info fs.FileInfo) domain.FileIdentity {
 	st, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {

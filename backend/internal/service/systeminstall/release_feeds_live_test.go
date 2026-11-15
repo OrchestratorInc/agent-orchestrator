@@ -9,13 +9,6 @@ import (
 	"time"
 )
 
-// TestLiveHarnessReleaseFeeds queries every release source the update
-// advisory depends on and fails when one stops returning a version AO can
-// compare. Vendors change these endpoints without notice and the unit tests
-// only see fakes, so the scheduled harness-release-feeds workflow runs this
-// daily to surface a broken feed before users see "unknown".
-//
-// Run explicitly with AO_LIVE_HARNESS_FEEDS=1.
 func TestLiveHarnessReleaseFeeds(t *testing.T) {
 	if os.Getenv("AO_LIVE_HARNESS_FEEDS") != "1" {
 		t.Skip("set AO_LIVE_HARNESS_FEEDS=1 to query live harness release feeds")
@@ -60,7 +53,6 @@ func TestLiveHarnessReleaseFeeds(t *testing.T) {
 				case plan.Method == "npm" || plan.Method == "bun":
 					lookup = func() (string, error) { return npmRegistryVersion(ctx, client, pkg, scheme) }
 				case plan.Method == "homebrew" && !strings.Contains(pkg, "/"):
-					// Tap packages are read from local brew metadata only.
 					cask := plan.PackageCask
 					lookup = func() (string, error) { return homebrewAPIVersion(ctx, client, pkg, cask) }
 				case plan.Method == "uv" || plan.Method == "pipx":

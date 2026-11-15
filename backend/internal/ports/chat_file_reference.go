@@ -8,8 +8,6 @@ import (
 	"unicode/utf8"
 )
 
-// ChatFileReference is user-supplied captured code, not a verified transcript excerpt.
-// It contains no local absolute paths or credentials. Source hints do not authorize reads.
 type ChatFileReference struct {
 	ReferenceFormat  string                  `json:"referenceFormat,omitempty" enum:"numbered-v1"`
 	ID               string                  `json:"id"`
@@ -31,7 +29,6 @@ type ChatFileReference struct {
 	WorkspaceVersion string                  `json:"workspaceVersion,omitempty"`
 }
 
-// ChatFileReferenceSource identifies the selected comparison without granting read access.
 type ChatFileReferenceSource struct {
 	Kind     string `json:"kind" enum:"workspace,pull_request,artifact"`
 	URL      string `json:"url,omitempty"`
@@ -39,7 +36,6 @@ type ChatFileReferenceSource struct {
 	Snapshot string `json:"snapshot,omitempty"`
 }
 
-// ChatFileReferenceLine retains a captured row and its original comparison coordinates.
 type ChatFileReferenceLine struct {
 	Side  string `json:"side,omitempty" enum:"file,old,new"`
 	Kind  string `json:"kind" enum:"context,add,del"`
@@ -48,7 +44,6 @@ type ChatFileReferenceLine struct {
 	Text  string `json:"text"`
 }
 
-// ValidateChatFileReference bounds user-supplied context without reading mutable files.
 func ValidateChatFileReference(ref ChatFileReference) error {
 	if ref.ReferenceFormat != "" && ref.ReferenceFormat != "numbered-v1" {
 		return fmt.Errorf("invalid annotation reference format")

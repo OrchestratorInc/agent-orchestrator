@@ -19,9 +19,6 @@ func TestSessionModeValid(t *testing.T) {
 	}
 }
 
-// Reads of durable state must always land on a dispatchable mode: rows written
-// before this feature have no mode, and a row written by a newer build may carry
-// one this build does not know.
 func TestNormalizeSessionModeFallsBackToTUI(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -41,14 +38,11 @@ func TestNormalizeSessionModeFallsBackToTUI(t *testing.T) {
 	}
 }
 
-// Requested modes are parsed strictly. Collapsing an unrecognized request to TUI
-// would silently put the caller in a native terminal they deliberately disabled.
 func TestParseSessionModeRejectsUnknownInsteadOfFallingBack(t *testing.T) {
 	if _, err := ParseSessionMode("codex-tui"); err == nil {
 		t.Fatal("ParseSessionMode(\"codex-tui\") = nil error, want a rejection")
 	}
 
-	// Absent is not invalid: callers apply their own precedence to the zero value.
 	mode, err := ParseSessionMode("")
 	if err != nil {
 		t.Fatalf("ParseSessionMode(\"\") returned error %v, want none", err)
@@ -84,11 +78,7 @@ func TestTurnStateTerminal(t *testing.T) {
 		{TurnStateQueued, false},
 		{TurnStateRunning, false},
 		{TurnStateCompleted, true},
-		// A recovered turn is terminal, but its provider outcome was unavailable
-		// during history replay. It must not keep the controller busy.
 		{TurnStateRecovered, true},
-		// Interrupted is terminal but is not a failure: the provider reports it
-		// as its own status and AO must not relabel it as an error.
 		{TurnStateInterrupted, true},
 		{TurnStateFailed, true},
 		{TurnStateCancelled, true},

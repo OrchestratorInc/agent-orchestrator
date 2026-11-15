@@ -9,7 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// SessionLaunchOptions returns the launch choices saved for a terminal session.
 func (s *Store) SessionLaunchOptions(ctx context.Context, id domain.SessionID) (domain.AgentLaunchOptions, error) {
 	raw, err := s.qr.GetSessionLaunchOptions(ctx, id)
 	if err != nil || raw == "" {
@@ -22,16 +21,12 @@ func (s *Store) SessionLaunchOptions(ctx context.Context, id domain.SessionID) (
 	return options, nil
 }
 
-// SetSessionLaunchOptions saves the launch choices for a terminal session.
 func (s *Store) SetSessionLaunchOptions(ctx context.Context, id domain.SessionID, options domain.AgentLaunchOptions) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.qw.SetSessionLaunchOptions(ctx, gen.SetSessionLaunchOptionsParams{LaunchOptions: encodeLaunchOptions(options), ID: id})
 }
 
-// UpdateSessionWithLaunchOptions writes a session row and its launch choices in
-// one transaction: a terminal switch moves both to the other agent, and a stop
-// between two writes would start one agent with the other's choices.
 func (s *Store) UpdateSessionWithLaunchOptions(ctx context.Context, rec domain.SessionRecord, options domain.AgentLaunchOptions) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -47,6 +42,6 @@ func encodeLaunchOptions(options domain.AgentLaunchOptions) string {
 	if options == (domain.AgentLaunchOptions{}) {
 		return ""
 	}
-	encoded, _ := json.Marshal(options) // plain fields: cannot fail
+	encoded, _ := json.Marshal(options)
 	return string(encoded)
 }

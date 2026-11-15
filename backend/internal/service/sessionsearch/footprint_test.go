@@ -14,14 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// The index must stay small relative to the text it describes. AO already stores
-// up to 64 KiB of output per command; an index that mirrored that would double
-// the database on a machine with 8 GB of RAM and a modest disk.
-//
-// This pins the ratio rather than an absolute size, because the absolute number
-// follows from how much output a person's sessions happen to contain. The bound
-// is deliberately loose: it fails on a design change that starts storing whole
-// command outputs (a ~1:1 ratio), not on normal growth.
 func TestIndexFootprintStaysSmallRelativeToSourceText(t *testing.T) {
 	dir := t.TempDir()
 	store, err := sqlite.Open(dir)
@@ -76,7 +68,6 @@ func TestIndexFootprintStaysSmallRelativeToSourceText(t *testing.T) {
 	}
 }
 
-// A single enormous command must not become an enormous document.
 func TestOneHugeCommandIsBounded(t *testing.T) {
 	dir := t.TempDir()
 	store, err := sqlite.Open(dir)
@@ -87,7 +78,6 @@ func TestOneHugeCommandIsBounded(t *testing.T) {
 	svc := sessionsearch.New(sessionsearch.Options{Store: store, Now: func() time.Time { return testNow }})
 	session := seedChatSession(t, store, "proj", "sess-1", "conv-1")
 	appendUserMessage(t, store, session, "conv-1", "m1", "t1", "run the build")
-	// 60 KiB, just under AO's own per-command cap.
 	huge := "linker error: undefined symbol zzNeedle\n" + strings.Repeat("x", 60<<10) + "\nzzTailNeedle"
 	addCommandActivity(t, store, "conv-1", "t1", "cmd-1", "make build", huge, domain.ActivityStatusFailed)
 	if _, err := svc.IndexChat(context.Background(), conversationFor(t, store, string(session.ID))); err != nil {
@@ -104,7 +94,6 @@ func TestOneHugeCommandIsBounded(t *testing.T) {
 	if maxBody > 16<<10 {
 		t.Fatalf("one document is %d bytes; the per-document budget must bound it", maxBody)
 	}
-	// The output keeps its first 3,072 characters (coverage.go).
 	if got := search(t, svc, "zzNeedle"); len(got.Results) != 1 {
 		t.Fatalf("the start of a huge command was lost: %+v", got.Results)
 	}
@@ -113,10 +102,6 @@ func TestOneHugeCommandIsBounded(t *testing.T) {
 	}
 }
 
-// Indexing must actually store rows. This asserts the document and source
-// tables directly rather than file sizes: the database runs in WAL mode, so
-// committed bytes live in a sidecar file until a checkpoint and a directory
-// walk would read as "nothing changed".
 func TestIndexingStoresDocumentsAndTracksTheSource(t *testing.T) {
 	store, err := sqlite.Open(t.TempDir())
 	if err != nil {
@@ -147,14 +132,11 @@ func TestIndexingStoresDocumentsAndTracksTheSource(t *testing.T) {
 	if source.State != domain.SessionSearchSourceActive || source.DocCount == 0 {
 		t.Fatalf("source row = %+v, want an active source with documents", source)
 	}
-	// The recorded stamp is what lets the next sweep skip without reading.
 	if source.Stamp == "" {
 		t.Fatal("no stamp recorded; the sweep would re-read every conversation forever")
 	}
 }
 
-// openRawWithIndex opens ao.db with the search database attached, as the
-// store's readers see them.
 func openRawWithIndex(t *testing.T, dir string) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "ao.db"))

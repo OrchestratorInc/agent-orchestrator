@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// Rollout records in the shape Codex 0.150 persists (event_msg payloads with
-// serde names task_started / task_complete / turn_aborted).
 const (
 	rolloutMeta        = `{"timestamp":"2026-10-18T10:00:00.000Z","type":"session_meta","payload":{"id":"0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b","source":"cli"}}`
 	rolloutTaskStarted = `{"timestamp":"2026-10-18T10:00:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"1"}}`
@@ -55,8 +53,6 @@ func TestLastTurnFailureReportsAFailedTurn(t *testing.T) {
 	}
 }
 
-// Esc fires no Stop hook (only Codex 0.150+'s Interrupt hook, which AO does
-// not install); the rollout records the aborted turn.
 func TestLastTurnFailureReportsAnInterruptedTurn(t *testing.T) {
 	path := writeRollout(t, lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutNextStarted, rolloutAborted, rolloutTokenCount))
 	failure, ok, err := New().LastTurnFailure(context.Background(), path)
@@ -70,25 +66,19 @@ func TestLastTurnFailureReportsAnInterruptedTurn(t *testing.T) {
 
 func TestLastTurnFailureIgnoresTurnsThatDidNotFail(t *testing.T) {
 	cases := map[string]string{
-		// A successful turn is already reported by Codex's Stop hook.
 		"successful turn":               lines(rolloutMeta, rolloutTaskStarted, rolloutSucceeded),
 		"explicit null error":           lines(rolloutMeta, rolloutTaskStarted, rolloutNullError),
 		"failure then a success":        lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutTaskStarted, rolloutSucceeded),
 		"old failure, turn now running": lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutNextStarted, rolloutUserMessage),
 		"interrupted, then a new turn":  lines(rolloutMeta, rolloutNextStarted, rolloutAborted, rolloutTaskStarted),
-		// A turn replaced by a newer one is not a turn the user stopped.
 		"replaced turn": lines(rolloutMeta, rolloutTaskStarted, rolloutFailed, rolloutNextStarted,
 			strings.Replace(rolloutAborted, `"interrupted"`, `"replaced"`, 1)),
 		"interrupt without a readable timestamp": lines(rolloutMeta, rolloutNextStarted,
 			strings.Replace(rolloutAborted, `"timestamp":"2026-10-18T10:00:09.500Z",`, ``, 1)),
-		"turn still running": lines(rolloutMeta, rolloutTaskStarted, rolloutUserMessage),
-		"no turns":           lines(rolloutMeta),
-		"empty":              "",
-		// Codex has not finished writing the record: it is not read yet.
+		"turn still running":        lines(rolloutMeta, rolloutTaskStarted, rolloutUserMessage),
+		"no turns":                  lines(rolloutMeta),
+		"empty":                     "",
 		"unfinished failure record": lines(rolloutMeta, rolloutTaskStarted) + rolloutFailed,
-		// Without its own time a failure cannot be ordered against the current
-		// prompt, so it is not reported, and the older failure behind it is
-		// not reached either.
 		"failure without a readable timestamp": lines(rolloutMeta, rolloutFailed, rolloutTaskStarted,
 			strings.Replace(rolloutFailed, `"timestamp":"2026-10-18T10:00:02.250Z"`, `"timestamp":"not a time"`, 1)),
 		"failure without a timestamp": lines(rolloutMeta, rolloutTaskStarted,
@@ -104,8 +94,6 @@ func TestLastTurnFailureIgnoresTurnsThatDidNotFail(t *testing.T) {
 	}
 }
 
-// A large tool output earlier in the turn must not hide the failure, and a
-// record cut by the tail window's start must not be parsed as a fragment.
 func TestLastTurnFailureReadsOnlyTheRolloutTail(t *testing.T) {
 	huge := `{"timestamp":"2026-10-18T10:00:01.500Z","type":"response_item","payload":{"type":"function_call_output","output":"` +
 		strings.Repeat("x", codexTurnTailWindow+1024) + `"}}`
@@ -113,8 +101,6 @@ func TestLastTurnFailureReadsOnlyTheRolloutTail(t *testing.T) {
 	if _, ok, err := New().LastTurnFailure(context.Background(), path); !ok || err != nil {
 		t.Fatalf("failure after a large record: ok %v err %v", ok, err)
 	}
-	// The failure itself sits beyond the window: only the huge record's end
-	// is in reach, which is no turn boundary.
 	path = writeRollout(t, lines(rolloutMeta, rolloutFailed, huge))
 	if _, ok, err := New().LastTurnFailure(context.Background(), path); ok || err != nil {
 		t.Fatalf("failure outside the tail window: ok %v err %v, want none", ok, err)
@@ -134,9 +120,6 @@ func TestLastTurnFailureReadsOnlyCodexRollouts(t *testing.T) {
 	}
 }
 
-// Event records of other types are skipped before decoding, even when they
-// name a turn (turn_id) or are not valid JSON, and do not hide the boundary
-// before them.
 func TestLastTurnFailureSkipsOtherEventRecords(t *testing.T) {
 	agentMessage := `{"timestamp":"2026-10-18T10:00:02.400Z","type":"event_msg","payload":{"type":"agent_message","turn_id":"1","message":"hi"}}`
 	garbled := `{"timestamp":"2026-10-18T10:00:02.500Z","type":"event_msg","payload":{"type":"agent_reasoning"`

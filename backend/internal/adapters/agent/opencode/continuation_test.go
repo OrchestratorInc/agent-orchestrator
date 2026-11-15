@@ -31,8 +31,6 @@ func TestOpenCodeNativeSessionConfigDir(t *testing.T) {
 	}
 }
 
-// writeOpenCodeProbeDB builds a synthetic opencode.db and closes it before
-// returning, so the probe reads a settled file. Content is wholly invented.
 func writeOpenCodeProbeDB(t *testing.T, root string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(root, "opencode.db")))

@@ -19,28 +19,10 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Intel Macs (#3879, #6621): V8 on x64 makes JIT code executable with
-// mprotect, which the hardened runtime allows only with the
-// allow-unsigned-executable-memory entitlement. A release whose signer drops
-// that entitlement ships a bundled Node that answers `node --version` but
-// dies (exit 133, "Check failed: 12 == (*__error())") as soon as V8 tiers up,
-// so the ACP adapter disconnects before answering initialize and every Chat
-// session fails to start.
-//
-// The signing fix belongs in the release pipeline, but users must not be
-// stranded until a fixed build reaches them. On darwin/amd64 the daemon
-// therefore smoke-tests the bundled Node once; if it shows that crash, it
-// copies the binary under the AO data dir, ad-hoc re-signs the copy with the
-// entitlements it needs, and launches the adapter with the copy. The app
-// bundle itself is never modified, so its signature stays intact.
-
-// jitSmokeScript runs long enough for V8 to tier the loop up to optimized code.
 const jitSmokeScript = `let s=0;for(let i=0;i<1e8;i++)s+=i;console.log("ok")`
 
 const jitSmokeTimeout = 60 * time.Second
 
-// nodeJITCrashMarker is V8's fatal check from OS::SetPermissions when the
-// kernel refuses to make JIT pages executable (errno 12, ENOMEM).
 const nodeJITCrashMarker = "Check failed: 12 == (*__error())"
 
 const nodeJITEntitlements = `<?xml version="1.0" encoding="UTF-8"?>
@@ -55,7 +37,6 @@ const nodeJITEntitlements = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
-// Seams for tests; production values target the real macOS toolchain.
 var (
 	jitRepairGOOS   = runtime.GOOS
 	jitRepairGOARCH = runtime.GOARCH
@@ -64,17 +45,11 @@ var (
 	jitRepairRoot   = defaultJITRepairRoot
 )
 
-// jitNodes caches the Node to launch for each bundled Node path once that
-// choice is settled, so the smoke test and any repair run once per daemon.
-// Only settled choices are kept: an inconclusive smoke test (a timeout, a
-// Node that could not start) or a failed repair is retried on the next start.
 var (
 	jitNodesMu sync.Mutex
 	jitNodes   = map[string]string{}
 )
 
-// jitCapableNode returns the Node executable the adapter should run in place
-// of node. Outside Intel macOS it is node itself.
 func jitCapableNode(ctx context.Context, node string) (string, error) {
 	if jitRepairGOOS != "darwin" || jitRepairGOARCH != "amd64" {
 		return node, nil
@@ -91,17 +66,12 @@ func jitCapableNode(ctx context.Context, node string) (string, error) {
 	return resolved, err
 }
 
-// resolveJITCapableNode picks the Node to launch. settled is false when the
-// choice rests on an inconclusive smoke test and should be made again later.
 func resolveJITCapableNode(ctx context.Context, node string) (string, bool, error) {
 	crashed, err := nodeCrashesOnJIT(ctx, node)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", false, ctxErr
 		}
-		// A smoke test that cannot run says nothing about the entitlement:
-		// launch the bundled Node this time and let any real failure surface
-		// through the normal ACP error path, but check again next start.
 		return node, false, nil
 	}
 	if !crashed {
@@ -119,8 +89,6 @@ func resolveJITCapableNode(ctx context.Context, node string) (string, bool, erro
 	return repaired, true, nil
 }
 
-// nodeCrashesOnJIT reports whether node dies with the missing-entitlement V8
-// crash. A false result with a nil error means the smoke test passed.
 func nodeCrashesOnJIT(ctx context.Context, node string) (bool, error) {
 	exitCode, stderr, err := runNodeSmoke(ctx, node)
 	if err != nil {
@@ -129,13 +97,9 @@ func nodeCrashesOnJIT(ctx context.Context, node string) (bool, error) {
 	if exitCode == 0 {
 		return false, nil
 	}
-	// 133 is 128+SIGTRAP, how V8's fatal check ends the process.
 	return exitCode == 133 || strings.Contains(stderr, nodeJITCrashMarker), nil
 }
 
-// nodeRunsJIT requires a successful smoke run. The bundled Node is judged by
-// nodeCrashesOnJIT, which ignores unrelated failures, but a re-signed copy AO
-// installs must actually work, or Chat would launch an unusable Node.
 func nodeRunsJIT(ctx context.Context, node string) error {
 	exitCode, stderr, err := runNodeSmoke(ctx, node)
 	if err != nil {
@@ -160,8 +124,6 @@ func repairNodeJIT(ctx context.Context, node string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Keyed by the source binary's digest, so an AO update with a new Node
-	// gets a fresh copy instead of reusing a stale one.
 	finalDir := filepath.Join(root, sum[:16])
 	finalNode := filepath.Join(finalDir, "node")
 	if _, statErr := os.Stat(finalNode); statErr == nil {
@@ -185,8 +147,6 @@ func repairNodeJIT(ctx context.Context, node string) (string, error) {
 	defer func() { _ = os.RemoveAll(stage) }()
 
 	stagedNode := filepath.Join(stage, "node")
-	// A plain byte copy carries no extended attributes, so the copy has no
-	// quarantine flag for Gatekeeper to assess.
 	if err := copyExecutable(node, stagedNode); err != nil {
 		return "", err
 	}
@@ -243,8 +203,6 @@ func defaultRunNodeSmoke(ctx context.Context, node string) (int, string, error) 
 	ctx, cancel := context.WithTimeout(ctx, jitSmokeTimeout)
 	defer cancel()
 	cmd := aoprocess.CommandContext(ctx, node, "-e", jitSmokeScript) //nolint:gosec // AO's own packaged Node runtime.
-	// Start from a clean NODE_OPTIONS so the user's flags cannot mask or cause
-	// the result; the adapter launch keeps its own environment.
 	cmd.Env = append(os.Environ(), "NODE_OPTIONS=")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -259,7 +217,6 @@ func defaultRunNodeSmoke(ctx context.Context, node string) (int, string, error) 
 	if errors.As(err, &exitErr) {
 		code := exitErr.ExitCode()
 		if code < 0 && strings.Contains(exitErr.String(), "trap") {
-			// Killed by SIGTRAP without a shell to translate it into 133.
 			code = 133
 		}
 		return code, stderr.String(), nil
@@ -276,8 +233,6 @@ func defaultCodesignNode(ctx context.Context, node, entitlements string) error {
 	return nil
 }
 
-// defaultJITRepairRoot keeps the re-signed copy under AO's data dir
-// (AO_DATA_DIR, default ~/.ao/data), never an OS app-data location.
 func defaultJITRepairRoot() (string, error) {
 	if dir := strings.TrimSpace(os.Getenv("AO_DATA_DIR")); dir != "" {
 		abs, err := filepath.Abs(dir)

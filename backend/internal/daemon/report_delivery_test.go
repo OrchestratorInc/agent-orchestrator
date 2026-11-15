@@ -58,8 +58,6 @@ func TestReportSemanticDeliveryUsesAcceptedTUIBoundary(t *testing.T) {
 }
 
 func TestReportSemanticDeliveryMarksAComposerDraftAsBusy(t *testing.T) {
-	// The coordinator backs off a busy orchestrator instead of retrying it ahead
-	// of every other project, so the draft refusal must reach it as busy.
 	sessions := &reportDeliverySession{sendErr: fmt.Errorf("send ao-1: %w", sessionmanager.ErrComposerBusy)}
 	delivery := reportSemanticDelivery{sessions: sessions}
 	err := delivery.Submit(context.Background(), "ao-1", "report context", "report-batch:abc123")

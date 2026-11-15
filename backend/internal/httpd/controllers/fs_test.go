@@ -49,19 +49,15 @@ func listDirs(t *testing.T, srv *httptest.Server, path string) (int, ListDirsRes
 	return resp.StatusCode, body, apiErr
 }
 
-// padName zero-pads so the cap test's directory names sort deterministically.
 func padName(i int) string { return fmt.Sprintf("%04d", i) }
 
 func TestListDirsShowsDirectoriesOnlyWithGitDetection(t *testing.T) {
 	home := t.TempDir()
-	// A plain dir, a git repo (.git directory), a worktree checkout (.git FILE),
-	// a dotdir that must be skipped, and a plain file that must not appear.
 	for _, d := range []string{"plain", "repo/.git", "worktree", ".hidden"} {
 		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Worktrees carry `.git` as a FILE ("gitdir: ..."), not a directory. Both count.
 	if err := os.WriteFile(filepath.Join(home, "worktree", ".git"), []byte("gitdir: /elsewhere\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +107,6 @@ func TestListDirsDefaultsToHome(t *testing.T) {
 func TestListDirsRejectsRelativeAndMissingPaths(t *testing.T) {
 	home := t.TempDir()
 	srv := newFSRig(t)
-	// A file is not browsable.
 	f := filepath.Join(home, "f.txt")
 	if err := os.WriteFile(f, nil, 0o644); err != nil {
 		t.Fatal(err)

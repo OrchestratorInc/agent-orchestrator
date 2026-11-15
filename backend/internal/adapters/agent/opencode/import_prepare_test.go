@@ -14,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The test binary doubles as a fake `opencode` CLI for PrepareImportedSession:
-// `export` prints a fixture, and `import` records the session into a test
-// opencode.db bound to the directory it ran in, as the real CLI does.
 func TestMain(m *testing.M) {
 	if db := os.Getenv("AO_FAKE_OPENCODE_DB"); db != "" {
 		os.Exit(fakeOpenCode(db, os.Args[1:]))
@@ -65,9 +62,6 @@ func fakeOpenCode(dbPath string, args []string) int {
 	return 2
 }
 
-// storeOpenCodeExport records an export in a test opencode.db as OpenCode's
-// import does: bound to cwd, storing each message's and part's data without
-// its ids, keeping message times, and setting part timestamps at import time.
 func storeOpenCodeExport(dbPath string, data []byte, cwd string, now int64) (string, error) {
 	var doc struct {
 		Info struct {
@@ -157,7 +151,6 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 			t.Fatal(err)
 		}
 	}
-	// Resolve the temp root so stored and launch paths compare as OpenCode's do.
 	if env.launch, err = filepath.EvalSymlinks(env.launch); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +172,6 @@ func newFakeOpenCode(t *testing.T) (*Plugin, fakeOpenCodeEnv) {
 	if err := os.WriteFile(env.export, []byte(openCodeExportFixture(env.source)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The source session the export describes, as discovery reads it.
 	if _, err := storeOpenCodeExport(dbPath, []byte(openCodeExportFixture(env.source)), env.source, 1762324000500); err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +186,6 @@ func (e fakeOpenCodeEnv) relocation() ports.ImportedSessionRelocation {
 	return ports.ImportedSessionRelocation{NativeSessionID: ocSourceID, ConfigDir: e.configDir, SourceCWD: e.source, LaunchCWD: e.launch, DataDir: e.dataDir}
 }
 
-// fingerprint is the discovery fingerprint of a session in the test store.
 func (e fakeOpenCodeEnv) fingerprint(t *testing.T, id string) string {
 	t.Helper()
 	got, err := openCodeSessionFingerprint(context.Background(), e.configDir, id)
@@ -204,7 +195,6 @@ func (e fakeOpenCodeEnv) fingerprint(t *testing.T, id string) string {
 	return got
 }
 
-// addTurn appends a message to a session, as another turn in OpenCode would.
 func (e fakeOpenCodeEnv) addTurn(t *testing.T, session, id string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(e.configDir, "opencode.db"))
@@ -217,7 +207,6 @@ func (e fakeOpenCodeEnv) addTurn(t *testing.T, session, id string) {
 	}
 }
 
-// editPart replaces the data of a session's part whose text or tool matches.
 func (e fakeOpenCodeEnv) editPart(t *testing.T, session, match, data string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(e.configDir, "opencode.db"))
@@ -273,7 +262,6 @@ func TestPrepareImportedOpenCodeSessionCopiesIntoLaunchDirectory(t *testing.T) {
 		t.Fatalf("source session changed: %+v", source)
 	}
 
-	// A retry reuses the published copy without running OpenCode again.
 	again, err := p.PrepareImportedSession(context.Background(), env.relocation())
 	if err != nil || again != ref {
 		t.Fatalf("retry = %+v, %v; want %+v", again, err, ref)
@@ -285,11 +273,10 @@ func TestPrepareImportedOpenCodeSessionCopiesIntoLaunchDirectory(t *testing.T) {
 
 func TestPrepareImportedOpenCodeSessionRejectsCopyBoundElsewhere(t *testing.T) {
 	p, env := newFakeOpenCode(t)
-	t.Setenv("AO_FAKE_OPENCODE_BIND", env.source) // OpenCode bound the copy to the wrong folder.
+	t.Setenv("AO_FAKE_OPENCODE_BIND", env.source)
 	if _, err := p.PrepareImportedSession(context.Background(), env.relocation()); err == nil || !strings.Contains(err.Error(), "not bound to AO's workspace") {
 		t.Fatalf("copy bound elsewhere accepted: %v", err)
 	}
-	// The mis-bound copy is never reused either.
 	t.Setenv("AO_FAKE_OPENCODE_BIND", "")
 	if _, err := p.PrepareImportedSession(context.Background(), env.relocation()); err == nil || !strings.Contains(err.Error(), "another directory") {
 		t.Fatalf("mis-bound copy reused: %v", err)
@@ -334,7 +321,6 @@ func TestRewriteOpenCodeExportRebindsIdentityAndDirectory(t *testing.T) {
 			t.Fatalf("rewritten export still references %q: %s", old, text)
 		}
 	}
-	// Numbers keep full precision and unknown fields pass through.
 	for _, keep := range []string{`"cost":0.000123456789`, `"input":12345678901`, `"projectID":"842266f1"`, `"slug":"cosmic-otter"`, `"text":"KIWI"`} {
 		if !strings.Contains(text, keep) {
 			t.Fatalf("rewritten export lost %s: %s", keep, text)
@@ -368,7 +354,6 @@ func TestRewriteOpenCodeExportRebindsIdentityAndDirectory(t *testing.T) {
 			t.Fatalf("part %d = %+v", i, p)
 		}
 	}
-	// Ids keep their prefix and time component so OpenCode's ordering holds.
 	if m1.ID[:openCodeIDTimeLen] != ocMsg1[:openCodeIDTimeLen] || len(m1.ID) != len(ocMsg1) {
 		t.Fatalf("message id %q lost its time component", m1.ID)
 	}
@@ -411,7 +396,6 @@ func TestPrepareImportedOpenCodeSessionStagesUnderAOData(t *testing.T) {
 		t.Fatal("no copy")
 	}
 
-	// Without AO's data directory there is nowhere private to stage a copy.
 	_, env = newFakeOpenCode(t)
 	r := env.relocation()
 	r.DataDir = ""
@@ -446,8 +430,6 @@ func TestPrepareImportedOpenCodeSessionHoldsTheSelectedHistory(t *testing.T) {
 		}
 	})
 	t.Run("retry after a lost checkpoint reuses the matching copy", func(t *testing.T) {
-		// The copy was published, saving its identity failed, and the source
-		// then gained a turn. The copy still holds exactly the archived history.
 		p, env := newFakeOpenCode(t)
 		r := env.relocation()
 		r.SourceFingerprint = env.fingerprint(t, ocSourceID)
@@ -481,7 +463,6 @@ func TestPrepareImportedOpenCodeSessionHoldsTheSelectedHistory(t *testing.T) {
 
 func TestNativeSessionFingerprintCoversContent(t *testing.T) {
 	for name, edit := range map[string]func(fakeOpenCodeEnv, *testing.T){
-		// Same length as "KIWI": a count or length check would miss it.
 		"same-length text edit": func(e fakeOpenCodeEnv, t *testing.T) {
 			e.editPart(t, ocSourceID, "KIWI", `{"type":"text","text":"PEAR"}`)
 		},
@@ -512,7 +493,6 @@ func TestNativeSessionFingerprintIgnoresCopiedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Different ids, directory and part timestamps; same history.
 	if _, err := storeOpenCodeExport(filepath.Join(env.configDir, "opencode.db"), doc, launch, 1762329999999); err != nil {
 		t.Fatal(err)
 	}

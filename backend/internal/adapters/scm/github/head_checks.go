@@ -11,11 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// HeadChecks reads what GitHub knows about the checks on sha: its check
-// suites, its commit statuses, and when checks could first have started. An
-// app installed on the repository that never runs here (Vercel, Cursor, a
-// review bot) still creates a suite for every push and leaves it queued with
-// no check runs, so a queued suite only means "not started", not "checking".
 func (p *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha string) (ports.SCMHeadChecks, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMHeadChecks{}, fmt.Errorf("github scm: head checks provider is not configured")
@@ -46,7 +41,6 @@ func (p *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha strin
 			out.Since = suite.CreatedAt
 		}
 	}
-	// Suites past the first page went unread: count them as started.
 	out.Started += max(0, suites.TotalCount-len(suites.CheckSuites))
 
 	resp, err = p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "commits", sha, "status"), nil, nil)
@@ -81,10 +75,6 @@ func (p *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha strin
 	return out, nil
 }
 
-// idleSuite is a suite that checked nothing: queued with no runs (an app that
-// hasn't started, or never will), or finished as skipped or stale without one.
-// Anything else, a run in progress or a suite waiting for approval included,
-// counts as checking.
 func idleSuite(status, conclusion string, runs int) bool {
 	if runs > 0 {
 		return false

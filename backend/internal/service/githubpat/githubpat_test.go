@@ -46,10 +46,6 @@ func TestListReposKeepsTokenOnUnauthorized(t *testing.T) {
 	if !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("ListRepos error = %v, want ErrInvalidCredentials", err)
 	}
-	// A 401 must NOT delete the stored token. A transient GitHub 401 would
-	// otherwise permanently wipe a still-valid credential and force a full
-	// reconnect. The token is preserved until the user reconnects (overwrite)
-	// or explicitly disconnects (DeletePAT).
 	if !service.HasPAT(context.Background()) {
 		t.Fatal("HasPAT = false: token was deleted on a 401 (it must be preserved)")
 	}
@@ -69,8 +65,6 @@ func TestListReposDoesNotRemoveTokenForTransientFailure(t *testing.T) {
 	}
 }
 
-// oauthRoutingClient routes the refresh POST and the repos GET, minting
-// "new-token" on refresh and only accepting it on /user/repos.
 func oauthRoutingClient(refreshCalls *int) *http.Client {
 	return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch {
@@ -100,8 +94,6 @@ func oauthService(t *testing.T, refreshCalls *int) *Service {
 func TestListReposRefreshesExpiringToken(t *testing.T) {
 	var refreshCalls int
 	s := oauthService(t, &refreshCalls)
-	// An OAuth token already past its expiry: ListRepos must renew it proactively
-	// before calling GitHub, not force the user to reconnect.
 	past := time.Now().Add(-time.Hour)
 	future := time.Now().Add(30 * 24 * time.Hour)
 	if err := s.StoreOAuthToken(context.Background(), "old-token", "old-refresh", past, future); err != nil {
@@ -125,9 +117,6 @@ func TestListReposRefreshesExpiringToken(t *testing.T) {
 func TestListReposForceRefreshesOnUnexpected401(t *testing.T) {
 	var refreshCalls int
 	s := oauthService(t, &refreshCalls)
-	// Token is not yet expired by its recorded deadline, so no proactive refresh;
-	// GitHub rejects it anyway (early expiry / rotation). One forced refresh +
-	// retry must recover without a reconnect prompt.
 	accessExpiry := time.Now().Add(time.Hour)
 	refreshExpiry := time.Now().Add(180 * 24 * time.Hour)
 	if err := s.StoreOAuthToken(context.Background(), "old-token", "old-refresh", accessExpiry, refreshExpiry); err != nil {
@@ -148,8 +137,6 @@ func TestListReposForceRefreshesOnUnexpected401(t *testing.T) {
 func TestListReposNoRefreshMaterialStaysInvalidOn401(t *testing.T) {
 	var refreshCalls int
 	s := oauthService(t, &refreshCalls)
-	// A plain PAT (no refresh token) that GitHub rejects must surface
-	// ErrInvalidCredentials without attempting a refresh.
 	if err := s.StorePAT(context.Background(), "plain-rejected"); err != nil {
 		t.Fatalf("StorePAT: %v", err)
 	}

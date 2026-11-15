@@ -1,15 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import type { ChatFileReference } from "../../shared/chat-file-reference";
-/**
- * Live conversation data for a Chat session.
- *
- * The daemon serves the snapshot already ordered by sequence, so this hook maps
- * the wire shape onto the view model and does not re-sort, re-derive turn state,
- * or decide which approvals are actionable. Those are daemon decisions.
- *
- * Live changes arrive through the daemon event channel. Older history is fetched
- * in bounded pages only when the reader asks for it.
- */
 
 import {
 	type InfiniteData,
@@ -75,17 +65,12 @@ export interface ConversationSendInput {
 	resources?: WireResourceContent[];
 	excerpts?: WireExcerptReference[];
 	fileReferences?: ChatFileReference[];
-	/** Caller-owned durable idempotency key used for crash-safe retries. */
 	clientMessageId?: string;
-	/** The user's one-click "continue" after stopping a turn. */
 	continuation?: boolean;
-	/** Switches the agent first; the new agent answers this message as its first turn. */
 	providerSwitch?: Omit<components["schemas"]["ProviderSwitchRequest"], "idempotencyKey" | "message">;
-	/** What the transcript's "Switched" line shows while the switch runs. Never sent. */
 	switchDisplay?: ConversationSwitchDisplay;
 }
 
-/** The two sides of a switch as the transcript names them, known before the daemon answers. */
 export interface ConversationSwitchDisplay {
 	sourceHarness: string;
 	sourceModel?: string;
@@ -93,17 +78,12 @@ export interface ConversationSwitchDisplay {
 	targetEffort?: string;
 }
 
-/** A send whose agent switch was refused or failed, so the message never left. */
 export class ProviderSwitchFailed extends Error {
 	constructor(readonly reason: unknown) {
 		super(apiErrorMessage(reason));
 	}
 }
 
-/**
- * A remote daemon's gateway answers 502–504 while the daemon may still finish the switch.
- * The daemon's own refusal (a PROVIDER_SWITCH_ code, 503 for "not installed") is definite.
- */
 const switchOutcomeUnknown = (status: number, error: unknown) =>
 	(status === 502 || status === 503 || status === 504) &&
 	!String((error as { code?: unknown } | undefined)?.code ?? "").startsWith("PROVIDER_SWITCH_");
@@ -154,33 +134,20 @@ type ConversationDispatchTracking =
 	| (ConversationDispatchDescriptor & { state: "accepted"; turnId: string });
 type ConversationDispatchTrackingBySession = Record<string, ConversationDispatchTracking>;
 
-/**
- * Renderer-only acknowledgement of a human send. It is deliberately separate
- * from the durable snapshot: CDC identifies a conversation, not one exact new
- * item, so treating it as a partial server update would make ordering unsafe.
- */
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
-	/** A continue after a stop, drawn as a marker while it is sent. */
 	continuation?: boolean;
 	createdAt: string;
-	/** A hibernated send is acknowledged locally while the provider wakes. */
 	backgroundWake?: boolean;
-	/** A turn was already active when this was sent, so it belongs in the queue dock, not the chat. */
 	queued?: boolean;
-	/** Excerpts are rendered inside the optimistic user message bubble. */
 	fileReferences?: ChatFileReference[];
 	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "comment" | "messageId" | "revision" | "order" | "snapshot"> & { id?: string; conversationId?: string })[];
-	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
-	/** Sent with an agent switch: the transcript shows the "Switched" line above it at once. */
 	providerSwitch?: ConversationSwitchDisplay & {
 		targetHarness: string;
-		/** The newest sequence seen when it was sent; the daemon's own line comes after it. */
 		afterSequence: number;
 	};
-	/** A new session's brief, sent before the session existed; its first human message is this. */
 	opening?: boolean;
 };
 type ConversationLocalEchosBySession = Record<string, ConversationLocalEcho[]>;
@@ -203,7 +170,6 @@ function addConversationLocalEcho(
 	targetSessionId: string,
 	echo: ConversationLocalEcho,
 ): void {
-	// An echo shown while an agent switch ran is replaced by its send's own.
 	queryClient.setQueryData<ConversationLocalEchosBySession>(conversationLocalEchosQueryKey, (current = {}) => ({
 		...current,
 		[targetSessionId]: [
@@ -213,7 +179,6 @@ function addConversationLocalEcho(
 	}));
 }
 
-/** Shows a new session's brief before its first conversation read lands. */
 export function seedOpeningLocalEcho(
 	queryClient: QueryClient,
 	sessionId: string,
@@ -340,7 +305,6 @@ function advanceConversationProviderCatalogEpoch(queryClient: QueryClient, sessi
 	epochs.set(sessionId, conversationProviderCatalogEpoch(queryClient, sessionId) + 1);
 }
 
-/** Drop provider-owned catalogs so a handoff cannot keep showing the outgoing controller's options. */
 export function clearConversationProviderCatalogs(queryClient: QueryClient, sessionId: string, hostId?: string) {
 	advanceConversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId, hostId));
 	queryClient.removeQueries({ queryKey: conversationModelsQueryKey(sessionId, hostId) });
@@ -348,7 +312,6 @@ export function clearConversationProviderCatalogs(queryClient: QueryClient, sess
 	queryClient.removeQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
-/** Refetch provider-owned catalogs after the target controller owns the session again. */
 export function invalidateConversationProviderCatalogs(queryClient: QueryClient, sessionId: string, hostId?: string) {
 	void queryClient.invalidateQueries({ queryKey: conversationModelsQueryKey(sessionId, hostId) });
 	void queryClient.invalidateQueries({ queryKey: conversationConfigOptionsQueryKey(sessionId, hostId) });
@@ -356,26 +319,15 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 }
 
 const CONVERSATION_PAGE_SIZE = 200;
-// A remote page crosses a tunnel, often on the host's upload: a small live page,
-// larger pages on scroll, and each tool output cut to its head and tail.
 const REMOTE_LIVE_PAGE_SIZE = 30;
 const REMOTE_OLDER_PAGE_SIZE = 100;
 const REMOTE_OUTPUT_LIMIT = 512;
 const remoteConversationRefreshErrorKey = (sessionId: string, hostId: string) => ["remote-conversation-refresh-error", hostId, sessionId] as const;
 const CONFIG_OPTIONS_POLL_INTERVAL_MS = 5_000;
 const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
-/**
- * A send with no answer by now is treated as unanswered: the composer keeps it as
- * an unsent message to retry with the same id, instead of waiting forever.
- */
 const SEND_ANSWER_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
 
-/**
- * Answers that will never change on a retry. SESSION_MODE_MISMATCH is permanent
- * while the session's committed controller is TUI; the others describe a session or
- * controller state the client should explain rather than poll at.
- */
 const PERMANENT_CODES = new Set([
 	"SESSION_MODE_MISMATCH",
 	"SESSION_NOT_FOUND",
@@ -386,7 +338,6 @@ const PERMANENT_CODES = new Set([
 export interface ConversationQueryResult {
 	snapshot?: ConversationSnapshot;
 	isLoading: boolean;
-	/** Set when the session exists but has no chat conversation to show. */
 	unavailable?: { code: string; message: string };
 	error?: string;
 	refreshError?: string;
@@ -414,18 +365,12 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 	return toSnapshot(await fetchConversationWire(sessionId, hostId, conversationPageQuery(hostId, beforeSequence)));
 }
 
-/** The whole output of one activity, for a page that carries only its head and tail. */
 export async function fetchActivityOutput(sessionId: string, hostId: string | undefined, sequence: number, activityId: string): Promise<string | undefined> {
 	const wire = await fetchConversationWire(sessionId, hostId, { beforeSequence: sequence + 1, afterSequence: sequence > 1 ? sequence - 1 : undefined, limit: 1 });
 	const activity = wire.activities?.find((candidate) => candidate.id === activityId);
 	return (activity?.detail as { output?: unknown } | undefined)?.output as string | undefined;
 }
 
-/**
- * Rows above this sequence can still change: the newest turn with rows (an undo
- * always takes it back), every open turn, and every unsettled activity. An undone
- * or cancelled turn stays last in turns with no rows, so turns cannot name it.
- */
 export function remoteConversationFloor(page: ConversationSnapshot): number {
 	const live = new Set(page.turns.filter((turn) => turn.state === "queued" || turn.state === "running").map((turn) => turn.id));
 	const newest = page.items.findLast((item) => item.turnId)?.turnId;
@@ -438,13 +383,6 @@ export function remoteConversationFloor(page: ConversationSnapshot): number {
 	return floor;
 }
 
-/**
- * A tail holds every row that can still change, so it replaces the rows above its
- * floor. A turn that starts, settles or is taken back, a branch switch, compaction,
- * a new copy of a list kept across turns, which supersedes the older copy, or a tail
- * that did not reach its floor can change rows below it, so those cases read the
- * whole live page instead.
- */
 export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: ConversationSnapshot, floor: number): ConversationSnapshot | undefined {
 	if (tail.conversationId !== prior.conversationId || tail.activeBranchId !== prior.activeBranchId || tail.hasMoreBefore) return undefined;
 	if (tail.compactedAt !== prior.compactedAt || tail.nativeForkAvailableAfterSequence !== prior.nativeForkAvailableAfterSequence) return undefined;
@@ -461,7 +399,6 @@ export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: C
 	return mergeConversationPages([tail, { ...prior, items: kept, turns: prior.turns.filter((turn) => keptTurnIds.has(turn.id)) }]);
 }
 
-/** Refresh only the live page; refetching an infinite query downloads all older history. */
 export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
 	const key = conversationQueryKey(sessionId, hostId);
 	let latest: ConversationSnapshot;
@@ -472,7 +409,6 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			const wire = await fetchConversationWire(sessionId, hostId, { afterSequence: floor, limit: REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT });
 			const tail = toSnapshot(wire);
 			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
-			// An older daemon ignores afterSequence and answers with a whole live page.
 			const merged = wire.afterSequence === floor && current?.pages.length ? mergeRemoteConversationTail(current.pages[0], tail, floor) : undefined;
 			if (merged && current) {
 				queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
@@ -484,7 +420,6 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			latest = await fetchConversationPage(sessionId, hostId);
 		}
 	} catch (error) {
-		// A host that did not answer already reads as offline. The alert is for one that did.
 		if (baseUrlForHost(hostId) && !HOST_UNREACHABLE_CODES.has(apiErrorCode(error))) {
 			queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
 		}
@@ -495,7 +430,6 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
 		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
 		const priorLive = previous.pages[0];
-		// The rows between these pages are unknown. Scrolling up reads them from here.
 		if (latest.oldestSequence > priorLive.latestSequence + 1) return { pages: [latest], pageParams: [undefined] };
 		const slidOut = latest.oldestSequence > priorLive.oldestSequence
 			? priorLive.items.filter((item) => item.sequence < latest.oldestSequence)
@@ -510,10 +444,6 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 
 const remoteConversationRefreshes = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
 
-/**
- * One refresh of a remote chat at a time, and one catch-up for everything that
- * changed while it ran, so a burst of events never stacks reads on the tunnel.
- */
 export function refreshRemoteConversationOnce(queryClient: QueryClient, sessionId: string, hostId: string): void {
 	let running = remoteConversationRefreshes.get(queryClient);
 	if (!running) remoteConversationRefreshes.set(queryClient, (running = new Map()));
@@ -529,16 +459,12 @@ export function refreshRemoteConversationOnce(queryClient: QueryClient, sessionI
 		do {
 			state.dirty = false;
 			try { await refreshRemoteConversation(queryClient, sessionId, hostId); }
-			catch { /* A later event or the polling fallback retries. */ }
+			catch { }
 		} while (state.dirty);
 		running.delete(key);
 	})();
 }
 
-/**
- * A cached local chat whose controller is ready or working. Such a chat learns
- * every change through events; one still starting up or waking does not.
- */
 export function conversationSettled(queryClient: QueryClient, sessionId: string, hostId?: string): boolean {
 	const state = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId))?.pages[0]?.controller.state;
 	return state === "ready" || state === "busy";
@@ -550,18 +476,9 @@ export function conversationQueryOptions(sessionId: string, hostId?: string) {
 		initialPageParam: undefined as number | undefined,
 		queryFn: ({ pageParam }) => fetchConversationPage(sessionId, hostId, pageParam),
 		getNextPageParam: (page) => (page.hasMoreBefore ? page.oldestSequence : undefined),
-		// A local chat changes only through events, which invalidate it even while
-		// it is closed, and a reconnect invalidates every chat. Opening an unchanged
-		// chat again therefore needs no request; refetching here reloaded every page
-		// it had. A remote chat refreshes its live page when it opens, and events
-		// refresh it while it is open, so a cached remote page is not refetched whole.
 		staleTime: Infinity,
 		...(hostId ? { refetchOnMount: false } : {}),
 		gcTime: 30 * 60_000,
-		// A mode mismatch is authoritative for this committed controller epoch, so
-		// retrying the same request cannot help and would leave the surface loading
-		// instead of explaining why there is no conversation. Only genuinely
-		// transient failures are retried.
 		retry: (attempt, error) => {
 			const code = apiErrorCode(error);
 			if (code && PERMANENT_CODES.has(code)) return false;
@@ -588,8 +505,6 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		select: selectConversationPages,
 	});
 	useEffect(() => {
-		// A cached remote page (an earlier visit, a prefetch, or the disk copy) shows
-		// at once; the open reads what changed since.
 		if (hostId && sessionId && queryClient.getQueryData(conversationQueryKey(sessionId, hostId))) {
 			refreshRemoteConversationOnce(queryClient, sessionId, hostId);
 		}
@@ -597,9 +512,6 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 
 	if (query.error && (!hostId || !query.data)) {
 		const code = apiErrorCode(query.error);
-		// The session is currently owned by Terminal UI (or its Chat controller is
-		// absent). A deliberate interface switch can change that later, but this
-		// request cannot, so explain it rather than retrying.
 		if (code === "SESSION_MODE_MISMATCH" || code === "CHAT_CONTROLLER_NOT_READY") {
 			return {
 				isLoading: false,
@@ -624,24 +536,19 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		isLoading: query.isLoading,
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
-		// A live refresh may be in flight; cancelling it would drop the newest
-		// page for good. The older page then loads on the next scroll or click.
 		loadOlder: () => {
 			void query.fetchNextPage({ cancelRefetch: false });
 		},
 	};
 }
 
-/** Drops what was cached from a session's outgoing agent once it switched. */
 async function refreshAfterProviderSwitch(queryClient: QueryClient, sessionId: string, hostId?: string) {
-	// Catalogs are keyed by AO session id, so the outgoing agent's go before the new one can show them.
 	clearConversationProviderCatalogs(queryClient, sessionId, hostId);
 	await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 	await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId, hostId) });
 	invalidateConversationProviderCatalogs(queryClient, sessionId, hostId);
 }
 
-/** Switches the session's agent, then drops what was cached from the outgoing one. */
 export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
@@ -654,14 +561,12 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 			return data;
 		},
 		onSuccess: () => refreshAfterProviderSwitch(queryClient, sessionId, hostId),
-		// With no clear answer the daemon may have switched, so what it runs is read back.
 		onError: (error) => {
 			if (!(error instanceof ProviderSwitchFailed)) void refreshAfterProviderSwitch(queryClient, sessionId, hostId).catch(() => {});
 		},
 	});
 }
 
-/** Commands against a conversation. Each refetches the snapshot on success. */
 export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false) {
 	const queryClient = useQueryClient();
 	const restoreSession = useRestoreSession();
@@ -672,16 +577,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		queryFn: async (): Promise<ConversationDispatchTrackingBySession> => ({}),
 		initialData: {} as ConversationDispatchTrackingBySession,
 		enabled: false,
-		// Dispatched work is a safety boundary for Chat -> Terminal. Keep both the
-		// in-flight request and its accepted turn until the exact durable row is
-		// observed, even if the Chat surface is unmounted.
-		//
-		// This cache is intentionally renderer-lifetime, not persisted. A full reload
-		// starts with work unknown (which already requires a policy choice) and then a
-		// fresh daemon snapshot; any later direct switch is drain-only, whose daemon
-		// gate atomically rejects new intake or drains work admitted before it. Without
-		// a durable request-reconciliation API, persisting an unresolved HTTP sentinel
-		// would instead leave sessions permanently and incorrectly busy.
 		gcTime: Number.POSITIVE_INFINITY,
 		staleTime: Number.POSITIVE_INFINITY,
 	}).data;
@@ -703,9 +598,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	);
 	const invalidate = useCallback(() => {
 		if (sessionId) {
-			// Refresh in the background. Awaiting the refetch in mutation onSuccess kept
-			// steer, queue, and approval mutations pending after the daemon had already
-			// answered, which left the composer spinner stuck and blocked further sends.
 			void invalidateSession(sessionId).catch(() => {});
 		}
 	}, [invalidateSession, sessionId]);
@@ -766,14 +658,12 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		}: ConversationSendMutationInput) => {
 			const { providerSwitch, switchDisplay: _switchDisplay, ...message } = input;
 			if (providerSwitch) {
-				// One request: the daemon switches, then sends, without waiting on a refetch here.
 				const refresh = () => void refreshAfterProviderSwitch(queryClient, targetSessionId, hostId).catch(() => {});
 				const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/provider-switch", {
 					params: { path: { sessionId: targetSessionId } },
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: { ...providerSwitch, idempotencyKey: crypto.randomUUID(), message: { ...message, clientMessageId } },
 				}).catch((failure: unknown) => {
-					// No answer: the daemon may have switched, so what it runs is read back.
 					refresh();
 					throw failure;
 				});
@@ -789,10 +679,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				{
 					params: { path: { sessionId: targetSessionId } },
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
-					// A stable id per attempt makes a retry idempotent: the daemon
-					// answers `duplicate` instead of opening a second provider turn.
 					body: { ...message, clientMessageId },
-					// ponytail: no timeout with attachments, whose upload can outlast it on a slow tunnel; scale it by size if those hang too.
 					signal: input.attachments?.length ? undefined : AbortSignal.timeout(SEND_ANSWER_TIMEOUT_MS),
 				},
 			);
@@ -809,18 +696,12 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					acceptedTurnId,
 				);
 				if (data.state === "queued") {
-					// A queued row is already durable and did not start a new provider turn,
-					// so keeping the accepted-turn safety marker would block the next queue
-					// entry until a refetch observes this id — and the composer would swallow
-					// further Enter presses with no error.
 					releaseConversationDispatch(
 						queryClient,
 						stateKey(variables.targetSessionId),
 						variables.clientMessageId,
 					);
 				} else {
-					// A refetch can briefly return the pre-send snapshot. Keep the accepted
-					// turn locally visible as pending until that exact durable row arrives.
 					acceptConversationDispatch(
 						queryClient,
 						stateKey(variables.targetSessionId),
@@ -829,9 +710,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					);
 				}
 			} else {
-				// A duplicate response intentionally has no turn id: the daemon already
-				// delivered this idempotency key, so there is no exact new row this
-				// renderer can wait to observe. Release only this request's sentinel.
 				releaseConversationDispatch(
 					queryClient,
 					stateKey(variables.targetSessionId),
@@ -843,10 +721,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					variables.clientMessageId,
 				);
 			}
-			// Delivery is already authoritative at this point. Refresh in the
-			// background so a slow conversation refetch cannot keep send.isPending
-			// true and leave the composer disabled or spinning after the daemon
-			// accepted the message.
 			void refreshSessionInBackground(variables.targetSessionId);
 		},
 		onError: (_error, variables) => {
@@ -916,9 +790,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (error) throw error;
 		},
 		onSuccess: (_data, variables) => refreshSessionInBackground(variables.targetSessionId),
-		// A failed interrupt (e.g. CHAT_NO_ACTIVE_TURN) means the cached turn
-		// state is wrong. Refetch so the UI discovers the real state instead of
-		// keeping a Working bar the user cannot dismiss.
 		onError: (_error, variables) => refreshSessionInBackground(variables.targetSessionId),
 	});
 
@@ -926,14 +797,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	const resume = useMutation({
 		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
 		mutationFn: async () => {
-			// The daemon refuses to resume a terminated session. Only a restore, which
-			// also brings its worktree back, can start it again.
 			if (terminated) {
 				const restored = await restoreSession(sessionId as string, hostId);
 				if (restored.status !== "success") throw new Error(restored.message);
-				// Stay pending until the chat reads the live agent: its cached snapshot
-				// still says stopped, which would flash as a crash. The composer stays
-				// locked meanwhile, so nothing here can strand a send.
 				await invalidateSession(sessionId as string).catch(() => {});
 				return undefined;
 			}
@@ -957,20 +823,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 	});
 
-	/**
-	 * Summarize earlier history to reclaim context.
-	 *
-	 * Without this a long conversation eventually cannot accept another turn at all:
-	 * every turn re-sends the history, so context fills on its own. It is the
-	 * difference between a session that works for an hour and one that works for a
-	 * day.
-	 *
-	 * The daemon answers as soon as the provider accepts, and the provider then does
-	 * the work over the next several seconds. So there is nothing to show on success
-	 * beyond the refetch — the reclaim arrives on the timeline as its own entry,
-	 * which is where it belongs, since it is durable history rather than the answer
-	 * to one request.
-	 */
 	const compact = useMutation({
 		mutationFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
@@ -985,8 +837,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		onSuccess: invalidate,
 	});
 
-	// The picker stays usable while a pick is being saved, so picks can overlap. Each is
-	// written after the one before it, and only the newest one's answer is kept.
 	const settingsWrites = useRef({ queue: Promise.resolve() as Promise<unknown>, latest: 0 });
 	const setSnapshotSettings = (targetSessionId: string, settings: TurnSettings) =>
 		queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(targetSessionId, hostId), (current) =>
@@ -996,7 +846,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			} : current,
 		);
 	const chooseSettings = useMutation({
-		// Shown at once, so the next pick builds on this one rather than on the saved settings.
 		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });
 			setSnapshotSettings(targetSessionId, settings);
@@ -1009,7 +858,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 					{
 						params: { path: { sessionId: targetSessionId } },
 						body: settings,
-						// Later picks wait behind this one, so it must not hang forever.
 						signal: AbortSignal.timeout(CONFIG_OPTION_WRITE_TIMEOUT_MS),
 					},
 				);
@@ -1022,8 +870,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		onError: (_error, { targetSessionId }, context) => {
 			if (context?.write === settingsWrites.current.latest) refreshSessionInBackground(targetSessionId);
 		},
-		// Confirm from the daemon's response before enabling Remember. A background
-		// snapshot refetch can be slow; it must not expose the previous permission.
 		onSuccess: async (settings, { targetSessionId }, context) => {
 			if (context?.write !== settingsWrites.current.latest) return;
 			const queryKey = conversationQueryKey(targetSessionId, hostId);
@@ -1033,24 +879,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 	});
 
-	/**
-	 * Undo back to a turn. This asks the agent to forget, not the timeline to hide:
-	 * the daemon discards the history provider-side and marks its own rows to match,
-	 * so a success has to be followed by a refetch rather than an optimistic edit —
-	 * how much was discarded is the daemon's answer, not the client's guess.
-	 */
-	/**
-	 * Guidance delivered INTO the running turn.
-	 *
-	 * Not interrupt-then-resend. An interrupt throws the turn away — its reasoning,
-	 * its half-finished tool calls, the command it has running — and the resend starts
-	 * from a cold start. A steer leaves all of it in place: the turn keeps its id, its
-	 * context and its in-flight work, and settles `completed`.
-	 *
-	 * Refusals are ordinary outcomes here, not failures, and they are kept apart
-	 * because the advice differs: one means "send this as a new message instead", one
-	 * means "wait and try again", and one means this harness cannot do it at all.
-	 */
 	const steer = useMutation({
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
@@ -1288,7 +1116,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		[queryClient, sessionId, stateSessionId],
 	);
 	const sendTargetsCurrentSession = send.variables?.targetSessionId === sessionId;
-	// A refused agent switch shows in the composer's own switch notice, not again as a send error.
 	const sendCode = apiErrorCode(send.error);
 	const sendError = sendTargetsCurrentSession && !(send.error instanceof ProviderSwitchFailed) && sendCode !== undefined && !HOST_UNREACHABLE_CODES.has(sendCode) ? send.error : undefined;
 	const interruptTargetsCurrentSession = interrupt.variables?.targetSessionId === sessionId;
@@ -1308,9 +1135,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 						? `Use the attached ${input.excerpts.length} chat excerpt(s) as context`
 						: input.text),
 				};
-			// React cannot disable the composer until its next render. Claim the
-			// session in the shared registry synchronously so two Enter events in the
-			// same tick cannot both cross the transport boundary.
 			if (!claimConversationDispatch(queryClient, stateSessionId as string, clientMessageId, "send")) {
 				return Promise.reject(new Error("Conversation work is already being sent for this session."));
 			}
@@ -1326,7 +1150,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		acknowledgeAcceptedTurn,
 		localEchos: stateSessionId ? localEchosBySession[stateSessionId] ?? [] : [],
 		acknowledgeLocalEcho,
-		/** Shows a message at once while the agent switch it waits for runs. */
 		echoBeforeSend: (
 			echo: Pick<ConversationLocalEcho, "clientMessageId" | "text" | "excerpts">,
 			providerSwitch?: { targetHarness: string; display: ConversationSwitchDisplay },
@@ -1338,7 +1161,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				providerSwitch: switchEcho(providerSwitch?.display, providerSwitch?.targetHarness, newestCachedSequence(queryClient, sessionId, hostId)),
 			});
 		},
-		/** Takes back a message shown before a send that never went out. */
 		dropEcho: (clientMessageId: string) => {
 			if (stateSessionId) releaseConversationLocalEcho(queryClient, stateSessionId, clientMessageId);
 		},
@@ -1356,7 +1178,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		compact: () => compact.mutateAsync(),
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
 		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
-		/** Saves settings the agent only reads when it starts, then restarts it. The conversation is resumed, not replaced. */
 		chooseStartSettings: async (settings: TurnSettings) => {
 			await chooseSettings.mutateAsync({ targetSessionId: sessionId as string, settings });
 			const { error } = await clientForSessionHost(hostId).POST(
@@ -1366,26 +1187,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (error) throw apiErrorException(error);
 			await resume.mutateAsync();
 		},
-		/** A compaction is in flight provider-side and takes seconds, so it reads as
-		 *  its own state rather than folding into the generic busy flag, which also
-		 *  gates the composer. */
 		compacting: compact.isPending,
-		/**
-		 * The daemon refuses a compaction while a turn is running, because the
-		 * provider would silently discard that turn to make room. Surfaced so the
-		 * control can explain itself instead of appearing to do nothing.
-		 */
 		compactUnavailable:
 			apiErrorCode(compact.error) === "CHAT_COMPACTION_UNSUPPORTED"
 				? "This agent cannot compact its history"
 				: apiErrorCode(compact.error) === "CHAT_COMPACTION_BUSY"
 					? "Stop the current turn before compacting"
 					: undefined,
-		/** Rolls back to a turn, restoring the files a preview listed when given
-		 *  that preview's planId. */
 		rollback: (turnId: string, filePlanId?: string) => rollback.mutateAsync({ turnId, filePlanId }),
-		/** What rolling back to a turn would restore on disk, read fresh each time
-		 *  the confirmation opens because the worktree keeps changing. */
 		previewRollback: async (turnId: string) => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/rollback",
@@ -1497,17 +1306,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		editQueuedTurnPendingTurnId: editQueuedTurn.isPending ? editQueuedTurn.variables?.turnId : undefined,
 		sendPending: send.isPending && sendTargetsCurrentSession,
 		steerPending: steer.isPending,
-		/**
-		 * Why the last steer was refused, or undefined. Only the retryable and
-		 * send-instead cases produce copy: `CHAT_STEER_UNSUPPORTED` is answered by
-		 * hiding the control entirely, since the harness will never accept one.
-		 */
 		steerRefusal: steerRefusal(steer.error),
-		/**
-		 * A harness that cannot steer at all. Learned from the daemon's typed refusal
-		 * rather than from the harness name, and sticky for the life of the surface: the
-		 * answer is a property of the driver, not of the moment.
-		 */
 		steerUnsupported: apiErrorCode(steer.error) === "CHAT_STEER_UNSUPPORTED",
 		busy:
 			trackedDispatch?.state === "pending" ||
@@ -1530,13 +1329,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	};
 }
 
-/**
- * What to tell the user about a refused steer.
- *
- * The daemon's own message is preferred for the retryable case because only it knows
- * which kind of turn refused — a compaction and a review read differently, and
- * "cannot be steered" alone leaves the user with nothing to do next.
- */
 function steerRefusal(error: unknown): string | undefined {
 	const code = apiErrorCode(error);
 	if (!code) return undefined;
@@ -1550,7 +1342,6 @@ function steerRefusal(error: unknown): string | undefined {
 			return `${/[.!?]$/.test(message) ? message : `${message}.`} Try again once it finishes.`;
 		}
 		case "CHAT_STEER_UNSUPPORTED":
-			// Answered by hiding the control, so there is nothing to say.
 			return undefined;
 		case "CHAT_STEER_TEXT_REQUIRED":
 			return "Type something to steer with.";
@@ -1600,18 +1391,10 @@ function editNonAcceptance(error: unknown): ChatEditOutcome | undefined {
 	return { status: "not-accepted", reason: apiErrorMessage(error) };
 }
 
-/**
- * The models the provider offers for this session.
- *
- * Fetched from the live conversation rather than a table in AO, and only while a
- * session is open: the catalog depends on the account's entitlements, which the
- * provider knows and AO does not.
- */
 export function useConversationModels(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const query = useQuery({
 		queryKey: conversationModelsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
-		// The catalog changes on the scale of provider releases, not turns.
 		staleTime: 5 * 60 * 1000,
 		retry: false,
 		queryFn: async () => {
@@ -1626,27 +1409,12 @@ export function useConversationModels(sessionId: string | undefined, enabled: bo
 		},
 	});
 	return {
-		// An empty list is a real answer: this agent offers no choice, so the picker
-		// hides itself rather than showing an error the user cannot act on.
 		models: query.data ?? [],
 		isLoading: query.isLoading,
-		/**
-		 * The provider has answered, with models or an error. Until then a chat can
-		 * show the saved catalog; afterwards the live answer decides, so an agent
-		 * that cannot list or switch models never offers saved choices.
-		 */
 		loaded: query.isFetched,
 	};
 }
 
-/**
- * Provider-owned controls advertised for this live session.
- *
- * Unlike AO's durable turn settings, these are an ACP catalog whose values and
- * available choices may change after any selection (choosing a model can replace
- * the effort choices, for example). The daemon therefore returns the complete
- * catalog after every mutation and that response replaces the cache atomically.
- */
 function offersValue(options: ChatConfigOption[], optionId: string, value: ChatConfigOptionValue): boolean {
 	const option = options.find((candidate) => candidate.id === optionId);
 	if (!option) return false;
@@ -1656,29 +1424,16 @@ function offersValue(options: ChatConfigOption[], optionId: string, value: ChatC
 export function useConversationConfigOptions(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const queryKey = conversationConfigOptionsQueryKey(sessionId ?? "", hostId);
-	// Set for as long as a selection is being written. Cancelling in-flight reads
-	// only closes half the race — without also holding the poll, the interval can
-	// start a fresh read mid-write whose pre-change catalog lands after the
-	// mutation's own result and reverts the picker the user just used.
 	const [writing, setWriting] = useState(false);
-	// Picks can overlap while one is being saved: each is written after the one before
-	// it, and only the newest one's answer replaces the catalog.
 	const writes = useRef({
 		queue: Promise.resolve() as Promise<unknown>,
 		latest: 0,
 		open: 0,
-		// Writes still in flight per option, so a failed one is only undone when no later pick replaced it.
 		pendingByOption: new Map<string, number>(),
-		// The catalog the agent last returned, which a queued pick is checked against before it is sent.
 		confirmed: undefined as ChatConfigOption[] | undefined,
 	});
-	// Set once a "not running" answer has asked for a fresh snapshot, so a poll that
-	// keeps getting it does not reload the conversation every time.
 	const snapshotRefreshed = useRef(false);
 	const readEnabled = Boolean(sessionId) && enabled;
-	// Turned off means the snapshot caught up, so each enabled period starts fresh.
-	// Reset on turning on too: a read still in flight when it turned off can answer
-	// "not running" after the first reset and set the guard again.
 	useEffect(() => {
 		snapshotRefreshed.current = false;
 	}, [readEnabled]);
@@ -1686,9 +1441,6 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		queryKey,
 		enabled: readEnabled,
 		retry: false,
-		// ACP can push a replacement catalog when one option changes. Until the
-		// renderer consumes daemon change events, a light poll keeps those updates
-		// visible without coupling them to conversation history polling.
 		refetchInterval: writing ? false : CONFIG_OPTIONS_POLL_INTERVAL_MS,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
@@ -1698,9 +1450,6 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 				},
 			);
 			if (error) {
-				// The snapshot that enabled this read says the controller is up and the
-				// daemon says it is not, so the snapshot is out of date. Read it again:
-				// its real state turns this read off and names the state in the chat.
 				if (apiErrorCode(error) === "CHAT_CONTROLLER_NOT_READY" && !snapshotRefreshed.current) {
 					snapshotRefreshed.current = true;
 					if (hostId) refreshRemoteConversationOnce(queryClient, sessionId as string, hostId);
@@ -1713,10 +1462,6 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		},
 	});
 	const mutation = useMutation({
-		// Held across the whole write, paired with the cancel below: `onMutate`
-		// runs before the request and `onSettled` after the result is committed,
-		// so no poll can start or land inside that window.
-		// The picked value shows at once; the agent's (possibly slow) reply brings what depends on it.
 		onMutate: async ({ optionId, value }) => {
 			writes.current.open += 1;
 			writes.current.pendingByOption.set(optionId, (writes.current.pendingByOption.get(optionId) ?? 0) + 1);
@@ -1728,13 +1473,11 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 			return { previous, write: ++writes.current.latest, controllerEpoch: conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId)) };
 		},
 		onError: (_error, { optionId }, context) => {
-			// A switch since the pick replaced the list; the old agent's must not come back.
 			if (!context?.previous || context.controllerEpoch !== conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId))) return;
 			if (context.write === writes.current.latest) {
 				queryClient.setQueryData(queryKey, writes.current.confirmed ?? context.previous);
 				return;
 			}
-			// Later picks are still being saved: undo only this option, unless one of them set it again.
 			if ((writes.current.pendingByOption.get(optionId) ?? 0) > 1) return;
 			const before = context.previous.find((option) => option.id === optionId);
 			if (before) queryClient.setQueryData<ChatConfigOption[]>(queryKey, (current) => current?.map((option) => option.id === optionId ? before : option));
@@ -1771,14 +1514,8 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 
 	async function writeConfigOption(optionId: string, value: ChatConfigOptionValue) {
 		const controllerEpoch = conversationProviderCatalogEpoch(queryClient, sessionUiKey(sessionId as string, hostId));
-		// A pick made while an earlier one was saving was chosen from the old catalog. If the
-		// agent's answer to that earlier pick dropped the option or this value (a new model
-		// with other efforts), sending it would only be refused, so it is dropped instead.
 		const confirmed = writes.current.confirmed;
 		if (confirmed && !offersValue(confirmed, optionId, value)) return { controllerEpoch, options: confirmed };
-		// A read already in flight when the user picked would otherwise land
-		// after this mutation's setQueryData and put the pre-change catalog
-		// back, reverting the picker to the old value until the next poll.
 		await queryClient.cancelQueries({ queryKey });
 		const { data, error } = await clientForSessionHost(hostId).PATCH(
 			"/api/v1/sessions/{sessionId}/conversation/config-options/{configId}",
@@ -1790,7 +1527,6 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 					},
 				},
 				body: value,
-				// An agent that never answers must not hold the settings locked.
 				signal: AbortSignal.timeout(CONFIG_OPTION_WRITE_TIMEOUT_MS),
 			},
 		);
@@ -1800,13 +1536,6 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		return { controllerEpoch, options };
 	}
 
-	// The read is enabled from the snapshot's controller state, and a cached snapshot
-	// can still say "ready" after the controller went away (an open whose cached page
-	// is shown while it refetches, or a sleeping agent). The daemon then answers 409
-	// CHAT_CONTROLLER_NOT_READY: that is the controller's state, which the refreshed
-	// snapshot and its controller notice report, not a failure of this catalog. Left
-	// unloaded, the bar keeps the saved settings until the poll or the next enabled
-	// read brings the catalog. A failed pick is still always shown.
 	const readError = query.error && !query.data && apiErrorCode(query.error) !== "CHAT_CONTROLLER_NOT_READY"
 		? query.error
 		: undefined;
@@ -1820,35 +1549,11 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 	};
 }
 
-/**
- * The named skills this session's provider will accept.
- *
- * Read from the live conversation for the same reason the model catalog is: skills
- * come from the user's own agent config and from the repo's own files, so a list AO
- * held would offer commands that no longer exist and hide ones just written.
- *
- * An empty list is a real answer and the composer depends on being able to tell it
- * from a failure — with no skills, `/` has to stay an ordinary character rather than
- * opening an empty menu.
- */
 export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const query = useQuery({
 		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
-		// ACP agents publish this catalog asynchronously and may replace it later.
-		// Polling also keeps Codex project skills current without introducing a
-		// second renderer event channel solely for ephemeral provider metadata. The
-		// catalog can be large and changes rarely, so it intentionally refreshes much
-		// less often than conversation state.
 		staleTime: SKILLS_POLL_INTERVAL_MS,
-		// The catalog is only served once a live controller owns the session; before
-		// then the daemon answers 409 CHAT_CONTROLLER_NOT_READY. A cached "ready"
-		// snapshot can outlive the controller (a restart or interface switch), so a
-		// mounted query keeps `enabled` true and would re-request the catalog on every
-		// interval, turning one readiness conflict into a steady 409 stream. Stop the
-		// poll while that conflict stands; readiness returning re-enables the query
-		// (the controller-gated `enabled`) or invalidates it, which refetches once and
-		// resumes polling on success.
 		refetchInterval: (query) =>
 			apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY"
 				? false
@@ -1868,26 +1573,12 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 	return { skills: query.data ?? [], isLoading: query.isLoading };
 }
 
-/**
- * Every path in the session worktree, for @-mention completion.
- *
- * The daemon already serves this list — tracked and untracked, non-ignored — so the
- * whole set is fetched once and filtered in the composer. That keeps a keystroke
- * from costing a round trip, which is what makes the menu feel like part of typing.
- * The endpoint caps itself, and `truncated` is respected rather than presented as a
- * complete list.
- */
 export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: boolean, hostId?: string) {
 	const queryClient = useQueryClient();
 	const query = useQuery({
 		queryKey: hostId ? ["remote-workspace-file-paths", hostId, sessionId ?? ""] : ["workspace-file-paths", sessionId ?? ""],
 		enabled: Boolean(sessionId) && enabled,
-		// The agent edits files as it works, so this goes stale; refetched on demand
-		// rather than polled, since a mention menu that is a minute out of date is
-		// still useful and polling every session would not be.
 		staleTime: 30 * 1000,
-		// Local file changes arrive through the workspace event subscription below.
-		// Remote sessions use their owning daemon instead of the local event stream.
 		refetchInterval: (query) => hostId && !isMissingWorkspaceError(query.state.error) ? 30 * 1000 : false,
 		retry: false,
 		queryFn: async () => {
@@ -1899,8 +1590,6 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 			});
 			if (error) throw recordWorkspaceResult(sessionId as string, hostId, error, response, "Unable to load workspace files", epoch);
 			return {
-				// A deleted path cannot be read, so offering it would insert a
-				// reference the agent then fails to resolve.
 				paths: (data?.files ?? [])
 					.filter((file) => file.status !== "deleted")
 					.map((file) => file.path),
@@ -1919,20 +1608,12 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 	};
 }
 
-/**
- * Write staged images into the session worktree.
- *
- * Returns the worktree-relative paths the agent can open. The composer names those
- * paths in the message it sends, which is how an image reaches an agent whose
- * conversation carries text: the same thing spawn does for the opening brief.
- */
 export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
 	return useCallback(
 		async (attachments: { mimeType: string; data: string; name?: string }[]): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
-				// The daemon names staged files itself; only the bytes go.
 				body: { attachments: attachments.map(({ mimeType, data }) => ({ mimeType, data })) },
 			});
 			if (error) throw error;
@@ -1942,15 +1623,6 @@ export function useStageAttachments(sessionId: string | undefined, hostId?: stri
 	);
 }
 
-/* -------------------------------------------------------------------------- */
-
-/**
- * Merge messages and activities into one ordered timeline.
- *
- * They are separate tables because they have different write patterns, but the
- * reader sees one sequence — which is why sequence is conversation-scoped rather
- * than per-table.
- */
 export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	const items: ConversationItem[] = [
 		...(wire.messages ?? []).map(toMessage),
@@ -1977,15 +1649,10 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			planMode: wire.settings?.planMode || undefined,
 			autoCompactWindow: wire.settings?.autoCompactWindow || undefined,
 		},
-		// Absent means the provider has not reported, which the meter renders as
-		// nothing rather than as an empty bar.
 		usage: wire.usage ? { ...wire.usage } : undefined,
 		rateLimits: wire.rateLimits ? { ...wire.rateLimits } : undefined,
 		compactedAt: wire.compactedAt ?? undefined,
 		title: wire.title || undefined,
-		// What actually answered, as opposed to what was asked for. Kept separate from
-		// `settings` all the way through, because collapsing them would lose exactly the
-		// fact worth showing.
 		modelReroute: wire.modelReroute
 			? {
 					fromModel: wire.modelReroute.fromModel || undefined,
@@ -2008,8 +1675,6 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 					reauthReason: wire.account.reauthReason || undefined,
 				}
 			: undefined,
-		// The provider's lifecycle view, kept apart from `controller` on purpose: they
-		// answer different questions and routinely disagree.
 		threadState: wire.threadState
 			? {
 					status: (wire.threadState.status as ThreadStatus | undefined) || undefined,
@@ -2068,8 +1733,6 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			requestedAt: turn.requestedAt,
 			startedAt: turn.startedAt ?? undefined,
 			completedAt: turn.completedAt ?? undefined,
-			// Left undefined when the daemon reported none, so the surface can tell
-			// "this turn changed nothing" from "this agent does not report diffs".
 			diff: turn.diff
 				? {
 						files: (turn.diff.files ?? []).map((file) => ({
@@ -2085,9 +1748,6 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 			artifacts: turn.artifacts?.files?.length
 				? turn.artifacts.files.map((file) => ({ path: file.path, status: file.status }))
 				: undefined,
-			// Current state of the turn rather than history: the provider re-sends the
-			// whole plan on every revision and the daemon overwrites this, which is why
-			// the surface reads it here instead of walking the timeline for plan rows.
 			plan: turn.plan
 				? {
 						explanation: turn.plan.explanation || undefined,
@@ -2149,7 +1809,6 @@ function applyQueuedTurnOrderToPages(
 	};
 }
 
-/** Merge the newest live page with any older pages loaded on demand. */
 export function mergeConversationPages(pages: ConversationSnapshot[]): ConversationSnapshot | undefined {
 	const live = pages[0];
 	if (!live) return undefined;
@@ -2157,10 +1816,7 @@ export function mergeConversationPages(pages: ConversationSnapshot[]): Conversat
 
 	const items = new Map<string, ConversationItem>();
 	const turns = new Map<string, ConversationSnapshot["turns"][number]>();
-	// Each page carries only its own batches' deliveries.
 	const deliveries = new Map<string, NonNullable<ConversationSnapshot["batchedDeliveries"]>[number]>();
-	// Walk oldest to newest so the live page wins when a row changed after an older
-	// page was fetched (for example, a streamed message settling).
 	for (const page of [...pages].reverse()) {
 		for (const item of page.items) items.set(`${item.kind}:${item.id}`, item);
 		for (const turn of page.turns) turns.set(turn.id, turn);
@@ -2225,9 +1881,6 @@ function toActivity(wire: WireActivity): ConversationActivity {
 		summary: wire.summary,
 		requestId: wire.requestId,
 		providerItemId: wire.providerItemId,
-		// The provider's own offered decisions, carried through the detail payload.
-		// Rendering from this is what keeps the card from drawing a button the
-		// provider will reject.
 		decisions: readDecisions(detail),
 		inputResponse: wire.activityKind === "user_input" ? readInputResponse(detail) : undefined,
 		detail: detail as ConversationActivity["detail"],

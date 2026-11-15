@@ -10,15 +10,8 @@ import (
 
 const claudeTerminalSurfaceLookbackLines = 12
 
-// claudeComposerChromeLabels names provider-owned text that Claude Code paints
-// into the current composer row with default styling (observed during drain
-// failures: a bare "Claude Code" product label between the composer rules).
-// It is not human input and must not fail an interface switch.
 var claudeComposerChromeLabels = []string{"Claude Code"}
 
-// InspectTerminalSurface reports independent work and composer facts from
-// Claude Code's current TUI. Claude may keep its composer visible while a turn
-// is active, so an empty composer never overrides an active footer marker.
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
 	composer := terminalui.LastBorderedPromptComposerState(output, "❯", claudeComposerChromeLabels...)
 	if composer == terminalui.ComposerUnknown {
@@ -37,13 +30,9 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 		observation.Work = ports.TerminalSurfaceWorkIdle
 	}
 	if observation.Work == ports.TerminalSurfaceWorkIdle && observation.Composer == ports.TerminalComposerEmpty {
-		// The banner must still be visible, with only the current composer and
-		// no provider response. An empty composer alone also follows real work.
 		header, prompts, response := false, 0, false
 		for _, line := range terminalui.PlainTerminalLines(output) {
 			line = strings.TrimSpace(line)
-			// The startup mascot animation can overwrite the brand separator
-			// in the captured viewport while leaving both banner labels intact.
 			if strings.Contains(line, "Claude") && strings.Contains(line, "Code v") {
 				header = true
 			}
@@ -70,9 +59,6 @@ func claudeComposerState(state terminalui.ComposerState) ports.TerminalComposerS
 	}
 }
 
-// Claude renders its active status immediately above the current composer (or
-// above the composer's upper border). Transcript and draft text may quote the
-// same words, so only that structurally current row is eligible as work chrome.
 func claudeActiveFrameVisible(output string) bool {
 	lines := terminalui.PlainTerminalLines(output)
 	prompt := -1
@@ -101,10 +87,6 @@ func claudeActiveFrameVisible(output string) bool {
 		return true
 	}
 
-	// Claude 2.1.232 moved the interrupt hint out of the spinner row and into
-	// the provider footer below the composer. Require the lower composer border
-	// before accepting that footer so transcript or wrapped draft text cannot
-	// make an idle surface look active.
 	lowerBorder := -1
 	for i := prompt + 1; i < len(lines); i++ {
 		if strings.TrimSpace(lines[i]) == "" {
@@ -151,12 +133,6 @@ func claudeHorizontalRule(line string) bool {
 	return true
 }
 
-// A Claude confirmation menu has a provider-owned numbered selection row, at
-// least one sibling option, and keyboard instructions beneath it. The question
-// text and footer wording change between Claude releases and between command,
-// file-edit, and user-question prompts, so structure is the stable boundary.
-// Transcript prose may quote any of these words, but it does not form this
-// current selection frame around the last prompt marker.
 func claudeConfirmationFrameVisible(output string) bool {
 	lines := terminalui.PlainTerminalLines(output)
 	if claudeNavigationMenuFrameVisible(lines) {
@@ -169,9 +145,6 @@ func claudeConfirmationFrameVisible(output string) bool {
 		if !strings.HasPrefix(line, "❯") {
 			continue
 		}
-		// The selected option must be Claude's last prompt-shaped row. If a
-		// normal composer appears below an old menu, that menu is transcript,
-		// not a request that is still waiting.
 		if !claudeNumberedOption(strings.TrimSpace(strings.TrimPrefix(line, "❯"))) {
 			return false
 		}
@@ -217,12 +190,6 @@ func claudeConfirmationFrameVisible(output string) bool {
 	return optionCount >= 2 && hasHint
 }
 
-// Some provider-owned menus, including Claude 2.1.233's /permissions screen,
-// keep the selection in a search control instead of prefixing an option with
-// the normal prompt marker. Treat the current boxed control + numbered option
-// + navigation footer as a pending decision. Requiring the footer to be the
-// last visible row keeps an older, completed menu above a composer from being
-// mistaken for live provider state.
 func claudeNavigationMenuFrameVisible(lines []string) bool {
 	hint := -1
 	for i := len(lines) - 1; i >= 0; i-- {

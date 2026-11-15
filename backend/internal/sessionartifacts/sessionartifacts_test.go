@@ -96,7 +96,7 @@ func TestSkips_AgreesWithList(t *testing.T) {
 	paths := map[string]bool{
 		"plan.md":                    false,
 		"charts/q4.html":             false,
-		"notes/.versions/kept.md":    false, // Only the top level holds versions.
+		"notes/.versions/kept.md":    false,
 		".versions/plan.md/1.txt":    true,
 		"node_modules/rxjs/index.js": true,
 		"charts/node_modules/x/a.js": true,

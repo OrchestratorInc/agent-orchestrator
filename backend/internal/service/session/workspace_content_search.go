@@ -15,16 +15,12 @@ import (
 )
 
 const (
-	workspaceContentResults = 8
-	// Bound output as well as matches per file so common queries cannot
-	// consume unbounded memory before ranking.
+	workspaceContentResults     = 8
 	workspaceContentOutputLimit = 512 << 10
 	workspaceContentTimeout     = 5 * time.Second
 	workspaceContentWindow      = 160
 )
 
-// WorkspaceContentHit is the best matching line of one file. Text wraps each
-// match in \x02 and \x03.
 type WorkspaceContentHit struct {
 	Path string
 	Line int
@@ -37,10 +33,6 @@ type workspaceGrepRoot struct {
 	noIndex     bool
 }
 
-// SearchWorkspaceContent returns the best line of each file whose lines hold
-// every word of query (case-insensitive, any order), best first. When no line
-// holds every word, lines holding the most words win, so one misspelled word
-// does not empty the result.
 func (s *Service) SearchWorkspaceContent(ctx context.Context, id domain.SessionID, query string) ([]WorkspaceContentHit, error) {
 	terms := domain.SearchTerms(strings.ToLower(query))
 	if len(terms) == 0 {
@@ -62,9 +54,6 @@ func (s *Service) SearchWorkspaceContent(ctx context.Context, id domain.SessionI
 	return rankWorkspaceContent(hits, terms, strings.ToLower(strings.Join(strings.Fields(query), " "))), nil
 }
 
-// workspaceGrepRoots lists the directories that hold a session's files, the
-// set the Files browser lists: one worktree, each repository of a workspace
-// project, or a scratch folder (no Git index).
 func (s *Service) workspaceGrepRoots(ctx context.Context, id domain.SessionID) ([]workspaceGrepRoot, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
@@ -120,9 +109,6 @@ func grepWorkspaceRoots(ctx context.Context, roots []workspaceGrepRoot, terms []
 	return hits, nil
 }
 
-// grepWorkspace runs git grep over tracked and untracked, non-ignored text
-// files, ranking among the first three matching lines in each file.
-// all=true requires every term on the line.
 func grepWorkspace(ctx context.Context, root workspaceGrepRoot, terms []string, all bool) ([]WorkspaceContentHit, error) {
 	args := []string{"grep", "--null", "--line-number", "--ignore-case", "--fixed-strings", "-I", "--no-color", "--max-count=3"}
 	if root.noIndex {
@@ -147,7 +133,6 @@ func grepWorkspace(ctx context.Context, root workspaceGrepRoot, terms []string, 
 	stderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	// Exit 1 with nothing on stderr is git grep's "no match".
 	noMatch := func() bool { return cmd.ProcessState.ExitCode() == 1 && stderr.buffer.Len() == 0 }
 	if err := cmd.Run(); err != nil && !stdout.filled && (cmd.ProcessState == nil || !noMatch()) {
 		return nil, classifyWorkspaceGitError(ctx, root.dir, "grep", err, strings.TrimSpace(stderr.buffer.String()))
@@ -172,7 +157,6 @@ func grepWorkspace(ctx context.Context, root workspaceGrepRoot, terms []string, 
 	return hits, nil
 }
 
-// grepOutput keeps the first limit bytes, then stops git.
 type grepOutput struct {
 	buffer bytes.Buffer
 	limit  int
@@ -190,17 +174,10 @@ func (w *grepOutput) Write(p []byte) (int, error) {
 	return w.buffer.Write(p)
 }
 
-// workspaceDefinitionPattern captures the name a line declares (Go methods
-// included): "func (s *Service) Search(" declares Search.
 var workspaceDefinitionPattern = regexp.MustCompile(`^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:pub\s+)?(?:func|type|const|let|var|class|interface|enum|struct|def|function|fn)\s+(?:\([^)]*\)\s*)?\*?([A-Za-z_$][\w$]*)`)
 
-// Tests, generated code, translations, vendored code and lockfiles.
 var workspaceLowValuePattern = regexp.MustCompile(`(^|/)(tests?|__tests__|testdata|gen|generated|i18n|locales|vendor|node_modules)/|[._](test|spec|gen|generated|min)\.|(\.lock|-lock\.json|-lock\.yaml|(^|/)go\.sum)$`)
 
-// rankWorkspaceContent keeps each file's best line and orders files by it.
-// A line scores for each term it holds (more at a word start), the query as
-// typed, declaring a name that holds a term, and a file name that holds a
-// term; low-value paths and minified lines rank lower.
 func rankWorkspaceContent(hits []WorkspaceContentHit, terms []string, phrase string) []WorkspaceContentHit {
 	type scored struct {
 		hit   WorkspaceContentHit
@@ -255,8 +232,6 @@ func rankWorkspaceContent(hits []WorkspaceContentHit, terms []string, phrase str
 	return out
 }
 
-// termAtWordStart reports whether term starts a word or a camelCase part in
-// text, so "form" in "FormField" beats "form" in "uniforms".
 func termAtWordStart(text, lower, term string) bool {
 	for at, next := 0, 0; next >= 0; at += next + 1 {
 		next = strings.Index(lower[at:], term)
@@ -277,8 +252,6 @@ func isWordByte(b byte) bool {
 
 func isUpperByte(b byte) bool { return b >= 'A' && b <= 'Z' }
 
-// markedWindow trims a line to a window starting just before its first match
-// and wraps each match in \x02 and \x03.
 func markedWindow(text string, terms []string) string {
 	text = strings.TrimSpace(text)
 	lower := asciiLower(text)
@@ -320,7 +293,6 @@ func markedWindow(text string, terms []string) string {
 	return out.String()
 }
 
-// asciiLower lowercases ASCII only, so byte offsets match the original text.
 func asciiLower(text string) string {
 	return strings.Map(func(r rune) rune {
 		if r >= 'A' && r <= 'Z' {

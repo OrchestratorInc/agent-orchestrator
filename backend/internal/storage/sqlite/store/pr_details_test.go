@@ -60,8 +60,6 @@ func TestPRDetailsRoundTripWithTheObservation(t *testing.T) {
 	}
 }
 
-// A pass that did not fetch details (metadata-only, local-only, or another
-// provider) must not wipe what an earlier pass stored.
 func TestPRObservationWithoutDetailsKeepsTheStoredOnes(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -84,9 +82,6 @@ func TestPRObservationWithoutDetailsKeepsTheStoredOnes(t *testing.T) {
 	}
 }
 
-// The stored details remember the provider updatedAt of the observation that
-// carried them. A pass that skipped them moves the PR's updatedAt but not
-// theirs, which is what makes the next poll read them again.
 func TestPRDetailsUpdatedAtFollowsTheObservationThatCarriedThem(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -127,8 +122,6 @@ func TestPRDetailsUpdatedAtFollowsTheObservationThatCarriedThem(t *testing.T) {
 	}
 }
 
-// Details stored without a provider updatedAt (a provider that reports none,
-// or rows from before it was recorded) read as due a read, never as current.
 func TestPRDetailsUpdatedAtIsUnknownWithoutAProviderUpdatedAt(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -158,7 +151,6 @@ func TestPRDetailsAreReplacedByTheNextObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The PR lost its labels and reviewers and its description was emptied.
 	pr.Details = &domain.PullRequestDetails{ObservedAt: now.Add(time.Minute)}
 	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatal(err)
@@ -195,9 +187,6 @@ func TestPRDescriptionKeepsMarkdownAndNonASCII(t *testing.T) {
 	}
 }
 
-// Details read outside an observation (a PR merged before the observer read
-// them) are stored on their own, with their updatedAt, and the PR's row is
-// left as it was.
 func TestSavePRDetailsStoresThemWithoutTouchingThePR(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

@@ -9,10 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// settingsStore adapts the SQLite store to the settings service's Store.
-//
-// The two define their own snapshot types so neither depends on the other's; this
-// is the one place that knows both, keeping the translation in the wiring.
 type settingsStore struct{ store *sqlite.Store }
 
 var _ settingssvc.Store = settingsStore{}

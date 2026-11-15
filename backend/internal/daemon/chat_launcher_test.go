@@ -13,8 +13,6 @@ import (
 )
 
 func TestChatLauncherForwardsSessionRelay(t *testing.T) {
-	// Exercise the production wrapper through the required launcher interface,
-	// rather than a fake that accidentally supplies extra methods.
 	store := sqlitetest.MustOpen(t)
 	created, err := store.CreateSession(context.Background(), domain.SessionRecord{
 		Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
@@ -32,8 +30,6 @@ func TestChatLauncherForwardsSessionRelay(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id, err := launcher.RelaySessionChatTurn(context.Background(), created.ID, "direction", tc.clientID, tc.options)
-			// No controller was started: reaching this service error proves forwarding
-			// across the real wrapper instead of failing with session relay unavailable.
 			if id != "" || !errors.Is(err, chatsvc.ErrNoController) {
 				t.Fatalf("relay = (%q, %v), want chat service's missing-controller error", id, err)
 			}

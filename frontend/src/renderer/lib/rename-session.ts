@@ -8,8 +8,6 @@ import { settingsQueryKey, type Settings } from "../hooks/useSettings";
 import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../hooks/useWorkspaceQuery";
 import type { WorkspaceSession } from "../types/workspace";
 
-/** Update a session's display name via the daemon (PATCH /sessions/{id}). The
- *  daemon enforces the same 100-character limit as the spawn `--name` flag. */
 export async function renameSession(sessionId: string, displayName: string, hostId?: string): Promise<void> {
 	const { error, response } = await (hostId ? clientForSessionHost(hostId) : apiClient).PATCH("/api/v1/sessions/{sessionId}", {
 		params: { path: { sessionId } },
@@ -21,10 +19,6 @@ export async function renameSession(sessionId: string, displayName: string, host
 	}
 }
 
-/**
- * Renames a Cloud session on the control plane, so everyone in it sees the new
- * title. It shows in the cached session lists at once and then refreshes them.
- */
 export async function renameCloudSession(
 	queryClient: QueryClient,
 	session: Pick<WorkspaceSession, "id"> & { cloud: { orgId: string } },

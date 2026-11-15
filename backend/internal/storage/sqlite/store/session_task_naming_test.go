@@ -6,9 +6,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A launched task's background rename applies only while the row still
-// carries the temporary branch it renamed, so it never overwrites another move.
-// A session stopped meanwhile still records the branch Git holds.
 func TestSetSessionTaskBranchRequiresTemporaryBranch(t *testing.T) {
 	s := newTestStore(t)
 	seedProject(t, s, "mer")
@@ -52,8 +49,6 @@ func TestSetSessionTaskBranchRequiresTemporaryBranch(t *testing.T) {
 	}
 }
 
-// The session row and its repository rows move together, or not at all, and
-// each repository row takes the branch its own checkout holds.
 func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
 	s := newTestStore(t)
 	seedProject(t, s, "mer")
@@ -87,7 +82,6 @@ func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
 			t.Fatalf("row %s = %q, want %q", row.RepoName, row.Branch, held[row.RepoName])
 		}
 	}
-	// A root an undo put back on the temporary branch has nothing to guard.
 	other, err := s.CreateSession(t.Context(), rec)
 	if err != nil {
 		t.Fatal(err)
@@ -100,8 +94,6 @@ func TestSetSessionTaskBranchMovesWorktreeRows(t *testing.T) {
 	}
 }
 
-// A full-row write from a read taken before the rename puts back neither the
-// temporary branch nor the old title, and the rename alone publishes a change.
 func TestTaskRenameSurvivesStaleRowWrites(t *testing.T) {
 	s := newTestStore(t)
 	ctx := t.Context()

@@ -17,9 +17,6 @@ type fakeProvider struct {
 	credsErr       error
 	fetchCallCount int
 	fetchErr       error
-	// partialResults, when non-nil, overrides the default FetchPullRequests
-	// behavior. The provider returns these observations (as-is) plus fetchErr.
-	// This simulates a partial batch: some Fetched=true, some Fetched=false.
 	partialResults []ports.SCMObservation
 	identity       ports.SCMIdentity
 	identityErr    error
@@ -194,11 +191,6 @@ func TestSCMCredentialsAvailable_NoneTrue(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_PropagatesError verifies that when the only provider
-// fails, no top-level error is returned. Instead, the failed observation carries
-// the provider's error in obs.Error for per-observation routing (review finding #5
-// / Ticket 02). Previously, the all-fail path returned an arbitrary map-iteration
-// error, causing the observer to apply one error classification to all refs.
 func TestFetchPullRequests_PropagatesError(t *testing.T) {
 	fetchErr := errors.New("github down")
 	gh := &fakeProvider{key: "github", fetchErr: fetchErr}
@@ -220,10 +212,6 @@ func TestFetchPullRequests_PropagatesError(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_OneProviderFailsOthersSucceed verifies that when one
-// provider fails, the other provider's successful observations are still
-// returned and no error suppresses them. A GitLab timeout
-// must not discard successful GitHub observations.
 func TestFetchPullRequests_OneProviderFailsOthersSucceed(t *testing.T) {
 	gh := &fakeProvider{key: "github", parseOK: true}
 	gl := &fakeProvider{key: "gitlab", parseOK: true, fetchErr: errors.New("gitlab timeout")}
@@ -240,18 +228,12 @@ func TestFetchPullRequests_OneProviderFailsOthersSucceed(t *testing.T) {
 	if len(obs) != 2 {
 		t.Fatalf("got %d observations, want 2", len(obs))
 	}
-	// GitHub observation must be present and correct despite GitLab failure.
 	if !obs[0].Fetched || obs[0].Provider != "github" || obs[0].PR.Number != 10 {
 		t.Errorf("obs[0] = %+v, want github/10 Fetched=true", obs[0])
 	}
-	// GitLab slot: the failing provider should leave a Fetched=false placeholder
-	// so the observer can reject it without advancing durable state.
 	if obs[1].Fetched {
 		t.Errorf("obs[1].Fetched = true, want false for failed gitlab fetch")
 	}
-	// Item 7: the failed-provider observation must carry the error as transient
-	// per-observation metadata so the observer can route it to cooldown or
-	// refresh-incomplete handling.
 	if obs[1].Error == nil {
 		t.Errorf("obs[1].Error = nil, want the gitlab failure error for observer routing")
 	}
@@ -263,10 +245,6 @@ func TestFetchPullRequests_OneProviderFailsOthersSucceed(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_FailedProviderErrorCarriedAsMetadata verifies that a
-// failed provider's error is attached to every failed-provider observation's
-// Error field (Item 7). The observer relies on this field to route rate-limit
-// errors to per-provider cooldown.
 func TestFetchPullRequests_FailedProviderErrorCarriedAsMetadata(t *testing.T) {
 	fetchErr := errors.New("gitlab 503")
 	gh := &fakeProvider{key: "github", parseOK: true}
@@ -282,11 +260,9 @@ func TestFetchPullRequests_FailedProviderErrorCarriedAsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v, want nil (one healthy provider)", err)
 	}
-	// GitHub obs: healthy, no error metadata.
 	if obs[0].Error != nil {
 		t.Errorf("obs[0].Error = %v, want nil for healthy github observation", obs[0].Error)
 	}
-	// Both GitLab obs must carry the same failure error.
 	if !errors.Is(obs[1].Error, fetchErr) {
 		t.Errorf("obs[1].Error = %v, want gitlab failure %v", obs[1].Error, fetchErr)
 	}
@@ -301,10 +277,6 @@ func TestFetchPullRequests_FailedProviderErrorCarriedAsMetadata(t *testing.T) {
 	}
 }
 
-// TestSCMCredentialsAvailable_SurfacesFirstRealError (Item 8) verifies that when
-// no provider reports usable credentials, the first real error is returned
-// (not nil) so CheckCredentialsOnce retries on the next poll rather than
-// definitively disabling SCM observation.
 func TestSCMCredentialsAvailable_SurfacesFirstRealError(t *testing.T) {
 	credErr := errors.New("github probe 503")
 	gh := &fakeProvider{key: "github", credsAvailable: false, credsErr: credErr}
@@ -323,14 +295,6 @@ func TestSCMCredentialsAvailable_SurfacesFirstRealError(t *testing.T) {
 	}
 }
 
-// TestSCMCredentialsAvailable_FirstErrorWinsWhenMultipleProvidersFail (Item 8)
-// verifies that when MULTIPLE providers report transient credential errors, the
-// FIRST provider's error (in registration order) is returned — not the second's,
-// and not nil. This closes the gap left by SurfacesFirstRealError, which only has
-// one provider with an error: the "first" in "first real error" is only truly
-// tested when a second error exists to lose to the first. Against the pre-fix
-// code (which discarded errors via `_ = err` and returned `(false, nil)`), this
-// test fails at the `err == nil` assertion.
 func TestSCMCredentialsAvailable_FirstErrorWinsWhenMultipleProvidersFail(t *testing.T) {
 	ghErr := errors.New("github probe 503")
 	glErr := errors.New("gitlab probe 502")
@@ -353,9 +317,6 @@ func TestSCMCredentialsAvailable_FirstErrorWinsWhenMultipleProvidersFail(t *test
 	}
 }
 
-// TestSCMCredentialsAvailable_HealthyProviderSuppressesError verifies that a
-// healthy provider's success still wins even when another provider returned a
-// transient credential error (the composite must report available=true, nil).
 func TestSCMCredentialsAvailable_HealthyProviderSuppressesError(t *testing.T) {
 	gh := &fakeProvider{key: "github", credsAvailable: false, credsErr: errors.New("github probe 503")}
 	gl := &fakeProvider{key: "gitlab", credsAvailable: true, credsErr: nil}
@@ -367,12 +328,6 @@ func TestSCMCredentialsAvailable_HealthyProviderSuppressesError(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_AllProvidersFail verifies that when ALL providers
-// fail, no top-level error is returned (Ticket 02). Each failed observation
-// carries its provider's error in obs.Error for per-observation routing.
-// Previously, the all-fail path returned an arbitrary map-iteration error,
-// causing the observer to apply one error classification to ALL refs across
-// ALL providers — e.g. treating a GitLab auth error as a GitHub rate-limit.
 func TestFetchPullRequests_AllProvidersFail(t *testing.T) {
 	ghErr := errors.New("github down")
 	glErr := errors.New("gitlab down")
@@ -391,7 +346,6 @@ func TestFetchPullRequests_AllProvidersFail(t *testing.T) {
 	if len(obs) != 2 {
 		t.Fatalf("got %d observations, want 2", len(obs))
 	}
-	// Each observation must carry its own provider's error, not an arbitrary one.
 	if !errors.Is(obs[0].Error, ghErr) {
 		t.Errorf("obs[0].Error = %v, want github failure %v", obs[0].Error, ghErr)
 	}
@@ -401,7 +355,6 @@ func TestFetchPullRequests_AllProvidersFail(t *testing.T) {
 	if obs[0].Fetched || obs[1].Fetched {
 		t.Errorf("all-fail observations must be Fetched=false")
 	}
-	// Ensure the errors are NOT cross-contaminated.
 	if errors.Is(obs[0].Error, glErr) {
 		t.Errorf("obs[0].Error = gitlab failure; must carry github's own error, not gitlab's")
 	}
@@ -410,14 +363,6 @@ func TestFetchPullRequests_AllProvidersFail(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_PartialBatchSingleProvider verifies that when a single
-// sub-provider returns partial results (some Fetched=true, some Fetched=false)
-// plus a non-nil error, the multi provider returns a nil top-level error (review
-// finding #5). The observer's chunk loop sees err == nil and processes each
-// observation individually — the Fetched=true one is persisted, the Fetched=false
-// one is routed via its .Error field. Without this fix, the single-group case
-// hits len(groupErrs) == len(groups) (1 == 1) and returns a top-level error,
-// causing the observer to discard ALL results including the Fetched=true one.
 func TestFetchPullRequests_PartialBatchSingleProvider(t *testing.T) {
 	fetchErr := errors.New("gitlab partial failure")
 	gl := &fakeProvider{
@@ -442,14 +387,12 @@ func TestFetchPullRequests_PartialBatchSingleProvider(t *testing.T) {
 	if len(obs) != 2 {
 		t.Fatalf("got %d observations, want 2", len(obs))
 	}
-	// The successful observation must be present.
 	if !obs[0].Fetched || obs[0].Provider != "gitlab" || obs[0].PR.Number != 10 {
 		t.Errorf("obs[0] = %+v, want gitlab/10 Fetched=true", obs[0])
 	}
 	if obs[0].Error != nil {
 		t.Errorf("obs[0].Error = %v, want nil for successful observation", obs[0].Error)
 	}
-	// The failed observation must be present with Fetched=false and carry the error.
 	if obs[1].Fetched {
 		t.Errorf("obs[1].Fetched = true, want false for failed ref")
 	}
@@ -458,13 +401,6 @@ func TestFetchPullRequests_PartialBatchSingleProvider(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_SingleProviderAllFail verifies that when a single
-// sub-provider returns all Fetched=false observations plus a non-nil error,
-// no top-level error is returned (Ticket 02). Each failed observation carries
-// the provider's error in obs.Error for per-observation routing. The observer's
-// per-observation routing at the !obs.Fetched branch classifies rate-limit
-// vs non-rate-limit per observation, and the "missing from chunk" loop calls
-// markRepoRefreshFailed for all Fetched=false observations.
 func TestFetchPullRequests_SingleProviderAllFail(t *testing.T) {
 	fetchErr := errors.New("gitlab down")
 	gl := &fakeProvider{key: "gitlab", parseOK: true, fetchErr: fetchErr}
@@ -492,10 +428,6 @@ func TestFetchPullRequests_SingleProviderAllFail(t *testing.T) {
 	}
 }
 
-// TestFetchPullRequests_TwoProvidersOneFailsOneSucceeds verifies that when two
-// providers are registered and one fully fails while the other fully succeeds,
-// the multi provider returns a nil top-level error and the healthy provider's
-// observations are present (review finding #5).
 func TestFetchPullRequests_TwoProvidersOneFailsOneSucceeds(t *testing.T) {
 	gh := &fakeProvider{key: "github", parseOK: true}
 	gl := &fakeProvider{key: "gitlab", parseOK: true, fetchErr: errors.New("gitlab down")}
@@ -512,19 +444,14 @@ func TestFetchPullRequests_TwoProvidersOneFailsOneSucceeds(t *testing.T) {
 	if len(obs) != 2 {
 		t.Fatalf("got %d observations, want 2", len(obs))
 	}
-	// GitHub observation must be present and correct despite GitLab failure.
 	if !obs[0].Fetched || obs[0].Provider != "github" || obs[0].PR.Number != 10 {
 		t.Errorf("obs[0] = %+v, want github/10 Fetched=true", obs[0])
 	}
-	// GitLab slot: Fetched=false placeholder with the error attached.
 	if obs[1].Fetched {
 		t.Errorf("obs[1].Fetched = true, want false for failed gitlab fetch")
 	}
 }
 
-// TestAuthenticatedIdentityForProvider_DelegatesToCorrectSubProvider verifies
-// that AuthenticatedIdentityForProvider resolves the identity from the
-// sub-provider matching the given key (finding #7).
 func TestAuthenticatedIdentityForProvider_DelegatesToCorrectSubProvider(t *testing.T) {
 	ghIdentity := ports.SCMIdentity{Login: "octocat", Human: true}
 	glIdentity := ports.SCMIdentity{Login: "gitlab-bot", Human: false}
@@ -549,9 +476,6 @@ func TestAuthenticatedIdentityForProvider_DelegatesToCorrectSubProvider(t *testi
 	}
 }
 
-// TestAuthenticatedIdentityForProvider_UnknownProviderReturnsError verifies
-// that requesting identity for an unregistered provider key returns an error
-// (finding #7).
 func TestAuthenticatedIdentityForProvider_UnknownProviderReturnsError(t *testing.T) {
 	gh := &fakeProvider{key: "github", identity: ports.SCMIdentity{Login: "octocat"}}
 	m := New(NamedProvider{Key: "github", Provider: gh})
@@ -562,15 +486,7 @@ func TestAuthenticatedIdentityForProvider_UnknownProviderReturnsError(t *testing
 	}
 }
 
-// TestFetchPullRequests_FailedPlaceholderCarriesHostAndRepo verifies that
-// Fetched=false placeholders created by the multi provider retain the Host
-// and Repo context of the ref they represent.
-// This test covers both placeholder sites: the unknown-provider branch and
-// the provider-returned-fewer-than-refs branch.
 func TestFetchPullRequests_FailedPlaceholderCarriesHostAndRepo(t *testing.T) {
-	// Case 1: unknown provider — the first placeholder construction site.
-	// When the only provider is unknown, the all-fail path returns a top-level
-	// error, but the placeholder is still constructed with Host/Repo.
 	m := New(NamedProvider{Key: "github", Provider: &fakeProvider{key: "github"}})
 
 	refs := []ports.SCMPRRef{
@@ -587,8 +503,6 @@ func TestFetchPullRequests_FailedPlaceholderCarriesHostAndRepo(t *testing.T) {
 		t.Errorf("obs[0].Repo = %q, want %q", obs[0].Repo, "owner/repo")
 	}
 
-	// Case 2: provider returns fewer observations than refs (the second site).
-	// Simulate by returning partial results: one obs for two refs.
 	gl := &fakeProvider{
 		key:      "gitlab",
 		parseOK:  true,
@@ -614,7 +528,6 @@ func TestFetchPullRequests_FailedPlaceholderCarriesHostAndRepo(t *testing.T) {
 		t.Errorf("obs2[1].Repo = %q, want %q", obs2[1].Repo, "group/proj")
 	}
 
-	// Case 3: Repo field empty — fallback to Owner + "/" + Name.
 	refs3 := []ports.SCMPRRef{
 		{Repo: ports.SCMRepo{Provider: "unknown", Host: "self-hosted.example", Owner: "myorg", Name: "myrepo"}, Number: 5},
 	}
@@ -628,8 +541,6 @@ func TestFetchPullRequests_FailedPlaceholderCarriesHostAndRepo(t *testing.T) {
 	}
 }
 
-// fakeHostScopedProvider wraps fakeProvider and adds per-host identity
-// resolution, simulating a GitLab provider with self-managed hosts.
 type fakeHostScopedProvider struct {
 	*fakeProvider
 	hostIdentities map[string]ports.SCMIdentity
@@ -648,10 +559,6 @@ func (f *fakeHostScopedProvider) AuthenticatedIdentityForHost(_ context.Context,
 	return ports.SCMIdentity{}, fmt.Errorf("no identity for host %q", host)
 }
 
-// TestAuthenticatedIdentityForProvider_DelegatesHostToSubProvider verifies
-// that the multi provider passes the host parameter through to host-scoped
-// sub-providers (GitLab), so a self-managed host gets the correct identity
-// (ticket 05).
 func TestAuthenticatedIdentityForProvider_DelegatesHostToSubProvider(t *testing.T) {
 	ghIdentity := ports.SCMIdentity{Login: "octocat", Human: true}
 	glDefault := ports.SCMIdentity{Login: "gl-dot-com-user", Human: true}
@@ -670,7 +577,6 @@ func TestAuthenticatedIdentityForProvider_DelegatesHostToSubProvider(t *testing.
 		NamedProvider{Key: "gitlab", Provider: gl},
 	)
 
-	// GitHub ignores host — delegates to AuthenticatedIdentity.
 	got, err := m.AuthenticatedIdentityForProvider(context.Background(), "github", "github.com")
 	if err != nil {
 		t.Fatalf("github: unexpected error: %v", err)
@@ -682,7 +588,6 @@ func TestAuthenticatedIdentityForProvider_DelegatesHostToSubProvider(t *testing.
 		t.Errorf("github should not call host-scoped method; got calls %v", gl.hostCalls)
 	}
 
-	// GitLab gitlab.com (empty host) — delegates to AuthenticatedIdentityForHost("").
 	got, err = m.AuthenticatedIdentityForProvider(context.Background(), "gitlab", "")
 	if err != nil {
 		t.Fatalf("gitlab default: unexpected error: %v", err)
@@ -691,7 +596,6 @@ func TestAuthenticatedIdentityForProvider_DelegatesHostToSubProvider(t *testing.
 		t.Errorf("gitlab default identity = %+v, want %+v", got, glDefault)
 	}
 
-	// GitLab self-managed host — delegates to AuthenticatedIdentityForHost("gitlab.internal").
 	got, err = m.AuthenticatedIdentityForProvider(context.Background(), "gitlab", "gitlab.internal")
 	if err != nil {
 		t.Fatalf("gitlab self-managed: unexpected error: %v", err)
@@ -700,7 +604,6 @@ func TestAuthenticatedIdentityForProvider_DelegatesHostToSubProvider(t *testing.
 		t.Errorf("gitlab self-managed identity = %+v, want %+v", got, glSelf)
 	}
 
-	// Verify the host parameter was passed through correctly.
 	if len(gl.hostCalls) != 2 || gl.hostCalls[0] != "" || gl.hostCalls[1] != "gitlab.internal" {
 		t.Errorf("host calls = %v, want [\"\" \"gitlab.internal\"]", gl.hostCalls)
 	}

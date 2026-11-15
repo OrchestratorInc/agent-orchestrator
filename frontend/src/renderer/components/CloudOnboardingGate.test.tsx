@@ -26,7 +26,6 @@ describe("CloudOnboardingGate", () => {
 	it("drops every Cloud chat's events, history window and step log on sign-out", () => {
 		const queryClient = seeded();
 		const view = render(<QueryClientProvider client={queryClient}><CloudOnboardingGate /></QueryClientProvider>);
-		// Signed in, the chats stay cached.
 		expect(queryClient.getQueryData(cloudChatEventsKey("org-1", "session-1"))).toBeDefined();
 		state.status = "unauthenticated";
 		view.rerender(<QueryClientProvider client={queryClient}><CloudOnboardingGate /></QueryClientProvider>);

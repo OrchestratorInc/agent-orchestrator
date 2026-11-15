@@ -11,15 +11,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// clearKimchiAuthEnv unsets KIMCHI_API_KEY so env-var auth state doesn't leak
-// between tests.
 func clearKimchiAuthEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("KIMCHI_API_KEY", "")
 }
 
-// withTempHome sets HOME to a temp dir so tests don't read the real
-// ~/.config/kimchi/config.json. Returns the temp dir.
 func withTempHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -27,8 +23,6 @@ func withTempHome(t *testing.T) string {
 	return home
 }
 
-// writeKimchiGlobalConfig writes content to ~/.config/kimchi/config.json under
-// the temp HOME. Returns the config path.
 func writeKimchiGlobalConfig(t *testing.T, home, content string) string {
 	t.Helper()
 	configPath := filepath.Join(home, ".config", "kimchi", "config.json")
@@ -40,10 +34,6 @@ func writeKimchiGlobalConfig(t *testing.T, home, content string) string {
 	}
 	return configPath
 }
-
-// ---------------------------------------------------------------------------
-// kimchiConfigAuthStatus — pure config-file probe (no binary dependency)
-// ---------------------------------------------------------------------------
 
 func TestConfigAuthStatusAuthorizedFromAPIKey(t *testing.T) {
 	home := withTempHome(t)
@@ -159,10 +149,6 @@ func TestConfigAuthStatusUnknownWhenNonStringKey(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// kimchiExtractAPIKey — unit test for the field extractor
-// ---------------------------------------------------------------------------
-
 func TestExtractAPIKey(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -191,13 +177,9 @@ func TestExtractAPIKey(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Plugin.AuthStatus — integration of binary + env + config
-// ---------------------------------------------------------------------------
-
 func TestAuthStatusAuthorizedFromEnvVar(t *testing.T) {
 	clearKimchiAuthEnv(t)
-	withTempHome(t) // ensure no real config file is read
+	withTempHome(t)
 	t.Setenv("KIMCHI_API_KEY", "env-key-789")
 	plugin := &Plugin{resolvedBinary: "kimchi"}
 
@@ -242,7 +224,7 @@ func TestAuthStatusUnknownFromConfigWithoutKey(t *testing.T) {
 
 func TestAuthStatusUnknownWhenNoEnvAndNoConfig(t *testing.T) {
 	clearKimchiAuthEnv(t)
-	withTempHome(t) // no config file under temp home
+	withTempHome(t)
 	plugin := &Plugin{resolvedBinary: "kimchi"}
 
 	got, err := plugin.AuthStatus(context.Background())
@@ -269,7 +251,6 @@ func TestAuthStatusEnvVarPrecedenceOverConfig(t *testing.T) {
 	if got != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("AuthStatus = %q, want %q", got, ports.AgentAuthStatusAuthorized)
 	}
-	// The launch uses the variable, so the check must not name the config.
 	if want := domain.EnvironmentSource("KIMCHI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey); evidence.Identity() != want {
 		t.Fatalf("evidence = %+v, want %+v", evidence.Identity(), want)
 	}
@@ -290,11 +271,6 @@ func TestAuthStatusContextCanceled(t *testing.T) {
 func TestAuthStatusUnknownWhenBinaryNotFound(t *testing.T) {
 	clearKimchiAuthEnv(t)
 	withTempHome(t)
-	// Plugin with no resolved binary: kimchiBinary calls ResolveKimchiBinary.
-	// On machines without kimchi installed (CI), this returns ErrAgentBinaryNotFound
-	// → (Unknown, nil). On dev machines where kimchi IS installed, the binary
-	// resolves and the test falls through to config — so we accept either Unknown
-	// (binary not found) or Unknown (no config file under temp home).
 	plugin := &Plugin{}
 
 	got, err := plugin.AuthStatus(context.Background())

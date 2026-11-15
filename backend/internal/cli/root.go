@@ -1,5 +1,3 @@
-// Package cli implements the user-facing ao command. It stays thin: commands
-// discover the local daemon, call its loopback HTTP API, and format output.
 package cli
 
 import (
@@ -23,17 +21,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// Execute runs the ao CLI with process stdio.
 func Execute() error {
 	return executeWithDeps(DefaultDeps(), os.Args[1:])
 }
 
 func executeWithDeps(deps Deps, args []string) error {
 	deps = deps.withDefaults()
-	// A configured self-hosted agent browser has its own command interface, so
-	// `ao browser` must reach it before Cobra parses desktop-only commands
-	// (AO also pins its own executable first on session PATHs, so a shell
-	// alias or wrapper cannot intercept it there).
 	if remote, rest, err := remoteBrowserForward(os.Getenv, args); remote != nil || err != nil {
 		if err != nil {
 			return err
@@ -49,21 +42,13 @@ func executeWithDeps(deps Deps, args []string) error {
 	return err
 }
 
-// usageError marks a command-line misuse (bad flag, wrong arg count). It lets
-// the process entrypoint return exit code 2 for usage errors versus 1 for
-// runtime failures, matching the convention CLIs are scripted against.
 type usageError struct{ err error }
 
 func (e usageError) Error() string { return e.err.Error() }
 func (e usageError) Unwrap() error { return e.err }
 
-// exitDataDirLocked is the exit code of a daemon that gave up waiting for
-// another AO process to release its data dir: sysexits EX_TEMPFAIL, since the
-// start can succeed once that process exits.
 const exitDataDirLocked = 75
 
-// ExitCode maps a CLI error to a process exit code: 2 for usage errors, 75 when
-// another AO process owns the data dir, 1 for any other failure, 0 for success.
 func ExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -78,8 +63,6 @@ func ExitCode(err error) int {
 	return 1
 }
 
-// Deps holds the small set of side effects the CLI needs. Tests replace these
-// functions without reaching into process-global state.
 type Deps struct {
 	In  io.Reader
 	Out io.Writer
@@ -95,17 +78,12 @@ type Deps struct {
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
-	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
-	// httptest without mutating package-global state.
-	DoctorGitHubRESTBase string
-	// DoctorGitLabRESTBase lets tests point the doctor GitLab token probe at
-	// httptest without mutating package-global state.
-	DoctorGitLabRESTBase string
-	Now                  func() time.Time
-	Sleep                func(time.Duration)
+	DoctorGitHubRESTBase  string
+	DoctorGitLabRESTBase  string
+	Now                   func() time.Time
+	Sleep                 func(time.Duration)
 }
 
-// DefaultDeps returns production dependencies.
 func DefaultDeps() Deps {
 	return Deps{
 		In:                    os.Stdin,
@@ -200,7 +178,6 @@ func (d Deps) withDefaults() Deps {
 	return d
 }
 
-// NewRootCommand builds a testable root command.
 func NewRootCommand(deps Deps) *cobra.Command {
 	deps = deps.withDefaults()
 	ctx := &commandContext{deps: deps}
@@ -223,8 +200,6 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.SetOut(deps.Out)
 	root.SetErr(deps.Err)
 	root.CompletionOptions.DisableDefaultCmd = true
-	// Tag flag-parse failures as usage errors so the entrypoint can exit 2 for
-	// misuse versus 1 for runtime failures. Subcommands inherit this func.
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
 		return usageError{err}
 	})
@@ -282,10 +257,6 @@ func shouldEmitCLIInvocation(cmd *cobra.Command) bool {
 		return false
 	}
 	switch commandPath {
-	// "ao daemon"/"ao start" are supervisor-driven bootstrapping, and
-	// "ao completion"/"ao help" are shell setup and self-documentation.
-	// "ao pty-host", "ao browser-host", "ao agent-process", and "ao mcp" are internal runtime
-	// processes. None reflect user activity.
 	case "ao triage", "ao daemon", "ao start", "ao completion", "ao help", "ao pty-host", "ao chat-host", "ao browser-host", "ao unreal-provider", "ao codex-login", "ao claude-login", "ao agent-process", "ao agent-process supervise", "ao mcp":
 		return false
 	default:
@@ -325,9 +296,6 @@ func (c *commandContext) emitCLIUsageError(ctx context.Context, args []string, e
 }
 
 func usageErrorCommand(args []string) (string, string) {
-	// Only tokens that match registered subcommands may enter the reported
-	// path: anything past the deepest match is user data (session names,
-	// prompts, orchestrator names) and must never ride into telemetry.
 	current := NewRootCommand(Deps{})
 	tokens := []string{"ao"}
 	for _, arg := range args {

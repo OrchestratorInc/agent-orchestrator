@@ -24,9 +24,6 @@ const (
 //go:embed assets/ao-activity.ts
 var v2PluginSource string
 
-// GetAgentHooks installs the v2 activity plugin and shared using-ao skill. The
-// v1 and v2 plugins cannot safely load together, so a marker-verified v1 plugin
-// is removed before the v2 artifact is written. Foreign files are never removed.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -63,8 +60,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// UninstallHooks removes only marker-verified v2 artifacts and the shared
-// marker-verified using-ao skill.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -84,7 +79,6 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 	return nil
 }
 
-// AreHooksInstalled reports whether the v2 path contains AO's v2 marker.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err

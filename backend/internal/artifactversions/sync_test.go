@@ -29,7 +29,6 @@ func TestSnapshotRecordsAnEditStillInsideTheSettleWindow(t *testing.T) {
 		t.Fatalf("Snapshot sum = %q, latest = %q, want the kept content's %q", sum, vs[0].SHA256, want)
 	}
 
-	// Content already kept is not recorded again, and its sum is still returned.
 	if sum, err := h.cap.Snapshot(h.ctx, h.sess, "plan.md"); err != nil || sum != sha256Hex("second") {
 		t.Fatalf("second Snapshot = %q, %v, want the latest version's sum", sum, err)
 	}
@@ -50,7 +49,6 @@ func TestSyncRecordsASettledEditWithoutWaitingForTheObserver(t *testing.T) {
 	h.tick()
 	h.write("plan.md", "second")
 
-	// The file was just written, so it may still be in flux.
 	h.cap.now = func() time.Time { return h.mtime.Add(SettleWindow / 2) }
 	if err := h.cap.Sync(h.ctx, h.sess, "plan.md"); err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -68,7 +66,6 @@ func TestSyncRecordsASettledEditWithoutWaitingForTheObserver(t *testing.T) {
 		t.Fatalf("versions after settling = %+v, want a second, agent-written one", vs)
 	}
 
-	// Syncing again, or an observer tick, adds nothing.
 	if err := h.cap.Sync(h.ctx, h.sess, "plan.md"); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
@@ -79,13 +76,11 @@ func TestSyncRecordsASettledEditWithoutWaitingForTheObserver(t *testing.T) {
 	}
 }
 
-// A turn start keeps every artifact as it is then, with no settle window, so
-// a fork of that turn can copy the artifacts as they were.
 func TestSnapshotSessionKeepsEveryFileNow(t *testing.T) {
 	h := newHarness(t)
 	h.write("report.md", "turn one")
 	h.write("notes/todo.md", "a list")
-	h.cap.now = func() time.Time { return h.mtime } // both still inside the settle window
+	h.cap.now = func() time.Time { return h.mtime }
 	if err := h.cap.SnapshotSession(h.ctx, h.sess); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +90,6 @@ func TestSnapshotSessionKeepsEveryFileNow(t *testing.T) {
 	if vs := h.versions("notes/todo.md"); len(vs) != 1 {
 		t.Fatalf("notes/todo.md versions = %+v", vs)
 	}
-	// Unchanged content is not recorded twice.
 	if err := h.cap.SnapshotSession(h.ctx, h.sess); err != nil {
 		t.Fatal(err)
 	}

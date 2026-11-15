@@ -14,20 +14,11 @@ import { Pressable } from "./ui/pressable";
 const circleClassName =
 	"inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-micro font-semibold leading-none text-muted-foreground ring-2";
 
-/**
- * The people in a shared session as overlapping circles, at most two then
- * "+N", whoever is writing to the agent ringed in the working color. Hovering
- * lists everyone and what they are doing; with onActivate the circles are a
- * button.
- */
 export function SessionPeopleStack({ people, list = people, me, onActivate, ringClassName = "ring-surface" }: {
-	/** Who the circles show. */
 	people: readonly SessionPerson[];
-	/** Who the hover list names; the circles' people by default. */
 	list?: readonly SessionPerson[];
 	me?: string;
 	onActivate?: () => void;
-	/** The ring that separates overlapping circles, matched to the surface behind them. */
 	ringClassName?: string;
 }) {
 	const { t } = useTranslation();
@@ -93,7 +84,6 @@ export function SessionPeopleStack({ people, list = people, me, onActivate, ring
 	);
 }
 
-/** The sign-in photo, with initials when it is absent or cannot load. */
 function SessionPersonAvatar({ person }: { person: SessionPerson }) {
 	const [broken, setBroken] = useState(false);
 	return person.avatarUrl && !broken ? (
@@ -107,15 +97,6 @@ function SessionPersonAvatar({ person }: { person: SessionPerson }) {
 	) : personInitials(person.name);
 }
 
-/**
- * The session header's sharing control, as Google Docs has it: one Share
- * button that opens the share dialog, which holds people and teams, their
- * access, General access and Copy link. While someone else has the session
- * open it shows who is there as circles instead, which open the same dialog
- * for the owner; a guest only sees who is there. The whole project is shared
- * from the dialog or from Project settings. An orchestrator is never shared on
- * its own: its Share shares the whole project.
- */
 export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent, shareProject = false }: {
 	orgId: string;
 	projectId: string;
@@ -123,9 +104,7 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 	canShare: boolean;
 	sessionName?: string;
 	projectName?: string;
-	/** The session is a Cloud standalone agent's: shared on its own, never as a project. */
 	standaloneAgent?: boolean;
-	/** The session is the project's orchestrator: Share opens the whole project, with no session to switch to. */
 	shareProject?: boolean;
 }) {
 	const { t } = useTranslation();

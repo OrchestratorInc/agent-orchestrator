@@ -12,12 +12,6 @@ import { cn } from "../lib/utils";
 import { sessionAgentExited, type WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 
-/**
- * Relaunches an agent that exited inside a still-live session. Distinct from
- * restore, which revives a TERMINATED row: this keeps the worktree, terminal
- * identity, and native conversation. Self-gating, so the inspector Summary and
- * the terminal strip can both mount it unconditionally.
- */
 export function ResumeAgentControl({
 	className,
 	containerClassName,
@@ -32,8 +26,6 @@ export function ResumeAgentControl({
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const canResume = useCanResumeAgent(session, hostId);
-	// A Cloud session's exited agent starts again in its live worker, through
-	// the control plane rather than this machine's daemon.
 	const canResumeCloud = Boolean(session.cloud) && sessionAgentExited(session);
 	const { client: cloudClient } = useCloudCp(Boolean(session.cloud));
 	const resuming = useIsMutating({ mutationKey: ["resume-agent", hostId ?? "local", session.id] }) > 0;
@@ -68,9 +60,6 @@ export function ResumeAgentControl({
 		},
 	});
 
-	// A deleted Cloud session re-provisions through the control plane
-	// (useRestoreSession); one whose agent exited restarts it there, never
-	// through this machine's daemon, which has never heard of it.
 	if (!canResume && !canResumeCloud) return null;
 
 	const error = resume.error instanceof Error ? resume.error.message : null;

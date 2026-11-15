@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// The usage summary keeps count as direct human Chat messages and adds the
-// other human sends and a per-client split, all drained and reset together.
 func TestUsageMessageSummaryCountsSurfacesSteersAndSends(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -60,7 +58,6 @@ func TestUsageMessageSummaryCountsSurfacesSteersAndSends(t *testing.T) {
 		t.Fatalf("after drain = %+v, err=%v; every counter must reset", more, err)
 	}
 
-	// A session with only a steer still drains: it is a returning person.
 	if err := s.RecordUsageHumanSend(ctx, session.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +171,6 @@ func TestUsagePRClosedOutcomeMergedViaAndDetail(t *testing.T) {
 	if _, mergedBefore, _ := s.WorkerPRUsageHistory(ctx); !mergedBefore {
 		t.Fatal("reported merge not visible as history")
 	}
-	// merged_via is frozen once the merge is reported.
 	if err := s.RecordWorkerPRMergedVia(ctx, merged.URL, "desktop"); err != nil {
 		t.Fatal(err)
 	}
@@ -202,10 +198,6 @@ func TestUsagePRDiscardMarksPendingCloses(t *testing.T) {
 	}
 }
 
-// A close observed while usage recording is off is consumed at that write, on
-// both the insert path (first sighting) and the conflict path (already
-// tracked), so re-enabling without a discard pass exports nothing from the off
-// interval.
 func TestUsagePRCloseObservedWhileDisabledIsNeverPending(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -238,7 +230,6 @@ func TestUsagePRCloseObservedWhileDisabledIsNeverPending(t *testing.T) {
 		return closes
 	}
 
-	// Conflict path: tracked and reported while enabled, closed while disabled.
 	tracked := domain.PullRequest{URL: "https://github.com/org/repo/pull/10", SessionID: worker.ID, Provider: "github",
 		Host: "github.com", Repo: "org/repo", Number: 10, ProviderID: "PR_10", UpdatedAt: now}
 	write(tracked)
@@ -253,11 +244,10 @@ func TestUsagePRCloseObservedWhileDisabledIsNeverPending(t *testing.T) {
 	tracked.Closed = true
 	write(tracked)
 
-	// Insert path: first seen, already closed, while disabled.
 	write(domain.PullRequest{URL: "https://github.com/org/repo/pull/11", SessionID: worker.ID, Provider: "github",
 		Host: "github.com", Repo: "org/repo", Number: 11, ProviderID: "PR_11", Closed: true, UpdatedAt: now})
 
-	allowed = true // no DiscardPendingWorkerPRUsage in between
+	allowed = true
 	if closes := pending(); len(closes) != 0 {
 		t.Fatalf("closes from the disabled interval pending: %v", closes)
 	}

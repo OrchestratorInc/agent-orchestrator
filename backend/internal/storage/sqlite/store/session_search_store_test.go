@@ -16,8 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// sessionSearchFixture seeds one project, two sessions with distinct harnesses,
-// and one Chat conversation whose messages carry text a query can find.
 func sessionSearchFixture(t *testing.T) (*sqlite.Store, domain.ConversationRecord) {
 	t.Helper()
 	ctx := context.Background()
@@ -56,8 +54,6 @@ func sessionSearchFixture(t *testing.T) (*sqlite.Store, domain.ConversationRecor
 	return s, conversation
 }
 
-// matchExpression builds the FTS expression the same way the search box does,
-// so a store test exercises the real query shape rather than a hand-written one.
 func matchExpression(raw string) string {
 	return domain.ParseSessionSearchQuery(raw).MatchQuery
 }
@@ -188,9 +184,6 @@ func TestSearchSessionSearchDocsFiltersByDateRange(t *testing.T) {
 	}
 }
 
-// The FTS mirror is maintained by triggers, so a document removed from the
-// projection must stop matching. This is what makes a rollback or an edit
-// disappear from results rather than linger.
 func TestSearchSessionSearchDocsDropsDeletedDocuments(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -217,8 +210,6 @@ func TestSearchSessionSearchDocsDropsDeletedDocuments(t *testing.T) {
 	}
 }
 
-// A source with more documents than one delete batch is cleared in several
-// short transactions, and nothing of it is left.
 func TestDeleteSessionSearchDocsForSourceClearsInBatches(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
@@ -286,8 +277,6 @@ func TestSessionSearchSourcesTrackCursorAndState(t *testing.T) {
 	}
 }
 
-// The indexer reads conversation visibility through the same branch-aware query
-// the UI uses, so a cancelled turn's text never becomes searchable.
 func TestSessionSearchVisibleMessagesSkipDiscardedTurns(t *testing.T) {
 	s, conversation := sessionSearchFixture(t)
 	ctx := context.Background()
@@ -324,9 +313,6 @@ func TestSessionSearchTouchedPathsReadsFileChangeActivities(t *testing.T) {
 	}
 }
 
-// Rewriting a document whose text did not change must not touch the FTS index.
-// Every pass over a source rewrites all of its documents; without the guard in
-// the text upsert, each one would cost an FTS delete and re-insert.
 func TestUpsertSessionSearchDocsLeavesUnchangedTextAlone(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -350,14 +336,12 @@ func TestUpsertSessionSearchDocsLeavesUnchangedTextAlone(t *testing.T) {
 	seedSearchDoc(t, s, doc)
 	before := ftsState()
 
-	// The same text in a later pass: the metadata row moves, the index does not.
 	doc.IndexedAt = testNow.Add(time.Minute)
 	seedSearchDoc(t, s, doc)
 	if after := ftsState(); after != before {
 		t.Fatalf("an unchanged document rewrote the FTS index: %s -> %s", before, after)
 	}
 
-	// Changed text is re-indexed: the new word matches and the old one does not.
 	doc.Body = "replacement haystack text"
 	doc.IndexedAt = testNow.Add(2 * time.Minute)
 	seedSearchDoc(t, s, doc)
@@ -368,7 +352,6 @@ func TestUpsertSessionSearchDocsLeavesUnchangedTextAlone(t *testing.T) {
 		t.Fatalf("old text still searchable: hits=%+v err=%v", hits, err)
 	}
 
-	// Deleting the document removes its text with it; nothing is left to match.
 	if err := s.DeleteSessionSearchDocsForSource(ctx, "chat:a"); err != nil {
 		t.Fatalf("DeleteSessionSearchDocsForSource: %v", err)
 	}
@@ -378,9 +361,6 @@ func TestUpsertSessionSearchDocsLeavesUnchangedTextAlone(t *testing.T) {
 	}
 }
 
-// Found in review: stage one keeps the best 2,000 documents, so a page past
-// them came back empty while the total still counted them, and the remaining
-// pages could never be fetched. Such a page is read again without the cap.
 func TestSearchSessionSearchDocsPagesPastTheCandidateCap(t *testing.T) {
 	s := newTestStore(t)
 	const matching = 2050
@@ -401,7 +381,6 @@ func TestSearchSessionSearchDocsPagesPastTheCandidateCap(t *testing.T) {
 		if err != nil {
 			t.Fatalf("[%s] first page: %v", group, err)
 		}
-		// The first pages stay capped: that is what keeps a broad search fast.
 		if len(first) != 100 || !first[0].MatchTotalCapped {
 			t.Fatalf("[%s] first page = %d rows, capped=%v; want 100 from the capped candidates", group, len(first), len(first) > 0 && first[0].MatchTotalCapped)
 		}
@@ -417,12 +396,6 @@ func TestSearchSessionSearchDocsPagesPastTheCandidateCap(t *testing.T) {
 	}
 }
 
-// Found in review: re-ranking a late page without the cap changed the order
-// between pages. The cap picks by raw bm25, the final order also weighs kinds,
-// so 2,000 short assistant replies filled the cap while 50 longer user
-// messages, which the user weight ranks first, were left out. The page past
-// the cap repeated replies already shown and the user messages were never
-// reached. Paging through everything must return every result exactly once.
 func TestSearchSessionSearchDocsPagingReturnsEveryResultOnceAcrossTheCap(t *testing.T) {
 	s := newTestStore(t)
 	docs := make([]domain.SessionSearchDoc, 0, 2050)
@@ -466,8 +439,6 @@ func TestSearchSessionSearchDocsPagingReturnsEveryResultOnceAcrossTheCap(t *test
 	}
 }
 
-// The text is stored once, compressed, and snippets are cut from it: the
-// result page and the find in chat's match list both still mark the matched word.
 func TestSessionSearchStoresTextCompressedAndCutsSnippetsFromIt(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -499,12 +470,6 @@ func TestSessionSearchStoresTextCompressedAndCutsSnippetsFromIt(t *testing.T) {
 	}
 }
 
-// In a contentless index, removing rows by rowid
-// (contentless_delete) left them counting in term statistics, so after a
-// source was cleared or a document rewritten, bm25 scored the remaining
-// documents differently from a fresh index (-7.27 became -12.21 here).
-// Rows are removed with FTS5's 'delete' command and their indexed text now,
-// which keeps the statistics exact.
 func TestSessionSearchScoresAreUnchangedByDeletedDocuments(t *testing.T) {
 	ctx := context.Background()
 	corpus := func(source string, n int, filler string) []domain.SessionSearchDoc {
@@ -535,7 +500,6 @@ func TestSessionSearchScoresAreUnchangedByDeletedDocuments(t *testing.T) {
 			t.Fatal(err)
 		}
 		if churn {
-			// A rewritten document replaces its old index row too.
 			docs[2].Body = "needle needle needle " + docs[2].Body
 			if err := s.UpsertSessionSearchDocs(ctx, docs[2:3]); err != nil {
 				t.Fatal(err)
@@ -563,9 +527,6 @@ func TestSessionSearchScoresAreUnchangedByDeletedDocuments(t *testing.T) {
 	}
 }
 
-// The index lives in its own database file, so a long index transaction (a
-// rebuild, an FTS5 merge) holds only that file's write lock: app writes and
-// searches go on while it runs. In ao.db those waited up to a second.
 func TestAppWritesAndSearchesDoNotWaitForTheIndexWriter(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -601,8 +562,6 @@ func TestAppWritesAndSearchesDoNotWaitForTheIndexWriter(t *testing.T) {
 	}
 }
 
-// The index is derived data with its own schema version: a file written by
-// another version is cleared and rebuilt by the indexer instead of migrated.
 func TestTheIndexIsClearedWhenItsSchemaVersionChanges(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -642,10 +601,6 @@ func TestTheIndexIsClearedWhenItsSchemaVersionChanges(t *testing.T) {
 	}
 }
 
-// The index is its own file and can hold sessions its database no longer has
-// (an older backup of ao.db restored beside it). Those are recorded as
-// deleted, so search drops them at once and the sweep removes their documents.
-// A session the database has, and one already recorded, are left alone.
 func TestIndexedSessionsMissingFromTheDatabaseAreRecordedAsDeleted(t *testing.T) {
 	ctx := context.Background()
 	s, conversation := sessionSearchFixture(t)
@@ -656,7 +611,6 @@ func TestIndexedSessionsMissingFromTheDatabaseAreRecordedAsDeleted(t *testing.T)
 	seedSearchDoc(t, s, domain.SessionSearchDoc{
 		SourceKey: "chat:gone", DocKey: "m1", SessionID: "gone", Kind: domain.SessionSearchKindUser, Body: "zzgone words",
 	})
-	// A source with no documents is indexed state too.
 	if err := s.UpsertSessionSearchSource(ctx, domain.SessionSearchSource{
 		SourceKey: "chat:empty", Kind: domain.SessionSearchSourceChat, SessionID: "empty",
 		State: domain.SessionSearchSourceActive, UpdatedAt: testNow,
@@ -691,24 +645,15 @@ func TestIndexedSessionsMissingFromTheDatabaseAreRecordedAsDeleted(t *testing.T)
 	if find("zzgone") != 0 || find("zzpresent") != 1 {
 		t.Fatalf("hits: gone=%d present=%d, want 0 and 1", find("zzgone"), find("zzpresent"))
 	}
-	// Already recorded: a second check has nothing to add.
 	if again, err := s.MarkSessionSearchSessionsMissing(ctx); err != nil || again != 0 {
 		t.Fatalf("a second check recorded %d (err %v), want 0", again, err)
 	}
 }
 
-// Found in review: the ranking stage kept the best 2,000 matches first and
-// dropped the documents of deleted sessions afterwards. More than 2,000 of
-// those, each matching better than a live document, took every place the cap
-// has: the first page came back empty although the count found the session,
-// and nothing fetched it later. They are left out before the cap now.
 func TestDocumentsOfDeletedSessionsDoNotFillTheCandidateCap(t *testing.T) {
 	ctx := context.Background()
 	s, conversation := sessionSearchFixture(t)
 	kept := string(conversation.SessionID)
-	// More than the cap (sessionSearchCandidateCap, 2,000), in a session the
-	// database does not have. One word each: a shorter document scores better
-	// than the kept ones below.
 	const pending, live, page = 2100, 30, 25
 	docs := make([]domain.SessionSearchDoc, 0, pending+live)
 	for index := 0; index < pending; index++ {
@@ -736,8 +681,6 @@ func TestDocumentsOfDeletedSessionsDoNotFillTheCandidateCap(t *testing.T) {
 	perMessage := params
 	perMessage.Group, perMessage.Limit = domain.SessionSearchGroupMessage, page
 
-	// The fixture's point: while both sessions are results, the stronger
-	// documents are the whole first page, so they are what the cap would keep.
 	first, err := s.SearchSessionSearchDocs(ctx, perMessage)
 	if err != nil || len(first) != page {
 		t.Fatalf("before the delete: %d hits (err %v), want a full page", len(first), err)
@@ -759,7 +702,6 @@ func TestDocumentsOfDeletedSessionsDoNotFillTheCandidateCap(t *testing.T) {
 	if count, err := s.CountSessionSearchDocsMatching(ctx, params); err != nil || count != 1 {
 		t.Fatalf("grouped count = %d (err %v), want 1", count, err)
 	}
-	// Every surviving document is reachable, page by page, exactly once.
 	seen := map[int64]bool{}
 	for offset := 0; offset <= live; offset += page {
 		perMessage.Offset = offset
@@ -782,9 +724,6 @@ func TestDocumentsOfDeletedSessionsDoNotFillTheCandidateCap(t *testing.T) {
 	}
 }
 
-// search.db indexes one ao.db. Beside a different one (a restored backup, a
-// swapped data directory) it is cleared, not left describing sessions that do
-// not exist there.
 func TestTheIndexIsClearedBesideADifferentAppDatabase(t *testing.T) {
 	ctx := context.Background()
 	dir, other := t.TempDir(), t.TempDir()
@@ -802,7 +741,6 @@ func TestTheIndexIsClearedBesideADifferentAppDatabase(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	}
-	// Reopening the same pair keeps the index.
 	s, err := sqlite.Open(dir)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)

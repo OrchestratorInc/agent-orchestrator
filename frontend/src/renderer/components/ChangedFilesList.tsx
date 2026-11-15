@@ -3,7 +3,6 @@ import type { WorkspaceFileSummary } from "../hooks/useSessionWorkspaceFiles";
 import { cn } from "../lib/utils";
 import { WorkspaceEntryIcon } from "./WorkspaceEntryIcon";
 
-/** Files listed in place; the rest are left to the full changes view. */
 export const CHANGED_FILES_SHOWN = 8;
 
 const statusMark: Record<WorkspaceFileSummary["status"], { letter: string; className: string; key: "added" | "modified" | "deleted" | "renamed" }> = {
@@ -14,7 +13,6 @@ const statusMark: Record<WorkspaceFileSummary["status"], { letter: string; class
 	unmodified: { letter: "M", className: "text-passive", key: "modified" },
 };
 
-/** +/− for a file or row, leaving out a side with nothing on it. */
 export function ChangeCounts({ additions, deletions, className }: { additions: number; deletions: number; className?: string }) {
 	if (additions === 0 && deletions === 0) return null;
 	return (
@@ -25,16 +23,10 @@ export function ChangeCounts({ additions, deletions, className }: { additions: n
 	);
 }
 
-/**
- * A branch row's files, opened in place under it: one flat line per file
- * (name, its folder dimmed, +/−, change letter), each opening its own diff.
- * "View all changes" opens the full changes view.
- */
 export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 	files: WorkspaceFileSummary[];
 	id: string;
 	onOpenAll: () => void;
-	/** Opens one file's diff; without it, a file opens the full view. */
 	onOpenFile?: (path: string) => void;
 }) {
 	const { t } = useTranslation();
@@ -60,7 +52,6 @@ export function ChangedFilesList({ files, id, onOpenAll, onOpenFile }: {
 							<WorkspaceEntryIcon className="size-icon-2xs" kind="file" name={name} />
 							<span className="flex min-w-0 flex-1 items-baseline gap-1.5">
 								<span className="min-w-0 truncate text-foreground">{name}</span>
-								{/* The folder gives way first when the line is tight. */}
 								{dir ? <span className="min-w-0 shrink-[100] truncate text-passive">{dir}</span> : null}
 							</span>
 							<ChangeCounts additions={file.additions ?? 0} deletions={file.deletions ?? 0} className="text-micro" />

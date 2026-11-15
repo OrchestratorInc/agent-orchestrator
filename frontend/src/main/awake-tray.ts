@@ -1,6 +1,5 @@
 import type { components } from "../api/schema";
 
-/** Observe local system effects independently of renderer/window lifetime. */
 export function createAwakeTrayMonitor(options: {
 	baseURL: () => string | null;
 	request: (url: string, init: RequestInit) => Promise<Response>;
@@ -23,7 +22,6 @@ export function createAwakeTrayMonitor(options: {
 				read("awake").then((state: components["schemas"]["AwakeState"]) => state.active),
 				read("mobile/status").then((state: components["schemas"]["MobileStatusResponse"]) => state.keepAwake?.active),
 			]);
-			// A failed probe is not evidence that an existing wake hold ended.
 			const active = states.some((state) => state.status === "fulfilled" && state.value === true)
 				? true
 				: states.every((state) => state.status === "fulfilled" && state.value === false) ? false : null;

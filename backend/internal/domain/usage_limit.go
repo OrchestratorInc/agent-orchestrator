@@ -6,11 +6,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	_ "time/tzdata" // Provider IANA zones also work in packaged Windows builds.
+	_ "time/tzdata"
 )
 
-// ConversationUsageLimit describes a settled provider quota refusal. A missing
-// deadline means the provider did not give AO a reset time it can safely use.
 type ConversationUsageLimit struct {
 	ResetsAt    *time.Time `json:"resetsAt,omitempty"`
 	AutoResume  bool       `json:"autoResume"`
@@ -36,9 +34,6 @@ var usageLimitMessage = regexp.MustCompile(`(?i)^(?:usage limit (?:reached|excee
 var usageLimitResetClock = regexp.MustCompile(`(?i)\bresets?(?:\s+at)?\s+(?:(tomorrow)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)`)
 var usageLimitResetISO = regexp.MustCompile(`(?i)\bresets?(?:\s+at)?\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))`)
 
-// ParseConversationUsageLimit recognizes only known quota refusals, never
-// assistant prose. Clock-only deadlines require the provider's explicit IANA
-// zone and are anchored to the failure, so rereading history cannot move them.
 func ParseConversationUsageLimit(message string, failedAt *time.Time) *ConversationUsageLimit {
 	message = strings.TrimSpace(strings.ReplaceAll(message, "’", "'"))
 	if !usageLimitMessage.MatchString(message) && !slices.ContainsFunc(claudeUsageLimitPrefixes, func(prefix string) bool {
@@ -83,7 +78,6 @@ func ParseConversationUsageLimit(message string, failedAt *time.Time) *Conversat
 	if match[1] != "" || !reset.After(*failedAt) {
 		reset = reset.AddDate(0, 0, 1)
 	}
-	// Nonexistent or repeated wall clocks must not become guessed deadlines.
 	if reset.Hour() != hour || reset.Minute() != minute || usageLimitClockRepeated(reset) {
 		return limit
 	}
@@ -107,7 +101,6 @@ func usageLimitClockRepeated(reset time.Time) bool {
 		if adjacentOffset == offset {
 			continue
 		}
-		// Both neighboring offsets can represent this clock during a backward jump.
 		other := reset.Add(time.Duration(offset-adjacentOffset) * time.Second)
 		if other.Format(time.DateTime) == clock {
 			return true

@@ -37,9 +37,6 @@ import { Button } from "./ui/button";
 
 type TrackerIntakeConfig = components["schemas"]["TrackerIntakeConfig"];
 
-// What the setup sheet asks for. The agents are chosen here only when the
-// sheet shows its agent pickers; otherwise the project starts on the most
-// preferred ready agent (see defaultProjectAgents).
 export type CreateProjectSetup = {
 	workerAgent?: string;
 	orchestratorAgent?: string;
@@ -54,12 +51,9 @@ type CreateProjectAgentSheetProps = {
 	error?: string | null;
 	action?: "create" | "clone";
 	connected?: boolean;
-	// Show the Worker and Orchestrator pickers. Off in Developer Mode, where the
-	// project starts on the most preferred ready agent without asking.
 	chooseAgents?: boolean;
 	hostId?: string;
 	intakeVisible?: boolean;
-	// Whether intake applies is still unknown; hold Create until it is.
 	settingsLoading?: boolean;
 	isCreating: boolean;
 	isInitializing?: boolean;
@@ -141,7 +135,6 @@ export function CreateProjectAgentSheet({
 	shake = false,
 }: CreateProjectAgentSheetProps) {
 	const { t } = useTranslation();
-	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const [isExiting, setIsExiting] = useState(false);
 	const contentOpen = open || isExiting;
@@ -158,10 +151,6 @@ export function CreateProjectAgentSheet({
 	const agents = agentsQuery.data;
 	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
 	const selectableAgents = useMemo(() => hostId ? agentOptions.filter(isLaunchableAgent) : agentOptions, [agentOptions, hostId]);
-	// "configured" belongs here even though it is not a verified credential.
-	// This picks the default preselection, not a gate — every agent stays
-	// selectable — and excluding it would silently stop preselecting an agent
-	// whose credentials AO simply cannot validate, which is most of them.
 	const authorizedAgents = useMemo(
 		() =>
 			selectableAgents.filter((agent) =>
@@ -169,8 +158,6 @@ export function CreateProjectAgentSheet({
 			),
 		[selectableAgents],
 	);
-	// Local history is an inference signal only for local projects. A remote
-	// project must never infer its agent from this laptop's sessions.
 	const workspacesQuery = useQuery({ ...workspaceQueryOptions, enabled: chooseAgents && open && !hostId });
 	const sessionHistory = useMemo(
 		() => (workspacesQuery.data ?? []).flatMap((workspace) => workspace.sessions),
@@ -444,7 +431,6 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 }: {
 	agents?: AgentInfo[];
 	disabled?: boolean;
-	/** Caption beside the label, e.g. naming where a preselected default came from. */
 	hint?: string;
 	icon?: AppIcon;
 	id: string;
@@ -453,12 +439,9 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	onChange: (value: string) => void;
 	placeholder: string;
 	hostId?: string;
-	/** Cloud tasks use remote availability, not this computer's Harness settings. */
 	manageAgents?: boolean;
-	/** Which Harness settings view "manage" opens: local logins or cloud connections. */
 	manageView?: "local" | "cloud";
 	triggerClassName?: string;
-	/** Optional shorter action copy for compact selectors. */
 	managementLabel?: string;
 	labelClassName?: string;
 	contentClassName?: string;
@@ -477,7 +460,6 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	const hasReadinessSnapshot = agents !== undefined;
 	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
 	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
-	// Local is Harness settings' default view, so only cloud needs to ask for one.
 	const management = useAgentManagementMenu(needsSetup ? value : undefined, hostId, manageView === "cloud" ? "cloud" : undefined);
 	const manageLabel = managementLabelOverride ?? (manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage"));
 	const managementAction = manageAgents ? { label: manageLabel, onSelect: management.requestManagement } : undefined;
@@ -531,11 +513,6 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 		return variant === "settings-row" ? <SettingsRow icon={icon} label={label}>{control}</SettingsRow> : control;
 	}
 
-	// Chip: the value reads as part of a sentence ("Runs with Codex") rather than
-	// as a form field, so the label is carried by that sentence, not by a <Label>.
-	// Built on the same SettingsOptionMenu as the settings-row variant (and the
-	// model chip beside it) so both halves of the pill share one dropdown
-	// component instead of a Select-based menu and a DropdownMenu-based one.
 	if (variant === "chip") {
 		const menuOptions = visibleOptions.map((agent) => ({
 			value: agent.id,
@@ -614,8 +591,6 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 					aria-label={label}
 					aria-invalid={invalid || undefined}
 				>
-					{/* Radix would otherwise clone the whole menu row into the trigger,
-					    dragging the selected checkmark and install status with it. */}
 					<SelectValue placeholder={placeholder}>
 						{selectedOption ? (
 							<span className="flex min-w-0 items-center gap-3">

@@ -63,7 +63,6 @@ const cloudSession: WorkspaceSession = {
 
 type SwitchControl = ReactElement<{ children: ReactElement<{ onClick: () => void; transition?: unknown; onCancel?: () => void }> }> | null;
 
-// The control is the switch button inside a hover wrapper.
 function requestSwitch(control: SwitchControl) {
 	if (!control) throw new Error("Switch action missing");
 	act(() => control.props.children.props.onClick());
@@ -178,11 +177,9 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		mocks.status = accountMove(mode, "target_starting");
 		const { cloud: _cloud, ...localSession } = cloudSession;
 		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode }));
-		// Not an arrival: the conversation or terminal on screen stays.
 		expect(result.current.optimisticTarget).toBeUndefined();
 		expect(result.current.renderedMode).toBe(mode);
 		expect(result.current.accountMoveTarget).toBe("acct-b");
-		// The stop between the two agents is still not a crash.
 		expect(result.current.controllerTransitioning).toBe(mode === "chat");
 	});
 
@@ -218,8 +215,6 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.switchAction).toBeFalsy();
 	});
 
-	// An agent switch keeps the interface: Chat stays on screen with its
-	// "Switching" line, and the terminal is covered while the worker restarts.
 	it.each([["chat", false], ["tui", true]] as const)("covers a %s session during an agent switch: %s", (mode, covered) => {
 		mocks.status = {
 			supported: true,
@@ -258,13 +253,9 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(result.current.cloudLoader).toBe(false);
 		expect(result.current.controllerTransitioning).toBe(false);
 		expect(result.current.newWorkDisabled).toBe(true);
-		// While it waits, the control shows the running switch instead of the button.
 		expect((result.current.switchControl as SwitchControl)?.props.children.props.transition).toBeDefined();
 	});
 
-	// The control plane lets only the session's creator cancel its agent switch
-	// (403 for anyone else, an org admin included); an interface-only switch
-	// stays any member's to cancel.
 	it("offers the cancel of an agent switch only to the session's creator", () => {
 		const draining = (agentSwitch: boolean): SessionInterfaceTransitionStatus => ({
 			supported: true,
@@ -290,8 +281,6 @@ describe("useSessionInterfaceSwitch Cloud handoff", () => {
 		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
 	});
 
-	// A move to another account runs on the creator's accounts too: the
-	// control plane lets only the creator cancel it (403 for anyone else).
 	it("offers the cancel of an account move only to the session's creator", () => {
 		mocks.status = {
 			supported: true,

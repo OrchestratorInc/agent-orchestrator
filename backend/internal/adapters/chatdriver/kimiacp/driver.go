@@ -1,5 +1,3 @@
-// Package kimiacp binds the user's own Kimi Code installation to AO's
-// reusable ACP Chat transport.
 package kimiacp
 
 import (
@@ -17,9 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches `kimi acp` from the exact binary resolved by the existing Kimi
-// agent plugin. Authentication, model discovery, sessions, and configuration
-// remain owned by that installation.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness: domain.HarnessKimi,
@@ -41,16 +36,12 @@ func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[s
 	if err := kimi.PrepareACPInstructions(ctx, cfg.WorkspacePath, cfg.SystemPrompt); err != nil {
 		return nil, nil, err
 	}
-	// The chat runs in AO's Kimi home, which signs in with the user's own login.
 	if err := kimi.ShareCredentials(cfg.DataDir); err != nil {
 		return nil, nil, err
 	}
 	return []string{"acp"}, nil, nil
 }
 
-// sessionPreamble carries AO's instructions, with any handoff note, on the
-// first prompt when the project owns .kimi-code/AGENTS.md: that file is the only
-// one of Kimi Code's that AO writes, and kimi acp reads no session metadata.
 func sessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	standing := strings.TrimSpace(cfg.SystemPrompt)
 	if standing == "" || !kimi.CodeInstructionsOwnedByProject(context.Background(), cfg.WorkspacePath) {
@@ -67,8 +58,6 @@ func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSetting
 	return nil
 }
 
-// sessionOptions maps AO's durable model choice onto Kimi's advertised legacy
-// model selector. The generic ACP transport routes it through session/set_model.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	var options []acpdriver.SessionOption
 	if settings.Model != "" {

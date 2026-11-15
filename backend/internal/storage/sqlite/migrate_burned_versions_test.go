@@ -12,13 +12,6 @@ import (
 	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// shippedMigrations freezes every migration version that has shipped in a
-// release, mapped to its exact filename. Once a version number is recorded in
-// a user's goose_db_version, any later file reusing that number is silently
-// skipped and surfaces as an opaque 500 from a generated query (issue #3475:
-// a burned version 40 skipped 0040_add_session_diff_base.sql and killed the
-// session list). Renaming, renumbering, or deleting a shipped migration
-// produces exactly that class of failure, so this list is append-only.
 var shippedMigrations = map[int64]string{
 	1:   "0001_init.sql",
 	2:   "0002_remove_activity_source.sql",
@@ -188,8 +181,6 @@ var shippedMigrations = map[int64]string{
 	185: "0185_worktree_startup_cues.sql",
 	186: "0186_remove_cue_description.sql",
 	187: "0187_remove_cue_startup_options.sql",
-	// 188 removes the obsolete cue worktree-startup schema; project setup now
-	// owns automatic workspace initialization.
 	188: "0188_remove_worktree_startup_cues.sql",
 	189: "0189_session_interaction.sql",
 	190: "0190_session_hibernation.sql",
@@ -204,7 +195,6 @@ var shippedMigrations = map[int64]string{
 	199: "0199_conversation_message_continuation.sql",
 	200: "0200_session_artifact_version_source.sql",
 	202: "0202_allow_memcode_harness.sql",
-	// 0203 was an unmerged Hermes candidate; retain its reservation.
 	206: "0206_awake.sql",
 	210: "0210_agent_accounts.sql",
 	211: "0211_account_transitions.sql",
@@ -272,32 +262,10 @@ var shippedMigrations = map[int64]string{
 	20261115072651599: "20261115072651599_allow_minimax_code_harness.sql",
 }
 
-// burnedVersion reports version numbers that must never be (re)used: they
-// shipped in a release and were then deleted, so real installs have them
-// recorded as applied while this repository ships no file with that number. A
-// new file claiming one would be skipped silently there.
-//
-//   - 22 shipped in a nightly (#2412) and was deleted by the revert.
-//
-// Beware of the adjacent hazard this cannot catch: at least one field profile
-// has versions 40 through 51 recorded as applied by a foreign build
-// (#3475/#3476), so migrations numbered up to 0051 are skipped there entirely.
-// Any such migration whose schema the generated queries depend on must add a
-// schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	// 203 was used by the historical Hermes candidate and must not be reused.
-	// 20261021083138547 and 20261114173247220 were used by unmerged Docker Agent
-	// builds before the migration moved above main's latest version.
 	return v == 22 || v == 203 || v == 20261021083138547 || v == 20261114173247220
 }
 
-// TestMigrationVersionLedger enforces the append-only migration ledger: every
-// migration file has exactly one entry in shippedMigrations (adding a
-// migration means appending its entry in the same change, where a review can
-// see the claimed number), no shipped file is renamed or deleted, and no file
-// reuses a burned number. Renumbering or deleting a released migration is what
-// produces silently-skipped migrations and unexplainable 500s months later
-// (issue #3475).
 func TestMigrationVersionLedger(t *testing.T) {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
@@ -314,9 +282,6 @@ func TestMigrationVersionLedger(t *testing.T) {
 			t.Errorf("migration %q has no version goose can parse: %v", e.Name(), err)
 			continue
 		}
-		// Two files claiming one number is the failure this ledger exists to
-		// prevent, and it is easy to reach from a branch: goose refuses to
-		// start at all, so it takes down the daemon rather than one query.
 		if other, clash := present[version]; clash {
 			t.Errorf("migrations %q and %q both claim version %d: goose refuses to start on a duplicate version",
 				other, e.Name(), version)
@@ -371,15 +336,9 @@ func TestReconcileMiMoHarnessConstraintAfterBurnedVersion(t *testing.T) {
 	}
 }
 
-// A concurrently approved branch can claim the next free number first, so this
-// branch's migrations have to survive being applied to a database that already
-// records a version they never shipped. goose runs with WithAllowMissing, which
-// is what makes the resulting gap harmless.
 func TestMigrationsApplyOverAForeignInterleavedVersion(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 103)
 
-	// Stand in for the other branch's migration: applied here, absent from this
-	// tree, and numbered below everything this branch adds.
 	if _, err := db.Exec(
 		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (104, 1)`,
 	); err != nil {
@@ -406,14 +365,8 @@ SELECT COUNT(*) FROM (
 	}
 }
 
-// TestSessionListSucceedsOnBurnedMigrationHistory reproduces the #3475/#3476
-// field profile: goose_db_version already records versions 40 through 51
-// (written by a foreign build), so goose silently skips the real
-// 0040_add_session_diff_base.sql and the sessions table lacks the diff-base
-// columns. Startup schema reconciliation must repair the physical schema so
-// the session list works instead of returning 500 INTERNAL_ERROR.
 func TestSessionListSucceedsOnBurnedMigrationHistory(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 39) // the real 0040 has not run; diff-base columns are absent
+	db := openMigratedDatabaseCopy(t, 39)
 	for v := 40; v <= 51; v++ {
 		if _, err := db.Exec(
 			`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, v,
@@ -492,8 +445,6 @@ INSERT INTO projects (
 		t.Fatalf("review = %+v, ok=%v, want persisted reviewer native id", review, ok)
 	}
 
-	// The repair is idempotent: a second startup on the repaired database (and
-	// on any healthy database) is a no-op, never a duplicate-column error.
 	if err := migrate(db); err != nil {
 		t.Fatalf("repeat migrate on repaired schema: %v", err)
 	}

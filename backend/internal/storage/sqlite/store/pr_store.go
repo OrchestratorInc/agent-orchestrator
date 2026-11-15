@@ -14,45 +14,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// The pr / pr_checks / pr_comment rows are modelled by domain.PullRequest /
-// domain.PullRequestCheck / domain.PullRequestComment — flat tables, one shared type per table.
-// This layer only maps those to/from the sqlc gen.* params: the bool PR flags
-// become the single pr.pr_state column, empty enums default to their
-// "nothing known yet" value (matching the CHECK constraints), and ints widen to
-// int64.
-
-// Compile-time proof that *Store satisfies both ports it is wired into, so a
-// drift between either interface and this implementation fails here at the point
-// of definition rather than later at the call sites in lifecycle_wiring / tests.
 var (
 	_ ports.PRWriter  = (*Store)(nil)
 	_ ports.SCMWriter = (*Store)(nil)
 	_ ports.PRClaimer = (*Store)(nil)
 )
 
-// WritePR persists a legacy PR observation — scalar facts, check runs, and the
-// replacement comment set — in one write transaction, so the rows and the
-// change_log events their triggers emit are committed all-or-nothing. The scalar
-// PR upsert runs first so the checks'/comments' CDC triggers can resolve the
-// session id from the pr row within the same transaction. It intentionally does
-// not touch pr_review_threads: those rows are owned by WriteSCMObservation's
-// slower review-thread refresh path.
 func (s *Store) WritePR(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, comments []domain.PullRequestComment) error {
 	return s.writePR(ctx, pr, checks, nil, nil, comments, ports.ReviewWritePreserve, true)
 }
 
-// WriteSCMObservation persists a provider-neutral SCM observation in one write
-// transaction. It upserts the full PR metadata row and CI checks. Review threads
-// and comments are preserved, replaced, or merged according to reviewMode
-// because review polling runs at a slower and sometimes intentionally bounded
-// cadence than metadata/CI polling.
 func (s *Store) WriteSCMObservation(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode) error {
 	return s.writePR(ctx, pr, checks, reviews, threads, comments, reviewMode, false)
 }
 
-// MarkPRMerged records the authoritative success returned by the provider's
-// merge endpoint without replacing concurrently refreshed CI or review facts.
-// The pr_cdc_update trigger emits the corresponding pr_updated event.
 func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -75,10 +50,6 @@ func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, 
 	return nil
 }
 
-// MarkPRState records the authoritative result of a provider close, reopen,
-// ready-for-review, or convert-to-draft mutation without replacing
-// concurrently refreshed CI or review facts. A merged PR is never rewritten.
-// The pr_cdc_update trigger emits the corresponding pr_updated event.
 func (s *Store) MarkPRState(ctx context.Context, prURL string, state domain.PRState, changedAt time.Time) error {
 	switch state {
 	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateClosed:
@@ -87,8 +58,6 @@ func (s *Store) MarkPRState(ctx context.Context, prURL string, state domain.PRSt
 	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	// Closing keeps a draft a draft, as the providers do, so reopening it brings
-	// back a draft; the other states say outright whether the PR is one.
 	draft := state == domain.PRStateDraft
 	if state == domain.PRStateClosed {
 		current, err := s.qw.GetPR(ctx, prURL)
@@ -117,8 +86,6 @@ func (s *Store) MarkPRState(ctx context.Context, prURL string, state domain.PRSt
 	return nil
 }
 
-// UpsertPRReviewComment stores one just-posted review-thread reply so the view
-// shows it before the next review observation, which reconciles it.
 func (s *Store) UpsertPRReviewComment(ctx context.Context, prURL string, comment domain.PullRequestComment) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -128,9 +95,6 @@ func (s *Store) UpsertPRReviewComment(ctx context.Context, prURL string, comment
 	return nil
 }
 
-// ClaimPR moves (or creates) a PR row to pr.SessionID and applies the live SCM
-// observation in the same transaction. The session_id update is what fires the
-// pr_session_changed CDC trigger added in migration 0005.
 func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, allowActiveTakeover bool) (ports.ClaimOutcome, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -234,9 +198,6 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 			}
 		}
 	}
-	// Preserve reviews that are still present so their original injection
-	// decision survives the upsert. Only reviews no longer returned by the SCM
-	// are removed in replace mode.
 	if reviewMode == ports.ReviewWriteReplace {
 		observed := make(map[string]struct{}, len(reviews))
 		for _, review := range reviews {
@@ -262,12 +223,6 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 			}
 		}
 	}
-	// Replace mode prunes orphans (threads no longer observed in the upstream
-	// listing) AFTER the upserts above, so that threads present in both the
-	// pre- and post-state hit ON CONFLICT DO UPDATE and fire the UPDATE trigger
-	// (e.g. pr_review_thread_resolved when resolved flips). The old
-	// delete-everything-first approach made every poll look like a fresh INSERT
-	// and the UPDATE trigger was unreachable for the common Replace path.
 	if reviewMode == ports.ReviewWriteReplace {
 		observed := make(map[string]struct{}, len(threads))
 		for _, th := range threads {
@@ -505,9 +460,6 @@ func reviewThreadIDs(threads []domain.PullRequestReviewThread, comments []domain
 	return out
 }
 
-// GetPRLastNudgeSignature returns the persisted nudge-dedup JSON payload for a
-// PR (empty string when the PR has no row or no signatures yet). The payload is
-// written by lifecycle.Manager; Kanban queries read its review-delivery entries.
 func (s *Store) GetPRLastNudgeSignature(ctx context.Context, url string) (string, error) {
 	sig, err := s.qr.GetPRLastNudgeSignature(ctx, url)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -519,8 +471,6 @@ func (s *Store) GetPRLastNudgeSignature(ctx context.Context, url string) (string
 	return sig, nil
 }
 
-// UpdatePRLastNudgeSignature overwrites the persisted nudge-dedup JSON payload
-// for a PR. A no-op when the URL has no pr row yet.
 func (s *Store) UpdatePRLastNudgeSignature(ctx context.Context, url, payload string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -530,8 +480,6 @@ func (s *Store) UpdatePRLastNudgeSignature(ctx context.Context, url, payload str
 	return nil
 }
 
-// RecordRepositoryRename stores the provider's current name for a renamed or
-// transferred repository.
 func (s *Store) RecordRepositoryRename(ctx context.Context, r domain.RepositoryRename) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -541,7 +489,6 @@ func (s *Store) RecordRepositoryRename(ctx context.Context, r domain.RepositoryR
 	return nil
 }
 
-// ListRepositoryRenames returns every known repository rename.
 func (s *Store) ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryRename, error) {
 	rows, err := s.qr.ListRepositoryRenames(ctx)
 	if err != nil {
@@ -554,7 +501,6 @@ func (s *Store) ListRepositoryRenames(ctx context.Context) ([]domain.RepositoryR
 	return out, nil
 }
 
-// GetPR returns the PR facts for a URL, or ok=false if absent.
 func (s *Store) GetPR(ctx context.Context, url string) (domain.PullRequest, bool, error) {
 	p, err := s.qr.GetPRByURLOrAlias(ctx, url)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -566,9 +512,6 @@ func (s *Store) GetPR(ctx context.Context, url string) (domain.PullRequest, bool
 	return prRowFromGen(p), true, nil
 }
 
-// GetPRByNumber returns the best matching tracked PR for the /prs/{id} path.
-// Active rows are preferred over terminal rows, then the newest observation
-// wins when the same provider number appears in more than one repository.
 func (s *Store) GetPRByNumber(ctx context.Context, number int) (domain.PullRequest, bool, error) {
 	if number <= 0 {
 		return domain.PullRequest{}, false, nil
@@ -583,8 +526,6 @@ func (s *Store) GetPRByNumber(ctx context.Context, number int) (domain.PullReque
 	return prRowFromGen(p), true, nil
 }
 
-// CountActivePRsByNumber reports whether a numeric resolve path is ambiguous
-// across simultaneously tracked repositories.
 func (s *Store) CountActivePRsByNumber(ctx context.Context, number int) (int, error) {
 	if number <= 0 {
 		return 0, nil
@@ -596,7 +537,6 @@ func (s *Store) CountActivePRsByNumber(ctx context.Context, number int) (int, er
 	return int(count), nil
 }
 
-// ListPRsBySession returns every PR owned by a session, newest first.
 func (s *Store) ListPRsBySession(ctx context.Context, sessionID domain.SessionID) ([]domain.PullRequest, error) {
 	rows, err := s.qr.ListPRsBySession(ctx, sessionID)
 	if err != nil {
@@ -609,7 +549,6 @@ func (s *Store) ListPRsBySession(ctx context.Context, sessionID domain.SessionID
 	return out, nil
 }
 
-// ListChecks returns every recorded check run for a PR.
 func (s *Store) ListChecks(ctx context.Context, prURL string) ([]domain.PullRequestCheck, error) {
 	rows, err := s.qr.ListChecksByPR(ctx, prURL)
 	if err != nil {
@@ -622,7 +561,6 @@ func (s *Store) ListChecks(ctx context.Context, prURL string) ([]domain.PullRequ
 	return out, nil
 }
 
-// ListPRComments returns a PR's review comments, oldest first.
 func (s *Store) ListPRComments(ctx context.Context, prURL string) ([]domain.PullRequestComment, error) {
 	rows, err := s.qr.ListPRComments(ctx, prURL)
 	if err != nil {
@@ -635,9 +573,6 @@ func (s *Store) ListPRComments(ctx context.Context, prURL string) ([]domain.Pull
 	return out, nil
 }
 
-// MarkPRReviewThreadResolved records a provider-resolved review thread and
-// all of its comments locally. The two updates share the writer lock so a
-// concurrent observation cannot interleave with the targeted state change.
 func (s *Store) MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -652,7 +587,6 @@ func (s *Store) MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID 
 	})
 }
 
-// ListPRReviewThreads returns a PR's review threads, oldest first.
 func (s *Store) ListPRReviewThreads(ctx context.Context, prURL string) ([]domain.PullRequestReviewThread, error) {
 	rows, err := s.qr.ListPRReviewThreads(ctx, prURL)
 	if err != nil {
@@ -665,7 +599,6 @@ func (s *Store) ListPRReviewThreads(ctx context.Context, prURL string) ([]domain
 	return out, nil
 }
 
-// ListPRReviews returns a PR's submitted reviews, oldest first.
 func (s *Store) ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error) {
 	rows, err := s.qr.ListPRReviews(ctx, prURL)
 	if err != nil {
@@ -678,9 +611,6 @@ func (s *Store) ListPRReviews(ctx context.Context, prURL string) ([]domain.PullR
 	return out, nil
 }
 
-// ---- domain <-> gen mapping ----
-
-// prState collapses the PR's bools into the single pr.state column value.
 func prState(r domain.PullRequest) domain.PRState {
 	switch {
 	case r.Merged:

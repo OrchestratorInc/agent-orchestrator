@@ -39,8 +39,6 @@ func TestPrepareV2DataHomeSnapshotsLiveSQLiteDatabase(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO sessions (id) VALUES ('two')`); err != nil {
 		t.Fatal(err)
 	}
-	// Keep the raw copier between the database and WAL long enough to force a
-	// checkpoint after it has copied the database file but before it copies WAL.
 	padding := make([]byte, 8<<20)
 	if err := os.WriteFile(filepath.Join(legacy, "opencode.db-padding"), padding, 0o600); err != nil {
 		t.Fatal(err)
@@ -103,9 +101,6 @@ func TestPrepareV2DataHomeDoesNotCopyOrphanedRollbackJournal(t *testing.T) {
 	}
 }
 
-// opencode keeps downloaded language servers under bin/, whose node_modules/.bin
-// is all symlinks. The migration leaves that cache behind rather than failing
-// on it, or OpenCode 2 never starts for anyone who has used an LSP.
 func TestPrepareV2DataHomeSkipsToolCache(t *testing.T) {
 	parent := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", parent)
@@ -192,9 +187,6 @@ func TestPrepareV2DataHomeStopsWaitingForMigrationLockOnCancel(t *testing.T) {
 	}
 }
 
-// removeAtCheckContext runs remove on the Nth ctx.Err() call. copyTree checks its
-// context at every walked entry and copied chunk, so raising N moves the deletion
-// across each point of the copy without relying on timing.
 type removeAtCheckContext struct {
 	context.Context
 	at     int
@@ -210,7 +202,6 @@ func (c *removeAtCheckContext) Err() error {
 	return c.Context.Err()
 }
 
-// A live OpenCode prunes its shell output while the migration copies the store.
 func TestCopyTreeToleratesEntriesVanishingAtAnyPoint(t *testing.T) {
 	const project = "9b29c8a3ea477dcfbde51766b401cd337ce370e8"
 	tests := []struct {
@@ -261,8 +252,6 @@ func TestCopyTreeToleratesEntriesVanishingAtAnyPoint(t *testing.T) {
 					t.Fatalf("deleting at context check %d: lost unrelated data: %v", at, err)
 				}
 				if at > ctx.calls {
-					// Every check has been exercised; this run deleted nothing,
-					// so it must have copied the entry under test.
 					if _, err := os.Stat(filepath.Join(destination, tt.wantVanished)); err != nil {
 						t.Fatalf("copy without a deletion lost %s: %v", tt.wantVanished, err)
 					}
@@ -286,9 +275,6 @@ func TestPrepareV2DataHomeFinishesWhenLegacyEntryVanishes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Checks run in a fixed order: PrepareV2DataHome, the root, shell,
-	// shell/project, sh_0.out and its two chunk reads. Check 7 is therefore the
-	// last one before the walk reaches sh_1.out, which it has already listed.
 	ctx := &removeAtCheckContext{
 		Context: context.Background(),
 		at:      7,
@@ -302,7 +288,6 @@ func TestPrepareV2DataHomeFinishesWhenLegacyEntryVanishes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareV2DataHome: %v", err)
 	}
-	// Only the skip logs this. A deletion before the listing would pass unnoticed.
 	if !strings.Contains(logs.String(), "sh_1.out") {
 		t.Fatalf("the deletion at check %d did not hit the vanished-entry skip; logs: %s", ctx.at, logs.String())
 	}
@@ -314,8 +299,6 @@ func TestPrepareV2DataHomeFinishesWhenLegacyEntryVanishes(t *testing.T) {
 	}
 }
 
-// Children of a deleted store are skipped as vanished, so only the root check
-// stops a near-empty copy from becoming the permanent store.
 func TestPrepareV2DataHomeFailsWhenWholeLegacyStoreVanishes(t *testing.T) {
 	for at := 1; ; at++ {
 		parent := t.TempDir()
@@ -332,8 +315,6 @@ func TestPrepareV2DataHomeFailsWhenWholeLegacyStoreVanishes(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		// PrepareV2DataHome's own check runs before the copy, so check 1 would
-		// take the "no legacy store" path instead. Start deleting inside the copy.
 		ctx := &removeAtCheckContext{
 			Context: context.Background(),
 			at:      at + 1,
@@ -341,7 +322,6 @@ func TestPrepareV2DataHomeFailsWhenWholeLegacyStoreVanishes(t *testing.T) {
 		}
 		_, err := PrepareV2DataHome(ctx)
 		if ctx.calls < ctx.at {
-			// Every check has been exercised; this run deleted nothing.
 			if err != nil {
 				t.Fatalf("copy without a deletion: %v", err)
 			}
@@ -360,7 +340,6 @@ func TestPrepareV2DataHomeFailsWhenWholeLegacyStoreVanishes(t *testing.T) {
 	}
 }
 
-// OpenCode can prune thousands of files during one copy, so they share one line.
 func TestCopyTreeSummarizesVanishedEntriesInOneWarning(t *testing.T) {
 	source, destination := t.TempDir(), t.TempDir()
 	const files = 8
@@ -374,8 +353,6 @@ func TestCopyTreeSummarizesVanishedEntriesInOneWarning(t *testing.T) {
 	previousLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
-	// Checks run in a fixed order: the root, sh_0.out and its two chunk reads.
-	// The assertions below fail if check 4 stops landing before the rest are read.
 	ctx := &removeAtCheckContext{
 		Context: context.Background(),
 		at:      4,

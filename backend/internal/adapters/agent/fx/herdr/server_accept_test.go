@@ -16,8 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// flakyListener fails the first accepts with a transient error, then hands
-// out queued connections until closed.
 type flakyListener struct {
 	failures int
 	conns    chan net.Conn
@@ -62,7 +60,6 @@ func TestServerRetriesTransientAcceptErrors(t *testing.T) {
 	if err := json.NewDecoder(client).Decode(&reply); err != nil || !reply.OK {
 		t.Fatalf("server stopped after transient accept errors: %+v %v", reply, err)
 	}
-	// The reply is written after the sink call, so the record is visible here.
 	if len(sink.records) != 1 || sink.records[0].signal.State != domain.ActivityActive {
 		t.Fatalf("signals = %+v", sink.records)
 	}

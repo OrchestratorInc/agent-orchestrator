@@ -1,9 +1,3 @@
-// Pure, deterministic matching for the `act` action: given a natural-language
-// instruction ("the submit button") and agent-browser's structured refs map,
-// resolve which ref it refers to — or say plainly that it can't, so the caller
-// can return the real snapshot rather than guessing on a mutating action. No
-// LLM call and no Electron/session imports.
-
 export type SnapshotEntry = {
 	role: string;
 	name: string;

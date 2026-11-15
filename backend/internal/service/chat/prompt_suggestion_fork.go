@@ -11,16 +11,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// RunPromptSuggestionTask uses an unpublished native child, retaining transcript
-// reconstruction when the provider cannot safely fork this completed turn.
 func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.SessionID, turnID string, harness domain.AgentHarness, cfg ports.ChatStartConfig, prompt string) (_ string, err error) {
 	driver, err := s.drivers.Driver(harness)
 	if err != nil {
 		return "", err
 	}
 	forker, canFork := driver.(ports.ChatIsolatedForker)
-	// Native children use the desktop launch's existing crash-cleanup journal.
-	// A standalone daemon retains the scratch-conversation fallback.
 	runID := s.sides.launchID()
 	if !canFork || runID == "" {
 		return s.RunBackgroundTask(ctx, harness, cfg, prompt)
@@ -83,7 +79,6 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	side.ProviderHostID = "btw-" + runID + "-" + side.ID
 	cfg.SessionID = domain.SessionID(side.ProviderHostID)
 	cfg.ProviderScopeID, cfg.ProviderIDsScoped = side.ID, true
-	// Retain a provider identity that can be deleted after a crash or host stop.
 	cfg.Ephemeral, cfg.ReadOnly, cfg.DisableNetwork, cfg.Effort = false, true, true, ""
 	if model := source.Settings().Model; model != "" {
 		cfg.Model = model
@@ -102,8 +97,6 @@ func (s *Service) RunPromptSuggestionTask(ctx context.Context, id domain.Session
 	}
 	var conversation ports.ChatConversation
 	defer func() {
-		// Only cleanup ownership enters the side store; no visible side, prompt,
-		// transcript, or draft is created for an autocomplete request.
 		if side.ProviderForkID != "" {
 			store.mu.Lock()
 			store.hostCleanup[side.ID] = side

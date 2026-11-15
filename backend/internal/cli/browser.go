@@ -39,14 +39,12 @@ type browserCommandResponseDTO struct {
 }
 
 type browserScreenshotFileResult struct {
-	Path        string `json:"path"`
-	Size        int64  `json:"size"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	Annotations []any  `json:"annotations,omitempty"`
-	// True when --annotate was requested but the browser returned no usable
-	// annotations, so the image may carry no labels.
-	AnnotationsUnavailable bool `json:"annotationsUnavailable,omitempty"`
+	Path                   string `json:"path"`
+	Size                   int64  `json:"size"`
+	Width                  int    `json:"width"`
+	Height                 int    `json:"height"`
+	Annotations            []any  `json:"annotations,omitempty"`
+	AnnotationsUnavailable bool   `json:"annotationsUnavailable,omitempty"`
 }
 
 const browserCapabilityHeader = "X-AO-Browser-Capability"
@@ -793,9 +791,6 @@ func writeBrowserResult(cmd *cobra.Command, action string, result map[string]any
 }
 
 func browserUntrustedText(value string) string {
-	// Page-controlled text must not be able to inject a delimiter that looks
-	// like the end of AO's trust boundary. Escape only exact marker collisions;
-	// the surrounding fixed markers remain easy for humans and agents to parse.
 	value = strings.ReplaceAll(value, browserUntrustedBegin, `\u003c`+browserUntrustedBegin[1:])
 	value = strings.ReplaceAll(value, browserUntrustedEnd, `\u003c`+browserUntrustedEnd[1:])
 	return browserUntrustedBegin + "\n" + value + "\n" + browserUntrustedEnd
@@ -1048,8 +1043,6 @@ func writeBrowserScreenshot(cmd *cobra.Command, result map[string]any, target st
 	return writeBrowserAnnotations(cmd, result, annotate)
 }
 
-// An older desktop host ignores an argument it does not know, so a capture that
-// came back without annotations is reported rather than passed off as annotated.
 func annotationsMissing(result map[string]any, annotate bool) bool {
 	if unavailable, _ := result["annotationsUnavailable"].(bool); unavailable {
 		return true

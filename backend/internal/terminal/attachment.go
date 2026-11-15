@@ -10,51 +10,25 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Source is what the terminal needs from the runtime: open an attach Stream and
-// a liveness check used to decide whether a dropped Stream should be re-attached
-// or treated as a clean exit. The runtime adapters (tmux/conpty) satisfy
-// it via Attach/IsAlive; the interface lives here, next to its only consumer, so
-// terminal does not depend on a concrete adapter.
 type Source interface {
 	ports.Attacher
 	IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 }
 
-// reattach policy: a Stream that drops is re-attached while the underlying
-// session is still alive, up to maxReattach consecutive failures. An attach that
-// survived longer than reattachResetGrace before dropping resets the counter, so
-// a long-lived pane that blips recovers but a tight crash-loop gives up.
 const (
 	defaultMaxReattach       = 5
 	defaultReattachResetTime = 5 * time.Second
 )
 
-// attachment is ONE client's hold on a pane: a private attach Stream opened per
-// mux open, streaming to a single sink. The runtime is the multiplexer — it owns
-// the session's screen state and scrollback, and answers every fresh attach with
-// its init handshake (alt screen, bracketed paste, scrollback replay) followed by
-// a faithful repaint. That handshake is why the Stream is per-client and there is
-// no terminal-layer replay buffer: a byte ring can replay recent output, but the
-// one-time mode negotiation at the head of the stream scrolls out of any bounded
-// buffer. A fresh attach per client makes the runtime re-send it, every time, by
-// construction.
-//
-// onOpen fires once the attach Stream is actually ready to accept input. onData
-// must not block: the WS layer funnels frames onto its own buffered writer.
-// onExit fires at most once, when the attach loop gives up (runtime dead,
-// attach failure cap) — never on close().
 type attachment struct {
-	id     string
-	handle ports.RuntimeHandle
-	src    Source
-	log    *slog.Logger
-	onOpen func()
-	onData func(data []byte)
-	onExit func()
-	// lockInput takes the terminal's write fence (see Manager.lockInputFence);
-	// nil means unfenced.
-	lockInput func() (unlock func())
-	// onInputReplay observes bytes replayed into the PTY while lockInput is held.
+	id            string
+	handle        ports.RuntimeHandle
+	src           Source
+	log           *slog.Logger
+	onOpen        func()
+	onData        func(data []byte)
+	onExit        func()
+	lockInput     func() (unlock func())
 	onInputReplay func([]byte)
 
 	maxReattach int
@@ -63,7 +37,7 @@ type attachment struct {
 	mu           sync.Mutex
 	pty          ports.Stream
 	cancel       context.CancelFunc
-	rows         uint16 // last size the client asked for; re-applied on every attach
+	rows         uint16
 	cols         uint16
 	closed       bool
 	exited       bool
@@ -71,9 +45,6 @@ type attachment struct {
 	inputReady   bool
 	pendingInput []pendingInput
 
-	// inputForgotten (guarded by mu) means ForgetTerminalInput dropped this
-	// terminal's input timestamp after its runtime was destroyed: the view
-	// takes no more input and exits instead of re-attaching.
 	inputForgotten bool
 }
 
@@ -102,8 +73,6 @@ func newAttachment(id string, handle ports.RuntimeHandle, src Source, onOpen fun
 	}
 }
 
-// run drives attach → read-loop → re-attach until the pane exits cleanly, the
-// attachment is closed, or ctx is cancelled. It is started once per attachment.
 func (a *attachment) run(ctx context.Context) {
 	ctx, cancel := context.WithCancel(ctx)
 	if !a.setRunCancel(cancel) {
@@ -118,21 +87,11 @@ func (a *attachment) run(ctx context.Context) {
 		if a.shouldStop(ctx) {
 			return
 		}
-		// The runtime this view was opened on was destroyed. Re-attaching could
-		// reach a new runtime under the same id with input still refused, so
-		// exit and let the client open a fresh view.
 		if a.isInputForgotten() {
 			a.markExited()
 			return
 		}
 
-		// Gate EVERY attach (including the first) on the runtime actually
-		// being alive. A mux attach resurrects EXITED sessions — re-running
-		// the serialized agent command — so attaching to a dead handle would
-		// re-create a runtime the daemon already destroyed, outside lifecycle
-		// control. A definitive "not alive" is a clean exit. A probe ERROR is
-		// not proof of death: it retries with backoff up to the same
-		// consecutive-failure cap as attach failures.
 		alive, err := a.src.IsAlive(ctx, a.handle)
 		if a.shouldStop(ctx) {
 			return
@@ -208,7 +167,6 @@ func (a *attachment) run(ctx context.Context) {
 	}
 }
 
-// copyOut pumps PTY output to the sink until the PTY closes or errors.
 func (a *attachment) copyOut(p ports.Stream) error {
 	buf := make([]byte, 32*1024)
 	for {
@@ -224,10 +182,6 @@ func (a *attachment) copyOut(p ports.Stream) error {
 	}
 }
 
-// backoff sleeps between attach attempts; false means ctx was cancelled.
-// Whether another attempt is warranted at all (liveness, failure cap) is
-// decided at the top of the run loop, so a re-attach and a first attach share
-// one gate.
 func (a *attachment) backoff(ctx context.Context, failures int) bool {
 	select {
 	case <-ctx.Done():
@@ -245,14 +199,8 @@ func reattachBackoff(failures int) time.Duration {
 	return d
 }
 
-// errInputRefused means writeLeased dropped the bytes without writing or
-// buffering them: the view is closed, exited, or its input was forgotten.
 var errInputRefused = errors.New("terminal: attachment closed")
 
-// writeLeased takes ownership of release and calls it only after the bytes
-// reach the PTY or are conclusively discarded. In particular, input buffered
-// during attach keeps its session-input lease until setPTY flushes it, so an
-// exclusive provider mutation cannot overtake queued keystrokes.
 func (a *attachment) writeLeased(p []byte, release func()) error {
 	if len(p) == 0 {
 		releaseInput(release)
@@ -278,10 +226,6 @@ func (a *attachment) writeLeased(p []byte, release func()) error {
 	return err
 }
 
-// resize records the client's grid and applies it to the live PTY. The size is
-// remembered so an attach that is still in flight (or a later re-attach) starts
-// at the client's grid instead of the kernel default — the open frame's
-// cols/rows land here before the PTY exists.
 func (a *attachment) resize(rows, cols uint16) error {
 	a.mu.Lock()
 	a.rows, a.cols = rows, cols
@@ -293,19 +237,12 @@ func (a *attachment) resize(rows, cols uint16) error {
 	return pty.Resize(rows, cols)
 }
 
-// size returns the client's last requested grid (zero before the first
-// open/resize recorded one). The attach path reads it so the Stream starts at
-// the client's grid instead of the kernel default.
 func (a *attachment) size() (rows, cols uint16) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.rows, a.cols
 }
 
-// setPTY publishes a freshly attached Stream and replays the client's last
-// requested size onto it (see resize) — the attach already started at the size
-// read in run, but a resize frame can land between that read and registration
-// here; the replay (Resize) converges the late case.
 func (a *attachment) setPTY(p ports.Stream) bool {
 	a.mu.Lock()
 	if a.closed || a.exited {
@@ -343,9 +280,6 @@ func (a *attachment) setPTY(p ports.Stream) bool {
 	}
 }
 
-// flushPendingInput writes the input buffered while no PTY was ready. It holds
-// the terminal's write fence like a live keystroke, so a held HoldInput keeps
-// buffered input off the pane too (#5711).
 func (a *attachment) flushPendingInput(p ports.Stream) error {
 	if a.lockInput != nil {
 		defer a.lockInput()()
@@ -377,9 +311,6 @@ func (a *attachment) clearPTY(p ports.Stream) {
 	a.mu.Unlock()
 }
 
-// close detaches this client: stop re-attaching and kill the attach PTY. It
-// never touches the runtime session itself, which the mux server keeps alive
-// for other clients.
 func (a *attachment) close() {
 	a.mu.Lock()
 	if a.closed {
@@ -426,10 +357,6 @@ func (a *attachment) isClosed() bool {
 	return a.closed
 }
 
-// forgetInput stops the view taking input for a destroyed runtime: input
-// buffered for a pending attach is dropped (its leases released), later writes
-// are refused, and the attach loop exits instead of re-attaching. The caller
-// holds the terminal's write fence, so no write or replay is in flight.
 func (a *attachment) forgetInput() {
 	a.mu.Lock()
 	a.inputForgotten = true
@@ -455,7 +382,6 @@ func (a *attachment) isExited() bool {
 	return a.exited
 }
 
-// markExited flips the attachment to exited and fires onExit once.
 func (a *attachment) markExited() {
 	a.mu.Lock()
 	if a.exited {
@@ -472,7 +398,6 @@ func (a *attachment) markExited() {
 	}
 }
 
-// fail reports an unrecoverable attach error as an exit.
 func (a *attachment) fail(reason string) {
 	a.log.Warn("terminal attachment failed", "id", a.id, "reason", reason)
 	a.markExited()

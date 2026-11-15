@@ -12,8 +12,6 @@ const body: CloudCpCreateSessionRequest = {
 };
 
 describe("cloudDefaultInterfaceMode", () => {
-	// The control plane starts an orchestrator created without a default in
-	// the terminal, as an older desktop expects, so "tui" is sent too.
 	it("always sends the default session interface", () => {
 		expect(cloudDefaultInterfaceMode({ defaultSessionMode: "chat" })).toBe("chat");
 		expect(cloudDefaultInterfaceMode({ defaultSessionMode: "tui" })).toBe("tui");
@@ -47,8 +45,6 @@ describe("createCloudSession", () => {
 			.mockResolvedValueOnce({ session: { id: "s1" } });
 		await expect(createCloudSession({ createSession }, "org-1", { ...body, ...fields })).resolves.toEqual({ session: { id: "s1" } });
 		expect(createSession).toHaveBeenNthCalledWith(1, "org-1", { ...body, ...fields });
-		// The prompt stays: an older control plane starts the session in the
-		// terminal with the prompt on the agent's command line.
 		expect(createSession).toHaveBeenNthCalledWith(2, "org-1", body);
 	});
 
@@ -73,9 +69,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		deleteSession: vi.fn().mockResolvedValue({}),
 	});
 
-	// The prompt would queue the first turn before the files exist, so the
-	// session starts empty and the brief follows as its first message, with the
-	// files and the task's settings.
 	it("creates the session without its prompt and sends the brief with the uploaded files", async () => {
 		const client = clientFor();
 		const upload = vi.fn(async (_sessionId: string, file: { name?: string }) => ({ id: `id-${file.name}` }));
@@ -92,7 +85,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(client.deleteSession).not.toHaveBeenCalled();
 	});
 
-	// A retry after a deleted attempt must not replay that attempt's create.
 	it("creates each attempt under its own key", async () => {
 		const client = clientFor();
 		const upload = vi.fn().mockResolvedValue({ id: "f" });
@@ -101,8 +93,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(client.createSession.mock.calls[0]![2].idempotencyKey).not.toBe(client.createSession.mock.calls[1]![2].idempotencyKey);
 	});
 
-	// A create whose answer was lost may have made the session: a retry with
-	// the same request id replays it rather than starting a second session.
 	it("replays a create whose answer was lost, so its retry reaches the same session", async () => {
 		const client = clientFor();
 		client.createSession.mockRejectedValueOnce(new TypeError("Failed to fetch"));
@@ -113,13 +103,10 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(first).toMatch(/^req-lost:files:/);
 		expect(second).toBe(first);
 		expect(client.sendSessionMessage).toHaveBeenCalledOnce();
-		// Settled, the request id starts afresh.
 		await createCloudChatSessionWithFiles(client, "org-1", chatBody, files, upload, { idempotencyKey: "req-lost" });
 		expect(client.createSession.mock.calls[2]![2].idempotencyKey).not.toBe(first);
 	});
 
-	// The cleanup could not delete the session, so it is still there: the
-	// retry continues it, with the files it already holds, under the same keys.
 	it("continues the session a failed cleanup left, with the files it holds", async () => {
 		const client = clientFor();
 		client.sendSessionMessage.mockRejectedValueOnce(new TypeError("Failed to fetch"));
@@ -133,7 +120,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(client.sendSessionMessage.mock.calls[1]).toEqual(client.sendSessionMessage.mock.calls[0]);
 	});
 
-	// Nothing was made by a refused create or is left of a deleted session.
 	it.each([
 		["a refused create", "create"],
 		["a deleted session", "delete"],
@@ -148,8 +134,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(second).not.toBe(first);
 	});
 
-	// The other files stop uploading once one fails, and the session is
-	// deleted only after they stopped, so none lands in it afterwards.
 	it("stops the other uploads when one fails, before deleting the session", async () => {
 		const client = clientFor();
 		const order: string[] = [];
@@ -176,8 +160,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(client.deleteSession).toHaveBeenCalledWith("org-1", "s1");
 	});
 
-	// Only a session known to be gone makes the failure final: one the delete
-	// did not reach may still take the brief, so its error stays uncertain.
 	it("makes an upload failure final once its session is deleted, and only then", async () => {
 		const failure = new Error("Couldn’t reach Orchestrator Cloud. Check the connection and try again.");
 		const deleted = clientFor();
@@ -191,10 +173,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect(uncertain).toMatchObject({ message: failure.message, cause: failure });
 	});
 
-	// A refusal of the brief or a session that did not start in Chat is final
-	// only once the cleanup deleted the session: one the delete did not reach
-	// is still there, so the start stays uncertain whatever the refusal said,
-	// and a retry with the same request id continues it.
 	it.each([
 		["a refused brief", "send"],
 		["a session that did not start in Chat", "terminal"],
@@ -211,8 +189,6 @@ describe("createCloudChatSessionWithFiles", () => {
 		expect((outcome as Error).cause).toBeInstanceOf(failing === "send" ? CloudCpError : CloudTaskFilesNeedChatError);
 	});
 
-	// A control plane that predates interfaceMode starts the session in the
-	// terminal, where the brief would not reach the agent with its files.
 	it("deletes a session that did not start in Chat", async () => {
 		const client = clientFor("tui");
 		const upload = vi.fn();

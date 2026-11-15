@@ -27,9 +27,6 @@ const (
 	ansiGreenBold = "\x1b[1;32m"
 )
 
-// newCodexLoginCommand is an internal, trusted terminal entry point. It gives
-// the user an interactive choice of Codex-supported authentication methods
-// while CODEX_HOME points at AO's private pending account slot.
 func newCodexLoginCommand(ctx *commandContext) *cobra.Command {
 	var executable string
 	var useDefaultCredentialStore bool

@@ -12,28 +12,21 @@ import (
 )
 
 const (
-	// RefreshInterval is the successful catalog polling interval before jitter.
 	RefreshInterval = 24 * time.Hour
-	// RetryInitial is the first delay after a failed refresh.
-	RetryInitial = time.Minute
-	// RetryMaximum caps the exponential failure retry delay.
-	RetryMaximum = time.Hour
+	RetryInitial    = time.Minute
+	RetryMaximum    = time.Hour
 )
 
-// FetchResult reports either a complete validated catalog or a valid 304.
 type FetchResult struct {
 	Catalog     *Catalog
 	ETag        string
 	NotModified bool
 }
 
-// CatalogFetcher is the injected remote transport boundary.
 type CatalogFetcher interface {
 	Fetch(context.Context, string, bool) (FetchResult, error)
 }
 
-// RefreshConfig supplies runtime dependencies and observable activation hooks.
-// Wait and Jitter are optional deterministic timing seams used by offline tests.
 type RefreshConfig struct {
 	Cache               *Cache
 	Fetcher             CatalogFetcher
@@ -45,8 +38,6 @@ type RefreshConfig struct {
 	Jitter              func(time.Duration) time.Duration
 }
 
-// Refresher synchronously publishes LKG state, then owns one non-overlapping
-// asynchronous remote refresh loop.
 type Refresher struct {
 	config  RefreshConfig
 	started atomic.Bool
@@ -56,7 +47,6 @@ type Refresher struct {
 	etag string
 }
 
-// NewRefresher validates dependencies and applies production timing defaults.
 func NewRefresher(config RefreshConfig) (*Refresher, error) {
 	if config.Cache == nil || config.Fetcher == nil || config.Manager == nil {
 		return nil, errors.New("pricing refresher requires cache, fetcher, and manager")
@@ -81,9 +71,6 @@ func NewRefresher(config RefreshConfig) (*Refresher, error) {
 	return &Refresher{config: config, done: make(chan struct{})}, nil
 }
 
-// Start synchronously loads and publishes a valid LKG snapshot, then launches
-// the immediate remote attempt. LKG activation delivery remains pending until
-// that first attempt completes.
 func (r *Refresher) Start(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return errors.New("pricing refresher already started")
@@ -105,7 +92,6 @@ func (r *Refresher) Start(ctx context.Context) error {
 	return nil
 }
 
-// Wait blocks until cancellation has stopped the refresher goroutine.
 func (r *Refresher) Wait() {
 	if !r.started.Load() {
 		return

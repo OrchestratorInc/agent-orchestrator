@@ -1,5 +1,3 @@
-// Package deepseekacp binds the user's own DeepSeek Harness installation to
-// AO's reusable ACP Chat transport.
 package deepseekharnessacp
 
 import (
@@ -17,13 +15,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// acpProfile is the shipped DeepSeek Harness profile that serves the
-// automation-only ACP v1 stdio surface.
 const acpProfile = "acp"
 
-// New launches `dsh --profile acp` from the exact binary resolved by the
-// DeepSeek Harness agent plugin. The profile supplies the model route and
-// credentials; AO adds no environment overlay of its own.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:              domain.HarnessDeepSeek,
@@ -36,8 +29,6 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	}, log)
 }
 
-// The harness reports a missing key as a generic ACP internal error. Only its
-// explicit route-specific diagnostic is safe to turn into setup guidance.
 func promptFailureCode(err error) domain.ConversationFailureCode {
 	var requestErr *acpsdk.RequestError
 	if !errors.As(err, &requestErr) || requestErr.Code != -32603 {
@@ -58,12 +49,6 @@ func configure(_ context.Context, _ acpdriver.LaunchConfig) ([]string, map[strin
 	return []string{"--profile", acpProfile}, nil, nil
 }
 
-// deepseekEfforts maps AO's provider-neutral reasoning-effort vocabulary onto
-// the levels DeepSeek Harness advertises (off, low, high, max). Harness has no
-// middle level, so AO's "medium" takes Harness's own default balance. Values not
-// listed here pass through unchanged: a model that grows a level keeps working,
-// and an unrecognized value is rejected by the agent rather than silently
-// replaced.
 var deepseekEfforts = map[string]string{
 	"none":    "off",
 	"minimal": "off",
@@ -75,10 +60,6 @@ var deepseekEfforts = map[string]string{
 	"max":     "max",
 }
 
-// sessionOptions maps AO's per-turn choices onto DeepSeek Harness's ACP config
-// options. Model values are opaque: Harness encodes each choice as a JSON array
-// string of the form ["deepseek-official","deepseek-v4-flash"], and the value AO
-// received from the session catalog is the value it sends back.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	options := make([]acpdriver.SessionOption, 0, 2)
 	if model := strings.TrimSpace(settings.Model); model != "" {
@@ -93,12 +74,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return options
 }
 
-// SessionPreamble delivers AO's standing instructions as a text block ahead of
-// the first prompt. DeepSeek Harness accepts no system-prompt launch flag and
-// its session/new handler reads only the working directory, so plain text on
-// the first turn is the channel it follows — the same shape as agyacp. An
-// embedded resource is avoided: Antigravity-class agents treated the resource
-// URI as something to look up rather than as instructions in testing.
 func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	standing := strings.TrimSpace(cfg.SystemPrompt)
 	if standing == "" {
@@ -110,8 +85,6 @@ func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
 	)}
 }
 
-// deepseekEffort resolves one AO effort value to a Harness level, passing an
-// already-native or unknown value through untouched.
 func deepseekEffort(effort string) string {
 	if mapped, ok := deepseekEfforts[strings.ToLower(effort)]; ok {
 		return mapped
@@ -119,11 +92,6 @@ func deepseekEffort(effort string) string {
 	return effort
 }
 
-// ValidateTurnSettings rejects a turn setting that cannot reach the session, so
-// the failure surfaces before DAO creates durable state rather than part-way
-// through the first turn. Harness model values are the opaque strings its own
-// session catalog advertises, so the model is only checked for presence; the
-// effort must resolve to one of the four advertised levels.
 func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
 	effort := strings.TrimSpace(settings.Effort)
 	if effort == "" {
@@ -137,11 +105,6 @@ func validateTurnSettings(_ ports.PermissionMode, settings ports.ChatTurnSetting
 	}
 }
 
-// permissionPolicy is AO's side of accept-edits and auto. DeepSeek Harness asks
-// through session/request_permission with one-shot allow/reject choices and
-// expects the client to answer, so AO answers per request rather than granting
-// anything up front. Bypass needs no entry: Harness only asks about actions its
-// own configuration has not already decided.
 func permissionPolicy(
 	mode ports.PermissionMode,
 	params acpsdk.RequestPermissionRequest,

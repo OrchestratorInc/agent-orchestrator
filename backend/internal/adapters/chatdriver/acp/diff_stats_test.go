@@ -9,7 +9,6 @@ import (
 )
 
 func TestLineDeltaCountsActualEditsNotWholeFiles(t *testing.T) {
-	// A one-line rewrite inside a large file must not report +N −N for N=len(file).
 	const n = 1415
 	var oldBuilder, newBuilder strings.Builder
 	for i := 0; i < n; i++ {
@@ -54,9 +53,6 @@ func TestLineDeltaAppendOnly(t *testing.T) {
 }
 
 func TestTurnDiffReplacesExpandedContextForSameTool(t *testing.T) {
-	// Claude ACP often re-sends the same edit with a wider old/new window.
-	// Combining the first narrow oldText with the later expanded newText inflates
-	// the count (live: +1000 then +1002 / −2). Replacement keeps +1000.
 	const appended = 1000
 	prefix := lines("keep", 5)
 	extraContext := lines("ctx", 2)
@@ -76,7 +72,6 @@ func TestTurnDiffReplacesExpandedContextForSameTool(t *testing.T) {
 		t.Fatalf("expanded update = +%d −%d, want +%d −0", add, del, appended)
 	}
 
-	// The buggy first-old + latest-new merge that this regression guards against.
 	wrongAdd, wrongDel := lineDelta(tightOld, expandedNew)
 	if wrongAdd == appended && wrongDel == 0 {
 		t.Fatal("fixture no longer reproduces the expanded-context inflation")

@@ -1,8 +1,5 @@
 import { create } from "zustand";
 
-// Shared open-state for the dev-only local (email/password) cloud sign-in
-// dialog. Both sidebar entry points (the expanded row and the collapsed rail
-// button) drive the single mounted dialog through this store.
 type LocalSignInDialogState = {
 	open: boolean;
 	openDialog: () => void;

@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// UpsertSessionTerminalTitle stores the title a session's terminal program last
-// set. An unchanged title writes nothing and emits no change event.
 func (s *Store) UpsertSessionTerminalTitle(ctx context.Context, id domain.SessionID, title string, updatedAt time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -21,7 +19,6 @@ func (s *Store) UpsertSessionTerminalTitle(ctx context.Context, id domain.Sessio
 	return nil
 }
 
-// ListSessionTerminalTitles returns the stored titles of the given sessions.
 func (s *Store) ListSessionTerminalTitles(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]string, error) {
 	out := make(map[domain.SessionID]string)
 	if len(ids) == 0 {
@@ -41,8 +38,6 @@ func (s *Store) ListSessionTerminalTitles(ctx context.Context, ids []domain.Sess
 	return out, nil
 }
 
-// UpdateShellTerminalAppTitle stores the title a shell's foreground program last
-// set. It leaves the shell's own name alone.
 func (s *Store) UpdateShellTerminalAppTitle(ctx context.Context, handleID, title string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

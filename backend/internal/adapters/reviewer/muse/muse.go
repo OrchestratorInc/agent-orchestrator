@@ -1,4 +1,3 @@
-// Package muse adapts the Muse Code worker agent for code-review sessions.
 package muse
 
 import (
@@ -10,17 +9,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Reviewer is the Muse Code reviewer adapter.
 type Reviewer struct {
 	agent ports.Agent
 }
 
-// New builds the Muse Code reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{agent: workermuse.New()}
 }
 
-// Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerMuse
 }
@@ -29,10 +25,6 @@ var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 
-// ReviewCommand launches Muse's interactive TUI with writes disabled. Muse
-// supplies its own sandbox and approval machinery; AO keeps the reviewer in
-// auto approval so read/report commands can run unattended while --disable-write
-// prevents non-shell workspace file writes.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config:           inv.Config,
@@ -50,8 +42,6 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	return ports.ReviewCommandSpec{Argv: addNoWriteFlag(argv, inv.Prompt != "")}, nil
 }
 
-// ReviewRestoreCommand resumes the reviewer Muse conversation captured from
-// hooks, reapplying the same no-write reviewer launch flag.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{Permissions: ports.PermissionModeAuto})
 	if err != nil || !ok {
@@ -61,13 +51,10 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 	return cmd, true, nil
 }
 
-// ReviewMessage returns AO's centrally-authored review task for an existing
-// Muse pane.
 func (*Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel stops the active Muse turn while preserving the terminal pane.
 func (*Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInput, Input: "\x1b"}, nil
 }

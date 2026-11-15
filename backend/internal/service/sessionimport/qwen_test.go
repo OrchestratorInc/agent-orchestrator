@@ -14,8 +14,6 @@ import (
 
 const qwenID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
-// writeQwenChat writes synthetic JSONL records (no real user content) to the
-// Qwen chats layout: <root>/projects/<sanitized-cwd>/chats/<id>.jsonl.
 func writeQwenChat(t *testing.T, root, project, id string, records []map[string]any) string {
 	t.Helper()
 	dir := filepath.Join(root, "projects", "-synthetic-"+id, "chats")
@@ -48,18 +46,15 @@ func writeQwenChat(t *testing.T, root, project, id string, records []map[string]
 func qwenConversation(project string) []map[string]any {
 	at := time.Now()
 	return []map[string]any{
-		// Injected context and environment are system-provenance, never prompts.
 		{"type": "system", "provenance": "system", "timestamp": at, "systemPayload": map[string]any{"subtype": "session_approval_mode"}},
 		{"type": "user", "provenance": "real_user", "timestamp": at.Add(time.Second),
 			"message": map[string]any{"role": "user", "parts": []map[string]any{{"text": "fix the parser"}}}},
-		// The model reply carries a thinking part and a tool call beside its text; only the text shows.
 		{"type": "assistant", "provenance": "assistant_output", "timestamp": at.Add(2 * time.Second),
 			"message": map[string]any{"role": "model", "parts": []map[string]any{
 				{"text": "considering options", "thought": true},
 				{"text": "Here is the fix."},
 				{"functionCall": map[string]any{"name": "edit", "args": map[string]any{}}},
 			}}},
-		// Tool output and background notifications are provider traffic, not messages.
 		{"type": "tool_result", "provenance": "tool_result", "timestamp": at.Add(3 * time.Second),
 			"message": map[string]any{"role": "user", "parts": []map[string]any{{"functionResponse": map[string]any{"name": "edit"}}}}},
 		{"type": "user", "provenance": "system", "timestamp": at.Add(4 * time.Second),
@@ -103,7 +98,6 @@ func TestQwenDiscoverSkipsArchiveAndNonTranscripts(t *testing.T) {
 	root := t.TempDir()
 	project := "/work/repo"
 	writeQwenChat(t, root, project, qwenID, qwenConversation(project))
-	// Archived chats and non-transcript files in the project dir must not be offered.
 	projectDir := filepath.Join(root, "projects", "-synthetic-"+qwenID)
 	archive := filepath.Join(projectDir, "chats", "archive")
 	if err := os.MkdirAll(archive, 0o700); err != nil {
@@ -147,7 +141,6 @@ func TestQwenNativeIdentityMismatch(t *testing.T) {
 
 func TestQwenPromptlessIsNotAConversation(t *testing.T) {
 	root := t.TempDir()
-	// Only assistant output and injected context, no real user prompt.
 	path := writeQwenChat(t, root, "/work/repo", qwenID, []map[string]any{
 		{"type": "user", "provenance": "system", "timestamp": time.Now(),
 			"message": map[string]any{"role": "user", "parts": []map[string]any{{"text": "injected"}}}},

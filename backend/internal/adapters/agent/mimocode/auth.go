@@ -18,7 +18,6 @@ var runAuthProbe = func(ctx context.Context, binary string, args ...string) ([]b
 	return aoprocess.CommandContext(ctx, binary, args...).CombinedOutput()
 }
 
-// AuthStatus reports whether MiMo Code has credentials or its built-in free model.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -35,8 +34,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	if status, ok := providerListStatus(string(out)); ok && status == ports.AgentAuthStatusConfigured {
 		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "auth", "list"))
-		// Credential detection and optional verification have separate budgets.
-		// Once credentials are known, an interrupted verification is inconclusive.
 		verificationCtx, cancelVerification := context.WithTimeout(ctx, authVerificationTimeout)
 		defer cancelVerification()
 		status = verifySelectedConnection(verificationCtx, binary)
@@ -50,9 +47,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		}
 		return status, nil
 	}
-	// MiMo Auto is usable without a login, so it is absent from `auth list`.
-	// Ask MiMo itself whether the free channel is available before reporting
-	// an inconclusive auth state.
 	models, err := runAuthProbe(probeCtx, binary, "models", "mimo")
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -61,7 +55,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, nil
 	}
 	if err == nil && freeModelListed(string(models)) {
-		// The free MiMo Auto channel needs no login.
 		ports.RecordAuthEvidence(ctx, domain.CommandSource(binary, "models", "mimo"))
 		return ports.AgentAuthStatusConfigured, nil
 	}

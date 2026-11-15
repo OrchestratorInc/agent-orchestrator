@@ -13,9 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
-// fakeStore is an in-memory cue.Store for service tests. It keeps stored
-// definitions by id and lets tests inject the sentinel errors the real store
-// produces.
 type fakeStore struct {
 	cues      map[domain.CueID]domain.Cue
 	setName   func(domain.Cue) error
@@ -112,8 +109,6 @@ func TestGetCue(t *testing.T) {
 	wantCode(t, err, apierr.KindInvalid, "INVALID_CUE_ID")
 }
 
-// wantCode asserts err is an *apierr.Error carrying the given kind and machine
-// code.
 func wantCode(t *testing.T, err error, kind apierr.Kind, code string) {
 	t.Helper()
 	var e *apierr.Error
@@ -182,7 +177,6 @@ func TestCreateDuplicateName(t *testing.T) {
 	_, err := svc.Create(context.Background(), "mer", commandInput("Test"))
 	wantCode(t, err, apierr.KindConflict, "CUE_NAME_EXISTS")
 
-	// The name may be reused in a different project.
 	got, err := svc.Create(context.Background(), "ao", commandInput("Test"))
 	if err != nil {
 		t.Fatalf("create same name in another project: %v", err)
@@ -296,8 +290,6 @@ func TestNilStoreGuard(t *testing.T) {
 	}
 }
 
-// fakeSessions is an in-memory cue.Sessions double that records what was sent
-// and spawned while honoring the injected error hooks.
 type fakeSessions struct {
 	sessions map[domain.SessionID]domain.Session
 	getErr   error

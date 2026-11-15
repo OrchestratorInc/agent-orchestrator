@@ -85,8 +85,6 @@ func TestParseClaudeCountsAMessageNoRecordEnded(t *testing.T) {
 	}
 }
 
-// The stored object is the CLI's usage record verbatim, so a field Anthropic
-// adds after this code was written still reaches pricing and auditing.
 func TestParseClaudeRetainsUnknownProviderUsageFieldsWithinTheBound(t *testing.T) {
 	source := usageSource(domain.UsageSourceClaudeMain)
 	result := parseRecords(source, []jsonlRecord{{Data: []byte(
@@ -104,9 +102,6 @@ func TestParseClaudeRetainsUnknownProviderUsageFieldsWithinTheBound(t *testing.T
 		t.Fatalf("provider usage = %s, want the object compacted verbatim", stored)
 	}
 
-	// An object far larger than the counter record the providers document is
-	// dropped rather than truncated: an absent object is honest, a partial one
-	// would silently misprice.
 	oversized := strings.Repeat("x", maxProviderUsageBytes)
 	huge := parseRecords(source, []jsonlRecord{{Data: []byte(fmt.Sprintf(
 		`{"type":"assistant","uuid":"two","message":{"id":"msg-2","model":"claude-x","stop_reason":"end_turn","usage":{"input_tokens":8,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2,"padding":%q}}}`,
@@ -123,10 +118,6 @@ func TestParseClaudeRetainsUnknownProviderUsageFieldsWithinTheBound(t *testing.T
 	}
 }
 
-// The transcript writes the same write-once column as the hook, so it earns the
-// same whitelist. A routing string AO cannot name is dropped rather than stored:
-// unattributed is repairable, and a wrong attribution — priced against nothing,
-// invisible to every repair path — is not.
 func TestParseClaudeProviderPrecedenceAndRetention(t *testing.T) {
 	source := usageSource(domain.UsageSourceClaudeMain)
 	source.ProviderHint = "anthropic"
@@ -140,9 +131,6 @@ func TestParseClaudeProviderPrecedenceAndRetention(t *testing.T) {
 	if len(result.Events) != 3 {
 		t.Fatalf("events = %+v", result.Events)
 	}
-	// The first two records name nothing AO recognises, so the whitelisted hook
-	// hint stands. The third names a route AO does know, canonicalised, and it
-	// takes precedence and persists to the next chunk.
 	if result.Events[0].BillingProviderID != "anthropic" || result.Events[0].ModelID != "claude-a" ||
 		result.Events[1].BillingProviderID != "anthropic" || result.Events[1].ModelID != "claude-a" ||
 		result.Events[2].BillingProviderID != "zai" || result.Events[2].ModelID != "claude-b" {
@@ -193,10 +181,6 @@ func TestParseClaudeCacheWriteSplitsAreCapturedOrRejected(t *testing.T) {
 		{name: "absent", wantEvents: 1},
 		{name: "explicit zero", cacheCreation: `,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}`, want5m: int64Ptr(0), want1h: int64Ptr(0), wantEvents: 1},
 		{name: "valid", cacheCreation: `,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":1}`, want5m: int64Ptr(2), want1h: int64Ptr(1), wantEvents: 1},
-		// An absent TTL member stays absent rather than becoming a known zero,
-		// and splits that do not sum to the generic total are still persisted:
-		// pricing treats either as an unknown input cost rather than rejecting
-		// the tokens.
 		{name: "missing member", cacheCreation: `,"cache_creation":{"ephemeral_5m_input_tokens":3}`, want5m: int64Ptr(3), wantEvents: 1},
 		{name: "negative", cacheCreation: `,"cache_creation":{"ephemeral_5m_input_tokens":4,"ephemeral_1h_input_tokens":-1}`, wantAnomaly: 1},
 		{name: "sum below generic total", cacheCreation: `,"cache_creation":{"ephemeral_5m_input_tokens":1,"ephemeral_1h_input_tokens":1}`, want5m: int64Ptr(1), want1h: int64Ptr(1), wantEvents: 1},
@@ -325,9 +309,6 @@ func TestParseCodexCumulativeDeltasAndRepeats(t *testing.T) {
 		tokenValue(got.CachedInputTokens) != 30 || tokenValue(got.OutputTokens) != 15 {
 		t.Fatalf("delta tokens = %+v", got)
 	}
-	// Each event stores payload.info exactly as emitted. These records carry only
-	// cumulative counters, so the stored object holds the running totals the
-	// event was derived from, not the derived delta.
 	for index, wantCumulativeInput := range []int64{100, 160} {
 		stored := result.Events[index].ProviderUsageJSON
 		if providerUsageTokens(t, stored, "total_token_usage", "input_tokens") != wantCumulativeInput {
@@ -343,8 +324,6 @@ func TestParseCodexCumulativeDeltasAndRepeats(t *testing.T) {
 	}
 }
 
-// Break caught: rejecting an oversized native object must not leave behind an
-// AO-only fragment that looks like the complete provider usage record.
 func TestParseCodexOversizedCumulativeUsageStaysAbsent(t *testing.T) {
 	source := usageSource(domain.UsageSourceCodexRollout)
 	padding := strings.Repeat("x", maxProviderUsageBytes)
@@ -406,8 +385,6 @@ func TestParseCodexReferenceUsageReconcilesLastAndCumulativeTotals(t *testing.T)
 		t.Fatalf("result = %+v, want three reconciled events", result)
 	}
 	assertCanonicalEventTotals(t, result.Events, 63566, 30848, 32718, 5058)
-	// last_token_usage is the per-event vector, so the reasoning and cache-write
-	// subsets pricing needs are recoverable from each stored object.
 	var reasoning, cacheWrite int64
 	for _, event := range result.Events {
 		if event.ProviderID != domain.UsageProviderOpenAI || event.ProviderUsageJSON == "" {
@@ -438,8 +415,6 @@ func TestParseCodexOptionalReportedTotalDoesNotDropDeltas(t *testing.T) {
 		t.Fatalf("result = %+v, want three clean events", result)
 	}
 	assertCanonicalEventTotals(t, result.Events, 200, 100, 100, 50)
-	// An optional field the CLI omitted stays absent rather than being
-	// manufactured as a zero.
 	if first := providerUsageValue(t, result.Events[0].ProviderUsageJSON, "total_token_usage", "total_tokens"); first == nil || *first != 120 {
 		t.Fatalf("first reported total = %v, want 120", first)
 	}
@@ -609,12 +584,6 @@ func TestDecodeParserStateTreatsWhitespaceOnlyObjectAsFreshState(t *testing.T) {
 	}
 }
 
-// Break caught: a build before #2928 wrote the harness name — "claude-code",
-// "openai" — into the parser state's "provider" key, and cleared it on decode
-// for exactly that reason. Reusing the key for the billing route would stamp the
-// harness onto every event newly ingested from such a source, marked observed
-// and so beyond every repair path. The route persists under its own key; the
-// retired one is still accepted and still discarded.
 func TestDecodeParserStateIgnoresTheRetiredProviderField(t *testing.T) {
 	tests := []struct {
 		kind        domain.UsageSourceKind
@@ -1091,9 +1060,6 @@ func tokenValue(value *int64) int64 {
 	return *value
 }
 
-// providerUsageValue reads one counter back out of a stored bounded provider
-// usage object, so tests assert on exactly what pricing will later read.
-// A missing path returns nil rather than zero.
 func providerUsageValue(t *testing.T, encoded string, path ...string) *int64 {
 	t.Helper()
 	if encoded == "" {
@@ -1154,12 +1120,6 @@ func osAppend(path, content string) error {
 	return err
 }
 
-// Break caught: once usage became a json.RawMessage, an explicit `usage: null`
-// no longer looked absent. It decoded as all-zero counters and produced a
-// synthetic event whose provider object was the literal `null`, which the
-// object-only column constraint rejects — rolling back the chunk without
-// advancing the cursor, so every retry hit the same record and no later usage
-// on that source could ever be collected.
 func TestParseClaudeTreatsNullUsageAsNoUsageWithoutWedgingTheSource(t *testing.T) {
 	source := usageSource(domain.UsageSourceClaudeMain)
 	records := []jsonlRecord{
@@ -1170,9 +1130,6 @@ func TestParseClaudeTreatsNullUsageAsNoUsageWithoutWedgingTheSource(t *testing.T
 
 	result := parseRecords(source, records, 600, time.Unix(1700000000, 0).UTC())
 
-	// A null usage member is skipped exactly like an absent one, a present
-	// non-object member stays a malformed anomaly, and the record after them is
-	// still collected.
 	if len(result.Events) != 1 {
 		t.Fatalf("events = %+v, want only the record carrying real usage", result.Events)
 	}
@@ -1192,10 +1149,6 @@ func TestParseClaudeTreatsNullUsageAsNoUsageWithoutWedgingTheSource(t *testing.T
 	}
 }
 
-// Break caught: `info: null` decoded into an all-zero cumulative vector instead
-// of being ignored. Against an existing baseline that read as a backwards jump,
-// which reset the baseline to zero, so the next real cumulative record was
-// charged from zero and durably double-counted every earlier token.
 func TestParseCodexNullInfoDoesNotResetTheCumulativeBaseline(t *testing.T) {
 	source := usageSource(domain.UsageSourceCodexRollout)
 	records := []jsonlRecord{
@@ -1210,8 +1163,6 @@ func TestParseCodexNullInfoDoesNotResetTheCumulativeBaseline(t *testing.T) {
 	if len(result.Events) != 2 || result.Cursor.AnomalyCount != 0 {
 		t.Fatalf("result = %+v, want two events and no anomaly", result)
 	}
-	// The second event is the delta against the first record's totals. A reset
-	// baseline would charge the full cumulative 160/90/35 again.
 	if got := result.Events[1].Tokens; tokenValue(got.InputTokens) != 60 ||
 		tokenValue(got.CachedInputTokens) != 30 || tokenValue(got.OutputTokens) != 15 {
 		t.Fatalf("delta tokens = %+v, want the baseline preserved across the null record", got)

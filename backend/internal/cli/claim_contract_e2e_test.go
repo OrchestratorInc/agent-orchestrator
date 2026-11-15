@@ -21,9 +21,6 @@ type claimContractSCM struct {
 	observation ports.SCMObservation
 }
 
-// claimContractSpawnService keeps the production ClaimPR implementation while
-// returning the pre-seeded workspace session from Spawn, avoiding an agent
-// process launch in this HTTP contract test.
 type claimContractSpawnService struct {
 	*sessionsvc.Service
 	spawned domain.Session
@@ -51,10 +48,6 @@ func (claimContractSCM) FetchReviewThreads(context.Context, ports.SCMPRRef) (por
 	return ports.SCMReviewObservation{}, nil
 }
 
-// This guards the complete metadata-only claim contract for both CLI forms:
-// the production service's BranchChanged=false must survive controller
-// serialization and CLI decoding, while the command leaves the real workspace
-// branch and HEAD alone.
 func TestE2E_ClaimPRMetadataOnlyContract(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

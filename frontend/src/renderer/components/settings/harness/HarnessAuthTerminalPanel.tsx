@@ -43,8 +43,6 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 	const { t } = useTranslation();
 	const theme = useResolvedTheme();
 	const shell = useShellMaybe();
-	// Logout can exit before attachment. Own its mux so a shell-list refresh
-	// cannot prune the retained cache entry before we receive the exit event.
 	const createMux = useCallback(() => {
 		const base = hostId ? baseUrlForHost(hostId) : getApiBaseUrl();
 		if (hostId && !base) throw new Error("Remote host disconnected");
@@ -66,8 +64,6 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 	useEffect(() => {
 		panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 	}, [workflow.terminal.handleId]);
-	// While the login runs, the terminal speaks for itself. Guidance is shown only
-	// when it tells the user to act outside the terminal (the Open login button).
 	const status = workflow.phase === "running"
 		? workflow.terminalInput ? workflow.guidance : ""
 		: workflow.phase === "verifying" ? t(workflow.action === "logout" ? "settings.harness.checkingLogout" : "settings.harness.checkingLogin")
@@ -97,7 +93,6 @@ export function HarnessAuthTerminalPanel({ workflow, hostId, onClose, onRetry, o
 					<CloseButton aria-label={t("settings.close")} size="icon-sm" disabled={workflow.phase === "closing" || workflow.phase === "verifying"} onClick={onClose} />
 				</div>
 			</div>
-			{/* Full-screen setup TUIs need enough rows for their provider pickers. */}
 			<div className="h-[min(600px,75vh)] min-h-0" data-settings-inline-edit=""><TerminalPane createMux={hostId || workflow.action === "logout" ? createMux : undefined} daemonReady={hostId ? true : shell ? shell.daemonStatus.state === "ready" : true} focusRequested={workflow.phase === "running" && terminalState === "attached"} fontSize={12} inputRequest={inputRequest} onInputRequestResult={handleInputRequestResult} onTerminalStateChange={handleTerminalState} terminalTarget={{ kind: "shell", handleId: workflow.terminal.handleId, generation: workflow.terminal.createdAt, title: workflow.terminal.title }} theme={theme} /></div>
 			{retryable ? <div className="flex items-center justify-end border-t border-(--color-border-settings-input) bg-surface/90 px-3 py-2"><Button type="button" size="sm" variant="secondary" onClick={workflow.phase === "cleanup_failed" ? onClose : onRetry}>{workflow.phase === "cleanup_failed" ? t("settings.harness.retry") : workflow.action === "logout" ? t("settings.harness.logout") : workflow.action === "setup" ? t("settings.harness.setup") : t("settings.harness.login")}</Button></div> : null}
 		</div>

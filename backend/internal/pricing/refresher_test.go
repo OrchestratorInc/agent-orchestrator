@@ -86,9 +86,6 @@ func TestRefresherPublishesLKGImmediatelyButDelaysActivationsUntilRemoteAttempt(
 	refresher.Wait()
 }
 
-// Break caught: legacy repair could start as soon as the LKG was published and
-// permanently price historical rows before the first remote refresh activated
-// a newer reviewed catalog.
 func TestRefresherRunsAfterInitialAttemptOnlyAfterActivationDelivery(t *testing.T) {
 	fixture := testCandidate(t, testBaseModels("0.1"))
 	catalog, err := ParseCatalog(fixture.manifest, fixture.providers)

@@ -12,23 +12,17 @@ import (
 	"strings"
 )
 
-// AvailableShell is one installed shell Settings offers for new terminals.
-// ID is what the client stores and sends back as the terminal's shell: a
-// Windows selector (pwsh, git-bash, ...) or, on macOS and Linux, the path.
 type AvailableShell struct {
 	ID   string
 	Name string
 	Path string
 }
 
-// ShellCatalog is the shell "auto" resolves to plus every installed shell.
 type ShellCatalog struct {
 	Default AvailableShell
 	Shells  []AvailableShell
 }
 
-// unixShellDirs are searched for unixShellNames in addition to /etc/shells,
-// which Homebrew and other package managers do not always update.
 var unixShellDirs = []string{"/opt/homebrew/bin", "/usr/local/bin", "/bin", "/usr/bin"}
 
 var unixShellNames = []string{"zsh", "bash", "fish", "nu", "pwsh", "sh", "dash", "ksh", "tcsh", "csh", "elvish", "xonsh"}
@@ -43,7 +37,6 @@ var shellDisplayNames = map[string]string{
 	"wsl.exe":        "WSL",
 }
 
-// DetectShells lists the shells installed on this machine.
 func DetectShells() ShellCatalog {
 	if runtime.GOOS == "windows" {
 		return detectWindowsShells()
@@ -51,8 +44,6 @@ func DetectShells() ShellCatalog {
 	return detectUnixShells(readEtcShells("/etc/shells"), unixShellDirs, unixShellNames)
 }
 
-// CheckShellPath resolves a custom shell to an executable path. It accepts an
-// absolute path, a ~/ path, or a bare command name found on PATH.
 func CheckShellPath(candidate string) (string, error) {
 	candidate = strings.TrimSpace(candidate)
 	if candidate == "" {
@@ -99,9 +90,6 @@ func readEtcShells(file string) []string {
 	return shells
 }
 
-// detectUnixShells keeps the first path seen for each real binary, so a
-// Homebrew symlink (/opt/homebrew/bin/fish) is offered rather than its
-// versioned Cellar target, and /bin/sh is not listed twice.
 func detectUnixShells(listed, dirs, names []string) ShellCatalog {
 	candidates := append([]string{}, listed...)
 	for _, dir := range dirs {

@@ -41,13 +41,10 @@ describe("findActiveTrigger", () => {
 		});
 	});
 
-	// Otherwise an email address opens a file menu mid-word.
 	it("ignores an at-sign inside a word", () => {
 		expect(findActiveTrigger("mail dhruv@corethink.ai", 23)).toBeUndefined();
 	});
 
-	// Once there is a space the user has moved on to prose; holding the menu open
-	// would keep Enter hijacked.
 	it("closes the trigger at whitespace", () => {
 		expect(findActiveTrigger("@src/app more words", 19)).toBeUndefined();
 		expect(findActiveTrigger("/review now", 11)).toBeUndefined();
@@ -79,8 +76,6 @@ describe("rankSkills", () => {
 		expect(rankSkills(skills, "").map((item) => item.value)).toHaveLength(4);
 	});
 
-	// An exact/prefix match on the name has to beat a match buried mid-name,
-	// otherwise the ordering reads as arbitrary.
 	it("ranks a name prefix above a mid-name match", () => {
 		const ranked = rankSkills(skills, "rev").map((item) => item.value);
 		expect(ranked[0]).toBe("review");
@@ -99,7 +94,6 @@ describe("rankSkills", () => {
 		expect(ranked("run-ao-fast")).toEqual(["run-ao-fast"]);
 		expect(ranked("run_ao")).toEqual(["run-ao-fast"]);
 		expect(ranked("ceplan")).toEqual(ranked("ce-plan"));
-		// A match at the start of a word still outranks one inside a word.
 		expect(ranked("plan")).toEqual(["ce-plan", "explanation"]);
 	});
 
@@ -135,8 +129,6 @@ describe("rankSkills", () => {
 		});
 	});
 
-	// The `skill:` prefix is how a Pi-style agent runs the skill, so the row shows
-	// the name alone while a pick still inserts the full command.
 	it("shows a skill command by its name but keeps the command as the value", () => {
 		const listed = [
 			skill("skill:Better Interface", "Cross-discipline interface review", "agent"),
@@ -159,8 +151,6 @@ describe("rankSkills", () => {
 		});
 	});
 
-	// Most skills carry only a slug, so the row reads it as a title. The slug is
-	// still what a pick inserts.
 	it("reads a slug as a title and keeps a label the skill gave", () => {
 		const listed = [
 			skill("ce-plan", "", "agent"),
@@ -242,7 +232,6 @@ describe("rankFiles", () => {
 		"frontend/src/renderer/components/chat/ChatWorkspace.tsx",
 	];
 
-	// People search for the file name, not the directories above it.
 	it("scores the basename ahead of the full path", () => {
 		const ranked = rankFiles(paths, "chatcomposer");
 		expect(ranked[0]?.value).toBe(
@@ -265,8 +254,6 @@ describe("rankFiles", () => {
 		});
 	});
 
-	// A file at the repo root has no parent directory. Deriving one from a negative
-	// index truncated its own name and showed "AGENTS.m" under "AGENTS.md".
 	it("gives a root-level file no parent detail", () => {
 		const [row] = rankFiles(["AGENTS.md"], "agents");
 		expect(row).toMatchObject({ value: "AGENTS.md", label: "AGENTS.md" });

@@ -1,17 +1,3 @@
-// Package lifecyclelog keeps a small, local, crash-survivable record of why the
-// daemon started and stopped: signals received, loss of the desktop supervisor
-// link, shutdown requests, the error Run returned, and (through
-// runtime/debug.SetCrashOutput) the traceback of a fatal panic or runtime
-// fault. Before it existed the daemon logged only to stderr, which belongs to
-// the desktop app and disappears with it, so an exit left no evidence.
-//
-// Files live in <root>/logs, where root is the run-file directory (normally
-// ~/.ao, so ~/.ao/logs beside the desktop's logs): daemon-lifecycle.jsonl (rotated by size) and
-// daemon-crash.log (Go crash output, rotated at startup). Nothing here is
-// uploaded. Records hold fixed event names and scalar facts; free text such as
-// an error message passes through Scrub, which removes URLs, credentials,
-// long opaque tokens and long quoted strings, and folds the home directory to
-// "~". Prompts and terminal output must never be passed in.
 package lifecyclelog
 
 import (
@@ -29,17 +15,12 @@ import (
 )
 
 const (
-	// FileName is the JSONL lifecycle record inside <dataDir>/logs.
-	FileName = "daemon-lifecycle.jsonl"
-	// CrashFileName receives Go's fatal crash output.
-	CrashFileName = "daemon-crash.log"
-	// DefaultMaxBytes caps the live lifecycle file before it rotates.
+	FileName        = "daemon-lifecycle.jsonl"
+	CrashFileName   = "daemon-crash.log"
 	DefaultMaxBytes = 2 << 20
-	// Keep is the number of rotated generations kept (.1 .. .Keep).
-	Keep = 2
-	// crashMaxBytes rotates the crash file at startup once it grows past this.
-	crashMaxBytes = 1 << 20
-	maxLineBytes  = 16 << 10
+	Keep            = 2
+	crashMaxBytes   = 1 << 20
+	maxLineBytes    = 16 << 10
 )
 
 var (
@@ -54,8 +35,6 @@ var (
 	opaquePattern     = regexp.MustCompile(`[A-Za-z0-9+_=-]{32,}`)
 )
 
-// Scrub removes material that must never be persisted from free text and
-// truncates it to limit bytes.
 func Scrub(value, homeDir string, limit int) string {
 	out := value
 	if len(homeDir) > 1 {
@@ -73,7 +52,6 @@ func Scrub(value, homeDir string, limit int) string {
 	return out
 }
 
-// Log appends lifecycle records. A nil *Log is a valid no-op.
 type Log struct {
 	mu       sync.Mutex
 	dir      string
@@ -85,8 +63,6 @@ type Log struct {
 	now      func() time.Time
 }
 
-// Open prepares a log under <root>/logs. It never fails: an unwritable
-// directory only means records are dropped, never that the daemon stops.
 func Open(root, version string) *Log {
 	home, _ := os.UserHomeDir()
 	dir := filepath.Join(root, "logs")
@@ -101,13 +77,10 @@ func Open(root, version string) *Log {
 	}
 }
 
-// Record appends one event. Field values must be scalars (string, bool,
-// integer, float, nil); anything else is dropped. Strings are scrubbed.
 func (l *Log) Record(event string, fields map[string]any) {
 	l.write(event, fields, nil)
 }
 
-// RecordError appends one event with the scrubbed error text.
 func (l *Log) RecordError(event string, err error, fields map[string]any) {
 	l.write(event, fields, err)
 }
@@ -164,8 +137,6 @@ func (l *Log) write(event string, fields map[string]any, err error) {
 	if err != nil {
 		return
 	}
-	// One write per record: the line reaches the kernel before Record returns,
-	// so it survives the process dying immediately afterwards.
 	_, _ = f.Write(line)
 	_ = f.Close()
 }
@@ -178,10 +149,6 @@ func rotate(path string, keep int) {
 	_ = os.Rename(path, path+".1")
 }
 
-// InstallCrashOutput sends Go's fatal crash output (unrecovered panics,
-// runtime faults such as SIGBUS/SIGSEGV, fatal errors) to daemon-crash.log in
-// addition to stderr. Without it that text went only to the desktop app's
-// pipe and was lost with it. The file is rotated once it exceeds 1 MiB.
 func (l *Log) InstallCrashOutput() error {
 	if l == nil {
 		return errors.New("lifecycle log unavailable")
@@ -202,15 +169,11 @@ func (l *Log) InstallCrashOutput() error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = f.Close() }() // SetCrashOutput keeps its own duplicate.
-	// A header per daemon start lets a crash be matched to its pid.
+	defer func() { _ = f.Close() }()
 	_, _ = fmt.Fprintf(f, "=== daemon pid %d version %s started %s\n", l.pid, Scrub(l.version, l.homeDir, 64), l.now().UTC().Format(time.RFC3339))
 	return debug.SetCrashOutput(f, debug.CrashOptions{})
 }
 
-// ProcessContext reports, on Linux, the process's cgroup and OOM score
-// adjustment: who it shares a systemd scope (and so an OOM kill or a scope
-// stop) with. Empty elsewhere.
 func ProcessContext() map[string]any {
 	fields := map[string]any{"ppid": os.Getppid()}
 	if data, err := os.ReadFile("/proc/self/cgroup"); err == nil {

@@ -1,8 +1,3 @@
-/**
- * Runs in each frame's isolated extension world. Track the actual mouse pointer
- * ID (never assume it is 1), then release capture before cancelled input's up.
- * Kept self-contained because chrome.scripting serializes this function.
- */
 export function mouseCapture(action: "track" | "observed" | "release", pointerIds: number[] = []): boolean | "idle" | number {
 	const world = globalThis as unknown as {
 		aoMouseCapture?: { pointerId?: number };
@@ -16,14 +11,11 @@ export function mouseCapture(action: "track" | "observed" | "release", pointerId
 				if (event.isTrusted && event.pointerType === "mouse" && event.buttons !== 0) state.pointerId = event.pointerId;
 			};
 			window.addEventListener("pointerdown", observe, true);
-			// A held drag may enter a different frame, which can then capture it.
 			window.addEventListener("pointermove", observe, true);
 		}
 		world.aoMouseCapture.pointerId = undefined;
 		return true;
 	}
-	// A new document/frame that did not see preparation cannot prove that its
-	// pointer is uncaptured. Fail closed rather than sending an activating up.
 	if (!world.aoMouseCapture) return false;
 	const id = world.aoMouseCapture.pointerId;
 	if (action === "observed") return id ?? "idle";

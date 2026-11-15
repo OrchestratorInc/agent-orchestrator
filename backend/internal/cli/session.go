@@ -60,25 +60,23 @@ type sessionRenameRequest struct {
 }
 
 type sessionDTO struct {
-	ID            string               `json:"id"`
-	ProjectID     string               `json:"projectId"`
-	IssueID       string               `json:"issueId,omitempty"`
-	Kind          string               `json:"kind"`
-	Harness       string               `json:"harness,omitempty"`
-	DisplayName   string               `json:"displayName,omitempty"`
-	Activity      sessionActivity      `json:"activity"`
-	IsTerminated  bool                 `json:"isTerminated"`
-	CreatedAt     time.Time            `json:"createdAt"`
-	UpdatedAt     time.Time            `json:"updatedAt"`
-	Status        string               `json:"status"`
-	Branch        string               `json:"branch,omitempty"`
-	BranchState   *branchStateDTO      `json:"branchState,omitempty"`
-	PRs           []sessionPRDTO       `json:"prs"`
-	Mode          string               `json:"mode,omitempty"`
-	ArtifactFiles []sessionArtifactDTO `json:"artifactFiles,omitempty"`
-	// WorkspaceCleanup is the recorded teardown outcome of a terminated
-	// session's workspace, empty when none has been recorded.
-	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
+	ID               string               `json:"id"`
+	ProjectID        string               `json:"projectId"`
+	IssueID          string               `json:"issueId,omitempty"`
+	Kind             string               `json:"kind"`
+	Harness          string               `json:"harness,omitempty"`
+	DisplayName      string               `json:"displayName,omitempty"`
+	Activity         sessionActivity      `json:"activity"`
+	IsTerminated     bool                 `json:"isTerminated"`
+	CreatedAt        time.Time            `json:"createdAt"`
+	UpdatedAt        time.Time            `json:"updatedAt"`
+	Status           string               `json:"status"`
+	Branch           string               `json:"branch,omitempty"`
+	BranchState      *branchStateDTO      `json:"branchState,omitempty"`
+	PRs              []sessionPRDTO       `json:"prs"`
+	Mode             string               `json:"mode,omitempty"`
+	ArtifactFiles    []sessionArtifactDTO `json:"artifactFiles,omitempty"`
+	WorkspaceCleanup string               `json:"workspaceCleanup,omitempty"`
 }
 
 type sessionArtifactDTO struct {
@@ -102,9 +100,6 @@ type sessionListResponse struct {
 	Sessions []sessionDTO `json:"sessions"`
 }
 
-// sessionPRSummaryResponse mirrors the daemon's curated PR read model. The
-// list endpoint already carries aggregate PR facts, while this response adds
-// the unresolved-thread count needed by the human-readable session table.
 type sessionPRSummaryResponse struct {
 	PRs []sessionPRSummaryDTO `json:"prs"`
 }
@@ -115,8 +110,6 @@ type sessionPRSummaryDTO struct {
 		State string `json:"state"`
 	} `json:"ci"`
 	Review struct {
-		// A pointer keeps a pre-change daemon's successful-but-fieldless
-		// response unknown rather than decoding absence as a known zero.
 		Decision              string `json:"decision"`
 		UnresolvedThreadCount *int   `json:"unresolvedThreadCount"`
 	} `json:"review"`
@@ -130,8 +123,6 @@ type deleteSessionResponse struct {
 	SessionID string `json:"sessionId"`
 }
 
-// killSessionRequest names the AO session running the command, so the session
-// that spawned the killed one shows the termination only when it asked for it.
 type killSessionRequest struct {
 	CallerSessionID string `json:"callerSessionId,omitempty"`
 }
@@ -167,9 +158,8 @@ type renameSessionResponse struct {
 
 type cleanupSkippedSession struct {
 	SessionID string `json:"sessionId"`
-	// Code is the stable class of the refusal; a daemon older than it sends none.
-	Code   string `json:"code,omitempty"`
-	Reason string `json:"reason"`
+	Code      string `json:"code,omitempty"`
+	Reason    string `json:"reason"`
 }
 
 type cleanupSessionsResponse struct {
@@ -731,16 +721,10 @@ func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, o
 	return writeSessionList(cmd, sessions, prSummaries, hiddenTerminatedCount, hiddenOrchestratorCount, c.deps.Now())
 }
 
-// listSessionPRSummaries fetches rich PR facts concurrently from the daemon.
-// Individual summary failures are intentionally non-fatal: the list response
-// still contains the persisted PR/CI/review facts and remains useful while an
-// SCM observation is incomplete or unavailable.
 func (c *commandContext) listSessionPRSummaries(ctx context.Context, sessions []sessionDTO) (map[string][]sessionPRSummaryDTO, error) {
 	out := make(map[string][]sessionPRSummaryDTO)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	// Keep the loopback daemon responsive when a project has many sessions while
-	// still resolving independent session summaries in parallel.
 	sem := make(chan struct{}, 8)
 	for _, sess := range sessions {
 		if len(sess.PRs) == 0 {
@@ -853,15 +837,11 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 		_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed\n", res.SessionID)
 		return err
 	}
-	// freed=false: the workspace was preserved (e.g. uncommitted changes) — the
-	// session is terminated either way, but the worktree is left for inspection.
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "session %s killed (workspace preserved)\n", res.SessionID)
 	return err
 }
 
 func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionDeleteOptions) error {
-	// Look the session up before asking, so an unknown id fails without a
-	// prompt; with --yes the delete itself reports it.
 	if opts.project != "" || !opts.yes {
 		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
 			return err
@@ -1074,8 +1054,6 @@ func (c *commandContext) previewCleanupSessions(ctx context.Context, project str
 	if err := c.getJSON(ctx, apiPath("sessions", params), &res); err != nil {
 		return nil, err
 	}
-	// Cleanup skips a workspace already released (or never created), so the
-	// preview must not offer it again on every run.
 	pending := make([]sessionDTO, 0, len(res.Sessions))
 	for _, sess := range res.Sessions {
 		if !domain.WorkspaceDisposition(sess.WorkspaceCleanup).Settled() {
@@ -1145,16 +1123,11 @@ func listPRsForSession(sess sessionDTO, summaries []sessionPRSummaryDTO) []sessi
 	if len(summaries) > 0 {
 		out := make([]sessionListPR, 0, len(summaries))
 		for _, pr := range summaries {
-			// Threads stays nil (rendered as "-") when the daemon did not
-			// publish a count: an older daemon or an only-partially observed
-			// thread snapshot must read as unknown, not zero.
 			out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI.State, Review: pr.Review.Decision, Threads: pr.Review.UnresolvedThreadCount})
 		}
 		return out
 	}
 
-	// Preserve useful list facts when the more detailed endpoint failed or its
-	// snapshot has already been replaced.
 	out := make([]sessionListPR, 0, len(sess.PRs))
 	for _, pr := range sess.PRs {
 		out = append(out, sessionListPR{Number: pr.Number, CI: pr.CI, Review: pr.Review})
@@ -1320,8 +1293,6 @@ func writeSessionDetails(cmd *cobra.Command, sess sessionDTO) error {
 	return nil
 }
 
-// formatBranchState renders the daemon's observed branch facts, for example
-// "feat/x (3 commits, 1 not pushed to origin/feat/x)".
 func formatBranchState(sess sessionDTO) string {
 	state := sess.BranchState
 	if sess.Branch == "" || state == nil {
@@ -1397,7 +1368,6 @@ func confirmSessionCleanup(cmd *cobra.Command, count int, project string) (bool,
 	return confirmTyped(cmd, fmt.Sprintf("Clean %d terminated session%s%s? Type yes to confirm: ", count, pluralS(count), scope))
 }
 
-// confirmTyped prints prompt and reports whether the user typed "yes".
 func confirmTyped(cmd *cobra.Command, prompt string) (bool, error) {
 	if _, err := fmt.Fprint(cmd.OutOrStdout(), prompt); err != nil {
 		return false, err

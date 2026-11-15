@@ -21,10 +21,7 @@ const ERROR_CODES = new Set([
 const ERROR_TYPES = new Set(["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "AbortError"]);
 export const BROWSER_CLOSE_LOG_MAX_BYTES = 256 * 1024;
 
-/** Local-only, bounded diagnostics. Never serialize an exception or page metadata. */
 export function createBrowserCloseDiagnostics(stateDir: string, appVersion: string) {
-	// Per-host keyed IDs correlate failures without storing session names or
-	// permitting dictionary attacks against predictable session/tab identifiers.
 	const key = randomBytes(32);
 	const opaque = (value: string) => createHmac("sha256", key).update(value).digest("hex").slice(0, 24);
 	const directory = path.join(stateDir, "logs");
@@ -53,7 +50,6 @@ export function createBrowserCloseDiagnostics(stateDir: string, appVersion: stri
 			appendFileSync(file, line, { mode: 0o600 });
 			chmodSync(file, 0o600);
 		} catch {
-			// Diagnostics must never replace the original failure (e.g. disk full).
 		}
 	};
 }

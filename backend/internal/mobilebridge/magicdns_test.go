@@ -37,8 +37,6 @@ func TestQueryTailscaleCertsDisabled(t *testing.T) {
 	}
 }
 
-// Every failure mode must yield the zero value rather than a partial result:
-// the caller treats an empty Name as "secure pairing unavailable".
 func TestQueryTailscaleFailuresYieldZero(t *testing.T) {
 	cases := map[string]struct {
 		out string

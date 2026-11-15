@@ -16,8 +16,6 @@ import (
 	"time"
 )
 
-// writeMarker writes a ~/.ao/app-state.json marker pointing at appPath into the
-// configured state dir (AO_RUN_FILE's directory).
 func writeMarker(t *testing.T, cfg testConfig, appPath string) {
 	t.Helper()
 	st := appState{SchemaVersion: 1, AppPath: appPath, InstallSource: "npm-bootstrap"}
@@ -34,9 +32,6 @@ func writeMarker(t *testing.T, cfg testConfig, appPath string) {
 	}
 }
 
-// makeBundle creates a path that stats as a usable bundle on the host OS:
-// a directory on macOS (.app), a regular file on Windows/Linux (exe/AppImage),
-// matching isUsableBundle's per-OS rule.
 func makeBundle(t *testing.T, name string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), name)
@@ -56,10 +51,7 @@ func TestResolveApp_MarkerHit(t *testing.T) {
 	cfg := setConfigEnv(t)
 	bundle := makeBundle(t, appBundleName)
 	writeMarker(t, cfg, bundle)
-	// No scan locations: a hit must come from the marker.
 	t.Cleanup(swapScanLocations(func() []string { return nil }))
-	// Point the preferred location at nothing so this exercises the marker,
-	// not the real /Applications on a macOS dev box.
 	t.Cleanup(swapPreferredAppPath(func() string { return "" }))
 
 	c := &commandContext{deps: Deps{}.withDefaults()}
@@ -69,9 +61,6 @@ func TestResolveApp_MarkerHit(t *testing.T) {
 	}
 }
 
-// The downgrade the marker used to re-propagate: a stale copy that got
-// launched leaves the marker pointing at itself, and `ao start` would reopen
-// that copy forever instead of the install the updater maintains.
 func TestResolveApp_PreferredOutranksMarker(t *testing.T) {
 	cfg := setConfigEnv(t)
 	stale := makeBundle(t, appBundleName)
@@ -87,7 +76,6 @@ func TestResolveApp_PreferredOutranksMarker(t *testing.T) {
 	}
 }
 
-// An absent preferred location must not shadow a good marker.
 func TestResolveApp_PreferredMissingFallsBackToMarker(t *testing.T) {
 	cfg := setConfigEnv(t)
 	bundle := makeBundle(t, appBundleName)
@@ -106,7 +94,6 @@ func TestResolveApp_PreferredMissingFallsBackToMarker(t *testing.T) {
 
 func TestResolveApp_MarkerMissThenScanHit(t *testing.T) {
 	cfg := setConfigEnv(t)
-	// Marker points at a path that does not exist -> must fall through to scan.
 	writeMarker(t, cfg, filepath.Join(t.TempDir(), "gone", appBundleName))
 	scanBundle := makeBundle(t, appBundleName)
 	t.Cleanup(swapScanLocations(func() []string { return []string{scanBundle} }))
@@ -120,7 +107,7 @@ func TestResolveApp_MarkerMissThenScanHit(t *testing.T) {
 }
 
 func TestResolveApp_ScanMissReturnsEmpty(t *testing.T) {
-	setConfigEnv(t) // no marker written
+	setConfigEnv(t)
 	t.Cleanup(swapScanLocations(func() []string {
 		return []string{filepath.Join(t.TempDir(), "nope", appBundleName)}
 	}))
@@ -162,11 +149,9 @@ func TestAssetArchMapping(t *testing.T) {
 func TestAssetName_PerOS(t *testing.T) {
 	got, err := assetName()
 	if err != nil {
-		// On unsupported arch (e.g. arm64 win/linux) an error is expected; the
-		// per-OS expectation below only applies on amd64/arm64 darwin.
 		if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
 			if runtime.GOARCH != "amd64" {
-				return // unsupported-arch error is correct
+				return
 			}
 		}
 		t.Fatalf("assetName() unexpected error: %v", err)
@@ -188,8 +173,6 @@ func TestAssetName_PerOS(t *testing.T) {
 }
 
 func TestRequireAMD64(t *testing.T) {
-	// Host-independent: requireAMD64 keys off runtime.GOARCH, which is amd64 or
-	// arm64 on every CI/dev host. Either branch is a valid assertion.
 	got, err := requireAMD64()
 	if runtime.GOARCH == "amd64" {
 		if err != nil || got != "x64" {
@@ -209,9 +192,6 @@ func TestWindowsInstalledExe(t *testing.T) {
 }
 
 func TestKnownAppLocations_HostOS(t *testing.T) {
-	// knownAppLocations must return at least one candidate on every supported OS
-	// (given the relevant env). Windows needs LOCALAPPDATA; set it so the test is
-	// deterministic regardless of host.
 	if runtime.GOOS == "windows" {
 		t.Setenv("LOCALAPPDATA", "C:\\Users\\me\\AppData\\Local")
 	}
@@ -387,10 +367,6 @@ func TestOpenApp_SpawnFailureFallsBackToManual(t *testing.T) {
 	}
 }
 
-// TestDownload_IgnoresShortClientTimeout proves download() does not inherit the
-// 2s deps.HTTPClient timeout (sized for loopback probes), which would otherwise
-// fail every real release download. The server responds after a delay that
-// exceeds the injected client's tiny timeout; download must still succeed.
 func TestDownload_IgnoresShortClientTimeout(t *testing.T) {
 	const body = "release-zip-bytes"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -400,7 +376,6 @@ func TestDownload_IgnoresShortClientTimeout(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c := &commandContext{deps: Deps{
-		// 50ms timeout: if download honored this, the 150ms server would fail it.
 		HTTPClient: &http.Client{Timeout: 50 * time.Millisecond},
 	}.withDefaults()}
 
@@ -417,13 +392,10 @@ func TestDownload_IgnoresShortClientTimeout(t *testing.T) {
 	}
 }
 
-// TestDownload_NonTTYProgress proves a non-interactive writer (a bytes.Buffer is
-// not an *os.File, so it's non-TTY) gets a plain start line plus a final done
-// line and NO carriage returns, while the bytes still land on disk correctly.
 func TestDownload_NonTTYProgress(t *testing.T) {
 	const body = "release-zip-bytes-payload"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(body)) // net/http sets Content-Length for a known body
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -439,7 +411,6 @@ func TestDownload_NonTTYProgress(t *testing.T) {
 		t.Fatalf("download failed: %v", err)
 	}
 
-	// Bytes on disk are intact.
 	got, err := os.ReadFile(dst)
 	if err != nil {
 		t.Fatal(err)
@@ -452,26 +423,20 @@ func TestDownload_NonTTYProgress(t *testing.T) {
 	if strings.Contains(out, "\r") {
 		t.Fatalf("non-TTY progress must not emit carriage returns, got %q", out)
 	}
-	// Start line: asset name, size, and repo are all present.
 	if !strings.Contains(out, "Downloading Agent Orchestrator (agent-orchestrator.zip, ") {
 		t.Fatalf("missing start line in %q", out)
 	}
 	if !strings.Contains(out, "from owner/repo...") {
 		t.Fatalf("start line missing repo in %q", out)
 	}
-	// Done line is present (the only per-copy line off a TTY).
 	if !strings.Contains(out, "Downloaded ") {
 		t.Fatalf("missing done line in %q", out)
 	}
 }
 
-// TestDownload_NoContentLengthOmitsSize proves the start line drops the size
-// segment when the server omits Content-Length, and still reports transferred
-// bytes on the done line.
 func TestDownload_NoContentLengthOmitsSize(t *testing.T) {
 	const body = "streamed-bytes"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Chunked transfer (no Content-Length): flush so the header omits length.
 		w.Header().Set("Transfer-Encoding", "chunked")
 		_, _ = w.Write([]byte(body))
 		if fl, ok := w.(http.Flusher); ok {
@@ -488,7 +453,6 @@ func TestDownload_NoContentLengthOmitsSize(t *testing.T) {
 		t.Fatalf("download failed: %v", err)
 	}
 	out := buf.String()
-	// No "~<size>)" segment when Content-Length is absent.
 	if strings.Contains(out, "~") {
 		t.Fatalf("size segment should be omitted without Content-Length, got %q", out)
 	}
@@ -515,15 +479,12 @@ func TestHumanBytes(t *testing.T) {
 	}
 }
 
-// swapPreferredAppPath replaces the preferred-location seam and returns a
-// restore func.
 func swapPreferredAppPath(fn func() string) func() {
 	orig := preferredAppPath
 	preferredAppPath = fn
 	return func() { preferredAppPath = orig }
 }
 
-// swapScanLocations replaces the scan-location seam and returns a restore func.
 func swapScanLocations(fn func() []string) func() {
 	orig := appScanLocations
 	appScanLocations = fn

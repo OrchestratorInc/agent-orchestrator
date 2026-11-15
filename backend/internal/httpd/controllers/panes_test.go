@@ -32,8 +32,6 @@ func (f *fakePanes) Execute(_ context.Context, _ string, action string, args jso
 	return f.result, f.err
 }
 
-// paneAuth stands in for the session lookup and capability check: session
-// "s-1" owns capability "cap-s-1".
 type paneAuth struct{}
 
 func (paneAuth) Get(_ context.Context, id domain.SessionID) (domain.Session, error) {

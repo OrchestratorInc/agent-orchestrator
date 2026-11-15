@@ -9,8 +9,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// A held lock and a file system that cannot lock are different verdicts: the
-// first makes the daemon wait, the second makes it start without the guard.
 func TestLockErrorSeparatesHeldFromUnsupported(t *testing.T) {
 	if err := lockError(windows.ERROR_LOCK_VIOLATION); !errors.Is(err, ErrLocked) {
 		t.Fatalf("lockError(ERROR_LOCK_VIOLATION) = %v, want ErrLocked", err)

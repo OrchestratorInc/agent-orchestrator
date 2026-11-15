@@ -225,8 +225,6 @@ func TestSessionEndedOmitsUnknownCreator(t *testing.T) {
 	}
 }
 
-// The ended event carries the same grouping IDs as ao.usage.messages_sent, so
-// a session's outcome joins its message counts.
 func TestSessionEndedJoinsUsageGrouping(t *testing.T) {
 	const projectTelemetryID = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9"
 	store := &fakeStore{projectIDs: map[string]string{"proj|ins_1": projectTelemetryID}}
@@ -271,8 +269,6 @@ func TestSessionEndedSkipsGroupingWhenUnavailable(t *testing.T) {
 	}
 }
 
-// Standalone sessions have no project grouping, but every ended event still
-// carries an opaque, install-scoped session_telemetry_id.
 func TestSessionEndedGivesStandaloneSessionsATelemetryID(t *testing.T) {
 	ids := map[string]string{}
 	for _, installID := range []string{"ins_1", "ins_2"} {

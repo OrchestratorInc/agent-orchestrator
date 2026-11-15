@@ -35,8 +35,6 @@ func TestCrushConfiguredProvidersReadsConfigAndProviderKeys(t *testing.T) {
 		{"id":"groq","type":"openai-compat","api_key":"${GROQ_API_KEY}"},
 		{"id":"bedrock","type":"bedrock"}
 	]`)
-	// A literal key, a key read from another variable, a command that is not
-	// run, a stored OAuth token, and a disabled provider whose key is set.
 	write(filepath.Join(home, ".config", "crush", "crush.json"), `{"providers":{
 		"custom":{"api_key":"sk-literal"},
 		"zai":{"api_key":"$MY_ZAI_KEY"},
@@ -52,7 +50,6 @@ func TestCrushConfiguredProvidersReadsConfigAndProviderKeys(t *testing.T) {
 		t.Fatalf("configured = %v, want %v", got, want)
 	}
 
-	// Bedrock needs the AWS credentials Crush itself looks for.
 	env["AWS_PROFILE"] = "work"
 	got = crushConfiguredProviders("", env)
 	sort.Strings(got)

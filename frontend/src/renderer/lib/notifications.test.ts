@@ -24,7 +24,6 @@ const {
 }));
 
 vi.mock("./api-client", () => ({
-	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
 	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	apiClient: { DELETE: apiDeleteMock, GET: apiGetMock },
 	apiErrorMessage: () => "Request failed",
@@ -109,8 +108,6 @@ function queryClient() {
 	return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
-// A covered or background Electron window still reports "visible" on Windows
-// and Linux, so visibility and focus have to be stubbed independently.
 function setWindowState({ focused, visible }: { focused: boolean; visible: boolean }) {
 	vi.spyOn(document, "visibilityState", "get").mockReturnValue(visible ? "visible" : "hidden");
 	vi.spyOn(document, "hasFocus").mockReturnValue(focused);
@@ -205,7 +202,6 @@ describe("notification cache helpers", () => {
 		expect(getCachedUnreadCount(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toBe(1);
 	});
 
-	// Opening the panel acknowledges what it rendered; history keeps the rows.
 	it("clears the acknowledged rows and keeps them in All", () => {
 		const qc = queryClient();
 		mergeUnreadNotification(qc, notification());
@@ -250,9 +246,6 @@ describe("notification cache helpers", () => {
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey))).toHaveLength(2);
 	});
 
-	// Acknowledging must never discard the cursor to rows the panel has not
-	// loaded yet: the server only cleared the ids we sent, so anything past the
-	// loaded page has to stay reachable for the rest of the session.
 	it("keeps unacknowledged pages and their cursor after acknowledgement", () => {
 		const qc = queryClient();
 		const loaded = Array.from({ length: NOTIFICATION_PAGE_SIZE }, (_, index) =>
@@ -280,8 +273,6 @@ describe("notification cache helpers", () => {
 		expect(getCachedUnreadCount(cache)).toBe(1);
 		expect(getCachedNotifications(cache).every((item) => item.status === "read")).toBe(true);
 
-		// The still-unread row past the loaded page arrives on the next page and
-		// must be visible rather than stranded.
 		mergeUnreadNotification(qc, notification({ id: "ntf_101", type: "pr_merged" }));
 		expect(
 			getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey)).find(
@@ -290,9 +281,6 @@ describe("notification cache helpers", () => {
 		).toBe("unread");
 	});
 
-	// Later all-list pages can ack unread ids that were never loaded into the
-	// unread cache. updatedCount must still move the badge, without wiping the
-	// unread pagination cursor.
 	it("decrements unreadCount from updatedCount when ids are absent from the unread cache", () => {
 		const qc = queryClient();
 		const loaded = Array.from({ length: NOTIFICATION_PAGE_SIZE }, (_, index) =>
@@ -381,8 +369,6 @@ describe("notification cache helpers", () => {
 		});
 	});
 
-	// Resolution is not acknowledgement: a resolved notification the user has not
-	// looked at yet must still show up as unseen, with unresolvedCount updated.
 	it("leaves the seen state alone when a notification resolves", () => {
 		const qc = queryClient();
 		mergeUnreadNotification(qc, notification());
@@ -882,7 +868,6 @@ describe("createNotificationsTransport", () => {
 		createNotificationsTransport(queryClient()).connect();
 		const onBaseUrlChange = subscribeApiBaseUrlMock.mock.calls[0][0] as () => void;
 
-		// Grow the delay on the old port.
 		for (let failure = 1; failure <= 4; failure += 1) {
 			const source = EventSourceStub.instances.at(-1)!;
 			source.readyState = 2;
@@ -893,7 +878,6 @@ describe("createNotificationsTransport", () => {
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:4555");
 		onBaseUrlChange();
 
-		// The fresh port starts over at the initial delay.
 		const moved = EventSourceStub.instances.at(-1)!;
 		moved.readyState = 2;
 		moved.onerror?.();

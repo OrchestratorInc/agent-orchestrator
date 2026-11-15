@@ -28,11 +28,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { TabContextMenu, type TabMenuSpec } from "./TabContextMenu";
 import { terminalTabActionClassName } from "./TerminalTabFrame";
 
-/**
- * A terminal shown in a split pane. Shell terminals come from the shared
- * cache, so moving one into or around a split re-parents the live xterm
- * instead of remounting it.
- */
 export function SplitPaneTerminal({
 	session,
 	target,
@@ -72,10 +67,6 @@ export function SplitPaneTerminal({
 
 const KEYBOARD_STEP = 0.05;
 
-/**
- * The split's own box never depends on its own ratio, so a divider's ratio can
- * be measured from the screen and the layout's fractions alone.
- */
 function clampDividerRatio(divider: CssDivider, rect: DOMRect | undefined, ratio: number): number {
 	const span = rect ? (divider.dir === "row" ? divider.box.w * rect.width : divider.box.h * rect.height) : 0;
 	const min = span > 0 ? Math.min(0.45, MIN_PANE_PX / span) : 0.1;
@@ -90,10 +81,6 @@ function ratioFromPoint(divider: CssDivider, rect: DOMRect, x: number, y: number
 	return clampDividerRatio(divider, rect, ratio);
 }
 
-/**
- * Where a vertical divider and a horizontal one meet: the horizontal one ends
- * on the vertical one (or the other way round). Dragging that point moves both.
- */
 export function findJunctions(dividers: CssDivider[]): { row: CssDivider; column: CssDivider }[] {
 	const eps = 1e-6;
 	const junctions: { row: CssDivider; column: CssDivider }[] = [];
@@ -113,7 +100,6 @@ export function findJunctions(dividers: CssDivider[]): { row: CssDivider; column
 	return junctions;
 }
 
-/** The point where two dividers meet; dragging it resizes both panes' edges at once. */
 export function SplitJunction({
 	screenRef,
 	row,
@@ -196,11 +182,6 @@ export function SplitJunction({
 	);
 }
 
-/**
- * The boundary between two panes of a split. Dragging rewrites only that
- * split's ratio variable on the screen element, so no pane re-renders until
- * the drag ends; terminals refit through their own resize observers.
- */
 export function SplitDivider({
 	screenRef,
 	divider,
@@ -235,8 +216,6 @@ export function SplitDivider({
 		event.preventDefault();
 		event.currentTarget.setPointerCapture(event.pointerId);
 		dragRef.current = { frame: null, ratio: ratioNow() };
-		// Shared with the shell resize grips: terminals do their final fit when
-		// the class goes away.
 		document.body.classList.add("is-resizing-x");
 		if (!row) document.body.style.cursor = "row-resize";
 	};
@@ -298,33 +277,19 @@ export type SplitGroupMember = {
 	label: string;
 	icon: ReactNode;
 	onSelect: () => void;
-	/** Closes the member's pane (a member that cannot close leaves the group). */
 	onClose: () => void;
-	/** A shell whose running agent should show, as on its strip tab. */
 	agentHandleId?: string;
 };
 
-/**
- * A shell in a split has no strip tab of its own, so wherever its name shows
- * (the group tab, its pane header) the agent running in it shows as on that tab.
- */
 function withMemberAgent(member: SplitGroupMember, agents: ReturnType<typeof useShellAgentStore.getState>["agents"]) {
 	const agent = member.agentHandleId ? agents[member.agentHandleId] : undefined;
 	if (!agent) return { ...member, agent };
-	// A default-named shell ("Terminal 3") reads as its agent.
 	const label = /^Terminal \d+$/.test(member.label) ? agentLabel(agent.harness) : member.label;
 	return { ...member, agent, label, icon: <ShellAgentIcon agent={agent} done={false} /> };
 }
 
-/** Height of a pane's title bar; the pane's content sits below it. */
 export const PANE_HEADER_PX = 28;
 
-/**
- * The title bar of one pane in a split. It is what makes a pane read as a tab:
- * it carries the tab's icon and name, is the handle to drag the pane (onto a
- * pane's edge to rearrange, onto the strip to unsplit), and has a close
- * button where the pane can close. Pressing anywhere on it focuses the pane at once.
- */
 export function SplitPaneHeader({
 	member,
 	focused,
@@ -338,7 +303,6 @@ export function SplitPaneHeader({
 	closable: boolean;
 	style: CSSProperties;
 	menu: TabMenuSpec & { kind: "group" };
-	/** The header was pressed: the pane should take keyboard focus. */
 	onPress?: () => void;
 }) {
 	const { t } = useTranslation();
@@ -357,7 +321,6 @@ export function SplitPaneHeader({
 				if (event.button !== 0) return;
 				member.onSelect();
 				onPress?.();
-				// The title chip is the tab being carried, so the ghost looks like a tab.
 				beginPaneTabDrag(event, member.key, event.currentTarget, undefined, { immediate: true });
 			}}
 			style={style}
@@ -391,14 +354,6 @@ export function SplitPaneHeader({
 	return <TabContextMenu spec={menu}>{header}</TabContextMenu>;
 }
 
-/**
- * One strip tab for tabs shown together. The focused member shows its name;
- * the others show only their icon, named by a tooltip. Each member is its own
- * target: clicking it shows the group with that pane focused, and dragging it
- * moves it within the split or out of the group. Hovering the tab swaps the
- * focused member's icon for a close button, as on other tabs, and its menu
- * (`useTabMenuItems`) ungroups it, followed by the focused member's own rows.
- */
 export function SplitGroupTab({
 	active,
 	focusedKey,
@@ -411,8 +366,6 @@ export function SplitGroupTab({
 	menu: TabMenuSpec & { kind: "group" };
 }) {
 	const { t } = useTranslation();
-	// A shell in a split has no strip tab of its own, so the group tab keeps
-	// the agent watch open and shows the agent as that tab would.
 	useShellAgentStream(members.some((member) => member.agentHandleId));
 	const agents = useShellAgentStore((state) => state.agents);
 	const shown = members.map((member) => withMemberAgent(member, agents));
@@ -423,7 +376,6 @@ export function SplitGroupTab({
 				"group relative inline-flex h-full shrink-0 self-stretch items-stretch border-r border-border",
 				active ? "bg-overlay text-foreground" : "text-passive hover:bg-raised",
 			)}
-			// The floating top bar draws the selected tab's pill from data-active.
 			data-active={active || undefined}
 			data-split-group-tab
 			data-terminal-tab-frame
@@ -431,7 +383,6 @@ export function SplitGroupTab({
 		>
 			{shown.map((member, index) => {
 				const focused = member.key === focusedKey;
-				// The aria-label hides the badge's own text, so it names the agent's state too.
 				const stateLabel = member.agent ? shellAgentStateLabel(t, member.agent, false) : undefined;
 				const segment = (
 					<Pressable
@@ -447,7 +398,6 @@ export function SplitGroupTab({
 							if (event.detail > 1) return;
 							member.onSelect();
 						}}
-						// A middle-click closes this member's pane, as its close button does.
 						onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
 						onAuxClick={(event) => {
 							if (event.button !== 1) return;
@@ -455,7 +405,6 @@ export function SplitGroupTab({
 							member.onClose();
 						}}
 						onPointerDown={(event) => {
-							// A member drags on its own; the group tab itself stays in place.
 							event.stopPropagation();
 							beginPaneTabDrag(event, member.key, event.currentTarget);
 						}}
@@ -482,7 +431,6 @@ export function SplitGroupTab({
 						{focused ? (
 							<span className="relative inline-flex min-w-0">
 								{segment}
-								{/* Takes the icon's slot on hover, like the close button on other tabs. */}
 								<span
 									className="pointer-events-none absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
 									data-terminal-tab-action
@@ -494,7 +442,6 @@ export function SplitGroupTab({
 											event.stopPropagation();
 											member.onClose();
 										}}
-										// The X covers the member's icon, so a middle-click there closes the pane too.
 										onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
 										onAuxClick={(event) => {
 											if (event.button !== 1) return;

@@ -111,7 +111,6 @@ export class DesktopTelemetryController {
 		this.transport.capture(request); return true;
 	}
 
-	// Main-process handled errors follow the same consent as renderer captures.
 	captureMain(request: MainErrorCapture): boolean {
 		if (!this.captureEnabled(this.view) || !this.transport?.captureMain) return false;
 		this.transport.captureMain(request); return true;
@@ -170,8 +169,6 @@ export class DesktopTelemetryController {
 				if (!transport) throw new Error("desktop telemetry transport is unavailable");
 			}
 		} catch (error) {
-			// If enabling fails after durable state changes, reuse the full opt-out
-			// path so no process can retain ambiguous enablement.
 			this.view = this.toView({ ...snapshot, acknowledged: false }, "cleanup_pending", "cleanup_failed");
 			await this.disable();
 			throw error;

@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// TestCueTypeValid pins the supported cue types.
 func TestCueTypeValid(t *testing.T) {
 	tests := []struct {
 		typ   CueType
@@ -27,8 +26,6 @@ func TestCueTypeValid(t *testing.T) {
 	}
 }
 
-// TestCueValidateValid accepts a minimum viable command and agent cue and keeps
-// the size bounds boundary-exact (at the cap is valid, one over is rejected).
 func TestCueValidateValid(t *testing.T) {
 	command := Cue{
 		ID:        "cue-1",
@@ -69,9 +66,6 @@ func TestCueValidateValid(t *testing.T) {
 
 }
 
-// TestCueValidateRejectsInvalid pins every invalid shape in the validation
-// matrix: missing/whitespace/oversized name, unknown
-// type, and each type missing or oversizing its executable payload.
 func TestCueValidateRejectsInvalid(t *testing.T) {
 	tests := []struct {
 		name    string

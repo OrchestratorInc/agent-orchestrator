@@ -260,7 +260,6 @@ func TestUnusedContextSlotSkipsInstructionSnapshot(t *testing.T) {
 	t.Setenv("AO_MEMCODE_SESSION", "ao-1")
 	t.Setenv(instructionChunkCountEnv, "1")
 	var out bytes.Buffer
-	// There is no snapshot to open: only the active slot may require it.
 	if err := EmitInstructionChunk(&out, "context-chunk-1"); err != nil || out.Len() != 0 {
 		t.Fatalf("unused slot = %q, %v", out.String(), err)
 	}
@@ -290,7 +289,6 @@ func TestLaunchChunkCountMustMatchPreparedContext(t *testing.T) {
 	if err := EmitInstructionChunk(io.Discard, "context-chunk-0"); err == nil {
 		t.Fatal("accepted stale launch chunk count")
 	}
-	// Processes launched before the optimization retain the decode fallback.
 	t.Setenv(instructionChunkCountEnv, "")
 	var out bytes.Buffer
 	if err := EmitInstructionChunk(&out, "context-chunk-0"); err != nil || out.String() != "context" {

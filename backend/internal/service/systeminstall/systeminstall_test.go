@@ -145,10 +145,6 @@ func testCommandRunner(command func(context.Context, []string) *exec.Cmd) comman
 	}
 }
 
-// lookPathFound returns a lookPath fake that resolves only the names present
-// in paths (defaulting each found name to "/usr/bin/<name>" when the map
-// value is empty), and errors for everything else — mirroring the
-// systemcheck test fake.
 func lookPathFound(names ...string) func(string) (string, error) {
 	set := make(map[string]bool, len(names))
 	for _, n := range names {
@@ -232,10 +228,6 @@ func TestPlanFor(t *testing.T) {
 			name: "tmux linux no package manager is unsupported", target: TargetTmux, goos: "linux",
 			wantUnsupported: true, wantReasonHas: "No supported Linux package manager",
 		},
-		// cloudflared is what makes a phone reachable from outside the local
-		// network. These are the package-manager fallbacks: newTestService has
-		// no downloader, so AO's own pinned copy is not on offer (see
-		// cloudflared_test.go for that).
 		{
 			name: "cloudflared darwin uses brew", target: TargetCloudflared, goos: "darwin", found: []string{"brew"},
 			wantCommand: []string{"brew", "install", "cloudflared"},
@@ -252,8 +244,6 @@ func TestPlanFor(t *testing.T) {
 			name: "cloudflared windows without winget is unsupported", target: TargetCloudflared, goos: "windows",
 			wantUnsupported: true, wantReasonHas: "winget",
 		},
-		// Same rule as every other Linux target: these need root, and AO never
-		// asks for a password, so it hands over the command instead.
 		{
 			name: "cloudflared linux is unsupported with instructions", target: TargetCloudflared, goos: "linux",
 			found: []string{"apt-get"}, wantUnsupported: true, wantReasonHas: "administrator password",
@@ -456,7 +446,7 @@ func TestStartAndStatus_Failed(t *testing.T) {
 }
 
 func TestStart_Unsupported(t *testing.T) {
-	s := newTestService("windows") // no winget on PATH
+	s := newTestService("windows")
 
 	job, err := s.Start(context.Background(), TargetTmux)
 	if err != nil {
@@ -518,9 +508,6 @@ func TestStatus_LinuxReturnsManualCommandBeforeStart(t *testing.T) {
 	}
 }
 
-// TestStart_IdempotentWhileRunning gates the fake install on a channel so the
-// test controls exactly when it finishes, then fires two concurrent Starts
-// and confirms neither one starts a second run.
 func TestStart_IdempotentWhileRunning(t *testing.T) {
 	release := make(chan struct{})
 	started := make(chan struct{}, 2)
@@ -542,7 +529,7 @@ func TestStart_IdempotentWhileRunning(t *testing.T) {
 		t.Fatalf("first Status = %q, want %q", first.Status, StatusRunning)
 	}
 
-	<-started // the background goroutine has begun (and is blocked on release)
+	<-started
 
 	second, err := s.Start(context.Background(), TargetTmux)
 	if err != nil {
@@ -560,11 +547,6 @@ func TestStart_IdempotentWhileRunning(t *testing.T) {
 	}
 }
 
-// TestRun_Timeout confirms a stalled installer eventually surfaces as a
-// failure instead of pinning its target in StatusRunning forever. The fake
-// command actually respects ctx (exec.CommandContext, same as real installs),
-// so the short installTimeout below kills it well before the real 5s sleep
-// would return on its own.
 func TestRun_Timeout(t *testing.T) {
 	s := newTestService("darwin", "brew")
 	s.installTimeout = 50 * time.Millisecond
@@ -1304,9 +1286,7 @@ func TestHarnessMaintenanceGateBlocksCodexLaunchThroughWorkerLifetime(t *testing
 
 func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.T) {
 	s := newTestService("darwin", "npm")
-	// With AO_UPDATE_WHILE_RUNNING off, the update must see the new session.
 	s.updateWhileRunningDisabled = true
-	// Sessions are checked once the update proves which method owns the copy.
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex 1.0.0"}, nil
@@ -1421,12 +1401,6 @@ func waitForStatus(t *testing.T, s *Service, target Target, want Status) {
 	t.Fatalf("timed out waiting for %s to reach status %q", target, want)
 }
 
-// A Linux package-manager plan must now carry the resolved argv even though it
-// stays Unsupported. That pairing is the whole point of the split: the daemon
-// refuses to elevate, while the CLI (which has a terminal and can prompt for a
-// sudo password) runs the very same command. Before this, the argv existed only
-// inside the Reason string, so the CLI had to re-derive it and the two surfaces
-// could drift.
 func TestLinuxPlanExposesArgvWhileStayingUnsupported(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
@@ -1451,8 +1425,6 @@ func TestLinuxPlanExposesArgvWhileStayingUnsupported(t *testing.T) {
 			if !plan.NeedsRoot {
 				t.Fatal("NeedsRoot = false, want true: every Linux package manager needs root")
 			}
-			// The security invariant. Exposing the argv must not have made the
-			// daemon willing to run it.
 			if !plan.Unsupported {
 				t.Fatal("Unsupported = false, want true: the daemon must never run a root install itself")
 			}
@@ -1460,8 +1432,6 @@ func TestLinuxPlanExposesArgvWhileStayingUnsupported(t *testing.T) {
 	}
 }
 
-// The daemon must still refuse to execute a Linux plan, argv or not. This is
-// the behavioural half of the invariant asserted above.
 func TestStartRefusesLinuxRootInstall(t *testing.T) {
 	s := newTestService("linux", "apt-get")
 	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error {
@@ -1477,8 +1447,6 @@ func TestStartRefusesLinuxRootInstall(t *testing.T) {
 	}
 }
 
-// Resolve is the seam the CLI consumes; it must agree with the Service's own
-// planner rather than being a second implementation of the same table.
 func TestResolveMatchesServicePlan(t *testing.T) {
 	lookPath := lookPathFound("brew", "curl", "bash")
 	service := &Service{goos: "darwin", executables: executableFinderFunc(lookPath)}
@@ -1542,8 +1510,6 @@ func TestVendorInstallerUpdateUsesHarnessSelfUpdateCommand(t *testing.T) {
 }
 
 func TestWindowsVendorUpdatesUsePowerShellInstallers(t *testing.T) {
-	// A pwsh.exe alias may exist in WindowsApps but refuse execution. The system
-	// powershell.exe must win when both names resolve.
 	s := newTestService("windows", "pwsh.exe", "powershell.exe")
 	planner, err := s.newRequestPlanner(context.Background())
 	if err != nil {
@@ -1705,12 +1671,10 @@ func TestKimiUpdateBindsOnlyKimiCodeDefaultInstall(t *testing.T) {
 		{"darwin", "/Users/test/.kimi-code/bin/kimi", "/Users/test", "/Users/test/.kimi-code"},
 		{"linux", "/home/u/.kimi-code/bin/kimi", "/home/u/", "/home/u/.kimi-code"},
 		{"windows", `C:\Users\Test\.Kimi-Code\BIN\Kimi.exe`, `C:\Users\test`, `C:\Users\Test\.Kimi-Code`},
-		// Another tool's kimi: the legacy Python kimi-cli, a cargo build, a system copy.
 		{"darwin", "/Users/test/.local/bin/kimi", "/Users/test", ""},
 		{"darwin", "/Users/test/.cargo/bin/kimi", "/Users/test", ""},
 		{"darwin", "/usr/local/bin/kimi", "/Users/test", ""},
 		{"windows", `C:\Users\test\.local\bin\kimi.exe`, `C:\Users\test`, ""},
-		// Case and executable names are exact outside Windows.
 		{"linux", "/home/u/.kimi-code/BIN/kimi", "/home/u", ""},
 		{"darwin", "/Users/test/.kimi-code/bin/kimi.exe", "/Users/test", ""},
 		{"darwin", "/Users/test/.kimi-code/bin/kimi-legacy", "/Users/test", ""},
@@ -1745,9 +1709,8 @@ func TestKimiUpdateAdvisoryOffersUpdateOnlyForDefaultInstall(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	for binary, want := range map[string]string{
 		home + "/.kimi-code/bin/kimi": "official-installer",
-		// The legacy Python kimi-cli and a cargo build are not Kimi Code's install.
-		home + "/.local/bin/kimi": "",
-		home + "/.cargo/bin/kimi": "",
+		home + "/.local/bin/kimi":     "",
+		home + "/.cargo/bin/kimi":     "",
 	} {
 		s := newTestService("darwin", "bash")
 		s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
@@ -1764,8 +1727,6 @@ func TestKimiUpdateAdvisoryOffersUpdateOnlyForDefaultInstall(t *testing.T) {
 	}
 }
 
-// The installer skips its legacy-shim migration, which renames or deletes
-// other kimi commands on PATH, only while its own bin directory is off PATH.
 func TestKimiUpdateKeepsItsBinDirectoryOffInstallerPath(t *testing.T) {
 	for _, test := range []struct {
 		goos, binary, home, pathList, want string
@@ -1853,8 +1814,6 @@ func TestAiderUpdatesThroughUVThatItsInstallerUses(t *testing.T) {
 	if want := []string{"uv", "tool", "upgrade", "aider-chat"}; !slices.Equal(plan.Command, want) {
 		t.Fatalf("Aider update = %v, want %v", plan.Command, want)
 	}
-	// The installer's binary lives in uv's tool layout, which the official
-	// method can never own; uv is the method that can update it.
 	if s.methodOwnsBinary(context.Background(), Plan{Method: "official-installer"}, "/Users/test/.local/share/uv/tools/aider-chat/bin/aider") {
 		t.Fatal("official installer claimed Aider's uv-managed binary")
 	}
@@ -1899,13 +1858,11 @@ func TestOpenCodeVendorUpdatePinsApprovedReleaseOverAdvisory(t *testing.T) {
 	if want := []string{"/Users/test/.opencode/bin/opencode", "upgrade", "1.18.35", "--method", "curl"}; !slices.Equal(ran, want) {
 		t.Fatalf("ran %v, want the approved release %v", ran, want)
 	}
-	// Reaching the approved release is success, though 1.18.36 was announced.
 	waitForStatus(t, s, TargetOpencode, StatusSucceeded)
 }
 
 func TestOpenCodeVendorUpdateNeverPinsAStaleCachedRelease(t *testing.T) {
 	s := newTestService("darwin", "bash")
-	// The cache still announces 1.18.35, but 1.18.36 was installed since.
 	s.updateAdvisories = map[Target]UpdateAdvisory{TargetOpencode: {AgentID: string(TargetOpencode), Status: UpdateStatusBehindLatest, CurrentVersion: "1.18.34", LatestVersion: "1.18.35", CheckedAt: time.Now()}}
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		return VerifyResult{ResolvedPath: "/Users/test/.opencode/bin/opencode", Output: "1.18.36"}, nil
@@ -1948,7 +1905,6 @@ func TestOpenCodeVendorUpdateNeverPinsUnvettedApprovedRelease(t *testing.T) {
 			t.Fatalf("expectedVersion %s ran %v", downgrade, ran)
 		}
 	}
-	// A release the advisory has not seen is a verification floor only.
 	var ran []string
 	s := newService(&ran)
 	if _, err := s.StartAgentOperation(context.Background(), TargetOpencode, "official-installer", AgentOperationUpdate, "9.9.9"); err != nil {
@@ -1980,10 +1936,7 @@ func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newTestService("darwin", "npm")
-			// Updates run alongside live work unless AO_UPDATE_WHILE_RUNNING is off;
-			// with it off a reviewer still counts as live work.
 			s.updateWhileRunningDisabled = true
-			// The worker runs Claude Code; only its reviewer uses Codex.
 			s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "claude-worker", Harness: domain.HarnessClaudeCode}}}
 			s.reviewers = reviewers
 			if _, err := s.StartAgentOperation(context.Background(), TargetCodex, "npm", AgentOperationUpdate, ""); !errors.Is(err, ErrHarnessActive) {
@@ -1991,8 +1944,6 @@ func TestHarnessUpdateIsBlockedWhileItsReviewerRuns(t *testing.T) {
 			}
 		})
 	}
-	// A reviewer on another harness, or a reviewer chat with no live
-	// controller, leaves the update to its other checks.
 	s := newTestService("darwin", "npm")
 	s.reviewers = reviewerListerStub{
 		handles: []domain.ReviewerHandle{{Harness: domain.ReviewerClaudeCode, HandleID: "pane-1"}},
@@ -2038,8 +1989,6 @@ func TestHomebrewUpdateRefreshesMetadataBeforeUpgrading(t *testing.T) {
 	}
 }
 
-// Without the shell AO runs Cua's installer with, Settings must offer Cua's
-// own one-line command to copy, not an Install button that fails again.
 func TestStatus_CuaDriverWithoutShellOffersTheOneLiner(t *testing.T) {
 	for goos, want := range map[string]string{
 		"windows": "irm https://cua.ai/driver/install.ps1 | iex",
@@ -2060,7 +2009,6 @@ func TestStatus_CuaDriverWithoutShellOffersTheOneLiner(t *testing.T) {
 		})
 	}
 
-	// With the shell present, AO runs the installer itself.
 	job, err := newTestService("darwin", "bash").Status(context.Background(), TargetCuaDriver)
 	if err != nil || job.Status == StatusUnsupported {
 		t.Fatalf("with bash: job = %+v, err = %v", job, err)

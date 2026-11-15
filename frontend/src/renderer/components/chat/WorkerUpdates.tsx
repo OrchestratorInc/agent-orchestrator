@@ -1,14 +1,3 @@
-/**
- * The orchestrator chat's view of its workers.
- *
- * A worker's message or report is drawn as one quiet row — who, state, a headline,
- * time — that opens to the full text, instead of a full-width card. When the
- * orchestrator's answer asks the user nothing, it hangs under the rows as one line
- * that opens to the work behind it, so the chat reads as the user's conversation
- * rather than a log of worker traffic. A turn that spawned workers lists them
- * with where each one is now.
- */
-
 import { Bot, ChevronDown, ChevronRight, FileText, GitPullRequest, LoaderCircle, Split, Tag } from "@/components/app-icons";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -24,7 +13,6 @@ import { Pressable } from "../ui/pressable";
 
 export interface WorkerUpdate {
 	key: string;
-	/** The report state (`needs_input`, `stuck`, `done`, ...); absent for a direct message. */
 	state?: string;
 	name: string;
 	sessionId?: string;
@@ -34,19 +22,10 @@ export interface WorkerUpdate {
 }
 
 const REPORTS_HEADER = "Reports since your previous turn:";
-// One entry per `[state] [name](ao://sessions/<project>/<session>)`, as report.PreparedBatch.Render writes it,
-// or `[state] ao://sessions/<project>/<session>` with no name, as older daemons wrote it.
-// ponytail: parses the prompt text the daemon renders, so a worker's note can mimic an entry; structured report rows on the message would end the guess.
 const REPORT_ENTRY = /\n\n\[([a-z_]+)\] (?:\[((?:\\.|[^\]\\])*)\]\(ao:\/\/sessions\/([^/)\s]+)\/([^)\s]+)\)|ao:\/\/sessions\/([^/\s]+)\/(\S+))(?: \(repeated \d+ times\))?/g;
-// The `artifact: <path>` line a report gets per attached artifact, as report.PreparedBatch.Render writes it.
 const ARTIFACT_LINE = /^artifact: (\S+)$/;
-// The `[from <session> "<name>"]` prefix `ao send` puts on a worker's message. Messages from before AO
-// stored the sender alongside carry only this.
 const SENDER_PREFIX = /^\[from (?:worker\s+)?([\w.-]+)(?:\s+"([^"]*)")?\]/;
-// The `[via <tool>]` or `[via <tool> #<tag>]` prefix an outside tool puts on what it sends through AO's API,
-// as integrations/grok-bot does. The tag only lets the tool find its reply.
 const VIA_PREFIX = /^\[via ([^\]#\n]{1,60}?)(?: #[^\]\n]*)?\]\s*/;
-// The prompt AO used to send the orchestrator to name a new task, and the command it answered with.
 const TITLE_UPDATE = "AO TASK TITLE UPDATE";
 const RENAME_COMMAND = /\bao'?\s+session\s+rename\s+\S+\s+(["'])(.+?)\1/;
 
@@ -81,7 +60,6 @@ function parseReports(text: string, createdAt: string, keyPrefix: string): Worke
 	});
 }
 
-/** Items never change in place, so each is parsed once however often the timeline renders. */
 export function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationItem) => T {
 	const cache = new WeakMap<ConversationItem, T>();
 	return (item) => {
@@ -90,10 +68,6 @@ export function cachedBy<T>(read: (item: ConversationItem) => T): (item: Convers
 	};
 }
 
-/**
- * What a worker sent, when this item is one: a direct `ao send` (a message, or a
- * steer when it arrived mid-turn) or a batch of reports.
- */
 export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
 	if (item.kind === "activity") {
 		const sender = isSteer(item) ? item.detail?.senderSessionId?.trim() : undefined;
@@ -123,10 +97,7 @@ export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
 	return parseReports(item.text, item.createdAt, item.id);
 });
 
-/** The outside tool a message or steer came through and what it said, when no AO session sent it. */
-// ponytail: reads the tool's text prefix, so anyone can type one; a sender name on the send API would replace it.
 export const relayedVia = cachedBy((item): { name: string; body: string } | null => {
-	// A message's piggybacked reports draw as their own rows, as under a human message.
 	const text = item.kind === "message"
 		? item.role === "user" && !item.senderSessionId ? humanVisibleText(item.text) : undefined
 		: isSteer(item) && !item.detail?.senderSessionId?.trim() ? item.detail?.text ?? item.summary : undefined;
@@ -140,7 +111,6 @@ export function isTaskTitleUpdate(item: ConversationItem): boolean {
 	return item.kind === "message" && item.role === "user" && item.origin !== "human" && item.text.startsWith(TITLE_UPDATE);
 }
 
-/** The title the orchestrator gave a new task, read from its `ao session rename`. */
 export function renamedTitle(items: readonly ConversationItem[]): string | undefined {
 	for (const item of items) {
 		if (item.kind !== "activity" || item.activityKind !== "command") continue;
@@ -150,12 +120,10 @@ export function renamedTitle(items: readonly ConversationItem[]): string | undef
 	return undefined;
 }
 
-/** A turn a worker or AO opened rather than the user: worker traffic, or a task-naming prompt. */
 export function isWorkerLead(item: ConversationItem | undefined): boolean {
 	return item !== undefined && (workerUpdatesOf(item).length > 0 || isTaskTitleUpdate(item));
 }
 
-/** Reports the daemon folded into a human message because the orchestrator was busy. */
 export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
 	if (item.kind !== "message" || item.role !== "user" || item.origin !== "human") return [];
 	const visible = humanVisibleText(item.text);
@@ -169,28 +137,17 @@ export const piggybackedUpdates = cachedBy((item): WorkerUpdate[] => {
 	return parseReports(envelope, item.createdAt, `${item.id}:reports`);
 });
 
-/** Reports AO batched into another message's provider input, by the message or steer they travelled with. */
 export interface BatchedReports {
-	/** Updates to draw under a human message (by message id) or a steer (by activity id). */
 	under: ReadonlyMap<string, readonly WorkerUpdate[]>;
-	/** Queued turns whose report now draws under that message, so the turn draws nothing itself. */
 	moved: ReadonlySet<string>;
 }
 
 export const BatchedReportsContext = createContext<BatchedReports | null>(null);
 
-/**
- * Where each batched report turn was delivered, from what the daemon recorded.
- * A steer that carried it takes it, when that steer is loaded. A queue drain puts
- * it under the last human message among the drained turns. Anything else, a
- * steer outside the loaded page or a drain with no human message, keeps its
- * reports on their own line.
- */
 export function placeBatchedReports(deliveries: readonly BatchedDelivery[], items: readonly ConversationItem[]): BatchedReports {
 	const under = new Map<string, WorkerUpdate[]>();
 	const moved = new Set<string>();
 	if (deliveries.length === 0) return { under, moved };
-	// One pass over the timeline: each turn's reports and last human message, and the loaded steers.
 	const reportsOf = new Map<string, WorkerUpdate[]>();
 	const lastHuman = new Map<string, { id: string; sequence: number }>();
 	const steers = new Set<string>();
@@ -204,7 +161,6 @@ export function placeBatchedReports(deliveries: readonly BatchedDelivery[], item
 		const reports = workerUpdatesOf(item).filter((update) => update.state !== undefined);
 		if (reports.length > 0) reportsOf.set(item.turnId, [...(reportsOf.get(item.turnId) ?? []), ...reports]);
 	}
-	// A drain's human message: the latest one among its target and every turn drained with it.
 	const drainHuman = new Map<string, { id: string; sequence: number }>();
 	const consider = (target: string, turnId: string) => {
 		const human = lastHuman.get(turnId);
@@ -230,9 +186,7 @@ export function placeBatchedReports(deliveries: readonly BatchedDelivery[], item
 }
 
 export interface WorkerUpdateIndex {
-	/** Keys of each worker's newest update; an older "needs you" has been overtaken. */
 	latestKeys: ReadonlySet<string>;
-	/** Each worker's newest update, by session. */
 	latest: ReadonlyMap<string, WorkerUpdate>;
 }
 
@@ -248,10 +202,6 @@ export function indexWorkerUpdates(items: readonly ConversationItem[]): WorkerUp
 	return { latest, latestKeys: new Set([...latest.values()].map((update) => update.key)) };
 }
 
-/**
- * The index for a timeline, keeping the same object until some worker's newest
- * update changes, so rows in settled turns stay idle while a reply streams.
- */
 export function useWorkerUpdateIndex(items: readonly ConversationItem[] | undefined): WorkerUpdateIndex | null {
 	const previous = useRef<WorkerUpdateIndex | null>(null);
 	return useMemo(() => {
@@ -281,7 +231,6 @@ function splitArtifacts(body: string): { text: string; artifacts: string[] } {
 	return { text: lines.join("\n").trim(), artifacts };
 }
 
-/** A short first line followed by more is the worker's headline; otherwise its first sentence is. */
 export function splitHeadline(body: string): { headline: string; detail: string } {
 	const newline = body.indexOf("\n");
 	const firstLine = (newline < 0 ? body : body.slice(0, newline)).trim();
@@ -297,7 +246,6 @@ const sessionHref = (update: Pick<WorkerUpdate, "sessionId" | "projectId">) =>
 		? `ao://sessions/${encodeURIComponent(update.projectId)}/${encodeURIComponent(update.sessionId)}`
 		: undefined;
 
-/** The worker as this chat's links see it: the local daemon's, a remote host's, or Cloud's. */
 function useWorkerSession(sessionId: string | undefined, projectId?: string): WorkspaceSession | undefined {
 	const workspaces = useChatLinkWorkspaces();
 	if (!sessionId) return undefined;
@@ -309,18 +257,10 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 	return undefined;
 }
 
-// Keyed on which sessions exist, not on the workspace list: that list changes with every session
-// event, and a new plugin list re-parses every message that renders it.
-// ponytail: one cached session set; chats on two hosts at once rebuild in turn, key the cache by set if that shows up.
 type References = { sessions: string; plugins: Options["remarkPlugins"] };
 const referencesByWorkspaces = new WeakMap<object, References>();
 let latestReferences: References | undefined;
 
-/**
- * Agents message each other in plain prose; their paths read as code and the
- * sessions they name link to them. Built once per workspace list and shared by
- * every message, and the same list until a session is added or removed.
- */
 export function usePlainReferences(): Options["remarkPlugins"] {
 	const workspaces = useChatLinkWorkspaces();
 	let references = referencesByWorkspaces.get(workspaces);
@@ -335,7 +275,6 @@ export function usePlainReferences(): Options["remarkPlugins"] {
 	return references.plugins;
 }
 
-/** Prose one agent sent another, with its plain references highlighted. Its own component, so only drawn prose reads them. */
 function AgentProse({ text, muted, className }: { text: string; muted?: boolean; className?: string }) {
 	const references = usePlainReferences();
 	return <ChatMarkdown text={text} muted={muted} safeOrigin remarkPlugins={references} className={className} />;
@@ -349,14 +288,12 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const { headline, detail } = splitHeadline(text);
 	const state = update.state ? STATES[update.state] : undefined;
 	const attention = state?.attention && isCurrent(index, update);
-	// An older message names its sender only by session id; the session supplies its project and title.
 	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session?.workspaceId });
 	const name = <span className="block truncate">{update.name === update.sessionId ? session?.title || update.name : update.name}</span>;
 	return (
 		<div className="min-w-0 text-xs" data-testid="worker-update">
 			<div className="group -mx-1.5 flex h-7 w-[calc(100%+0.75rem)] min-w-0 items-center gap-2 rounded-md px-1.5 text-muted-foreground transition-colors hover:bg-interactive-hover">
 				<Bot aria-hidden="true" className="size-3.5 shrink-0" />
-				{/* The sender opens its session, as the "[from …]" label on a worker message does; the rest of the row expands. */}
 				{href ? (
 					<SessionLabelLink
 						href={href}
@@ -386,7 +323,6 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 			{artifacts.map((path) => (
 				<p key={path} className="ml-6 flex h-6 min-w-0 items-center gap-1.5 text-muted-foreground">
 					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
-					{/* A listed artifact links to its preview; one the session no longer lists stays a name. */}
 					<span className="min-w-0 truncate" title={path}>
 						<ArtifactPathCode text={artifactReference(path, update.sessionId)}>{path.split("/").at(-1)}</ArtifactPathCode>
 					</span>
@@ -401,7 +337,6 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	);
 }
 
-/** A report may name an artifact relative to its session's artifact folder; scope that to the session. */
 function artifactReference(path: string, sessionId: string | undefined): string {
 	const absolute = path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
 	return absolute || !sessionId ? path : `${sessionId}/${path}`;
@@ -417,14 +352,6 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 	);
 }
 
-/**
- * Reports AO delivered together, as one line that opens to their rows: a batch
- * that reached the orchestrator on its own, or one a worker's steer carried.
- * Reports sent with a human message are not drawn. It leads with the first
- * senders' agents, in black and white. A
- * report whose worker still waits on the user (stuck counts too) keeps its count
- * on the closed line; a newer update from that worker clears it.
- */
 export function ReportsLine({ updates, open, onOpenChange }: {
 	updates: readonly WorkerUpdate[];
 	open: boolean;
@@ -433,14 +360,12 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 	const { t } = useTranslation();
 	const index = useContext(WorkerUpdateIndexContext);
 	const needsYou = updates.filter((update) => update.state && STATES[update.state]?.attention && isCurrent(index, update)).length;
-	// One logo per sender, however many reports it sent.
 	const senders = [...new Map(updates.map((update) => [update.sessionId ?? update.key, update])).values()];
 	return (
 		<div className="min-w-0 text-[length:var(--font-size-base)]" data-testid="worker-reports">
 			<Pressable
 				aria-expanded={open}
 				onClick={() => onOpenChange(!open)}
-				// As tall as the hover actions that float under a message, so opened rows start below them.
 				className="-mx-1.5 inline-flex h-7 max-w-full items-center gap-1.5 rounded-md px-1.5 text-foreground/80 transition-colors hover:bg-interactive-hover hover:text-foreground"
 			>
 				<span aria-hidden="true" className="flex shrink-0 items-center">
@@ -460,7 +385,6 @@ export function ReportsLine({ updates, open, onOpenChange }: {
 	);
 }
 
-/** One sender's agent on a reports line: its logo in black and white, stacked over the one before. */
 function ReportLogo({ update, first }: { update: WorkerUpdate; first: boolean }) {
 	const provider = useWorkerSession(update.sessionId, update.projectId)?.provider;
 	return (
@@ -470,13 +394,6 @@ function ReportLogo({ update, first }: { update: WorkerUpdate; first: boolean })
 	);
 }
 
-/**
- * In a worker's chat, a message another agent sent it (its orchestrator, or a
- * sibling worker), drawn the way the orchestrator chat draws a worker: avatar,
- * linked name and time, with what it sent open beneath at the row's indent.
- * What an outside tool relayed through AO's API (`[via Grok Bot] …`) draws the
- * same way under the tool's name, in any chat. Any other message draws as `children`.
- */
 export function FromAgent({ item, queued, children }: { item: ConversationItem; queued?: boolean; children: ReactNode }) {
 	const { t } = useTranslation();
 	const updates = workerUpdatesOf(item);
@@ -516,7 +433,6 @@ function SenderRow({ avatar, createdAt, body, queued, children }: { avatar: Reac
 		<div className="relative min-w-0 pl-6" data-testid="agent-message">
 			{avatar}
 			<Folded watch={body}>
-				{/* The name and time float into the message's first line; the rest wraps under the name. */}
 				<span className="float-right ml-3 text-xs leading-[calc(var(--chat-readable-font-size)*1.58)] tabular-nums text-muted-foreground">
 					{formatTime(createdAt)}
 				</span>
@@ -528,11 +444,6 @@ function SenderRow({ avatar, createdAt, body, queued, children }: { avatar: Reac
 	);
 }
 
-/**
- * Content folded after five lines, with "Show more" whenever the fold hides
- * something. Re-measured as the chat resizes, so hidden text always comes with a
- * way to open it.
- */
 export function Folded({ watch, children }: { watch: unknown; children: ReactNode }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -569,7 +480,6 @@ export function Folded({ watch, children }: { watch: unknown; children: ReactNod
 	);
 }
 
-/** A task-naming prompt and its rename, drawn as the one fact they produced. */
 export function TaskNamedLine({ title }: { title: string }) {
 	const { t } = useTranslation();
 	return (
@@ -585,8 +495,6 @@ export function TaskNamedLine({ title }: { title: string }) {
 const readyToMerge = (pr: PullRequestFacts | undefined) =>
 	pr?.state === "open" && pr.ci === "passing" && pr.review === "approved" && pr.mergeability !== "conflicting";
 
-// What `ao spawn` prints: `spawned session <id> "<name>" (<status>)`.
-// ponytail: reads command output; #6507's session.spawned rows replace this once merged.
 const SPAWNED = /\bspawned\s+session\s+([\w.-]+)/i;
 
 export function spawnedSessionIds(items: readonly ConversationItem[]): string[] {
@@ -608,7 +516,6 @@ export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: Reado
 		&& spawnedIds.has(item.detail.targetSessionId);
 }
 
-/** The workers a turn started, each showing where it is now. */
 export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] }) {
 	const [open, setOpen] = useState(false);
 	return (

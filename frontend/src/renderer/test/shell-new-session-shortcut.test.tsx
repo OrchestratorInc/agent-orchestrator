@@ -143,8 +143,6 @@ const shellMocks = vi.hoisted(() => {
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
 	...(await importOriginal<typeof import("@tanstack/react-query")>()),
 	useQueryClient: () => shellMocks.queryClient,
-	// TerminalCacheProvider owns reviewer queries in production. This shell-only
-	// harness has no routed terminal children and intentionally omits a provider.
 	useQueries: () => [],
 }));
 
@@ -221,9 +219,6 @@ vi.mock("../lib/host-clients", () => ({
 	subscribeConnectedHosts: () => () => undefined,
 }));
 
-// Remote-hosts-off (the beforeEach default) looks like listed: false, as the
-// real hook leaves it. When a test leaves remoteHostsState null, the real
-// hook runs (used by the startup recheck test through the bridge mock).
 vi.mock("../hooks/useRemoteHosts", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useRemoteHosts")>();
 	return {
@@ -257,9 +252,6 @@ vi.mock("../lib/daemon-status", () => ({
 	refreshDaemonStatus: vi.fn(async () => shellMocks.state.daemonStatus),
 }));
 
-// TerminalCacheProvider resolves the cloud terminal transport in production.
-// These shell shortcut tests never mount a terminal, so keep that unrelated
-// settings/query path out of the provider-free harness.
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: {}, ready: false, baseUrl: "" }),
 }));
@@ -268,8 +260,6 @@ vi.mock("../hooks/useCloudOrg", () => ({
 	useCloudOrg: () => ({ org: undefined, isLoading: false, error: undefined, ready: false }),
 }));
 
-// The shell layout opens standalone terminals; this suite only covers the
-// shortcut subscriptions, so the mutation is stubbed rather than driven.
 vi.mock("../hooks/useShellTerminals", () => ({
 	useShellTerminals: () => ({ data: [], isSuccess: true }),
 	useOpenShellTerminal: (hostId?: string) => ({
@@ -283,16 +273,11 @@ vi.mock("../hooks/useShellTerminals", () => ({
 
 vi.mock("../hooks/useAgentReadinessQuery", () => ({
 	agentReadinessQueryKey: ["agent-readiness"],
-	// The shell reports the install's agent inventory once per launch, so the
-	// mock has to answer this too. Undefined data means the hook reports nothing,
-	// which keeps these shortcut tests free of telemetry side effects.
 	useAgentReadinessQuery: () => ({ data: undefined }),
 	useEnsureAgentReadiness: vi.fn(),
 	useProjectAgentDefaults: () => async () => ({ workerAgent: "claude-code", orchestratorAgent: "claude-code", reviewerAgent: "claude-code" }),
 }));
 
-// ao.setup.checked reads the startup checks' react-query cache; these
-// shortcut tests render the shell without a QueryClient.
 vi.mock("../hooks/useAgentInventoryTelemetry", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useAgentInventoryTelemetry")>()),
 	useSetupCheckedTelemetry: () => undefined,
@@ -449,7 +434,6 @@ function setWorkspaces(list: WorkspaceSummary[]) {
 	shellMocks.state.workspaceQuery = { data: list, dataUpdatedAt: 0, isError: false, isSuccess: true };
 }
 
-/** Delivers an application shortcut the way the main process does. */
 function emitAppShortcut(event: AppShortcutEvent) {
 	act(() => {
 		for (const listener of [...shellMocks.state.appShortcutListeners]) listener(event);
@@ -463,7 +447,6 @@ function emitShortcut() {
 }
 
 beforeEach(() => {
-	// The shell remembers the last project for ⌘N outside one; start each test clean.
 	window.localStorage.removeItem("ao.newTask.lastProject");
 	shellMocks.navigate.mockReset();
 	shellMocks.onNewSessionShortcut.mockClear();
@@ -533,8 +516,6 @@ beforeEach(() => {
 });
 
 describe("shell workspace startup", () => {
-	// The shell lazy-loads the starting chat; warm the module so the first render
-	// that needs it resolves within findBy's default timeout.
 	beforeAll(async () => {
 		await import("../components/chat/OrchestratorStartingChat");
 	});
@@ -583,8 +564,6 @@ describe("shell workspace startup", () => {
 		] as WorkspaceSummary[];
 		await renderShell();
 
-		// Removal is optimistic and runs in the background; the page is left
-		// before the project disappears, and only when it shows that project.
 		act(() => shellMocks.state.removeRemoteProject?.("box-b", "project-b"));
 		await waitFor(() => expect(shellMocks.remoteDelete).toHaveBeenCalledTimes(1));
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
@@ -851,8 +830,6 @@ describe("shell workspace startup", () => {
 
 		const sidebar = screen.getByTestId("sidebar");
 		expect(screen.queryByTestId("session-topbar-host")).not.toBeInTheDocument();
-		// The route shell owns only the frame. SessionView places its topbar host
-		// inside the terminal panel so the inspector header can occupy this row too.
 		expect(sidebar).not.toHaveAttribute("data-topbar-offset", "session");
 		expect(document.querySelector(".center-panel-shell--session > .center-panel-surface")).toBeInTheDocument();
 	});
@@ -1019,10 +996,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 		act(() => listener());
 	}
 
-	// Regression: the shell LAYOUT must own this, not the session view. When the
-	// session view owned it, the shortcut did nothing outside a session route —
-	// nothing was mounted to hear it.
-	// Regression (#4772): ⌘T on the project board has no session to open a terminal in.
 	it("ignores the shortcut on the project board", async () => {
 		shellMocks.state.routeParams = { projectId: "proj-1" };
 		await renderShell();
@@ -1033,9 +1006,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 		expect(shellMocks.openShellTerminal).not.toHaveBeenCalled();
 	});
 
-	// Regression: a terminal opened from a session view must carry the session
-	// id, not just its owning project's, so the daemon can resolve the
-	// session's own worktree instead of the registered project root.
 	it("scopes the terminal to the session in scope", async () => {
 		shellMocks.state.routeParams = { sessionId: "sess-1" };
 		await renderShell();
@@ -1065,8 +1035,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 		delete session.cloud;
 	});
 
-	// Session terminals always belong to the session on screen — there is no
-	// longer an "owner" session whose worktree could be borrowed here (#3208).
 	it("scopes the terminal to the session on screen, not the route's project alone", async () => {
 		shellMocks.state.routeParams = { projectId: "proj-2", sessionId: "sess-cross" };
 		await renderShell();
@@ -1089,7 +1057,6 @@ describe("shell new-shell-terminal shortcut subscription", () => {
 		expect(shellMocks.openShellTerminal).toHaveBeenCalledTimes(2);
 	});
 
-	// Regression: ⌘T did nothing on a remote machine's session.
 	it("opens the terminal on the remote host that owns the session on screen", async () => {
 		shellMocks.state.routeParams = { hostId: "box-a", projectId: "remote-proj", sessionId: "remote-sess" };
 		await renderShell();
@@ -1227,8 +1194,6 @@ describe("shell application shortcut subscriptions", () => {
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
 	});
 
-	// Sidebar order for the fixture: sess-3, sess-1 (newest first; terminated
-	// sessions are not listed), then proj-2's sess-cross.
 	it("moves to the next session in sidebar order, crossing into the next project", async () => {
 		shellMocks.state.routeParams = { sessionId: "sess-1" };
 		await renderShell();
@@ -1334,7 +1299,6 @@ describe("shell application shortcut subscriptions", () => {
 		shellMocks.state.routeParams = { sessionId: "sess-3" };
 		await renderShell();
 
-		// Pinned sess-3 is first; its project row would list it again at the end.
 		emitAppShortcut({ id: "jump-to-session", index: 0 });
 		expect(shellMocks.navigate).toHaveBeenLastCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
@@ -1390,8 +1354,6 @@ describe("shell application shortcut subscriptions", () => {
 		emitAppShortcut({ id: "next-attention-session" });
 		emitAppShortcut({ id: "previous-attention-session" });
 
-		// Sidebar order is d, c, b, a (newest first) then e; the only other
-		// attention session from d is b, both ways round.
 		expect(ids().every((id) => id === "b")).toBe(true);
 		expect(ids().length).toBeGreaterThan(0);
 	});
@@ -1440,7 +1402,6 @@ describe("shell application shortcut subscriptions", () => {
 		}
 		expect(shellMocks.router.history.back).not.toHaveBeenCalled();
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
-		// The next shortcut resumes ordinary route navigation.
 		emitAppShortcut({ id: "history-back" });
 		expect(shellMocks.router.history.back).toHaveBeenCalledTimes(1);
 	});
@@ -1497,7 +1458,6 @@ describe("shell application shortcut subscriptions", () => {
 		};
 		await renderShell();
 
-		// The Scratchpad lists newest first (standalone-2, standalone-1).
 		act(() => shellMocks.state.previousSessionListener?.());
 
 		expect(shellMocks.navigate).toHaveBeenCalledWith({
@@ -1578,10 +1538,6 @@ describe("shell folder drag-and-drop", () => {
 		expect(screen.queryByTestId("folder-drop-overlay")).not.toBeInTheDocument();
 	});
 
-	// Regression: dragenter/dragleave fire again for every child-element boundary
-	// the pointer crosses while hovering inside the window, not just at the
-	// window's own edge. A relatedTarget-blind counter is what keeps the overlay
-	// from flickering off mid-drag.
 	it("does not flicker the overlay when the pointer crosses a child element", async () => {
 		await renderShell();
 
@@ -1627,13 +1583,6 @@ describe("shell folder drag-and-drop", () => {
 		expect(useUiStore.getState().folderDropRequest).toEqual({ nonce: 2, path: "/dropped/second" });
 	});
 
-	// Regression: XtermTerminal used to stopPropagation() on a plain (non-folder)
-	// file drop, so this drop event never reached the window and dragDepthRef
-	// was never reset. The next folder drag then bumped from a stale nonzero
-	// depth, missed the === 1 branch, and never showed the overlay. Xterm no
-	// longer stops propagation for a non-directory drop, so this event now
-	// always reaches the window; this test locks in that the window's own
-	// reset logic correctly recovers once it does.
 	it("does not suppress the next folder drag's overlay after a plain file drop resets the counter", async () => {
 		await renderShell();
 
@@ -1660,7 +1609,6 @@ describe("shell taskbar-icon folder drop subscription", () => {
 	});
 });
 
-/** Delivers an ao-app:// session deep link the way the main process does. */
 function emitSessionDeepLink(rawUrl: string) {
 	const listener = shellMocks.state.sessionDeepLinkListener;
 	if (!listener) throw new Error("session deep link listener was not registered");
@@ -1668,8 +1616,6 @@ function emitSessionDeepLink(rawUrl: string) {
 }
 
 describe("shell session deep links", () => {
-	// The startup gate needs the confirmed startup fetch: a ready daemon plus
-	// its resolved re-fetch marks the first workspace page trustworthy.
 	function useReadyDaemon() {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4266, pid: 1234 };
 	}
@@ -1699,9 +1645,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("holds a link that arrives before the first workspace page succeeds, then flushes it", async () => {
-		// Daemon-not-ready startup: the query sits in error with no data, so the
-		// workspace lists are empty and a naive handler would toast not-found
-		// for a session that exists.
 		shellMocks.state.workspaces = [];
 		shellMocks.state.workspaceQuery = { data: [], dataUpdatedAt: 0, isError: true, isSuccess: false };
 		const view = await renderShell();
@@ -1710,7 +1653,6 @@ describe("shell session deep links", () => {
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToast).toBeNull();
 
-		// The daemon becomes ready and the confirmed startup fetch lands.
 		shellMocks.state.workspaces = workspaces;
 		shellMocks.state.workspaceQuery = { data: workspaces, dataUpdatedAt: 0, isError: false, isSuccess: true };
 		useReadyDaemon();
@@ -1730,9 +1672,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("waits for the confirmed startup fetch when a cached empty page already succeeded", async () => {
-		// The route loader cached [] before the daemon port was known: the query
-		// is green, but startup has not confirmed the page yet (CodeRabbit round
-		// 2). Processing now would toast not-found for a session that exists.
 		shellMocks.state.workspaces = [];
 		shellMocks.state.workspaceQuery = { data: [], dataUpdatedAt: 0, isError: false, isSuccess: true };
 		const view = await renderShell();
@@ -1741,7 +1680,6 @@ describe("shell session deep links", () => {
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToast).toBeNull();
 
-		// The confirmed startup fetch lands with real data.
 		shellMocks.state.workspaces = workspaces;
 		shellMocks.state.workspaceQuery = { data: workspaces, dataUpdatedAt: 0, isError: false, isSuccess: true };
 		useReadyDaemon();
@@ -1761,9 +1699,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("keeps the workspace that resolved the session, not a same-id local project", async () => {
-		// Local project `proj-1` lacks `sess-x`; the remote host's `proj-1` has
-		// it. The remote workspace must win route and hostId, not a local
-		// project picked by id alone (CodeRabbit round 2).
 		shellMocks.state.workspaces = [
 			{ id: "proj-1", name: "Local", path: "/local", sessions: [{ id: "sess-other", status: "idle" }] },
 		] as unknown as WorkspaceSummary[];
@@ -1780,9 +1715,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("refuses a link whose session id matches local and remote machines", async () => {
-		// Session ids are <project>-<n> per daemon, so a paired machine running
-		// the same repo can host a session with the same id; the URL carries no
-		// host, so honoring either side could open the wrong one (round 5).
 		shellMocks.state.workspaces = [
 			{ id: "proj-1", name: "Local", path: "/local", sessions: [{ id: "sess-1", status: "working" }] },
 		] as unknown as WorkspaceSummary[];
@@ -1805,7 +1737,6 @@ describe("shell session deep links", () => {
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToast).toBeNull();
 
-		// The host connects and its project and session queries land.
 		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteLoadedProjectHostIds = ["box-a"];
 		shellMocks.state.remoteLoadedSessionHostIds = ["box-a"];
@@ -1827,9 +1758,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("handles links while signed out, when remote hosts can never be listed", async () => {
-		// The remote-hosts preference defaults to on, but useRemoteHosts only
-		// lists for an authenticated account. Signed out, the remote wait must
-		// not hold local links forever (CodeRabbit round 4).
 		useUiStore.setState({ remoteHosts: true });
 		shellMocks.state.cloudSessionStatus = "unauthenticated";
 		await renderShellWithReadyDaemon();
@@ -1841,10 +1769,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("holds a remote link until the host's session query lands, not just its project query", async () => {
-		// A host's project and session queries settle independently; with only
-		// the project loaded its workspaces still have sessions: [], and an
-		// immediate lookup would drop the link with a false not-found
-		// (CodeRabbit round 4).
 		useUiStore.setState({ remoteHosts: true });
 		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteLoadedProjectHostIds = ["box-a"];
@@ -1857,7 +1781,6 @@ describe("shell session deep links", () => {
 		expect(shellMocks.navigate).not.toHaveBeenCalled();
 		expect(useUiStore.getState().globalToast).toBeNull();
 
-		// The session query lands and the held link resolves.
 		shellMocks.state.remoteLoadedSessionHostIds = ["box-a"];
 		shellMocks.state.remoteWorkspaces = [
 			{ id: "proj-remote", hostId: "box-a", sessions: [{ id: "sess-remote", status: "working" }] },
@@ -1877,9 +1800,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("finds a standalone session on a later host sharing the standalone project id", async () => {
-		// Every connected host contributes its own __standalone__ workspace to
-		// one merged list, so the first id match is not necessarily the one
-		// holding the session (CodeRabbit round 4).
 		useUiStore.setState({ remoteHosts: true });
 		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }, { hostId: "box-b", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteLoadedProjectHostIds = ["box-a", "box-b"];
@@ -1890,7 +1810,6 @@ describe("shell session deep links", () => {
 		] as unknown as WorkspaceSummary[];
 		await renderShellWithReadyDaemon();
 		emitSessionDeepLink(`ao-app://sessions/${STANDALONE_WORKSPACE_ID}/sess-b`);
-		// A standalone session takes the host-scoped scratchpad route.
 		expect(shellMocks.navigate).toHaveBeenCalledWith({
 			to: "/host/$hostId/session/$sessionId",
 			params: { hostId: "box-b", sessionId: "sess-b" },
@@ -1913,9 +1832,6 @@ describe("shell session deep links", () => {
 	});
 
 	it("reports a failed remote host as unavailable, not a missing session", async () => {
-		// A host whose session query failed settles the gate with empty session
-		// lists (CodeRabbit round 4). A miss on such a project is "could not
-		// load", not "does not exist" — the session may still exist there.
 		useUiStore.setState({ remoteHosts: true });
 		shellMocks.state.remoteHostsState = { hosts: [{ hostId: "box-a", status: "connected" }], listed: true, settled: true, refresh: async () => undefined };
 		shellMocks.state.remoteFailedHostIds = ["box-a"];

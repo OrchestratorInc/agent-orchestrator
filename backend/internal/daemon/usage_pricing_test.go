@@ -18,8 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// Break caught: ingestion could start against an empty manager while a valid
-// last-known-good catalog was still being loaded asynchronously.
 func TestUsagePricingRuntimePublishesLKGBeforeStartReturnsAndWaitsOnShutdown(t *testing.T) {
 	dataDir := t.TempDir()
 	catalog, err := catalogsync.Catalog([]byte(`{
@@ -73,8 +71,6 @@ func TestUsagePricingRuntimePublishesLKGBeforeStartReturnsAndWaitsOnShutdown(t *
 	}
 }
 
-// Break caught: an absent cache plus offline catalog endpoint must degrade to
-// unavailable estimates, never make daemon startup fail.
 func TestUsagePricingRuntimeCatalogFailureIsNonfatal(t *testing.T) {
 	dataDir := t.TempDir()
 	store := sqlitetest.MustOpenAt(t, dataDir)
@@ -97,8 +93,6 @@ func TestUsagePricingRuntimeCatalogFailureIsNonfatal(t *testing.T) {
 	runtime.Wait()
 }
 
-// Break caught: a provider-null row whose model first appears in a later daily
-// catalog needs another attribution pass; cost backfill cannot select it yet.
 func TestUsagePricingRuntimeRepairsHistoryAfterLaterCatalogActivation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	dataDir := t.TempDir()
@@ -117,8 +111,6 @@ func TestUsagePricingRuntimeRepairsHistoryAfterLaterCatalogActivation(t *testing
 		t.Fatal(err)
 	}
 
-	// Insert the late model first so the sentinel's successful attribution
-	// proves the initial pass has already visited and skipped it.
 	lateSourceID := seedDaemonClaudeUsage(t, store, "late", "claude-late")
 	sentinelSourceID := seedDaemonClaudeUsage(t, store, "sentinel", "claude-old")
 	if err := runtime.backfiller.Start(ctx); err != nil {

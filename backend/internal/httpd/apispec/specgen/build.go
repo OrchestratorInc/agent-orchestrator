@@ -1,8 +1,3 @@
-// Package specgen builds the code-first OpenAPI document from the Go contract
-// types. It lives outside apispec because it imports the controllers (to
-// reflect their request/response shapes), and controllers import apispec (for
-// the 501 stub) — keeping Build here breaks that cycle. apispec only embeds and
-// serves the committed openapi.yaml; specgen produces it.
 package specgen
 
 import (
@@ -27,32 +22,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
-// Build reflects the Go contract types and the operation registry below into
-// the OpenAPI document. It is the single source of truth for the /api/v1
-// contract: `cmd/genspec` writes its output to apispec/openapi.yaml (the
-// committed, embedded artifact) and TestBuild_MatchesEmbedded asserts the embed
-// equals fresh Build() output so the two can never drift. Schema facets live as
-// struct tags on the service.*/controllers.* types; operation metadata (path,
-// status codes, summaries) lives here.
-//
-// Every wire shape is reflected straight from where it is used at runtime — the
-// request bodies, path params, and response envelopes from controllers, the
-// error envelope from httpd/envelope — so the served responses and the
-// generated schema share one definition each.
 func Build() ([]byte, error) {
 	r := openapi31.NewReflector()
-	// Derive `required` from the idiomatic Go convention: a JSON field without
-	// `omitempty` is required. swaggest does not infer this on its own, so the
-	// structs stay clean (only description/enum tags) and this hook adds the
-	// required array. nonNullableSlices drops the spurious "null" type swaggest
-	// stamps on every Go slice.
 	r.DefaultOptions = append(r.DefaultOptions,
 		func(rc *jsonschema.ReflectContext) { rc.EnvelopNullability = true },
 		jsonschema.InterceptProp(requiredFromJSONTag),
 		jsonschema.InterceptNullability(nonNullableSlices),
 		jsonschema.InterceptNullability(validNullableReferenceUnions),
-		// Clean component schema names (which become the generated TS type names):
-		// swaggest defaults to PackageType, e.g. "ProjectProject", "EnvelopeAPIError".
 		jsonschema.InterceptDefName(schemaName),
 	)
 
@@ -118,10 +94,6 @@ func Build() ([]byte, error) {
 			oc.AddReqStructure(param)
 		}
 		if op.reqBody != nil {
-			// AddReqStructure leaves requestBody.required absent, which
-			// OpenAPI reads as optional. Most of these bodies are mandatory, so
-			// force it — otherwise validators/generators treat the body as
-			// skippable. Ops that genuinely accept an empty body opt out.
 			if op.optionalReqBody {
 				oc.AddReqStructure(op.reqBody)
 			} else {
@@ -143,13 +115,6 @@ func Build() ([]byte, error) {
 	return r.Spec.MarshalYAML()
 }
 
-// schemaName maps swaggest's default PackageType component names (e.g.
-// "ProjectProject", "EnvelopeAPIError") to the clean, stable schema names that
-// become the generated TypeScript type names. Every reflected type is listed
-// explicitly: an unrecognised default name is returned verbatim, so a new type
-// surfaces as a visibly-wrong "PackageType" name in the diff (and the drift
-// test) rather than silently colliding with an existing schema via a
-// TrimPrefix catch-all.
 func schemaName(_ reflect.Type, defaultName string) string {
 	if clean, ok := schemaNames[defaultName]; ok {
 		return clean
@@ -157,9 +122,6 @@ func schemaName(_ reflect.Type, defaultName string) string {
 	return defaultName
 }
 
-// schemaNames is the exhaustive default→clean mapping for every type reflected
-// by projectOperations(). Add an entry when a new contract type is introduced;
-// the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
 	"DomainAutoSpawnPause":                                 "AutoSpawnPause",
 	"DomainChatExcerptSnapshot":                            "ChatExcerptSnapshot",
@@ -327,429 +289,398 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersListAutomationsResponse":                   "ListAutomationsResponse",
 	"ControllersAutomationRunResponse":                     "AutomationRunResponse",
 	"ControllersListAutomationRunsResponse":                "ListAutomationRunsResponse",
-	// httpd/envelope
-	"EnvelopeAPIError": "APIError",
-	// observe/ownership
-	"OwnershipOwner": "ReportingOwner",
-	// domain
-	"DomainProjectID":                 "ProjectID",
-	"DomainSessionID":                 "SessionID",
-	"DomainIssueID":                   "IssueID",
-	"DomainSession":                   "Session",
-	"DomainSessionProvisionStep":      "SessionProvisionStep",
-	"DomainSessionBranchState":        "SessionBranchState",
-	"DomainSessionStaleBinary":        "SessionStaleBinary",
-	"DomainSessionWait":               "SessionWait",
-	"DomainProjectConfig":             "ProjectConfig",
-	"DomainTrackerIntakeConfig":       "TrackerIntakeConfig",
-	"ControllersTriggerReviewRequest": "TriggerReviewRequest",
-	"DomainContainerReapConfig":       "ContainerReapConfig",
-	"DomainAgentConfig":               "AgentConfig",
-	"DomainRoleOverride":              "RoleOverride",
-	// httpd/controllers (wire envelopes)
-	"ControllersListProjectsResponse":                     "ListProjectsResponse",
-	"ControllersProjectResponse":                          "ProjectResponse",
-	"ControllersClonePrepareStreamEvent":                  "ClonePrepareStreamEvent",
-	"ControllersAgentIDParam":                             "AgentIDParam",
-	"ControllersCodexAccountIDParam":                      "CodexAccountIDParam",
-	"ControllersCodexAccountLoginIDParam":                 "CodexAccountLoginIDParam",
-	"ControllersGetProjectResponse":                       "ProjectGetResponse",
-	"ControllersProjectOrDegraded":                        "ProjectOrDegraded",
-	"ControllersListSessionsQuery":                        "ListSessionsQuery",
-	"ControllersListDirsQuery":                            "ListDirsQuery",
-	"ControllersListDirsResponse":                         "ListDirsResponse",
-	"ControllersFSEntry":                                  "FSEntry",
-	"ControllersCleanupSessionsQuery":                     "CleanupSessionsQuery",
-	"ControllersListSessionsResponse":                     "ListSessionsResponse",
-	"ControllersSessionArchiveSummary":                    "SessionArchiveSummary",
-	"ControllersSpawnSessionRequest":                      "SpawnSessionRequest",
-	"ControllersSpawnSessionResponse":                     "SpawnSessionResponse",
-	"ControllersSessionResponse":                          "SessionResponse",
-	"ControllersSessionArtifactView":                      "SessionArtifact",
-	"ControllersSessionPreviewResponse":                   "SessionPreviewResponse",
-	"ControllersSetSessionPreviewRequest":                 "SetSessionPreviewRequest",
-	"ControllersStartPreviewServerRequest":                "StartPreviewServerRequest",
-	"ControllersPreviewServerStatusResponse":              "PreviewServerStatusResponse",
-	"ControllersBrowserStatusQuery":                       "BrowserStatusQuery",
-	"ControllersBrowserStatusResponse":                    "BrowserStatusResponse",
-	"ControllersBrowserCommandRequest":                    "BrowserCommandRequest",
-	"ControllersBrowserCommandResponse":                   "BrowserCommandResponse",
-	"ControllersSetSessionMergePolicyRequest":             "SetSessionMergePolicyRequest",
-	"ControllersSetSessionMergePolicyResponse":            "SetSessionMergePolicyResponse",
-	"ControllersSetSessionAutoInjectReviewRequest":        "SetSessionAutoInjectReviewRequest",
-	"ControllersSetSessionAutoInjectReviewResponse":       "SetSessionAutoInjectReviewResponse",
-	"ControllersSetSessionAutoInjectCIRequest":            "SetSessionAutoInjectCIRequest",
-	"ControllersSetSessionAutoInjectCIResponse":           "SetSessionAutoInjectCIResponse",
-	"ControllersRenameSessionRequest":                     "RenameSessionRequest",
-	"ControllersSetSessionReviewerRequest":                "SetSessionReviewerRequest",
-	"ControllersRenameSessionResponse":                    "RenameSessionResponse",
-	"ControllersRestoreSessionResponse":                   "RestoreSessionResponse",
-	"ControllersExitAgentResponse":                        "ExitAgentResponse",
-	"ControllersResumeAgentResponse":                      "ResumeAgentResponse",
-	"ControllersStartSessionInterfaceTransitionRequest":   "StartSessionInterfaceTransitionRequest",
-	"ControllersSessionInterfaceTransitionView":           "SessionInterfaceTransition",
-	"ControllersSessionInterfaceTransitionStatusResponse": "SessionInterfaceTransitionStatusResponse",
-	"ControllersStartSessionInterfaceTransitionResponse":  "StartSessionInterfaceTransitionResponse",
-	"ControllersCancelSessionInterfaceTransitionResponse": "CancelSessionInterfaceTransitionResponse",
-	"ControllersInterfaceTransitionNoticeAckResponse":     "AcknowledgeSessionInterfaceTransitionNoticeResponse",
-	"ControllersCleanupSessionsResponse":                  "CleanupSessionsResponse",
-	"ControllersCleanupSkippedSession":                    "CleanupSkippedSession",
-	"ControllersWorkspaceFileQuery":                       "WorkspaceFileQuery",
-	"ControllersArtifactFileQuery":                        "ArtifactFileQuery",
-	"ControllersArtifactFileResponse":                     "ArtifactFileResponse",
-	"ControllersUpdateArtifactFileRequest":                "UpdateArtifactFileRequest",
-	"ControllersGitHubStatusResponse":                     "GitHubStatusResponse",
-	"ControllersArtifactVersionQuery":                     "ArtifactVersionQuery",
-	"ControllersArtifactVersionSummary":                   "ArtifactVersionSummary",
-	"ControllersListArtifactVersionsResponse":             "ListArtifactVersionsResponse",
-	"ControllersArtifactVersionResponse":                  "ArtifactVersionResponse",
-	"ControllersRestoreArtifactVersionRequest":            "RestoreArtifactVersionRequest",
-	"ControllersSyncArtifactVersionsRequest":              "SyncArtifactVersionsRequest",
-	"ControllersRegisterArtifactsRequest":                 "RegisterArtifactsRequest",
-	"ControllersRegisterArtifactsResponse":                "RegisterArtifactsResponse",
-	"ControllersPRFileQuery":                              "PRFileQuery",
-	"ControllersPRFileRevisionQuery":                      "PRFileRevisionQuery",
-	"ControllersUpdateWorkspaceFileRequest":               "UpdateWorkspaceFileRequest",
-	"ControllersWorkspaceFileBlobQuery":                   "WorkspaceFileBlobQuery",
-	"ControllersWorkspaceFileRevisionQuery":               "WorkspaceFileRevisionQuery",
-	"ControllersWorkspaceSearchQuery":                     "WorkspaceSearchQuery",
-	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
-	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
-	"ControllersAttachmentInput":                          "AttachmentInput",
-	"ControllersListWorkspaceFilesResponse":               "ListWorkspaceFilesResponse",
-	"ControllersWorkspaceManifestResponse":                "WorkspaceManifestResponse",
-	"ControllersWorkspaceHistoryResponse":                 "WorkspaceHistoryResponse",
-	"ControllersWorkspaceHistoryQuery":                    "WorkspaceHistoryQuery",
-	"ControllersWorkspaceViewResponse":                    "WorkspaceViewResponse",
-	"ControllersWorkspaceCommitSelectionRequest":          "WorkspaceCommitSelectionRequest",
-	"ControllersWorkspaceCommitSelectionResponse":         "WorkspaceCommitSelectionResponse",
-	"ControllersWorkspaceCommitConflictResponse":          "WorkspaceCommitConflictResponse",
-	"ControllersWorkspaceBranchesResponse":                "WorkspaceBranchesResponse",
-	"ControllersWorkspaceBranchResponse":                  "WorkspaceBranchResponse",
-	"ControllersListPRFilesResponse":                      "ListPRFilesResponse",
-	"ControllersWorkspaceFileSummary":                     "WorkspaceFileSummary",
-	"ControllersWorkspaceFileSections":                    "WorkspaceFileSections",
-	"ControllersWorkspaceCommitSummary":                   "WorkspaceCommitSummary",
-	"ControllersWorkspaceSummary":                         "WorkspaceSummary",
-	"ControllersEnsureCodexAccountsRequest":               "EnsureCodexAccountsRequest",
-	"ControllersConsumeCodexAccountResetCreditRequest":    "ConsumeCodexAccountResetCreditRequest",
-	"ControllersCodexAccountsResponse":                    "CodexAccountsResponse",
-	"ControllersCodexDeviceReconciliationResponse":        "CodexDeviceReconciliationResponse",
-	"ControllersCodexAccountResponse":                     "CodexAccountResponse",
-	"ControllersCodexAuthenticationResponse":              "CodexAuthenticationResponse",
-	"ControllersCodexAccountCapacityResponse":             "CodexAccountCapacityResponse",
-	"ControllersCodexCapacityBucketResponse":              "CodexCapacityBucketResponse",
-	"ControllersCodexCapacityWindowResponse":              "CodexCapacityWindowResponse",
-	"ControllersCodexResetCreditsSummaryResponse":         "CodexResetCreditsSummaryResponse",
-	"ControllersCodexAccountUsageSummaryResponse":         "CodexAccountUsageSummaryResponse",
-	"ControllersCodexCapabilityObservationResponse":       "CodexCapabilityObservationResponse",
-	"ControllersCodexAccountCapabilitiesResponse":         "CodexAccountCapabilitiesResponse",
-	"ControllersCodexAccountLoginResponse":                "CodexAccountLoginResponse",
-	"ControllersCodexActiveLoginResponse":                 "CodexActiveLoginResponse",
-	"ControllersCodexAccountSwitchResponse":               "CodexAccountSwitchResponse",
-	"ControllersCodexAccountSwitchPhase":                  "CodexAccountSwitchPhase",
-	"ControllersStartCodexAccountSwitchRequest":           "StartCodexAccountSwitchRequest",
-	"ControllersCodexAccountSwitchIDParam":                "CodexAccountSwitchIDParam",
-	"DomainCodexCapacitySummary":                          "CodexCapacitySummary",
-	"ControllersWorkspaceFileResponse":                    "WorkspaceFileResponse",
-	"ControllersWorkspaceDiffRequest":                     "WorkspaceDiffRequest",
-	"ControllersWorkspaceDiffDeferredResponse":            "WorkspaceDiffDeferredResponse",
-	"ControllersWorkspaceDiffErrorResponse":               "WorkspaceDiffErrorResponse",
-	"ControllersWorkspaceDiffGroupResponse":               "WorkspaceDiffGroupResponse",
-	"ControllersWorkspaceDiffsResponse":                   "WorkspaceDiffsResponse",
-	"ControllersWorkspaceFileRevisionResponse":            "WorkspaceFileRevisionResponse",
-	"ControllersWorkspaceFileSearchResultResponse":        "WorkspaceFileSearchResultResponse",
-	"ControllersWorkspaceFileSearchResponse":              "WorkspaceFileSearchResponse",
-	"ControllersWorkspaceContentSearchHitResponse":        "WorkspaceContentSearchHitResponse",
-	"ControllersWorkspaceContentSearchResponse":           "WorkspaceContentSearchResponse",
-	"ControllersConversationSearchHitResponse":            "ConversationSearchHitResponse",
-	"ControllersConversationSearchResponse":               "ConversationSearchResponse",
-	"ControllersWorkspaceResolveQuery":                    "WorkspaceResolveQuery",
-	"ControllersWorkspacePathResolutionResponse":          "WorkspacePathResolutionResponse",
-	"ControllersWorkspaceTreeQuery":                       "WorkspaceTreeQuery",
-	"ControllersListWorkspaceTreeResponse":                "ListWorkspaceTreeResponse",
-	"ControllersWorkspaceTreeEntry":                       "WorkspaceTreeEntry",
-	"ControllersListEditorsResponse":                      "ListEditorsResponse",
-	"ControllersEditorSummary":                            "EditorSummary",
-	"ControllersOpenSessionEditorRequest":                 "OpenSessionEditorRequest",
-	"ControllersOpenSessionEditorResponse":                "OpenSessionEditorResponse",
-	"ControllersKillSessionResponse":                      "KillSessionResponse",
-	"ControllersRollbackSessionResponse":                  "RollbackSessionResponse",
-	"ControllersDeleteSessionResponse":                    "DeleteSessionResponse",
-	"ControllersSendSessionMessageRequest":                "SendSessionMessageRequest",
-	"ControllersSendSessionMessageResponse":               "SendSessionMessageResponse",
-	"ControllersDelegateTaskRequest":                      "DelegateTaskRequest",
-	"ControllersDelegateTaskResponse":                     "DelegateTaskResponse",
-	"ControllersPrepareTaskResponse":                      "PrepareTaskResponse",
-	"ControllersClaimPRResponse":                          "ClaimPRResponse",
-	"ControllersClaimPRRequest":                           "ClaimPRRequest",
-	"ControllersSessionPRFacts":                           "SessionPRFacts",
-	"ControllersSessionPRSummary":                         "SessionPRSummary",
-	"ControllersSessionPRLabel":                           "SessionPRLabel",
-	"ControllersSessionPRRequestedReviewer":               "SessionPRRequestedReviewer",
-	"ControllersSessionPRCommit":                          "SessionPRCommit",
-	"ControllersSessionPRThread":                          "SessionPRThread",
-	"ControllersSessionPRComment":                         "SessionPRComment",
-	"ControllersSessionPRReference":                       "SessionPRReference",
-	"ControllersSessionPRCISummary":                       "SessionPRCISummary",
-	"ControllersSessionPRFailingCheck":                    "SessionPRFailingCheck",
-	"ControllersSessionPRCheck":                           "SessionPRCheck",
-	"ControllersSessionPRReviewSummary":                   "SessionPRReviewSummary",
-	"ControllersSessionPRReviewEntry":                     "SessionPRReviewEntry",
-	"ControllersSessionPRUnresolvedReviewer":              "SessionPRUnresolvedReviewer",
-	"ControllersSessionPRReviewCommentLink":               "SessionPRReviewCommentLink",
-	"ControllersSessionPRMergeabilitySummary":             "SessionPRMergeabilitySummary",
-	"ControllersSessionPRConflictFile":                    "SessionPRConflictFile",
-	"ControllersListSessionPRsResponse":                   "ListSessionPRsResponse",
-	"ControllersSetActivityRequest":                       "SetActivityRequest",
-	"ControllersSetActivityResponse":                      "SetActivityResponse",
-	"ControllersCodewhaleLifecycleWebhookRequest":         "CodewhaleLifecycleWebhookRequest",
-	"ControllersCodewhaleLifecycleEvent":                  "CodewhaleLifecycleEvent",
-	"ControllersSetReviewActivityRequest":                 "SetReviewActivityRequest",
-	"ControllersSetReviewActivityResponse":                "SetReviewActivityResponse",
-	"ControllersSpawnOrchestratorRequest":                 "SpawnOrchestratorRequest",
-	"ControllersSpawnOrchestratorResponse":                "SpawnOrchestratorResponse",
-	"ControllersOrchestratorResponse":                     "OrchestratorResponse",
-	"AgentInventory":                                      "ListAgentsResponse",
-	"AgentInfo":                                           "AgentInfo",
-	"AgentProbeResult":                                    "ProbeAgentResponse",
-	"AgentReadiness":                                      "AgentReadinessResponse",
-	"ControllersEnsureAgentReadinessRequest":              "EnsureAgentReadinessRequest",
-	"DomainAgentReadinessSnapshot":                        "AgentReadinessSnapshot",
-	"DomainAgentInstallationObservation":                  "AgentInstallationObservation",
-	"DomainAgentAuthDiagnostic":                           "AgentAuthDiagnostic",
-	"DomainAgentAccountIdentity":                          "AgentAccountIdentity",
-	"DomainAgentAuthenticationObservation":                "AgentAuthenticationObservation",
-	// service/systemcheck: "SystemcheckReport" is a generic default name that
-	// reads like an internal type, not a wire response — rename to match the
-	// endpoint it serves, same treatment as AgentInventory above.
-	"SystemcheckReport":             "SystemRequirementsResponse",
-	"SystemcheckRequirement":        "SystemRequirement",
-	"ControllersInstallTargetParam": "InstallTargetParam",
-	// service/computeruse: the Cua Driver integration behind Settings and the computer-use tools.
-	"ComputeruseStatus":                        "ComputerUseStatus",
-	"ComputerusePermissions":                   "ComputerUsePermissions",
-	"ComputeruseCallRequest":                   "ComputerUseCallRequest",
-	"ComputeruseCallResult":                    "ComputerUseCallResult",
-	"ComputeruseImage":                         "ComputerUseImage",
-	"ControllersComputerUseDoctorResponse":     "ComputerUseDoctorResponse",
-	"ComputeruseAgentTool":                     "ComputerUseAgentTool",
-	"ControllersComputerUseAgentToolsResponse": "ComputerUseAgentToolsResponse",
-	// service/systeminstall: Job backs both StartInstallResponse and
-	// InstallStatusResponse (they're the same Go type), so it reflects to one
-	// shared component — name it after the domain concept, not either alias.
-	"SysteminstallJob":                            "InstallJob",
-	"SysteminstallProgress":                       "InstallProgress",
-	"SysteminstallAgentPlan":                      "AgentInstallPlan",
-	"SysteminstallAgentInstallMethod":             "AgentInstallMethod",
-	"SysteminstallUpdateAdvisory":                 "AgentUpdateAdvisory",
-	"SysteminstallUpdateInUse":                    "AgentUpdateInUse",
-	"ControllersAgentUpdateAdvisoryQuery":         "AgentUpdateAdvisoryQuery",
-	"ControllersAgentInstallerCatalogResponse":    "AgentInstallerCatalogResponse",
-	"ControllersStartAgentInstallRequest":         "StartAgentInstallRequest",
-	"ControllersAgentInstallJobsResponse":         "AgentInstallJobsResponse",
-	"AgentauthAction":                             "AgentAuthAction",
-	"AgentauthPlan":                               "AgentAuthPlan",
-	"ControllersListAgentAuthPlansResponse":       "ListAgentAuthPlansResponse",
-	"ControllersStartAgentAuthResponse":           "StartAgentAuthResponse",
-	"ControllersStartAgentUILoginRequest":         "StartAgentUILoginRequest",
-	"ControllersSubmitAgentUILoginCodeRequest":    "SubmitAgentUILoginCodeRequest",
-	"AgentauthLoginMethod":                        "AgentLoginMethod",
-	"AgentauthLoginSnapshot":                      "AgentLoginSnapshot",
-	"AgentauthProviderKey":                        "ProviderKey",
-	"ProviderkeysCheckResult":                     "ProviderKeyCheck",
-	"ControllersProviderKeyNameParam":             "ProviderKeyNameParam",
-	"ControllersListProviderKeysResponse":         "ListProviderKeysResponse",
-	"ControllersSaveProviderKeyRequest":           "SaveProviderKeyRequest",
-	"ControllersCheckProviderKeyRequest":          "CheckProviderKeyRequest",
-	"AgentauthCatalogProvider":                    "CatalogProvider",
-	"ControllersCatalogProviderParam":             "CatalogProviderParam",
-	"ControllersListCatalogProvidersResponse":     "ListCatalogProvidersResponse",
-	"ControllersListCatalogModelsResponse":        "ListCatalogModelsResponse",
-	"ControllersRecordAgentSignInResponse":        "RecordAgentSignInResponse",
-	"PortsAgentModelCatalog":                      "AgentModelsResponse",
-	"PortsAgentModelInfo":                         "AgentModelInfo",
-	"ControllersListNotificationsQuery":           "ListNotificationsQuery",
-	"ControllersNotificationStreamQuery":          "NotificationStreamQuery",
-	"ControllersNotificationIDParam":              "NotificationIDParam",
-	"ControllersNotificationTarget":               "NotificationTarget",
-	"ControllersNotificationResponse":             "NotificationResponse",
-	"ControllersListNotificationsResponse":        "ListNotificationsResponse",
-	"ControllersMarkNotificationReadRequest":      "MarkNotificationReadRequest",
-	"ControllersNotificationEnvelope":             "NotificationEnvelope",
-	"ControllersMarkAllNotificationsReadRequest":  "MarkAllNotificationsReadRequest",
-	"ControllersMarkAllNotificationsReadResponse": "MarkAllNotificationsReadResponse",
-	"ControllersCreateReportRequest":              "CreateReportRequest",
-	"ControllersReportOutputRequest":              "ReportOutputRequest",
-	"ControllersCreateReportResponse":             "CreateReportResponse",
-	"ControllersReportOutputResponse":             "ReportOutputResponse",
-	"ControllersReportResponse":                   "ReportResponse",
-	"ControllersListReportsResponse":              "ListReportsResponse",
-	"ControllersClearNotificationsResponse":       "ClearNotificationsResponse",
-	"ControllersUsageHookMetadata":                "UsageHookMetadata",
-	"ControllersListUsageSessionsQuery":           "ListUsageSessionsQuery",
-	"ControllersUsageLimitHistoryRequest":         "UsageLimitHistoryRequest",
-	"ControllersUsagePriceOverride":               "UsagePriceOverride",
-	"ControllersUsagePricesRequest":               "UsagePricesRequest",
-	"ControllersUsagePricesResponse":              "UsagePricesResponse",
-	"ControllersUsageLimitHistoryResponse":        "UsageLimitHistoryResponse",
-	"ControllersUsageLimitWindowsQuery":           "UsageLimitWindowsQuery",
-	"ControllersUsageLimitWindowsResponse":        "UsageLimitWindowsResponse",
-	"DomainUsageLimitLogin":                       "UsageLimitLogin",
-	"DomainUsageLimitSpan":                        "UsageLimitSpan",
-	"DomainUsageLimitPoint":                       "UsageLimitPoint",
-	"ControllersUsageReportQuery":                 "UsageReportQuery",
-	"ControllersUsageReportResponse":              "UsageReportResponse",
-	"ControllersUsageReportRowResponse":           "UsageReportRowResponse",
-	"ControllersUsageReportSessionResponse":       "UsageReportSessionResponse",
-	"ControllersEstimatedCostResponse":            "EstimatedCostResponse",
-	"ControllersCompactSessionUsageResponse":      "CompactSessionUsageResponse",
-	"ControllersListSessionMemoryResponse":        "ListSessionMemoryResponse",
-	"ControllersSessionMemoryResponse":            "SessionMemoryResponse",
-	"ControllersSessionMemoryProcessResponse":     "SessionMemoryProcessResponse",
-	"ControllersSystemMemoryResponse":             "SystemMemoryResponse",
-	"ControllersAppMemoryResponse":                "AppMemoryResponse",
-	"ControllersMemoryPressureResponse":           "MemoryPressureResponse",
-	"ControllersSessionActivityResponse":          "SessionActivityResponse",
-	"ControllersSessionStepResponse":              "SessionStepResponse",
-	"ControllersListCompactSessionUsageResponse":  "ListCompactSessionUsageResponse",
-	// httpd/controllers — standalone shell terminal wire envelopes
-	"ControllersShellTerminalHandleIDParam":            "ShellTerminalHandleIDParam",
-	"ControllersOpenShellTerminalRequest":              "OpenShellTerminalRequest",
-	"ControllersUpdateShellTerminalRequest":            "UpdateShellTerminalRequest",
-	"ControllersShellTerminalResponse":                 "ShellTerminalResponse",
-	"ControllersListShellTerminalsResponse":            "ListShellTerminalsResponse",
-	"ControllersTerminalShellResponse":                 "TerminalShellResponse",
-	"ControllersTerminalShellsResponse":                "TerminalShellsResponse",
-	"ControllersTerminalShellCheckResponse":            "TerminalShellCheckResponse",
-	"ControllersShellTerminalEnvelope":                 "ShellTerminalEnvelope",
-	"ControllersOpenCodexAccountLoginTerminalResponse": "OpenCodexAccountLoginTerminalResponse",
-	"ControllersCodexAccountLoginTerminalResponse":     "CodexAccountLoginTerminalResponse",
-	// httpd/controllers — project cue wire envelopes
-	"ControllersCueIDParam":           "CueIDParam",
-	"ControllersCueProjectIDParam":    "CueProjectIDParam",
-	"ControllersCueDefinitionRequest": "CueDefinitionRequest",
-	"ControllersCueResponse":          "CueResponse",
-	"ControllersListCuesResponse":     "ListCuesResponse",
-	"ControllersInvokeCueRequest":     "InvokeCueRequest",
-	"ControllersInvokeCueResponse":    "InvokeCueResponse",
-	"ControllersCueEnvelope":          "CueEnvelope",
-	// httpd/controllers — PR wire envelopes
-	"ControllersMergePRRequest":             "MergePRRequest",
-	"ControllersPRStackLayerResponse":       "PRStackLayerResponse",
-	"ControllersPRStackResponse":            "PRStackResponse",
-	"ControllersPRStackParentResponse":      "PRStackParentResponse",
-	"ControllersPRStackQuery":               "PRStackQuery",
-	"ControllersGetPRStackResponse":         "GetPRStackResponse",
-	"ControllersAddPRToStackRequest":        "AddPRToStackRequest",
-	"ControllersLoadPRDetailsRequest":       "LoadPRDetailsRequest",
-	"ControllersPRStackHead":                "PRStackHead",
-	"ControllersMergePRStackRequest":        "MergePRStackRequest",
-	"ControllersMergePRStackResponse":       "MergePRStackResponse",
-	"ControllersMergePRResponse":            "MergePRResponse",
-	"ControllersResolveCommentsRequest":     "ResolveCommentsRequest",
-	"ControllersResolveCommentsResponse":    "ResolveCommentsResponse",
-	"ControllersChangePRStateRequest":       "ChangePRStateRequest",
-	"ControllersChangePRStateResponse":      "ChangePRStateResponse",
-	"ControllersPostPRCommentRequest":       "PostPRCommentRequest",
-	"ControllersPostPRCommentResponse":      "PostPRCommentResponse",
-	"ControllersPRCommentAttachment":        "PRCommentAttachment",
-	"ControllersPRAttachmentAccessResponse": "PRAttachmentAccessResponse",
-	// httpd/controllers — review wire envelopes
-	"ControllersListReviewsResponse":   "ListReviewsResponse",
-	"ControllersReviewRunResponse":     "ReviewRunResponse",
-	"ControllersTriggerReviewResponse": "TriggerReviewResponse",
-	"ControllersCancelReviewResponse":  "CancelReviewResponse",
-	"ControllersKillReviewResponse":    "KillReviewResponse",
-	"ControllersRestoreReviewResponse": "RestoreReviewResponse",
-	"ControllersSubmitReviewItem":      "SubmitReviewItem",
-	"ControllersSubmitReviewInput":     "SubmitReviewInput",
-	// domain review entities
-	"DomainReviewRun":                  "ReviewRun",
-	"ReviewPRReviewState":              "PRReviewState",
-	"SessionimportCandidate":           "SessionImportCandidate",
-	"SessionimportPreview":             "SessionImportPreview",
-	"SessionimportResult":              "SessionImportResult",
-	"ControllersSessionImportRequest":  "SessionImportRequest",
-	"ControllersSessionImportResponse": "SessionImportResponse",
-	// httpd/controllers: import wire envelopes
-	"ControllersImportStatusResponse": "ImportStatusResponse",
-	"ControllersImportRunResponse":    "ImportRunResponse",
-	// service/importer: project import onboarding DTOs
-	"ImporterImportValidationInput":         "ImportValidationInput",
-	"ImporterImportValidationResult":        "ImportValidationResult",
-	"ImporterRepoGitStatus":                 "RepoGitStatus",
-	"ImporterGitPreparationInput":           "GitPreparationInput",
-	"ImporterGitPreparationResult":          "GitPreparationResult",
-	"ImporterGitPreparationEvent":           "GitPreparationEvent",
-	"ImporterGitHubRepositoryPreparation":   "GitHubRepositoryPreparation",
-	"ImporterGitRepositoryPreparationInput": "GitRepositoryPreparationInput",
-	// httpd/controllers: dev wire envelopes
-	"ControllersDevImportProjectsRequest":  "DevImportProjectsRequest",
-	"ControllersDevImportProjectsResponse": "DevImportProjectsResponse",
-	// httpd/controllers: mobile wire envelopes
-	"ControllersMobileStatusResponse":             "MobileStatusResponse",
-	"ControllersSetBrowserRemoteAccessRequest":    "SetBrowserRemoteAccessRequest",
-	"MobilebridgeEndpoint":                        "MobileEndpoint",
-	"MobilebridgeTunnelStatus":                    "MobileTunnelStatus",
-	"ControllersIdentityResponse":                 "IdentityResponse",
-	"ControllersEndpointsResponse":                "EndpointsResponse",
-	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
-	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
-	"ControllersSessionSearchQuery":               "SessionSearchQuery",
-	"ControllersSessionSearchResponse":            "SessionSearchResponse",
-	"ControllersSessionSearchResult":              "SessionSearchResult",
-	"ControllersSessionSearchHighlight":           "SessionSearchHighlight",
-	"ControllersSessionSearchCoverage":            "SessionSearchCoverage",
-	"ControllersSessionSearchIndexStatusResponse": "SessionSearchIndexStatusResponse",
-	"ControllersMobileDeviceResponse":             "MobileDeviceResponse",
-	"ControllersMobileDevicesResponse":            "MobileDevicesResponse",
-	"ControllersMobileDeviceIDParam":              "MobileDeviceIDParam",
-	"ControllersPushPairingIDParam":               "PushPairingIDParam",
-	// devimport report
-	"DevimportReport":   "DevImportProjectsReport",
-	"DevimportConflict": "DevImportProjectsConflict",
-	// httpd/controllers: push-device wire envelopes
-	"ControllersRegisterPushDeviceRequest":    "RegisterPushDeviceRequest",
-	"ControllersPushDeviceEnvelope":           "PushDeviceEnvelope",
-	"ControllersPushDeviceResponse":           "PushDeviceResponse",
-	"ControllersUnregisterPushDeviceResponse": "UnregisterPushDeviceResponse",
-	// legacyimport report
-	"LegacyimportReport": "ImportReport",
-	// service/project entities + DTOs
-	"ProjectProject":                    "Project",
-	"ProjectSummary":                    "ProjectSummary",
-	"ProjectDegraded":                   "DegradedProject",
-	"ProjectAddInput":                   "AddProjectInput",
-	"ProjectCloneInput":                 "CloneProjectInput",
-	"ProjectClonePreparationResult":     "ClonePreparationResult",
-	"ProjectCloneDestination":           "CloneDestination",
-	"ProjectCloneProgress":              "CloneProgress",
-	"ProjectInitializeRepositoryInput":  "InitializeRepositoryInput",
-	"ProjectInitializeRepositoryResult": "InitializeRepositoryResult",
-	"ProjectRemoveResult":               "RemoveProjectResult",
-	"ProjectSetPermissionsInput":        "SetProjectPermissionsInput",
-	"ProjectSetConfigInput":             "SetProjectConfigInput",
-	"ProjectUpdateSettingsInput":        "UpdateProjectSettingsInput",
-	"ProjectWorkspaceRepo":              "WorkspaceRepo",
-	"SessionWorkspaceFileStatus":        "WorkspaceFileStatus",
-	// httpd/controllers: GitHub PAT wire envelopes
-	"ControllersPutGitHubPATRequest": "PutGitHubPATRequest",
-	"GithubpatRepo":                  "GitHubRepo",
+	"EnvelopeAPIError":                                     "APIError",
+	"OwnershipOwner":                                       "ReportingOwner",
+	"DomainProjectID":                                      "ProjectID",
+	"DomainSessionID":                                      "SessionID",
+	"DomainIssueID":                                        "IssueID",
+	"DomainSession":                                        "Session",
+	"DomainSessionProvisionStep":                           "SessionProvisionStep",
+	"DomainSessionBranchState":                             "SessionBranchState",
+	"DomainSessionStaleBinary":                             "SessionStaleBinary",
+	"DomainSessionWait":                                    "SessionWait",
+	"DomainProjectConfig":                                  "ProjectConfig",
+	"DomainTrackerIntakeConfig":                            "TrackerIntakeConfig",
+	"ControllersTriggerReviewRequest":                      "TriggerReviewRequest",
+	"DomainContainerReapConfig":                            "ContainerReapConfig",
+	"DomainAgentConfig":                                    "AgentConfig",
+	"DomainRoleOverride":                                   "RoleOverride",
+	"ControllersListProjectsResponse":                      "ListProjectsResponse",
+	"ControllersProjectResponse":                           "ProjectResponse",
+	"ControllersClonePrepareStreamEvent":                   "ClonePrepareStreamEvent",
+	"ControllersAgentIDParam":                              "AgentIDParam",
+	"ControllersCodexAccountIDParam":                       "CodexAccountIDParam",
+	"ControllersCodexAccountLoginIDParam":                  "CodexAccountLoginIDParam",
+	"ControllersGetProjectResponse":                        "ProjectGetResponse",
+	"ControllersProjectOrDegraded":                         "ProjectOrDegraded",
+	"ControllersListSessionsQuery":                         "ListSessionsQuery",
+	"ControllersListDirsQuery":                             "ListDirsQuery",
+	"ControllersListDirsResponse":                          "ListDirsResponse",
+	"ControllersFSEntry":                                   "FSEntry",
+	"ControllersCleanupSessionsQuery":                      "CleanupSessionsQuery",
+	"ControllersListSessionsResponse":                      "ListSessionsResponse",
+	"ControllersSessionArchiveSummary":                     "SessionArchiveSummary",
+	"ControllersSpawnSessionRequest":                       "SpawnSessionRequest",
+	"ControllersSpawnSessionResponse":                      "SpawnSessionResponse",
+	"ControllersSessionResponse":                           "SessionResponse",
+	"ControllersSessionArtifactView":                       "SessionArtifact",
+	"ControllersSessionPreviewResponse":                    "SessionPreviewResponse",
+	"ControllersSetSessionPreviewRequest":                  "SetSessionPreviewRequest",
+	"ControllersStartPreviewServerRequest":                 "StartPreviewServerRequest",
+	"ControllersPreviewServerStatusResponse":               "PreviewServerStatusResponse",
+	"ControllersBrowserStatusQuery":                        "BrowserStatusQuery",
+	"ControllersBrowserStatusResponse":                     "BrowserStatusResponse",
+	"ControllersBrowserCommandRequest":                     "BrowserCommandRequest",
+	"ControllersBrowserCommandResponse":                    "BrowserCommandResponse",
+	"ControllersSetSessionMergePolicyRequest":              "SetSessionMergePolicyRequest",
+	"ControllersSetSessionMergePolicyResponse":             "SetSessionMergePolicyResponse",
+	"ControllersSetSessionAutoInjectReviewRequest":         "SetSessionAutoInjectReviewRequest",
+	"ControllersSetSessionAutoInjectReviewResponse":        "SetSessionAutoInjectReviewResponse",
+	"ControllersSetSessionAutoInjectCIRequest":             "SetSessionAutoInjectCIRequest",
+	"ControllersSetSessionAutoInjectCIResponse":            "SetSessionAutoInjectCIResponse",
+	"ControllersRenameSessionRequest":                      "RenameSessionRequest",
+	"ControllersSetSessionReviewerRequest":                 "SetSessionReviewerRequest",
+	"ControllersRenameSessionResponse":                     "RenameSessionResponse",
+	"ControllersRestoreSessionResponse":                    "RestoreSessionResponse",
+	"ControllersExitAgentResponse":                         "ExitAgentResponse",
+	"ControllersResumeAgentResponse":                       "ResumeAgentResponse",
+	"ControllersStartSessionInterfaceTransitionRequest":    "StartSessionInterfaceTransitionRequest",
+	"ControllersSessionInterfaceTransitionView":            "SessionInterfaceTransition",
+	"ControllersSessionInterfaceTransitionStatusResponse":  "SessionInterfaceTransitionStatusResponse",
+	"ControllersStartSessionInterfaceTransitionResponse":   "StartSessionInterfaceTransitionResponse",
+	"ControllersCancelSessionInterfaceTransitionResponse":  "CancelSessionInterfaceTransitionResponse",
+	"ControllersInterfaceTransitionNoticeAckResponse":      "AcknowledgeSessionInterfaceTransitionNoticeResponse",
+	"ControllersCleanupSessionsResponse":                   "CleanupSessionsResponse",
+	"ControllersCleanupSkippedSession":                     "CleanupSkippedSession",
+	"ControllersWorkspaceFileQuery":                        "WorkspaceFileQuery",
+	"ControllersArtifactFileQuery":                         "ArtifactFileQuery",
+	"ControllersArtifactFileResponse":                      "ArtifactFileResponse",
+	"ControllersUpdateArtifactFileRequest":                 "UpdateArtifactFileRequest",
+	"ControllersGitHubStatusResponse":                      "GitHubStatusResponse",
+	"ControllersArtifactVersionQuery":                      "ArtifactVersionQuery",
+	"ControllersArtifactVersionSummary":                    "ArtifactVersionSummary",
+	"ControllersListArtifactVersionsResponse":              "ListArtifactVersionsResponse",
+	"ControllersArtifactVersionResponse":                   "ArtifactVersionResponse",
+	"ControllersRestoreArtifactVersionRequest":             "RestoreArtifactVersionRequest",
+	"ControllersSyncArtifactVersionsRequest":               "SyncArtifactVersionsRequest",
+	"ControllersRegisterArtifactsRequest":                  "RegisterArtifactsRequest",
+	"ControllersRegisterArtifactsResponse":                 "RegisterArtifactsResponse",
+	"ControllersPRFileQuery":                               "PRFileQuery",
+	"ControllersPRFileRevisionQuery":                       "PRFileRevisionQuery",
+	"ControllersUpdateWorkspaceFileRequest":                "UpdateWorkspaceFileRequest",
+	"ControllersWorkspaceFileBlobQuery":                    "WorkspaceFileBlobQuery",
+	"ControllersWorkspaceFileRevisionQuery":                "WorkspaceFileRevisionQuery",
+	"ControllersWorkspaceSearchQuery":                      "WorkspaceSearchQuery",
+	"ControllersStageSessionAttachmentsRequest":            "StageSessionAttachmentsRequest",
+	"ControllersStageSessionAttachmentsResponse":           "StageSessionAttachmentsResponse",
+	"ControllersAttachmentInput":                           "AttachmentInput",
+	"ControllersListWorkspaceFilesResponse":                "ListWorkspaceFilesResponse",
+	"ControllersWorkspaceManifestResponse":                 "WorkspaceManifestResponse",
+	"ControllersWorkspaceHistoryResponse":                  "WorkspaceHistoryResponse",
+	"ControllersWorkspaceHistoryQuery":                     "WorkspaceHistoryQuery",
+	"ControllersWorkspaceViewResponse":                     "WorkspaceViewResponse",
+	"ControllersWorkspaceCommitSelectionRequest":           "WorkspaceCommitSelectionRequest",
+	"ControllersWorkspaceCommitSelectionResponse":          "WorkspaceCommitSelectionResponse",
+	"ControllersWorkspaceCommitConflictResponse":           "WorkspaceCommitConflictResponse",
+	"ControllersWorkspaceBranchesResponse":                 "WorkspaceBranchesResponse",
+	"ControllersWorkspaceBranchResponse":                   "WorkspaceBranchResponse",
+	"ControllersListPRFilesResponse":                       "ListPRFilesResponse",
+	"ControllersWorkspaceFileSummary":                      "WorkspaceFileSummary",
+	"ControllersWorkspaceFileSections":                     "WorkspaceFileSections",
+	"ControllersWorkspaceCommitSummary":                    "WorkspaceCommitSummary",
+	"ControllersWorkspaceSummary":                          "WorkspaceSummary",
+	"ControllersEnsureCodexAccountsRequest":                "EnsureCodexAccountsRequest",
+	"ControllersConsumeCodexAccountResetCreditRequest":     "ConsumeCodexAccountResetCreditRequest",
+	"ControllersCodexAccountsResponse":                     "CodexAccountsResponse",
+	"ControllersCodexDeviceReconciliationResponse":         "CodexDeviceReconciliationResponse",
+	"ControllersCodexAccountResponse":                      "CodexAccountResponse",
+	"ControllersCodexAuthenticationResponse":               "CodexAuthenticationResponse",
+	"ControllersCodexAccountCapacityResponse":              "CodexAccountCapacityResponse",
+	"ControllersCodexCapacityBucketResponse":               "CodexCapacityBucketResponse",
+	"ControllersCodexCapacityWindowResponse":               "CodexCapacityWindowResponse",
+	"ControllersCodexResetCreditsSummaryResponse":          "CodexResetCreditsSummaryResponse",
+	"ControllersCodexAccountUsageSummaryResponse":          "CodexAccountUsageSummaryResponse",
+	"ControllersCodexCapabilityObservationResponse":        "CodexCapabilityObservationResponse",
+	"ControllersCodexAccountCapabilitiesResponse":          "CodexAccountCapabilitiesResponse",
+	"ControllersCodexAccountLoginResponse":                 "CodexAccountLoginResponse",
+	"ControllersCodexActiveLoginResponse":                  "CodexActiveLoginResponse",
+	"ControllersCodexAccountSwitchResponse":                "CodexAccountSwitchResponse",
+	"ControllersCodexAccountSwitchPhase":                   "CodexAccountSwitchPhase",
+	"ControllersStartCodexAccountSwitchRequest":            "StartCodexAccountSwitchRequest",
+	"ControllersCodexAccountSwitchIDParam":                 "CodexAccountSwitchIDParam",
+	"DomainCodexCapacitySummary":                           "CodexCapacitySummary",
+	"ControllersWorkspaceFileResponse":                     "WorkspaceFileResponse",
+	"ControllersWorkspaceDiffRequest":                      "WorkspaceDiffRequest",
+	"ControllersWorkspaceDiffDeferredResponse":             "WorkspaceDiffDeferredResponse",
+	"ControllersWorkspaceDiffErrorResponse":                "WorkspaceDiffErrorResponse",
+	"ControllersWorkspaceDiffGroupResponse":                "WorkspaceDiffGroupResponse",
+	"ControllersWorkspaceDiffsResponse":                    "WorkspaceDiffsResponse",
+	"ControllersWorkspaceFileRevisionResponse":             "WorkspaceFileRevisionResponse",
+	"ControllersWorkspaceFileSearchResultResponse":         "WorkspaceFileSearchResultResponse",
+	"ControllersWorkspaceFileSearchResponse":               "WorkspaceFileSearchResponse",
+	"ControllersWorkspaceContentSearchHitResponse":         "WorkspaceContentSearchHitResponse",
+	"ControllersWorkspaceContentSearchResponse":            "WorkspaceContentSearchResponse",
+	"ControllersConversationSearchHitResponse":             "ConversationSearchHitResponse",
+	"ControllersConversationSearchResponse":                "ConversationSearchResponse",
+	"ControllersWorkspaceResolveQuery":                     "WorkspaceResolveQuery",
+	"ControllersWorkspacePathResolutionResponse":           "WorkspacePathResolutionResponse",
+	"ControllersWorkspaceTreeQuery":                        "WorkspaceTreeQuery",
+	"ControllersListWorkspaceTreeResponse":                 "ListWorkspaceTreeResponse",
+	"ControllersWorkspaceTreeEntry":                        "WorkspaceTreeEntry",
+	"ControllersListEditorsResponse":                       "ListEditorsResponse",
+	"ControllersEditorSummary":                             "EditorSummary",
+	"ControllersOpenSessionEditorRequest":                  "OpenSessionEditorRequest",
+	"ControllersOpenSessionEditorResponse":                 "OpenSessionEditorResponse",
+	"ControllersKillSessionResponse":                       "KillSessionResponse",
+	"ControllersRollbackSessionResponse":                   "RollbackSessionResponse",
+	"ControllersDeleteSessionResponse":                     "DeleteSessionResponse",
+	"ControllersSendSessionMessageRequest":                 "SendSessionMessageRequest",
+	"ControllersSendSessionMessageResponse":                "SendSessionMessageResponse",
+	"ControllersDelegateTaskRequest":                       "DelegateTaskRequest",
+	"ControllersDelegateTaskResponse":                      "DelegateTaskResponse",
+	"ControllersPrepareTaskResponse":                       "PrepareTaskResponse",
+	"ControllersClaimPRResponse":                           "ClaimPRResponse",
+	"ControllersClaimPRRequest":                            "ClaimPRRequest",
+	"ControllersSessionPRFacts":                            "SessionPRFacts",
+	"ControllersSessionPRSummary":                          "SessionPRSummary",
+	"ControllersSessionPRLabel":                            "SessionPRLabel",
+	"ControllersSessionPRRequestedReviewer":                "SessionPRRequestedReviewer",
+	"ControllersSessionPRCommit":                           "SessionPRCommit",
+	"ControllersSessionPRThread":                           "SessionPRThread",
+	"ControllersSessionPRComment":                          "SessionPRComment",
+	"ControllersSessionPRReference":                        "SessionPRReference",
+	"ControllersSessionPRCISummary":                        "SessionPRCISummary",
+	"ControllersSessionPRFailingCheck":                     "SessionPRFailingCheck",
+	"ControllersSessionPRCheck":                            "SessionPRCheck",
+	"ControllersSessionPRReviewSummary":                    "SessionPRReviewSummary",
+	"ControllersSessionPRReviewEntry":                      "SessionPRReviewEntry",
+	"ControllersSessionPRUnresolvedReviewer":               "SessionPRUnresolvedReviewer",
+	"ControllersSessionPRReviewCommentLink":                "SessionPRReviewCommentLink",
+	"ControllersSessionPRMergeabilitySummary":              "SessionPRMergeabilitySummary",
+	"ControllersSessionPRConflictFile":                     "SessionPRConflictFile",
+	"ControllersListSessionPRsResponse":                    "ListSessionPRsResponse",
+	"ControllersSetActivityRequest":                        "SetActivityRequest",
+	"ControllersSetActivityResponse":                       "SetActivityResponse",
+	"ControllersCodewhaleLifecycleWebhookRequest":          "CodewhaleLifecycleWebhookRequest",
+	"ControllersCodewhaleLifecycleEvent":                   "CodewhaleLifecycleEvent",
+	"ControllersSetReviewActivityRequest":                  "SetReviewActivityRequest",
+	"ControllersSetReviewActivityResponse":                 "SetReviewActivityResponse",
+	"ControllersSpawnOrchestratorRequest":                  "SpawnOrchestratorRequest",
+	"ControllersSpawnOrchestratorResponse":                 "SpawnOrchestratorResponse",
+	"ControllersOrchestratorResponse":                      "OrchestratorResponse",
+	"AgentInventory":                                       "ListAgentsResponse",
+	"AgentInfo":                                            "AgentInfo",
+	"AgentProbeResult":                                     "ProbeAgentResponse",
+	"AgentReadiness":                                       "AgentReadinessResponse",
+	"ControllersEnsureAgentReadinessRequest":               "EnsureAgentReadinessRequest",
+	"DomainAgentReadinessSnapshot":                         "AgentReadinessSnapshot",
+	"DomainAgentInstallationObservation":                   "AgentInstallationObservation",
+	"DomainAgentAuthDiagnostic":                            "AgentAuthDiagnostic",
+	"DomainAgentAccountIdentity":                           "AgentAccountIdentity",
+	"DomainAgentAuthenticationObservation":                 "AgentAuthenticationObservation",
+	"SystemcheckReport":                                    "SystemRequirementsResponse",
+	"SystemcheckRequirement":                               "SystemRequirement",
+	"ControllersInstallTargetParam":                        "InstallTargetParam",
+	"ComputeruseStatus":                                    "ComputerUseStatus",
+	"ComputerusePermissions":                               "ComputerUsePermissions",
+	"ComputeruseCallRequest":                               "ComputerUseCallRequest",
+	"ComputeruseCallResult":                                "ComputerUseCallResult",
+	"ComputeruseImage":                                     "ComputerUseImage",
+	"ControllersComputerUseDoctorResponse":                 "ComputerUseDoctorResponse",
+	"ComputeruseAgentTool":                                 "ComputerUseAgentTool",
+	"ControllersComputerUseAgentToolsResponse":             "ComputerUseAgentToolsResponse",
+	"SysteminstallJob":                                     "InstallJob",
+	"SysteminstallProgress":                                "InstallProgress",
+	"SysteminstallAgentPlan":                               "AgentInstallPlan",
+	"SysteminstallAgentInstallMethod":                      "AgentInstallMethod",
+	"SysteminstallUpdateAdvisory":                          "AgentUpdateAdvisory",
+	"SysteminstallUpdateInUse":                             "AgentUpdateInUse",
+	"ControllersAgentUpdateAdvisoryQuery":                  "AgentUpdateAdvisoryQuery",
+	"ControllersAgentInstallerCatalogResponse":             "AgentInstallerCatalogResponse",
+	"ControllersStartAgentInstallRequest":                  "StartAgentInstallRequest",
+	"ControllersAgentInstallJobsResponse":                  "AgentInstallJobsResponse",
+	"AgentauthAction":                                      "AgentAuthAction",
+	"AgentauthPlan":                                        "AgentAuthPlan",
+	"ControllersListAgentAuthPlansResponse":                "ListAgentAuthPlansResponse",
+	"ControllersStartAgentAuthResponse":                    "StartAgentAuthResponse",
+	"ControllersStartAgentUILoginRequest":                  "StartAgentUILoginRequest",
+	"ControllersSubmitAgentUILoginCodeRequest":             "SubmitAgentUILoginCodeRequest",
+	"AgentauthLoginMethod":                                 "AgentLoginMethod",
+	"AgentauthLoginSnapshot":                               "AgentLoginSnapshot",
+	"AgentauthProviderKey":                                 "ProviderKey",
+	"ProviderkeysCheckResult":                              "ProviderKeyCheck",
+	"ControllersProviderKeyNameParam":                      "ProviderKeyNameParam",
+	"ControllersListProviderKeysResponse":                  "ListProviderKeysResponse",
+	"ControllersSaveProviderKeyRequest":                    "SaveProviderKeyRequest",
+	"ControllersCheckProviderKeyRequest":                   "CheckProviderKeyRequest",
+	"AgentauthCatalogProvider":                             "CatalogProvider",
+	"ControllersCatalogProviderParam":                      "CatalogProviderParam",
+	"ControllersListCatalogProvidersResponse":              "ListCatalogProvidersResponse",
+	"ControllersListCatalogModelsResponse":                 "ListCatalogModelsResponse",
+	"ControllersRecordAgentSignInResponse":                 "RecordAgentSignInResponse",
+	"PortsAgentModelCatalog":                               "AgentModelsResponse",
+	"PortsAgentModelInfo":                                  "AgentModelInfo",
+	"ControllersListNotificationsQuery":                    "ListNotificationsQuery",
+	"ControllersNotificationStreamQuery":                   "NotificationStreamQuery",
+	"ControllersNotificationIDParam":                       "NotificationIDParam",
+	"ControllersNotificationTarget":                        "NotificationTarget",
+	"ControllersNotificationResponse":                      "NotificationResponse",
+	"ControllersListNotificationsResponse":                 "ListNotificationsResponse",
+	"ControllersMarkNotificationReadRequest":               "MarkNotificationReadRequest",
+	"ControllersNotificationEnvelope":                      "NotificationEnvelope",
+	"ControllersMarkAllNotificationsReadRequest":           "MarkAllNotificationsReadRequest",
+	"ControllersMarkAllNotificationsReadResponse":          "MarkAllNotificationsReadResponse",
+	"ControllersCreateReportRequest":                       "CreateReportRequest",
+	"ControllersReportOutputRequest":                       "ReportOutputRequest",
+	"ControllersCreateReportResponse":                      "CreateReportResponse",
+	"ControllersReportOutputResponse":                      "ReportOutputResponse",
+	"ControllersReportResponse":                            "ReportResponse",
+	"ControllersListReportsResponse":                       "ListReportsResponse",
+	"ControllersClearNotificationsResponse":                "ClearNotificationsResponse",
+	"ControllersUsageHookMetadata":                         "UsageHookMetadata",
+	"ControllersListUsageSessionsQuery":                    "ListUsageSessionsQuery",
+	"ControllersUsageLimitHistoryRequest":                  "UsageLimitHistoryRequest",
+	"ControllersUsagePriceOverride":                        "UsagePriceOverride",
+	"ControllersUsagePricesRequest":                        "UsagePricesRequest",
+	"ControllersUsagePricesResponse":                       "UsagePricesResponse",
+	"ControllersUsageLimitHistoryResponse":                 "UsageLimitHistoryResponse",
+	"ControllersUsageLimitWindowsQuery":                    "UsageLimitWindowsQuery",
+	"ControllersUsageLimitWindowsResponse":                 "UsageLimitWindowsResponse",
+	"DomainUsageLimitLogin":                                "UsageLimitLogin",
+	"DomainUsageLimitSpan":                                 "UsageLimitSpan",
+	"DomainUsageLimitPoint":                                "UsageLimitPoint",
+	"ControllersUsageReportQuery":                          "UsageReportQuery",
+	"ControllersUsageReportResponse":                       "UsageReportResponse",
+	"ControllersUsageReportRowResponse":                    "UsageReportRowResponse",
+	"ControllersUsageReportSessionResponse":                "UsageReportSessionResponse",
+	"ControllersEstimatedCostResponse":                     "EstimatedCostResponse",
+	"ControllersCompactSessionUsageResponse":               "CompactSessionUsageResponse",
+	"ControllersListSessionMemoryResponse":                 "ListSessionMemoryResponse",
+	"ControllersSessionMemoryResponse":                     "SessionMemoryResponse",
+	"ControllersSessionMemoryProcessResponse":              "SessionMemoryProcessResponse",
+	"ControllersSystemMemoryResponse":                      "SystemMemoryResponse",
+	"ControllersAppMemoryResponse":                         "AppMemoryResponse",
+	"ControllersMemoryPressureResponse":                    "MemoryPressureResponse",
+	"ControllersSessionActivityResponse":                   "SessionActivityResponse",
+	"ControllersSessionStepResponse":                       "SessionStepResponse",
+	"ControllersListCompactSessionUsageResponse":           "ListCompactSessionUsageResponse",
+	"ControllersShellTerminalHandleIDParam":                "ShellTerminalHandleIDParam",
+	"ControllersOpenShellTerminalRequest":                  "OpenShellTerminalRequest",
+	"ControllersUpdateShellTerminalRequest":                "UpdateShellTerminalRequest",
+	"ControllersShellTerminalResponse":                     "ShellTerminalResponse",
+	"ControllersListShellTerminalsResponse":                "ListShellTerminalsResponse",
+	"ControllersTerminalShellResponse":                     "TerminalShellResponse",
+	"ControllersTerminalShellsResponse":                    "TerminalShellsResponse",
+	"ControllersTerminalShellCheckResponse":                "TerminalShellCheckResponse",
+	"ControllersShellTerminalEnvelope":                     "ShellTerminalEnvelope",
+	"ControllersOpenCodexAccountLoginTerminalResponse":     "OpenCodexAccountLoginTerminalResponse",
+	"ControllersCodexAccountLoginTerminalResponse":         "CodexAccountLoginTerminalResponse",
+	"ControllersCueIDParam":                                "CueIDParam",
+	"ControllersCueProjectIDParam":                         "CueProjectIDParam",
+	"ControllersCueDefinitionRequest":                      "CueDefinitionRequest",
+	"ControllersCueResponse":                               "CueResponse",
+	"ControllersListCuesResponse":                          "ListCuesResponse",
+	"ControllersInvokeCueRequest":                          "InvokeCueRequest",
+	"ControllersInvokeCueResponse":                         "InvokeCueResponse",
+	"ControllersCueEnvelope":                               "CueEnvelope",
+	"ControllersMergePRRequest":                            "MergePRRequest",
+	"ControllersPRStackLayerResponse":                      "PRStackLayerResponse",
+	"ControllersPRStackResponse":                           "PRStackResponse",
+	"ControllersPRStackParentResponse":                     "PRStackParentResponse",
+	"ControllersPRStackQuery":                              "PRStackQuery",
+	"ControllersGetPRStackResponse":                        "GetPRStackResponse",
+	"ControllersAddPRToStackRequest":                       "AddPRToStackRequest",
+	"ControllersLoadPRDetailsRequest":                      "LoadPRDetailsRequest",
+	"ControllersPRStackHead":                               "PRStackHead",
+	"ControllersMergePRStackRequest":                       "MergePRStackRequest",
+	"ControllersMergePRStackResponse":                      "MergePRStackResponse",
+	"ControllersMergePRResponse":                           "MergePRResponse",
+	"ControllersResolveCommentsRequest":                    "ResolveCommentsRequest",
+	"ControllersResolveCommentsResponse":                   "ResolveCommentsResponse",
+	"ControllersChangePRStateRequest":                      "ChangePRStateRequest",
+	"ControllersChangePRStateResponse":                     "ChangePRStateResponse",
+	"ControllersPostPRCommentRequest":                      "PostPRCommentRequest",
+	"ControllersPostPRCommentResponse":                     "PostPRCommentResponse",
+	"ControllersPRCommentAttachment":                       "PRCommentAttachment",
+	"ControllersPRAttachmentAccessResponse":                "PRAttachmentAccessResponse",
+	"ControllersListReviewsResponse":                       "ListReviewsResponse",
+	"ControllersReviewRunResponse":                         "ReviewRunResponse",
+	"ControllersTriggerReviewResponse":                     "TriggerReviewResponse",
+	"ControllersCancelReviewResponse":                      "CancelReviewResponse",
+	"ControllersKillReviewResponse":                        "KillReviewResponse",
+	"ControllersRestoreReviewResponse":                     "RestoreReviewResponse",
+	"ControllersSubmitReviewItem":                          "SubmitReviewItem",
+	"ControllersSubmitReviewInput":                         "SubmitReviewInput",
+	"DomainReviewRun":                                      "ReviewRun",
+	"ReviewPRReviewState":                                  "PRReviewState",
+	"SessionimportCandidate":                               "SessionImportCandidate",
+	"SessionimportPreview":                                 "SessionImportPreview",
+	"SessionimportResult":                                  "SessionImportResult",
+	"ControllersSessionImportRequest":                      "SessionImportRequest",
+	"ControllersSessionImportResponse":                     "SessionImportResponse",
+	"ControllersImportStatusResponse":                      "ImportStatusResponse",
+	"ControllersImportRunResponse":                         "ImportRunResponse",
+	"ImporterImportValidationInput":                        "ImportValidationInput",
+	"ImporterImportValidationResult":                       "ImportValidationResult",
+	"ImporterRepoGitStatus":                                "RepoGitStatus",
+	"ImporterGitPreparationInput":                          "GitPreparationInput",
+	"ImporterGitPreparationResult":                         "GitPreparationResult",
+	"ImporterGitPreparationEvent":                          "GitPreparationEvent",
+	"ImporterGitHubRepositoryPreparation":                  "GitHubRepositoryPreparation",
+	"ImporterGitRepositoryPreparationInput":                "GitRepositoryPreparationInput",
+	"ControllersDevImportProjectsRequest":                  "DevImportProjectsRequest",
+	"ControllersDevImportProjectsResponse":                 "DevImportProjectsResponse",
+	"ControllersMobileStatusResponse":                      "MobileStatusResponse",
+	"ControllersSetBrowserRemoteAccessRequest":             "SetBrowserRemoteAccessRequest",
+	"MobilebridgeEndpoint":                                 "MobileEndpoint",
+	"MobilebridgeTunnelStatus":                             "MobileTunnelStatus",
+	"ControllersIdentityResponse":                          "IdentityResponse",
+	"ControllersEndpointsResponse":                         "EndpointsResponse",
+	"ControllersLinkPreviewQuery":                          "LinkPreviewQuery",
+	"ControllersLinkPreviewResponse":                       "LinkPreviewResponse",
+	"ControllersSessionSearchQuery":                        "SessionSearchQuery",
+	"ControllersSessionSearchResponse":                     "SessionSearchResponse",
+	"ControllersSessionSearchResult":                       "SessionSearchResult",
+	"ControllersSessionSearchHighlight":                    "SessionSearchHighlight",
+	"ControllersSessionSearchCoverage":                     "SessionSearchCoverage",
+	"ControllersSessionSearchIndexStatusResponse":          "SessionSearchIndexStatusResponse",
+	"ControllersMobileDeviceResponse":                      "MobileDeviceResponse",
+	"ControllersMobileDevicesResponse":                     "MobileDevicesResponse",
+	"ControllersMobileDeviceIDParam":                       "MobileDeviceIDParam",
+	"ControllersPushPairingIDParam":                        "PushPairingIDParam",
+	"DevimportReport":                                      "DevImportProjectsReport",
+	"DevimportConflict":                                    "DevImportProjectsConflict",
+	"ControllersRegisterPushDeviceRequest":                 "RegisterPushDeviceRequest",
+	"ControllersPushDeviceEnvelope":                        "PushDeviceEnvelope",
+	"ControllersPushDeviceResponse":                        "PushDeviceResponse",
+	"ControllersUnregisterPushDeviceResponse":              "UnregisterPushDeviceResponse",
+	"LegacyimportReport":                                   "ImportReport",
+	"ProjectProject":                                       "Project",
+	"ProjectSummary":                                       "ProjectSummary",
+	"ProjectDegraded":                                      "DegradedProject",
+	"ProjectAddInput":                                      "AddProjectInput",
+	"ProjectCloneInput":                                    "CloneProjectInput",
+	"ProjectClonePreparationResult":                        "ClonePreparationResult",
+	"ProjectCloneDestination":                              "CloneDestination",
+	"ProjectCloneProgress":                                 "CloneProgress",
+	"ProjectInitializeRepositoryInput":                     "InitializeRepositoryInput",
+	"ProjectInitializeRepositoryResult":                    "InitializeRepositoryResult",
+	"ProjectRemoveResult":                                  "RemoveProjectResult",
+	"ProjectSetPermissionsInput":                           "SetProjectPermissionsInput",
+	"ProjectSetConfigInput":                                "SetProjectConfigInput",
+	"ProjectUpdateSettingsInput":                           "UpdateProjectSettingsInput",
+	"ProjectWorkspaceRepo":                                 "WorkspaceRepo",
+	"SessionWorkspaceFileStatus":                           "WorkspaceFileStatus",
+	"ControllersPutGitHubPATRequest":                       "PutGitHubPATRequest",
+	"GithubpatRepo":                                        "GitHubRepo",
 }
 
-// markRequestBodyRequired sets requestBody.required: true on the operation's
-// JSON body. swaggest leaves it absent (== optional) for AddReqStructure bodies.
 func markRequestBodyRequired(cor openapi.ContentOrReference) {
 	if rb, ok := cor.(*openapi31.RequestBodyOrReference); ok && rb.RequestBody != nil {
 		rb.RequestBody.WithRequired(true)
 	}
 }
 
-// nonNullableSlices drops the "null" that swaggest unions into every Go slice
-// type (a nil slice marshals as JSON null). A required array field should be
-// `T[]`, not `T[] | null`; the handlers normalise nil to an empty slice, so
-// null never reaches the wire. Byte slices (base64 strings) are left alone.
 func nonNullableSlices(p jsonschema.InterceptNullabilityParams) {
 	if !p.NullAdded || p.Type == nil || p.Type.Kind() != reflect.Slice {
 		return
@@ -761,9 +692,6 @@ func nonNullableSlices(p jsonschema.InterceptNullabilityParams) {
 	p.Schema.Type.SliceOfSimpleTypeValues = nil
 }
 
-// validNullableReferenceUnions removes the original concrete type left beside
-// an enveloped null-or-reference anyOf. Keeping that sibling type would apply
-// it conjunctively and reject null despite the explicit null branch.
 func validNullableReferenceUnions(p jsonschema.InterceptNullabilityParams) {
 	if p.Schema.Type == nil || len(p.Schema.AnyOf) == 0 {
 		return
@@ -776,10 +704,6 @@ func validNullableReferenceUnions(p jsonschema.InterceptNullabilityParams) {
 	}
 }
 
-// requiredFromJSONTag marks a property required when its json tag has neither
-// `omitempty` nor `omitzero` (the Go convention for "always present"). Runs after default
-// processing so ParentSchema exists; skips fields without a json tag (e.g. path
-// params, which swaggest marks required on their own).
 func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
 	if !p.Processed || p.ParentSchema == nil {
 		return nil
@@ -807,8 +731,6 @@ func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
 	return nil
 }
 
-// --- operation registry -----------------------------------------------------
-
 type respUnit struct {
 	status int
 	body   any
@@ -817,13 +739,11 @@ type respUnit struct {
 type operation struct {
 	method, path, id, summary string
 	tag                       string
-	pathParams                []any // path/query param containers (e.g. ProjectIDParam)
-	reqBody                   any   // JSON request body struct, nil when the op takes none
-	// optionalReqBody declares the body without marking it required, for the
-	// handlers that accept an empty body as a meaningful default.
-	optionalReqBody bool
-	resps           []respUnit
-	contentTypes    map[int]string // optional non-JSON response content types by status
+	pathParams                []any
+	reqBody                   any
+	optionalReqBody           bool
+	resps                     []respUnit
+	contentTypes              map[int]string
 }
 
 func operations() []operation {
@@ -876,9 +796,6 @@ func automationOperations() []operation {
 	}
 }
 
-// sessionSearchOperations declares the ranked search over past sessions. Must
-// stay 1:1 with the routes SessionSearchController.Register mounts (enforced by
-// the parity test).
 func sessionSearchOperations() []operation {
 	commonErrors := []respUnit{
 		{http.StatusBadRequest, envelope.APIError{}},
@@ -912,9 +829,6 @@ func sessionSearchOperations() []operation {
 	}
 }
 
-// linkPreviewOperations declares the server-side link unfurl. Must stay 1:1
-// with the routes LinkPreviewController.Register mounts (enforced by the
-// parity test).
 func linkPreviewOperations() []operation {
 	return []operation{
 		{
@@ -932,9 +846,6 @@ func linkPreviewOperations() []operation {
 	}
 }
 
-// endpointsOperations declares the phone's endpoint refresh. Not under
-// /api/v1/mobile, which lanControlBlock 404s on the only listener a phone can
-// reach.
 func endpointsOperations() []operation {
 	return []operation{
 		{
@@ -948,8 +859,6 @@ func endpointsOperations() []operation {
 	}
 }
 
-// telemetryIdentityOperations declares the phone's telemetry identity sync.
-// Authenticated and outside /api/v1/mobile for the same reason as endpoints.
 func telemetryIdentityOperations() []operation {
 	return []operation{
 		{
@@ -963,10 +872,6 @@ func telemetryIdentityOperations() []operation {
 	}
 }
 
-// identityOperations declares the unauthenticated host-identity probe. It is
-// the one route the Connect Mobile LAN listener serves without the connection
-// password, so the phone can confirm which machine answered before presenting
-// a credential. See docs/adr/0003-unauthenticated-identity-probe.md.
 func identityOperations() []operation {
 	return []operation{
 		{
@@ -1005,9 +910,6 @@ func reportOperations() []operation {
 	}}
 }
 
-// systemOperations declares the startup requirements gate the desktop loading
-// screen polls before showing the board, plus the real-install operations for
-// the fixed system/install target allowlist.
 func systemOperations() []operation {
 	return []operation{
 		{
@@ -1063,10 +965,6 @@ func systemOperations() []operation {
 	}
 }
 
-// computerUseOperations declares the Cua Driver integration: the status and
-// actions Settings shows, and the tool calls a chat session's `ao mcp` server
-// makes. Every image a call produces is saved to a file; responses carry
-// paths, never base64.
 func computerUseOperations() []operation {
 	statusResps := []respUnit{
 		{http.StatusOK, controllers.ComputerUseStatusResponse{}},
@@ -1367,8 +1265,6 @@ func usageOperations() []operation {
 	}
 }
 
-// shellTerminalOperations describes the standalone shell terminal surface:
-// shells the user opens by hand, with no agent session behind them.
 func shellTerminalOperations() []operation {
 	return []operation{
 		{method: http.MethodPatch, path: "/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/label", id: "renameSessionSideChat", tag: "conversations", pathParams: []any{controllers.SessionIDParam{}, controllers.SideChatIDParam{}}, reqBody: controllers.SideLabelRequest{}, resps: []respUnit{{http.StatusNoContent, nil}, {http.StatusConflict, envelope.APIError{}}}},
@@ -2125,8 +2021,6 @@ func shellTerminalOperations() []operation {
 	}
 }
 
-// cueOperations declares the project cue surface: reusable quick actions a
-// user defines per project and invokes through an agent session or normal shell terminal.
 func cueOperations() []operation {
 	return []operation{
 		{
@@ -2624,11 +2518,6 @@ func agentOperations() []operation {
 	}
 }
 
-// mobileOperations declares the 5 /mobile control operations. These are
-// mounted on the loopback router (mountMobile in router.go), not the REST
-// /api/v1 group — only the desktop/CLI may enable, disable, or regenerate the
-// phone's LAN access; the phone never toggles its own connection. Must stay
-// 1:1 with the routes mountMobile registers (enforced by the parity test).
 func mobileOperations() []operation {
 	return []operation{
 		{
@@ -2772,11 +2661,6 @@ func mobileOperations() []operation {
 	}
 }
 
-// mobileDeviceOperations declares the desktop-only mobile device roster
-// routes. These sit under /api/v1/mobile — like mobileOperations above — so
-// they inherit the LAN listener's transport-level block; a paired phone can
-// neither list nor manage the household's other devices. Must stay 1:1 with
-// the routes mountMobileDevices registers (enforced by the parity test).
 func mobileDeviceOperations() []operation {
 	return []operation{
 		{
@@ -2801,8 +2685,6 @@ func mobileDeviceOperations() []operation {
 	}
 }
 
-// importOperations declares the /import operations. Must stay 1:1 with
-// the routes ImportController.Register mounts (enforced by the parity test).
 func importOperations() []operation {
 	return []operation{
 		{method: http.MethodGet, path: "/api/v1/session-import", id: "scanSessionImport", tag: "import", summary: "Preview readable local agent histories from Git folders and Standalone", resps: []respUnit{{http.StatusOK, sessionimport.Preview{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}},
@@ -2866,8 +2748,6 @@ func importOperations() []operation {
 	}
 }
 
-// fsOperations declares the read-only filesystem-browsing operations. Must stay
-// 1:1 with the routes FSController.Register mounts (enforced by the parity test).
 func fsOperations() []operation {
 	return []operation{
 		{
@@ -2885,8 +2765,6 @@ func fsOperations() []operation {
 	}
 }
 
-// devOperations declares developer-only API operations. Must stay 1:1 with
-// the routes DevController.Register mounts (enforced by the parity test).
 func devOperations() []operation {
 	return []operation{
 		{
@@ -2974,11 +2852,6 @@ func notificationOperations() []operation {
 	}
 }
 
-// reviewOperations declares the session-scoped /reviews operations. Must stay
-// 1:1 with the routes ReviewsController.Register mounts (enforced by the parity
-// test).
-// pushOperations declares the /push/devices operations. Must stay 1:1 with the
-// routes PushController.Register mounts (enforced by the parity test).
 func pushOperations() []operation {
 	return []operation{
 		{
@@ -3029,9 +2902,8 @@ func reviewOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/reviews/trigger", id: "triggerReview", tag: "reviews",
-			summary:    "Trigger a code review of a worker's PR",
-			pathParams: []any{controllers.SessionIDParam{}},
-			// Optional: an empty body runs under the project's configured reviewer.
+			summary:         "Trigger a code review of a worker's PR",
+			pathParams:      []any{controllers.SessionIDParam{}},
 			reqBody:         controllers.TriggerReviewRequest{},
 			optionalReqBody: true,
 			resps: []respUnit{
@@ -3151,9 +3023,6 @@ func eventOperations() []operation {
 	}
 }
 
-// projectOperations declares the canonical /projects operations. The set must
-// stay 1:1 with the routes ProjectsController.Register mounts —
-// TestRouteSpecParity fails the build otherwise.
 func projectOperations() []operation {
 	return []operation{
 		{
@@ -4144,9 +4013,6 @@ func sessionOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.DeleteSessionResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
-				// Conflict: the session is live, its worktree is not cleaned up
-				// yet (or cleanup-first kept it), or its turns belong to a
-				// conversation that outlives it.
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
@@ -4172,9 +4038,6 @@ func sessionOperations() []operation {
 				{http.StatusOK, controllers.SendSessionMessageResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
-				// Conflict: the session is terminated, or paused on a permission
-				// decision (SESSION_AWAITING_DECISION) — the guarded send refuses
-				// to paste into a pending dialog.
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 			},
@@ -4288,9 +4151,6 @@ func sessionOperations() []operation {
 	}
 }
 
-// prOperations declares the PR action operations. These live in the SCM lane:
-// the handler delegates to a PRService backed by the SCM provider. A nil
-// PRService (SCM not configured) returns 501 for both routes.
 func prOperations() []operation {
 	return []operation{
 		{
@@ -4349,7 +4209,7 @@ func prOperations() []operation {
 			method: http.MethodPost, path: "/api/v1/prs/{id}/resolve-comments", id: "resolveComments", tag: "prs",
 			summary:    "Resolve review threads on a pull request",
 			pathParams: []any{controllers.PRIDParam{}},
-			reqBody:    nil, // body is optional: omitting it resolves all unresolved threads
+			reqBody:    nil,
 			resps: []respUnit{
 				{http.StatusOK, controllers.ResolveCommentsResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
@@ -4407,7 +4267,6 @@ func prOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 			},
 		},
-		// GitHub PAT + repos (local daemon storage)
 		{
 			method: http.MethodPut, path: "/api/v1/github/pat", id: "putGitHubPAT", tag: "github",
 			summary: "Store a GitHub personal access token locally",

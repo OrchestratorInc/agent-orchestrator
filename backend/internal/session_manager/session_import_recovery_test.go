@@ -135,8 +135,6 @@ func TestFingerprintNativeCopyRecoversAfterUncheckpointedPublication(t *testing.
 			} else if err := os.WriteFile(record.Metadata.NativeTranscriptPath, []byte("different original context"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			// A new adapter instance must recover from durable private proof,
-			// not process memory left over from the interrupted preparation.
 			recovered := &recoveryImportAgent{terminalImportAgent: terminalImportAgent{native: true}, fingerprint: agent.fingerprint, sourceRoot: root}
 			manager.agents = singleAgent{agent: recovered}
 			result, err := manager.ResumeAgentWithMode(ctx, record.ID)

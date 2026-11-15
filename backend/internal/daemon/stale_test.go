@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
-// healthzBody returns a handler that answers /healthz with the given service
-// name and pid, mimicking the daemon's real liveness probe.
 func healthzBody(service string, pid int) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {
@@ -93,8 +91,6 @@ func TestRunFileOwnerServing(t *testing.T) {
 }
 
 func TestRunFileOwnerServingNoListener(t *testing.T) {
-	// Bind then immediately close to obtain a port nothing is listening on, so
-	// the probe hits a refused connection — the leaked-run-file case.
 	srv := httptest.NewServer(http.NotFoundHandler())
 	host, port := hostPort(t, srv.URL)
 	srv.Close()

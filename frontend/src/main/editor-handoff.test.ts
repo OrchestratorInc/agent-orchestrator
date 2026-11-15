@@ -24,7 +24,6 @@ function deps(overrides: Partial<EditorHandoffDeps> = {}): EditorHandoffDeps {
 	};
 }
 
-// Simulate Windows paths consistently on every test host.
 function winDeps(overrides: Partial<EditorHandoffDeps> = {}): EditorHandoffDeps {
 	return deps({
 		platform: "win32",
@@ -64,7 +63,6 @@ describe("editor handoff", () => {
 		});
 		const state = await createEditorHandoff(input).getState("ao-1");
 		expect(state.targets.map(({ id }) => id)).not.toContain("cursor");
-		// The IDE app bundle still wins when installed alongside the shim.
 		const withApp = await createEditorHandoff({ ...input, isDirectory: (value) => value === "/Applications/Cursor.app" }).getState("ao-1");
 		expect(withApp.targets.map(({ id }) => id)).toContain("cursor");
 	});
@@ -687,8 +685,6 @@ describe("editor handoff", () => {
 });
 
 describe("editor handoff (win32 fallback discovery)", () => {
-	// Cursor's Windows per-user install keeps its .cmd shim under
-	// resources\app\bin (the VS Code fork layout), not a top-level bin dir.
 	const cursorBin = path.win32.join("C:", "Users", "tester", "AppData", "Local", "Programs", "Cursor", "resources", "app", "bin", "cursor.cmd");
 	const vscodeSystemBin = path.win32.join("C:", "Program Files", "Microsoft VS Code", "bin", "code.cmd");
 	const vscodeAgentExec = path.win32.join("C:", "Program Files", "Microsoft VS Code", "bin", "code.exe");
@@ -709,8 +705,6 @@ describe("editor handoff (win32 fallback discovery)", () => {
 	});
 
 	it("prefers a Windows-native .cmd shim over a bare extension-less sh script on PATH", async () => {
-		// VS Code/Cursor ship a bare `code` sh script and a `code.cmd` batch
-		// side by side; spawn must use the .cmd so cmd.exe can run it.
 		const dir = path.win32.join("C", "bin");
 		const shScript = path.win32.join(dir, "code");
 		const cmdShim = path.win32.join(dir, "code.cmd");
@@ -822,7 +816,6 @@ describe("chat path actions", () => {
 				await handoff.pathAction({ sessionId: "ao-1", path: reference, action: "copy" });
 				expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/${reference}`);
 			}
-			// Creating the leaf must not change whether the same reference is accepted.
 			await writeFile(path.join(workspace, "missing.ts"), "now present");
 			await handoff.pathAction({ sessionId: "ao-1", path: "deep-link/../../missing.ts", action: "copy" });
 			expect(input.copyText).toHaveBeenLastCalledWith(`${workspace}/deep-link/../../missing.ts`);
@@ -885,7 +878,6 @@ describe("chat path actions", () => {
 				await expect(createEditorHandoff(input).pathAction({ sessionId: "ao-1", path: "link/../file.ts", action, editorId: "vscode" })).rejects.toThrow("outside");
 				expect(input.revealPath).not.toHaveBeenCalled();
 				expect(input.launch).not.toHaveBeenCalled();
-				// Lexically this escapes, but following the link first stays inside.
 				const inside = deps({ resolveWorkspace: async () => workspace, realPath: realpath });
 				await createEditorHandoff(inside).pathAction({ sessionId: "ao-1", path: "deep-link/../../file.ts", action, editorId: "vscode" });
 				if (action === "reveal") expect(inside.revealPath).toHaveBeenCalledExactlyOnceWith(path.join(workspace, "file.ts"));

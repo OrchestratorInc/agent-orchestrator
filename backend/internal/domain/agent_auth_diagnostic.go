@@ -2,9 +2,6 @@ package domain
 
 import "time"
 
-// AgentAuthDiagnostic is evidence from one auth check, not a new auth verdict.
-// Producers supply only authored methods, adapter-owned source paths/labels and classified outcomes;
-// never include credentials, CLI output, provider bodies, URLs or raw errors.
 type AgentAuthDiagnostic struct {
 	Method     string    `json:"method"`
 	Code       string    `json:"code"`
@@ -19,8 +16,6 @@ type AgentAuthDiagnostic struct {
 	HTTPStatus int       `json:"httpStatus,omitempty"`
 }
 
-// NewAgentAuthDiagnostic uses authored explanations rather than exporting raw
-// subprocess or provider messages, which can echo tokens even on failure.
 func NewAgentAuthDiagnostic(method, code string) AgentAuthDiagnostic {
 	d := AgentAuthDiagnostic{Method: method, Code: code, CheckedAt: time.Now()}
 	switch code {

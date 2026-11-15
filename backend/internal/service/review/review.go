@@ -1,7 +1,3 @@
-// Package review is the daemon's HTTP-facing code-review service boundary. The
-// core orchestration lives in internal/review; this layer is the thin contract
-// the API controller depends on and delegates to the engine, so the same engine
-// can also back a future in-process CLI trigger.
 package review
 
 import (
@@ -20,13 +16,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// errRunSuperseded marks a run that became terminal before its result arrived.
-// SubmitMany treats it as stale input so it cannot strand valid sibling results
-// in the same reviewer submission.
 var errRunSuperseded = errors.New("review: run is no longer running")
 
-// ErrInvalid and ErrNotFound re-export the engine sentinels so the HTTP
-// controller maps service failures to 422/404 without importing the core.
 var (
 	ErrInvalid              = reviewcore.ErrInvalid
 	ErrNotFound             = reviewcore.ErrNotFound
@@ -37,16 +28,7 @@ var (
 	ErrAgentBinaryNotFound  = ports.ErrAgentBinaryNotFound
 )
 
-// reviewErrorKind reduces a trigger failure to a safe category. Raw error text
-// can carry repository paths and agent binary locations, so only the kind and a
-// stable code ever leave the process.
 func reviewErrorKind(err error) string {
-	// The engine returns its own sentinels (reviewcore.ErrInvalid / ErrNotFound)
-	// and ports.ErrAgentBinaryNotFound, wrapped with %w. Those are mapped to API
-	// error kinds only at the HTTP controller boundary, after Trigger has already
-	// returned here, so telemetrymeta.ErrorKindAndCode (which only classifies
-	// *apierr.Error) would collapse every trigger failure to "internal" and the
-	// field could never say why a trigger failed. Classify the sentinels first.
 	switch {
 	case errors.Is(err, reviewcore.ErrInvalid):
 		return "invalid"
@@ -61,7 +43,6 @@ func reviewErrorKind(err error) string {
 	return kind
 }
 
-// Manager is the reviews surface the HTTP controller depends on.
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
 	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
@@ -80,7 +61,6 @@ type Manager interface {
 	List(ctx context.Context, workerID domain.SessionID) (reviewcore.SessionReviews, error)
 }
 
-// Service is the API-facing review service. It delegates to the core engine.
 type Service struct {
 	engine             *reviewcore.Engine
 	store              Store
@@ -92,10 +72,7 @@ type Service struct {
 	notifications      reviewNotificationSink
 	prRefresher        PRRefresher
 	reviewRefresher    ThreadRefresher
-	// engineTrigger indirects the engine's source-tagged trigger so the
-	// instrumented path can be exercised without standing up a full engine and
-	// its eighteen-method store. Defaulted in New; only tests replace it.
-	engineTrigger func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
+	engineTrigger      func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error)
 }
 
 type reviewNotificationSink interface {
@@ -104,14 +81,10 @@ type reviewNotificationSink interface {
 
 var _ Manager = (*Service)(nil)
 
-// RecoverChatReviewers restores durable reviewer-owned Chat controllers after
-// daemon startup. It is intentionally part of the required manager contract so
-// startup wiring cannot silently omit it.
 func (s *Service) RecoverChatReviewers(ctx context.Context) error {
 	return s.engine.RecoverChatReviewers(ctx)
 }
 
-// Store is the review_run persistence surface owned by the service submit path.
 type Store interface {
 	GetReviewByID(ctx context.Context, id string) (domain.Review, bool, error)
 	UpdateReviewActivity(ctx context.Context, id string, state domain.ActivityState, agentSessionID, launchID string) (bool, error)
@@ -122,104 +95,62 @@ type Store interface {
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
 	ListPRComments(ctx context.Context, prURL string) ([]domain.PullRequestComment, error)
-	// MarkPRReviewThreadResolved records a thread resolved along with all its
-	// comments; the PR summary reads a thread's state from the thread row.
 	MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error
 }
 
-// PRRefresher fetches one pull request fresh from its provider and records it
-// on the worker session. It attaches a PR the session does not track yet, but
-// never takes one over from another active session.
 type PRRefresher interface {
 	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error
 }
 
-// BranchPRFinder finds open PRs from the worker's own branch that AO does not
-// track yet, so a review requested right after opening a PR can attach it
-// instead of failing until the SCM observer's next poll.
 type BranchPRFinder interface {
 	FindBranchPRs(ctx context.Context, workerID domain.SessionID) (BranchPRs, error)
 }
 
-// BranchPRs are the open PR URLs a branch lookup found, split by who opened
-// them.
 type BranchPRs struct {
-	// Own are the PRs opened by the account AO is signed in with.
-	Own []string
-	// OtherAuthor are the PRs another account opened on the same branch; they
-	// are attached only when named with --pr.
+	Own         []string
 	OtherAuthor []string
 }
 
-// prRefreshTimeout bounds the provider fetch a trigger waits for before
-// falling back to the PR facts AO already has.
 const prRefreshTimeout = 10 * time.Second
 
-// Option customizes the review service.
 type Option func(*Service)
 
-// WithPRRefresher refreshes a worker's PRs from the provider before a
-// requested review, so the pass covers the commit actually on the PR.
 func WithPRRefresher(r PRRefresher) Option {
 	return func(s *Service) { s.prRefresher = r }
 }
 
-// ThreadRefresher asks SCM observation to read one PR's review threads now
-// rather than on its next scheduled poll. It must not block.
 type ThreadRefresher interface {
 	RequestReviewRefresh(prURL string)
 }
 
-// WithThreadRefresher refreshes a PR's review threads as soon as an AO review
-// posted to the provider is submitted, so its comments reach the worker
-// without waiting for the poller to notice them.
 func WithThreadRefresher(r ThreadRefresher) Option {
 	return func(s *Service) { s.reviewRefresher = r }
 }
 
-// WithClock overrides the service clock for tests.
 func WithClock(clock func() time.Time) Option {
 	return func(s *Service) { s.clock = clock }
 }
 
-// WithReviewRequester wires provider-backed re-review requests.
 func WithReviewRequester(requester ports.SCMReviewRequester) Option {
 	return func(s *Service) { s.requester = requester }
 }
 
-// WithReviewResolver wires provider-backed review-thread resolution.
 func WithReviewResolver(resolver ports.SCMReviewResolver) Option {
 	return func(s *Service) { s.resolver = resolver }
 }
 
-// WithTelemetry records review outcomes.
-//
-// Code review is a headline feature with no telemetry at all, so there is no way
-// to answer whether reviewers are used, whether they approve or request changes,
-// or how long a pass takes. Optional so the service still works unwired, which
-// is how every existing test constructs it.
 func WithTelemetry(sink ports.EventSink) Option {
 	return func(s *Service) { s.telemetry = sink }
 }
 
-// WithNotificationSink publishes durable review results after their run has
-// reached complete. The run id is the dedupe key, so submit retries are safe.
 func WithNotificationSink(sink reviewNotificationSink) Option {
 	return func(s *Service) { s.notifications = sink }
 }
 
-// WithCodexAccountOperationGate prevents new Codex reviewer controllers from
-// entering while the device-global Codex credential is changing.
 func WithCodexAccountOperationGate(gate ports.CodexOperationGate) Option {
 	return func(s *Service) { s.codexOperationGate = gate }
 }
 
-// emit reports an event when a sink is wired.
-//
-// Only enum-like fields are ever passed in. Never the review body, the PR URL,
-// or the target SHA: the body is reviewer prose about someone's code, and the URL
-// and SHA identify the repository. The daemon's remote allowlist would drop
-// unknown keys anyway, but the intent belongs at the call site.
 func (s *Service) emit(ctx context.Context, name string, sessionID domain.SessionID, payload map[string]any) {
 	if s.telemetry == nil {
 		return
@@ -236,7 +167,6 @@ func (s *Service) emit(ctx context.Context, name string, sessionID domain.Sessio
 	})
 }
 
-// New wraps a core review engine as the API-facing service.
 func New(engine *reviewcore.Engine, store Store, opts ...Option) *Service {
 	s := &Service{
 		engine: engine,
@@ -254,8 +184,6 @@ func New(engine *reviewcore.Engine, store Store, opts ...Option) *Service {
 	return s
 }
 
-// RequestRereview asks the SCM provider to request another review from reviewer
-// on one of the worker session's tracked PRs.
 func (s *Service) RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error {
 	reviewer = strings.TrimSpace(strings.TrimPrefix(reviewer, "@"))
 	if workerID == "" {
@@ -396,8 +324,6 @@ func githubOwnerRepoFromPRURL(raw string) (string, string) {
 	return "", ""
 }
 
-// ResolveReviewComment resolves the provider review thread that owns the given
-// unresolved review comment.
 func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error {
 	commentURL = strings.TrimSpace(commentURL)
 	if workerID == "" {
@@ -432,7 +358,6 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 		return fmt.Errorf("%w: review comment is not tracked for this PR", ErrNotFound)
 	}
 	if target.Resolved {
-		// Already resolved on the provider; make sure the thread row agrees.
 		return s.store.MarkPRReviewThreadResolved(ctx, pr.URL, target.ThreadID)
 	}
 	ref, err := reviewRequestRef(pr)
@@ -448,8 +373,6 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 		}
 		return err
 	}
-	// Mark the whole thread, not just this comment: the summary takes a thread's
-	// state from its row, so a comment-only mark left the card open until the next poll.
 	if err := s.store.MarkPRReviewThreadResolved(ctx, pr.URL, target.ThreadID); err != nil {
 		return err
 	}
@@ -457,33 +380,22 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 	return nil
 }
 
-// TriggerRequest is a client-requested review pass with its same-commit and
-// feedback policy.
 type TriggerRequest struct {
-	Harness domain.ReviewerHarness
-	Config  domain.AgentConfig
-	// Source is manual (a person) or agent (an AO session through the CLI).
-	// Automatic passes come only from the daemon through TriggerAuto.
-	Source        domain.ReviewTriggerSource
-	InterfaceMode domain.ReviewerInterfaceMode
-	// PRURL restricts the pass to one PR, attaching it to the worker first when
-	// AO does not track it yet.
+	Harness            domain.ReviewerHarness
+	Config             domain.AgentConfig
+	Source             domain.ReviewTriggerSource
+	InterfaceMode      domain.ReviewerInterfaceMode
 	PRURL              string
 	RejectReviewedHead bool
 	Rerun              bool
-	// EnableAutoInject turns on the worker session's review auto-inject once a
-	// pass has started, so the reviewer's PR review comments reach the worker.
-	EnableAutoInject bool
+	EnableAutoInject   bool
 }
 
-// TriggerOutcome is the trigger result plus whether this request turned the
-// session's review auto-inject on.
 type TriggerOutcome struct {
 	reviewcore.TriggerResult
 	AutoInjectEnabled bool
 }
 
-// TriggerRequested starts a client-requested review pass.
 func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error) {
 	source := req.Source
 	if source == "" {
@@ -519,9 +431,6 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if !req.EnableAutoInject {
 		return outcome, nil
 	}
-	// Only after a pass exists: a rejected or failed trigger must not change
-	// the session's feedback policy. Delivery reads the session's live setting
-	// when the result arrives, so turning it on now covers this pass.
 	session, ok, err := s.store.GetSession(ctx, workerID)
 	if err != nil {
 		return TriggerOutcome{}, err
@@ -540,14 +449,6 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	return outcome, nil
 }
 
-// refreshPRs fetches the worker's PRs fresh from the provider before a
-// requested review, so the pass reviews the commit really on the PR rather than
-// whatever the SCM observer last saw. A named PR is attached first when AO does
-// not track it yet; failing to fetch it is an error, because there is nothing
-// else to review. Refreshing already-tracked PRs is best effort: on failure the
-// trigger proceeds with the facts AO has, and its same-commit checks still
-// report a push AO has not observed. It reports whether a lookup of the
-// worker's branch ran and found no open PR.
 func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) (bool, error) {
 	if s.prRefresher == nil {
 		return false, nil
@@ -587,9 +488,6 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 	return false, nil
 }
 
-// hasOpenPR reports whether any tracked PR is still open. A session whose
-// only tracked PRs are closed or merged may have opened a new one on the same
-// branch.
 func hasOpenPR(prs []domain.PullRequest) bool {
 	for _, pr := range prs {
 		if !pr.Merged && !pr.Closed {
@@ -599,13 +497,6 @@ func hasOpenPR(prs []domain.PullRequest) bool {
 	return false
 }
 
-// attachBranchPR attaches the one open PR from the worker's branch when AO
-// tracks no open PR yet, typically because the PR was opened moments ago. Finding
-// nothing leaves the engine to report that no PR is tracked, and is reported
-// as true so the engine can say the branch has none; a failed lookup, several
-// candidates, and a PR another account opened are reported with the exact
-// retry command. Another account's PR is never attached without --pr, the
-// same rule the SCM observer follows.
 func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) (bool, error) {
 	finder, ok := s.prRefresher.(BranchPRFinder)
 	if !ok {
@@ -613,8 +504,6 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 	}
 	found, err := finder.FindBranchPRs(ctx, workerID)
 	if err != nil {
-		// Nothing is tracked, so the review cannot go ahead; say the lookup
-		// failed rather than that the branch has no PR.
 		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
 		return false, fmt.Errorf("%w: Orchestrator is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
 	}
@@ -625,8 +514,6 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		}
 		return true, nil
 	case 1:
-		// The PR may have closed since the lookup, seconds ago; say it was
-		// found, so a not-found or not-open error does not read as a miss.
 		prURL := found.Own[0]
 		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil {
 			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", prURL, workerID, err, workerID, prURL)
@@ -636,7 +523,6 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that Orchestrator does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
 }
 
-// retryCommands lists the `ao review trigger --pr` command for each URL.
 func retryCommands(workerID domain.SessionID, urls []string) string {
 	cmds := make([]string, len(urls))
 	for i, prURL := range urls {
@@ -654,16 +540,10 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// TriggerAuto starts a daemon-initiated review pass.
 func (s *Service) TriggerAuto(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness) (reviewcore.TriggerResult, error) {
 	return s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{Harness: harness, Source: domain.ReviewTriggerAuto})
 }
 
-// triggerWithOptions is the single instrumented trigger path. Every entry
-// point routes through it so an automatic pass is never invisible: before
-// this, only the manual Trigger emitted, which made auto-review
-// indistinguishable from manual review in every downstream funnel even though
-// the two answer completely different product questions.
 func (s *Service) triggerWithOptions(
 	ctx context.Context,
 	workerID domain.SessionID,
@@ -700,8 +580,6 @@ func (s *Service) triggerWithOptions(
 	if result.Run.Harness != "" {
 		triggeredPayload["harness"] = string(result.Run.Harness)
 	}
-	// A created run or a restarted pass is an actual review. Reused and skipped
-	// automatic attempts can recur on every sweep and are not new reviews.
 	createdOrRestarted := result.Created || len(result.CreatedRuns) > 0
 	if !createdOrRestarted {
 		return result, nil
@@ -711,7 +589,6 @@ func (s *Service) triggerWithOptions(
 	return result, nil
 }
 
-// Cancel stops the live reviewer pane and marks running review passes as failed.
 func (s *Service) Cancel(ctx context.Context, workerID domain.SessionID) (reviewcore.CancelResult, error) {
 	result, err := s.engine.Cancel(ctx, workerID)
 	if err != nil {
@@ -723,20 +600,15 @@ func (s *Service) Cancel(ctx context.Context, workerID domain.SessionID) (review
 	return result, nil
 }
 
-// TerminateReviewer hard-destroys the reviewer pane for worker lifecycle
-// teardown and marks any running review runs as cancelled.
 func (s *Service) TerminateReviewer(ctx context.Context, workerID domain.SessionID, body string) error {
 	_, err := s.engine.TerminateReviewer(ctx, workerID, body)
 	return err
 }
 
-// TeardownReviewerTerminal removes reviewer panes during recovery-oriented
-// worker shutdown while preserving review rows and native reviewer session ids.
 func (s *Service) TeardownReviewerTerminal(ctx context.Context, workerID domain.SessionID) error {
 	return s.engine.TeardownReviewerTerminal(ctx, workerID)
 }
 
-// RestoreReviewer relaunches an idle reviewer pane after its worker has been restored.
 func (s *Service) RestoreReviewer(ctx context.Context, workerID domain.SessionID) error {
 	release, err := s.acquireReviewerCodexAdmission(ctx, workerID, "")
 	if err != nil {
@@ -747,8 +619,6 @@ func (s *Service) RestoreReviewer(ctx context.Context, workerID domain.SessionID
 	return err
 }
 
-// SwitchReviewer atomically persists a worker's reviewer preference and returns
-// the authoritative post-switch review state.
 func (s *Service) SwitchReviewer(ctx context.Context, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (reviewcore.SessionReviews, error) {
 	release, err := s.acquireReviewerCodexAdmission(ctx, workerID, harness)
 	if err != nil {
@@ -776,7 +646,6 @@ func (s *Service) acquireReviewerCodexAdmission(ctx context.Context, workerID do
 	return s.codexOperationGate.AcquireSharedWait(ctx)
 }
 
-// ActivitySignal is reviewer-owned hook metadata.
 type ActivitySignal struct {
 	Event          string
 	State          domain.ActivityState
@@ -784,8 +653,6 @@ type ActivitySignal struct {
 	LaunchID       string
 }
 
-// ApplyReviewActivitySignal records reviewer-owned hook facts without touching
-// the worker session lifecycle row.
 func (s *Service) ApplyReviewActivitySignal(ctx context.Context, reviewSessionID string, signal ActivitySignal) error {
 	if reviewSessionID == "" {
 		return fmt.Errorf("%w: review session id is required", ErrInvalid)
@@ -804,9 +671,6 @@ func (s *Service) ApplyReviewActivitySignal(ctx context.Context, reviewSessionID
 		return err
 	}
 	if !updated {
-		// A live reviewer row is reused across launches. Once it carries a launch
-		// generation, a delayed hook from an older reviewer must not clobber the
-		// replacement's activity state. Treat that as a successful no-op.
 		if review.ReviewerLaunchID != "" && signal.LaunchID != review.ReviewerLaunchID {
 			return nil
 		}
@@ -815,7 +679,6 @@ func (s *Service) ApplyReviewActivitySignal(ctx context.Context, reviewSessionID
 	return nil
 }
 
-// SubmittedReview is one review result supplied by the reviewer CLI.
 type SubmittedReview struct {
 	RunID          string
 	Verdict        domain.ReviewVerdict
@@ -823,7 +686,6 @@ type SubmittedReview struct {
 	GithubReviewID string
 }
 
-// Submit records a reviewer's result for a specific worker review pass.
 func (s *Service) Submit(ctx context.Context, workerID domain.SessionID, runID string, verdict domain.ReviewVerdict, body, githubReviewID string) (domain.ReviewRun, error) {
 	runs, err := s.SubmitMany(ctx, workerID, []SubmittedReview{{
 		RunID:          runID,
@@ -840,9 +702,6 @@ func (s *Service) Submit(ctx context.Context, workerID domain.SessionID, runID s
 	return runs[0], nil
 }
 
-// SubmitMany records one reviewer CLI submission containing results for one or
-// more PR-scoped runs. Delivery is scoped to the runs in this submission, so a
-// missing/stuck result for another PR in the same trigger cannot block feedback.
 func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, reviews []SubmittedReview) ([]domain.ReviewRun, error) {
 	if workerID == "" {
 		return nil, fmt.Errorf("%w: worker session id is required", ErrInvalid)
@@ -858,9 +717,6 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 	for _, review := range reviews {
 		run, err := s.submitOne(ctx, workerID, review)
 		if err != nil {
-			// A newer trigger or lifecycle cancellation may have made one queued
-			// run terminal while the reviewer was working. That run is no longer
-			// submittable, but it must not prevent valid siblings from delivery.
 			if errors.Is(err, errRunSuperseded) {
 				supersededRunIDs = append(supersededRunIDs, review.RunID)
 				continue
@@ -875,10 +731,6 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 		}
 		return nil, fmt.Errorf("%w: no submittable review runs in submission", ErrInvalid)
 	}
-	// The result reaches the worker through the PR itself: the reviewer posts
-	// its review on the provider, and the SCM observer forwards unresolved
-	// review comments to the worker like any other reviewer's. AO does not send
-	// a second, separate verdict message.
 	return runs, nil
 }
 
@@ -931,25 +783,14 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if githubReviewID != "" && s.reviewRefresher != nil {
 			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
 		}
-		// Only on the real running -> complete transition. Re-submitting an
-		// already-complete run returns early below, so telemetry stays idempotent
-		// the same way the store does.
 		s.emit(ctx, "ao.reviews.submitted", workerID, map[string]any{
 			"harness":            string(run.Harness),
 			"verdict":            string(verdict),
 			"duration_ms":        s.clock().Sub(run.CreatedAt).Milliseconds(),
 			"posted_to_provider": githubReviewID != "",
-			// Which pass produced this verdict. A manual and an automatic review
-			// mean different things about how the feature is being used, and the
-			// verdict split between them is the whole question.
-			"trigger": string(run.TriggerSource),
-			// A size, never the text. Review depth is otherwise unobservable: a
-			// changes-requested verdict with a two-line body and one with a full
-			// findings list are the same event without it.
-			"body_bytes": len(body),
-			// Whether the session policy will let this result reach the worker at
-			// all, recorded at the moment it is snapshotted onto the run.
-			"auto_inject": session.AutoInjectReview,
+			"trigger":            string(run.TriggerSource),
+			"body_bytes":         len(body),
+			"auto_inject":        session.AutoInjectReview,
 		})
 	case domain.ReviewRunComplete:
 		if run.Verdict != verdict {
@@ -1002,12 +843,10 @@ func (s *Service) emitReviewNotification(ctx context.Context, run domain.ReviewR
 	}
 }
 
-// List returns a worker's review state.
 func (s *Service) List(ctx context.Context, workerID domain.SessionID) (reviewcore.SessionReviews, error) {
 	return s.engine.List(ctx, workerID)
 }
 
-// ArchiveReviewer retires the reviewer surface while preserving its history.
 func (s *Service) ArchiveReviewer(ctx context.Context, workerID domain.SessionID) error {
 	return s.engine.ArchiveReviewer(ctx, workerID)
 }

@@ -20,25 +20,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The live Hermes tests run the operator's own `hermes` against a scripted
-// OpenAI-compatible model served by the test, through AO's driver and
-// persistent chat host. Run them explicitly with AO_LIVE_HERMES=1. Hermes gets
-// a private HERMES_HOME holding only a config.yaml that points at the scripted
-// model, and no provider keys, so nothing reaches a real model or the
-// operator's ~/.hermes. CI never depends on them.
-
-// liveSteerRunTime is how long the scripted model takes to answer guidance that
-// Hermes runs as a prompt of its own. It is longer than the 10 s the client
-// waits for a steer command's answer once the turn's own prompt has answered.
 const liveSteerRunTime = 12 * time.Second
 
-// liveHermesCommand is the slow command the scripted model asks Hermes to run.
 const liveHermesCommand = "sleep 6; echo slow-check-done"
 
-// TestLiveHermesACPSteersARunningTurn steers while Hermes runs a tool. Hermes
-// queues `/steer` for the running turn and hands it to the model after the tool
-// result. AO must report the steer taken and see one turn whose reply comes
-// from the steered request.
 func TestLiveHermesACPSteersARunningTurn(t *testing.T) {
 	model := startLiveHermesModel(t)
 	model.script = func(r modelRequest) modelReply {
@@ -96,15 +81,6 @@ func TestLiveHermesACPSteersARunningTurn(t *testing.T) {
 	expectNoMoreTurns(ctx, t, conversation)
 }
 
-// TestLiveHermesACPKeepsALateSteerInTheTurn sends `/steer` just as Hermes'
-// turn ends, sweeping the delay over several turns. Hermes then takes the text
-// one of three ways: into the running turn; as a prompt of its own, run from
-// its queue ("No active turn") or in place of the command; or, when it
-// acknowledged the steer after the turn's last step, in a later turn. Whatever
-// it does, AO must see one completion per turn and nothing after it, and a
-// prompt of its own must finish inside the turn. Which request runs that
-// prompt is up to Hermes' timing; the host's unit tests pin down the case where
-// the `/steer` request runs it after the turn's own prompt has answered.
 func TestLiveHermesACPKeepsALateSteerInTheTurn(t *testing.T) {
 	model := startLiveHermesModel(t)
 	var mu sync.Mutex
@@ -113,8 +89,6 @@ func TestLiveHermesACPKeepsALateSteerInTheTurn(t *testing.T) {
 		round := r.round()
 		switch {
 		case round != "" && r.lastUserIs("STEER-ME-"+round+": use staging"):
-			// Outlast the client's wait for a steer command's answer, so only the
-			// host keeping the turn open keeps this run in it.
 			time.Sleep(liveSteerRunTime)
 			return modelReply{text: "PROMPT-RAN-" + round}
 		case round != "" && r.mentions("STEER-ME-"+round):
@@ -126,7 +100,7 @@ func TestLiveHermesACPKeepsALateSteerInTheTurn(t *testing.T) {
 			if gate != nil {
 				<-gate
 			}
-			return modelReply{text: "DONE-" + round} // never "ROOT-": round() reads that
+			return modelReply{text: "DONE-" + round}
 		default:
 			return modelReply{text: "lab"}
 		}
@@ -191,8 +165,6 @@ func TestLiveHermesACPKeepsALateSteerInTheTurn(t *testing.T) {
 			path = "not seen by the model"
 		}
 		if path == "not seen by the model" && steerErr == nil {
-			// Hermes acknowledged it ("queued for the active turn") after the
-			// model's last answer, when no step was left to take it.
 			path = "acknowledged, not in this turn"
 			acknowledgedLate = append(acknowledgedLate, round)
 		}
@@ -210,8 +182,6 @@ func TestLiveHermesACPKeepsALateSteerInTheTurn(t *testing.T) {
 	}
 }
 
-// stopLiveHermesGateway ends the gateway Hermes started for hermesHome, and
-// only that one: its state file must name hermesHome as its home.
 func stopLiveHermesGateway(t *testing.T, hermesHome string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(hermesHome, "gateway_state.json"))
@@ -231,7 +201,6 @@ func stopLiveHermesGateway(t *testing.T, hermesHome string) {
 		t.Logf("gateway %d belongs to %s, not %s; leaving it", state.PID, state.HermesHome, hermesHome)
 		return
 	}
-	// The state file can outlive the gateway, and its pid can be reused.
 	out, err := exec.Command("ps", "-p", fmt.Sprint(state.PID), "-o", "command=").Output()
 	if err != nil || !strings.Contains(string(out), "hermes") || !strings.Contains(string(out), "gateway") {
 		return
@@ -240,8 +209,6 @@ func stopLiveHermesGateway(t *testing.T, hermesHome string) {
 	if err != nil || process.Signal(os.Interrupt) != nil {
 		return
 	}
-	// It writes its exit state on the way out, which would recreate the folder
-	// after it is removed, so wait for it to go.
 	for range 60 {
 		if exec.Command("ps", "-p", fmt.Sprint(state.PID)).Run() != nil {
 			return
@@ -256,16 +223,11 @@ func isLiveRefusal(err error) bool {
 	return errors.As(err, &refusal) && refusal.ChatRefusal()
 }
 
-// startLiveHermes starts AO's Hermes driver against model and returns the
-// conversation. The provider is terminated when the test ends.
 func startLiveHermes(t *testing.T, model *liveHermesModel) (context.Context, ports.ChatConversation) {
 	t.Helper()
 	if os.Getenv("AO_LIVE_HERMES") != "1" {
 		t.Skip("set AO_LIVE_HERMES=1 to run against the local hermes with a scripted model")
 	}
-	// `hermes acp` auto-starts a gateway for its HERMES_HOME, which outlives
-	// the test unless stopped. The cleanup stops the one this home recorded,
-	// then removes the folder, retrying while Hermes finishes writing to it.
 	hermesHome, err := os.MkdirTemp("", "ao-live-hermes-home-")
 	if err != nil {
 		t.Fatal(err)
@@ -300,8 +262,6 @@ func startLiveHermes(t *testing.T, model *liveHermesModel) (context.Context, por
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// A closed conversation leaves its persistent host and Hermes running for a
-	// later resume, so end the provider too.
 	t.Cleanup(func() {
 		if terminator, ok := conversation.(ports.ChatProviderTerminator); ok {
 			_ = terminator.Terminate()
@@ -314,8 +274,6 @@ func startLiveHermes(t *testing.T, model *liveHermesModel) (context.Context, por
 	return ctx, conversation
 }
 
-// liveHermesEnv is the test's environment without provider credentials, so a
-// misconfigured Hermes cannot fall back to a real model.
 func liveHermesEnv() map[string]string {
 	out := make(map[string]string)
 	for _, pair := range os.Environ() {
@@ -358,8 +316,6 @@ func nextLiveEvent(ctx context.Context, t *testing.T, conversation ports.ChatCon
 		if event.Kind == ports.ChatEventError {
 			t.Fatalf("controller error: %v", event.Err)
 		}
-		// The daemon acknowledges each persisted event; the persistent host
-		// refuses the next prompt until the previous one is acknowledged.
 		if event.ProviderEventID != "" {
 			if acknowledger, ok := conversation.(ports.ChatProviderEventAcknowledger); ok {
 				if err := acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID); err != nil {
@@ -374,7 +330,6 @@ func nextLiveEvent(ctx context.Context, t *testing.T, conversation ports.ChatCon
 	return ports.ChatEvent{}
 }
 
-// resolveLiveApproval allows the scripted command only as written.
 func resolveLiveApproval(ctx context.Context, t *testing.T, conversation ports.ChatConversation, event ports.ChatEvent) {
 	t.Helper()
 	want := ports.ChatDecisionRejectOnce
@@ -393,8 +348,6 @@ func resolveLiveApproval(ctx context.Context, t *testing.T, conversation ports.C
 	}
 }
 
-// expectNoMoreTurns fails if anything completes, or the agent keeps talking,
-// in the quiet window after a turn.
 func expectNoMoreTurns(ctx context.Context, t *testing.T, conversation ports.ChatConversation) {
 	t.Helper()
 	quiet := time.After(3 * time.Second)
@@ -412,7 +365,6 @@ func expectNoMoreTurns(ctx context.Context, t *testing.T, conversation ports.Cha
 	}
 }
 
-// liveHermesModel is a scripted OpenAI-compatible chat model.
 type liveHermesModel struct {
 	server   *httptest.Server
 	script   func(modelRequest) modelReply
@@ -424,7 +376,7 @@ type liveHermesModel struct {
 
 type modelReply struct {
 	text    string
-	command string // a terminal tool call instead of text
+	command string
 }
 
 type modelRequest struct {
@@ -438,8 +390,6 @@ func (r modelRequest) mentions(s string) bool { return strings.Contains(r.all, s
 
 func (r modelRequest) lastUserIs(s string) bool { return strings.TrimSpace(r.lastUser) == s }
 
-// round returns n for the newest prompt "ROOT-<n>: …", or "". Replies must
-// not contain "ROOT-".
 func (r modelRequest) round() string {
 	i := strings.LastIndex(r.all, "ROOT-")
 	if i < 0 {
@@ -461,7 +411,6 @@ func startLiveHermesModel(t *testing.T) *liveHermesModel {
 	return m
 }
 
-// waitFor returns a channel closed once a chat request mentions s.
 func (m *liveHermesModel) waitFor(s string) <-chan struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -470,8 +419,6 @@ func (m *liveHermesModel) waitFor(s string) <-chan struct{} {
 	return ch
 }
 
-// mentionedAfter returns the first logged request, after the first one whose
-// newest user message mentions after, that mentions s anywhere, or "".
 func (m *liveHermesModel) mentionedAfter(s, after string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -528,8 +475,6 @@ func (m *liveHermesModel) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	req.all = all.String()
-	// Waiters hear of the request before the script runs: a script can hold
-	// its answer until the test, having seen the request, lets it go.
 	m.mu.Lock()
 	for s, ch := range m.waiters {
 		if strings.Contains(req.all, s) {

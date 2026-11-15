@@ -29,8 +29,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
-// No real shell or command is started: these fakes expose whether the HTTP
-// boundary reached creation or attachment, and echo terminal bytes in memory.
 type boundaryShells struct {
 	opened     atomic.Int32
 	otherCalls atomic.Int32
@@ -156,7 +154,6 @@ func TestBrowserBoundaryAuthorizedClients(t *testing.T) {
 			if resp.StatusCode != http.StatusCreated || shells.opened.Load() != 1 {
 				t.Fatalf("create: status=%d calls=%d", resp.StatusCode, shells.opened.Load())
 			}
-			// Two viewers plus a reconnect must still attach the same durable handle.
 			var connections []*websocket.Conn
 			defer func() {
 				for _, conn := range connections {
@@ -286,8 +283,6 @@ func TestBrowserBoundaryPreviewHostsCannotDispatchAPI(t *testing.T) {
 	}
 }
 
-// The separate Electron process uses Chromium's real headers for app://renderer
-// and hostile documents. Optional locally; the frontend workflow enables it.
 func TestBrowserBoundaryElectron(t *testing.T) {
 	electronBinary := os.Getenv("AO_BOUNDARY_ELECTRON")
 	if electronBinary == "" {
@@ -303,8 +298,6 @@ func TestBrowserBoundaryElectron(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := NewRouterWithControl(config.Config{DataDir: dataDir, AllowedOrigins: []string{"app://renderer"}}, discardLogger(), mgr, APIDeps{ShellTerminals: shells}, ControlDeps{})
-	// Protected media fixture runs through the router's actual browser guard.
-	// Element transports are the same as workspace blobs and streamed previews.
 	router.Get("/boundary-media/{file}", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".png") {
 			w.Header().Set("Content-Type", "image/png")
@@ -330,8 +323,6 @@ func TestBrowserBoundaryElectron(t *testing.T) {
 	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/boundary-fixture/") {
-			// Header emission on actual preview routes is tested in controllers;
-			// this fixture checks Chromium's enforcement and resulting request headers.
 			if strings.HasSuffix(r.URL.Path, "/sandbox") {
 				w.Header().Set("Content-Security-Policy", "sandbox allow-scripts allow-forms")
 			}

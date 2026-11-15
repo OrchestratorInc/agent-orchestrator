@@ -63,8 +63,6 @@ func protectCodexPrivateFile(_ string, file *os.File) error {
 }
 
 func protectCodexDeviceCredentialFile(_ string) error {
-	// The staged replacement is already owner-only on Unix. Windows needs a
-	// separate post-commit hook because the final path receives a device ACL.
 	return nil
 }
 

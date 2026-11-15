@@ -2,48 +2,28 @@ package domain
 
 import "time"
 
-// CodexAccountSource identifies an AO-owned Codex credential slot. Device
-// credentials are an import source only; once verified, the slot is managed.
 type CodexAccountSource string
 
-// CodexAccountSourceManaged identifies an AO-owned credential slot.
 const CodexAccountSourceManaged CodexAccountSource = "managed"
 
-// CodexAccountStatus describes whether a discovered account slot is usable.
 type CodexAccountStatus string
 
 const (
-	// CodexAccountStatusValid means the descriptor and credential home are safe.
-	CodexAccountStatusValid CodexAccountStatus = "valid"
-	// CodexAccountStatusSignedOut means the descriptor and private home are safe,
-	// but the account currently has no saved credential.
+	CodexAccountStatusValid     CodexAccountStatus = "valid"
 	CodexAccountStatusSignedOut CodexAccountStatus = "signed_out"
-	// CodexAccountStatusBroken means the slot is visible but cannot be used.
-	CodexAccountStatusBroken CodexAccountStatus = "broken"
+	CodexAccountStatusBroken    CodexAccountStatus = "broken"
 )
 
-// CodexDeviceReconciliationStatus describes whether AO has conclusively
-// identified the account currently installed in Codex's device-global home.
-// It is runtime state only; the durable active-account pointer remains the
-// last known selection across daemon restarts.
 type CodexDeviceReconciliationStatus string
 
 const (
-	// CodexDeviceReconciliationNotChecked means device discovery has not run.
-	CodexDeviceReconciliationNotChecked CodexDeviceReconciliationStatus = "not_checked"
-	// CodexDeviceReconciliationChecking means device discovery is in progress.
-	CodexDeviceReconciliationChecking CodexDeviceReconciliationStatus = "checking"
-	// CodexDeviceReconciliationVerified means the canonical device state was conclusively identified.
-	CodexDeviceReconciliationVerified CodexDeviceReconciliationStatus = "verified"
-	// CodexDeviceReconciliationTemporarilyUnavailable means discovery failed and will be retried.
+	CodexDeviceReconciliationNotChecked             CodexDeviceReconciliationStatus = "not_checked"
+	CodexDeviceReconciliationChecking               CodexDeviceReconciliationStatus = "checking"
+	CodexDeviceReconciliationVerified               CodexDeviceReconciliationStatus = "verified"
 	CodexDeviceReconciliationTemporarilyUnavailable CodexDeviceReconciliationStatus = "temporarily_unavailable"
-	// CodexDeviceReconciliationBlocked means switching requires a user or environment change.
-	CodexDeviceReconciliationBlocked CodexDeviceReconciliationStatus = "blocked"
+	CodexDeviceReconciliationBlocked                CodexDeviceReconciliationStatus = "blocked"
 )
 
-// CodexDeviceReconciliation is the display-safe, ephemeral state of device
-// discovery. Provider output, credential paths, and secret-bearing errors must
-// never be copied into this projection.
 type CodexDeviceReconciliation struct {
 	Status                CodexDeviceReconciliationStatus `json:"status" enum:"not_checked,checking,verified,temporarily_unavailable,blocked"`
 	ActiveAccountVerified bool                            `json:"activeAccountVerified"`
@@ -54,40 +34,29 @@ type CodexDeviceReconciliation struct {
 	NextRetryAt           *time.Time                      `json:"nextRetryAt,omitempty"`
 }
 
-// CodexAuthMethod identifies the provider authentication mechanism.
 type CodexAuthMethod string
 
 const (
-	// CodexAuthMethodChatGPT represents browser-backed ChatGPT authentication.
 	CodexAuthMethodChatGPT CodexAuthMethod = "chatgpt"
-	// CodexAuthMethodAPIKey represents Codex API-key authentication.
-	CodexAuthMethodAPIKey CodexAuthMethod = "api_key"
-	// CodexAuthMethodOther represents a recognized unclassified mechanism.
-	CodexAuthMethodOther CodexAuthMethod = "other"
-	// CodexAuthMethodUnknown means the mechanism could not be established.
+	CodexAuthMethodAPIKey  CodexAuthMethod = "api_key"
+	CodexAuthMethodOther   CodexAuthMethod = "other"
 	CodexAuthMethodUnknown CodexAuthMethod = "unknown"
 )
 
-// CodexCapabilityState is the support state of one installed Codex capability.
 type CodexCapabilityState string
 
 const (
-	// CodexCapabilitySupported means the installed protocol exposes the capability.
-	CodexCapabilitySupported CodexCapabilityState = "supported"
-	// CodexCapabilityUnsupported means a successful probe proved absence.
+	CodexCapabilitySupported   CodexCapabilityState = "supported"
 	CodexCapabilityUnsupported CodexCapabilityState = "unsupported"
-	// CodexCapabilityUnknown means the capability probe was inconclusive.
-	CodexCapabilityUnknown CodexCapabilityState = "unknown"
+	CodexCapabilityUnknown     CodexCapabilityState = "unknown"
 )
 
-// CodexCapabilityObservation is a display-safe capability result.
 type CodexCapabilityObservation struct {
 	State      CodexCapabilityState `json:"state" enum:"supported,unsupported,unknown"`
 	ReasonCode string               `json:"reasonCode"`
 	Reason     string               `json:"reason"`
 }
 
-// CodexAccountCapabilities reports the account-management protocol surface.
 type CodexAccountCapabilities struct {
 	AccountRead        CodexCapabilityObservation `json:"accountRead"`
 	NativeLogin        CodexCapabilityObservation `json:"nativeLogin"`
@@ -97,7 +66,6 @@ type CodexAccountCapabilities struct {
 	GlobalSwitch       CodexCapabilityObservation `json:"globalSwitch"`
 }
 
-// CodexAccountSnapshot is the display-safe cached state for one AO account.
 type CodexAccountSnapshot struct {
 	ID             string                         `json:"id"`
 	Label          string                         `json:"label"`
@@ -114,9 +82,6 @@ type CodexAccountSnapshot struct {
 	CreatedAt      time.Time                      `json:"createdAt"`
 }
 
-// CodexAccountUsageSummary contains optional structured token-usage
-// aggregates. Field names carry their units so renderers never have to infer
-// what the provider values represent.
 type CodexAccountUsageSummary struct {
 	LatestDayTokens           *int64    `json:"latestDayTokens,omitempty"`
 	LatestDayStartDate        *string   `json:"latestDayStartDate,omitempty"`
@@ -128,79 +93,48 @@ type CodexAccountUsageSummary struct {
 	ObservedAt                time.Time `json:"observedAt"`
 }
 
-// CodexResetCreditOutcome is the provider's idempotent result for one reset
-// attempt. It is kept internal to the daemon boundary; public callers receive
-// the refreshed account snapshot or a typed API error.
 type CodexResetCreditOutcome string
 
 const (
-	// CodexResetCreditReset means the provider applied a new usage reset.
-	CodexResetCreditReset CodexResetCreditOutcome = "reset"
-	// CodexResetCreditAlreadyRedeemed means this idempotent attempt was applied previously.
+	CodexResetCreditReset           CodexResetCreditOutcome = "reset"
 	CodexResetCreditAlreadyRedeemed CodexResetCreditOutcome = "already_redeemed"
-	// CodexResetCreditNothingToReset means the account currently has no eligible limit to reset.
-	CodexResetCreditNothingToReset CodexResetCreditOutcome = "nothing_to_reset"
-	// CodexResetCreditNoCredit means the account has no reset credit available.
-	CodexResetCreditNoCredit CodexResetCreditOutcome = "no_credit"
+	CodexResetCreditNothingToReset  CodexResetCreditOutcome = "nothing_to_reset"
+	CodexResetCreditNoCredit        CodexResetCreditOutcome = "no_credit"
 )
 
 const (
-	// CodexAccountReasonValid identifies a usable account slot.
-	CodexAccountReasonValid = "account_valid"
-	// CodexAccountReasonSignedOut identifies a retained account without credentials.
-	CodexAccountReasonSignedOut = "account_signed_out"
-	// CodexAccountReasonDescriptorInvalid identifies a malformed descriptor.
+	CodexAccountReasonValid             = "account_valid"
+	CodexAccountReasonSignedOut         = "account_signed_out"
 	CodexAccountReasonDescriptorInvalid = "account_descriptor_invalid"
-	// CodexAccountReasonHomeMissing identifies a missing credential home.
-	CodexAccountReasonHomeMissing = "account_credential_home_missing"
-	// CodexAccountReasonUnsafePath identifies unsafe ownership or link state.
-	CodexAccountReasonUnsafePath = "account_unsafe_path"
-	// CodexCapabilityReasonSupported is the safe supported reason code.
-	CodexCapabilityReasonSupported = "supported"
-	// CodexCapabilityReasonUnsupported is the safe unsupported reason code.
-	CodexCapabilityReasonUnsupported = "unsupported"
-	// CodexCapabilityReasonUnknown is the safe inconclusive reason code.
-	CodexCapabilityReasonUnknown = "unknown"
+	CodexAccountReasonHomeMissing       = "account_credential_home_missing"
+	CodexAccountReasonUnsafePath        = "account_unsafe_path"
+	CodexCapabilityReasonSupported      = "supported"
+	CodexCapabilityReasonUnsupported    = "unsupported"
+	CodexCapabilityReasonUnknown        = "unknown"
 )
 
-// CodexAccountLoginStatus is the daemon-owned pending login lifecycle state.
 type CodexAccountLoginStatus string
 
 const (
-	// CodexAccountLoginPending means the native login terminal is still active.
-	CodexAccountLoginPending CodexAccountLoginStatus = "pending"
-	// CodexAccountLoginVerifying means structured verification is running.
-	CodexAccountLoginVerifying CodexAccountLoginStatus = "verifying"
-	// CodexAccountLoginUnauthorized means verification confirmed signed-out state.
+	CodexAccountLoginPending      CodexAccountLoginStatus = "pending"
+	CodexAccountLoginVerifying    CodexAccountLoginStatus = "verifying"
 	CodexAccountLoginUnauthorized CodexAccountLoginStatus = "unauthorized"
-	// CodexAccountLoginRetryable means the local credential is not ready yet.
-	CodexAccountLoginRetryable CodexAccountLoginStatus = "retryable"
-	// CodexAccountLoginCompleted means a verified account was committed.
-	CodexAccountLoginCompleted CodexAccountLoginStatus = "completed"
-	// CodexAccountLoginCancelled means terminal and staging were removed.
-	CodexAccountLoginCancelled CodexAccountLoginStatus = "cancelled"
-	// CodexAccountLoginFailed means the operation could not complete safely.
-	CodexAccountLoginFailed CodexAccountLoginStatus = "failed"
-	// CodexAccountLoginExpired means the terminal exceeded its lifetime.
-	CodexAccountLoginExpired CodexAccountLoginStatus = "expired"
+	CodexAccountLoginRetryable    CodexAccountLoginStatus = "retryable"
+	CodexAccountLoginCompleted    CodexAccountLoginStatus = "completed"
+	CodexAccountLoginCancelled    CodexAccountLoginStatus = "cancelled"
+	CodexAccountLoginFailed       CodexAccountLoginStatus = "failed"
+	CodexAccountLoginExpired      CodexAccountLoginStatus = "expired"
 )
 
 const (
-	// CodexAccountLoginReasonPending is the safe pending-login reason code.
-	CodexAccountLoginReasonPending = "login_pending"
-	// CodexAccountLoginReasonCompleted is the safe completed-login reason code.
-	CodexAccountLoginReasonCompleted = "login_completed"
-	// CodexAccountLoginReasonCancelled is the safe cancelled-login reason code.
-	CodexAccountLoginReasonCancelled = "login_cancelled"
-	// CodexAccountLoginReasonFailed is the safe failed-login reason code.
-	CodexAccountLoginReasonFailed = "login_failed"
-	// CodexAccountLoginReasonUnauthorized is the safe signed-out reason code.
+	CodexAccountLoginReasonPending      = "login_pending"
+	CodexAccountLoginReasonCompleted    = "login_completed"
+	CodexAccountLoginReasonCancelled    = "login_cancelled"
+	CodexAccountLoginReasonFailed       = "login_failed"
 	CodexAccountLoginReasonUnauthorized = "login_unauthorized"
-	// CodexAccountLoginReasonExpired is the safe expiry reason code.
-	CodexAccountLoginReasonExpired = "login_expired"
+	CodexAccountLoginReasonExpired      = "login_expired"
 )
 
-// CodexAccountLoginOperation is the safe transient login projection.
 type CodexAccountLoginOperation struct {
 	OperationID string                  `json:"operationId"`
 	AccountID   string                  `json:"accountId,omitempty"`

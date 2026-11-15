@@ -22,14 +22,8 @@ const (
 	defaultLaunchReadinessTTL   = 30 * time.Second
 	defaultInstallCheckTimeout  = 2 * time.Second
 	opencodeInstallCheckTimeout = 12 * time.Second
-	// Hermes is a Python CLI: a warm --version identity probe takes about two
-	// seconds, and the first run after an install compiles its bytecode.
-	hermesInstallCheckTimeout = 60 * time.Second
-	// The Hermes auth check resolves the binary, then runs `hermes status`,
-	// which inspects every provider and takes several seconds even when warm.
-	hermesAuthCheckTimeout = 45 * time.Second
-	// The Docker Agent auth check runs `docker-agent doctor`, then asks the
-	// provider to list models with the key; each has its own bound.
+	hermesInstallCheckTimeout   = 60 * time.Second
+	hermesAuthCheckTimeout      = 45 * time.Second
 	dockerAgentAuthCheckTimeout = 30 * time.Second
 	opencodeV2MigrationTimeout  = 30 * time.Minute
 	defaultAuthCheckTimeout     = 10 * time.Second
@@ -47,23 +41,19 @@ const (
 )
 
 type readinessCoordinatorConfig struct {
-	DataDir             string
-	Agents              []agentregistry.HarnessAgent
-	Factory             func() []agentregistry.HarnessAgent
-	Context             context.Context
-	Logger              *slog.Logger
-	Now                 func() time.Time
-	DisplayTTL          time.Duration
-	LaunchTTL           time.Duration
-	InstallTimeout      time.Duration
-	AuthTimeout         time.Duration
-	RetryDelays         []time.Duration
-	Workers             int
-	AuthenticationCheck func(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool)
-	// OnAuthenticationRecovered runs (asynchronously) when a check observes an
-	// agent that was signed out become signed in or configured, however the
-	// login happened: AO's login terminal, the agent's own CLI, or a renewed
-	// token. Caches derived from the signed-out state hook in here.
+	DataDir                   string
+	Agents                    []agentregistry.HarnessAgent
+	Factory                   func() []agentregistry.HarnessAgent
+	Context                   context.Context
+	Logger                    *slog.Logger
+	Now                       func() time.Time
+	DisplayTTL                time.Duration
+	LaunchTTL                 time.Duration
+	InstallTimeout            time.Duration
+	AuthTimeout               time.Duration
+	RetryDelays               []time.Duration
+	Workers                   int
+	AuthenticationCheck       func(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool)
 	OnAuthenticationRecovered func(agentID string)
 }
 
@@ -201,9 +191,6 @@ func (c *readinessCoordinator) EnsureInstallation(ctx context.Context, agentIDs 
 	return c.ensure(ctx, agentIDs, purpose, readinessInvalidateInstallation)
 }
 
-// Force invalidates the requested observations before ensuring them. It is
-// reserved for explicit refresh actions; ordinary callers should use Ensure so
-// they benefit from the coordinator's freshness policy.
 func (c *readinessCoordinator) Force(ctx context.Context, agentIDs []string, purpose domain.AgentReadinessPurpose) ([]domain.AgentReadinessSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -221,10 +208,6 @@ func (c *readinessCoordinator) Force(ctx context.Context, agentIDs []string, pur
 	return c.ensure(ctx, ids, purpose, readinessInvalidateAll)
 }
 
-// FindInstalled returns as soon as one bounded installation-only ensure
-// confirms a harness. Compatible checks already in progress remain shared and
-// continue under the daemon context after this caller stops waiting; presence
-// checks never inherit an execution-enabled identity probe.
 func (c *readinessCoordinator) FindInstalled(ctx context.Context, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, bool) {
 	if err := ctx.Err(); err != nil || !purpose.Valid() {
 		return domain.AgentReadinessSnapshot{}, false
@@ -373,9 +356,6 @@ func (c *readinessCoordinator) ensureOne(ctx context.Context, id string, purpose
 	if presenceOnly {
 		if call := c.calls[readinessCallKey{id: id}]; call != nil {
 			snapshot := c.snapshotLocked(entry, purpose)
-			// A prior installed state is not proof while an execution-enabled
-			// refresh is still replacing it. Presence callers must not inherit
-			// that in-flight call or report the stale state as installed.
 			snapshot.Installation.State = domain.AgentInstallationUnknown
 			snapshot.EffectiveReadiness = domain.EffectiveAgentReadiness(snapshot.Installation.State, snapshot.Authentication.State)
 			c.mu.Unlock()
@@ -383,9 +363,6 @@ func (c *readinessCoordinator) ensureOne(ctx context.Context, id string, purpose
 			return snapshot, nil
 		}
 	} else if call := c.calls[readinessCallKey{id: id, presenceOnly: true}]; call != nil {
-		// Presence and identity checks have different guarantees. Let a normal
-		// caller wait for the process-free pass to finish, then retry so an
-		// identity-pending result cannot satisfy the normal check from cache.
 		c.mu.Unlock()
 		select {
 		case <-call.done:
@@ -592,8 +569,6 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var diagnostics []domain.AgentAuthDiagnostic
 	evidenceCtx, evidence := ports.WithAuthEvidence(c.ctx)
 	if c.dataDir != "" {
-		// AO exports every saved provider key to itself; the probe sees only
-		// what this harness's sessions receive, so status and sessions agree.
 		evidenceCtx = ports.WithAuthEnvironment(evidenceCtx, providerkeys.Withheld(c.dataDir, string(item.Harness)))
 	}
 	defer func() {
@@ -624,19 +599,14 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	if timeout == defaultAuthCheckTimeout {
 		switch item.Harness {
 		case domain.HarnessOpenCodeV2:
-			// First-use migration needs its own budget; the adapter bounds its auth CLI separately.
 			timeout = opencodeV2MigrationTimeout
 		case domain.HarnessHermes:
 			timeout = hermesAuthCheckTimeout
 		case domain.HarnessDockerAgent:
-			// `docker-agent doctor` (15s) then the provider key check (10s).
 			timeout = dockerAgentAuthCheckTimeout
 		case domain.HarnessMiMoCode:
-			// Allow separate 20-second credential detection and verification budgets.
 			timeout = 40 * time.Second
 		case domain.HarnessMiniMaxCode:
-			// `mcode provider list` has its own 20-second budget after the
-			// binary is resolved and its version probed.
 			timeout = 40 * time.Second
 		}
 	}
@@ -646,8 +616,6 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	var account domain.AgentAccountIdentity
 	var err error
 	if runtimeChecker, ok := item.Agent.(ports.AgentRuntimeAuthChecker); ok && c.dataDir != "" {
-		// Verify the credential local session launch will use, including a
-		// login AO saved itself (Claude's setup token).
 		status, account, diagnostics, err = runtimeChecker.AuthStatusForRuntime(ctx, c.dataDir)
 	} else if authChecker, ok := item.Agent.(ports.AgentAuthDiagnosticsChecker); ok {
 		status, account, diagnostics, err = authChecker.AuthStatusWithDiagnostics(ctx)
@@ -660,8 +628,6 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 		}
 		return failedAuthentication(attempted, domain.AgentReadinessReasonAuthCheckFailed, "Authentication check failed."), true
 	}
-	// What the adapter reported about the account, completed by the evidence
-	// it recorded for the decision (an environment variable, file or command).
 	account = account.Merge(evidence.Identity())
 	switch status {
 	case ports.AgentAuthStatusAuthorized:
@@ -671,9 +637,6 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 	case ports.AgentAuthStatusUnauthorized:
 		return successfulAuthentication(attempted, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, item.Manifest.Name+" needs authentication."), false
 	case ports.AgentAuthStatusConfigured:
-		// A definite observation — a credential exists — but not a verified
-		// one. It is recorded as a success so the coordinator does not retry
-		// it as a failure, and it derives to unknown readiness, not ready.
 		reason := item.Manifest.Name + " has credentials configured, but Orchestrator could not verify them."
 		if slices.ContainsFunc(diagnostics, func(d domain.AgentAuthDiagnostic) bool { return d.Code == "token_renewal_pending" }) {
 			reason = item.Manifest.Name + " is signed in; its access token renews the next time it runs."
@@ -709,15 +672,7 @@ func (c *readinessCoordinator) Warm() <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// Warm installation through the process-free capability first. Goose's
-		// normal resolver validates identity by running --help, so startup must
-		// not accidentally turn this background cache fill into an execution
-		// probe. Adapters without a presence capability retain their existing
-		// installation check behavior.
 		_, _ = c.ensureMode(c.ctx, nil, domain.AgentReadinessPurposeDisplay, readinessInvalidateInstallation, true)
-		// Preserve the warm authentication pass without asking adapters to
-		// resolve installation again. An identity-pending installation yields an
-		// inconclusive auth observation until an explicit normal refresh.
 		_, _ = c.ensureMode(c.ctx, nil, domain.AgentReadinessPurposeDisplay, readinessInvalidateAuthentication, false)
 	}()
 	return done

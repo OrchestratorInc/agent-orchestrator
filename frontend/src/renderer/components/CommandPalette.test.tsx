@@ -100,9 +100,6 @@ const ctx = vi.hoisted(() => {
 		params: {} as { hostId?: string; projectId?: string; sessionId?: string },
 		enabled: true,
 		workspaces,
-		// The mocked route and workspace hooks subscribe here, as the real ones
-		// subscribe to the router and the query cache, so the memoized palette
-		// re-reads them when a test changes `params` or `workspaces`.
 		version: 0,
 		listeners: new Set<() => void>(),
 	};
@@ -176,7 +173,6 @@ vi.mock("../lib/api-client", () => ({
 vi.mock("../lib/host-clients", () => ({
 	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
 	clientForHost: () => ({ GET: getMock, POST: postMock }),
-	// The session menu's hooks read the connected hosts.
 	subscribeConnectedHosts: () => () => {},
 	connectedHost: () => undefined,
 	connectedHosts: () => NO_CONNECTED_HOSTS,
@@ -249,10 +245,6 @@ function pressEscape(init: KeyboardEventInit = {}): KeyboardEvent {
 
 const paletteInput = () => screen.queryByPlaceholderText(/search sessions/i);
 
-/**
- * Matches a palette row by its whole title. A typed query draws the matched
- * part of a title in its own span, so the title text is no longer one node.
- */
 const rowTitle = (title: string | RegExp) => (_content: string, element: Element | null) => {
 	if (element?.getAttribute("data-slot") !== "command-item-title") return false;
 	const text = element.textContent ?? "";
@@ -277,14 +269,10 @@ beforeEach(() => {
 	spawnMock.mockReset();
 	choosePathMock.mockReset();
 	getMock.mockReset();
-	// Opening the palette now asks for recent sessions, so the default mock must
-	// answer the search and index-status endpoints. A test that cares about a
-	// specific search response overrides this.
 	getMock.mockImplementation(async (path: string) => {
 		if (String(path).includes("/search/index-status")) {
 			return { data: { coverage: { state: "ready" } } };
 		}
-		// Chat-message search (palette "Messages") answers with no hits by default.
 		if (String(path) === "/api/v1/conversations/search") return { data: { results: [] } };
 		if (String(path).includes("/search/sessions")) {
 			return {
@@ -382,7 +370,6 @@ describe("CommandPalette gating", () => {
 	});
 });
 
-/** Answers the palette's searches: file names, file contents and chats. */
 function mockSearch(names: unknown[], content: unknown[] = [], messages: unknown[] = []) {
 	getMock.mockImplementation(async (path: string) => {
 		if (path.endsWith("/workspace/search/content")) return { data: { results: content } };
@@ -430,7 +417,6 @@ describe("CommandPalette workspace file search", () => {
 
 		fireEvent.change(input, { target: { value: "zqx2" } });
 		fireEvent.keyDown(input, { key: "Enter" });
-		// Past the debounce, the next search is in flight and the old row still shows.
 		await waitFor(() => expect(getMock).toHaveBeenCalledWith(
 			expect.stringContaining("/workspace/search"),
 			expect.objectContaining({ params: expect.objectContaining({ query: { query: "zqx2", limit: 20 } }) }),
@@ -469,7 +455,6 @@ describe("CommandPalette workspace file search", () => {
 
 	it("does not show another host's file results for the same session id", async () => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
-		// Only the first search (the local host) answers.
 		let fileSearches = 0;
 		getMock.mockImplementation(async (path: string) => {
 			if (path.endsWith("/workspace/search")) {
@@ -487,7 +472,6 @@ describe("CommandPalette workspace file search", () => {
 		fireEvent.change(input, { target: { value: "zqx1" } });
 		await screen.findByText(rowTitle("local-only.ts"), {}, { timeout: 2_000 });
 
-		// The same session id, now on a remote host.
 		ctx.workspaces[0].hostId = "host-a";
 		for (const session of ctx.workspaces[0].sessions) session.hostId = "host-a";
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix", hostId: "host-a" };
@@ -519,7 +503,6 @@ describe("CommandPalette workspace file search", () => {
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
-		// On a session page the project's actions wait for a search.
 		fireEvent.change(input, { target: { value: "archived" } });
 		await waitFor(() => expect(document.querySelector('[cmdk-item][data-value="current-open-archive"]')).not.toBeNull());
 
@@ -703,7 +686,6 @@ describe("CommandPalette content search", () => {
 			? { error: {} }
 			: { data: { results: [], truncated: false } });
 		renderPalette();
-		// Text inside files is searched from Go to file; chats from the main list.
 		const inFiles = failedPath.endsWith("/content");
 		act(() => (inFiles ? appShortcutBus.emit({ id: "quick-open-file" }) : useUiStore.getState().setCommandPaletteOpen(true)));
 		const input = await screen.findByPlaceholderText(inFiles ? "Search files" : /search sessions/i);
@@ -725,9 +707,6 @@ describe("CommandPalette content search", () => {
 	});
 });
 
-// Chords are matched in the main process (see main/app-shortcuts.ts and its
-// tests, which also cover the Windows/Linux terminal yield); the palette only
-// reacts to the resulting command.
 describe("CommandPalette shortcuts", () => {
 	it("opens on the palette command and toggles closed on a second one", async () => {
 		renderPalette();
@@ -835,8 +814,6 @@ describe("CommandPalette drill-in + Enter", () => {
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 
-		// "app" is the exact project title but also a keyword hit on the Needs
-		// attention rows, which render above Projects by default.
 		fireEvent.change(input, { target: { value: "app" } });
 		await waitFor(() => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
@@ -978,7 +955,6 @@ describe("CommandPalette actions", () => {
 	it("runs New task off a project the way ⌘N does", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const newSession = vi.fn();
-		// The shell's ⌘N handler, as the palette reaches it.
 		const dispose = onDedicatedShortcut("new-session", () => () => {}, newSession);
 		try {
 			ctx.params = {};
@@ -1028,7 +1004,6 @@ describe("CommandPalette actions", () => {
 		ctx.params = {};
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
-		// Projects wait for a search.
 		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "lib" } });
 		fireEvent.click(await screen.findByText(rowTitle("lib")));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId", params: { projectId: "proj-2" } });
@@ -1263,8 +1238,6 @@ describe("CommandPalette PR and review actions", () => {
 			return { data: undefined };
 		});
 		await openPaletteWithQuery("#7");
-		// Open PR / Copy PR URL don't depend on review state; the mutating
-		// review action must not render until we actually know it's safe.
 		expect(await screen.findByText(rowTitle("Open PR #7"))).toBeInTheDocument();
 		expect(screen.queryByText(rowTitle(/run review|re-run review|reviewing/i))).toBeNull();
 		await waitFor(() =>
@@ -1276,8 +1249,6 @@ describe("CommandPalette PR and review actions", () => {
 			resolveReviews({ data: { reviewerHandleId: "", reviews: [reviewState("running")] } });
 		});
 		expect(await screen.findByText("Review already running")).toBeInTheDocument();
-		// A later poll reflecting a finished review must not retitle the row —
-		// this session is frozen for the remainder of this open.
 		mockReviews([reviewState("up_to_date")]);
 		await act(async () => {
 			await Promise.resolve();
@@ -1291,9 +1262,6 @@ describe("CommandPalette PR and review actions", () => {
 		queryClient.setQueryData(
 			["session-reviews", "w-merge"],
 			{ reviewerHandleId: "", reviews: [reviewState("needs_review")] },
-			// Force this cached value to look well past the palette's 60s
-			// staleTime so opening the palette triggers a background refetch
-			// while still returning this (now-outdated) data synchronously.
 			{ updatedAt: Date.now() - 120_000 },
 		);
 
@@ -1316,8 +1284,6 @@ describe("CommandPalette PR and review actions", () => {
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.change(input, { target: { value: "#7" } });
 
-		// The stale cached "needs_review" data must not surface as an enabled
-		// Run review action while the background refetch is still settling.
 		expect(await screen.findByText(rowTitle("Open PR #7"))).toBeInTheDocument();
 		expect(screen.queryByText(rowTitle(/run review|re-run review/i))).toBeNull();
 		await waitFor(() =>
@@ -1330,7 +1296,6 @@ describe("CommandPalette PR and review actions", () => {
 			resolveReviews({ data: { reviewerHandleId: "", reviews: [reviewState("running")] } });
 		});
 
-		// Once the refetch settles with the true state, the row must reflect it.
 		expect(await screen.findByText("Review already running")).toBeInTheDocument();
 		fireEvent.click(screen.getByText(rowTitle("Reviewing... #7")));
 		expect(postMock).not.toHaveBeenCalled();
@@ -1341,9 +1306,6 @@ describe("CommandPalette PR and review actions", () => {
 		queryClient.setQueryData(
 			["session-reviews", "w-merge"],
 			{ reviewerHandleId: "", reviews: [reviewState("needs_review")] },
-			// Force this cached value to look well past the palette's 60s
-			// staleTime so opening the palette triggers a background refetch
-			// while still returning this (now-outdated) data synchronously.
 			{ updatedAt: Date.now() - 120_000 },
 		);
 		let rejectReviews: (error: Error) => void = () => {};
@@ -1368,10 +1330,6 @@ describe("CommandPalette PR and review actions", () => {
 		await act(async () => {
 			rejectReviews(new Error("network error"));
 		});
-		// TanStack Query keeps the stale cached data and flips isFetching back
-		// to false on a failed refetch — the stale "needs_review" value must
-		// still not be treated as resolved, so the row must stay hidden rather
-		// than reappearing as an enabled Run review.
 		await waitFor(() => expect(getMock).toHaveBeenCalled());
 		expect(screen.queryByText(rowTitle(/run review|re-run review/i))).toBeNull();
 	});
@@ -1559,8 +1517,6 @@ describe("CommandPalette session-text search", () => {
 		});
 	}
 
-	// The row's snippet line is the palette's own: the matched word is its own
-	// span, drawn in the foreground, inside the line holding the message.
 	async function matchedWordIn(line: string, word: string) {
 		const matched = await screen.findByText(word, { selector: "[cmdk-item] span span" }, { timeout: 2_000 });
 		expect(matched.parentElement?.textContent).toBe(line);
@@ -1580,9 +1536,6 @@ describe("CommandPalette session-text search", () => {
 	});
 
 	it("keeps one row per session across Past sessions and Messages", async () => {
-		// Both searches find the session; only its session-text row stays, with
-		// its message count. The reviewer chat's matches are counted in that row
-		// too, so its Messages row would be a second row for the same session.
 		const chatHits = [
 			{ messageId: "chat-main", sessionId: "w-fix", projectId: "proj-1", title: "Main chat twin", text: "the \x02flaky\x03 login test" },
 			{ messageId: "chat-review", sessionId: "w-fix", projectId: "proj-1", reviewId: "review-1", title: "Reviewer thread", text: "a \x02flaky\x03 retry" },
@@ -1598,7 +1551,6 @@ describe("CommandPalette session-text search", () => {
 		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
 
 		expect(await screen.findByText("fix flake", {}, { timeout: 2_000 })).toBeInTheDocument();
-		// The row shows the best-matching message with the query marked, and the count.
 		await matchedWordIn("the flaky login test", "flaky");
 		expect(screen.getByText("you · 7 matches · app · codex")).toBeInTheDocument();
 		expect(screen.queryByText("Main chat twin")).not.toBeInTheDocument();
@@ -1636,11 +1588,6 @@ describe("CommandPalette session-text search", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-1", sessionId: "w-fix" },
 		});
-		// Opening is not enough: the palette must hand the matched message to the
-		// session, or the Chat timeline has nothing to scroll to and the row would
-		// behave like a plain session jump.
-		// The matched word: the opened message marks it, and the session opens
-		// find in chat on it.
 		expect(peekSessionSearchReveal("w-fix")).toEqual({
 			messageId: "msg-1",
 			text: "flaky",
@@ -1649,8 +1596,6 @@ describe("CommandPalette session-text search", () => {
 		await waitFor(() => expect(useUiStore.getState().isCommandPaletteOpen).toBe(false));
 	});
 
-	// A standalone session has no project, so its hit carries an empty project
-	// id. It must open on the standalone route, not "/projects//sessions/…".
 	it("opens a standalone session's match on the standalone route", async () => {
 		mockSearch([{ ...hit, sessionId: "standalone-3", projectId: "", projectName: undefined, sessionName: "kettle notes" }]);
 		renderPalette();
@@ -1673,8 +1618,6 @@ describe("CommandPalette session-text search", () => {
 		fireEvent.click(row);
 
 		expect(navigateMock).toHaveBeenCalled();
-		// A command-output hit has no message bubble; the session opens plainly
-		// rather than scrolling to a guessed anchor.
 		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
 	});
 
@@ -1689,7 +1632,6 @@ describe("CommandPalette session-text search", () => {
 			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
 			expect(selected?.textContent).toContain("fix flake");
 		}, { timeout: 2_000 });
-		// The footer names what ⌘↵ does on this row.
 		expect(screen.getByText("Copy resume command")).toBeInTheDocument();
 		fireEvent.keyDown(input, { key: "Enter", metaKey: true });
 
@@ -1703,7 +1645,6 @@ describe("CommandPalette session-text search", () => {
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		const input = await screen.findByPlaceholderText(/search sessions/i);
 		await screen.findByPlaceholderText(/search sessions/i);
-		// Clear the recents request so only the typed query is measured.
 		getMock.mockClear();
 		fireEvent.change(input, { target: { value: "f" } });
 
@@ -1736,7 +1677,6 @@ describe("CommandPalette session-text search", () => {
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 
 		expect(await screen.findByText("fix flake", {}, { timeout: 2_000 })).toBeInTheDocument();
-		// The request is a recency browse, not a text search.
 		const searchCall = getMock.mock.calls.find(([path]) => String(path).includes("/search/sessions"));
 		expect(searchCall?.[1]).toMatchObject({ params: { query: { sort: "recent", limit: 8 } } });
 	});
@@ -1791,8 +1731,6 @@ describe("CommandPalette session-text search", () => {
 		}, { timeout: 2_000 });
 	});
 
-	// The recent sessions once sat under Past sessions while a typed search
-	// loaded, as if they were its matches.
 	it("does not show recents as matches while a typed search loads", async () => {
 		getMock.mockImplementation((path: string, init?: { params?: { query?: { q?: string } } }) => {
 			if (String(path).includes("/search/index-status")) return Promise.resolve({ data: { coverage: { state: "ready" } } });
@@ -1834,8 +1772,6 @@ describe("CommandPalette session-text search", () => {
 		expect(screen.getByText(/aider/)).toBeInTheDocument();
 	});
 
-	// A failed first build leaves nothing filling the index: "no matches" there
-	// is not the complete answer it reads as.
 	it("says when the index could not finish building", async () => {
 		mockSearch([], { state: "unavailable" });
 		renderPalette();

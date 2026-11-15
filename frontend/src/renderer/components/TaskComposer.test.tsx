@@ -136,7 +136,6 @@ vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ chatHarnesses: h.cloudChatHarnesses, loaded: h.cloudOfferingLoaded, defaultProvider: h.cloudDefaultProvider, maxAttachmentBytes: h.cloudMaxAttachmentBytes }),
 }));
 
-// A Cloud task's files upload to its session through the main process's binary channel.
 vi.mock("../lib/cloud-attachments", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/cloud-attachments")>(),
 	uploadCloudAttachment: h.cloudUpload,
@@ -166,7 +165,6 @@ const task = () => screen.getByRole("textbox", { name: "Task" });
 const startTask = () => screen.getByRole("button", { name: "Start task" });
 const localModelReads = () => h.get.mock.calls.filter(([path]) => String(path).includes("/models"));
 
-/** A cloud project whose worker runs `agent`, connected for Cloud unless `connections` says otherwise. */
 function cloudFixture(
 	agent: string,
 	agentConfig: Record<string, string> = {},
@@ -185,15 +183,10 @@ function releaseCatalog(models: Array<Record<string, unknown>>, cliVersion = "2.
 	return { models, source: "release", cliVersion };
 }
 
-/** A list a Cloud worker reported for the account itself (verified). */
 function accountCatalog(models: Array<Record<string, unknown>>, cliVersion = "2.1.287") {
 	return { models, source: "worker", cliVersion };
 }
 
-/**
- * Local projects whose workers run Codex, each with the model `models` names
- * (if any), and this computer's model list per agent. A delegate is accepted.
- */
 function localProjects(models: Record<string, string>, catalogs: Record<string, Array<Record<string, unknown>>>) {
 	h.get.mockImplementation(async (path: string, init?: { params?: { path?: Record<string, string> } }) => {
 		if (path.includes("/models")) {
@@ -208,12 +201,10 @@ function localProjects(models: Record<string, string>, catalogs: Record<string, 
 		: { data: { taskPreparation: "" } });
 }
 
-/** The bodies of the local tasks delegated so far. */
 const delegated = () => h.post.mock.calls
 	.filter(([path]) => path === "/api/v1/orchestrators/delegate")
 	.map(([, init]) => (init as { body: Record<string, unknown> }).body);
 
-/** Picks a listed Cloud model, which nothing selected for the user beforehand. */
 async function chooseCloudModel(label: string) {
 	const picker = await screen.findByRole("button", { name: "Model" });
 	await waitFor(() => expect(picker).toHaveTextContent("Project or agent default"));
@@ -236,7 +227,6 @@ beforeEach(() => {
 	h.realPermissionDiscovery = false;
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
 	h.agentCatalog = { agents: AGENT_OPTIONS.map((id) => agentReadiness(id, agentLabel(id))) };
-	// An older control plane, unless a test says otherwise.
 	h.cloudListUserAgentModels.mockRejectedValue(new CloudCpError("404 page not found", { status: 404 }));
 	h.cloudListProviderConnections.mockRejectedValue(new CloudCpError("Signed out", { status: 401 }));
 	h.get.mockImplementation(async (path: string) => {
@@ -759,7 +749,6 @@ describe("TaskComposer", () => {
 
 	it("does not show another view's failed lookup of the standalone sentinel as a Scratchpad error", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		// A Scratchpad chat elsewhere asked the daemon for the sentinel as a project.
 		await queryClient.prefetchQuery({
 			queryKey: ["project", "__standalone__"],
 			queryFn: async () => { throw new Error("Project id failed storage-path validation"); },
@@ -1410,7 +1399,6 @@ describe("TaskComposer", () => {
 	it("manages cloud harness connections from a cloud project's agent picker", async () => {
 		h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: {} });
 		const { unmount } = render(<Wrap><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
-		// Only connected harnesses, with "Manage harness connections…" (Harness settings' Cloud view).
 		expect(await screen.findByLabelText("Agent")).toHaveAttribute("data-manage-view", "cloud");
 		unmount();
 
@@ -1509,7 +1497,6 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenLastCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) }));
 	});
 
-	// An older control plane lists this device's models, whose first one the cloud VM may not run.
 	it("leaves an unreported cloud default model to the cloud VM", async () => {
 		const queryClient = cloudFixture("codex");
 		h.get.mockImplementation(async () => ({ data: { agent: "codex", selectionMode: "catalog", models: [
@@ -1557,8 +1544,6 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("session-1"));
-		// A task carries the interface it starts in, never the default an
-		// orchestrator create carries.
 		expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ interfaceMode: "tui" }), { idempotencyKey: expect.any(String) });
 		expect(h.cloudCreateSession.mock.calls[0]?.[1]).not.toHaveProperty("defaultInterfaceMode");
 	});
@@ -1812,7 +1797,6 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("sess-after-refresh"));
 		expect(h.post).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", expect.anything());
 		expect(delegate).toHaveBeenCalledTimes(2);
-		// One request id for both tries, so a lost first response cannot create a second session.
 		expect(delegate.mock.calls[1][1].body.clientRequestId).toBe(delegate.mock.calls[0][1].body.clientRequestId);
 	});
 
@@ -2452,7 +2436,6 @@ describe("TaskComposer", () => {
 		expect(task()).toHaveValue("Use the native model");
 	});
 
-	// A model is always selected: with no reported default, FX starts on its first offered model.
 	it.each([false, true])("selects FX's first offered model when no default is reported (unrelated model hidden: %s)", async (hideUnrelated) => {
 		h.agentCatalog = { agents: [agentReadiness("fx", "FX")] };
 		h.get.mockImplementation(async (path: string) => {
@@ -2669,7 +2652,6 @@ describe("TaskComposer", () => {
 		h.post.mockResolvedValue({ data: { workerId: "sess-1" } });
 
 		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
-		// The mode picker replaces the model picker once the catalog says it lists modes.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("Fast"));
 		fireEvent.change(task(), { target: { value: "Use the first mode" } });
 		fireEvent.click(startTask());
@@ -2734,16 +2716,12 @@ describe("TaskComposer", () => {
 			serveClaude(() => claudeCatalog({ warning: "the saved Claude Code login token expired", warningCode: "auth_expired" }));
 			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
 			await waitFor(() => expect(h.get).toHaveBeenCalledWith(expect.stringContaining("/models"), expect.anything()));
-			// The catalog has rendered once its models are listed; only then is
-			// the absence of the notice meaningful.
 			await userEvent.click(await screen.findByRole("button", { name: "Model" }));
 			expect(await screen.findByText("Sonnet 5.5")).toBeInTheDocument();
 			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
 			expect(screen.queryByText("the saved Claude Code login token expired")).not.toBeInTheDocument();
 		});
 
-		// A remote host may run an older daemon that still refuses the spawn for a
-		// stale catalog, so it keeps the notice and its Log in shortcut.
 		it("keeps the expired-login notice for a remote host", async () => {
 			const claude = agentReadiness("claude-code", "Claude Code", { authentication: "configured" });
 			h.agentCatalog = { agents: [claude] };
@@ -2757,8 +2735,6 @@ describe("TaskComposer", () => {
 				: { data: {} });
 			render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
 			const notice = await screen.findByTestId("model-catalog-notice");
-			// The host's login only expired, so say that rather than "not logged in
-			// on this computer".
 			expect(notice).toHaveTextContent("Claude Code's saved login has expired.");
 			expect(notice).not.toHaveTextContent("isn't logged in on this computer");
 			expect(screen.getByRole("button", { name: "Log in again" })).toBeInTheDocument();
@@ -2778,8 +2754,6 @@ describe("TaskComposer", () => {
 			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
 		});
 
-		// A cloud task runs with the cloud credential and the control plane's
-		// catalog, so this computer's login never reads as a problem.
 		it("keeps a cloud project startable without consulting the local login", async () => {
 			h.cloudProjects.push({ id: "cloud-1", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "claude-code" } } });
 			h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
@@ -2854,8 +2828,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		expect(screen.getByRole("menuitem", { name: "Use project or agent default" })).toBeInTheDocument();
 		expect(screen.getByText("Models for Claude Code 2.1.287")).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
-		// With nothing remembered, run or configured, Claude Code opens on the catalog's default,
-		// as a local task opens on its catalog's, and as the session's Chat names it.
 		await waitFor(() => expect(picker).toHaveTextContent("Sonnet"));
 		fireEvent.change(task(), { target: { value: "Use the default" } });
 		fireEvent.click(startTask());
@@ -2910,7 +2882,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		fireEvent.change(task(), { target: { value: "Use the default" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
-		// The alias keeps following the model Cloud's agent names as its default.
 		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ model: "opus" });
 	});
 
@@ -2964,7 +2935,6 @@ describe("TaskComposer Cloud model catalog", () => {
 
 	it("matches the Cloud catalog to Settings by its own ids, as a Cloud chat does", async () => {
 		const queryClient = cloudFixture("claude-code");
-		// This computer's Haiku 5.5 is switched off, which is not Cloud's "haiku" (Haiku 4.5).
 		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
 			? { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-haiku-5-5"] } } } }
 			: { data: { status: "ok", project: { config: {} } } });
@@ -3004,7 +2974,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		h.cloudListUserAgentModels.mockReturnValue(new Promise((resolve) => { finishCatalog = resolve; }));
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Model" });
-		// Usable on the default while Cloud answers.
 		expect(picker).toBeEnabled();
 		expect(picker).toHaveTextContent("Project or agent default");
 		act(() => finishCatalog(releaseCatalog([{ id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", default: true, efforts: ["low", "high"] }], "0.130.0")));
@@ -3025,7 +2994,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		await chooseCloudModel("Connected Sonnet");
 		expect(h.cloudListUserAgentModels).toHaveBeenCalledWith("org-1", "opencode", { signal: expect.any(AbortSignal) });
 		expect(h.get).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", expect.objectContaining({ params: expect.objectContaining({ query: { projectId: "@cred:anthropic_api_key" } }) }));
-		// Only the credential's own catalog, never this device's.
 		expect(localModelReads().every(([, init]) => init.params.query.projectId === "@cred:anthropic_api_key")).toBe(true);
 		await userEvent.click(screen.getByRole("button", { name: "Model" }));
 		expect(screen.getByText("From your connected provider's model list")).toBeInTheDocument();
@@ -3140,11 +3108,9 @@ describe("TaskComposer Cloud model catalog", () => {
 		const picker = await screen.findByRole("button", { name: "Model" });
 		await waitFor(() => expect(picker).toHaveTextContent("configured-model"));
 		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
-		// The release list is every account's; the account may run more, so nothing is flagged.
 		expect(screen.queryByText(/won't run|may not run|isn't available/)).not.toBeInTheDocument();
 		await userEvent.click(picker);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.6 Sol" }));
-		// Still listed, so it can be chosen again.
 		await userEvent.click(picker);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "configured-model" }));
 		fireEvent.change(task(), { target: { value: "Use the configured model" } });
@@ -3167,7 +3133,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		fireEvent.change(task(), { target: { value: "Run on what the account has" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
-		// No model is sent: the project's would fail, so the task runs the default.
 		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
 	});
 
@@ -3182,7 +3147,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		], "0.130.0"));
 		const view = render(<Wrap queryClient={queryClient}><Notice /></Wrap>);
 		await waitFor(() => expect(screen.getByTestId("notice")).toHaveTextContent("isn't available to your Codex account on Cloud"));
-		// Reading the list again cannot make the model available.
 		expect(screen.getByTestId("notice")).toHaveAttribute("data-retries", "false");
 		view.unmount();
 
@@ -3200,10 +3164,8 @@ describe("TaskComposer Cloud model catalog", () => {
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Chosen" }));
-		// The account's own list arrives and lacks it: an explicit pick stays, with a clear warning.
 		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-agent-models"] }));
 		expect(await screen.findByText("chosen isn't available to your Codex account on Cloud, so it won't run. Pick another model.")).toBeInTheDocument();
-		// Cloud refuses it, so the task cannot be sent on it; another model can.
 		fireEvent.change(task(), { target: { value: "Run on the chosen model" } });
 		expect(startTask()).toBeDisabled();
 		await userEvent.click(screen.getByRole("button", { name: "Model" }));
@@ -3239,7 +3201,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		expect(screen.queryByText(/Couldn't load/)).not.toBeInTheDocument();
 		await act(() => queryClient.invalidateQueries({ queryKey: ["cloud-agent-models"] }));
 		expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("chosen");
-		// Still the release list: no account list says it won't run.
 		expect(screen.queryByText(/won't run|may not run/)).not.toBeInTheDocument();
 		fireEvent.change(task(), { target: { value: "Retain my choices" } });
 		fireEvent.click(startTask());
@@ -3296,7 +3257,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
 		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
-		// This computer's model is not what the Cloud task starts on.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).not.toHaveTextContent("GPT-5.5"));
 		fireEvent.change(task(), { target: { value: "A cloud task" } });
 		fireEvent.click(startTask());
@@ -3339,7 +3299,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		fireEvent.change(task(), { target: { value: "Run on a stale pick" } });
 		fireEvent.click(startTask());
 		expect(await screen.findByText(reason)).toBeInTheDocument();
-		// The list the picker showed was older than Cloud's: it is read again.
 		await waitFor(() => expect(h.cloudListUserAgentModels.mock.calls.length).toBeGreaterThan(reads));
 	});
 
@@ -3352,7 +3311,6 @@ describe("TaskComposer Cloud model catalog", () => {
 			{ id: "gpt-5.5", label: "GPT-5.5" },
 			{ id: "gpt-b", label: "GPT-B" },
 		] });
-		// B is visited first, so its project is cached when the composer comes back to it.
 		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-b" onCreated={vi.fn()} /></Wrap>);
 		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-B"));
 		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-a" onCreated={vi.fn()} /></Wrap>);
@@ -3366,7 +3324,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		fireEvent.change(task(), { target: { value: "Run on B's model" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(delegated()).toHaveLength(1));
-		// B's own project model applies, as on main: nothing is sent for it.
 		expect(delegated()[0]).toMatchObject({ projectId: "proj-b", agent: "codex" });
 		expect(delegated()[0]).not.toHaveProperty("model");
 	});
@@ -3461,7 +3418,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		await waitFor(() => expect(model).toHaveTextContent("GPT-6-Astra"));
 		await userEvent.click(model);
 		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
-		// Switching agents and back remembers GPT-5.5 as project A's Codex pick.
 		fireEvent.click(screen.getByTestId("agent-field"));
 		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
 		fireEvent.click(screen.getByTestId("agent-field"));
@@ -3497,7 +3453,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
 		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-a" onCreated={vi.fn()} /></Wrap>);
-		// Back in A, switching to Codex finds the pick A remembered for it.
 		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "claude-code"));
 		fireEvent.click(screen.getByTestId("agent-field"));
 		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "codex"));
@@ -3518,7 +3473,6 @@ describe("TaskComposer Cloud model catalog", () => {
 		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-A"));
 		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
-		// The project's model is changed in its settings meanwhile.
 		models["proj-a"] = "gpt-a2";
 		await act(() => queryClient.refetchQueries({ queryKey: ["project", "proj-a"] }));
 		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="proj-a" onCreated={vi.fn()} /></Wrap>);
@@ -3797,19 +3751,16 @@ describe("TaskComposer Cloud orchestrator model", () => {
 		for (const leave of liveCleanups.splice(0)) leave();
 	});
 
-	/** A field given as undefined is left out, as a control plane that predates it leaves it out. */
 	function orchestratorSession(overrides: Record<string, unknown> = {}) {
 		const session: Record<string, unknown> = { id: "orch-1", projectId: "cloud-1", kind: "orchestrator", harness: "claude-code", model: "claude-opus-test", currentModel: "claude-opus-test", status: "working", isTerminated: false, createdAt: "2026-11-01T00:00:00Z", ...overrides };
 		for (const key of Object.keys(session)) if (session[key] === undefined) delete session[key];
 		return session;
 	}
 
-	/** The project's sessions as the sidebar's poll left them: its running orchestrator, and any others. */
 	function seedSessions(queryClient: QueryClient, orchestrator: Record<string, unknown> = {}, others: Array<Record<string, unknown>> = []) {
 		queryClient.setQueryData(["cloud-sessions", h.cloudBaseUrl, h.cloudOrgId], [orchestratorSession(orchestrator), ...others]);
 	}
 
-	/** The orchestrator's Chat, open elsewhere in this window, following its live state; returns how to send that state. */
 	async function openOrchestratorChat() {
 		const listeners = new Map<string, (event: CloudCpStreamEvent) => void>();
 		const bridge = {
@@ -3881,8 +3832,6 @@ describe("TaskComposer Cloud orchestrator model", () => {
 
 	it("keeps the usual defaults beside an orchestrator that runs its agent's default model", async () => {
 		const queryClient = cloudFixture("claude-code");
-		// It started on a model no catalog lists and runs the agent's default now (""):
-		// that model is not followed, and the newest worker's model is the last used.
 		seedSessions(queryClient, { model: "claude-retired-test", currentModel: "" }, [
 			{ id: "worker-1", projectId: "cloud-1", kind: "worker", harness: "claude-code", model: "claude-haiku-test", status: "working", isTerminated: false, createdAt: "2026-10-30T00:00:00Z" },
 		]);
@@ -3900,7 +3849,6 @@ describe("TaskComposer Cloud orchestrator model", () => {
 
 	it("follows the orchestrator's open Chat, whose Default names no model", async () => {
 		const queryClient = cloudFixture("claude-code");
-		// Started on the agent's default, then set to Opus in its Chat: no model it started with to fall back on.
 		seedSessions(queryClient, { model: "" });
 		h.cloudListUserAgentModels.mockResolvedValue(catalog());
 		const sendLive = await openOrchestratorChat();
@@ -3910,7 +3858,6 @@ describe("TaskComposer Cloud orchestrator model", () => {
 		sendLive({ model: "claude-haiku-test", reasoningEffort: "low" });
 		await waitFor(() => expect(picker).toHaveTextContent("Haiku"));
 		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Low");
-		// Set to the agent's own default, the orchestrator names no model to follow.
 		sendLive({ model: "default" });
 		await waitFor(() => expect(picker).toHaveTextContent("Sonnet"));
 		await userEvent.click(picker);
@@ -4028,7 +3975,6 @@ describe("TaskComposer Cloud orchestrator model", () => {
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		const picker = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(picker);
-		// The orchestrator's model is still named, but the remembered one is selected.
 		expect(await screen.findByRole("menuitem", { name: /Opus.*Same as orchestrator/ })).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(picker).toHaveTextContent("Sonnet"));
@@ -4050,7 +3996,6 @@ describe("TaskComposer Cloud orchestrator model", () => {
 
 	it("leaves a worker of another agent, and a stopped or other project's orchestrator, to the usual defaults", async () => {
 		const queryClient = cloudFixture("claude-code");
-		// Models no catalog lists, so only an orchestrator default could pick them.
 		seedSessions(queryClient, { harness: "codex", model: "gpt-5.6-sol", currentModel: "gpt-5.6-sol" }, [
 			orchestratorSession({ id: "orch-old", model: "claude-stopped-test", currentModel: "claude-stopped-test", status: "terminated", isTerminated: true, createdAt: "2026-11-02T00:00:00Z" }),
 			orchestratorSession({ id: "orch-other", projectId: "cloud-2", model: "claude-elsewhere-test", currentModel: "claude-elsewhere-test", createdAt: "2026-11-03T00:00:00Z" }),
@@ -4085,7 +4030,6 @@ describe("TaskComposer local saved choices", () => {
 	const PREFERENCES = "ao.taskComposer.preferences.v1";
 	const savedCodex = () => JSON.parse(window.localStorage.getItem(PREFERENCES) ?? "{}")["proj-1"]?.agents?.codex;
 
-	/** A local Codex project, with the worker effort `projectEffort` names, and one model list for every agent. */
 	function localProject(projectEffort?: string) {
 		h.get.mockImplementation(async (path: string, init?: { params?: { path?: Record<string, string> } }) => path.includes("/models")
 			? { data: { agent: init?.params?.path?.agent ?? "codex", selectionMode: "catalog", allowCustom: true, refreshRecommended: false, models: [
@@ -4133,7 +4077,6 @@ describe("TaskComposer local saved choices", () => {
 		fireEvent.change(task(), { target: { value: "Back on Codex" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(delegated()).toHaveLength(1));
-		// The model the switch saved is remembered as a pick, so the launch keeps it.
 		expect(savedCodex()).toEqual(expect.objectContaining({ model: "gpt-a" }));
 	});
 });
@@ -4202,10 +4145,8 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect(h.cloudCreateSession).toHaveBeenCalledOnce();
 		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ projectId: "cloud-1", harness: "codex", prompt: "Fix the bug", displayName: "Fix the bug", approvalMode: "auto" });
 		expect(h.cloudCreateSession.mock.calls[0][2]).toEqual({ idempotencyKey: "req-1" });
-		// The brief goes with the create; nothing renames or messages a session afterwards.
 		expect(h.cloudRenameSession).not.toHaveBeenCalled();
 		expect(h.cloudSendSessionMessage).not.toHaveBeenCalled();
-		// With the interface it started in, which the session view needs before its list has the session.
 		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-1"])).toMatchObject({ clientMessageId: "req-1", text: "Fix the bug", interfaceMode: "chat" });
 	});
 
@@ -4241,7 +4182,6 @@ describe("useTaskLaunch Cloud start on send", () => {
 			.mockResolvedValue({ session: { id: "s-8", harness: "codex" } });
 		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
 		await screen.findByText("ready");
-		// The dialog passes no request id of its own: the launch keeps one per brief.
 		await act(async () => { await task.launch("Fix the bug").catch(() => undefined); });
 		let sessionId!: string;
 		await act(async () => { sessionId = await task.launch("Fix the bug"); });
@@ -4251,8 +4191,6 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect(second).toEqual(first);
 	});
 
-	// A refusal the page treats as uncertain keeps the send pinned and retries
-	// it as it was, so a task with files that cannot start must be refused as final.
 	it("refuses files on a Cloud task that starts in the terminal as final, creating nothing", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
@@ -4263,12 +4201,10 @@ describe("useTaskLaunch Cloud start on send", () => {
 			outcome = await task.launch("Look at this", { clientRequestId: "req-f1", interfaceMode: "tui", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
 				.catch((error: unknown) => error);
 		});
-		// The page has no interface switch: the default session interface in Settings decides it.
 		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_NEED_CHAT", message: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." });
 		expect(h.cloudCreateSession).not.toHaveBeenCalled();
 	});
 
-	// An agent Cloud runs only in the terminal starts there whatever the default says.
 	it("says to choose another agent when the task's agent has no Chat on Cloud", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
@@ -4297,8 +4233,6 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect(h.cloudCreateSession).not.toHaveBeenCalled();
 	});
 
-	// Its session was deleted again, so nothing is left to retry: the page
-	// hands the brief and files back with the reason.
 	it("returns a Cloud task whose files did not upload as final, once its session is deleted", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
@@ -4316,8 +4250,6 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect(queryClient.getQueryData(["cloud-opening", "org-1", "s-f3"])).toBeUndefined();
 	});
 
-	// A session the cleanup could not delete may still take the brief: the
-	// failure stays uncertain, so the page retries it with the same request id.
 	it("keeps a Cloud task with files uncertain while its session may still exist", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
@@ -4336,9 +4268,6 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect((outcome as { code?: string }).code).toBeUndefined();
 	});
 
-	// A control plane's refusal of the brief is final only once the session
-	// is gone: while the cleanup could not delete it, the page keeps the send
-	// and retries it with the same request id, which continues that session.
 	it("keeps a refused brief uncertain while its session may still exist", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
@@ -4359,8 +4288,6 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect((outcome as { status?: number }).status).toBeUndefined();
 	});
 
-	// Its own project comes with its session, so a start the files did not
-	// reach would leave that project behind: it starts without them.
 	it("refuses files on a Cloud standalone agent as final, starting nothing", async () => {
 		const queryClient = freestyleFixture();
 		h.cloudMaxAttachmentBytes = 25 * 1024 * 1024;
@@ -4488,7 +4415,6 @@ describe("useTaskLaunch on the new chat page", () => {
 			if (path === "/api/v1/orchestrators/delegate") return new Promise((done) => { created = done; });
 			return { data: {} };
 		});
-		// The readiness check before the create is the window in which the page can go away.
 		let checked!: () => void;
 		h.ensureTargetedReadiness.mockReturnValue(new Promise((done) => { checked = () => done({ agents: [] }); }));
 		let task!: ReturnType<typeof useTaskLaunch>;
@@ -4511,7 +4437,6 @@ describe("useTaskLaunch on the new chat page", () => {
 			created({ data: { workerId: "proj-1-7" } });
 			await launched;
 		});
-		// Answered, the send releases it as any send does.
 		expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
 	});
 });

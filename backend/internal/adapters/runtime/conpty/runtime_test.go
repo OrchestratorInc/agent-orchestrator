@@ -18,15 +18,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// livePID returns a PID that is guaranteed to be alive (the current process).
-// Using this as the fake pty-host PID means ptyregistry.List() will not prune
-// the entry during tests. Do NOT use this for the Destroy test: Destroy calls
-// Kill on the pid, so use deadPID() there instead.
 func livePID() int { return os.Getpid() }
 
-// deadPID returns a PID that is guaranteed to be dead (no process). This is
-// used in Destroy tests so the force-kill step is a safe no-op.
-// ponytail: PID 2147483647 (MaxInt32) is never a real process; signal-0 returns ESRCH.
 func deadPID() int { return 2147483647 }
 
 func TestProbeFencedRuntimeCompleteRegistryAbsentIsDead(t *testing.T) {
@@ -269,21 +262,12 @@ func TestRuntimeRejectsStyledOutputFromARecoveredLegacyHost(t *testing.T) {
 	}
 	_ = listener.Close()
 
-	// The negotiated legacy result is cached per adopted host. A second call
-	// must return the capability sentinel without dialing the now-closed socket.
 	_, err = runtime.GetStyledOutput(context.Background(), ports.RuntimeHandle{ID: "sess-legacy"}, 10)
 	if !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable) {
 		t.Fatalf("cached GetStyledOutput error = %v, want ErrStyledTerminalOutputUnavailable", err)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Test harness: in-process pty-host backed by a fakePTY.
-// ---------------------------------------------------------------------------
-
-// inProcHost starts a Serve engine with a fakePTY on a real 127.0.0.1:0
-// listener and returns a fake spawner that returns that addr and a fake pid.
-// The caller must call cleanup() to shut down the host.
 type inProcHost struct {
 	addr   string
 	pid    int
@@ -333,9 +317,6 @@ func (h *inProcHost) cleanup(t *testing.T) {
 	}
 }
 
-// fakeSpawnerFor returns a hostSpawner that starts an in-process host for a
-// single session ID and records which sessions have been spawned.
-// The returned map maps sessionID -> *inProcHost for test inspection.
 func fakeSpawnerFor(t *testing.T, hosts map[string]*inProcHost, fakePID int) hostSpawner {
 	t.Helper()
 	return func(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string, _ HostOptions) (string, int, error) {
@@ -347,10 +328,6 @@ func fakeSpawnerFor(t *testing.T, hosts map[string]*inProcHost, fakePID int) hos
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Redirect ptyregistry to a temp HOME so tests don't pollute ~/.ao
-// ---------------------------------------------------------------------------
-
 func isolateRegistry(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -358,12 +335,6 @@ func isolateRegistry(t *testing.T) {
 	t.Setenv("USERPROFILE", dir)
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-// TestCreate_RegistersSession verifies Create returns {ID: sessionID}, writes
-// to the in-memory map, and registers in the ptyregistry.
 func TestCreate_RegistersSession(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
@@ -383,7 +354,6 @@ func TestCreate_RegistersSession(t *testing.T) {
 		t.Fatalf("handle.ID = %q, want %q", handle.ID, "sess-abc")
 	}
 
-	// In-memory map must have the entry.
 	rt.mu.Lock()
 	sess := rt.sessions["sess-abc"]
 	rt.mu.Unlock()
@@ -391,7 +361,6 @@ func TestCreate_RegistersSession(t *testing.T) {
 		t.Fatal("session not in in-memory map after Create")
 	}
 
-	// Registry must have the entry.
 	entries, err := ptyregistry.List(context.Background())
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -409,11 +378,6 @@ func TestCreate_RegistersSession(t *testing.T) {
 	hosts["sess-abc"].cleanup(t)
 }
 
-// TestCreate_RunFilePathScopesRegistryToInstanceDir verifies Create honors
-// Options.RunFilePath, registering into that instance's own registry file
-// instead of the ~/.ao default. This is the fix for two AO daemon instances
-// on one machine (e.g. a headless dev daemon and the desktop app) silently
-// sharing one pty-host registry and cross-wiring same-named sessions.
 func TestCreate_RunFilePathScopesRegistryToInstanceDir(t *testing.T) {
 	isolateRegistry(t)
 	instanceDir := t.TempDir()
@@ -442,7 +406,6 @@ func TestCreate_RunFilePathScopesRegistryToInstanceDir(t *testing.T) {
 	}
 }
 
-// TestCreate_DuplicateErrors verifies a second Create for the same session id fails.
 func TestCreate_DuplicateErrors(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
@@ -472,7 +435,6 @@ func TestCreate_DuplicateErrors(t *testing.T) {
 	hosts["sess-dup"].cleanup(t)
 }
 
-// TestCreate_InvalidIDErrors verifies Create rejects invalid session ids.
 func TestCreate_InvalidIDErrors(t *testing.T) {
 	isolateRegistry(t)
 	rt := New(Options{Spawner: fakeSpawnerFor(t, nil, livePID())})
@@ -490,8 +452,6 @@ func TestCreate_InvalidIDErrors(t *testing.T) {
 	}
 }
 
-// TestSendMessage_DeliversChunkedTextAndEnter verifies clientSendMessage sends
-// the text + "\r" to the fakePTY input.
 func TestSendMessage_DeliversChunkedTextAndEnter(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
@@ -510,7 +470,6 @@ func TestSendMessage_DeliversChunkedTextAndEnter(t *testing.T) {
 	defer h.cleanup(t)
 
 	msg := "hello world"
-	// Collect PTY input in background.
 	inputC := make(chan []byte, 4)
 	go func() {
 		buf := make([]byte, 1024)
@@ -531,10 +490,8 @@ func TestSendMessage_DeliversChunkedTextAndEnter(t *testing.T) {
 		t.Fatalf("SendMessage: %v", err)
 	}
 
-	// Collect all received bytes within 2s.
 	var received []byte
 	deadline := time.After(2 * time.Second)
-	// Expect at least msg + "\r".
 	for !bytes.Contains(received, []byte("\r")) {
 		select {
 		case chunk := <-inputC:
@@ -584,8 +541,6 @@ func TestSendInputDeliversEscapeByte(t *testing.T) {
 	}
 }
 
-// TestSendMessage_LargeMessageChunked verifies a message > 512 runes is
-// delivered correctly (host receives full text + "\r").
 func TestSendMessage_LargeMessageChunked(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
@@ -600,8 +555,6 @@ func TestSendMessage_LargeMessageChunked(t *testing.T) {
 	h := hosts["sess-lg"]
 	defer h.cleanup(t)
 
-	// Build a message longer than 512 runes (use multi-byte runes to test
-	// rune-boundary splitting).
 	var sb strings.Builder
 	for i := 0; i < 600; i++ {
 		sb.WriteRune('A' + rune(i%26))
@@ -610,7 +563,6 @@ func TestSendMessage_LargeMessageChunked(t *testing.T) {
 
 	inputDone := make(chan []byte, 1)
 	go func() {
-		// Read until we see "\r".
 		var acc []byte
 		buf := make([]byte, 4096)
 		for {
@@ -635,7 +587,6 @@ func TestSendMessage_LargeMessageChunked(t *testing.T) {
 
 	select {
 	case got := <-inputDone:
-		// Strip trailing \r for comparison.
 		trimmed := strings.TrimSuffix(string(got), "\r")
 		if trimmed != msg {
 			t.Fatalf("PTY received %d chars, want %d\ngot:  %q\nwant: %q", len(trimmed), len(msg), trimmed[:min(50, len(trimmed))], msg[:min(50, len(msg))])
@@ -645,7 +596,6 @@ func TestSendMessage_LargeMessageChunked(t *testing.T) {
 	}
 }
 
-// TestGetOutput_ReturnsRingTail verifies GetOutput returns the ring's tail.
 func TestGetOutput_ReturnsRingTail(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
@@ -660,7 +610,6 @@ func TestGetOutput_ReturnsRingTail(t *testing.T) {
 	h := hosts["sess-go"]
 	defer h.cleanup(t)
 
-	// Seed the ring.
 	h.ring.Append([]byte("line1\nline2\nline3\n"))
 
 	text, err := rt.GetOutput(ctx, handle, 2)
@@ -673,8 +622,6 @@ func TestGetOutput_ReturnsRingTail(t *testing.T) {
 	}
 }
 
-// TestIsAlive_TrueWhileServing_FalseAfterClose verifies IsAlive returns true
-// while the host listens and false after its listener is closed.
 func TestIsAlive_TrueWhileServing_FalseAfterClose(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
@@ -696,11 +643,9 @@ func TestIsAlive_TrueWhileServing_FalseAfterClose(t *testing.T) {
 		t.Fatal("expected IsAlive=true while serving")
 	}
 
-	// Shut down the host.
 	h.cancel()
 	<-h.done
 
-	// Give the listener a moment to close.
 	time.Sleep(100 * time.Millisecond)
 
 	alive2, err2 := rt.IsAlive(ctx, handle)
@@ -766,8 +711,6 @@ func TestSupervisedProcessExitKeepsHostAlive(t *testing.T) {
 	}
 }
 
-// TestIsAlive_FalseForUnknownSession verifies IsAlive returns (false, nil) for
-// a session not in the map or registry.
 func TestIsAlive_FalseForUnknownSession(t *testing.T) {
 	isolateRegistry(t)
 	rt := New(Options{Spawner: fakeSpawnerFor(t, nil, livePID())})
@@ -782,10 +725,6 @@ func TestIsAlive_FalseForUnknownSession(t *testing.T) {
 	}
 }
 
-// TestDestroy_KillsHostAndCleansUp verifies Destroy triggers clientKill,
-// removes the map + registry entry, and is idempotent on second call.
-// Uses deadPID() so the force-kill step is a safe no-op (the fake pty-host
-// has no real OS process; clientKill already shut it down via the loopback).
 func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 	isolateRegistry(t)
 	hosts := map[string]*inProcHost{}
@@ -802,19 +741,16 @@ func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 	}
 	h := hosts["sess-destroy"]
 
-	// Destroy should succeed.
 	if err := rt.Destroy(ctx, handle); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
 
-	// Wait for Serve to stop (clientKill triggers shutdown).
 	select {
 	case <-h.done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("host did not stop after Destroy")
 	}
 
-	// fakePTY.Close must have been called.
 	h.pty.closeMu.Lock()
 	closed := h.pty.closed
 	h.pty.closeMu.Unlock()
@@ -822,7 +758,6 @@ func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 		t.Fatal("expected fakePTY.Close() after Destroy")
 	}
 
-	// Map entry must be gone.
 	rt.mu.Lock()
 	_, exists := rt.sessions["sess-destroy"]
 	rt.mu.Unlock()
@@ -830,7 +765,6 @@ func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 		t.Fatal("expected map entry removed after Destroy")
 	}
 
-	// Registry entry must be gone.
 	entries, _ := ptyregistry.List(context.Background())
 	for _, e := range entries {
 		if e.SessionID == "sess-destroy" {
@@ -838,7 +772,6 @@ func TestDestroy_KillsHostAndCleansUp(t *testing.T) {
 		}
 	}
 
-	// Second Destroy must be idempotent (returns nil).
 	if err := rt.Destroy(ctx, handle); err != nil {
 		t.Fatalf("second Destroy: expected nil, got %v", err)
 	}
@@ -916,34 +849,25 @@ func TestDestroyRequiresCompleteResolutionEvidence(t *testing.T) {
 	}
 }
 
-// TestResolveViaRegistry verifies that with an empty in-memory map but a
-// registry entry pointing at a live in-process host, status, styled output, and
-// input still work (simulates a daemon restart).
 func TestResolveViaRegistry(t *testing.T) {
 	isolateRegistry(t)
 
-	// Start a host directly (not through Create) to simulate a pre-existing
-	// pty-host from a previous daemon run. Use the current process PID so
-	// ptyregistry.List() does not prune the entry as dead.
 	h := startInProcHost(t, "sess-reg", livePID())
 	defer h.cleanup(t)
 
-	// Manually register the host in the registry.
 	err := ptyregistry.Register(context.Background(), ptyregistry.Entry{
 		SessionID:    "sess-reg",
 		PtyHostPID:   h.pid,
-		PipePath:     h.addr, // addr stored in PipePath field
+		PipePath:     h.addr,
 		RegisteredAt: fmt.Sprintf("%d", time.Now().Unix()),
 	})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
-	// Create a Runtime with an empty in-memory map (simulates daemon restart).
 	rt := New(Options{Spawner: fakeSpawnerFor(t, nil, livePID())})
 	ctx := context.Background()
 
-	// IsAlive must work via registry resolution.
 	alive, err := rt.IsAlive(ctx, ports.RuntimeHandle{ID: "sess-reg"})
 	if err != nil {
 		t.Fatalf("IsAlive via registry: %v", err)
@@ -970,7 +894,6 @@ func TestResolveViaRegistry(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	// SendMessage must work via registry resolution.
 	inputC := make(chan []byte, 4)
 	go func() {
 		buf := make([]byte, 512)
@@ -991,7 +914,6 @@ func TestResolveViaRegistry(t *testing.T) {
 		t.Fatalf("SendMessage via registry: %v", err)
 	}
 
-	// Collect PTY input.
 	var received []byte
 	deadline := time.After(3 * time.Second)
 	for !bytes.Contains(received, []byte("\r")) {
@@ -1007,13 +929,6 @@ func TestResolveViaRegistry(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests for client helpers (dial a fresh in-proc host directly).
-// ---------------------------------------------------------------------------
-
-// TestClientGetOutput_TimesOutReturnsEmpty verifies clientGetOutput returns ""
-// (no error) if no response arrives within the timeout. We test the happy path
-// instead (timeout path would require a non-responding server).
 func TestClientGetOutput_HappyPath(t *testing.T) {
 	f := startServe(t, 3001)
 	defer f.cancel()
@@ -1045,7 +960,7 @@ func TestClientStatusContext_CancellationStopsProbe(t *testing.T) {
 		}
 		defer func() { _ = conn.Close() }()
 		close(accepted)
-		_, _ = io.Copy(io.Discard, conn) // consume the request without replying
+		_, _ = io.Copy(io.Discard, conn)
 	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1071,8 +986,6 @@ func TestClientStatusContext_CancellationStopsProbe(t *testing.T) {
 	}
 }
 
-// TestClientIsAlive_TrueAndFalse verifies clientIsAlive returns (true, nil) for
-// a live host and (false, nil) for a refused address (definitively gone).
 func TestClientIsAlive_TrueAndFalse(t *testing.T) {
 	f := startServe(t, 3002)
 	defer f.cancel()
@@ -1082,29 +995,20 @@ func TestClientIsAlive_TrueAndFalse(t *testing.T) {
 	}
 
 	f.cancel()
-	// Wait for listener to close.
 	select {
 	case <-f.done:
 	case <-time.After(2 * time.Second):
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	// After close the OS refuses the connection on the freed port -> gone.
 	if alive, err := clientIsAlive(f.addr); alive || err != nil {
 		t.Fatalf("clientIsAlive(closed) = (%v, %v), want (false, nil)", alive, err)
 	}
 }
 
-// TestIsAlive_RefusedIsGone_TimeoutIsTransient is the reaper-safety regression
-// test. It asserts the dead-vs-transient split that keeps a single transient
-// loopback hiccup from spuriously reaping a live idle session:
-//
-//	(a) a resolved-but-REFUSED host -> IsAlive == (false, nil)  [ProbeDead]
-//	(b) a resolved host whose probe TIMES OUT -> (false, non-nil) [ProbeFailed]
 func TestIsAlive_RefusedIsGone_TimeoutIsTransient(t *testing.T) {
 	isolateRegistry(t)
 
-	// (a) Refused: bind+close a listener to obtain a port nothing listens on.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -1122,9 +1026,6 @@ func TestIsAlive_RefusedIsGone_TimeoutIsTransient(t *testing.T) {
 		t.Fatalf("IsAlive(refused) = (%v, %v), want (false, nil) definitively gone", alive, err)
 	}
 
-	// (b) Transient timeout: a listener that Accepts but never replies. The
-	// short isAliveTimeout read deadline fires before any STATUS_RES arrives,
-	// which must surface as a non-nil (transient) error, not a death.
 	silent, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen silent: %v", err)
@@ -1136,7 +1037,6 @@ func TestIsAlive_RefusedIsGone_TimeoutIsTransient(t *testing.T) {
 			if err != nil {
 				return
 			}
-			// Hold the connection open without ever sending a STATUS_RES.
 			go func(c net.Conn) {
 				time.Sleep(isAliveTimeout + time.Second)
 				_ = c.Close()
@@ -1158,12 +1058,10 @@ func TestIsAlive_RefusedIsGone_TimeoutIsTransient(t *testing.T) {
 	}
 }
 
-// TestClientKill_Idempotent verifies clientKill on a dead address returns nil.
 func TestClientKill_Idempotent(t *testing.T) {
 	if err := clientKill("127.0.0.1:1"); err != nil {
 		t.Fatalf("clientKill on unreachable addr: %v", err)
 	}
 }
 
-// Ensure the packages compile (import check).
 var _ = io.Discard

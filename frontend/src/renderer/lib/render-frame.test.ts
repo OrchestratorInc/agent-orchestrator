@@ -76,7 +76,6 @@ describe("render-frame helpers", () => {
 			[[320, 600, 1]],
 			[null],
 		]) {
-			// The page still shows, at the agent's height.
 			expect(read(bad)).toEqual(render);
 		}
 	});

@@ -17,12 +17,10 @@ import (
 
 var prIDPattern = regexp.MustCompile(`^[1-9]\d*$`)
 
-// PRsController owns the /prs action routes.
 type PRsController struct {
 	Svc prsvc.ActionManager
 }
 
-// Register mounts the PR action routes on the supplied router.
 func (c *PRsController) Register(r chi.Router) {
 	r.Post("/prs/{id}/merge", c.merge)
 	r.Post("/prs/{id}/resolve-comments", c.resolveComments)
@@ -108,8 +106,6 @@ func (c *PRsController) addToStack(w http.ResponseWriter, r *http.Request) {
 	writeStackResult(w, res)
 }
 
-// loadDetails reads a tracked PR's details from its provider when none are
-// stored, as for a PR that merged before the observer read them.
 func (c *PRsController) loadDetails(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/prs/{id}/details")
@@ -230,7 +226,6 @@ func (c *PRsController) resolveComments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Body is optional: omitting it resolves all unresolved threads.
 	var in ResolveCommentsRequest
 	if err := decodeJSON(r, &in); err != nil && !isEmptyBody(err) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
@@ -293,7 +288,6 @@ func (c *PRsController) postComment(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
 		return
 	}
-	// A comment can carry its files, so this route reads a body that large.
 	r.Body = http.MaxBytesReader(w, r.Body, maxPRCommentBodyBytes)
 	var in PostPRCommentRequest
 	if err := decodeJSON(r, &in); err != nil {
@@ -338,12 +332,8 @@ func (c *PRsController) postComment(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, PostPRCommentResponse{OK: true, ID: res.ID, URL: res.URL, CreatedAt: res.CreatedAt})
 }
 
-// maxPRAttachmentDataChars is the base64 length of the largest allowed
-// attachment, so an oversized file is refused before it is decoded.
 var maxPRAttachmentDataChars = base64.StdEncoding.EncodedLen(prsvc.MaxAttachmentBytes)
 
-// maxPRCommentBodyBytes bounds a comment's body: all of its files, base64,
-// plus headroom for the text, URL, and JSON envelope.
 var maxPRCommentBodyBytes = int64(base64.StdEncoding.EncodedLen(prsvc.MaxCommentAttachmentsBytes)) + (1 << 20)
 
 func (c *PRsController) attachmentAccess(w http.ResponseWriter, r *http.Request) {
@@ -373,8 +363,6 @@ func writeAttachmentTooLarge(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_TOO_LARGE", "An attachment exceeds 10 MiB, or a comment's attachments exceed 25 MiB together", nil)
 }
 
-// writePRError maps PR sentinel errors to their locked HTTP envelopes,
-// falling back to 500 for unexpected failures.
 func writePRError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, prsvc.ErrInvalidPR):
@@ -416,8 +404,6 @@ func writePRError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// isEmptyBody reports whether err signals an absent or empty request body.
-// io.ErrUnexpectedEOF means a truncated/malformed body — bad request, not absent.
 func isEmptyBody(err error) bool {
 	return errors.Is(err, io.EOF)
 }

@@ -39,8 +39,6 @@ func writeGrokLookupTranscript(t *testing.T, root, bucket string) string {
 	return target
 }
 
-// An unreadable unrelated bucket must not block a readable selected
-// conversation, whether the walk reaches it before or after the target.
 func TestGrokLocateSkipsUnreadableSibling(t *testing.T) {
 	for _, tc := range []struct{ name, blocked, bucket string }{
 		{name: "sibling before target", blocked: "%2Faaa", bucket: "%2Fzzz"},

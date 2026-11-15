@@ -9,14 +9,6 @@ import { useImportedAgentBlock } from "../../lib/session-import";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { useSideChatsAvailable } from "../../lib/side-chats";
-/**
- * The central surface for a chat-mode session.
- *
- * Mounted by SessionView when the session's persisted mode is `chat`. It owns the
- * conversation query and command wiring so ChatWorkspace stays a pure view of a
- * snapshot — which is what lets the same component render fixtures in the dev
- * preview and live data here.
- */
 
 import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -120,15 +112,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onConversationWorkChange,
 	interfaceSwitch,
 }: {
-	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
-	/** The inspector's Subagents tab body while that tab shows; null otherwise. */
 	subagentContainer?: HTMLDivElement | null;
-	/** Brings the Subagents tab up the way the host switches any inspector tab, resizing it on the way. */
 	onRevealSubagents?: () => void;
 	session: WorkspaceSession;
-	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
 	assetBaseUrl?: string;
 	reviewerTerminal?: { handleId: string; harness: string };
@@ -139,9 +127,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onSessionRenamed?: () => void | Promise<void>;
 	reviewerTarget?: Extract<TerminalTarget, { kind: "reviewer" }>;
 	onSelectChat?: () => void;
-	/** This session's standalone shells, rendered as tabs in the chat header. */
 	shellTerminals?: ShellTerminal[];
-	/** The selected shell pane, if any. Mirrors reviewerTarget. */
 	shellTarget?: Extract<TerminalTarget, { kind: "shell" }>;
 	onSelectShellTerminal?: (handleId: string) => void;
 	onCloseShellTerminal?: (handleId: string) => void;
@@ -151,14 +137,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
-	/** Opens the Files inspector from a turn's changed-files Review control. */
 	onOpenFiles?: () => void;
-	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
-	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
 	onOpenArtifact?: (target: { path: string }) => void;
 	onOpenFileAnnotation?: OpenFileAnnotation;
-	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
@@ -167,31 +149,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
-	/** A file overlay hides the chat surface, so it must not offer a suggestion. */
 	workspaceFileActive?: boolean;
-	/** Session-owned order shared with the terminal UI surface. */
 	auxiliaryTabOrder?: string[];
 	onAuxiliaryTabOrderChange?: (keys: string[]) => void;
-	/** The target controller is being installed by an interface handoff. */
 	controllerTransitioning?: boolean;
-	/** The handoff is an account move; see ChatWorkspace. */
 	accountMoving?: boolean;
 	accountMoveQueues?: boolean;
-	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
-	/** controllerResumeError says another app still holds this chat. */
 	controllerResumeOpenElsewhere?: boolean;
-	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
-	/** A switch from the terminal is under way and the conversation is not readable yet. */
 	arriving?: boolean;
-	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
 	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
-	// The host is connecting or unreachable: the chat is its last saved copy, to read only.
 	const hostUnreachable = Boolean(hostId) && !daemonReady;
 	const {
 		snapshot: queriedSnapshot,
@@ -203,16 +175,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		isLoadingOlder,
 		loadOlder,
 	} = useConversation(session.id, hostId);
-	// Route props can move to the destination before the old query observer drops
-	// its data. Treat that snapshot as unknown everywhere, especially at the work
-	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
-	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
-	// Whether the project has a setup script, so a start lists that step only when it
-	// runs something. Remote and cloud projects are not read here and keep the step.
 	const plansSetup = Boolean(session.provisionSteps?.some((step) => step.id === "setup"));
 	const projectScripts = useQuery({
 		queryKey: ["project", session.workspaceId],
@@ -246,19 +212,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		snapshot?.controller?.state === "busy" || commands.busy || acceptedLocalWorkPending;
 	const hasRunningTurn = Boolean(snapshot?.turns.some((turn) => turn.state === "running"));
 	const queuedTurnCount = snapshot?.turns.filter((turn) => turn.state === "queued").length ?? 0;
-	// Choosing another agent only records the choice; the switch runs with the next message.
 	const providerSwitch = useProviderSwitchCommand(session.id, hostId);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
-	// The chat is the tab in front: not a file, terminal or reviewer tab.
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
-	// Sending is the switch, so a pick is dropped once another tab comes forward: a message
-	// typed on coming back could otherwise go to an agent no longer meant.
 	useEffect(() => {
 		if (!chatInFront) setChosenSwitch(undefined);
 	}, [chatInFront]);
-	// After a daemon restart the daemon reattaches surviving Chats on its own, and
-	// that reattach emits no change event. The session's recovery check settling
-	// on "ready" is the signal to refresh the controller state this view shows.
 	const statusReadiness = session.statusReadiness;
 	const lastReadiness = useRef({ id: session.id, readiness: statusReadiness });
 	useEffect(() => {
@@ -268,14 +227,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			!previous.readiness || previous.readiness === "ready") return;
 		void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 	}, [hostId, queryClient, session.id, statusReadiness]);
-	// A switch refused inside a send; the separate switch request keeps its own.
 	const [sendSwitchError, setSendSwitchError] = useState<unknown>();
 	const switchError = providerSwitch.error ?? sendSwitchError;
 	const clearSwitchError = () => { setSendSwitchError(undefined); providerSwitch.reset(); };
 	const currentHarness = snapshot?.harness;
 	const pendingSwitch = currentHarness && chosenSwitch?.harness !== currentHarness ? chosenSwitch : undefined;
-	// Catalogs are cached by session; a switch made elsewhere (another window or device)
-	// leaves the outgoing agent's, so they follow the agent the chat reports.
 	useEffect(() => {
 		if (!currentHarness) return;
 		const key = ["conversation-catalog-harness", hostId ?? "", session.id];
@@ -286,24 +242,20 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			invalidateConversationProviderCatalogs(queryClient, session.id, hostId);
 		}
 	}, [currentHarness, hostId, queryClient, session.id]);
-	// A pick whose agent the chat now runs is done, however the switch's answer went.
 	useEffect(() => {
 		if (chosenSwitch && chosenSwitch.harness === currentHarness) setChosenSwitch(undefined);
 	}, [chosenSwitch, currentHarness]);
 	const pendingHarness = pendingSwitch?.harness;
-	// The daemon's first-start chat check can take a second; run it now so the send does not wait.
 	useEffect(() => {
 		if (!pendingHarness) return;
 		void clientForSessionHost(hostId)
 			.POST("/api/v1/agents/{agent}/chat/prewarm", { params: { path: { agent: pendingHarness } } })
 			.catch(() => undefined);
 	}, [hostId, pendingHarness]);
-	// Ultracode is asked for in each message, so it is kept here, not on the agent.
 	const [ultracodeOn, setUltracodeOn] = useState(false);
 	const ultracode = useMemo(() => ({ on: ultracodeOn, onChange: setUltracodeOn }), [ultracodeOn]);
 	const autoCompactWindow = snapshot?.settings.autoCompactWindow;
 	const [applyingAutoCompact, setApplyingAutoCompact] = useState(false);
-	// Claude Code reads this when it starts, so saving it restarts the agent.
 	const saveAutoCompact = useLatestCallback((value: TurnSettings["autoCompactWindow"]) => {
 		if (!snapshot) return;
 		setApplyingAutoCompact(true);
@@ -312,20 +264,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			.finally(() => setApplyingAutoCompact(false));
 	});
 	const agentBusy = controllerBusy || hasRunningTurn || queuedTurnCount > 0;
-	// The restart is only safe while the agent is not working.
 	const autoCompact = useMemo(
 		() => ({ value: autoCompactWindow, disabled: applyingAutoCompact || agentBusy, onChange: saveAutoCompact }),
 		[agentBusy, applyingAutoCompact, autoCompactWindow, saveAutoCompact],
 	);
 	const switchBlocked = agentBusy || providerSwitch.isPending;
-	// A new pick for the same agent keeps the permission mode picked for it.
 	const choosePendingSwitch = useCallback((next: PendingAgentSwitch | undefined) => {
 		setChosenSwitch((current) => next && current?.approvalMode && current.harness === next.harness && !next.approvalMode
 			? { ...next, approvalMode: current.approvalMode }
 			: next);
 	}, []);
-	// While the agent runs in a mode it needed (Pi only bypassed), a switch away goes back
-	// to the chat's own, which its switch marker keeps.
 	const chatPermissionMode = useMemo(() => {
 		const marker = snapshot?.items.findLast((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
 		const detail = marker?.kind === "activity" ? marker.detail : undefined;
@@ -373,11 +321,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const targetChatControllerReady =
 		snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "ready" || snapshot.controller?.state === "busy");
-	// Mode commits before the target controller starts. A cached ready snapshot
-	// can also outlive the source, so wait for the handoff's final snapshot refresh.
-	// A background resume keeps the last-known catalogs visible so the model
-	// picker doesn't blank out while the agent spins up.
-	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
 	const controllerCatalogsEnabled = !hostUnreachable && targetChatControllerReady && !controllerTransitioning && !newWorkDisabled;
@@ -386,13 +329,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		Boolean(controllerCatalogsEnabled && snapshot && can(snapshot, "config_options")),
 		hostId,
 	);
-	// A provider config catalog may cover only model, only mode, or both.
-	// Suppress native controls only for dimensions the provider catalog replaces;
-	// a model-only catalog must not hide the Approvals control.
 	const providerOptions = configOptions.options ?? [];
-	// Keep this agent's settings so the new chat page can draw the very bar a
-	// session of it will show, before that session exists.
-	// Keyed by the raw harness: the provider label folds unknown harnesses into one.
 	const templateHarness = snapshot?.harness;
 	useEffect(() => {
 		if (session.kind !== "worker" || !templateHarness || !configOptions.loaded || providerOptions.length === 0) return;
@@ -402,8 +339,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const hasProviderModel = providerOptions.some(
 		(option) => option.category === "model" || option.id === "model",
 	);
-	// Only asked for once the conversation is actually readable: the catalog comes
-	// from the live controller, so there is nothing to fetch before then.
 	const { models: controllerModels, loaded: controllerModelsLoaded } = useConversationModels(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot) && !hasProviderModel,
@@ -415,7 +350,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
 	);
-	// A new chat of this agent offers these "/" skills before its own session runs.
 	const skillsHarness = snapshot?.harness;
 	useEffect(() => {
 		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
@@ -423,19 +357,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	}, [hostId, session.kind, skills, skillsHarness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
-	// Applied once: the chat below unmounts while the conversation reloads, and
-	// a request still held would scroll it back to the same message on return.
 	const annotationNavigation = useChatNavigationRequest<{ id: string; text: string; snapshot?: import("../../../shared/chat-excerpt").ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number }>(uiSessionId);
 	const navigateToAnnotation = annotationNavigation.navigate;
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), navigateToAnnotation);
-	// A search result hands its matched message over out-of-band (see
-	// session-search-reveal): the search view navigates, and this surface takes
-	// the target and holds it until the chat shows the conversation the daemon
-	// holds (applied below, once renderSnapshot is known). The existing
-	// annotation navigation then scrolls to and highlights it. For a match in a
-	// message's words, find in chat also opens on the highlighted word, starting
-	// at that message, so Enter and Shift+Enter step through its other
-	// occurrences across the whole history.
 	const findNavigation = useChatNavigationRequest<ChatFindRequest>(uiSessionId);
 	const openFind = findNavigation.navigate;
 	const [heldReveal, setHeldReveal] = useState<{ owner: string; reveal: SessionSearchReveal }>();
@@ -443,13 +367,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		const revealPending = () => {
 			const reveal = takeSessionSearchReveal(session.id);
 			if (!reveal) return;
-			// The chat comes forward at once; the match waits for its conversation.
 			onSelectChat?.();
 			setHeldReveal({ owner: session.id, reveal });
 		};
-		// The target that opened the session, then every later one: picking another
-		// result in this session keeps the surface mounted, so this effect does not
-		// run again to pick it up.
 		revealPending();
 		return subscribeSessionSearchReveal(session.id, revealPending);
 	}, [onSelectChat, session.id]);
@@ -481,8 +401,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			: { container: subagentContainer, reveal: onRevealSubagents, onAvailableChange: reportSubagents, models },
 		[models, onRevealSubagents, reportSubagents, subagentContainer],
 	);
-	// A pending action owns its destination; an unanswered creation owns only its
-	// request identity. Reselecting text must not turn a lost reply into a new fork.
 	const selectionSideScope = useMemo(() => ({ active: true,
 		processing: new Map<string, Promise<void>>(),
 		receipts: new Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }>(),
@@ -506,7 +424,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (pending) return pending;
 		const destination = selectionSideChatsRef.current;
 		const destinationId = destination.activeId;
-		// Reserve before any UI update or synchronous failure can trigger activation.
 		const action = Promise.resolve().then(async () => {
 			if (!current()) throw new Error("Side chat is no longer active.");
 			openSideInspector();
@@ -526,8 +443,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId,
 					});
 				} catch (error) {
-					// A confirmed close is terminal, not an unanswered creation. Do not retry
-					// automatically; the next deliberate Add may allocate a fresh request.
 					if (apiErrorCode(error) === "CHAT_SIDE_CLOSED") selectionSideScope.receipts.delete(identity);
 					throw error;
 				}
@@ -554,13 +469,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		chatInFront,
 	), hostId);
 	const renderShellFallback = Boolean(shellTarget && session);
-	// A switch from the terminal shows the chat before the daemon has a
-	// conversation to read. The starting snapshot stands in for the whole
-	// arrival, even over a cached transcript, so history appears once and fades
-	// in instead of flashing, hiding, and reappearing as the controller restarts.
 	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
-	// A task started from the new chat page already shows its brief, so its first
-	// read keeps that frame instead of flashing a loading state.
 	const openingSend = localEchos.some((echo) => echo.opening);
 	const optimisticChat = ((session.kind === "orchestrator" || openingSend) && isLoading && !renderShellFallback) || optimisticArrival;
 	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
@@ -572,18 +481,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
-	// A held search match is applied to the conversation the daemon holds. An
-	// orchestrator with nothing cached, and a switch from the terminal, first
-	// render a placeholder under another conversation id. Find opened on that
-	// closes when the real conversation replaces it, and the scroll would look
-	// for the message in an empty transcript.
 	const conversationShown = Boolean(snapshot) && renderSnapshot === snapshot;
 	const appliedReveal = useRef<SessionSearchReveal | undefined>(undefined);
 	useEffect(() => {
 		if (!heldReveal || !conversationShown) return;
 		const { owner, reveal } = heldReveal;
 		setHeldReveal(undefined);
-		// Once per match: StrictMode runs this effect twice with the same one.
 		if (owner !== session.id || appliedReveal.current === reveal) return;
 		appliedReveal.current = reveal;
 		navigateToAnnotation({ id: crypto.randomUUID(), text: reveal.text, messageId: reveal.messageId, activitySequence: reveal.activitySequence });
@@ -591,7 +494,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (word && reveal.find) openFind({ id: crypto.randomUUID(), query: word, messageId: reveal.messageId });
 	}, [conversationShown, heldReveal, navigateToAnnotation, openFind, session.id]);
 	const settingsLoading = waking || Boolean(renderSnapshot && can(renderSnapshot, "config_options") && !configOptions.loaded && !configOptions.error);
-	// The model the running agent reports, kept so this chat names it at once the next time it loads.
 	const liveModel = settingsLoading || !targetChatControllerReady || controllerTransitioning ? undefined
 		: providerOptions.find((option) => option.category === "model" || option.id === "model")?.currentValue ?? snapshot?.settings?.model;
 	useEffect(() => {
@@ -603,15 +505,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
 	useEffect(() => {
-		// Keep an ambiguous request's identity until durable progress confirms
-		// that intent ended. An undo can later make the same stop eligible again.
 		if (!stoppedTurnId && renderSnapshot && continueIntent.current &&
 			renderSnapshot.latestSequence > continueIntent.current.sequence) {
 			continueIntent.current = null;
 		}
 	}, [stoppedTurnId, renderSnapshot?.latestSequence]);
-	// Keep the project marked as starting until its controller is ready, so
-	// sidebar actions cannot launch a duplicate orchestrator.
 	useEffect(() => {
 		if (session.kind !== "orchestrator" || session.provisionState === "provisioning") return;
 		if (isLoading && !renderShellFallback) return;
@@ -619,16 +517,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		useUiStore.getState().setProjectProvisioning(session.workspaceId, false, hostId);
 	}, [error, hostId, isLoading, renderShellFallback, session.kind, session.provisionState, session.workspaceId, targetChatControllerReady, unavailable]);
 
-	// Until the agent's own settings arrive the bar shows the saved ones, disabled. With
-	// none saved yet it waits, so defaults never pass for the chat's own.
 	const settingsReady = Boolean(renderSnapshot) && !optimisticChat && (targetChatControllerReady || agentResuming || waking) &&
 		(!settingsLoading || Boolean(renderSnapshot?.settings?.model || renderSnapshot?.settings?.approvalMode));
-	// The session's own settings have taken over; a later restart must not bring the launch chips back.
 	useEffect(() => {
 		if (settingsReady && !settingsLoading && launchSettings) forgetLaunchSettings(queryClient, session.id, hostId);
 	}, [hostId, launchSettings, queryClient, session.id, settingsLoading, settingsReady]);
-	// Once the opening brief's turn has settled the chat is an ordinary one; a later
-	// Undo of that turn must not bring the start-up state back.
 	const openingSettled = Boolean(snapshot?.turns[0] && snapshot.turns[0].state !== "queued" && snapshot.turns[0].state !== "running");
 	useEffect(() => {
 		if (openingStartedAt && openingSettled) forgetOpeningStart(queryClient, session.id, hostId);
@@ -643,10 +536,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 	}
 
-	// A chat session whose controller has not started yet, or whose agent cannot
-	// run Chat is a state to explain rather than an error to spin on. A compatible
-	// session may switch interfaces, but retrying this failed controller by itself
-	// cannot change the answer.
 	if (unavailable && !renderShellFallback && !optimisticArrival) {
 		return (
 			<Centered>
@@ -670,7 +559,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				<p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
 					{hostUnreachable && error ? t("remote.hostOffline") : error ?? "Could not load this conversation."}
 				</p>
-				{/* The terminal can still carry on from here. */}
 				{interfaceSwitch?.control}
 			</Centered>
 		);
@@ -735,9 +623,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				accountMoving={accountMoving}
 				accountMoveQueues={accountMoveQueues}
 				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
-				// A stand-in is on screen until the conversation is read; an existing
-				// session may hold messages, so its composer opens docked. One still
-				// being created has none and opens centered, like the start before it.
 				historyUnread={!conversationShown && !renderShellFallback && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
@@ -747,9 +632,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				excerptsEnabled
 				fileReferencesEnabled={Boolean(renderSnapshot.supportsFileReferences)}
 				onSend={async (text, attachments, clientMessageId, excerpts, fileReferences) => {
-					// Only claim /btw where side chats can open. Elsewhere the
-					// text goes to the agent as typed (it may be the harness's own skill),
-					// so a failed side launch can never strand the main draft.
 					const btw = sideCreationEnabled ? /^\/btw(?:\s+|$)/i.exec(text) : null;
      if (btw && fileReferences?.length) {
       throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
@@ -759,10 +641,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						const side = await sideChats.create(undefined, true, clientMessageId);
 						const question = text.slice(btw[0].length).trim();
 						if (question || excerpts?.length || attachments?.length) {
-							// Retain the main draft if handing the request to the side fails.
 							await sideChats.send(side.id, question, attachments, excerpts, true, clientMessageId);
 						}
-						// The main transcript keeps the reader's place: /btw is for asking aside.
 						return SENT_OUTSIDE_TRANSCRIPT;
 					}
 					const viaClaude = (pendingSwitch?.harness ?? currentHarness) === "claude-code";
@@ -780,11 +660,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							comment: excerpt.comment,
 						})),
 					};
-					// A new message replaces an earlier switch's failure.
 					clearSwitchError();
 					if (!pendingSwitch) return commands.send(message);
-					// The bar shows the mode the agent will start in only once its modes are known
-					// (Pi runs only with permissions bypassed); nothing goes before then.
 					if (!pendingPermissionModes) {
 						const reason = { message: t("agentSwitch.checkingPermissionModes", { agent: agentLabel(pendingSwitch.harness) }) };
 						setSendSwitchError(reason);
@@ -793,12 +670,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					const { harness: targetHarness, model, fastMode, autoCompactWindow } = pendingSwitch;
 					const effort = switchEffort(pendingSwitch);
 					const switchRequest = { targetHarness, model, effort, fastMode, autoCompactWindow, permissionMode: pendingSwitch.approvalMode };
-					// The transcript draws the "Switched" line from this while the daemon works.
 					const switchDisplay = currentHarness
 						? { sourceHarness: currentHarness, sourceModel: snapshot?.settings?.model, targetModel: model, targetEffort: effort }
 						: undefined;
-					// Nothing was sent if the switch fails, so the draft stays editable. A refused
-					// switch drops the pick; with no clear answer it stays until the chat shows its agent.
 					const switchFailed = (error: unknown) => {
 						if (error instanceof ProviderSwitchFailed) setChosenSwitch(undefined);
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
@@ -806,11 +680,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 					};
 					const switched = () => {
 						setChosenSwitch(undefined);
-						// Ultracode picked with the switch stays on for the messages after it.
 						ultracode.onChange(Boolean(pendingSwitch.ultracode));
 					};
-					// The daemon switches and sends in one request, attachments included, so no other
-					// switch can take the message; it shows at once.
 					try {
 						const sent = await commands.send({ ...message, providerSwitch: switchRequest, switchDisplay });
 						switched();
@@ -820,8 +691,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 							setSendSwitchError(error.reason);
 							throw switchFailed(error);
 						}
-						// The switch went through and only the send failed, or no answer came. The chat is
-						// read back; once it runs the picked agent the pick drops, so a retry is an ordinary send.
 						void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id, hostId) });
 						throw error;
 					}
@@ -868,11 +737,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				settingsLoading={settingsLoading}
 				lastModel={lastModel}
 				openingStartedAt={openingStartedAt}
-				// A task started from the new chat page keeps its chips until the agent's own settings load.
 				draftSettings={launchSettings && (!settingsReady || settingsLoading) ? <LaunchSettingsBar {...launchSettings} /> : undefined}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
-				// A Scratchpad session has no project to remember a mode for.
 				onRememberPermissions={session.workspaceId === STANDALONE_WORKSPACE_ID || (can(renderSnapshot, "config_options") && !configOptions.loaded)
 					? undefined : projectPermissions.remember}
 				rememberPermissionsPending={projectPermissions.pending}
@@ -906,10 +773,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				localEchos={localEchos}
 				onStageAttachments={stageAttachments}
 				nativeImages={can(renderSnapshot, "images")}
-				// Gated on what the daemon advertises, so the control is never drawn for a
-				// harness that cannot steer. The refusal check stays as a backstop: it
-				// covers the window before the controller reports, and it is the last word
-				// afterwards, since the capability is a property of the driver.
 				onSteer={can(renderSnapshot, "steer") && !commands.steerUnsupported ? commands.steer : undefined}
 				sendPending={commands.sendPending}
 				steerPending={commands.steerPending}

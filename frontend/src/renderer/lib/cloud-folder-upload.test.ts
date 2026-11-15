@@ -56,22 +56,16 @@ describe("cloud folder upload", () => {
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "git@github.com:acme/a.git", committed: { branch: "feature-x" } });
 		preview.mockResolvedValue({ status: "ok", source: "head", leftOut: [] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "git@github.com:acme/a.git", committed: { branch: undefined } });
-		// The scan sees a repository with a commit, but the main process imports
-		// the folder's files (say git could not read the repository's HEAD as
-		// the folder's own): the main process decides.
 		preview.mockResolvedValue({ status: "ok", source: "import", leftOut: [".env"] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "git@github.com:acme/a.git", leftOut: [".env"] });
-		// A linked worktree's .git is a file, which the scan reads as a plain folder.
 		scan.mockResolvedValue(repo({ isRepo: false, hasCommit: false, needsGitInit: true, remote: "" }));
 		preview.mockResolvedValue({ status: "ok", source: "head", branch: "wt", leftOut: [] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "", committed: { branch: "wt" } });
-		// A scan that fails still says what goes; a preview that fails says nothing.
 		scan.mockRejectedValue(new Error("unreadable"));
 		preview.mockResolvedValue({ status: "ok", source: "import", leftOut: [] });
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "" });
 		preview.mockRejectedValue(new Error("no bridge"));
 		expect(await describeLocalFolder("/w/a")).toEqual({ remote: "" });
-		// The branch comes from the main process, never read separately.
 		expect(branch).not.toHaveBeenCalled();
 		scan.mockRestore();
 		branch.mockRestore();
@@ -113,7 +107,6 @@ describe("cloud folder upload", () => {
 			.toEqual({ message: "Your Orchestrator Cloud session expired. Sign in again, then try again." });
 		expect(folderPushErrorText(t, new FolderPushError("push_failed", "Could not upload notes: remote hung up"), "/w/notes/"))
 			.toEqual({ message: "Could not upload notes.", detail: "Could not upload notes: remote hung up" });
-		// A code this build does not know reads as a failed upload.
 		expect(folderPushErrorText(t, new FolderPushError("brand_new" as never, "Something new"), "/w/notes"))
 			.toEqual({ message: "Could not upload notes.", detail: "Something new" });
 	});

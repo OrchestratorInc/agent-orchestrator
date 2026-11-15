@@ -8,17 +8,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 )
 
-// Gemini CLI and Qwen Code read settings.json as JSON with comments, trailing
-// commas and an optional UTF-8 BOM. AO edits those files by splicing the
-// original bytes, so every comment, key order and layout it does not change
-// stays exactly as the user wrote it.
-
 var utf8BOM = []byte("\ufeff")
 
 var errJSONCShape = errors.New("settings do not have the expected shape")
 
-// jsoncPlain returns data's JSON text with comments and trailing commas
-// blanked out, keeping every byte offset, and the length of a leading BOM.
 func jsoncPlain(data []byte) (plain []byte, bom int) {
 	if bytes.HasPrefix(data, utf8BOM) {
 		bom = len(utf8BOM)
@@ -28,7 +21,6 @@ func jsoncPlain(data []byte) (plain []byte, bom int) {
 	return plain, bom
 }
 
-// jsoncUnmarshal parses a settings file the way its harness does.
 func jsoncUnmarshal(data []byte, v any) error {
 	plain, _ := jsoncPlain(data)
 	return json.Unmarshal(plain, v)
@@ -62,9 +54,6 @@ func blankTrailingCommas(text []byte) {
 
 func isJSONSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }
 
-// setJSONC sets the member at path, a list of object keys, to the JSON value
-// raw, creating the objects on the way that are missing. Only the replaced
-// value, or the inserted member, changes in data.
 func setJSONC(data []byte, path []string, raw []byte) ([]byte, error) {
 	plain, bom := jsoncPlain(data)
 	if len(bytes.TrimSpace(plain)) == 0 {
@@ -88,9 +77,6 @@ func setJSONC(data []byte, path []string, raw []byte) ([]byte, error) {
 	return append(out, data[bom+end:]...), nil
 }
 
-// editJSONCObject reads the members of the object whose "{" ends at open,
-// through its "}", and returns the edit that sets path in it: replace
-// plain[at:end] with text.
 func editJSONCObject(dec *json.Decoder, plain []byte, open int, path []string, raw []byte) (at, end int, text []byte, err error) {
 	found, last := false, -1
 	for dec.More() {

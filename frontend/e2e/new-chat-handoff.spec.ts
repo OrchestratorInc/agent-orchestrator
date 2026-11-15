@@ -2,10 +2,6 @@ import { expect, test, type Page } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// The new chat page hands its brief to the session's chat when the first send
-// creates it. The first session ever opened used to draw a blank pane for a
-// moment while the session view's lazy chunk resolved, even when preloaded.
-
 const projectId = "handoff";
 const at = new Date().toISOString();
 
@@ -49,9 +45,7 @@ test("renderer: the first send from the new chat page never blanks the composer 
 	await page.goto(`/#/new?project=${projectId}`);
 	const prompt = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(prompt).toBeVisible();
-	// The page preloads the session view as it opens; give it the moment typing would.
 	await page.waitForTimeout(1500);
-	// Every frame counts, so a requestAnimationFrame loop watches for a missing composer.
 	await page.evaluate(() => {
 		const seen = { blank: false };
 		(window as unknown as { __handoff: typeof seen }).__handoff = seen;
@@ -65,7 +59,6 @@ test("renderer: the first send from the new chat page never blanks the composer 
 	await page.keyboard.type("Hand this over");
 	const delegated = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/v1/orchestrators/delegate" && request.method() === "POST");
 	await page.keyboard.press("Enter");
-	// Leave an unselected policy to the daemon's project and harness defaults.
 	expect((await delegated).postDataJSON()).not.toHaveProperty("approvalMode");
 	await expect(page).toHaveURL(/sessions\/handoff-w1/);
 	await expect(prompt).toBeVisible();
@@ -73,7 +66,6 @@ test("renderer: the first send from the new chat page never blanks the composer 
 	expect(await page.evaluate(() => (window as unknown as { __handoff: { blank: boolean } }).__handoff.blank)).toBe(false);
 });
 
-// The composer's shortcuts work on the new chat page as on the session's chat.
 test("renderer: Cmd/Ctrl+Shift+M opens the model menu on the new chat page and in the chat @T0", async ({ page }) => {
 	await setup(page, { existingSession: true });
 	for (const where of ["new", "session"] as const) {
@@ -85,7 +77,6 @@ test("renderer: Cmd/Ctrl+Shift+M opens the model menu on the new chat page and i
 		await prompt.click();
 		await page.keyboard.press("ControlOrMeta+Shift+KeyM");
 		await expect(page.getByRole("menu")).toBeVisible();
-		// Closing hands the caret back to the composer.
 		await page.keyboard.press("Escape");
 		await expect(page.getByRole("menu")).toBeHidden();
 		await expect(prompt).toBeFocused();

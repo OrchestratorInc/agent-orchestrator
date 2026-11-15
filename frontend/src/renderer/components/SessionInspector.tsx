@@ -158,9 +158,6 @@ const prStateLabelKeys: Record<SessionPRSummary["state"], MessageKey> = {
 	closed: "pr.state.closed",
 };
 
-/**
- * Tabbed inspector rail beside the terminal (Summary · Files · Reviews · Browser · Side chat · Artifacts).
- */
 export const SessionInspector = memo(function SessionInspector({
 	orchestrator = false,
 	session,
@@ -185,10 +182,8 @@ export const SessionInspector = memo(function SessionInspector({
 	onViewChange,
 	standaloneAgent = false,
 }: {
-	/** An orchestrator's rail has Summary, Browser, and contextual Artifacts. */
 	orchestrator?: boolean;
 	session?: WorkspaceSession;
-	/** The session is a Cloud standalone agent's, alone in its own project. */
 	standaloneAgent?: boolean;
 	hostId?: string;
 	onOpenReviewerTerminal?: OpenReviewerTerminal;
@@ -196,7 +191,6 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue?: BrowserAnnotationQueueModel;
 	isInspectorVisible?: boolean;
 	onToggleBrowserPopOut?: (next: boolean) => void;
-	/** The artifact the Artifacts view should show, e.g. one clicked in the Summary. */
 	artifactRequest?: ArtifactOpenRequest | null;
 	onArtifactRequestConsumed?: (key: number) => void;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
@@ -207,9 +201,7 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView?: ReactNode;
 	browserView?: BrowserViewModel;
 	sideChatView?: ReactNode;
-	/** The chat's Subagents panel; the tab shows only while the chat has subagents to list. */
 	subagentsView?: ReactNode;
-	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
 }) {
@@ -220,16 +212,13 @@ export const SessionInspector = memo(function SessionInspector({
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesActionsHost, setFilesActionsHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
-	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.browserUnseen) : false,
 	);
-	// Badge the Artifacts tab when an artifact was registered while Browser or Files was in use.
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
 	);
 	const inspectorQueryClient = useQueryClient();
-	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
 		orchestrator || session?.cloud || session?.needsResume || (session && !sessionWorkspaceReady(session)) ? undefined : session?.id,
 		hostId,
@@ -239,9 +228,6 @@ export const SessionInspector = memo(function SessionInspector({
 	const cloudOrgId = session?.cloud?.orgId;
 	const cloudReview = useQuery({
 		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session?.id ?? "", "summary"],
-		// Only a connected worker answers for its files, as in the Files panel: a
-		// waking session's count is not polled until its worker is back, and the
-		// count read before stays on the tab meanwhile.
 		enabled: cloudReady && session?.cloud !== undefined && cloudOrgId !== undefined && session.runtimeConnected === true,
 		refetchInterval: 5_000,
 		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session!.id),
@@ -249,9 +235,6 @@ export const SessionInspector = memo(function SessionInspector({
 	const cloudFilesChangedCount = cloudReview.data?.summary.files;
 	const filesChangedCount = session?.cloud ? (cloudFilesChangedCount ? cloudFilesChangedCount : undefined) : localFilesChangedCount;
 	const hasWorkspaceInventory = session?.cloud ? Boolean(cloudReview.data?.files.length) : Boolean(localWorkspaceData?.files?.length);
-	// An artifact link can open the Artifacts tab before a session refresh lists
-	// the file. The request keeps the tab available until the file is listed or
-	// another tab is picked.
 	const [settledArtifactRequestKey, setSettledArtifactRequestKey] = useState<number>();
 	const artifactRequestPending = artifactRequest != null && artifactRequest.key !== settledArtifactRequestKey;
 	useEffect(() => {
@@ -267,29 +250,19 @@ export const SessionInspector = memo(function SessionInspector({
 	}, [artifactRequest, onOpenFiles, onViewChange]);
 	const openReviews = useCallback(() => setView("reviews"), [setView]);
 	const openFilesView = useCallback(() => setView("files"), [setView]);
-	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
-	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
 		entry.id === "summary" || entry.id === "browser"
 		|| (entry.id === "subagents" && subagentsView !== undefined)
 		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
-			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
 			&& (entry.id !== "subagents" || subagentsView !== undefined)
-			// Artifacts shows whenever the session lists files, or while an artifact
-			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
-	// The chat reports its subagents just after it mounts, so on the way back to a
-	// session the Subagents tab is briefly missing. Show Summary through that gap but
-	// keep the reader's choice, so the tab comes back selected.
 	const awaitingSubagents = requestedView === "subagents" && subagentsView === undefined;
 	useEffect(() => {
-		// Until the session loads, its tabs are unknown: keep the requested view.
 		if (view === requestedView || (!sessionLoaded && !orchestrator) || awaitingSubagents) return;
 		setInternalView(view);
 		onViewChange?.(view);
@@ -308,12 +281,6 @@ export const SessionInspector = memo(function SessionInspector({
 		};
 	});
 	return (
-		// SessionInspectorShellView (packages/product-ui) doesn't accept a
-		// className, but styles.css's native-composition transparency cascade
-		// targets a `.session-inspector` ancestor around it (to punch a
-		// see-through hole for the live browser page when the compositor's
-		// shell is raised for an overlay). `contents` keeps this wrapper out of
-		// layout/flex entirely — it exists purely as a CSS selector anchor.
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
 				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
@@ -391,8 +358,6 @@ export const SessionInspector = memo(function SessionInspector({
 
 function reviewsTabVisible(session: WorkspaceSession | undefined): boolean {
 	if (!session) return true;
-	// Cloud PR facts are queried directly by CloudReviewsSection instead of
-	// piggybacking on the local daemon workspace projection.
 	if (session.cloud) return true;
 	return sortedPRs(session).some((pr) => pr.state === "open" || pr.state === "draft");
 }
@@ -422,10 +387,8 @@ const SummaryView = memo(function SummaryView({
 	canOpenReviews: boolean;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	hostId?: string;
-	/** The Summary stays mounted while the inspector is closed. */
 	inspectorVisible: boolean;
 	onOpenFiles: () => void;
-	/** Opens a file's diff at a line, for a review thread's "View in diff". */
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
 	onOpenReviews: () => void;
 	orchestrator: boolean;
@@ -446,8 +409,6 @@ const SummaryView = memo(function SummaryView({
 			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
 		},
 	});
-	// A Cloud project's repositories come from the control plane: its own and
-	// the additional ones its sessions check out.
 	const { client: cloudClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
 	const cloudProjectQuery = useQuery({
 		queryKey: ["cloud-project-repositories", cloudBaseUrl, session.cloud?.orgId ?? "", session.workspaceId],
@@ -472,9 +433,6 @@ const SummaryView = memo(function SummaryView({
 		: t("inspector.artifact");
 	const branchPR = sessionBranchPR(session, prSummaries);
 	const openPRNumber = branchPR?.number;
-	// One PR on screen: the one picked, else the PR the branch updates, else the
-	// newest open one; with several, pills over the card pick another. Until a
-	// pick, it follows the branch, which settles once the PR details load.
 	const focusStore = `${hostId ?? ""}:${session.id}`;
 	const [focusChoice, setFocusChoice] = useState<string | undefined>(() => prFocus.get(focusStore));
 	const focusedPR = prSummaries.find((pr) => prFocusKey(pr) === focusChoice)
@@ -485,21 +443,12 @@ const SummaryView = memo(function SummaryView({
 		setFocusChoice(prFocusKey(pr));
 	};
 	const focusedIsBranchPR = Boolean(branchPR && focusedPR && prFocusKey(focusedPR) === prFocusKey(branchPR));
-	// Another PR of the session that conflicts: its card hands that to the agent.
-	// A Cloud session has no local branch rows to plan from, so its focused PR,
-	// the branch's own included, takes the same step; a guest leaves it to the owner.
 	const conflictStepPR = session.cloud ? (session.cloud.shared ? undefined : focusedPR) : focusedIsBranchPR ? undefined : focusedPR;
 	const otherPRConflict = useOtherPRConflictStep(session, hostId, conflictStepPR);
-	// CI, review, and merge policies act on a PR. Standalone sessions, local or
-	// a Cloud standalone agent, keep the row for Archive.
 	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
 	const showSessionControls = hasPRs || scratchpadSession;
-	// Cloud orchestrators list the workers they spawned; local orchestrators
-	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
-	// Reached through a share: this person sees the session's pull requests but
-	// leaves managing them, and the session's policies, to its owner.
 	const guest = session.cloud?.shared === true;
 	const prView = usePRViewEnabled();
 	return (
@@ -534,7 +483,6 @@ const SummaryView = memo(function SummaryView({
 					pullRequests={hasPRs ? (work: BranchWork | undefined) => (
 						<>
 							{focusedPR ? (
-								// One card, one PR; with several, pills over it pick which.
 								<div className="flex min-w-0 flex-col rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-1" data-testid="pr-card">
 									{prSummaries.length > 1 ? (
 										<div className="pt-2 pb-1">
@@ -608,11 +556,6 @@ const SummaryView = memo(function SummaryView({
 	);
 });
 
-/**
- * The latest Setup and Cleanup runs, collapsed: a terminal session's agent
- * covers the startup loader once it starts, and Cleanup only runs after the
- * session is deleted, so this is where both stay reachable.
- */
 function CloudScriptRunSections({ cloud, sessionId }: { cloud: NonNullable<WorkspaceSession["cloud"]>; sessionId: string }) {
 	const { t } = useTranslation();
 	const runs = useCloudScriptRuns(cloud.orgId, sessionId, { lifecycle: cloud });
@@ -924,7 +867,6 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 	});
 	const policyError = policy.error instanceof Error ? policy.error.message : null;
 	const canTerminateNow = session.status === "merged";
-	// Its project has no board to return to, and no policies apart from Archive.
 	const isStandaloneSession = scratchpad;
 
 	const confirmTermination = ({ deleteArtifacts }: SessionArchiveChoice) => {
@@ -964,7 +906,6 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 							variant="quiet"
 							onClick={() => {
 								clearTerminateSessionState(queryClient, session.id, hostId);
-								// Always open the confirm; the modal owns its own dismissal.
 								setConfirmOpen(true);
 							}}
 							type="button"
@@ -1027,15 +968,12 @@ function updateSessionMergePolicy(
 	}));
 }
 
-/** The PR each session's card shows, once the person picked one; outlives the card's unmount. */
 const prFocus = new Map<string, string>();
 
-/** Forgets every remembered PR choice; for tests. */
 export function resetPRFocus() {
 	prFocus.clear();
 }
 
-/** Under a PR that is not the branch's: the git rows and actions belong to the PR the branch updates. */
 function BranchWorkElsewhere({ branchPR }: { branchPR: SessionPRSummary }) {
 	const { t } = useTranslation();
 	return (
@@ -1046,10 +984,6 @@ function BranchWorkElsewhere({ branchPR }: { branchPR: SessionPRSummary }) {
 }
 
 
-/**
- * A PR's card: the PR view's (one PR in focus, its own tab, one action button)
- * while that Developer mode preview is on, else the card as it was before it.
- */
 export function PRSummaryCard(props: ComponentProps<typeof PRViewSummaryCard>) {
 	return usePRViewEnabled() ? <PRViewSummaryCard {...props} /> : <ClassicPRSummaryCard {...props} />;
 }
@@ -1070,24 +1004,17 @@ function PRViewSummaryCard({
 	work,
 }: {
 	canOpenReviews: boolean;
-	/** In focus without the branch's work: where that work is instead. */
 	elsewhere?: ReactNode;
 	hostId?: string;
 	cloudOrgId?: string;
-	/** Reached through a share: this person asks the project's owner to merge. */
 	guest?: boolean;
 	onOpenReviews: () => void;
 	pr: SessionPRSummary;
-	/** The cloud project, for a guest's merge requests. */
 	projectId?: string;
-	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
 	liveSessionId?: string;
 	sessionId: string;
-	/** "focus" is the inspector's one PR at a time, under a header row; "card" stands alone. */
 	layout?: "card" | "focus";
-	/** Label the card with its repository: the session has PRs on several. */
 	showRepository?: boolean;
-	/** The branch rows and git action, when new commits land on this PR. */
 	work?: BranchWork;
 }) {
 	const { t } = useTranslation();
@@ -1100,7 +1027,6 @@ function PRViewSummaryCard({
 	const presentation = prCardPresentation(pr, { noChecks });
 	const canMerge = prCanMerge(pr, { noChecks }) && Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
-		// Cloud sessions merge from here; a local session merges from its action button.
 		mutationFn: async () => {
 			if (usePreviewData || !cloudOrgId) return;
 			await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
@@ -1158,7 +1084,6 @@ function PRViewSummaryCard({
 						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
 					</Button>
 				) : !cloudOrgId && !guest ? (
-					// A local session acts from the one action button at the card's foot.
 					undefined
 				) : canMerge ? (
 					<Button
@@ -1189,20 +1114,16 @@ function PRViewSummaryCard({
 	);
 	if (layout === "card") return cardView;
 	const state = prStateIcon[pr.state];
-	// A local PR opens in its own tab, where its description, conversation and changes live.
 	const opensTab = !cloudOrgId && !guest && Boolean(pr.url);
 	const tabShowing = activeTabUrl === pr.url;
 	const openTab = (section?: PRTabSection) => openPRTab(sessionUiKey(sessionId, hostId), pr.url, section);
 	const titleLabel = (
 		<>
-			{/* The chips above name the repository in full on hover; here its short name leaves room for the title. */}
 			<span className="font-medium">{viewModel.repositoryLabel ? `${prRepositoryShortName(viewModel.repositoryLabel)} ` : ""}PR #{pr.number}</span>
 			{pr.title ? <span> {pr.title}</span> : null}
-			{/* The icon carries the state; keep it for screen readers. */}
 			<span className="sr-only"> {viewModel.stateLabel}</span>
 		</>
 	);
-	// The logo says this one leaves for GitHub; the row itself stays in the app.
 	const providerLink = (
 		<InfoRowLink
 			ariaLabel={t("inspector.openPR", { number: pr.number })}
@@ -1241,7 +1162,6 @@ function PRViewSummaryCard({
 			{work?.hasRows ? (
 				<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-1">{work.content}</div>
 			) : elsewhere}
-			{/* One button for everything on this PR, at the foot of its card: the branch's next git step, then the PR's own. */}
 			{!cloudOrgId && !guest && pr.state !== "merged" ? (
 				<div className={cn("pt-2 pb-2", !work?.hasRows && !elsewhere && "border-t border-(--color-border-settings-input)")}>
 					<PRActionButton canMerge={canMerge} git={work?.git} hostId={hostId} pr={pr} sessionId={sessionId} />
@@ -1255,7 +1175,6 @@ function PRViewSummaryCard({
 	);
 }
 
-/** The card as it was before the PR view; shown while that preview is off. Delete with the prView flag. */
 function ClassicPRSummaryCard({
 	canOpenReviews,
 	hostId,
@@ -1271,16 +1190,12 @@ function ClassicPRSummaryCard({
 	canOpenReviews: boolean;
 	hostId?: string;
 	cloudOrgId?: string;
-	/** Reached through a share: this person asks the project's owner to merge. */
 	guest?: boolean;
 	onOpenReviews: () => void;
 	pr: SessionPRSummary;
-	/** The cloud project, for a guest's merge requests. */
 	projectId?: string;
-	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
 	liveSessionId?: string;
 	sessionId: string;
-	/** Label the card with its repository: the session has PRs on several. */
 	showRepository?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -1396,19 +1311,12 @@ function ClassicPRSummaryCard({
 	);
 }
 
-/** The row holds as many previews as fit at this width or wider, up to the maximum. */
 const ARTIFACT_PREVIEW_MIN_WIDTH = 88;
 const ARTIFACT_PREVIEW_GAP = 8;
 const ARTIFACT_PREVIEW_MAX = 4;
-/** Fills a 5:4 preview tile with a page laid out 1000 wide. */
 const ARTIFACT_PREVIEW_PAGE_HEIGHT = 800;
 const ARTIFACT_ROWS_COLLAPSED = 3;
 
-/**
- * The Summary's artifacts: previews of the most recently updated ones, as many
- * as fit the width, then the rest by name. Each opens its file in the
- * inspector's Artifacts tab.
- */
 function ArtifactSummaryList({
 	artifacts,
 	onOpenArtifact,
@@ -1417,12 +1325,10 @@ function ArtifactSummaryList({
 }: {
 	artifacts: SessionArtifact[];
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
-	/** Off while the inspector is closed, so hidden pages and PDFs unload. */
 	previewLive: boolean;
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
-	// Who each published file's link opens for, marked as on the Artifacts page.
 	const shareAccess = useReconciledShareLinks();
 	const container = useRef<HTMLDivElement>(null);
 	const [columns, setColumns] = useState(3);
@@ -1476,7 +1382,6 @@ function ArtifactSummaryList({
 	);
 }
 
-/** One Summary preview: a small thumbnail with the file's name, how it is shared and last update. */
 function ArtifactPreviewTile({
 	artifact,
 	onOpenArtifact,
@@ -1521,7 +1426,6 @@ function ArtifactPreviewTile({
 	);
 }
 
-/** One Summary row: icon, name, how it is shared and last update. */
 function ArtifactSummaryRow({
 	artifact,
 	onOpenArtifact,
@@ -1556,12 +1460,9 @@ function ArtifactSummaryRow({
 
 type SortableTimelineEvent = InspectorTimelineEvent & { sortTime: number };
 
-// ponytail: newest 5 commits only; a "show all" control when long sessions need it.
 const TIMELINE_COMMIT_LIMIT = 5;
 
 function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: SessionPRSummary[]; session: WorkspaceSession }) {
-	// Keyed on the daemon's commit count, not the shared history query that every
-	// file edit invalidates, so only a new commit refetches.
 	const commitCount = session.branchState?.commits ?? 0;
 	const history = useQuery({
 		queryKey: ["session-activity-commits", hostId ?? "", session.id, commitCount],
@@ -1570,8 +1471,6 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		placeholderData: (previous) => previous,
 		enabled: !session.cloud && session.kind !== "orchestrator" && !session.needsResume && sessionWorkspaceReady(session),
 	});
-	// A Cloud session's commits come from its worker's workspace review, the
-	// same read (and cache entry) the inspector polls for its Files count.
 	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudOrgId = session.cloud?.orgId;
 	const cloudReview = useQuery({
@@ -1658,9 +1557,6 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		);
 	}
 
-	// An account move stops the old agent before the new one starts. That stop
-	// is not the session ending, so the move stands in for "Exited" meanwhile.
-	// The session's own host: a remote session's id means nothing to the local daemon.
 	const { transition } = useSessionInterfaceTransitionStatus(session.cloud ? undefined : session.id, hostId);
 	const accountMoving = Boolean(transition?.targetAccountId) && interfaceTransitionIsActive(transition);
 	const activityView = accountMoving
@@ -1775,13 +1671,9 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	if (session.status === "ci_failed") add("ci_failed");
 	if (session.status === "changes_requested") add("changes_requested");
 	if (session.status === "commented") add("commented");
-	// Only open and draft PRs contribute live PR signals.
 	for (const pr of openPRs(session)) {
 		if (pr.ci === "failing") add("ci_failed");
 		if (pr.review === "changes_requested") add("changes_requested");
-		// Read the raw fact directly rather than session.status: status collapses
-		// to "working" while the agent is active, but unresolved comments from a
-		// non-blocking review must stay visible regardless of agent activity.
 		if (pr.reviewComments) add("commented");
 		if (pr.mergeability === "conflicting") add("conflict");
 	}
@@ -1789,16 +1681,9 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	return states;
 }
 
-/** Reviewer harness the daemon accepts, typed from the generated schema. */
 type ReviewerHarness = NonNullable<components["schemas"]["TriggerReviewRequest"]["harness"]>;
 type AgentCatalog = components["schemas"]["AgentReadinessResponse"];
 
-/**
- * The project-level reviewer model/mode/effort the daemon puts under a session's
- * own reviewer settings when the session reviews with the same agent (see
- * projectReviewerSelection and DefaultWorkerReviewer in the daemon). An empty
- * session field means "use this", not the model's own default.
- */
 function inheritedReviewerConfig(config: ProjectConfig | undefined, harness: string): ReviewerModelConfig {
 	const reviewer = config?.reviewers?.[0];
 	if (reviewer) {
@@ -1807,8 +1692,6 @@ function inheritedReviewerConfig(config: ProjectConfig | undefined, harness: str
 		return { model: model || undefined, mode: mode || undefined, effort: effort || undefined };
 	}
 	const worker = config?.worker?.agent ?? "";
-	// The project's default worker reviews with its own model and effort, but only
-	// when that agent reviews as itself.
 	if (!worker || WORKER_DEFAULT_REVIEWERS[worker] !== worker || worker !== harness) return {};
 	return {
 		model: config?.worker?.agentConfig?.model || config?.agentConfig?.model || undefined,
@@ -1901,9 +1784,6 @@ function LocalReviewsSection({
 			return projectConfig(data?.project);
 		},
 	});
-	// The reviewer preference belongs to the worker session, not this component
-	// or the whole project. Keep local state responsive while the daemon persists
-	// it, and resync when the inspector moves to another session.
 	const currentDefaultReviewerHarness = resolveDefaultReviewerHarness(projectConfigQuery.data, session.provider);
 	const [reviewerOverride, setReviewerOverride] = useState<ReviewerHarness | "">(
 		session.reviewerHarness ?? "",
@@ -1957,8 +1837,6 @@ function LocalReviewsSection({
 	});
 	const saveAutoReview = useMutation({
 		mutationFn: async (enabled: boolean) => {
-			// Intent, not effect: emitted before the PUT, so a failed save still
-			// counts as the user reaching for the switch.
 			void captureRendererEvent("ao.renderer.review_auto_review_toggled", { enabled });
 			const { error } = await clientForSessionHost(hostId).PUT("/api/v1/sessions/{sessionId}/auto-review", {
 				params: { path: { sessionId: session.id } },
@@ -1972,7 +1850,6 @@ function LocalReviewsSection({
 	});
 	const triggerReview = useMutation({
 		mutationFn: async ({ ownerKey, rerun = false }: { ownerKey: string; rerun?: boolean }) => {
-			// Keep agent/model/effort overrides scoped to this pass; the daemon selects the surface.
 			const reviewerConfig = reviewerModel || reviewerMode || reviewerEffort
 				? { ...(reviewerModel ? { model: reviewerModel } : {}), ...(reviewerMode ? { mode: reviewerMode } : {}), ...(reviewerEffort ? { effort: reviewerEffort } : {}) }
 				: undefined;
@@ -2045,8 +1922,6 @@ function LocalReviewsSection({
 	);
 	return (
 		<>
-			{/* Running a review is an action; reading them is a list. The action stays
-			    on top, then one list carrying both sources keyed by PR. */}
 			<ReviewPanel
 				autoReviewEnabled={autoReviewEnabled}
 				config={projectConfigQuery.data}
@@ -2156,8 +2031,6 @@ function CloudReviewsSection({
 		queryFn: () => client.inspectSessionReviewerHarnesses(orgId, session.id),
 		retry: 1,
 	});
-	// With no reviewer chosen, the worker's agent maps to its default reviewer
-	// the way a local project's does (WORKER_DEFAULT_REVIEWERS).
 	const defaultReviewer = defaultReviewerHarness(session.provider, true);
 	const effectiveReviewerHarness = reviewsQuery.data?.reviewerHarness || session.reviewerHarness || defaultReviewer;
 	const [selectedReviewerHarness, setSelectedReviewerHarness] = useState(effectiveReviewerHarness);
@@ -2228,9 +2101,6 @@ function CloudReviewsSection({
 	const selectedHarnessStatus = harnessesQuery.data?.harnesses.find(
 		(entry) => entry.harness === selectedReviewerHarness,
 	);
-	// The currently running worker proves its own harness binary exists. Keep
-	// review available while the optional inspection request is still loading
-	// (and for older control planes that do not expose it yet).
 	const selectedHarnessReady =
 		selectedHarnessStatus?.status === "ready" ||
 		(selectedHarnessStatus === undefined && selectedReviewerHarness === session.provider);
@@ -2359,13 +2229,6 @@ function cloudReviewsToLocal(
 	};
 }
 
-/**
- * AO's own reviewer passes and the reviews humans and bots left on GitHub, in
- * one list keyed by PR. They were two sections, which made the same PR appear
- * twice and left the reader joining them up by number; a review is a review,
- * and what matters is who wrote it. Each group inside a PR names its source —
- * "AO codex" against the agent that ran, "On GitHub" for everyone else.
- */
 function MergedReviewsSection({
 	githubPRs,
 	hostId,
@@ -2379,7 +2242,6 @@ function MergedReviewsSection({
 }: {
 	githubPRs: SessionPRSummary[];
 	hostId?: string;
-	/** Reached through a share: the reviews show, but only the owner acts on them. */
 	readOnly?: boolean;
 	isLoading: boolean;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
@@ -2397,10 +2259,6 @@ function MergedReviewsSection({
 	const runsByPR = runsByPRFrom(openReviewStates, runs);
 	const aoStates = triggeredReviewStatesFrom(openReviewStates, runs);
 
-	// Union by PR, newest PR first. A PR can appear on either side alone. A
-	// multi-repository session can have the same number in two repositories, so
-	// there a PR is its repository and number; a single-repository session
-	// matches by number alone, as before.
 	const prRepositories = new Set([
 		...aoStates.map((state) => prRepositoryFromUrl(state.prUrl)),
 		...githubPRs.map((pr) => pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url)),
@@ -2443,7 +2301,6 @@ function MergedReviewsSection({
 	};
 	const sendReviewSummaryToWorker = async (summary: InspectorReviewSummaryAction) => {
 		if (session.cloud) {
-			// Cloud delivers the stored review through the durable control-plane queue.
 			const matchingRun = [...runs]
 				.sort((left, right) => right.createdAt.localeCompare(left.createdAt))
 				.find(
@@ -2465,8 +2322,6 @@ function MergedReviewsSection({
 		const entries = (github?.review?.reviews ?? []).filter(
 			(entry) => !externalReviewActorMatchesPRAuthor(entry.reviewerId, github?.author),
 		);
-		// A bot's inline comments (CodeRabbit's) come from the PR's review threads:
-		// the summary's lists leave bots out.
 		const botReviewers = github ? botThreadReviewers(github) : { unresolved: [], resolved: [] };
 		const allUnresolvedReviewers = mergeReviewers(github?.review?.unresolvedBy ?? [], botReviewers.unresolved);
 		const allResolvedReviewers = mergeReviewers(github?.review?.resolvedBy ?? [], botReviewers.resolved);
@@ -2601,8 +2456,6 @@ function MergedReviewsSection({
 				verdict: githubVerdict("none", t),
 			});
 		}
-		// Top-level PR comments read beside the reviews: a bot's walkthrough or a
-		// person's note is feedback too, and the PR page shows it in the same place.
 		for (const comment of github ? prConversationComments(github) : []) {
 			externalEntries.push({
 				body: comment.body,
@@ -2763,8 +2616,6 @@ function reviewLabels(t: TFunction): InspectorReviewLabels {
 }
 
 function renderReviewMarkdown(body: string) {
-	// The same renderer as the PR's comments, so a bot's <details> sections and
-	// badges read as GitHub shows them rather than as literal tags.
 	return (
 		<div className={githubHtmlClass}>
 			<GitHubMarkdown body={body} />
@@ -2904,11 +2755,8 @@ function ReviewPanel({
 	onAutoReviewChange: (enabled: boolean) => void;
 	isAutoReviewSaving: boolean;
 	onKill: () => void;
-	/** Cloud sessions choose from only credentials connected for the session owner. */
 	cloud?: boolean;
-	/** Reached through a share: the reviews show, but only the owner runs them. */
 	readOnly?: boolean;
-	/** Cloud-only: the trigger declined to run and says why. */
 	notice?: string | null;
 	cloudReviewerHarnesses?: string[];
 	cloudReviewerHarness?: string;
@@ -2919,8 +2767,6 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	// A failed run stores its reason in body. Show it for manual triggers too:
-	// the trigger request itself only returns a generic "Review operation failed".
 	const latestFailure = reviewStates
 		.map((review) => review.latestRun)
 		.filter(
@@ -2946,10 +2792,6 @@ function ReviewPanel({
 	}
 
 	const openReviewStates = openReviewStatesFor(session, reviewStates);
-	// Whichever PR happens to come first is not the reviewer to name. With one PR
-	// reviewed earlier by claude-code and another running under codex, taking the
-	// first run reported the wrong agent as the one working. Prefer the run
-	// actually in flight, then the newest recorded one.
 	const runningRun = openReviewStates.find((review) => review.status === "running")?.latestRun;
 	const newestRun = openReviewStates
 		.map((review) => review.latestRun)
@@ -3051,7 +2893,6 @@ function ReviewPanel({
 							</div>
 						</div>
 					) : (
-					// Agent, model, and effort in one menu, picked the way the chat box picks them.
 					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
 						<span className="shrink-0 text-sm text-settings-label">{t("settings.models.reviewerRole")}</span>
 						<ReviewerPicker
@@ -3071,13 +2912,8 @@ function ReviewPanel({
 						/>
 					</div>
 					)}
-					{/* Several reviewers can work on one worker at once (an agent may
-					    ask a reviewer other than the selected one). The reviewer tab
-					    shows one at a time, so each live reviewer gets a row to open it
-					    whenever any of them is not the selected reviewer. */}
 					{activeReviewers.some((surface) => surface.reviewId !== reviewerSurface?.reviewId)
 						? <>
-							{/* Labelled, so these rows do not read as stray lines under the reviewer box. */}
 							<p className="mt-2 mb-0.5 text-xs text-settings-muted">{t("inspector.review.activeReviewers")}</p>
 							{activeReviewers.map((surface) => (
 								<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1" key={surface.reviewId}>
@@ -3175,12 +3011,7 @@ function githubVerdict(verdict: string, t: TFunction): { label: string; tone: "n
 	}
 }
 
-/* The reviews view is assembled from two queries that live in different
-   components, so the derivations both need are module-level rather than
-   recomputed (and allowed to drift) in each. */
 
-/** Every recorded reviewer pass per PR, so each reviewer keeps its own tab.
- *  Falls back to the state's own runs against a daemon predating the runs field. */
 function runsByPRFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[]): Map<string, ReviewRunFacts[]> {
 	const byPR = new Map<string, ReviewRunFacts[]>();
 	for (const run of runs.filter(
@@ -3206,7 +3037,6 @@ function reviewRunHasOutcome(run: ReviewRunFacts | undefined): boolean {
 	return Boolean(run?.verdict?.trim());
 }
 
-/** The PRs AO has an agent review outcome for. */
 function triggeredReviewStatesFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[]): PRReviewState[] {
 	return openReviewStates.filter(
 		(reviewState) =>
@@ -3237,8 +3067,6 @@ function aoReviewMeta(reviewState: PRReviewState): string {
 	return `#${reviewState.prNumber}`;
 }
 
-// GitHub anchors a posted review at #pullrequestreview-<id> on the PR page; we
-// only have that link once the run has been delivered to GitHub.
 function aoReviewCommentUrl(run: PRReviewState["latestRun"]): string | null {
 	if (!run?.prUrl || !run.githubReviewId) return null;
 	return `${run.prUrl}#pullrequestreview-${run.githubReviewId}`;
@@ -3287,12 +3115,7 @@ function BrowserView({
 	browserView?: BrowserViewModel;
 	topbarHost?: HTMLElement | null;
 }) {
-	// While maximized, the browser is a full-window overlay that covers the rail,
-	// so the inspector's Browser tab has nothing to show (and must not mount a
-	// second BrowserPanelView — it would fight the overlay over the shared native
-	// view slot). Exit is via the overlay's own minimize button.
 	const { t } = useTranslation();
-	// Stable, so the memoized panel skips this view's unrelated renders.
 	const togglePopOut = useCallback((next: boolean) => onTogglePopOut?.(next), [onTogglePopOut]);
 	if (browserPoppedOut) {
 		return (

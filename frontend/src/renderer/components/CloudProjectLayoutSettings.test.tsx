@@ -60,7 +60,6 @@ it("adds an additional repository and keeps a stored branch for one that stays",
 	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
 	expect(screen.getByText("../11x")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Add a repository" }));
-	// Neither the main repository nor one already listed is offered.
 	expect(screen.queryByRole("option", { name: /acme\/alice/ })).toBeNull();
 	expect(screen.queryByRole("option", { name: /acme\/11x/ })).toBeNull();
 	await userEvent.click(await screen.findByRole("option", { name: /acme\/voice-calling-ai/ }));
@@ -76,7 +75,6 @@ it("opens the picker for a newly added repository and drops the row when it is d
 	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
 	const add = screen.getByRole("button", { name: "Add a repository" });
 	await userEvent.click(add);
-	// One click is enough: the new row's list is already open.
 	expect(await screen.findByRole("listbox", { name: "Additional repository 2" })).toBeInTheDocument();
 	expect(screen.getByRole("combobox", { name: "Additional repository 2" })).toHaveAttribute("aria-expanded", "true");
 
@@ -85,7 +83,6 @@ it("opens the picker for a newly added repository and drops the row when it is d
 	expect(screen.queryByRole("listbox")).toBeNull();
 	await waitFor(() => expect(add).toHaveFocus());
 	expect(add).toBeEnabled();
-	// The stored repository is untouched and nothing is left to save.
 	expect(screen.getByText("../11x")).toBeInTheDocument();
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });
@@ -222,7 +219,6 @@ it("shows the working folder in the app's language", async () => {
 	}
 });
 
-// The control plane answers a settings write with the whole project, layout included.
 function workspacePatches() {
 	mocks.patch.mockImplementation((_org: string, _id: string, body: { config: Record<string, unknown> }) =>
 		Promise.resolve({ project: project({ layout: "workspace", ...body.config }) }));
@@ -242,23 +238,18 @@ it("lists a workspace's repositories as its own, without an agent start choice, 
 	const onSaveState = vi.fn();
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" onSaveState={onSaveState} />);
 
-	// The pane's title already says it, so the field label is for screen readers only.
 	expect(await screen.findByText("Workspace repositories")).toHaveClass("sr-only");
 	expect(screen.queryByText("Agent starts in")).toBeNull();
 	await userEvent.click(screen.getByRole("button", { name: "Add a local folder" }));
 	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
 
 	await waitFor(() => expect(push).toHaveBeenCalledWith({ folder: "/Users/me/notes", pushPath: "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git", branch: "main" }));
-	// The new repository goes in the workspace's own GitHub account.
 	expect(mocks.createRepository).toHaveBeenCalledWith("org-1", { name: "notes", owner: "acme", description: "Uploaded from Orchestrator" });
-	// Saved without Save, so leaving Settings never strands the new repository;
-	// a stored branch is kept.
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 	expect(mocks.patch.mock.calls[0][2]).toEqual({
 		config: { repos: [{ url: "https://github.com/acme/11x", branch: "develop" }, { url: "https://github.com/acme/notes" }] },
 	});
 	expect(await screen.findByText("../notes")).toBeInTheDocument();
-	// Nothing is left to save.
 	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ dirty: false, phase: "saved" })));
 	choose.mockRestore();
 });
@@ -334,13 +325,11 @@ it("checks a folder's repository against the workspace before making it", async 
 	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
 
 	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
-	// A new acme/11x would be the repository already in the workspace.
 	expect(await screen.findByText("acme/11x is listed twice.")).toBeInTheDocument();
 	expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
 	const name = screen.getByLabelText("Repository name for /Users/me/11x");
 	await userEvent.clear(name);
 	await userEvent.type(name, "alice");
-	// The main repository's folder is taken too.
 	expect(await screen.findByText("acme/alice is already the main repository.")).toBeInTheDocument();
 	await userEvent.clear(name);
 	await userEvent.type(name, "repository");
@@ -378,7 +367,6 @@ it("says a repository folder uploads its commits and holds the dialog open while
 	expect(await screen.findByText("Uploads the commits of draft, not uncommitted changes")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Upload" }));
 	await waitFor(() => expect(push).toHaveBeenCalledOnce());
-	// Settings waits for an upload as for a save in flight.
 	await waitFor(() => expect(onSaveState).toHaveBeenLastCalledWith(expect.objectContaining({ requestPending: true, phase: "saving" })));
 
 	finishPush({ status: "pushed", branch: "main", commit: "abc", source: "head", leftOut: [] });
@@ -406,7 +394,6 @@ it("asks to sign in again when an upload finds the session expired", async () =>
 	signIn.mockRestore();
 });
 
-/** A workspace holding 11x and voice-calling-ai, whose next folder upload waits for finish. */
 function slowUploadSetup() {
 	workspacePatches();
 	mocks.get.mockResolvedValue({ project: project({ layout: "workspace", repos: [{ url: "https://github.com/acme/11x" }, { url: "https://github.com/acme/voice-calling-ai" }] }) });
@@ -430,7 +417,6 @@ it("keeps a repository removed and saved during an upload out of the workspace w
 	await userEvent.click(await screen.findByRole("button", { name: "Upload" }));
 	await waitFor(() => expect(push).toHaveBeenCalledOnce());
 
-	// While it uploads, 11x is removed and saved.
 	await userEvent.click(screen.getByRole("button", { name: "Remove acme/11x" }));
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
@@ -462,7 +448,6 @@ it("saves an uploaded folder after a save in flight, on top of what it saved", a
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
 
-	// The upload ends while that save is still in flight.
 	upload.finish();
 	await new Promise((resolve) => setTimeout(resolve, 20));
 	expect(mocks.patch).toHaveBeenCalledOnce();
@@ -490,7 +475,6 @@ it("says a picked folder is being checked, and takes no other folder until it is
 
 	await userEvent.click(await screen.findByRole("button", { name: "Add a local folder" }));
 	expect(await screen.findByRole("status")).toHaveTextContent("Checking slow");
-	// A second click would start a second full check of a folder.
 	expect(screen.getByRole("button", { name: "Add a local folder" })).toBeDisabled();
 	expect(choose).toHaveBeenCalledOnce();
 

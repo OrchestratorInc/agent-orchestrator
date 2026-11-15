@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Run explicitly with AO_LIVE_QWEN_ACP=1. It uses the user's existing Qwen Code
-// executable, settings, models, and credentials; CI never depends on them.
 func TestLiveQwenACP(t *testing.T) {
 	if os.Getenv("AO_LIVE_QWEN_ACP") != "1" {
 		t.Skip("set AO_LIVE_QWEN_ACP=1 to run against the local Qwen Code account")
@@ -84,9 +82,6 @@ func TestLiveQwenACPHandshake(t *testing.T) {
 		t.Fatalf("Probe: %v", err)
 	}
 
-	// Qwen ACP requires a selected auth type, not just OPENAI_API_KEY. A real
-	// user gets that from `/auth`; the handshake uses a private QWEN_HOME so
-	// we can open a session without writing the operator's ~/.qwen.
 	qwenHome := t.TempDir()
 	settings := []byte(`{"security":{"auth":{"selectedType":"openai"}},"env":{"OPENAI_API_KEY":"sk-test-ao-probe"}}`)
 	if err := os.WriteFile(filepath.Join(qwenHome, "settings.json"), settings, 0o600); err != nil {
@@ -134,8 +129,6 @@ func envMap() map[string]string {
 	return out
 }
 
-// Run explicitly with AO_LIVE_QWEN_ACP=1. Pins the approval channel: a
-// non-read-only shell under auto-edit must raise an approval request.
 func TestLiveQwenACPApprovalChannel(t *testing.T) {
 	if os.Getenv("AO_LIVE_QWEN_ACP") != "1" {
 		t.Skip("set AO_LIVE_QWEN_ACP=1 to run against the local Qwen Code account")

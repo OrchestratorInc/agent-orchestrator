@@ -68,12 +68,10 @@ const {
 	}),
 );
 let terminalLinkHandler: ((uri: string) => void) | undefined;
-// What the pane hands the terminal for dropped files, and the session organization's attachment limit.
 const dropSetup = vi.hoisted(() => ({
 	maxAttachmentBytes: undefined as number | undefined,
 	props: undefined as { saveDroppedFile?: unknown; droppedFileMaxBytes?: number } | undefined,
 }));
-// Read through a function: an assignment in a test would otherwise narrow it for the checks that follow.
 const droppedFileProps = () => dropSetup.props;
 vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ features: dropSetup.maxAttachmentBytes === undefined ? [] : ["attachments"], maxAttachmentBytes: dropSetup.maxAttachmentBytes }),
@@ -290,7 +288,6 @@ describe("TerminalPane dropped files", () => {
 		const without = renderPane(cloudSession);
 		try {
 			await waitFor(() => expect(droppedFileProps()).toBeDefined());
-			// A path on this machine means nothing in the sandbox: no drops at all.
 			expect(droppedFileProps()?.saveDroppedFile).toBeNull();
 		} finally {
 			without.restore();
@@ -327,8 +324,6 @@ describe("TerminalPane Cloud reviewer connections", () => {
 		const cloudSession = { ...worker, cloud: { orgId: "cloud-org" } } as WorkspaceSession;
 		const reviewer = (handleId: string) => ({ kind: "reviewer", handleId, harness: "codex", sessionId: cloudSession.id }) satisfies TerminalTarget;
 		const connect = async () => {
-			// A reviewer pane mounts fresh, outside the retained cache, yet must not
-			// fall back to the local daemon mux.
 			await waitFor(() => expect(terminalSessionOptions.at(-1)?.createMux).toBeTypeOf("function"));
 			terminalSessionOptions.at(-1)?.createMux?.();
 			await cloudMuxOptions.at(-1)?.mintTicket("agent");
@@ -593,7 +588,6 @@ describe("TerminalPane empty states", () => {
 		try {
 			const { rerender } = render(pane("Switching to b@example.com…"));
 			expect(screen.getByRole("status")).toHaveTextContent("Switching to b@example.com…");
-			// The move commits before the restarted agent has drawn: still covered.
 			rerender(pane());
 			expect(screen.getByRole("status")).toHaveTextContent("Switching to b@example.com…");
 			act(() => visibleContentCallback.value?.());
@@ -729,8 +723,6 @@ describe("TerminalPane empty states", () => {
 		const view = renderCachedPane({
 			session: worker,
 			sessions: [worker],
-			// The authoritative shell can replace the optimistic cache row before
-			// the selected target changes. A pending handle itself is the contract.
 			shellTerminals: [],
 			terminalTarget: {
 				generation: shell.createdAt,
@@ -750,12 +742,8 @@ describe("TerminalPane empty states", () => {
 	});
 });
 
-// Initial-replay cover (issue #3160): xterm stays mounted and ingesting behind
-// a blank cover so the pane is revealed already drawn at the tail.
 describe("TerminalPane replay cover", () => {
 	beforeEach(() => {
-		// The cover is scoped to an attachment that is actually expecting a
-		// replay, so these cases have to be in a connecting/attached state.
 		terminalState.value = "connecting";
 	});
 
@@ -767,8 +755,6 @@ describe("TerminalPane replay cover", () => {
 			expect(cover).toBeInTheDocument();
 			expect(cover).toHaveClass("bg-terminal-opaque", "pointer-events-none");
 			expect(cover).not.toHaveClass("terminal-surface");
-			// xterm keeps rendering underneath — covered, never unmounted, so the
-			// grid it measures stays correct.
 			expect(screen.getByTestId("xterm")).toBeInTheDocument();
 		} finally {
 			view.restore();
@@ -779,8 +765,6 @@ describe("TerminalPane replay cover", () => {
 		replaySettled.value = false;
 		const view = renderPane({ ...worker, terminalHandleId: "term-1", cloud: { orgId: "org-1" } });
 		try {
-			// Before the first attach, a cloud terminal shows the single opaque
-			// connecting cover (not the replay cover), with a bare "Connecting".
 			expect(screen.getByTestId("terminal-connecting-cover")).toHaveTextContent("Connecting");
 			expect(terminalSessionOptions.at(-1)?.waitForInitialOutput).toBe(true);
 		} finally {
@@ -885,8 +869,6 @@ describe("TerminalPane replay cover", () => {
 		hasAttached.value = true;
 		const view = renderPane({ ...worker, terminalHandleId: "term-1" });
 		try {
-			// An open timeout lifts the cover and the backoff reconnect would pull
-			// it straight back down; the banner explains this window better.
 			expect(screen.queryByTestId("terminal-replay-cover")).not.toBeInTheDocument();
 			expect(screen.getByText("Terminal disconnected — reattaching…")).toBeInTheDocument();
 		} finally {
@@ -922,8 +904,6 @@ describe("TerminalCacheProvider", () => {
 			expect(document.querySelector("[data-terminal-cache-key]")).toBeNull();
 			const unmounts = xtermUnmounts.value;
 			act(() => { view.queryClient.setQueryData(shellTerminalsQueryKey, []); });
-			// Transient auth commands may exit before attachment; list pruning must
-			// leave the caller-owned pane mounted to receive the mux exit event.
 			expect(xtermUnmounts.value).toBe(unmounts);
 		} finally {
 			view.restore();
@@ -1021,12 +1001,10 @@ describe("TerminalCacheProvider", () => {
 			await waitFor(() => expect(within(screen.getByTestId("right-pane")).getByTestId("xterm")).toBeInTheDocument());
 			const hostA = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionA.id}:worker|"]`);
 			const hostB = document.querySelector<HTMLElement>(`[data-terminal-cache-key^="session:${sessionB.id}:worker|"]`);
-			// Both panes are on screen at once: neither terminal is parked.
 			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
 			expect(hostB).toHaveAttribute("data-terminal-activation-phase", "visible");
 			const mounts = xtermMounts.value;
 
-			// A moves to the right pane and B leaves: A's live renderer is re-parented.
 			view.rerender(tree(undefined, sessionA));
 			await waitFor(() => expect(screen.getByTestId("right-pane").contains(hostA)).toBe(true));
 			expect(hostA).toHaveAttribute("data-terminal-activation-phase", "visible");
@@ -1131,10 +1109,6 @@ describe("TerminalCacheProvider", () => {
 	});
 
 	it("adopts a fresh cloud worker's first epoch in place without remounting", async () => {
-		// A fresh cloud worker attaches before its sandbox is up, while the epoch is
-		// still unknown; the moment the worker comes online the polled epoch flips
-		// from undefined to its first value. That must NOT remount the just-attached
-		// pane, which the user would see as connected -> blank -> terminal.
 		const cloud = { orgId: "cloud-org" } as const;
 		const connecting = { ...sessionA, cloud, terminalGeneration: undefined };
 		const online = { ...connecting, terminalGeneration: "5605" };
@@ -1146,15 +1120,11 @@ describe("TerminalCacheProvider", () => {
 				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([online]));
 			});
 			view.show(online);
-			// The reconcile loop runs on the query update; adoption is synchronous, so
-			// no remount and no second attach should ever occur.
 			expect(activeXterm()).toBe(terminal);
 			expect(xtermMounts.value).toBe(1);
 			expect(xtermUnmounts.value).toBe(0);
 			expect(attachMock).toHaveBeenCalledTimes(1);
 
-			// A genuine later epoch advance (idle-resume) still re-mints, proving the
-			// adopted epoch was recorded rather than ignored.
 			const resumed = { ...online, terminalGeneration: "5606" };
 			act(() => {
 				view.queryClient.setQueryData(workspaceQueryKey, workspaceWithSessions([resumed]));
@@ -1186,10 +1156,6 @@ describe("TerminalCacheProvider", () => {
 	});
 
 	it("keeps the terminal on screen for a session the snapshot does not list yet", async () => {
-		// A session opened before the snapshot lists it (created through the API,
-		// or in a project the list has not fetched yet): its slot activates an
-		// entry only when it mounts, so disposing it would leave the pane empty
-		// (and the startup loader up) until the user navigated away and back.
 		const view = renderCachedPane({ session: sessionA, sessions: [sessionB] });
 		try {
 			const terminalA = await waitFor(() => activeXterm());
@@ -1201,8 +1167,6 @@ describe("TerminalCacheProvider", () => {
 			expect(activeXterm()).toBe(terminalA);
 			expect(xtermUnmounts.value).toBe(0);
 
-			// Leaving it disposes it, though no later snapshot arrives: parked,
-			// it would outlive its session until one did.
 			view.show(sessionB);
 			await waitFor(() => expect(activeXterm()).not.toBe(terminalA));
 			await waitFor(() => expect(terminalA.isConnected).toBe(false));
@@ -1213,8 +1177,6 @@ describe("TerminalCacheProvider", () => {
 	});
 
 	it("disposes a terminal opened before the snapshot lists its session when it leaves the screen", async () => {
-		// No snapshot arrives while it is on screen or after: leaving must not
-		// park it for good.
 		const view = renderCachedPane({ session: sessionA, sessions: [sessionB] });
 		try {
 			const terminalA = await waitFor(() => activeXterm());
@@ -1342,7 +1304,6 @@ describe("terminal restore", () => {
 	it("restores an archived Cloud session from the strip through the control plane", async () => {
 		terminalState.value = "exited";
 		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
-		// Restore finds a Cloud session in the Cloud listing, which keeps archived rows.
 		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
 		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
 		try {
@@ -1352,15 +1313,11 @@ describe("terminal restore", () => {
 			expect(postMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/restore", expect.anything());
 		} finally {
 			view.restore();
-			// The restore leaves the session waiting for its new box; later tests reuse its id.
 			useTerminalResetStore.getState().markConnected(worker.id);
 		}
 	});
 
 	it("offers no Restore to a guest on an archived Cloud session shared with them", () => {
-		// Only the sharer's organization restores a session; a guest's restore
-		// would not even reach the control plane (the session is not in their
-		// own Cloud listing), it would go to this machine's daemon instead.
 		terminalState.value = "exited";
 		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1", shared: true }, terminalHandleId: "term-1" });
 		try {
@@ -1394,8 +1351,6 @@ describe("terminal restore", () => {
 		}
 	});
 
-	// The agent process died but the session row did not. Recovery here is
-	// resume-agent (keeps worktree + native conversation), never restore.
 	describe("agent exited while the session row is alive", () => {
 		const exited = {
 			activity: { state: "exited", lastActivityAt: "2026-06-10T00:00:00Z" },
@@ -1422,9 +1377,6 @@ describe("terminal restore", () => {
 			}
 		});
 
-		// An agent can exit while its pane survives on a keep-alive, so the mux
-		// never reports "exited". Without sessionAgentExited in showEndedState the
-		// whole strip stays hidden and the only recovery control goes with it.
 		it("shows the strip even when the mux never reported an exit", () => {
 			terminalState.value = "attached";
 			const view = renderPane({ ...orchestrator, ...exited });
@@ -1452,8 +1404,6 @@ describe("terminal restore", () => {
 			},
 		);
 
-		// A Cloud session's exited agent restarts in its live worker through the
-		// control plane (ResumeAgentControl), never through the local daemon.
 		it("offers resume for a cloud session whose agent exited", () => {
 			terminalState.value = "exited";
 			const view = renderPane({
@@ -1497,8 +1447,6 @@ describe("terminal restore", () => {
 		try {
 			const restore = screen.getByRole("button", { name: "Restore session" });
 			expect(restore).toBeInTheDocument();
-			// The restore action must be a visible labeled CTA, not an icon-only
-			// button floating in the corner of the strip (issue #3300).
 			expect(restore).toHaveTextContent("Restore session");
 		} finally {
 			view.restore();
@@ -1542,9 +1490,6 @@ describe("terminal restore", () => {
 });
 
 describe("providerScrollsByKeyboard", () => {
-	// opencode, its derivatives kilocode and MiMo Code, and grok use TUIs that scroll their own transcripts
-	// by keyboard and ignore SGR wheel reports, so they must opt into the
-	// PageUp/PageDown wheel routing (see XtermTerminal's paneScrollsByKeyboard).
 	it("is true for keyboard-scroll TUIs", () => {
 		expect(providerScrollsByKeyboard("opencode")).toBe(true);
 		expect(providerScrollsByKeyboard("opencode-v2")).toBe(true);
@@ -1556,8 +1501,6 @@ describe("providerScrollsByKeyboard", () => {
 	it("is false for mouse-report/native-scroll providers", () => {
 		expect(providerScrollsByKeyboard("codex")).toBe(false);
 		expect(providerScrollsByKeyboard("claude-code")).toBe(false);
-		// Muse writes its transcript to the normal buffer. PageUp is ignored by
-		// Muse, so wheel input must stay on the SGR -> tmux copy-mode path.
 		expect(providerScrollsByKeyboard("muse")).toBe(false);
 	});
 

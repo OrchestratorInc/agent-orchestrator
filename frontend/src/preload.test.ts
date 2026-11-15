@@ -33,9 +33,6 @@ vi.mock("electron", () => ({
 
 await import("./preload");
 
-// Captured once, before any test's beforeEach clears the listeners map: this
-// is the always-on buffering listener preload.ts registers at module load,
-// not the per-call listener onOpenFolderPath registers when invoked.
 const openFolderPathBufferListener = electronMocks.listeners.get("app:openFolderPath");
 const sessionDeepLinkBufferListener = electronMocks.listeners.get(OPEN_SESSION_DEEP_LINK_CHANNEL);
 const openSettingsBufferListener = electronMocks.listeners.get(OPEN_SETTINGS_SHORTCUT_CHANNEL);
@@ -92,8 +89,6 @@ describe("preload session deep link bridge", () => {
 	});
 
 	it("buffers a deep link that arrives before ShellLayout subscribes", () => {
-		// Mirrors the cold-start race: main flushes on renderer ready (a child
-		// effect) before ShellLayout's parent effect has subscribed.
 		sessionDeepLinkBufferListener?.({}, "ao-app://sessions/proj-1/sess-9");
 
 		const listener = vi.fn();
@@ -102,7 +97,6 @@ describe("preload session deep link bridge", () => {
 		expect(listener).toHaveBeenCalledTimes(1);
 		expect(listener).toHaveBeenCalledWith("ao-app://sessions/proj-1/sess-9");
 
-		// The buffer is drained, not replayed on later resubscription.
 		const lateListener = vi.fn();
 		const lateDispose = exposedBridge().app.onOpenSessionDeepLink(lateListener);
 		expect(lateListener).not.toHaveBeenCalled();
@@ -123,8 +117,6 @@ describe("preload session deep link bridge", () => {
 	});
 
 	it("buffers a deep link that arrives between disposal and resubscription", () => {
-		// Same semantics as onOpenFolderPath: disposal is a temporary
-		// unsubscribe (effect cleanup/re-subscribe), so nothing is lost.
 		const listener = vi.fn();
 		const dispose = exposedBridge().app.onOpenSessionDeepLink(listener);
 		dispose();
@@ -211,10 +203,6 @@ describe("preload telemetry generation bridge", () => {
 });
 
 describe("preload openFolderPath bridge", () => {
-	// The dispatcher's "active listener" is module-level state that outlives a
-	// single test, exactly like the real renderer's mounted subscription — so
-	// every test below disposes its own subscription before finishing, the same
-	// way a real unmount would, to avoid leaking into the next test.
 	let dispose: (() => void) | undefined;
 
 	afterEach(() => {
@@ -223,11 +211,6 @@ describe("preload openFolderPath bridge", () => {
 	});
 
 	it("replays a folder path that arrived before onOpenFolderPath was called", () => {
-		// Regression: cold start / an early second-instance can flush
-		// app:openFolderPath before ShellLayout's own effect has run to call
-		// onOpenFolderPath and register its listener (React mounts TrayRuntime's
-		// child effect, whose ready-ping triggers the main-process flush, before
-		// ShellLayout's own parent effect). Without buffering, that path was lost.
 		openFolderPathBufferListener?.({}, "/dropped/via-icon");
 
 		const listener = vi.fn();
@@ -257,10 +240,6 @@ describe("preload openFolderPath bridge", () => {
 	});
 
 	it("does not replay a normally delivered path to a later resubscription", () => {
-		// Regression: a single dispatcher forwards straight to the active
-		// listener without ever touching the buffer, so unsubscribing and
-		// resubscribing afterward must not hand the new listener a path that
-		// was already delivered while the first listener was active.
 		const firstListener = vi.fn();
 		const disposeFirst = exposedBridge().app.onOpenFolderPath(firstListener);
 
@@ -371,9 +350,6 @@ describe("preload application shortcut bridges", () => {
 		expect(electronMocks.off).toHaveBeenCalledWith(channel, wrapped);
 	});
 
-	// The settings channel uses the module-load dispatcher-and-buffer instead
-	// of a per-subscription listener: a billing return flushed on the shell's
-	// readiness ping races ShellLayout's subscription (CodeRabbit round 5).
 	it("delivers an open-settings event sent after subscription", () => {
 		const listener = vi.fn();
 		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
@@ -391,7 +367,6 @@ describe("preload application shortcut bridges", () => {
 		expect(listener).toHaveBeenCalledTimes(1);
 		expect(listener).toHaveBeenCalledWith("billing");
 
-		// The buffer drains: a later subscription gets nothing replayed.
 		const lateListener = vi.fn();
 		const lateDispose = exposedBridge().app.onOpenSettingsShortcut(lateListener);
 		expect(lateListener).not.toHaveBeenCalled();
@@ -400,9 +375,6 @@ describe("preload application shortcut bridges", () => {
 	});
 
 	it("replays an open-settings event that arrives after disposal, on resubscription", () => {
-		// Disposal is a temporary unsubscribe (effect cleanup/re-subscribe), so
-		// an event in that window waits for the next listener, like the folder
-		// and deep-link channels.
 		const listener = vi.fn();
 		const dispose = exposedBridge().app.onOpenSettingsShortcut(listener);
 		dispose();
@@ -594,7 +566,6 @@ describe("preload cloud binary requests", () => {
 		bridge.cancelBinary("other");
 		expect(electronMocks.send).toHaveBeenCalledWith("cloudCp:cancelBinary", "other");
 		electronMocks.send.mockClear();
-		// A reload: what still runs is cancelled, not what already finished.
 		window.dispatchEvent(new Event("pagehide"));
 		expect(electronMocks.send.mock.calls).toEqual([["cloudCp:cancelBinary", "running"]]);
 		electronMocks.send.mockClear();

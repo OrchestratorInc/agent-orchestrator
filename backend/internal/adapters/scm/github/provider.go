@@ -20,19 +20,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ciFailureLogTailLines is the number of trailing lines of a failed job's
-// log we splice into the observation. 20 lines is enough to catch the
-// usual "X tests failed" tail without bloating the per-PR row.
 const ciFailureLogTailLines = 20
 
-// ProviderOptions configures a Provider. Production code typically sets
-// Token; tests inject a pre-built Client pointed at httptest.
 type ProviderOptions struct {
-	Client     *Client
-	HTTPClient *http.Client
-	Token      TokenSource
-	// SkipTokenPreflight defers token validation until the first provider call.
-	// Daemon wiring uses this so gh-token shell-out never blocks readiness.
+	Client             *Client
+	HTTPClient         *http.Client
+	Token              TokenSource
 	SkipTokenPreflight bool
 	RESTBase           string
 	GraphQLURL         string
@@ -40,28 +33,16 @@ type ProviderOptions struct {
 	Logger             *slog.Logger
 }
 
-// Provider observes one GitHub pull request and returns a normalized
-// ports.PRObservation for the PR Manager to persist. There is no polling
-// loop in v1 — the loop is a follow-up PR (#35); this adapter is the
-// observation primitive that loop will call.
 type Provider struct {
 	client           *Client
 	logger           *slog.Logger
 	identityMu       sync.Mutex
 	identity         ports.SCMIdentity
 	identityResolved bool
-	// now and randomSuffix name comment attachments; tests pin them, and nil
-	// means the wall clock and crypto/rand.
-	now          func() time.Time
-	randomSuffix func() string
+	now              func() time.Time
+	randomSuffix     func() string
 }
 
-// NewProvider returns a Provider. If opts.Client is supplied it is used
-// verbatim; otherwise a Client is built from the other options. When a
-// Token source is supplied it is exercised once so missing credentials
-// surface at daemon startup rather than at first observation, unless
-// SkipTokenPreflight is set. Tests that want an unauthenticated fake pass
-// opts.Client directly.
 func NewProvider(opts ProviderOptions) (*Provider, error) {
 	if opts.Client == nil && opts.Token != nil && !opts.SkipTokenPreflight {
 		if _, err := opts.Token.Token(context.Background()); err != nil {
@@ -85,10 +66,6 @@ func NewProvider(opts ProviderOptions) (*Provider, error) {
 	return &Provider{client: c, logger: logger}, nil
 }
 
-// SCMCredentialsAvailable checks whether this provider can obtain a token. The
-// SCM observer calls it lazily during the first poll that has SCM subjects, so
-// daemon readiness is not blocked by shelling out to gh auth token and idle
-// daemons do not warn about missing credentials.
 func (p *Provider) SCMCredentialsAvailable(ctx context.Context) (bool, error) {
 	if p.client == nil || p.client.tokens == nil {
 		return true, nil
@@ -102,8 +79,6 @@ func (p *Provider) SCMCredentialsAvailable(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// AuthenticatedIdentity returns the account associated with the active GitHub
-// token. Successful results are cached for the provider's lifetime.
 func (p *Provider) AuthenticatedIdentity(ctx context.Context) (ports.SCMIdentity, error) {
 	p.identityMu.Lock()
 	defer p.identityMu.Unlock()
@@ -129,10 +104,6 @@ func (p *Provider) AuthenticatedIdentity(ctx context.Context) (ports.SCMIdentity
 	return p.identity, nil
 }
 
-// Observe fetches the current state of one PR by its github.com URL and
-// returns a normalized ports.PRObservation. Any required network call
-// failing yields Fetched=false (caller must not infer "PR closed" from a
-// failed observation).
 func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservation, error) {
 	out := ports.PRObservation{URL: prURL}
 	owner, repo, number, err := parsePRURL(prURL)
@@ -143,9 +114,6 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 
 	rest, err := p.fetchRESTPull(ctx, owner, repo, number)
 	if err != nil {
-		// Network/auth/rate-limit failures must surface as Fetched:false.
-		// Stable terminal states like 404 also surface that way — the PR
-		// Manager keeps the prior row rather than fabricating closed/merged.
 		return out, scmObserveError(err)
 	}
 
@@ -165,9 +133,6 @@ func (p *Provider) Observe(ctx context.Context, prURL string) (ports.PRObservati
 	out.Checks = checksFromGraphQL(gq, rest.Head.SHA)
 	out.Comments = commentsFromGraphQL(gq)
 
-	// Log-tail enrichment is best-effort: a job-log fetch failure must not
-	// flip the observation to Fetched:false, because we already have the
-	// authoritative CI summary from GraphQL. Stamp a one-liner instead.
 	for i := range out.Checks {
 		if !isFailingCheckStatus(out.Checks[i].Status) {
 			continue
@@ -194,10 +159,6 @@ func scmObserveError(err error) error {
 	}
 	return err
 }
-
-// ---------------------------------------------------------------------------
-// REST: pull payload
-// ---------------------------------------------------------------------------
 
 type restPull struct {
 	State    string `json:"state"`
@@ -226,32 +187,10 @@ func (p *Provider) fetchRESTPull(ctx context.Context, owner, repo string, number
 	return pull, nil
 }
 
-// ---------------------------------------------------------------------------
-// GraphQL: the heavy lift
-// ---------------------------------------------------------------------------
-
-// graphQLCheckContextLimit caps how many statusCheckRollup contexts we
-// request in one GraphQL hop. 100 is GitHub's documented per-page max
-// for the contexts connection. When the rollup has MORE than this many
-// contexts the response surfaces pageInfo.hasNextPage=true and
-// ciSummaryFromGraphQL is conservative (see the "CIUnknown on
-// hasNextPage when not already CIFailing" branch — a partial visible
-// set could hide a failure, so we degrade the verdict rather than
-// risk reporting a broken PR as passing).
 const graphQLCheckContextLimit = 100
 
-// checkRunFields is the CheckRun selection every rollup query uses. The
-// workflow name and event identify which runs are reruns of the same check
-// (see latestCheckRuns). Suite IDs keep cancellation evidence within one run.
 const checkRunFields = `name status conclusion detailsUrl url databaseId checkSuite{ conclusion id workflowRun{ event workflow{ name } } }`
 
-// prObservationQuery is the GraphQL query (derived from PR #28, credited
-// to @whoisasx) that pulls everything we need in one round trip:
-//   - reviewDecision (APPROVED / CHANGES_REQUESTED / REVIEW_REQUIRED / null)
-//   - mergeable + mergeStateStatus (DIRTY / BLOCKED / UNSTABLE / CLEAN / ...)
-//   - latest commit's statusCheckRollup (CheckRuns + StatusContexts) so we
-//     can derive a CIState without an extra REST hop, and so that bot vs
-//     human is detected via __typename on review comments.
 const prObservationQuery = `query($owner:String!,$repo:String!,$number:Int!){
   repository(owner:$owner,name:$repo){
     pullRequest(number:$number){
@@ -310,10 +249,6 @@ func (p *Provider) fetchGraphQL(ctx context.Context, owner, repo string, number 
 	return pr, nil
 }
 
-// ---------------------------------------------------------------------------
-// REST: per-job log tail
-// ---------------------------------------------------------------------------
-
 func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobID int64) (string, error) {
 	logPath := repoPath(owner, repo, "actions", "jobs", strconv.FormatInt(jobID, 10), "logs")
 	body, err := p.client.fetchPlainText(ctx, logPath)
@@ -323,8 +258,6 @@ func (p *Provider) fetchJobLogTail(ctx context.Context, owner, repo string, jobI
 	return string(body), nil
 }
 
-// Cancellation alone cannot explain a failure. Require a gate-only script and
-// cancelled siblings, with no other failure in the complete, unfiltered run.
 func (p *Provider) markCancelledGateFailures(ctx context.Context, owner, repo string, pr map[string]any) {
 	contexts := statusContexts(pr)
 	if pageInfoHasMore(contexts) {
@@ -356,8 +289,6 @@ func (p *Provider) markCancelledGateFailures(ctx context.Context, owner, repo st
 	}
 }
 
-// Recognize the dependency-only assertions in the observed gate logs. Unknown
-// scripts or unreadable logs retain their failures; job names prove nothing.
 func cancellationGateLog(log string) bool {
 	parts := strings.Split(ansi.Strip(log), "##[group]Run ")
 	if len(parts) != 2 {
@@ -365,7 +296,7 @@ func cancellationGateLog(log string) bool {
 	}
 	commands, cancelled := 0, false
 	for _, raw := range strings.Split(parts[1], "\n")[1:] {
-		_, line, _ := strings.Cut(raw, " ") // Actions timestamps precede each line.
+		_, line, _ := strings.Cut(raw, " ")
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "shell:") {
 			return commands > 0 && cancelled
@@ -387,22 +318,6 @@ func cancellationGateLog(log string) bool {
 	return false
 }
 
-// ---------------------------------------------------------------------------
-// Projection helpers
-// ---------------------------------------------------------------------------
-
-// ciSummaryFromGraphQL maps the per-PR status rollup onto domain.CIState.
-// If ANY visible context concluded failure-class we return CIFailing.
-// Otherwise any pending context wins over passing. A cancelled check is
-// not a failure: it usually means a replacement run is on its way, which
-// the pending case reports. With nothing running, a cancelled check (say,
-// one stopped by hand) settles as CIUnknown even beside passing checks:
-// it proved nothing, so AO must not report the PR as passing. An empty
-// rollup is CIUnknown. When the rollup is paginated (pageInfo.hasNextPage=true)
-// the verdict is conservative: a known failure is still safe — failures
-// don't get un-failed by more pages — but passing/pending/unknown
-// verdicts could hide a failing context on the next page, so we degrade
-// them all to CIUnknown rather than risk reporting a broken PR as ready.
 func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	roll := statusRollup(pr)
 	if roll == nil {
@@ -411,9 +326,6 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	contexts, _ := roll["contexts"].(map[string]any)
 	rawNodes := latestCheckRuns(nodes(contexts["nodes"]))
 	if len(rawNodes) == 0 {
-		// GitHub returns a top-level "state" on the rollup even when the
-		// nodes list is empty (e.g. SUCCESS / FAILURE / PENDING). Honor it
-		// rather than returning CIUnknown for an otherwise-decided PR.
 		return mapRollupState(str(roll["state"]))
 	}
 	pending, passing, cancelled := false, false, false
@@ -445,10 +357,6 @@ func ciSummaryFromGraphQL(pr map[string]any) domain.CIState {
 	}
 }
 
-// pageInfoHasMore reports whether the rollup contexts have a next page
-// the current request didn't fetch. We treat a missing pageInfo block
-// as "no more" (older API shapes that don't expose pagination simply
-// return everything in one page).
 func pageInfoHasMore(contexts map[string]any) bool {
 	pi, ok := contexts["pageInfo"].(map[string]any)
 	if !ok {
@@ -470,9 +378,6 @@ func mapRollupState(s string) domain.CIState {
 	}
 }
 
-// reviewDecisionFromGraphQL normalizes the GraphQL reviewDecision enum
-// onto the domain vocabulary. Re-implemented inline because the helper
-// referenced in the task brief lived against types that no longer exist.
 func reviewDecisionFromGraphQL(pr map[string]any) domain.ReviewDecision {
 	switch strings.ToUpper(strings.TrimSpace(str(pr["reviewDecision"]))) {
 	case "APPROVED":
@@ -486,19 +391,7 @@ func reviewDecisionFromGraphQL(pr map[string]any) domain.ReviewDecision {
 	}
 }
 
-// mergeabilityFromGraphQL composes the merge verdict from three signals:
-// the REST mergeable/rebaseable booleans, the GraphQL mergeStateStatus,
-// and the already-derived CIState + ReviewDecision. The rules follow the
-// spec table in doc.go.
 func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState, review domain.ReviewDecision) domain.Mergeability {
-	// REST's mergeable_state is the tiebreaker: GraphQL's
-	// mergeStateStatus enum (DIRTY / BLOCKED / UNSTABLE / CLEAN /
-	// UNKNOWN) is the primary; if it is empty we fall back to the
-	// REST string (lowercase: "dirty" / "blocked" / "unstable" /
-	// "clean" / "behind" / "unknown") uppercased so the same switch
-	// covers both shapes. The REST API does NOT expose a
-	// `merge_state_status` field — earlier revs of this code chased
-	// that ghost; we use mergeable_state instead.
 	state := strings.ToUpper(strings.TrimSpace(firstNonEmpty(str(pr["mergeStateStatus"]), rest.MergeableState)))
 	rawMergeable := strings.ToUpper(strings.TrimSpace(str(pr["mergeable"])))
 
@@ -524,9 +417,6 @@ func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState
 		return domain.MergeBlocked
 	}
 
-	// REST's mergeable_state ("clean" / "blocked" / "behind" / "dirty" / "unstable"
-	// / "draft" / "unknown") backs up the GraphQL view when GitHub hasn't
-	// computed the rollup yet.
 	switch strings.ToLower(strings.TrimSpace(rest.MergeableState)) {
 	case "clean":
 		if rawMergeable == "MERGEABLE" || (rest.Mergeable != nil && *rest.Mergeable) {
@@ -546,9 +436,6 @@ func mergeabilityFromGraphQL(pr map[string]any, rest restPull, ci domain.CIState
 	return domain.MergeUnknown
 }
 
-// checksFromGraphQL projects each context node into a PRCheckObservation.
-// StatusContext (commit-status) and CheckRun (Actions) are both flattened
-// into the same slice because downstream consumers don't distinguish.
 func checksFromGraphQL(pr map[string]any, headSHA string) []ports.PRCheckObservation {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
@@ -583,9 +470,6 @@ func checksFromGraphQL(pr map[string]any, headSHA string) []ports.PRCheckObserva
 	return out
 }
 
-// commentsFromGraphQL flattens unresolved review threads into one comment
-// per node, dropping bot authors entirely (the spec keeps Resolved=false
-// always since we filter resolved threads out client-side).
 func commentsFromGraphQL(pr map[string]any) []ports.PRCommentObservation {
 	threads, _ := pr["reviewThreads"].(map[string]any)
 	rawNodes := nodes(threads["nodes"])
@@ -620,10 +504,6 @@ func commentsFromGraphQL(pr map[string]any) []ports.PRCommentObservation {
 	return out
 }
 
-// isBotAuthor uses ONLY GitHub's typed signal (__typename or User.Type
-// === "Bot"). The strings.Contains(login, "bot") fallback from PR #28
-// was deliberately dropped — aa-18 flagged it as a false-positive
-// magnet (logins like "robothon", "lambot123" tripped it).
 func isBotAuthor(author map[string]any) bool {
 	if strings.EqualFold(str(author["__typename"]), "Bot") {
 		return true
@@ -634,10 +514,6 @@ func isBotAuthor(author map[string]any) bool {
 	return false
 }
 
-// jobIDForCheck looks up the Actions job ID for a check by name, so we
-// can call /actions/jobs/{job_id}/logs. StatusContext rows have no job
-// ID (they're commit statuses, not Actions runs); those return 0 and
-// the log fetch is skipped for them.
 func jobIDForCheck(pr map[string]any, name string) int64 {
 	roll := statusRollup(pr)
 	contexts, _ := roll["contexts"].(map[string]any)
@@ -653,14 +529,6 @@ func jobIDForCheck(pr map[string]any, name string) int64 {
 	return 0
 }
 
-// latestCheckRuns drops check runs that a newer run of the same check
-// superseded on this commit. statusCheckRollup keeps every workflow run on the
-// SHA (one cancelled when the workflow re-ran, a failed attempt before a green
-// rerun) and GitHub's rollup state counts them, while GitHub's checks list and
-// `gh pr checks` show only the newest run per workflow, event and job. Check
-// run IDs grow, so the highest databaseId is the newest. A run without a
-// readable workflowRun (another app, or a token without Actions access) is
-// always kept: it can't be matched to its reruns.
 func latestCheckRuns(in []map[string]any) []map[string]any {
 	newest := map[string]float64{}
 	for _, n := range in {
@@ -691,9 +559,6 @@ func checkRunKey(n map[string]any) string {
 	return strings.Join([]string{str(workflow["name"]), str(run["event"]), str(n["name"])}, "\x00")
 }
 
-// statusRollup extracts the commits[0].commit.statusCheckRollup blob
-// from the GraphQL pullRequest payload. Nil when the PR has no commits
-// or GitHub hasn't computed the rollup yet.
 func statusRollup(pr map[string]any) map[string]any {
 	commits, _ := pr["commits"].(map[string]any)
 	for _, n := range nodes(commits["nodes"]) {
@@ -706,9 +571,6 @@ func statusRollup(pr map[string]any) map[string]any {
 	return nil
 }
 
-// checkStatusFromGraphQL maps the (status, conclusion) tuple of one node
-// onto the domain enum. Failure-class conclusions always win — pending
-// status with a final conclusion of "failure" is still a failed check.
 func checkStatusFromGraphQL(n map[string]any) domain.PRCheckStatus {
 	typ := str(n["__typename"])
 	if typ == "StatusContext" {
@@ -746,16 +608,11 @@ func checkStatusFromGraphQL(n map[string]any) domain.PRCheckStatus {
 	case "IN_PROGRESS":
 		return domain.PRCheckInProgress
 	case "COMPLETED":
-		// Completed without a conclusion is unusual but reachable — treat
-		// it as unknown so the caller does not over-trust an absent state.
 		return domain.PRCheckUnknown
 	}
 	return domain.PRCheckUnknown
 }
 
-// checkSuiteConclusion is the upper-cased conclusion of the check suite a
-// CheckRun belongs to, or "" while the suite is running or when the field is
-// missing.
 func checkSuiteConclusion(n map[string]any) string {
 	suite, _ := n["checkSuite"].(map[string]any)
 	return strings.ToUpper(strings.TrimSpace(str(suite["conclusion"])))
@@ -765,14 +622,6 @@ func isFailingCheckStatus(s domain.PRCheckStatus) bool {
 	return s == domain.PRCheckFailed
 }
 
-// ---------------------------------------------------------------------------
-// URL + path helpers
-// ---------------------------------------------------------------------------
-
-// parsePRURL accepts both the canonical github.com web URL and the API
-// pulls URL. Returns owner, repo, number or an error wrapping ErrNotFound
-// for shapes we don't recognise (so the caller surfaces them like any
-// other "PR isn't on GitHub" outcome).
 func parsePRURL(prURL string) (string, string, int, error) {
 	if prURL == "" {
 		return "", "", 0, fmt.Errorf("%w: empty PR url", ErrNotFound)
@@ -782,23 +631,14 @@ func parsePRURL(prURL string) (string, string, int, error) {
 		return "", "", 0, fmt.Errorf("%w: parse url: %w", ErrNotFound, err)
 	}
 	host := strings.ToLower(u.Host)
-	// Accept github.com (web) and api.github.com (REST/GraphQL). GitHub
-	// Enterprise hosts must end in .github.com or .ghe.io (GitHub's own
-	// dedicated TLDs); anything else looks like a bad URL or a different
-	// SCM and is rejected.
 	switch {
 	case host == "":
-		// Allow path-only URLs (parsePRURL is also exercised via API
-		// paths without a host in some tests).
 	case host == "github.com", host == "www.github.com", host == "api.github.com":
-		// canonical
 	case strings.HasSuffix(host, ".github.com") || strings.HasSuffix(host, ".ghe.io"):
-		// enterprise
 	default:
 		return "", "", 0, fmt.Errorf("%w: host %q is not a github host", ErrNotFound, host)
 	}
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	// Web form: /owner/repo/pull/123
 	if len(parts) >= 4 && (parts[2] == "pull" || parts[2] == "pulls") {
 		owner, repo := parts[0], parts[1]
 		n, err := strconv.Atoi(parts[3])
@@ -807,7 +647,6 @@ func parsePRURL(prURL string) (string, string, int, error) {
 		}
 		return owner, repo, n, nil
 	}
-	// API form: /repos/owner/repo/pulls/123
 	if len(parts) >= 5 && parts[0] == "repos" && parts[3] == "pulls" {
 		owner, repo := parts[1], parts[2]
 		n, err := strconv.Atoi(parts[4])
@@ -826,10 +665,6 @@ func repoPath(owner, repo string, elems ...string) string {
 	}
 	return "/" + path.Join(all...)
 }
-
-// ---------------------------------------------------------------------------
-// Small JSON-ish accessors
-// ---------------------------------------------------------------------------
 
 func nodes(v any) []map[string]any {
 	a, ok := v.([]any)
@@ -916,9 +751,6 @@ func tailLines(s string, n int) string {
 	return strings.Join(lines, "\n")
 }
 
-// scrubError keeps the error message single-line so the LogTail field
-// stays a tidy one-liner instead of leaking multi-line API payloads
-// into the PR row.
 func scrubError(err error) string {
 	if err == nil {
 		return ""

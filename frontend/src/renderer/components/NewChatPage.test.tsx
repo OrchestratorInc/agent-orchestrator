@@ -39,7 +39,6 @@ vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => h.navigate,
 	useRouter: () => ({ preloadRoute: async () => undefined, history: { canGoBack: () => false, back: vi.fn() } }),
 }));
-// What the settings bar's agent and model picker is given; the picker is tested on its own.
 const modelPicker = vi.hoisted(() => ({ current: undefined as PickerSource | undefined }));
 vi.mock("./chat/AgentSwitchPicker", async (original) => ({
 	...await original<typeof import("./chat/AgentSwitchPicker")>(),
@@ -168,8 +167,6 @@ describe("NewChatPage", () => {
 
 		let sent!: Promise<unknown>;
 		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")); });
-		// While the session is created the brief is already the user's turn; only the
-		// project picker leaves, and the agent, model, and effort hold still.
 		expect(h.workspace?.localEchos).toEqual([expect.objectContaining({ clientMessageId: "cid-1", text: "Fix the build" })]);
 		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: expect.objectContaining({
 			harness: "codex",
@@ -205,22 +202,18 @@ describe("NewChatPage", () => {
 		h.launch.mockResolvedValue("cloud-sess-1");
 		const queryClient = renderPage();
 		const queryClientEchos = () => queryClient.getQueryData(["conversation-local-echos"]);
-		// No hand-over to the old dialog: the page stays and offers the same composer.
 		expect(h.navigate).not.toHaveBeenCalled();
 		expect(h.workspace?.holdAttachments).toBe(false);
 		expect(h.workspace?.skills).toEqual([]);
-		// The settings bar (inside the draft's fragment) offers the approval mode.
 		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({ props: expect.objectContaining({ showApprovalMode: true }) }) } }));
 		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-1"); });
 		expect(h.launch).toHaveBeenCalledWith("Fix the build", expect.objectContaining({ clientRequestId: "cid-1" }));
-		// A cloud session opens on its own surface, so no local echo is seeded for it.
 		expect(queryClientEchos()).toBeUndefined();
 		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "cloud-sess-1" } })));
 	});
 
 	it("offers Cloud sessions beside the local one where Cloud starts standalone agents", async () => {
 		const user = userEvent.setup();
-		// The project picker sits in the composer's tray.
 		const openPicker = async () => {
 			cleanup();
 			render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
@@ -239,8 +232,6 @@ describe("NewChatPage", () => {
 		expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/new", search: expect.objectContaining({ project: CLOUD_STANDALONE_WORKSPACE_ID }) }));
 	});
 
-	// A Cloud standalone agent starts without files: its own project comes
-	// with its session, so a start the files did not reach would leave it behind.
 	it("offers files on a Cloud project's task where the control plane takes them, and not on a Cloud standalone agent", () => {
 		h.isCloudProject = true;
 		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: ["attachments", "standalone_agents"], maxAttachmentBytes: 25 * 1024 * 1024 };
@@ -252,14 +243,9 @@ describe("NewChatPage", () => {
 		render(<QueryClientProvider client={new QueryClient()}><NewChatPage projectId={CLOUD_STANDALONE_WORKSPACE_ID} /></QueryClientProvider>);
 		expect(h.workspace?.holdAttachments).toBe(false);
 		expect(h.workspace?.cloudAttachments).toBeUndefined();
-		// A draft that brought files from another target keeps them, with why this one takes none.
 		expect(h.workspace?.attachmentsRefusal).toBe("Files can't start a standalone agent. Remove them to continue.");
 	});
 
-	// A send whose answer was lost keeps the files it went with until its
-	// outcome is known, even if the target stopped taking files meanwhile:
-	// its retry carries them under the same request, and only a new send
-	// meets the refusal.
 	it("keeps a pending send's files held, without the refusal, until its outcome is known", async () => {
 		h.isCloudProject = true;
 		h.offering = { ready: true, loaded: true, org: { id: "org-1" }, features: [], maxAttachmentBytes: undefined };
@@ -310,7 +296,6 @@ describe("NewChatPage", () => {
 
 		let sent!: Promise<unknown>;
 		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch(() => undefined); });
-		// Set before the first message paints, so it lands where the session shows it.
 		expect(useUiStore.getState().newChatSending).toBe(true);
 		await waitFor(() => expect(h.launch).toHaveBeenCalled());
 		await act(async () => {
@@ -319,7 +304,6 @@ describe("NewChatPage", () => {
 		});
 		expect(useUiStore.getState().newChatSending).toBe(false);
 
-		// Leaving mid-send gives the bar back too.
 		h.launch.mockReturnValueOnce(new Promise<string>(() => undefined));
 		act(() => { void Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-2")).catch(() => undefined); });
 		expect(useUiStore.getState().newChatSending).toBe(true);
@@ -415,7 +399,6 @@ describe("NewChatPage", () => {
 		expect(h.navigate).not.toHaveBeenCalled();
 	});
 
-	// A Cloud create's error carries the control plane's HTTP status.
 	const createError = (message: string, status: number, code?: string) =>
 		Object.assign(new Error(message), { name: "TaskCreateError", status, ...(code ? { code } : {}) });
 
@@ -428,7 +411,6 @@ describe("NewChatPage", () => {
 		{ status: 429, code: undefined },
 	])("leaves a $status ($code) answer to a create uncertain, so the composer retries it with the same request id", async ({ status, code }) => {
 		h.isCloudProject = true;
-		// The composer holds the send while it is in flight, as it does in the app.
 		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Fix the build", composerText: "Fix the build", attachments: [] });
 		h.launch.mockRejectedValue(createError("The control plane could not finish the request.", status, code));
 		renderPage();
@@ -436,7 +418,6 @@ describe("NewChatPage", () => {
 		await act(async () => {
 			outcome = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
 		});
-		// The error itself, not a final refusal: the composer keeps the send and offers "Retry message safely".
 		expect(outcome).toMatchObject({ status });
 		expect(outcome).not.toMatchObject({ code: "TASK_CREATE_FAILED" });
 		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}").local).toMatchObject({ clientMessageId: "cid-1" });
@@ -466,7 +447,6 @@ describe("NewChatPage", () => {
 		let sent!: Promise<unknown>;
 		act(() => { sent = Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")); });
 		await waitFor(() => expect(h.launch).toHaveBeenCalled());
-		// The session exists; before the page hands over, a new task opens for another project.
 		await act(async () => {
 			resolve("sess-1");
 			page.showProject("proj-2");
@@ -518,7 +498,6 @@ describe("NewChatPage", () => {
 		await act(async () => {
 			outcome = await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "cid-1")).catch((error: unknown) => error);
 		});
-		// The composer still holds the first attempt, whose outcome is unknown.
 		expect(outcome).toMatchObject({ code: "AGENT_AUTH_REQUIRED" });
 		expect(JSON.parse(window.localStorage.getItem("ao.newTask.pendingLaunch.v1") ?? "{}").local).toMatchObject({ clientMessageId: "cid-1", projectId: "proj-1" });
 		expect(screen.getByRole("alert")).toHaveTextContent("Claude Code needs you to sign in again.");
@@ -623,8 +602,6 @@ describe("New Chat permission menu capabilities", () => {
 });
 
 describe("New Chat model menu", () => {
-	// This computer's Claude Code defaults to Fable, so its saved bar describes its
-	// Default row as Fable 5.2 beside a Fable 5.2 row of its own.
 	const rememberLocalClaudeBar = () => rememberChatSettingsTemplate("claude-code", undefined, { options: [
 		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "default", choices: [
 			{ value: "default", name: "Default (recommended)", description: "Fable 5.2" },
@@ -646,7 +623,6 @@ describe("New Chat model menu", () => {
 		h.model = "sonnet";
 		rememberLocalClaudeBar();
 		const queryClient = renderPage();
-		// Drawn from Cloud's catalog, as the session's own bar is, not from this computer's agent.
 		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
 			props: expect.objectContaining({ models: catalog, configOptions: undefined }),
 		}) } }));
@@ -664,7 +640,6 @@ describe("New Chat model menu", () => {
 		rememberLocalClaudeBar();
 		const queryClient = renderPage();
 		render(<QueryClientProvider client={queryClient}>{h.workspace?.draftSettings}</QueryClientProvider>);
-		// Drawn from the agent's saved controls, which a new task can start with.
 		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({
 			props: expect.objectContaining({ configOptions: [expect.objectContaining({ id: "model", currentValue: "sonnet" })] }),
 		}) } }));

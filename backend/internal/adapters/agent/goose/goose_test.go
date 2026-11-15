@@ -345,7 +345,6 @@ func TestGetAgentHooksInstallsGooseHooks(t *testing.T) {
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must not duplicate AO hook commands.
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +380,6 @@ func TestUninstallHooksRemovesGooseHooks(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own Stop hook; it must survive uninstall.
 	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -686,10 +684,6 @@ func TestGooseIdentityCommandBoundsDescendantHoldingOutputPipes(t *testing.T) {
 	}
 }
 
-// TestGooseIdentityPipeHolder is a subprocess fixture for the production
-// identity command. The parent exits while its child retains both output
-// descriptors; the test above then proves exec.Cmd.WaitDelay closes the
-// command's pipes instead of waiting for that descendant indefinitely.
 func TestGooseIdentityPipeHolder(t *testing.T) {
 	const (
 		modeEnv   = "AO_TEST_GOOSE_WAIT_DELAY_MODE"
@@ -995,9 +989,6 @@ func TestResolveGooseBinaryFallback(t *testing.T) {
 	}
 	t.Cleanup(func() { gooseIdentityCommand = previousCommand })
 
-	// When the binary is not on PATH or any well-known location, the resolver
-	// MUST surface ports.ErrAgentBinaryNotFound rather than a silent string
-	// fallback that lets a missing CLI launch into an empty tmux pane.
 	bin, err := ResolveGooseBinary(context.Background())
 	if !errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		t.Fatalf("err = %v, want ports.ErrAgentBinaryNotFound", err)
@@ -1040,8 +1031,6 @@ func containsSubsequence(values []string, needle []string) bool {
 	return false
 }
 
-// gooseHookFile is the on-disk shape of the hooks file, used to decode and
-// assert on what GetAgentHooks wrote.
 type gooseHookFile struct {
 	Hooks map[string][]hooksjson.MatcherGroup `json:"hooks"`
 }

@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ompConfigDirEnv overrides OMP's session-state root. OMP is a Pi fork and
-// reuses Pi's variable name; it defaults to ~/.omp/agent.
 const ompConfigDirEnv = "PI_CODING_AGENT_DIR"
 
 var (
@@ -24,8 +22,6 @@ var (
 	_ ports.AgentImportedSessionRelocator    = (*Plugin)(nil)
 )
 
-// NativeSessionConfigDir returns OMP's session-state root: PI_CODING_AGENT_DIR
-// when set, otherwise ~/.omp/agent.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -37,17 +33,10 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return dir, nil
 }
 
-// ProbeNativeSession reports whether OMP's local transcript for the native id
-// still exists under the recorded config dir. A missing config dir is Unknown
-// rather than Unavailable, mirroring the other continuation adapters.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
-// LocateTranscript finds OMP's rollout JSONL by native id. OMP writes one
-// conversation per file at <config>/sessions/<cwd-folder>/<ISO-time>_<id>.jsonl;
-// a suffix match finds the original or its AO copy without depending on the
-// folder-name encoding.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -78,15 +67,6 @@ func validateOMPNativeSessionID(value string) (string, error) {
 	return value, nil
 }
 
-// ompSessionDir encodes the folder OMP derives from a working directory, so AO
-// can place an imported transcript where OMP will look when launched in the AO
-// worktree. The folder is built from the RESOLVED path. A path under $HOME has the home
-// prefix stripped and each "/" turned into "-" (e.g. ~/.ao/data/wt/x =>
-// "-.ao-data-wt-x"); any other path is wrapped, "--" + path without its leading
-// "/" and "/"->"-" + "--" (e.g. /private/tmp/a/b => "--private-tmp-a-b--").
-// Dots and other characters are preserved. Callers pass the real user home; both
-// paths are symlink-resolved (AO worktrees live under $HOME, so the home-relative
-// form is the one that matters at resume).
 func ompSessionDir(home, cwd string) string {
 	resolve := func(p string) string {
 		if r, err := filepath.EvalSymlinks(p); err == nil {
@@ -102,10 +82,6 @@ func ompSessionDir(home, cwd string) string {
 	return "--" + strings.ReplaceAll(strings.TrimPrefix(resolved, sep), sep, "-") + "--"
 }
 
-// RelocateImportedSession places the imported transcript where OMP's ACP
-// session/load looks for LaunchCWD. The folder uses the resolved path, while
-// the session record must keep the raw launch path. The shared helper keeps
-// the original untouched and never replaces a copy holding AO's later turns.
 func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	if err := ctx.Err(); err != nil {
 		return err

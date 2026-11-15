@@ -94,8 +94,6 @@ func TestRemoveDeletesKeyAndDeviceMarker(t *testing.T) {
 	}
 }
 
-// blockMarker makes the next read of a marker file fail, as a write that
-// cannot complete would, and returns a func that puts the file back.
 func blockMarker(t *testing.T, dir, file string) func() {
 	t.Helper()
 	path := filepath.Join(dir, file)
@@ -115,9 +113,6 @@ func blockMarker(t *testing.T, dir, file string) func() {
 	}
 }
 
-// Turning sharing off never leaves a name published without its user-owned
-// mark: a later withdrawal would take the user's own value for AO's copy and
-// remove it from their environment.
 func TestUnpublishingNeverDropsOwnershipWhileStillPublished(t *testing.T) {
 	ctx := context.Background()
 	t.Run("device marker write fails", func(t *testing.T) {
@@ -153,8 +148,6 @@ func TestUnpublishingNeverDropsOwnershipWhileStillPublished(t *testing.T) {
 			t.Fatal("reported success although the user-owned marker could not be written")
 		}
 		restore()
-		// The name is unpublished first, so nothing withdraws it; the
-		// leftover mark is cleared when AO next publishes its own value.
 		if device, _ := DeviceNames(dir); device["GROQ_API_KEY"] {
 			t.Fatal("still published although the device marker was cleared first")
 		}

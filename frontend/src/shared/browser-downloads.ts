@@ -1,5 +1,3 @@
-// "blocked" is a download Chromium tried to start that is waiting for the user
-// to allow it. No bytes have been saved for it.
 export type BrowserDownloadStatus =
 	| "blocked"
 	| "progressing"

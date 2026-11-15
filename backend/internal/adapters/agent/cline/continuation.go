@@ -18,7 +18,6 @@ var (
 	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
 )
 
-// NativeSessionConfigDir resolves Cline's data root for the launch environment.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -46,7 +45,6 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return filepath.Join(home, ".cline", "data"), nil
 }
 
-// LocateTranscript finds Cline's native message document within its data root.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -76,7 +74,6 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	return filepath.Join(ref.ConfigDir, rel), info.Mode().IsRegular() && info.Size() > 0, nil
 }
 
-// ProbeNativeSession reports whether Cline's local message document is available.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if ref.ConfigDir == "" {
 		return ports.NativeSessionAvailabilityUnknown, ctx.Err()

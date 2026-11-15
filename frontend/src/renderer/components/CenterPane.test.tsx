@@ -71,7 +71,6 @@ vi.mock("../lib/bridge", () => ({
 	},
 }));
 
-// The terminal body pulls in xterm/SSE machinery irrelevant to the header under test.
 vi.mock("./TerminalPane", () => ({
 	TerminalPane: (props: {
 		focusRequested?: boolean;
@@ -445,7 +444,6 @@ describe("CenterPane toolbar session label", () => {
 			"max-w-shell-tab-max",
 		);
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).not.toHaveAttribute("aria-current", "true");
-		// The reviewer's mark is drawn: an <img>, or a tinted mask for a single-colour logo.
 		expect(reviewerTab.querySelector('img, [style*="mask"]')).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Back to agent" })).not.toBeInTheDocument();
 	});
@@ -552,7 +550,6 @@ describe("CenterPane toolbar session label", () => {
 	it("keeps the tab strip flush with the action controls", () => {
 		renderCenterPane({ session: worker });
 
-		// Inline spacing lives on .session-topbar-actions in styles.css.
 		expect(screen.getByTestId("session-terminal-region")).not.toHaveClass("pr-3");
 		expect(screen.getByTestId("session-action-region")).toHaveClass("session-topbar-actions");
 		expect(screen.getByTestId("session-action-region")).not.toHaveClass("px-3");
@@ -568,7 +565,6 @@ describe("CenterPane toolbar session label", () => {
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: pane });
 		act(() => document.dispatchEvent(new Event("fullscreenchange")));
 
-		// Fullscreen hides the panel-owned bell, so the region keeps only its own copy.
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).toHaveAttribute("data-fullscreen", "true");
 		expect(within(actionRegion).queryByRole("button", { name: "Session action" })).not.toBeInTheDocument();
@@ -603,12 +599,9 @@ describe("CenterPane toolbar session label", () => {
 			expect(frame?.classList.contains("min-w-16")).toBe(false);
 			expect(tab.classList.contains("min-w-0")).toBe(true);
 		}
-		// Overflow is handled directly by the scroll strip; arrow controls never reserve space.
 		expect(screen.queryByRole("button", { name: "Scroll tabs left" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Scroll tabs right" })).toBeNull();
 
-		// The tab list sizes to its tabs and shrinks into a scroll strip when
-		// they overflow, so New terminal can sit right after the last tab.
 		const tabList = screen.getByRole("tablist", { name: "Open terminals" });
 		expect(tabList).toHaveClass("min-w-0");
 		expect(tabList).not.toHaveClass("flex-1");
@@ -730,13 +723,10 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.wheel(scrollRegion, { deltaY: 80 });
 		expect(scrollBy).toHaveBeenCalledWith({ left: 80 });
 
-		// Horizontal trackpad input is driven by the strip too, so a gesture can
-		// never latch onto an outer scroller and leave the tabs stuck.
 		scrollBy.mockClear();
 		expect(fireEvent.wheel(scrollRegion, { deltaX: 60, deltaY: 5 })).toBe(false);
 		expect(scrollBy).toHaveBeenCalledWith({ left: 60 });
 
-		// Ctrl+wheel is terminal font zoom, not tab scrolling.
 		scrollBy.mockClear();
 		fireEvent.wheel(scrollRegion, { deltaY: 80, ctrlKey: true });
 		expect(scrollBy).not.toHaveBeenCalled();
@@ -805,8 +795,6 @@ describe("CenterPane toolbar session label", () => {
 		expect(document.activeElement).toBe(sessionTab);
 		expect(onSelectSessionTerminal).toHaveBeenCalledOnce();
 
-		// Revisiting a tab quickly by keyboard must not count as a double-click
-		// and enter rename mode.
 		fireEvent.keyDown(sessionTab, { key: "ArrowRight" });
 		expect(document.activeElement).toBe(firstShellTab);
 		expect(screen.queryByRole("textbox", { name: /rename terminal/i })).toBeNull();
@@ -882,13 +870,11 @@ describe("CenterPane tab context menu", () => {
 		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
 		unmount();
 
-		// A Cloud worker archives like a local one.
 		const cloud = renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
 		cloud.unmount();
 
-		// A Cloud session shared from another organization is the sharer's to archive.
 		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1", shared: true } } as WorkspaceSession });
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 		await screen.findByRole("menu");

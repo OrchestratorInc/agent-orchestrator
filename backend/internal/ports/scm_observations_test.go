@@ -6,8 +6,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// A PR counts as the account's own only when a human account's login matches
-// its author; a bot or login-less account authors nothing.
 func TestSCMIdentityAuthored(t *testing.T) {
 	for _, tc := range []struct {
 		id     ports.SCMIdentity

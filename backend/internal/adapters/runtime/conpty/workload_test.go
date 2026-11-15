@@ -30,7 +30,6 @@ func TestCountWorkloadCommands(t *testing.T) {
 	if got, err := countWorkloadCommands(windows, host); err != nil || got != 1 {
 		t.Fatalf("agent running PowerShell = %d, %v; want 1", got, err)
 	}
-	// A login shell between the host and the supervisor is not a command.
 	wrapped := []procmem.Process{
 		{PID: host, PPID: 1, Command: "ao pty-host s1"},
 		{PID: 110, PPID: host, Command: "/bin/zsh -lc ao agent-process supervise --session s1"},

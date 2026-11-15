@@ -44,7 +44,6 @@ it("stops missing workspace requests by session and allows explicit recovery", a
 		status = 500;
 		await expect(client.fetchQuery(sessionWorkspaceFilesQueryOptions("transient"))).rejects.toMatchObject({ code, status });
 		await expect(client.fetchQuery(sessionWorkspaceFilesQueryOptions("transient"))).rejects.toMatchObject({ code, status });
-		// A server failure still gets the existing bounded query retry policy.
 		expect(requests).toHaveLength(13);
 	} finally {
 		client.clear();
@@ -72,7 +71,6 @@ it.each(["image.png", "video.webm", "audio.mp3"])("loads %s metadata from a GET-
 		}
 		response.on("close", () => { cancelled = true; });
 		response.writeHead(200, { "Content-Length": "104857600", "Last-Modified": modified });
-		// Leave the body open: metadata loading must finish without downloading it.
 		response.flushHeaders();
 	});
 	const previousBase = getApiBaseUrl();
@@ -155,8 +153,6 @@ it.for([
 				await listen(daemon, { host: "127.0.0.1", port });
 				break;
 			} catch (error) {
-				// IPv6's ephemeral port can still be occupied on IPv4. Release
-				// our reservation and try a fresh port, keeping real errors fatal.
 				if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE" || attempt === 9) throw error;
 				await close(competitor);
 			}
@@ -164,8 +160,6 @@ it.for([
 		expect(daemonListen.mock.calls.length).toBeGreaterThanOrEqual(simulateCollision ? 2 : 1);
 		const hostname = "ao-preview-artifact.session.localhost";
 		const rawUrl = `http://${hostname}:${port}/${artifactPath}?raw=true`;
-		// Reproduce Chromium choosing ::1 deterministically, without relying on
-		// the test host's DNS support or address ordering for *.localhost.
 		const fetch = vi.fn((input: string | URL | Request, init?: RequestInit) =>
 			nativeFetch(String(input).replace(`http://${hostname}:`, "http://[::1]:"), init));
 		vi.stubGlobal("fetch", fetch);
@@ -183,7 +177,6 @@ it.for([
 		expect(competingRequests).toBe(1);
 		expect(fetch).toHaveBeenCalledExactlyOnceWith(`http://127.0.0.1:${port}${requests[0]}`);
 
-		// A stopped/restarting daemon must not fall back to the ambiguous host.
 		client.clear();
 		fetch.mockClear();
 		setApiBaseUrl(null);

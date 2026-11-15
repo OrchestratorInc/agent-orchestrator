@@ -25,7 +25,6 @@ func TestAccessDevicesIssueMatchRevoke(t *testing.T) {
 	if phone.Name != "Dhruv's iPhone" || phone.Platform != "ios" {
 		t.Fatalf("device = %+v", phone)
 	}
-	// An account token is 64 hex characters; a device token must not look like one.
 	if !strings.HasPrefix(token, DeviceTokenPrefix) || regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(token) {
 		t.Fatalf("token %q could be taken for an account token", token)
 	}
@@ -40,7 +39,6 @@ func TestAccessDevicesIssueMatchRevoke(t *testing.T) {
 		t.Fatalf("registry mode = %v, want 0600", info.Mode().Perm())
 	}
 
-	// A reload still accepts the token: the registry survives a daemon restart.
 	reloaded, err := LoadAccessDevices(path)
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +87,6 @@ func TestAccessDevicesTouchAndLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Inside the write limit nothing moves; past it the time is stored.
 	devices.Touch(phone.ID, now.Add(touchInterval-time.Second))
 	if got := devices.List()[0].LastSeenAt; !got.Equal(now) {
 		t.Fatalf("LastSeenAt moved inside the write limit: %v", got)
@@ -136,7 +133,6 @@ func TestAccessDevicesCapAndDamagedFile(t *testing.T) {
 	if _, err := os.Stat(path + ".bad"); err != nil {
 		t.Fatalf("the damaged file was not kept aside: %v", err)
 	}
-	// The empty registry is usable: a device can pair again.
 	if _, _, err := damaged.Issue("again", "ios", now); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +140,6 @@ func TestAccessDevicesCapAndDamagedFile(t *testing.T) {
 
 func TestAnUnreadableRegistryIsMovedAside(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "access-devices.json")
-	// A directory in the file's place fails to read on every platform.
 	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +160,6 @@ func TestARegistryThatCannotBeMovedAsideIsKept(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A non-empty directory at the .bad path makes the rename fail everywhere.
 	if err := os.MkdirAll(filepath.Join(path+".bad", "taken"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +201,6 @@ func TestPairingCodesAreSingleUseAndExpire(t *testing.T) {
 		t.Fatal("an expired code worked")
 	}
 
-	// Past the cap, the code closest to expiry makes room.
 	first, _, _ := codes.Issue()
 	for range maxPairingCodes {
 		now = now.Add(time.Second)

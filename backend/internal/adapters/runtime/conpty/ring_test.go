@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// TestRingAppendPartialThenComplete verifies partial-line accumulation and
-// that Snapshot/Tail reflect only completed lines.
 func TestRingAppendPartialThenComplete(t *testing.T) {
 	r := NewRing()
 	r.Append([]byte("hel"))
@@ -23,7 +21,6 @@ func TestRingAppendPartialThenComplete(t *testing.T) {
 		t.Errorf("Tail(10) = %q, want %q", tail, "hello\n")
 	}
 
-	// Flush the partial "wor"
 	r.FlushPartial()
 	snap = string(r.Snapshot())
 	if snap != "hello\nwor" {
@@ -31,10 +28,8 @@ func TestRingAppendPartialThenComplete(t *testing.T) {
 	}
 }
 
-// TestRingExceedsMaxOutputLines verifies the buffer trims to MaxOutputLines.
 func TestRingExceedsMaxOutputLines(t *testing.T) {
 	r := NewRing()
-	// Push 1005 lines.
 	for i := 0; i < 1005; i++ {
 		r.Append([]byte("x\n"))
 	}
@@ -46,7 +41,6 @@ func TestRingExceedsMaxOutputLines(t *testing.T) {
 	}
 }
 
-// TestRingFlushPartialNoNewline verifies FlushPartial pushes a trailing line.
 func TestRingFlushPartialNoNewline(t *testing.T) {
 	r := NewRing()
 	r.Append([]byte("line1\npartial"))
@@ -57,7 +51,6 @@ func TestRingFlushPartialNoNewline(t *testing.T) {
 		t.Errorf("Snapshot missing 'partial': %q", snap)
 	}
 
-	// Calling FlushPartial again is a no-op.
 	r.FlushPartial()
 	snap2 := string(r.Snapshot())
 	if snap2 != snap {
@@ -65,7 +58,6 @@ func TestRingFlushPartialNoNewline(t *testing.T) {
 	}
 }
 
-// TestRingTailEdgeCases covers n > stored count and n <= 0.
 func TestRingTailEdgeCases(t *testing.T) {
 	r := NewRing()
 	r.Append([]byte("a\nb\n"))
@@ -81,7 +73,6 @@ func TestRingTailEdgeCases(t *testing.T) {
 	}
 }
 
-// TestRingANSIRoundTrip verifies raw ANSI escape sequences survive storage intact.
 func TestRingANSIRoundTrip(t *testing.T) {
 	ansi := "\x1b[31mhi\x1b[0m\n"
 	r := NewRing()
@@ -97,7 +88,6 @@ func TestRingANSIRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRingTailSubset verifies Tail returns exactly the last n lines.
 func TestRingTailSubset(t *testing.T) {
 	r := NewRing()
 	for i := 0; i < 10; i++ {
@@ -110,8 +100,6 @@ func TestRingTailSubset(t *testing.T) {
 	}
 }
 
-// TestRingSnapshotExcludesPartial verifies the in-progress partial line is NOT
-// included in Snapshot (matches TS semantics: only outputBuffer, not partialLine).
 func TestRingSnapshotExcludesPartial(t *testing.T) {
 	r := NewRing()
 	r.Append([]byte("complete\npartial"))
@@ -134,10 +122,6 @@ func TestRingReplayIncludesPartialTUIOutput(t *testing.T) {
 	}
 }
 
-// TestRingConcurrent validates the advertised goroutine-safety of Ring under the
-// race detector. It spawns 10 writer goroutines (Append) and 10 reader goroutines
-// (Snapshot + Tail) that all run concurrently; any data race will be caught by
-// "go test -race". The test itself only asserts no panic and no race.
 func TestRingConcurrent(t *testing.T) {
 	const goroutines = 10
 	const iters = 100

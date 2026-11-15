@@ -24,7 +24,6 @@ function effectiveSavedTuning(config?: TuningConfig) {
 	};
 }
 
-/** Offers an explicit reset for stale saved worker tuning; opening the composer never writes settings. */
 export function useResetStaleProjectTuning(args: {
 	projectId?: string;
 	hostId?: string;
@@ -59,7 +58,6 @@ export function useResetStaleProjectTuning(args: {
 		const reset = async () => {
 			if (!stillCurrent()) return;
 			const client = hostId ? clientForHost(hostId) : apiClient;
-			// Re-read before the whole-config PUT so no other change is erased.
 			const current = await client.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
 			if (current.error) throw current.error;
 			if (current.data?.status !== "ok" || !current.data.project) return;

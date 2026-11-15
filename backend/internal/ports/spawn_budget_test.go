@@ -11,8 +11,6 @@ import (
 
 type budgetTestKey struct{}
 
-// A spawn whose budget runs out reads ctx.Err() to tell a timeout
-// (SPAWN_TIMEOUT, 503) from a cancellation; so do the contexts it derives.
 func TestSpawnRequestContextStopsWithDeadlineExceeded(t *testing.T) {
 	ctx, timedOut, release := ports.NewSpawnRequestContext(context.Background(), 20*time.Millisecond)
 	defer release()
@@ -53,7 +51,6 @@ func TestSpawnRequestContextExtendsFromNow(t *testing.T) {
 	}
 }
 
-// The client going away is a cancellation, not a timeout.
 func TestSpawnRequestContextFollowsTheRequestsCancellation(t *testing.T) {
 	parent, cancelParent := context.WithCancel(context.Background())
 	ctx, timedOut, release := ports.NewSpawnRequestContext(parent, time.Hour)

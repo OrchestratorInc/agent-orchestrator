@@ -12,7 +12,6 @@ import { LanguageSelect, LanguageSelectText } from "./language-select";
 const COPY_LABELS: Partial<Record<SupportedLocale, string>> = { en: "Copy code", ja: "コードをコピー" };
 
 beforeAll(() => {
-  // The popover measures its trigger; jsdom has no ResizeObserver.
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}
@@ -22,7 +21,6 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-/** Renders `ui` inside an English-marked article, with the interface in `locale`. */
 function renderInArticle(locale: SupportedLocale, ui: ReactNode) {
   const i18n = setupI18n({ locale, messages: { [locale]: {} } });
   return render(

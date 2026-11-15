@@ -1,12 +1,3 @@
-/**
- * Continuing a stopped turn, like play after pause.
- *
- * The composer's one button stops a running turn; once the user stopped it and
- * the composer is empty, the same button continues it, sending the continue
- * prompt as the user's own message. These tests cover when the workspace offers
- * that: only for the latest turn that still counts, only once it was stopped.
- */
-
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -15,7 +6,6 @@ import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot, ConversationTurn } from "../../types/conversation";
 import { renderChat as render } from "../../test/render-chat";
 
-/** turn-1 completed and turn-2 stopped by the user, with nothing in flight. */
 function stoppedSnapshot(change: (turns: ConversationTurn[]) => ConversationTurn[] = (turns) => turns): ConversationSnapshot {
 	const turns = chatFixture.turns.map((turn) =>
 		turn.id === "turn-2"
@@ -24,8 +14,6 @@ function stoppedSnapshot(change: (turns: ConversationTurn[]) => ConversationTurn
 				? { ...turn, state: "completed" as const, completedAt: turn.requestedAt }
 				: turn,
 	);
-	// The fixture steers mid-turn, which splits the turn in two; these tests read
-	// the stopped answer as the turn's last reply, so they leave the steer out.
 	const items = chatFixture.items
 		.filter((item) => item.id !== "a-steer-1")
 		.map((item) => (item.kind === "message" && item.id === "m-5" ? { ...item, streaming: false } : item));
@@ -55,7 +43,6 @@ describe("ChatWorkspace continue", () => {
 		expect(within(outcome).getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
 		expect(within(outcome).getByRole("button", { name: "Roll back to here" })).toBeInTheDocument();
 
-		// The stopped answer hands its actions down rather than drawing a second row.
 		const answer = screen.getByText(/Tests are still running/).closest<HTMLElement>(".group\\/message")!;
 		expect(within(answer).queryByRole("button")).toBeNull();
 	});
@@ -102,7 +89,6 @@ describe("ChatWorkspace continue", () => {
 
 		expect(screen.getByText("Continued")).toBeInTheDocument();
 		expect(screen.queryByText(CONTINUE_STOPPED_TURN_PROMPT)).toBeNull();
-		// The continued turn is now the latest, so there is nothing left to continue.
 		expect(continueButton()).toBeNull();
 	});
 

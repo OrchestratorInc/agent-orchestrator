@@ -12,17 +12,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// UpsertSessionCleanupFacts records or updates the durable teardown facts for a
-// terminated session. The session_cleanup_facts_cdc_* triggers fan out a
-// session_updated CDC event when the disposition or runtime-release state
-// actually changes (retry-bookkeeping-only writes are suppressed).
 func (s *Store) UpsertSessionCleanupFacts(ctx context.Context, rec domain.SessionCleanupRecord) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	disposition := rec.WorkspaceDisposition
 	if disposition == "" {
-		// The column default is 'pending' and the CHECK rejects ''; default a
-		// zero-value disposition so an unset record still writes a valid row.
 		disposition = domain.DispositionPending
 	}
 	return s.qw.UpsertSessionCleanupFacts(ctx, gen.UpsertSessionCleanupFactsParams{
@@ -38,8 +32,6 @@ func (s *Store) UpsertSessionCleanupFacts(ctx context.Context, rec domain.Sessio
 	})
 }
 
-// GetSessionCleanupFacts returns the cleanup facts for a session, or ok=false
-// when the session has no facts row yet.
 func (s *Store) GetSessionCleanupFacts(ctx context.Context, id domain.SessionID) (domain.SessionCleanupRecord, bool, error) {
 	row, err := s.qr.GetSessionCleanupFacts(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -51,8 +43,6 @@ func (s *Store) GetSessionCleanupFacts(ctx context.Context, id domain.SessionID)
 	return sessionCleanupFromGen(row), true, nil
 }
 
-// ListSessionCleanupFactsForSessions batches GetSessionCleanupFacts for
-// session-list reads. Only sessions that have a facts row appear in the map.
 func (s *Store) ListSessionCleanupFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
 	out := make(map[domain.SessionID]domain.SessionCleanupRecord, len(ids))
 	if len(ids) == 0 {
@@ -72,21 +62,6 @@ func (s *Store) ListSessionCleanupFactsForSessions(ctx context.Context, ids []do
 	return out, nil
 }
 
-// listTerminalCleanupCandidatesSQL is the coarse, SESSIONS-driven candidate scan
-// for the terminal-resource reconciler's boot / periodic pass. It is a
-// `sessions LEFT JOIN facts` (NOT a facts-only `WHERE disposition='pending'`) so
-// the pre-existing leaked backlog — terminated sessions with NO facts row — is
-// still surfaced. A candidate is a terminated session with no facts row yet,
-// facts stale relative to the session's cleanup_generation, or a pending cleanup
-// due for retry at or before now. Terminal dispositions (removed / preserved_dirty
-// / failed / not_applicable) are excluded; only a user-triggered retry revisits
-// preserved_dirty / failed. The restorable-marker exclusion and terminal re-check
-// are applied by the Go finalizer under the per-session lock, not in SQL.
-//
-// It runs as raw SQL rather than a sqlc query because sqlc 1.31's SQLite parser
-// truncates the trailing clause after the final `?` placeholder — the scan's
-// parameter is nested inside a WHERE group whose closing parens would be stripped
-// (see the note in queries/cleanup.sql).
 const listTerminalCleanupCandidatesSQL = `
 SELECT s.id
 FROM sessions s
@@ -102,9 +77,6 @@ WHERE s.is_terminated = 1
   )
 ORDER BY s.project_id, s.num;`
 
-// ListTerminalCleanupCandidates returns the ids of terminated sessions whose
-// runtime/workspace resources may still need releasing (see
-// listTerminalCleanupCandidatesSQL).
 func (s *Store) ListTerminalCleanupCandidates(ctx context.Context, now time.Time) ([]domain.SessionID, error) {
 	rows, err := s.readDB.QueryContext(ctx, listTerminalCleanupCandidatesSQL, timeToNullTime(now))
 	if err != nil {

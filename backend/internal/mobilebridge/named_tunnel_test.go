@@ -13,21 +13,15 @@ import (
 	"time"
 )
 
-// fakeAOCloud answers the fixed-tunnel route for host-uuid.
 type fakeAOCloud struct {
-	mu      sync.Mutex
-	repairs []bool
-	digests []string
-	status  int // 0 answers 200
-	// repairStatus answers repair requests instead, when set.
+	mu           sync.Mutex
+	repairs      []bool
+	digests      []string
+	status       int
 	repairStatus int
-	// tokens are handed out in turn, the last one from then on; empty means
-	// run-token-tun-1 every time.
-	tokens []string
-	// since is when the DNS record was made; zero means just now.
-	since time.Time
-	// skew sets AO Cloud's clock this far behind the machine's.
-	skew time.Duration
+	tokens       []string
+	since        time.Time
+	skew         time.Duration
 }
 
 func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +41,7 @@ func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if status != 0 {
 		w.WriteHeader(status)
-		if status == http.StatusUnauthorized { // as AO Cloud words a refusal
+		if status == http.StatusUnauthorized {
 			_, _ = w.Write([]byte(`{"error":"Unauthorized","code":"unauthorized","message":"Invalid host credential."}`))
 		}
 		return
@@ -78,8 +72,6 @@ func (f *fakeAOCloud) requests() int {
 	return len(f.repairs)
 }
 
-// newFixedSource returns a linked machine's tunnel source backed by a fake AO
-// Cloud. Plain http is accepted because the fake listens on 127.0.0.1.
 func newFixedSource(t *testing.T) (*fakeAOCloud, *FixedTunnelSource) {
 	t.Helper()
 	cloud := &fakeAOCloud{}
@@ -101,8 +93,6 @@ func link(t *testing.T, src *FixedTunnelSource, digest string) {
 	}
 }
 
-// knownTunnel makes the fake's record a day old and caches its tunnel, as on
-// every start after the first.
 func knownTunnel(t *testing.T, cloud *fakeAOCloud, src *FixedTunnelSource) {
 	t.Helper()
 	cloud.mu.Lock()
@@ -119,15 +109,13 @@ func knownTunnel(t *testing.T, cloud *fakeAOCloud, src *FixedTunnelSource) {
 	}
 }
 
-// AO Cloud's answers that leave the machine on a quick tunnel: no fixed
-// addresses there, or an account that already uses all of its fixed addresses.
 func TestFixedTunnelReadsAOCloudsNoFixedAddressAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		status int
 		body   string
 	}{
 		{http.StatusNotFound, `{"code":"fixed_addresses_unavailable"}`},
-		{http.StatusServiceUnavailable, `{"code":"fixed_addresses_unavailable"}`}, // an older AO Cloud
+		{http.StatusServiceUnavailable, `{"code":"fixed_addresses_unavailable"}`},
 		{http.StatusConflict, `{"code":"fixed_address_limit_reached"}`},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -147,8 +135,6 @@ func TestFixedTunnelReadsAOCloudsNoFixedAddressAnswers(t *testing.T) {
 	}
 }
 
-// A bare 404, from an AO Cloud that predates the route or a proxy in front of
-// one, keeps the cached tunnel, as an unreachable AO Cloud does.
 func TestFixedTunnelKeepsTheCacheOnABare404(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	knownTunnel(t, cloud, src)
@@ -182,8 +168,6 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	if err != nil || first.Hostname != "h-test.example.dev" || first.RunToken != "run-token-tun-1" || !first.Since.Equal(cloud.since) {
 		t.Fatalf("first = %+v, %v", first, err)
 	}
-	// AO Cloud deleted the record and made it again under the same name: the
-	// address is new again, though the machine has known the name for a day.
 	cloud.mu.Lock()
 	cloud.since = time.Now()
 	cloud.mu.Unlock()
@@ -192,20 +176,16 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 		t.Fatalf("again = %+v, %v, repairs %v, digests %v", again, err, cloud.repairs, cloud.digests)
 	}
 
-	// AO Cloud down: the cached tunnel still starts.
 	cloud.set(http.StatusBadGateway)
 	cached, err := src.TunnelFor(ctx, "host-uuid", false)
 	if err == nil || cached.RunToken != "run-token-tun-1" {
 		t.Fatalf("down = %+v, %v", cached, err)
 	}
-	// A proxy's refusal is not AO Cloud's: the cache stays.
 	cloud.set(http.StatusForbidden)
 	if got, err := src.TunnelFor(ctx, "host-uuid", false); errors.Is(err, errHostRefused) || got.RunToken == "" {
 		t.Fatalf("403 = %+v, %v", got, err)
 	}
 	cloud.set(http.StatusBadGateway)
-	// Another host never borrows the cache, nor does another account's link,
-	// which also drops the run token from disk.
 	if other, _ := src.TunnelFor(ctx, "other-host", false); other.RunToken != "" {
 		t.Fatalf("other host = %+v", other)
 	}
@@ -218,7 +198,6 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	}
 	link(t, src, "account-digest")
 
-	// Removed from every account: the tunnel is gone, and so is the cache.
 	cloud.set(http.StatusUnauthorized)
 	if got, err := src.TunnelFor(ctx, "host-uuid", false); !errors.Is(err, errHostRefused) || got.RunToken != "" {
 		t.Fatalf("refused = %+v, %v", got, err)
@@ -229,8 +208,6 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	}
 }
 
-// A machine whose clock runs fast must still wait out a record AO Cloud made
-// just now: since is moved onto the machine's clock.
 func TestFixedTunnelSinceFollowsTheMachinesClock(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	cloud.skew = 30 * time.Second

@@ -11,10 +11,6 @@ type InputAction = "accept" | "decline" | "cancel";
 type InputValue = string | number | boolean | string[];
 type PropertyEntry = [string, Record<string, unknown>];
 
-/**
- * Pending questions dock above the composer. After resolution, their prompt and
- * submitted answers remain readable in the transcript through ElicitationHistory.
- */
 export function ElicitationDock({
 	activity,
 	onResolve,
@@ -78,8 +74,6 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 	const groups = claudeQuestionGroups(properties);
 	const message = activity.detail?.message ?? schema?.title ?? activity.summary;
 	const content = answered ? response.content : undefined;
-	// The line under the question is the answer, or how the question ended when
-	// there is no answer to show. An answer needs no "Answered" label above it.
 	const showsAnswers = answered && properties.length > 0;
 	const ending = showsAnswers ? null : <p className="text-muted-foreground">{outcome}</p>;
 
@@ -110,12 +104,6 @@ export function ElicitationHistory({ activity }: { activity: ConversationActivit
 	);
 }
 
-/**
- * Only what was picked or typed. A Claude question already reads as the answer's
- * label, so its answers drop the field name; generic forms keep it to tell their
- * fields apart. Option descriptions and the "(Recommended)" tag only help while
- * choosing, so neither is repeated here.
- */
 function HistoryAnswers({ properties, content, labelled = false }: {
 	properties: PropertyEntry[];
 	content?: Record<string, unknown>;
@@ -161,7 +149,6 @@ function answerText(property: Record<string, unknown>, value: unknown): string {
 	return Array.isArray(value) ? value.map(label).join(", ") : label(value);
 }
 
-/** The full question stays visible above its answers, alongside the step count. */
 function DockHeader({
 	id,
 	title,
@@ -174,10 +161,8 @@ function DockHeader({
 	id?: string;
 	title: string;
 	pager?: string;
-	/** Cancel lives in the header as a quiet close, not as a footer pill. */
 	onDismiss?: () => void;
 	disabled?: boolean;
-	/** Folds the answers away so the transcript above can be read first. */
 	collapsed?: boolean;
 	onToggleCollapsed?: () => void;
 }) {
@@ -187,7 +172,6 @@ function DockHeader({
 				<p className="text-caption leading-snug text-muted-foreground">
 					Question{pager ? <span className="tabular-nums"> · {pager}</span> : null}
 				</p>
-				{/* A long question scrolls inside its own cap so the answers and actions below keep their room. */}
 				<p
 					id={id}
 					data-testid="elicitation-question"
@@ -244,8 +228,6 @@ function URLRequest({
 		setOpening(true);
 		setOpenError(undefined);
 		try {
-			// Opening is the consented action. Tell the provider only after Electron
-			// accepted it, so an OS-level refusal is never reported as success.
 			await aoBridge.app.openExternal(parsed.href);
 			await onResolve("accept");
 		} catch {
@@ -277,7 +259,6 @@ function URLRequest({
 					</p>
 				)}
 			</div>
-			{/* Pinned beside the actions it reports on, so a long URL cannot scroll it out of view. */}
 			{openError ? (
 				<p role="alert" className="shrink-0 px-3 pb-1 pt-1.5 text-xs leading-snug text-destructive">
 					{openError}
@@ -337,9 +318,6 @@ function FormRequest({
 	const formRef = useRef<HTMLFormElement>(null);
 	const shownQuestion = useRef(activeQuestion);
 
-	// Changing question unmounts the focused choice (and Back, on the first
-	// question), which drops focus out of the card. Put it on the new question so
-	// the next number key and Enter still reach it.
 	useEffect(() => {
 		if (shownQuestion.current === activeQuestion) return;
 		shownQuestion.current = activeQuestion;
@@ -348,8 +326,6 @@ function FormRequest({
 		(form.querySelector<HTMLInputElement>("input:checked") ?? form.querySelector<HTMLInputElement>("input"))?.focus();
 	}, [activeQuestion]);
 
-	// Claude puts a single prompt in message and each prompt of a multi-question
-	// form in its field description. The field title is only a short topic label.
 	const question = questionGroups ? visibleProperties[0] : undefined;
 	const title = question
 		? questionPrompt(question, questionGroups?.length === 1 ? activity.detail?.message : undefined)
@@ -359,15 +335,12 @@ function FormRequest({
 			? `${activeQuestion + 1} of ${questionGroups.length}`
 			: undefined;
 
-	// Number keys pick the matching choice and 0 jumps to "Other", the same
-	// shortcuts the rows print. Typing in a text field is left alone.
 	function pickByNumber(event: KeyboardEvent<HTMLFormElement>) {
 		if (!questionGroups || disabled || event.metaKey || event.ctrlKey || event.altKey) return;
 		const onChoice = event.target instanceof HTMLInputElement
 			&& (event.target.type === "radio" || event.target.type === "checkbox");
 		if (event.target instanceof HTMLInputElement && !onChoice) return;
 		const form = event.currentTarget;
-		// Browsers don't submit a form when Enter is pressed on a radio.
 		if (event.key === "Enter" && onChoice) {
 			event.preventDefault();
 			form.requestSubmit();
@@ -385,8 +358,6 @@ function FormRequest({
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
-		// A marked Other answer stands in for its question's choice; the daemon
-		// accepts it in the question's place on the same marker.
 		const absent = new Set(
 			visibleProperties
 				.filter(([name]) => {
@@ -418,10 +389,6 @@ function FormRequest({
 			/>
 			{collapsed ? null : (
 				<>
-				{/* A focused row's ring draws 2px outside it, and the Other row's field sits 4px
-				    inside its row. The padding keeps that ring clear at either end of the list, and
-				    the scroll padding wherever focus scrolls a row in. Both leave room to spare,
-				    because scroll offsets round to whole pixels. */}
 				<div
 					data-testid="elicitation-scroll-body"
 					className="chat-composer-scrollbar min-h-0 flex-1 scroll-py-2 overflow-y-auto overscroll-contain py-1"
@@ -439,14 +406,9 @@ function FormRequest({
 								required={required.has(name)}
 								invalid={missing.has(name)}
 								disabled={disabled}
-								// Inside a Claude question the header is the prompt, so the first
-								// field borrows it as its accessible name instead of printing it.
 								labelledBy={questionGroups && index === 0 ? headerId : undefined}
 								rows={Boolean(questionGroups)}
 								onChange={(value) => {
-									// A choice and its marked "Other" answer are alternatives: picking
-									// one clears the other so it is always clear which one is sent.
-									// Unmarked fields are independent, whatever their names.
 									const question = [...otherAnswers].find(([, other]) => other === name)?.[0];
 									const sibling = question ?? otherAnswers.get(name);
 									setValues((current) => {
@@ -519,7 +481,6 @@ function FormRequest({
 							Skip
 						</Button>
 					</div>
-					{/* Sending an answer is the composer's send, so it wears the composer's send colour. */}
 					<Button
 						type="submit"
 						variant="primary"
@@ -563,9 +524,7 @@ function FormField({
 	required: boolean;
 	invalid: boolean;
 	disabled: boolean;
-	/** Use the dock header as this field's name instead of drawing a legend. */
 	labelledBy?: string;
-	/** Draw choices and free text as dock rows rather than a labelled form field. */
 	rows?: boolean;
 	onChange: (value: InputValue) => void;
 }) {
@@ -616,11 +575,8 @@ function FormField({
 									onChange={() =>
 										onChange(multi ? toggleValue(Array.isArray(value) ? value : [], option.value) : option.value)
 									}
-									// Invisible but laid over the whole row, so a pointer on the row
-									// lands on the real radio rather than on its label.
 									className="absolute inset-0 m-0 size-full cursor-pointer opacity-0"
 								/>
-								{/* The number doubles as the keyboard shortcut and the selection mark. */}
 								<span
 									aria-hidden="true"
 									className={cn(
@@ -714,16 +670,9 @@ function FormField({
 		/>
 	);
 
-	// A Claude "Other" answer is one more way to answer the question above it, so
-	// it is one more row, indented into the column the choices keep for their
-	// radio. Its title is a quiet visible label above the field rather than a
-	// placeholder: DESIGN.md §9 allows a placeholder as an example, never as the
-	// only name a field has.
 	if (rows) {
 		return (
 			<>
-				{/* The field itself is borderless here and global CSS strips rings from
-				    the focused element, so the row carries focus like a choice row does. */}
 				<div className="mx-2 mt-0.5 flex min-w-0 items-center gap-3 rounded-lg px-2 py-1 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/40">
 					<span aria-hidden="true" className="grid size-[18px] shrink-0 place-items-center rounded-[5px] border text-[10px] font-medium leading-none tabular-nums transition-colors border-border-strong text-muted-foreground">
 						0
@@ -814,14 +763,8 @@ function claudeQuestionGroups(properties: PropertyEntry[]): PropertyEntry[][] | 
 	return ordered;
 }
 
-/**
- * Marks the free-text "Other" field an AskUserQuestion bridge (claude-agent-acp)
- * adds after each question. The daemon recognises the same marker
- * (`askUserQuestionCustomAnswerMetaKey` in chatdriver/acp).
- */
 const CUSTOM_ANSWER_META_KEY = "_askUserQuestionCustomAnswer";
 
-/** Each marked question mapped to the field that answers it in free text. */
 function otherAnswerFields(properties: PropertyEntry[]): Map<string, string> {
 	const names = new Set(properties.map(([name]) => name));
 	const fields = new Map<string, string>();
@@ -866,7 +809,6 @@ function isEmpty(value: InputValue | undefined): boolean {
 	return value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
 }
 
-/** Empty, or text that is only whitespace, which the adapter ignores as an Other answer. */
 function isBlank(value: InputValue | undefined): boolean {
 	return typeof value === "string" ? value.trim() === "" : isEmpty(value);
 }

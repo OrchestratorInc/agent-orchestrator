@@ -84,7 +84,6 @@ func TestContinueProviderFollowsContinuesOwnConfigChoice(t *testing.T) {
 		}
 		return ""
 	}
-	// Continue falls back to config.json only while config.yaml is missing.
 	legacy := filepath.Join(home, ".continue")
 	if err := os.MkdirAll(legacy, 0o700); err != nil {
 		t.Fatal(err)
@@ -98,7 +97,6 @@ func TestContinueProviderFollowsContinuesOwnConfigChoice(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(legacy, "config.yaml")); !os.IsNotExist(err) {
 		t.Fatal("created a config.yaml that hides config.json")
 	}
-	// CONTINUE_GLOBAL_DIR moves the whole global folder.
 	global := t.TempDir()
 	t.Setenv("CONTINUE_GLOBAL_DIR", global)
 	if _, err := saveContinueProviderUndoable(t.Context(), "OPENAI_API_KEY", "gpt-5", "test-secret"); err != nil {
@@ -107,8 +105,6 @@ func TestContinueProviderFollowsContinuesOwnConfigChoice(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(global, ".env")); err != nil {
 		t.Fatalf("key not saved in CONTINUE_GLOBAL_DIR: %v", err)
 	}
-	// A value other models share through an anchor is never rewritten; an
-	// alias becomes a plain value and the anchor it pointed at stays valid.
 	shared := "name: c\nversion: 0.0.1\nschema: v1\nmodels:\n  - name: gpt-5\n    provider: openai\n    model: gpt-5\n    apiKey: &shared ${{ secrets.OTHER_KEY }}\n  - name: other\n    provider: openai\n    model: other\n    apiKey: *shared\n"
 	configPath := filepath.Join(global, "config.yaml")
 	if err := os.WriteFile(configPath, []byte(shared), 0o600); err != nil {

@@ -394,9 +394,6 @@ describe("XtermTerminal", () => {
 		useUiStore.setState({ terminalClickMode: "app", terminalSelectHintShown: false });
 	});
 
-	// FitAddon proposes its 2-column minimum for a host with no layout box (a
-	// tab parked before it was laid out). Adopting it would start the shell at
-	// 2 columns.
 	it("never adopts a fitted grid from a host with no layout box", async () => {
 		state.fit.mockReturnValue({ cols: 2, rows: 5 });
 		let terminal!: AttachableTerminal;
@@ -798,8 +795,6 @@ describe("XtermTerminal", () => {
 			const { rerender } = render(<XtermTerminal theme="dark" />);
 			const topbar = document.createElement("div");
 			topbar.dataset.testid = "session-workspace-topbar";
-			// ⋮ trigger and embedded shell chrome are plain buttons in the
-			// topbar with no opt-in marker — they must keep focus.
 			const actionsTrigger = document.createElement("button");
 			actionsTrigger.setAttribute("data-session-actions-trigger", "");
 			topbar.appendChild(actionsTrigger);
@@ -836,7 +831,6 @@ describe("XtermTerminal", () => {
 
 			act(() => useUiStore.getState().setThemeStyle("github"));
 
-			// Named palettes come from the injected theme catalog stylesheet.
 			expect(state.lastTerminal!.options.theme).toMatchObject({
 				background: "#0d1117",
 				cursor: "#4493f8",
@@ -942,9 +936,7 @@ describe("XtermTerminal", () => {
 		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
 		Object.defineProperty(scrollbar, "clientHeight", { configurable: true, value: 400 });
 		state.lastTerminal!.buffer.active.baseY = 100;
-		// Settle mount-time frames and timers so the test starts idle.
 		act(() => vi.runOnlyPendingTimers());
-		// The scrollbar follows scrolling once per frame, not once per line feed.
 		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
 		const nextFrame = () => act(() => vi.advanceTimersToNextFrame());
 		return { scrollbar, scroll, nextFrame };
@@ -965,9 +957,6 @@ describe("XtermTerminal", () => {
 		vi.useRealTimers();
 	});
 
-	// Streaming output scrolls continuously; the scrollbar stays up until the
-	// last scroll goes idle, and per-scroll work stays cheap (one frame, then
-	// one pending timer).
 	it("keeps the macOS scrollbar up through continuous scrolling with one pending timer", () => {
 		const { scrollbar, scroll, nextFrame } = renderScrollableMacTerminal();
 
@@ -1702,8 +1691,6 @@ describe("XtermTerminal", () => {
 	it("joins full-width rows of wide characters by cell coverage, not string length", () => {
 		render(<XtermTerminal theme="dark" />);
 		const terminal = state.lastTerminal!;
-		// "你好你" occupies all 6 grid cells (3 wide chars) but is only 3 UTF-16
-		// code units long — fullness must not compare string length to cols.
 		terminal.cols = 6;
 		terminal.bufferLines = [
 			{ isWrapped: false, translateToString: (t) => (t ? "你好你" : "你好你") },
@@ -2260,9 +2247,6 @@ describe("XtermTerminal", () => {
 	);
 
 	it("does not re-fire a shortcut on the keyup that follows its keydown", () => {
-		// xterm.js invokes attachCustomKeyEventHandler on keydown, keyup, AND
-		// keypress for the same physical key press. Without gating on event.type,
-		// releasing Ctrl+Backspace would emit the escape sequence a second time.
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
@@ -2396,7 +2380,6 @@ describe("XtermTerminal", () => {
 			/>,
 		);
 
-		// One onData hook exists for OSC 10/11/12 color replies (Cursor theme probes).
 		expect(state.lastTerminal!.dataListeners.size).toBe(1);
 		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b[A"));
 		expect(onInput).not.toHaveBeenCalled();
@@ -2563,7 +2546,6 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		let terminal: AttachableTerminal | undefined;
 		render(<XtermTerminal theme="dark" onReady={(handle) => { terminal = handle; handle.onUserInput(onInput); }} />);
-		// The replay is still being parsed: its write has not called back yet.
 		vi.spyOn(state.lastTerminal!, "write").mockImplementation(() => {});
 		terminal!.write(new TextEncoder().encode("old output\x1b]11;?\x07"), undefined, "replay");
 		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b]11;rgb:f5f5/f5f5/f4f4\x07"));
@@ -2739,7 +2721,6 @@ describe("XtermTerminal", () => {
 	it("translates wheel motion into SGR wheel reports for zellij scrollback", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
-		// rowHeight = fontSize(12) * lineHeight(1.35) = 16.2px; -50px => 3 lines up.
 		const suppressed = state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent);
 
 		expect(suppressed).toBe(false);
@@ -2754,7 +2735,6 @@ describe("XtermTerminal", () => {
 	])("reports actual one-based wheel coordinates over %s", (_name, clientX, clientY, column, row) => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
-		// Offset grid with 20px cells: models a moved and CSS-scaled terminal.
 		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({
 			left: 100, top: 50, width: 1600, height: 480,
 		} as DOMRect);
@@ -2776,11 +2756,9 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
-		// DOM_DELTA_LINE: deltaY is already in lines, so one notch up => one report.
 		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M", "wheel");
 
-		// DOM_DELTA_PAGE: one page down => rows (24) line reports down.
 		onInput.mockClear();
 		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<65;1;1M".repeat(24), "wheel");
@@ -2804,8 +2782,6 @@ describe("XtermTerminal", () => {
 		state.lastTerminal!.modes.mouseTrackingMode = "none";
 		state.lastTerminal!.buffer.active.type = "normal";
 
-		// rowHeight = 16.2px; -50px => 3 lines up. The pane never sees these bytes;
-		// we scroll the terminal's retained scrollback locally instead.
 		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(-3);
 		expect(onInput).not.toHaveBeenCalled();
@@ -2819,8 +2795,6 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 		state.lastTerminal!.modes.mouseTrackingMode = "none";
-		// Alt buffer: no local scrollback to move, and no keyboard-scroll hint, so a
-		// page key per notch is the best fallback.
 		state.lastTerminal!.buffer.active.type = "alternate";
 
 		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
@@ -2835,9 +2809,6 @@ describe("XtermTerminal", () => {
 		setNavigatorPlatform("Win32");
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
-		// A mouse-tracking pane gets SGR reports on every platform; on Windows conpty
-		// forwards them straight to the app. Keyboard-scroll panes (opencode) opt out
-		// via the paneScrollsByKeyboard hint, tested separately.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
 		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
@@ -2847,8 +2818,6 @@ describe("XtermTerminal", () => {
 	it("sends PageUp/PageDown for keyboard-scroll panes even under a mux (opencode on macOS/Linux)", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" paneScrollsByKeyboard onReady={(terminal) => terminal.onUserInput(onInput)} />);
-		// Linux (beforeEach) + mouse tracking on: without the paneScrollsByKeyboard
-		// hint this would send SGR reports; the hint forces page keys.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
 		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
@@ -2860,8 +2829,6 @@ describe("XtermTerminal", () => {
 		const onLinkOpen = vi.fn();
 		render(<XtermTerminal onLinkOpen={onLinkOpen} theme="dark" />);
 
-		// A left-click on an http(s) link is reported to the parent (which shows it
-		// in the AO Browser panel); it must NOT spawn a system-browser window.
 		expect(state.linkHandler).toBeTypeOf("function");
 		state.linkHandler!({} as MouseEvent, "https://example.com");
 
@@ -3044,7 +3011,6 @@ describe("XtermTerminal", () => {
 			expect(terminal._core.element.classList.remove).not.toHaveBeenCalledWith("enable-mouse-events");
 			expect(shouldForce(press())).toBe(false);
 			expect(shouldForce(press({ shiftKey: true }))).toBe(true);
-			// Alt stays xterm's column-selection modifier off macOS, so it is reported.
 			expect(shouldForce(press({ altKey: true }))).toBe(false);
 			expect(shouldForce(press({ button: 1 }))).toBe(true);
 			expect(shouldForce(press({ button: 2 }))).toBe(true);
@@ -3115,7 +3081,6 @@ describe("XtermTerminal", () => {
 			const emitData = (data: string) => terminal.dataListeners.forEach((listener) => listener(data));
 			const emitBinary = (data: string) => terminal.binaryListeners.forEach((listener) => listener(data));
 
-			// No mouse event has been dispatched yet: a report-shaped string is not user input.
 			emitData("\x1b[<0;5;3M");
 			expect(onInput).not.toHaveBeenCalled();
 
@@ -3125,7 +3090,6 @@ describe("XtermTerminal", () => {
 			emitData("\x1b[<0;6;3m");
 			emitData("\x1b[<35;7;3M");
 			emitBinary("\x1b[M !!");
-			// Wheel reports are AO's own job; X10 bytes above 0x7f cannot cross the text path.
 			emitData("\x1b[<64;5;3M");
 			emitBinary("\x1b[M \x80!");
 			emitData("plain typed text");
@@ -3169,7 +3133,6 @@ describe("XtermTerminal", () => {
 			const host = container.querySelector(".terminal-xterm-host")!;
 			const terminal = state.lastTerminal!;
 
-			// A drag goes to the program, then a Shift-drag copies a local selection.
 			fireEvent.pointerDown(host, { button: 0 });
 			fireEvent.pointerUp(document, { button: 0 });
 			terminal.selection = "newer local selection";
@@ -3211,10 +3174,8 @@ describe("XtermTerminal", () => {
 			const copyingTerminal = state.lastTerminal!;
 			expect(copyingTerminal).not.toBe(programTerminal);
 
-			// A drag goes to the program in the first terminal...
 			fireEvent.pointerDown(first.container.querySelector(".terminal-xterm-host")!, { button: 0 });
 			fireEvent.pointerUp(document, { button: 0 });
-			// ...then the user copies a selection in the second one.
 			copyingTerminal.selection = "copied in the other terminal";
 			copyingTerminal.keyHandler!({
 				key: "c",
@@ -3317,10 +3278,6 @@ describe("XtermTerminal", () => {
 		await waitFor(() => expect(onInput).toHaveBeenCalledWith("/tmp/ao-dropped/notes.txt ", "paste"));
 
 		window.removeEventListener("drop", bubbled);
-		// Regression: no stopPropagation here — _shell.tsx's window-level listener
-		// still needs this drop to reset the drag-depth counter its preceding
-		// dragenter bumped, or the next folder drag inherits a stale depth and
-		// never shows the overlay.
 		expect(bubbled).toHaveBeenCalledTimes(1);
 	});
 
@@ -3344,7 +3301,6 @@ describe("XtermTerminal", () => {
 		const file = new File(["hello"], "notes.txt", { type: "text/plain" });
 		const event = createEvent.drop(container.firstElementChild!, { dataTransfer: dropTransfer({ isDirectory: false }, [file]) });
 		fireEvent(container.firstElementChild!, event);
-		// Left to the window, which ignores a dropped file.
 		expect(event.defaultPrevented).toBe(false);
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		expect(saveDroppedFile).not.toHaveBeenCalled();
@@ -3388,7 +3344,6 @@ describe("XtermTerminal", () => {
 		expect(alert).toHaveTextContent("Couldn’t attach locked.txt: This session does not allow workspace writes.");
 		expect(alert).toHaveTextContent("Couldn’t attach huge.bin: The file is larger than 1 MB, the most this session takes.");
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
-		// The file that was placed is still typed.
 		expect(onInput).toHaveBeenCalledWith("'/workspace/.ao/attachments/notes.txt' ", "paste");
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -3420,9 +3375,6 @@ describe("XtermTerminal", () => {
 		}
 	});
 
-	// Regression: a dropped folder is the app-wide "open as project" gesture
-	// (_shell.tsx's window-level drop handler), not a file to attach — dropping
-	// one over an active terminal pane must not be swallowed as a file-attach.
 	it("lets a dropped folder bubble to the window instead of attaching it as a file", () => {
 		const saveDroppedFile = vi.fn();
 		window.ao!.terminal.saveDroppedFile = saveDroppedFile;
@@ -3444,8 +3396,6 @@ describe("XtermTerminal", () => {
 		const selectionService = state.lastTerminal!._core._selectionService;
 		const listener = selectionService._mouseMoveListener!;
 
-		// Simulate xterm's timer having been armed by a previous drag below the
-		// terminal before the pointer crosses horizontally into the sidebar.
 		selectionService._dragScrollAmount = 1;
 		listener(new MouseEvent("mousemove", { clientX: 801 }));
 		expect(state.mouseMoveListener).not.toHaveBeenCalled();

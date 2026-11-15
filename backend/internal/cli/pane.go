@@ -14,9 +14,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// paneCommandAPIRequest mirrors the daemon's body for
-// POST /api/v1/sessions/{id}/panes. The CLI keeps its own copy so it need not
-// import httpd.
 type paneCommandAPIRequest struct {
 	Action string  `json:"action"`
 	Tab    *string `json:"tab,omitempty"`
@@ -142,7 +139,6 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// The split focuses the tab it placed, so the selection is the terminal.
 			return ctx.runInPane(cmd.Context(), cmd.OutOrStdout(), layout.Layout.Selected, runAfterSplit, runWait)
 		},
 	}
@@ -167,7 +163,6 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	runFlags.register(run)
-	// Everything after the tab is the command: `ao pane run <tab> ls -la`.
 	run.Flags().SetInterspersed(false)
 	cmd.AddCommand(run)
 
@@ -257,8 +252,6 @@ func newPaneCommand(ctx *commandContext) *cobra.Command {
 	return cmd
 }
 
-// paneRequest calls this session's pane API. Like `ao browser`, it proves the
-// session with the capability AO injects into that session's agent only.
 func (c *commandContext) paneRequest(ctx context.Context, method, suffix string, body, out any) error {
 	sessionID := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
 	if sessionID == "" {
@@ -294,9 +287,6 @@ func (c *commandContext) paneCommandLayout(ctx context.Context, req paneCommandA
 	return out, err
 }
 
-// closePaneTerminal closes a terminal tab through the window showing the
-// session, which updates its strip and split as the tab's ✕ does. With no
-// window showing it, the daemon closes the terminal directly.
 func (c *commandContext) closePaneTerminal(ctx context.Context, tab string) error {
 	_, err := c.paneCommandLayout(ctx, paneCommandAPIRequest{Action: "close", Tab: &tab})
 	var apiErr apiResponseError
@@ -324,7 +314,6 @@ func (c *commandContext) readPane(ctx context.Context, tab string, lines int) (p
 	return out, err
 }
 
-// runWaitFlags controls how long `run` waits for a command's output.
 type runWaitFlags struct {
 	timeout time.Duration
 	lines   int
@@ -337,12 +326,8 @@ func (f *runWaitFlags) register(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.noWait, "no-wait", false, "return right after typing the command")
 }
 
-// paneSettleInterval is how long the screen must stay unchanged before `run`
-// treats the command's output as settled.
 var paneSettleInterval = 700 * time.Millisecond
 
-// runInPane types a command into a terminal tab, waits for its screen to
-// settle and prints its last lines.
 func (c *commandContext) runInPane(ctx context.Context, w io.Writer, tab, command string, wait runWaitFlags) error {
 	if strings.TrimSpace(command) == "" {
 		return usageError{errors.New("nothing to run")}
@@ -367,16 +352,12 @@ func (c *commandContext) runInPane(ctx context.Context, w io.Writer, tab, comman
 			return ctx.Err()
 		case <-timer.C:
 		}
-		// A stalled read must not outlast --timeout.
 		readCtx, cancelRead := context.WithDeadline(ctx, deadline)
 		next, err := c.readPane(readCtx, tab, wait.lines)
-		// Read the context's state before cancelling it: cancelling always makes
-		// it non-nil, which would pass every read error off as a timeout.
 		readExpired := errors.Is(readCtx.Err(), context.DeadlineExceeded)
 		cancelRead()
 		if err != nil {
 			if ctx.Err() == nil && readExpired && haveOutput {
-				// The deadline passed mid-read: show the last screen we did get.
 				_, _ = fmt.Fprintf(w, "(timed out after %s; it may still be running. Check again with `ao pane read %s`.)\n", wait.timeout, tab)
 				break
 			}
@@ -416,7 +397,6 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 	}
 	_, _ = fmt.Fprintf(w, "Split panes: %s\n", state)
 	_, _ = fmt.Fprintf(w, "On screen: %s\n", layout.Selected)
-	// Keys line up in one column; a terminal's key is long.
 	width := 0
 	for _, tab := range layout.Tabs {
 		width = max(width, len(tab.Key))
@@ -452,8 +432,6 @@ func writePaneLayout(w io.Writer, out paneLayoutResponseDTO, asJSON bool) error 
 	return nil
 }
 
-// writePaneTerminalHint tells an agent reading the layout how to use a
-// terminal tab, so it need not remember the command from the guide.
 func writePaneTerminalHint(w io.Writer, layout paneLayoutDTO) {
 	for _, tab := range layout.Tabs {
 		if tab.Kind == "terminal" {
@@ -464,7 +442,6 @@ func writePaneTerminalHint(w io.Writer, layout paneLayoutDTO) {
 	_, _ = fmt.Fprintln(w, "\nOpen a terminal and run a command in it: ao pane split terminal --run <command>")
 }
 
-// paneRegion describes where a pane sits, e.g. "x 50%, y 0%, 50% wide, 100% tall".
 func paneRegion(p paneBoxDTO) string {
 	pct := func(v float64) string { return fmt.Sprintf("%.0f%%", v*100) }
 	return fmt.Sprintf("x %s, y %s, %s wide, %s tall", pct(p.X), pct(p.Y), pct(p.Width), pct(p.Height))

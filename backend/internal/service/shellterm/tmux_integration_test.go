@@ -34,8 +34,6 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 	} {
 		for _, reconcile := range []string{"list", "desktop relaunch"} {
 			t.Run(tc.name+"/"+reconcile, func(t *testing.T) {
-				// A fresh, short socket root isolates even the legacy default
-				// socket and stays below macOS's Unix socket path limit.
 				socketRoot, err := os.MkdirTemp("/tmp", "ao-shell-exit-")
 				if err != nil {
 					t.Fatal(err)
@@ -66,17 +64,14 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 				t.Cleanup(func() {
 					cleanupCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
 					defer stop()
-					// This socket exists only inside this subtest's temporary root.
 					_ = exec.CommandContext(cleanupCtx, binary, "-L", socket, "kill-server").Run()
 				})
-				// Cover both a surviving server and exit of its only shell.
 				if !tc.noAnchor {
 					tmuxCommand("new-session", "-d", "-s", "anchor", "/bin/sh")
 				}
 				rt := tmux.New(tmux.Options{Binary: binary, LegacyBinary: binary, SocketName: tc.socket, Shell: "/bin/sh", Timeout: time.Second})
 				st := &fakeShellTerminalStore{}
 				workspace := t.TempDir()
-				// Session-scoped: relaunch keeps only shells a session can show.
 				sessions := &fakeSessionWorkspaceLocator{sessions: map[domain.SessionID]fakeSessionWorkspace{
 					"session-1": {workspacePath: workspace},
 				}}
@@ -91,7 +86,6 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 				if tc.retainPane {
 					tmuxCommand("set-option", "-w", "-t", "="+term.HandleID+":0", "remain-on-exit", "on")
 				}
-				// Relaunching preserves the still-running requested shell.
 				svc = NewService(rt, st, nil, sessions, workspace, "next-launch", testLogger())
 				if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
 					t.Fatalf("live reap = %d, %v", n, err)
@@ -106,9 +100,6 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 				deadline := time.Now().Add(3 * time.Second)
 				for {
 					alive, err := rt.IsChildAlive(ctx, handle)
-					// Server shutdown can race the probe (Linux may report
-					// "server exited unexpectedly" or "no current target").
-					// These remain unknown, not evidence of child death.
 					if err == nil && !alive {
 						break
 					}
@@ -135,8 +126,6 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 				if len(st.records) != 0 {
 					t.Fatalf("exited shell row retained: %+v", st.records)
 				}
-				// Destroy clears the runtime's socket cache. Inspect this exact
-				// fixture server instead of probing an uncached legacy fallback.
 				if tc.noAnchor {
 					out, err := exec.CommandContext(ctx, binary, "-L", socket, "list-sessions").CombinedOutput()
 					if err == nil {

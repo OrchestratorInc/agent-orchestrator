@@ -1,7 +1,3 @@
-// Package push delivers dashboard notifications to registered phones as OS push
-// notifications via the Expo Push Service (exp.host), which relays to APNs/FCM.
-// The daemon is the sender: a dispatcher subscribes to the in-process notification
-// hub and POSTs each new notification to every registered device.
 package push
 
 import (
@@ -14,13 +10,11 @@ import (
 	"time"
 )
 
-// Expo Push Service endpoints.
 const (
 	expoSendURL     = "https://exp.host/--/api/v2/push/send"
 	expoReceiptsURL = "https://exp.host/--/api/v2/push/getReceipts"
 )
 
-// Message is one Expo push message targeting a single device token.
 type Message struct {
 	To        string         `json:"to"`
 	Title     string         `json:"title"`
@@ -31,9 +25,6 @@ type Message struct {
 	ChannelID string         `json:"channelId,omitempty"`
 }
 
-// Ticket is Expo's synchronous per-message result. Status is "ok" or "error";
-// on error, Details.Error carries a code such as "DeviceNotRegistered". A ticket
-// with Status "ok" carries an ID used to fetch the later delivery Receipt.
 type Ticket struct {
 	Status  string `json:"status"`
 	ID      string `json:"id,omitempty"`
@@ -43,15 +34,10 @@ type Ticket struct {
 	} `json:"details,omitempty"`
 }
 
-// IsDeviceNotRegistered reports whether the ticket says the target token is dead
-// (uninstalled or rotated) and should be pruned from the registry.
 func (t Ticket) IsDeviceNotRegistered() bool {
 	return t.Status == "error" && t.Details.Error == "DeviceNotRegistered"
 }
 
-// Receipt is Expo's asynchronous per-message delivery result, fetched by ticket
-// ID ~15 minutes after send. It is the only place some failures surface — most
-// importantly a token that died after Expo accepted the message.
 type Receipt struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
@@ -60,23 +46,17 @@ type Receipt struct {
 	} `json:"details,omitempty"`
 }
 
-// IsDeviceNotRegistered reports whether the receipt says the token is dead and
-// should be pruned from the registry.
 func (r Receipt) IsDeviceNotRegistered() bool {
 	return r.Status == "error" && r.Details.Error == "DeviceNotRegistered"
 }
 
-// ExpoClient sends messages to the Expo Push Service. The zero value is not
-// usable; construct it with NewExpoClient.
 type ExpoClient struct {
 	http        *http.Client
 	sendURL     string
 	receiptsURL string
-	accessToken string // optional; enables Expo enforced push security when set
+	accessToken string
 }
 
-// NewExpoClient constructs a client. accessToken is optional (empty sends
-// unauthenticated, which the Expo Push Service accepts by default).
 func NewExpoClient(accessToken string) *ExpoClient {
 	return &ExpoClient{
 		http:        &http.Client{Timeout: 15 * time.Second},
@@ -87,21 +67,13 @@ func NewExpoClient(accessToken string) *ExpoClient {
 }
 
 const (
-	// maxBatch is the Expo Push Service per-request message cap.
-	maxBatch = 100
-	// maxReceiptBatch is the getReceipts per-request id cap.
+	maxBatch        = 100
 	maxReceiptBatch = 300
-	// maxSendAttempts bounds the transient-error retry (D3): a momentary
-	// network/5xx blip is retried a couple times, but we never queue.
 	maxSendAttempts = 3
 )
 
-// retryBaseDelay is the first backoff step (doubled each attempt). A var so tests
-// can shrink it.
 var retryBaseDelay = 500 * time.Millisecond
 
-// retryableError marks a send failure worth retrying (transport error, 5xx, 429).
-// A 4xx or a decode error is not wrapped, so it fails fast.
 type retryableError struct{ err error }
 
 func (e retryableError) Error() string { return e.err.Error() }
@@ -112,11 +84,6 @@ func isRetryable(err error) bool {
 	return errors.As(err, &r)
 }
 
-// Send delivers messages to Expo and returns one ticket per message, in the same
-// order. It chunks into batches of 100 (Expo's cap) and retries a batch a few
-// times on a transient error (D3: bounded retry, no durable outbox). A batch that
-// keeps failing aborts and is returned; tickets from earlier batches are still
-// returned.
 func (c *ExpoClient) Send(ctx context.Context, messages []Message) ([]Ticket, error) {
 	tickets := make([]Ticket, 0, len(messages))
 	for start := 0; start < len(messages); start += maxBatch {
@@ -144,7 +111,6 @@ func (c *ExpoClient) sendBatchWithRetry(ctx context.Context, batch []Message) ([
 		if !isRetryable(err) || attempt == maxSendAttempts {
 			return nil, err
 		}
-		// Exponential backoff, but abort promptly if the daemon is shutting down.
 		delay := retryBaseDelay * time.Duration(1<<(attempt-1))
 		select {
 		case <-ctx.Done():
@@ -162,7 +128,7 @@ func (c *ExpoClient) sendBatch(ctx context.Context, batch []Message) ([]Ticket, 
 	}
 	res, err := c.post(ctx, c.sendURL, body)
 	if err != nil {
-		return nil, retryableError{err} // transport error — retry
+		return nil, retryableError{err}
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= 500 {
@@ -180,9 +146,6 @@ func (c *ExpoClient) sendBatch(ctx context.Context, batch []Message) ([]Ticket, 
 	return envelope.Data, nil
 }
 
-// GetReceipts fetches delivery receipts for the given ticket ids (chunked to the
-// getReceipts cap). Returns a map keyed by ticket id; ids with no receipt yet are
-// simply absent.
 func (c *ExpoClient) GetReceipts(ctx context.Context, ids []string) (map[string]Receipt, error) {
 	out := make(map[string]Receipt, len(ids))
 	for start := 0; start < len(ids); start += maxReceiptBatch {

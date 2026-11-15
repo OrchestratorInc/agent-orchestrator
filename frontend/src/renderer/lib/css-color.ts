@@ -1,8 +1,3 @@
-/**
- * Resolve a CSS custom property holding any color syntax (oklch, hex, …) to an
- * opaque `#rrggbb` string. Returns null when it cannot be resolved (jsdom, no
- * canvas, unset token).
- */
 export function resolveCssColorToHex(property: string): string | null {
 	try {
 		const probe = document.createElement("span");

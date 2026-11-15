@@ -309,10 +309,6 @@ export function formatBrowserAnnotationMessage(
 	return limitMessage(lines.join("\n"), MAX_BROWSER_ANNOTATION_MESSAGE_LENGTH);
 }
 
-/**
- * Parse AO's annotation transport so the transcript can render a concise card
- * instead of exposing selectors and agent-facing handoff instructions.
- */
 export function parseBrowserAnnotationMessage(message: string): ParsedBrowserAnnotationMessage | null {
 	const match = BROWSER_ANNOTATIONS_BLOCK_PATTERN.exec(message.trim());
 	if (!match) return null;

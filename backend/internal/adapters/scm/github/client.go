@@ -24,30 +24,19 @@ const (
 	defaultUserAgent   = "ao-agent-orchestrator/scm-github"
 )
 
-// Sentinel errors. Provider-level callers should match on these via
-// errors.Is; the orchestrator's lifecycle code is intentionally insulated
-// from raw HTTP status codes.
 var (
 	ErrNotFound    = ports.ErrSCMNotFound
 	ErrAuthFailed  = errors.New("github scm: authentication failed")
 	ErrRateLimited = errors.New("github scm: rate limited")
-	// errGraphQL marks a GraphQL error payload that is not an auth, rate-limit,
-	// or not-found failure. For a mutation it is the provider refusing the
-	// request.
-	errGraphQL = errors.New("github scm: graphql error")
+	errGraphQL     = errors.New("github scm: graphql error")
 )
 
-// RateLimitError carries the structured backoff hints from a rate-limit
-// response. Callers that want to back off intelligently can extract
-// ResetAt / RetryAfter via errors.As; callers that only need the category
-// can use errors.Is(err, ErrRateLimited).
 type RateLimitError struct {
 	ResetAt    time.Time
 	RetryAfter time.Duration
 	Message    string
 }
 
-// Error formats the rate-limit error for logs.
 func (e *RateLimitError) Error() string {
 	if e == nil {
 		return ErrRateLimited.Error()
@@ -58,11 +47,8 @@ func (e *RateLimitError) Error() string {
 	return ErrRateLimited.Error()
 }
 
-// Is lets errors.Is match a *RateLimitError against ErrRateLimited.
 func (e *RateLimitError) Is(target error) bool { return target == ErrRateLimited }
 
-// ClientOptions configures a Client. Production code sets Token alone;
-// tests inject HTTPClient and the URL fields to point at an httptest fake.
 type ClientOptions struct {
 	HTTPClient *http.Client
 	Token      TokenSource
@@ -71,11 +57,6 @@ type ClientOptions struct {
 	UserAgent  string
 }
 
-// Client is the HTTP wrapper. It owns:
-//   - bearer-token injection (with cache invalidation on auth failures),
-//   - ETag cache for REST GETs (so the second observation of the same PR
-//     burns a free 304 instead of a fresh payload), and
-//   - sentinel-error classification so callers don't switch on status codes.
 type Client struct {
 	http       *http.Client
 	tokens     TokenSource
@@ -84,21 +65,13 @@ type Client struct {
 	userAgent  string
 
 	mu       sync.Mutex
-	etagOut  map[string]string // key (method+path+query) -> last-seen ETag
-	bodyOut  map[string][]byte // key -> last-seen body for 304 replay
-	cacheLRU []string          // insertion-order keys for FIFO eviction
+	etagOut  map[string]string
+	bodyOut  map[string][]byte
+	cacheLRU []string
 }
 
-// cacheMaxEntries caps the number of distinct (method,path,query) tuples
-// the in-memory ETag cache will track. A single Provider observes one PR
-// at a time today, but the follow-up poller will reuse one Provider for
-// the whole daemon — without a cap, long-running daemons would grow this
-// map forever.
 const cacheMaxEntries = 512
 
-// NewClient returns a Client. It is intentionally tolerant of nil
-// dependencies: production passes a TokenSource; tests sometimes leave it
-// nil and supply Bearer-less fakes.
 func NewClient(opts ClientOptions) *Client {
 	c := &Client{
 		http:       opts.HTTPClient,
@@ -124,9 +97,6 @@ func NewClient(opts ClientOptions) *Client {
 	return c
 }
 
-// RESTResponse is what doREST returns to the Provider. NotModified=true
-// means the cached body is being served; the byte slice is unchanged from
-// the previous fresh fetch.
 type RESTResponse struct {
 	StatusCode  int
 	NotModified bool
@@ -134,10 +104,6 @@ type RESTResponse struct {
 	Body        []byte
 }
 
-// doRESTWithETag performs one REST GET with an explicit caller-owned ETag.
-// Unlike doREST, it does not replay cached bodies or mutate the client's
-// internal compatibility cache; it exists for the provider-neutral SCM observer,
-// whose ETag cache belongs to the observer orchestration layer.
 func (c *Client) doRESTWithETag(ctx context.Context, path string, q url.Values, etag string) (RESTResponse, error) {
 	u, err := c.restURL(path, q)
 	if err != nil {
@@ -178,11 +144,6 @@ func (c *Client) doRESTWithETag(ctx context.Context, path string, q url.Values, 
 	return RESTResponse{StatusCode: resp.StatusCode, Body: b}, err
 }
 
-// doREST performs one REST request with ETag-aware caching. The cache is
-// scoped to the (method, path, query) tuple so repeated PR observations
-// against the same endpoint replay from the cache while observations of a
-// different PR don't share state. Only GET requests participate in the
-// cache — mutating methods would mis-replay 304s as the previous payload.
 func (c *Client) doREST(ctx context.Context, method, path string, q url.Values, body any) (RESTResponse, error) {
 	cacheable := method == http.MethodGet
 	cacheKey := method + " " + path + "?" + q.Encode()
@@ -232,8 +193,6 @@ func (c *Client) doREST(ctx context.Context, method, path string, q url.Values, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if cacheable && resp.StatusCode == http.StatusNotModified {
-		// Replay the cached body. Update the ETag if GitHub returned a
-		// fresher one — some endpoints rotate ETags on weak revalidation.
 		newETag := resp.Header.Get("ETag")
 		if newETag != "" && newETag != prevETag {
 			c.mu.Lock()
@@ -251,9 +210,6 @@ func (c *Client) doREST(ctx context.Context, method, path string, q url.Values, 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		etag := resp.Header.Get("ETag")
 		if cacheable && etag != "" {
-			// Defensive copy: GitHub's HTTP body is owned by net/http's
-			// buffer pool. Holding the raw slice in our cache would let a
-			// later caller mutate or alias the same backing array.
 			c.storeCacheEntry(cacheKey, etag, append([]byte(nil), b...))
 		}
 		return RESTResponse{StatusCode: resp.StatusCode, ETag: etag, Body: b}, nil
@@ -272,9 +228,6 @@ type graphQLError struct {
 	Path    []any  `json:"path"`
 }
 
-// doGraphQL posts one GraphQL request and returns the decoded data map
-// (the "data" field). Top-level GraphQL errors are surfaced as Go errors
-// classified by the same sentinels as REST.
 func (c *Client) doGraphQL(ctx context.Context, query string, variables map[string]any) (map[string]any, error) {
 	payload := map[string]any{"query": query}
 	if variables != nil {
@@ -318,10 +271,6 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 	if err := json.Unmarshal(respBody, &decoded); err != nil {
 		return nil, fmt.Errorf("github scm: decode graphql response: %w", err)
 	}
-	// A token without Actions read access gets an error on every
-	// checkSuite.workflowRun it touches, with that field nulled and the rest of
-	// the data intact. The field only lets latestCheckRuns match reruns, which
-	// keeps runs without it, so it must not fail the whole fetch.
 	decoded.Errors = slices.DeleteFunc(decoded.Errors, func(e graphQLError) bool {
 		return slices.Contains(e.Path, any("workflowRun"))
 	})
@@ -343,10 +292,6 @@ func (c *Client) doGraphQL(ctx context.Context, query string, variables map[stri
 	return decoded.Data, nil
 }
 
-// fetchPlainText is a small REST helper used for the job-log endpoint,
-// which returns text/plain rather than JSON. It does NOT participate in
-// the ETag cache (logs are append-only and tiny enough that re-fetch is
-// cheap; caching would just inflate memory for no win).
 func (c *Client) fetchPlainText(ctx context.Context, path string) ([]byte, error) {
 	u, err := c.restURL(path, nil)
 	if err != nil {
@@ -356,11 +301,6 @@ func (c *Client) fetchPlainText(ctx context.Context, path string) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("github scm: build %s request: %w", path, err)
 	}
-	// The /actions/jobs/{id}/logs endpoint validates the Accept header
-	// before issuing its 302 to the log blob; sending text/plain here
-	// gets a 406. The canonical Accept for the GitHub REST API is the
-	// vnd.github+json media type — the redirected blob serves the
-	// actual text/plain regardless of what we asked for.
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", c.userAgent)
 	if err := c.authorize(ctx, req); err != nil {
@@ -381,10 +321,6 @@ func (c *Client) fetchPlainText(ctx context.Context, path string) ([]byte, error
 	return nil, classifyError(resp, body)
 }
 
-// storeCacheEntry records one (ETag, body) pair under cacheKey and evicts
-// the oldest entry once cacheMaxEntries is exceeded. FIFO is intentional:
-// the access pattern is "one PR per poll cycle"; an LRU would just add
-// bookkeeping without changing eviction order in practice.
 func (c *Client) storeCacheEntry(cacheKey, etag string, body []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -444,12 +380,6 @@ func classifyError(resp *http.Response, body []byte) error {
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%w: %s", ErrAuthFailed, msg)
 	case http.StatusForbidden:
-		// GitHub returns 403 for primary rate-limit exhaustion, for
-		// secondary/abuse limits, and for genuine auth/permission failures.
-		// Disambiguate by signal: primary limit sets X-RateLimit-Remaining=0;
-		// secondary/abuse sets Retry-After (often without the Remaining
-		// header); either case mentions "rate limit" / "abuse" in the body.
-		// Everything else is an auth/permission failure.
 		if isRateLimited(resp, msg) {
 			return rateLimited(resp, msg)
 		}

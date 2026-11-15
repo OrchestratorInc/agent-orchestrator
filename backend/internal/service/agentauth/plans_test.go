@@ -72,10 +72,6 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		got := plans[i]
 		wantLaunchMode := LaunchTerminal
 		switch want.id {
-		// Aider and Unreal Agent configure providers through files and environment,
-		// with no command to drive. DeepSeek Harness has no login subcommand either,
-		// but its web profile serves the Models page that writes the credential, so
-		// its setup is a terminal plan.
 		case "aider", "unreal-agent", "memcode":
 			wantLaunchMode = LaunchDocumentation
 		}
@@ -112,10 +108,6 @@ func TestUnknownPlanReturnsStableTargetError(t *testing.T) {
 	}
 }
 
-// TestCommandCodeLoginNeverLaunchesBareCmd pins the cross-platform login
-// command: on native Windows `cmd` is the system shell rather than Command
-// Code, so the auth plan must use the portable `command-code` binary name,
-// which resolves on every OS the adapter supports.
 func TestCommandCodeLoginNeverLaunchesBareCmd(t *testing.T) {
 	t.Parallel()
 

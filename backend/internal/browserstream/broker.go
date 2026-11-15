@@ -17,10 +17,8 @@ const helloTimeout = 5 * time.Second
 
 const controlQueueSize = 16
 
-// ErrUnavailable means the Electron browser host cannot currently serve a stream.
 var ErrUnavailable = errors.New("browser stream host is unavailable")
 
-// Event is a frame or state transition emitted by the Electron browser host.
 type Event struct {
 	Type    string
 	Frame   *Frame
@@ -41,7 +39,6 @@ type subscriber struct {
 	closed bool
 }
 
-// Subscription receives ordered control events and latest-value frames for one AO session.
 type Subscription struct {
 	StreamID uint32
 	Events   <-chan Event
@@ -49,7 +46,6 @@ type Subscription struct {
 	close    func()
 }
 
-// Close releases this subscriber and stops the host capture when it was the last one.
 func (s *Subscription) Close() {
 	if s != nil && s.close != nil {
 		s.close()
@@ -57,8 +53,6 @@ func (s *Subscription) Close() {
 	}
 }
 
-// Broker owns the single authenticated Electron media link and fans one host
-// capture out to any number of daemon-side subscribers.
 type Broker struct {
 	log   *slog.Logger
 	token string
@@ -72,7 +66,6 @@ type Broker struct {
 	nextSubID uint64
 }
 
-// New creates a broker authenticated with the private daemon-to-Electron token.
 func New(log *slog.Logger, token string) *Broker {
 	if log == nil {
 		log = slog.Default()
@@ -80,14 +73,12 @@ func New(log *slog.Logger, token string) *Broker {
 	return &Broker{log: log, token: token, streams: map[string]*streamState{}, byID: map[uint32]*streamState{}, nextID: 1}
 }
 
-// Connected reports whether an authenticated Electron browser host is attached.
 func (b *Broker) Connected() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.conn != nil
 }
 
-// Subscribe starts or joins the latest-value frame stream for one AO session.
 func (b *Broker) Subscribe(ctx context.Context, sessionID string) (*Subscription, error) {
 	if sessionID == "" {
 		return nil, errors.New("browser stream session id is required")
@@ -152,7 +143,6 @@ func (b *Broker) unsubscribe(sessionID string, subID uint64) {
 	}
 }
 
-// Send delivers a validated input/navigation/lease command to the host.
 func (b *Broker) Send(ctx context.Context, sessionID, typ string, payload any) error {
 	b.mu.Lock()
 	stream := b.streams[sessionID]
@@ -190,7 +180,6 @@ func (b *Broker) send(ctx context.Context, control Control) error {
 	return nil
 }
 
-// Serve accepts the single private browser-host connection until ctx is canceled.
 func (b *Broker) Serve(ctx context.Context, ln net.Listener) error {
 	go func() {
 		<-ctx.Done()
@@ -286,8 +275,6 @@ func (b *Broker) publish(streamID uint32, event Event) {
 			select {
 			case subscriber.events <- event:
 			default:
-				// Disconnect a stalled subscriber rather than silently dropping
-				// a state transition or growing an unbounded control queue.
 				subscriber.closed = true
 				close(subscriber.events)
 				close(subscriber.frames)

@@ -109,7 +109,6 @@ describe("FileContentPane", () => {
 				diffTruncated: false,
 			},
 		});
-		// Two written comments bring the bar up.
 		const targets = [
 			{ path: "src/App.tsx", side: "file", surface: "focused", line: 1 },
 			{ path: "src/App.tsx", side: "file", surface: "focused", line: 2 },
@@ -261,7 +260,6 @@ describe("FileContentPane", () => {
 		const src = player.getAttribute("src");
 		player.currentTime = 12;
 		const client = subscribeMock.mock.calls[0]![1];
-		// A focus refetch gets a new load timestamp even when its file is unchanged.
 		const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1000);
 		onTestFinished(() => now.mockRestore());
 		await act(() => client.invalidateQueries({ queryKey: ["session-workspace-file", "sess-1"] }));
@@ -549,7 +547,6 @@ describe("FileContentPane", () => {
 
 		const breadcrumb = await screen.findByRole("navigation", { name: "File path" });
 		expect(breadcrumb).toHaveTextContent("src/App.tsx");
-		// Status and change counts live beside the name, replacing the diff's own header row.
 		expect(breadcrumb).toHaveTextContent("M+1−1");
 		expect(screen.getByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
 		await userEvent.click(screen.getByRole("tab", { name: "File" }));
@@ -757,7 +754,6 @@ describe("FileContentPane", () => {
 		renderWithQuery(<FileContentPane annotation={model} path="src/App.tsx" sessionId="sess-1" split={false} />);
 
 		const composer = await screen.findByRole("textbox", { name: /Feedback for src\/App\.tsx/ });
-		// In the page flow right under the sticky toolbar, not floating over the code.
 		expect(composer.closest(".absolute")).toBeNull();
 		expect(screen.getByRole("navigation", { name: "File path" }).closest(".sticky")?.nextElementSibling).toContainElement(composer);
 	});
@@ -981,16 +977,12 @@ describe("FileContentPane", () => {
 					diff: "@@ -0,0 +1,1 @@\n+# Hello\n", diffTruncated: false,
 				},
 			});
-			// Centre tab, request #1: switched to Rich preview.
 			const centre = renderWithQuery(pane("sess-1", "README.md", 1));
 			await userEvent.click(await richPreviewTab());
 			centre.unmount();
 
-			// The maximized Files panel keeps its own request numbers and does not
-			// opt in, so its explicit diff request #1 still opens as a diff.
 			renderWithQuery(<FileContentPane annotation={noopAnnotation()} initialMode="diff" initialRequestKey={1} path="README.md" sessionId="sess-1" split={false} />);
 			expect(await screen.findByRole("tab", { name: "Diff" })).toHaveAttribute("aria-selected", "true");
-			// Nor does it record its own picks over the centre tab's.
 			await userEvent.click(screen.getByRole("tab", { name: "File" }));
 			expect(useUiStore.getState().inspectorSessions["sess-1"]?.fileDisplayModes?.["README.md"]).toEqual({ mode: "rendered", requestKey: 1 });
 		});

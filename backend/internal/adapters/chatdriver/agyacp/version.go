@@ -8,29 +8,16 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 )
 
-// serverAgentName is the agentInfo.name Google's Antigravity ACP server reports.
 const serverAgentName = "antigravity-acp"
 
-// minimumServerVersion is the oldest server AO has verified end to end:
-// session/request_permission with allow_once, default/auto_edit/yolo modes,
-// session/load, and authenticate reusing an existing Google sign-in.
 const minimumServerVersion = "1.3.0"
 
-// cliServerAgentName is the agentInfo.name of the ACP server built into the
-// agy CLI, started as `agy acp`.
 const cliServerAgentName = "Antigravity ACP Server"
 
-// minimumCLIACPVersion is the first agy CLI whose `agy acp` AO launches. Its
-// `agy acp` steers a running turn when another prompt arrives from 1.5.0, but
-// before 1.5.4 a turn hangs when a tool call needs a second approval, and a
-// resumed session drops back to the default mode (1.5.4 changelog). AO
-// launches older CLIs' separate server instead.
 const minimumCLIACPVersion = "1.5.4"
 
 var versionPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
 
-// validateInitialize admits only Google's Antigravity ACP servers at a tested
-// version: the separate server, which has no --version flag, or `agy acp`.
 func validateInitialize(init acpsdk.InitializeResponse) error {
 	if isCLIServer(init) {
 		installed, ok := parseVersion(init.AgentInfo.Version)
@@ -60,12 +47,10 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 	return nil
 }
 
-// isCLIServer reports whether the handshake came from `agy acp`.
 func isCLIServer(init acpsdk.InitializeResponse) bool {
 	return init.AgentInfo != nil && init.AgentInfo.Name == cliServerAgentName
 }
 
-// cliSteers reports whether the handshake came from an `agy acp` that steers.
 func cliSteers(init acpsdk.InitializeResponse) bool {
 	if !isCLIServer(init) {
 		return false

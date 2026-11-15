@@ -1,9 +1,3 @@
-/**
- * The page behind cached artifact previews. Main loads it in a hidden window,
- * hands it one artifact with `start`, polls `state`, and asks `encode` for the
- * WebP once the preview is complete. It draws the same ArtifactThumbnail a card
- * does, in a box the snapshot's size, and nothing else of the app.
- */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
@@ -20,7 +14,6 @@ import { ARTIFACT_SNAPSHOT_HEIGHT, ARTIFACT_SNAPSHOT_WIDTH, type ArtifactSnapsho
 
 type State = "loading" | "ready" | "unavailable" | "error";
 
-/** How long the preview must stay still before it counts as drawn; a PDF paints its canvas later than the DOM. */
 const QUIET_MS = 500;
 const QUIET_PDF_MS = 1_200;
 
@@ -45,12 +38,10 @@ function state(): State {
 	if (Date.now() - activity < quietMs || document.fonts.status !== "loaded") return "loading";
 	for (const image of root.querySelectorAll("img")) if (!image.complete) return "loading";
 	for (const video of root.querySelectorAll("video")) if (video.readyState < 2) return "loading";
-	// An HTML page can take longer than the quiet period to load; a frame still loading is a blank or half-drawn card.
 	for (const frame of root.querySelectorAll("iframe")) if (!loadedFrames.has(frame)) return "loading";
 	return "ready";
 }
 
-/** Unmounts the preview, so the window sits idle until the next artifact. */
 function reset(): void {
 	started = false;
 	mounted?.observer.disconnect();
@@ -79,7 +70,6 @@ async function start(job: ArtifactSnapshotJob): Promise<void> {
 	};
 	quietMs = /\.pdf$/i.test(job.path) ? QUIET_PDF_MS : QUIET_MS;
 	const root = document.getElementById("root") as HTMLElement;
-	// Anything that changes the preview, or finishes loading into it, restarts the quiet period.
 	const observer = new MutationObserver(bump);
 	observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
 	bump();
@@ -97,7 +87,6 @@ async function start(job: ArtifactSnapshotJob): Promise<void> {
 	);
 }
 
-/** The frame as WebP, base64: the page's canvas encodes it, which Electron's own images cannot. */
 async function encode(png: string, quality: number): Promise<string> {
 	const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
 	const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
@@ -113,7 +102,6 @@ async function encode(png: string, quality: number): Promise<string> {
 }
 
 void preloadMarkdownFonts();
-// Loads and errors do not bubble, but they do capture; listen once for every artifact.
 for (const type of ["load", "loadeddata", "error"]) document.getElementById("root")?.addEventListener(type, bump, true);
 document.getElementById("root")?.addEventListener("load", (event) => {
 	if (event.target instanceof HTMLIFrameElement) loadedFrames.add(event.target);

@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// sessionRefreshFixture tracks PR 1 for p-1 and PR 2 for p-2 behind an
-// unchanged repo guard, so only a forced refresh fetches either.
 func sessionRefreshFixture(pr1 ports.SCMObservation) (*Observer, *fakeProvider, *fakeStore) {
 	store := testStoreWithSession()
 	store.sessions = append(store.sessions, domain.SessionRecord{ID: "p-2", ProjectID: "p", Metadata: domain.SessionMetadata{Branch: "feat"}})
@@ -54,8 +52,6 @@ func TestRequestSessionRefresh_CoalescesIntoOneTrigger(t *testing.T) {
 	}
 }
 
-// A signal fetches that session's PR past the 304 repo guard, once, and leaves
-// the other session's PR and its CI guard to the regular poll.
 func TestPoll_SessionRefreshFetchesOnlyThatSessionOnce(t *testing.T) {
 	merged := testObs(1)
 	merged.PR.State = "merged"

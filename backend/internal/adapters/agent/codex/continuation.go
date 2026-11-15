@@ -19,17 +19,12 @@ var (
 	_ ports.AgentTranscriptLocator              = (*Plugin)(nil)
 )
 
-// ContinuationCapabilities reports that Codex accepts current developer
-// instructions on fresh launch and `codex resume`. Codex itself assigns fresh
-// conversation ids, which AO captures through SessionStart hooks.
 func (p *Plugin) ContinuationCapabilities() ports.ContinuationCapabilities {
 	return ports.ContinuationCapabilities{
 		FreshNativeSessionID: ports.FreshNativeSessionIDProviderAssigned,
 	}
 }
 
-// NativeSessionConfigDir returns the exact CODEX_HOME used by the invocation,
-// falling back to Codex's standard ~/.codex state root.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -41,9 +36,6 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return dir, nil
 }
 
-// ProbeNativeSession checks only Codex's active sessions directory. An
-// archived transcript remains useful handoff context but is not treated as a
-// resumable active conversation.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	if strings.TrimSpace(ref.ConfigDir) == "" {
 		return ports.NativeSessionAvailabilityUnknown, nil
@@ -62,9 +54,6 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// LocateTranscript finds Codex's rollout JSONL by native session id. It checks
-// active sessions first, then archived sessions so a non-resumable prior
-// conversation can still contribute a provenance-labeled handoff reference.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -93,8 +82,6 @@ func findCodexTranscript(ctx context.Context, root, sessionID string) (string, b
 	return findCodexRollout(ctx, root, sessionID, func(name, id string) bool { return strings.HasSuffix(name, "-"+id+".jsonl") })
 }
 
-// codexRolloutStored also accepts the forms Codex stores a resumable thread in:
-// an inactive rollout compressed to .jsonl.zst, and `<thread>_<segment>` files.
 func codexRolloutStored(name, id string) bool {
 	thread := nativeconfig.CodexRolloutThread(name)
 	return thread != "" && strings.EqualFold(thread, id)

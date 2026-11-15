@@ -19,11 +19,6 @@ const (
 	dailyCommandCountCap = 20
 )
 
-// DailySummarySink turns ao.usage.cli_usage_errors into one remote event per UTC day.
-// Other events pass through. The local fanout is upstream, so diagnostics stay
-// complete. Counts persist across restarts. A day is sent once, after it ends,
-// when a later event arrives or FlushCompleted runs. Opt-out must wrap this
-// sink so a suppressed day is not stored and flushed after opt-in.
 type DailySummarySink struct {
 	next ports.EventSink
 	path string
@@ -38,8 +33,6 @@ type dailyUsageState struct {
 	Sent   bool           `json:"sent"`
 }
 
-// NewDailySummarySink loads any unsent day from path. An empty path keeps the
-// summary in memory only.
 func NewDailySummarySink(next ports.EventSink, path string) *DailySummarySink {
 	sink := &DailySummarySink{next: next, path: path, state: dailyUsageState{Counts: map[string]int{}}}
 	if path == "" {
@@ -60,8 +53,6 @@ func NewDailySummarySink(next ports.EventSink, path string) *DailySummarySink {
 	return sink
 }
 
-// Emit records a CLI usage error or forwards every other event. Crossing into
-// a new UTC day flushes the previous day's summary first.
 func (s *DailySummarySink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	if s == nil || s.next == nil {
 		return
@@ -78,7 +69,6 @@ func (s *DailySummarySink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	s.mu.Unlock()
 }
 
-// FlushCompleted sends a finished, unsent day. The in-progress day stays put.
 func (s *DailySummarySink) FlushCompleted(ctx context.Context, now time.Time) {
 	if s == nil {
 		return
@@ -86,7 +76,6 @@ func (s *DailySummarySink) FlushCompleted(ctx context.Context, now time.Time) {
 	s.flushCompleted(ctx, now)
 }
 
-// Close flushes a completed day and closes the next sink.
 func (s *DailySummarySink) Close(ctx context.Context) error {
 	if s == nil || s.next == nil {
 		return nil
@@ -95,8 +84,6 @@ func (s *DailySummarySink) Close(ctx context.Context) error {
 	return s.next.Close(ctx)
 }
 
-// Discard drops the unsent summary and removes its file. Opt-out and an
-// install-id reset call this so command paths are not flushed later.
 func (s *DailySummarySink) Discard() {
 	if s == nil {
 		return
@@ -207,8 +194,6 @@ func endOfUTCDay(day string) time.Time {
 	if err != nil {
 		return time.Now().UTC()
 	}
-	// Last millisecond of that UTC day. Midnight of the next day is bucketed
-	// as the following day.
 	return parsed.UTC().Add(24*time.Hour - time.Millisecond)
 }
 

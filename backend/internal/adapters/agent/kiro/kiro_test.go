@@ -435,7 +435,6 @@ func TestGetAgentHooksInstallsKiroHooks(t *testing.T) {
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must not duplicate AO hook commands.
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +676,6 @@ func TestUninstallHooksRemovesKiroHooks(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own stop hook; it must survive uninstall.
 	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -920,9 +918,6 @@ func TestSessionInfoFalseWhenNoHookMetadata(t *testing.T) {
 }
 
 func TestResolveKiroBinaryFallback(t *testing.T) {
-	// When the binary is not on PATH or any well-known location, the resolver
-	// MUST surface ports.ErrAgentBinaryNotFound rather than a silent string
-	// fallback that lets a missing CLI launch into an empty tmux pane.
 	bin, err := ResolveKiroBinary(context.Background())
 	if err != nil {
 		if !errors.Is(err, ports.ErrAgentBinaryNotFound) {

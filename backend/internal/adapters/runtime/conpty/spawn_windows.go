@@ -1,7 +1,5 @@
 //go:build windows
 
-// spawn_windows.go - real detached pty-host spawner for Windows using
-// CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS so the host survives daemon exit.
 package conpty
 
 import (
@@ -18,9 +16,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// boundedBuffer is a thread-safe io.Writer that retains up to max bytes of what
-// is written and discards the rest. It always consumes its input (never blocks
-// or errors), making it a safe startup diagnostic sink for a detached host.
 type boundedBuffer struct {
 	mu  sync.Mutex
 	buf []byte
@@ -45,41 +40,25 @@ func (b *boundedBuffer) String() string {
 	return string(b.buf)
 }
 
-// defaultSpawnHost resolves the current executable, builds the pty-host argv,
-// and spawns it detached on Windows. It reads stdout for "READY:<pid> <port>"
-// with a 10s timeout, then unrefs (detaches) the child. Returns the loopback
-// address and the pty-host OS PID.
 func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string, env map[string]string, opts HostOptions) (string, int, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", 0, fmt.Errorf("conpty spawn: resolve executable: %w", err)
 	}
 
-	// Translate a leading `env NAME=VALUE ...` prefix into real child env vars.
-	// Windows has no `env` binary and the pty-host execs argv[0] directly, so an
-	// adapter that emits `env KEY=value <bin>` (e.g. opencode, to set
-	// OPENCODE_CONFIG) would otherwise fail with "env: executable file not
-	// found". The assignments are added to the pty-host environment below, which
-	// the ConPTY child inherits (host_conpty_windows.go passes os.Environ()).
 	envAssignments, argv := stripEnvAssignments(argv)
 
-	// Build: <exe> pty-host [--start=attach] <sessionID> <cwd> <shellCmd> <shellArgs...>
 	args := ptyHostArgs(sessionID, cwd, argv, opts)
 	if err := validateWindowsCommandLine(append([]string{exe}, args...)); err != nil {
 		return "", 0, fmt.Errorf("conpty spawn: %w", err)
 	}
 
-	// Merge and normalize the environment for an interactive true-color PTY.
 	merged := interactiveTerminalEnv(os.Environ(), env, envAssignments)
 
 	cmd := exec.CommandContext(ctx, exe, args...) //nolint:forbidigo // detached ConPTY host requires specialized creation flags
 	cmd.Dir = cwd
 	cmd.Env = merged
 
-	// Windows process-creation flags: detached + hidden console.
-	// ponytail: DETACHED_PROCESS puts the child in its own console; without it
-	// the child is killed when the parent's console closes. CREATE_NEW_PROCESS_GROUP
-	// insulates it from Ctrl+C sent to the parent. windowsHide suppresses the flash.
 	cmd.SysProcAttr = &windows.SysProcAttr{
 		CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP,
 		HideWindow:    true,
@@ -89,9 +68,6 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	if err != nil {
 		return "", 0, fmt.Errorf("conpty spawn: stdout pipe: %w", err)
 	}
-	// Capture a bounded copy of the pty-host's stderr. It writes its startup
-	// diagnostics there (listen/newConPTY failures) before exiting without
-	// printing READY; retaining them lets us report the real cause below.
 	stderr := &boundedBuffer{max: maxCapturedStderr}
 	cmd.Stderr = stderr
 
@@ -99,7 +75,6 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 		return "", 0, fmt.Errorf("conpty spawn: start: %w", err)
 	}
 
-	// Read READY line with a timeout.
 	readyC := make(chan struct {
 		addr string
 		pid  int
@@ -142,10 +117,8 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 			pid, err := cleanupStartedHostFailure(cmd.Process.Pid, r.err, cmd.Process.Kill)
 			return "", pid, err
 		}
-		// Unref: detach stdout so the child is not blocked, then release reference
-		// so our process can exit while the child keeps running.
 		stdout.Close()
-		cmd.Process.Release() // nolint: errcheck - best-effort detach
+		cmd.Process.Release()
 		return r.addr, cmd.Process.Pid, nil
 	case <-timer.C:
 		pid, err := cleanupStartedHostFailure(cmd.Process.Pid, fmt.Errorf("conpty spawn: pty-host startup timeout (%s)", spawnReadyTimeout), cmd.Process.Kill)

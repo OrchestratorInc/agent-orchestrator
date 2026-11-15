@@ -148,7 +148,6 @@ func TestPoll_SharedBaseCheckoutOrder(t *testing.T) {
 					Name: destination.Owner, RelativePath: destination.Owner, RepoOriginURL: remoteAddress(shared),
 				})
 			}
-			// The right checkout must not authorize a head for the left fork itself.
 			unrelated := provider.openPRs[prKey(shared, 0)][1]
 			unrelated.Number = 90
 			unrelated.URL = "https://github.com/left/widget/pull/90"

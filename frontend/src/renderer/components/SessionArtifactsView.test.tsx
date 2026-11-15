@@ -7,7 +7,6 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { aoBridge } from "../lib/bridge";
 import { isMacPlatform } from "../lib/platform";
 
-// The zoom chord is Cmd on macOS and Ctrl elsewhere, never both, as in the app menu.
 const primaryModifier = () => (isMacPlatform() ? { metaKey: true } : { ctrlKey: true });
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -15,10 +14,8 @@ import { AppBrowserLinkContext } from "./AppLink";
 import { SessionArtifactsView } from "./SessionArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-// The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
 vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
 
-// Share is offered only where the control plane serves share links.
 vi.mock("../hooks/useSettings", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
 	return {
@@ -72,7 +69,6 @@ vi.mock("../hooks/useCloudCp", () => ({
 		userId: "u-1",
 	}),
 }));
-// These tests are about the live preview a card draws before it is cached; the cached image path has its own tests.
 vi.mock("./ArtifactSnapshotThumbnail", async () => {
 	const { ArtifactThumbnail } = await import("./ArtifactThumbnail");
 	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
@@ -191,7 +187,6 @@ describe("SessionArtifactsView for a cloud session", () => {
 	it("sends feedback on an html artifact to the worker through the control plane", async () => {
 		renderView(<SessionArtifactsView session={cloudSession()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
-		// The file's actions are in its name menu.
 		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Add feedback" }));
 		await userEvent.type(screen.getByRole("textbox"), "make the chart wider");
@@ -575,7 +570,6 @@ describe("SessionArtifactsView", () => {
 		expect(document.querySelector("iframe")).toHaveAttribute("src", "http://ao-inline-artifact.sess-1.localhost/report.html");
 		expect(document.querySelector("iframe")).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
 		expect(screen.getByTestId("artifact-view").parentElement).toHaveClass("hidden");
-		// Page and source are a single choice in the file's name menu.
 		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
 		expect(screen.getByRole("menuitemradio", { name: "Rich preview" })).toHaveAttribute("aria-checked", "true");
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "View source" }));
@@ -584,7 +578,6 @@ describe("SessionArtifactsView", () => {
 		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: "Rich preview" }));
 		expect(document.querySelector("iframe")).not.toBeNull();
-		// The header keeps only Share and full screen beside the menu.
 		expect(screen.queryByRole("button", { name: "View source" })).not.toBeInTheDocument();
 	});
 
@@ -624,13 +617,11 @@ describe("SessionArtifactsView", () => {
 		const openExternal = vi.spyOn(aoBridge.editorHandoff, "openArtifactInBrowser");
 		renderView(<SessionArtifactsView session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
-		// A Markdown file is not one a browser renders.
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
 		expect(screen.queryByRole("menuitem", { name: "Open in browser" })).not.toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
 		await userEvent.click(screen.getByRole("button", { name: "Back to artifacts" }));
 		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
-		// The file's actions stay in its menu, not the header.
 		expect(screen.queryByRole("button", { name: "Open in browser" })).not.toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Open in browser" }));
@@ -645,7 +636,6 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "report.html" }} session={{ ...cloudSession(), cloud: { orgId: "org-1", createdByUserId: "me-1" } } as WorkspaceSession} />);
 		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Open in browser" }));
-		// Every file is copied, so the page's own files load beside it.
 		await vi.waitFor(() => expect(openFolder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ sessionId: "cloud-1", reveal: "report.html", open: "browser", files: expect.arrayContaining([expect.objectContaining({ path: "chart.png" })]) })));
 		openFolder.mockRestore();
 	});
@@ -697,7 +687,6 @@ describe("SessionArtifactsView", () => {
 			const toolbar = screen.getByRole("group", { name: "Zoom" });
 			await act(() => vi.advanceTimersByTimeAsync(1_500));
 			expect(toolbar).toHaveAttribute("data-state", "hidden");
-			// Pointer moves inside the cross-origin page reach the viewer only through its bridge.
 			const frame = document.querySelector("iframe")!;
 			act(() => {
 				window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow, data: { jsonrpc: "2.0", method: "ao/zoom", params: { reveal: true } } }));
@@ -715,7 +704,6 @@ describe("SessionArtifactsView", () => {
 			const toolbar = screen.getByRole("group", { name: "Zoom" });
 			await act(() => vi.advanceTimersByTimeAsync(1_500));
 			expect(toolbar).toHaveAttribute("data-state", "hidden");
-			// Hidden, it still takes the pointer, so it can be found over a cloud page too.
 			expect(toolbar).not.toHaveClass("pointer-events-none");
 			fireEvent.pointerEnter(toolbar);
 			expect(toolbar).toHaveAttribute("data-state", "visible");
@@ -767,8 +755,6 @@ describe("SessionArtifactsView", () => {
 	});
 
 	it("says a requested file is not listed yet, and opens it once the session lists it", () => {
-		// A chat link to a file the agent just wrote opens Artifacts before the
-		// session's list has it.
 		const request = { key: 1, path: "notes/fresh.md" };
 		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
 		expect(screen.getByText("notes/fresh.md isn't in this session's artifacts yet. It opens here once the session lists it.")).toBeInTheDocument();
@@ -779,7 +765,6 @@ describe("SessionArtifactsView", () => {
 	});
 
 	it("opens a requested file listed under a new name, not the not-listed-yet note", () => {
-		// A link written before the agent renamed the file names its old path.
 		const request = { key: 1, path: "notes/draft.md" };
 		const view = renderView(<SessionArtifactsView request={request} session={session()} />);
 		expect(screen.getByText(/notes\/draft\.md isn't in this session's artifacts yet/)).toBeInTheDocument();
@@ -790,7 +775,6 @@ describe("SessionArtifactsView", () => {
 	});
 
 	it("returns to the gallery, not the not-listed-yet note, when the open file leaves the list", async () => {
-		// Deleted from the viewer's menu, or by the agent: the file is gone, not on its way.
 		const view = renderView(<SessionArtifactsView session={session()} />);
 		await userEvent.click(screen.getByRole("button", { name: /^notes\.md/ }));
 		expect(screen.getByTestId("artifact-view")).toHaveTextContent("viewer:notes.md");
@@ -799,7 +783,6 @@ describe("SessionArtifactsView", () => {
 		expect(screen.queryByText(/isn't in this session's artifacts yet/)).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /^plan\.md/ })).toBeInTheDocument();
 
-		// A requested file that was listed and then removed goes back to the gallery too.
 		const request = { key: 1, path: "notes/fresh.md" };
 		const fresh: SessionArtifact = { kind: "markdown", name: "fresh.md", path: "notes/fresh.md", size: 5, updatedAt: "2026-09-24T00:00:00Z" };
 		view.rerender(<SessionArtifactsView request={request} session={session([...remaining, fresh])} />);
@@ -981,7 +964,6 @@ describe("SessionArtifactsView", () => {
 			return;
 		}
 		expect(share).toHaveTextContent("Publish");
-		// After the file's menu and the viewer's own buttons (Edit), before full screen.
 		const after = (first: Element, second: Element) => Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 		expect(after(screen.getByRole("button", { name: "notes.md" }), share!)).toBe(true);
 		expect(after(share!, screen.getByRole("button", { name: "Maximize" }))).toBe(true);
@@ -1030,7 +1012,6 @@ describe("SessionArtifactsView", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: path }));
 		const menu = screen.getByRole("menu");
-		// A media file's versions are reachable locally, or on a host that says it serves them.
 		const hasHistory = !(path.endsWith(".png") && (cloud || hostId));
 		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(hasHistory ? ["Version history", ...actions] : actions);
 		expect(within(menu).queryAllByRole("separator")).toHaveLength(separators + (hasHistory ? 1 : 0));
@@ -1085,7 +1066,6 @@ describe("SessionArtifactsView", () => {
 		cloudAccessMock.mockReturnValue({ data: CLOUD_ROOT, isError: false, refetch: vi.fn() });
 		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1", createdByUserId: "someone-else" } } as WorkspaceSession} />);
 
-		// The list's cards: no edit, delete or copy to this machine.
 		expect(screen.getAllByRole("button", { name: /^More actions:/ }).length).toBeGreaterThan(0);
 		expect(screen.queryByRole("button", { name: /^Edit file:/ })).toBeNull();
 		expect(screen.queryByRole("button", { name: /^Delete artifact:/ })).toBeNull();
@@ -1117,7 +1097,6 @@ describe("SessionArtifactsView", () => {
 		expect(screen.queryByText(/^View only\./)).toBeNull();
 	});
 
-	// A session with no creator on record offers these, and the server refuses them.
 	it("reads a refused delete of a cloud file as view only", async () => {
 		deleteCloudArtifactMock.mockReset().mockRejectedValue(new CloudCpError("Only the person who started this session can change its files.", { status: 403, code: "artifact_not_owner" }));
 		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);

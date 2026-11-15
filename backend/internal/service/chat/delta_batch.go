@@ -10,53 +10,28 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// deltaFlushInterval is the longest a streamed delta waits for its write while
-// more of the same stream keeps arriving. A var so tests can change it.
 var deltaFlushInterval = 50 * time.Millisecond
 
-// deltaRunMaxBytes and deltaRunMaxEvents bound one run of deltas, and with it
-// the archive row and the transaction a backlog can produce. The event bound
-// matters for deltas with native identities, which keep an archive row each:
-// without it, a replayed backlog of tiny chunks would hold the shared writer
-// for one very long transaction.
 const (
 	deltaRunMaxBytes  = 32 * 1024
 	deltaRunMaxEvents = 1024
 )
 
-// coalescible reports whether event only appends text to one provider item.
 func coalescible(event ports.ChatEvent) bool {
 	switch event.Kind {
 	case ports.ChatEventMessageDelta, ports.ChatEventReasoningDelta, ports.ChatEventCommandOutputDelta,
 		ports.ChatEventCommandInput, ports.ChatEventActivityText:
-		// SQLite's capped appends stop at NUL; joining would discard later deltas too.
 		return event.Err == nil && !strings.ContainsRune(event.Delta, '\x00')
 	}
 	return false
 }
 
-// sameStream reports whether next appends to the same column of the same row as
-// run, carrying the same metadata. Only the text and the native event identity
-// may differ.
 func sameStream(run, next ports.ChatEvent) bool {
 	run.Delta, run.ProviderEventID = "", ""
 	next.Delta, next.ProviderEventID = "", ""
 	return reflect.DeepEqual(run, next) //nolint:govet // coalescible events have nil Err; compare the rest exactly.
 }
 
-// pumpProviderEvents hands provider events to project in arrival order, one unit
-// at a time: a single event, or a run of consecutive deltas for the same stream,
-// which project commits as one transaction instead of one per token.
-//
-// A run is written before any other event, when the stream ends, when a flush is
-// requested, when it reaches its size bounds, and no later than interval after
-// its first delta. Once nothing more is queued, a run is written at once if it
-// starts a different stream from the last run written or no run was written in
-// the last interval: an idle writer adds no latency, and a new item's first
-// delta, which creates its row and takes its timeline position, is not held
-// back. While one stream keeps going, its runs are written at most once per
-// interval. Deltas that arrive while a write is running wait in the channel and
-// join the next run. It reports false when project stops consumption.
 func pumpProviderEvents(
 	events <-chan ports.ChatEvent,
 	flushRequests <-chan chan struct{},
@@ -155,8 +130,6 @@ func pumpProviderEvents(
 	}
 }
 
-// flushDeltas asks the projector to write the run it is batching and waits until
-// that write has finished, the controller stopped, or ctx ended.
 func (c *Controller) flushDeltas(ctx context.Context) {
 	done := make(chan struct{})
 	select {
@@ -173,15 +146,6 @@ func (c *Controller) flushDeltas(ctx context.Context) {
 	}
 }
 
-// projectDeltas commits a run of deltas for one stream in one transaction.
-//
-// Deltas without a native event identity are never deduplicated, so the run is
-// archived as one event holding the joined text. Deltas with one keep a row
-// apiece: a persistent host replays an unacknowledged prompt from its start, and
-// a replay can split the stream into different runs, so only per-event
-// identities let the archive skip exactly the deltas it already holds. The first
-// delta not yet archived opens the transaction; the rest join it, and only text
-// the archive had not seen is applied.
 func (c *Controller) projectDeltas(ctx context.Context, run []ports.ChatEvent) (bool, error) {
 	merged := run[0]
 	if !slices.ContainsFunc(run, func(event ports.ChatEvent) bool { return event.ProviderEventID != "" }) {

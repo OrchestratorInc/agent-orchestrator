@@ -126,8 +126,6 @@ func TestGetLaunchCommandOrchestratorAppendsSystemPromptInteractively(t *testing
 }
 
 func TestGetLaunchCommandEmitsNoPermissionFlag(t *testing.T) {
-	// Pi has no permission CLI surface; every mode must produce the same argv
-	// and never emit a permission flag.
 	modes := []ports.PermissionMode{
 		ports.PermissionModeDefault,
 		"",

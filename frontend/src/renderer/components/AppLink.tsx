@@ -19,22 +19,14 @@ import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
-/** Shared web-link behavior; native fragments and special schemes retain their handlers. */
 export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, filePath, menuPath, onFileOpen, hoverPreview, noHoverPreview, ref, ...props }: ComponentProps<"a"> & {
 	onBrowserOpen?: (url: string) => void;
 	inAppLink?: (url: string) => boolean;
-	/**
-	 * Open every activation (click, modifier click, Enter, middle click, and the
-	 * hover card's links) in the OS browser and never in the Orchestrator
-	 * Browser. Schemes other than http(s) and mailto open nothing.
-	 */
 	systemBrowser?: boolean;
 	filePath?: string;
-	/** A displayed filesystem path whose click navigates elsewhere, such as an artifact link. */
 	menuPath?: string;
 	onFileOpen?: (path: string) => void;
 	hoverPreview?: (open: boolean) => ReactNode;
-	/** For links in a dense list, where a preview card would cover the rows around it. */
 	noHoverPreview?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -50,7 +42,6 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
 	const anchorRef = useRef<HTMLAnchorElement>(null);
 	useImperativeHandle(ref, () => anchorRef.current as HTMLAnchorElement);
-	// Gaining or losing a card remounts the anchor, so that re-runs this too.
 	useEffect(() => (hasHoverPreview ? observeLinkForPreload(anchorRef.current, href) : undefined), [hasHoverPreview, href]);
 	const anchor = (
 		<a
@@ -72,7 +63,6 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 			}}
 			onAuxClick={(event) => {
 				onAuxClick?.(event);
-				// Middle click would otherwise open a window the shell routes on its own.
 				if (!systemBrowser || event.button !== 1 || event.defaultPrevented || !href) return;
 				event.preventDefault();
 				if (isSystemBrowserLink(href)) void openLinkInSystemBrowser(href);
@@ -85,8 +75,6 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 			<HoverCardTrigger
 				asChild
 				onFocus={(event) => {
-					// Keyboard focus opens the preview. Focus returning to a clicked
-					// link, as when the window regains focus, must not.
 					if (!event.currentTarget.matches(":focus-visible")) event.preventDefault();
 				}}
 			>

@@ -25,19 +25,6 @@ import {
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
-/**
- * Bring-your-own-Coder configuration: the connection the control plane uses to
- * drive the org's own Coder deployment. Connecting takes only the Coder **Base
- * URL** and an **API token**: the workspace owner is resolved from the token by
- * the control plane on save, and the template is chosen per project via the
- * creation picker. Once connected, the **Workspace setup** fields say how AO
- * works inside the template's workspaces (who the agent runs as, where it
- * works, and the scripts around each session). Only shown when the org's
- * offering includes the coder provider (gated by the settings catalog). Mirrors CloudCredentialsSection's shape: the
- * outer component reads only the daemon cloud gate (a query the settings page
- * already runs), so a local-only app renders nothing and never mounts the cloud
- * hooks.
- */
 export function CoderSettingsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { cloudEnabled } = useCloudGate();
 	if (!cloudEnabled) return null;
@@ -62,8 +49,6 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const [removing, setRemoving] = useState(false);
 	const [removeError, setRemoveError] = useState<string | null>(null);
 
-	// Hydrate the editable non-secret fields from the loaded config. The token is
-	// never returned by the control plane, so its field always starts empty.
 	const loaded = config.data;
 	useEffect(() => {
 		if (!loaded) return;
@@ -71,16 +56,10 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		setDevEnv(devEnvDraftOf(loaded));
 	}, [loaded]);
 
-	// A connection must be saved before the control plane can reach the org's Coder
-	// to list its templates, so only then do we enable the live template list.
 	const tokenStored = Boolean(loaded?.tokenSet);
 	const { templates, isLoading: templatesLoading, isError: templatesError } = useCoderTemplates(orgId === "" ? undefined : orgId, tokenStored);
-	// The coder-templates query is keyed by this prefix (see useCoderTemplates); a
-	// prefix match re-runs it after the connection changes.
 	const coderTemplatesQueryKey = ["cloud-coder-templates"] as const;
 
-	// Saving the connection needs the signed-in org. This page is reachable while
-	// signed out, so say why it is empty instead of rendering a blank pane.
 	if (status !== "authenticated") {
 		return (
 			<SettingsSection title={t("settings.coder.title")} sectionId="coder" titleHidden={titleHidden} grouped>
@@ -89,22 +68,11 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 		);
 	}
 
-	// A save sends a new token when one is pasted: the control plane re-derives the
-	// workspace owner from it and the form never round-trips the stored secret.
-	// Without one, Save is clickable only when the workspace setup changed; the
-	// stored setup is carried through every save so a token rotation never resets
-	// it. Re-fetching templates is the refresh button on the Templates section.
-	// A control plane that reports protectSecretFiles knows every Workspace
-	// setup field; an older one knows only the ones it had before.
 	const currentControlPlane = loaded?.protectSecretFiles !== undefined;
 	const devEnvFieldErrors = devEnvErrors(devEnv);
 	const devEnvInvalid = Object.keys(devEnvFieldErrors).length > 0;
 	const devEnvDirty = loaded != null && !sameDevEnv(devEnv, devEnvDraftOf(loaded));
-	// The control plane lets only org owners and admins change the connection. A
-	// role the renderer does not know yet leaves the decision to the server.
 	const readOnly = org?.role !== undefined && !canManageBilling(org);
-	// An org that lost the coder capability keeps the connection its sessions run
-	// on: it can read and remove it, but the control plane refuses a save.
 	const saveAllowed = loaded?.editable !== false;
 	const canSave = !busy && !readOnly && saveAllowed && orgId !== "" && baseUrl.trim() !== "" && !devEnvInvalid
 		&& (token.trim() !== "" || (tokenStored && devEnvDirty));
@@ -119,13 +87,9 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				...carriedCoderConfig(loaded),
 				baseUrl: baseUrl.trim(),
 				token: token.trim() === "" ? undefined : token.trim(),
-				// A first connection has no Workspace setup yet (the form shows once
-				// a connection is saved), so it sends none of those fields.
 				...(loaded ? devEnvRequestFields(devEnv, currentControlPlane) : {}),
 			});
 			setToken("");
-			// The connection now points at a (possibly new) Coder, so its template list
-			// may have changed — refresh both the config and the templates.
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: orgCoderConfigQueryKey }),
 				queryClient.invalidateQueries({ queryKey: coderTemplatesQueryKey }),
@@ -147,15 +111,12 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 			setToken("");
 			setBaseUrl("");
 			setDevEnv(EMPTY_DEV_ENV);
-			// The org's offering (whether this page shows) and its templates follow
-			// the connection, so refresh them with the config.
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: orgCoderConfigQueryKey }),
 				queryClient.invalidateQueries({ queryKey: coderTemplatesQueryKey }),
 				queryClient.invalidateQueries({ queryKey: cloudMeQueryKey }),
 			]);
 		} catch (caught) {
-			// The control plane keeps a connection that sessions still run on.
 			if (caught instanceof CloudCpError && caught.code === "connection_in_use") {
 				setRemoveError(t("settings.coder.removeInUse"));
 			} else {
@@ -250,10 +211,6 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 				</SettingsSection>
 			) : null}
 			{tokenStored ? (
-				// Read-only catalog of every template on the connected Coder — so the
-				// whole Coder story lives inside AO. Same tidy name + one-line-spec
-				// style as the session template picker; the template for a session is
-				// chosen per project at creation time, not here.
 				<SettingsSection title={t("settings.coder.templatesListLabel")} grouped>
 					<div className="settings-row-bar">
 						<p className="min-w-0 text-pretty text-control leading-4 text-settings-muted">{t("settings.coder.templatesListHint")}</p>
@@ -353,22 +310,13 @@ function CoderSettingsSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	);
 }
 
-/** A path, not copy: the same in every language. */
 const WORKING_DIRECTORY_EXAMPLE = "~/work/{repo}";
 
-/**
- * How AO works inside the connected Coder's workspaces: who the worker and
- * agent run as, where the session works, and the ready check that waits for
- * the template's own setup. The values are org-wide and apply to sessions
- * started after a save. Per-session setup and cleanup commands are project
- * settings (Project settings > Scripts), as for a local project.
- */
 function WorkspaceSetupFields({ draft, errors, disabled, readOnly, currentControlPlane, onChange }: {
 	draft: DevEnvDraft;
 	errors: Partial<Record<keyof DevEnvDraft, DevEnvErrorKey>>;
 	disabled: boolean;
 	readOnly: boolean;
-	/** False on an older control plane, which rejects the newer fields. */
 	currentControlPlane: boolean;
 	onChange: (patch: Partial<DevEnvDraft>) => void;
 }) {
@@ -494,17 +442,14 @@ function WorkspaceSetupFields({ draft, errors, disabled, readOnly, currentContro
 }
 
 const READY_PROBE_MAX_LENGTH = 1000;
-/** Seconds ranges the control plane accepts; a blank field uses its default. */
 const READY_PROBE_TIMEOUT_RANGE = { min: 30, max: 3600 } as const;
 
-/** The dev-environment fields as the form edits them. */
 interface DevEnvDraft {
 	workspaceUser: boolean;
 	reuseCheckout: boolean;
 	protectSecretFiles: boolean;
 	workingDirectory: string;
 	readyProbe: string;
-	/** Seconds as typed; "" uses the default. */
 	readyProbeTimeout: string;
 }
 
@@ -520,9 +465,7 @@ const EMPTY_DEV_ENV: DevEnvDraft = {
 function devEnvDraftOf(config: CloudCpOrgCoderConfig): DevEnvDraft {
 	return {
 		workspaceUser: config.workerUser === "workspace",
-		// Reusing the template's checkout defaults on for the workspace user.
 		reuseCheckout: config.reuseExistingCheckout ?? true,
-		// Keeping the agent out of .env files is on unless turned off.
 		protectSecretFiles: config.protectSecretFiles ?? true,
 		workingDirectory: config.workingDirectory ?? "",
 		readyProbe: config.readyProbe ?? "",
@@ -543,7 +486,6 @@ function sameDevEnv(a: DevEnvDraft, b: DevEnvDraft): boolean {
 		&& (a.readyProbe.trim() === "" || a.readyProbeTimeout.trim() === b.readyProbeTimeout.trim());
 }
 
-/** Blank uses the default; otherwise a whole number of seconds in range. */
 function isValidSeconds(value: string, range: { min: number; max: number }): boolean {
 	const trimmed = value.trim();
 	if (trimmed === "") return true;
@@ -555,12 +497,6 @@ function isValidSeconds(value: string, range: { min: number; max: number }): boo
 const WORKING_DIRECTORY_MAX_LENGTH = 512;
 const WORKING_DIRECTORY_REPO_PLACEHOLDER = "{repo}";
 
-/**
- * The working directory the control plane accepts: absolute or under the
- * workspace user's home (`~/` or `$HOME/`), naming a directory below that
- * root, at most 512 characters, with no control characters, no `.` or `..`
- * segment, and no placeholder other than `{repo}`.
- */
 function isValidWorkingDirectory(value: string): boolean {
 	const trimmed = value.trim();
 	if (trimmed === "") return true;
@@ -581,7 +517,6 @@ type DevEnvErrorKey =
 	| "readyProbeTooLong"
 	| "readyProbeTimeoutInvalid";
 
-/** Field-level problems, mirroring the control plane's validation. */
 function devEnvErrors(draft: DevEnvDraft): Partial<Record<keyof DevEnvDraft, DevEnvErrorKey>> {
 	const errors: Partial<Record<keyof DevEnvDraft, DevEnvErrorKey>> = {};
 	const workingDirectory = draft.workingDirectory.trim();
@@ -593,14 +528,6 @@ function devEnvErrors(draft: DevEnvDraft): Partial<Record<keyof DevEnvDraft, Dev
 	return errors;
 }
 
-/**
- * The dev-environment fields for the PUT body. The control plane keeps the
- * stored value of any field the request leaves out, so every field it knows is
- * sent, defaults included: that is how clearing the ready check or the
- * working directory, or turning the workspace user off, takes effect. An older
- * control plane (it does not report protectSecretFiles) rejects the newer
- * fields, so it gets only the ones it already had; the form hides the others.
- */
 function devEnvRequestFields(draft: DevEnvDraft, currentControlPlane: boolean): Partial<CloudCpPutOrgCoderConfigRequest> {
 	const probe = draft.readyProbe.trim();
 	const timeout = draft.readyProbeTimeout.trim();
@@ -617,11 +544,6 @@ function devEnvRequestFields(draft: DevEnvDraft, currentControlPlane: boolean): 
 	return fields;
 }
 
-/**
- * Stored settings this form does not edit, carried through a save so it does
- * not drop them. The owner is left out on purpose: the control plane derives it
- * from the token, which may have changed.
- */
 function carriedCoderConfig(config: CloudCpOrgCoderConfig | null | undefined): Partial<CloudCpPutOrgCoderConfigRequest> {
 	if (!config) return {};
 	const fields: Partial<CloudCpPutOrgCoderConfigRequest> = {};

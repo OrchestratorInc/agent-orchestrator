@@ -11,31 +11,19 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// MaxListLimit bounds one page of a session list.
 const MaxListLimit = 200
 
-// ListPage is one page of a session list.
 type ListPage struct {
-	Sessions []domain.Session
-	// NextCursor resumes the list after the page's last session. Empty on the
-	// last page, and for an unpaged list.
+	Sessions   []domain.Session
 	NextCursor string
-	// Archived counts the terminated sessions an active-only list (Active is
-	// true) left out, so a client that does not fetch the archive can still say
-	// how big it is. Nil for any other filter.
-	Archived *ArchiveSummary
+	Archived   *ArchiveSummary
 }
 
-// ArchiveSummary is the size of the archive behind an active-only list, under
-// the same project and kind filters.
 type ArchiveSummary struct {
 	Total     int
 	ByProject map[domain.ProjectID]int
 }
 
-// selectSessionRecords keeps the rows matching filter and, for an active-only
-// filter, counts the terminated rows that the same filter without Active would
-// have kept.
 func selectSessionRecords(recs []domain.SessionRecord, filter ListFilter) ([]domain.SessionRecord, *ArchiveSummary) {
 	matched := make([]domain.SessionRecord, 0, len(recs))
 	var archive *ArchiveSummary
@@ -58,7 +46,6 @@ func selectSessionRecords(recs []domain.SessionRecord, filter ListFilter) ([]dom
 	return matched, archive
 }
 
-// listPageKey is a row's position in a paged list.
 type listPageKey struct {
 	pinned    bool
 	updatedAt time.Time
@@ -69,10 +56,6 @@ func pageKeyOf(rec domain.SessionRecord) listPageKey {
 	return listPageKey{pinned: rec.IsPinned, updatedAt: rec.UpdatedAt.UTC(), id: rec.ID}
 }
 
-// before reports whether a sorts ahead of b in a paged list: pinned rows
-// first, then the most recently updated, then by id so the order is total and
-// a cursor always resumes at one place. Desktop's archive orders by updatedAt
-// too, so both apps list the archive the same way.
 func (a listPageKey) before(b listPageKey) bool {
 	if a.pinned != b.pinned {
 		return a.pinned
@@ -83,10 +66,6 @@ func (a listPageKey) before(b listPageKey) bool {
 	return a.id > b.id
 }
 
-// pageSessionRecords orders the rows, skips everything up to and including the
-// cursor's row, and returns at most limit of them with the cursor for the rest.
-// The cursor is a position rather than an offset, so rows added or removed
-// between pages neither repeat nor go missing.
 func pageSessionRecords(recs []domain.SessionRecord, after *listPageKey, limit int) ([]domain.SessionRecord, string) {
 	sort.SliceStable(recs, func(i, j int) bool { return pageKeyOf(recs[i]).before(pageKeyOf(recs[j])) })
 	if after != nil {

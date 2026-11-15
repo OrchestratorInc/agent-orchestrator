@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-// executeCLIRoot runs args through executeWithDeps so tests cover the
-// root-level remote-browser routing, not just the assembled command tree.
 func executeCLIRoot(t *testing.T, deps Deps, args ...string) (string, string, error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
@@ -139,10 +137,6 @@ func TestBrowserRemoteRoutingRequiresBrowserCommand(t *testing.T) {
 	}
 }
 
-// TestBrowserRemoteSlowResponseSucceedsWithProductionClient covers the review
-// finding that the default CLI HTTP client's 2-second timeout, not the command
-// context, bounded remote browser requests: a healthy response slower than
-// the probe timeout must still succeed with production defaults.
 func TestBrowserRemoteSlowResponseSucceedsWithProductionClient(t *testing.T) {
 	capture := &remoteBrowserCapture{}
 	srv := remoteBrowserServer(t, capture, func(w http.ResponseWriter) {
@@ -163,24 +157,17 @@ func TestBrowserRemoteSlowResponseSucceedsWithProductionClient(t *testing.T) {
 	}
 }
 
-// TestBrowserRemoteAcceptsBase64PayloadsPast64MiB covers the review finding
-// that a valid large file (base64 of up to 64 MiB of content) plus JSON
-// overhead exceeded the old 64 MiB whole-response cap: decoding must succeed
-// past that boundary and the cap must exceed a maximum file's encoded size.
 func TestBrowserRemoteAcceptsBase64PayloadsPast64MiB(t *testing.T) {
 	if remoteBrowserMaxResponseBytes < (64<<20)*4/3 {
 		t.Fatalf("response cap %d cannot carry one maximum 64 MiB file base64-encoded", remoteBrowserMaxResponseBytes)
 	}
-	// ~50 MiB of content encodes to ~66.7 MiB of base64: past the old cap,
-	// comfortably inside the new one.
 	content := bytes.Repeat([]byte("x"), 50<<20)
 	encoded := base64.StdEncoding.EncodeToString(content)
 	dir := t.TempDir()
 	saved := filepath.Join(dir, "shot.png")
 	body := remoteBrowserResponse{
 		Output: "saved\n",
-		// The service keys returned files by the path the command named.
-		Files: map[string]string{saved: encoded},
+		Files:  map[string]string{saved: encoded},
 	}
 	encodedBody, err := json.Marshal(body)
 	if err != nil {

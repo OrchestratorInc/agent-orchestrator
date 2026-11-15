@@ -18,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
-// TestFakeClaudeOwnerProcess is the body of startFakeClaude's child, not a test.
 func TestFakeClaudeOwnerProcess(t *testing.T) {
 	if os.Getenv("AO_TEST_FAKE_CLAUDE_OWNER") != "1" {
 		return
@@ -26,11 +25,6 @@ func TestFakeClaudeOwnerProcess(t *testing.T) {
 	time.Sleep(30 * time.Second)
 }
 
-// startFakeClaude runs a long-lived process that ps names "claude": this test
-// binary, through a symlink of that name, running only the helper above. A
-// symlink to /bin/sleep does not work where sleep is a multicall coreutils
-// (uutils, Ubuntu's default since 25.10): it does not know a tool called
-// "claude" and exits at once.
 func startFakeClaude(t *testing.T) *exec.Cmd {
 	t.Helper()
 	self, err := os.Executable()
@@ -49,10 +43,6 @@ func startFakeClaude(t *testing.T) *exec.Cmd {
 	return cmd
 }
 
-// waitForExecName waits until a just-started child has replaced the forked test
-// binary with its own executable and is still running. Until then ps names the
-// child after the test binary, so an ownership check run too early sees no
-// Claude process; a child that already exited is a zombie, never an owner.
 func waitForExecName(t *testing.T, pid int, name string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -100,7 +90,6 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 		t.Fatal("a released Codex writer lock is still ownership")
 	}
 
-	// Claude Code registers live sessions under sessions/<pid>.json.
 	owner := startFakeClaude(t)
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
 	waitForExecName(t, owner.Process.Pid, "claude")
@@ -120,7 +109,7 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	register(os.Getpid(), "/source") // alive, but not a Claude process
+	register(os.Getpid(), "/source")
 	if importOwnedElsewhere(ctx, claude) {
 		t.Fatal("a reused PID was treated as Claude")
 	}
@@ -128,7 +117,6 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	if !importOwnedElsewhere(ctx, claude) {
 		t.Fatal("a live Claude session was not detected")
 	}
-	// Claude registers after it starts; a process that started later reused the PID.
 	register(owner.Process.Pid, "/source", time.Now().Add(-time.Hour))
 	if importOwnedElsewhere(ctx, claude) {
 		t.Fatal("a reused PID was treated as the registered Claude session")
@@ -150,9 +138,6 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	}
 }
 
-// OpenCode has no per-session lock or live-session registry and stores no
-// writable transcript file, so there is never positive evidence that another
-// process holds the conversation.
 func TestImportOwnedElsewhereOpenCodeNeverOwned(t *testing.T) {
 	ctx := context.Background()
 	oc := domain.SessionRecord{Harness: domain.HarnessOpenCode}
@@ -166,7 +151,6 @@ func TestImportOwnedElsewhereOpenCodeNeverOwned(t *testing.T) {
 	}
 }
 
-// Claude Code accepts a second writer, so AO checks its registry after adoption too.
 func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 	home := t.TempDir()
 	owner := startFakeClaude(t)
@@ -194,7 +178,6 @@ func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 	}
 }
 
-// A held Codex writer lock is answered without starting a Codex app-server.
 func TestAdoptedCodexImportOpenElsewhereSkipsLaunch(t *testing.T) {
 	home := t.TempDir()
 	lock := filepath.Join(home, "thread-writer-locks", "thread-1.lock")

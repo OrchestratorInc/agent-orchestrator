@@ -19,61 +19,38 @@ type memorySessionStore interface {
 	ListAllSessions(context.Context) ([]domain.SessionRecord, error)
 }
 
-// memoryReviewerStore names live reviewer panes independent of session rows:
-// a reviewer's identity is the review record, not a session, and it can
-// outlive the worker session that spawned it.
 type memoryReviewerStore interface {
 	ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error)
 }
 
-// MemoryReaderDeps wires the memory reader. Snapshot defaults to a real `ps`
-// run; tests inject a parsed table.
 type MemoryReaderDeps struct {
-	Store   memorySessionStore
-	Runtime ports.RuntimeProcessRootInspector
-	// Reviewers is optional: without it AppMemory cannot see reviewer-owned
-	// process trees at all (they silently fold into nothing, not into Own —
-	// the whole point is they are not a daemon descendant either).
-	Reviewers memoryReviewerStore
-	// ChatHostPID names the provider host of a runtime-less Chat session.
-	// Nil means Chat sessions are not measured.
+	Store       memorySessionStore
+	Runtime     ports.RuntimeProcessRootInspector
+	Reviewers   memoryReviewerStore
 	ChatHostPID func(sessionID domain.SessionID) (int, bool)
 	Snapshot    func(context.Context) (*procmem.Table, error)
 	Now         func() time.Time
-	// AppRootPIDs names AO's own processes (daemon, desktop shell). Nil means
-	// AppMemory counts sessions only.
 	AppRootPIDs func() []int
-	// CacheTTL bounds how often the process table is re-read while several
-	// clients poll. Zero disables caching.
-	CacheTTL time.Duration
+	CacheTTL    time.Duration
 }
 
-// MemoryReader samples resident memory for every live session's runtime.
 type MemoryReader struct {
 	deps MemoryReaderDeps
 
-	mu       sync.Mutex
-	cached   *procmem.Table
-	cachedAt time.Time
-	// prev is the snapshot before cached, kept so CPU is a rate between two
-	// samples rather than a lifetime average.
-	prev   *procmem.Table
-	prevAt time.Time
-	// lastSystem is the previous host reading, for the swap rate.
-	lastSystem   procmem.System
-	lastSystemAt time.Time
-	// cachedSystem is the last SystemMemory answer, reused within CacheTTL.
+	mu             sync.Mutex
+	cached         *procmem.Table
+	cachedAt       time.Time
+	prev           *procmem.Table
+	prevAt         time.Time
+	lastSystem     procmem.System
+	lastSystemAt   time.Time
 	cachedSystem   domain.SystemMemory
 	cachedSystemAt time.Time
-	// systemFlight lets callers that miss the cache together share one host
-	// read. Two reads milliseconds apart would each move the swap and CPU
-	// baseline, and the second would report a rate over almost no time.
-	systemFlight singleflight.Group
-	ReadSystem   func() (procmem.System, error)
-	ReadPressure func() (procmem.Pressure, error)
+	systemFlight   singleflight.Group
+	ReadSystem     func() (procmem.System, error)
+	ReadPressure   func() (procmem.Pressure, error)
 }
 
-// NewMemoryReader constructs a memory reader.
 func NewMemoryReader(deps MemoryReaderDeps) *MemoryReader {
 	if deps.Snapshot == nil {
 		deps.Snapshot = func(ctx context.Context) (*procmem.Table, error) { return procmem.Snapshot(ctx, nil) }
@@ -84,9 +61,6 @@ func NewMemoryReader(deps MemoryReaderDeps) *MemoryReader {
 	return &MemoryReader{deps: deps, ReadSystem: procmem.ReadSystem, ReadPressure: procmem.ReadPressure}
 }
 
-// ListMemory returns one reading per live session that has a runtime. Sessions
-// that are terminated, have no runtime handle, or whose runtime cannot name a
-// root pid are omitted rather than reported as zero.
 func (r *MemoryReader) ListMemory(ctx context.Context, projectID domain.ProjectID) ([]domain.SessionMemory, error) {
 	if r == nil || r.deps.Store == nil || r.deps.Runtime == nil {
 		return nil, fmt.Errorf("session memory reader is unavailable")
@@ -128,7 +102,6 @@ func (r *MemoryReader) ListMemory(ctx context.Context, projectID domain.ProjectI
 	return out, nil
 }
 
-// treeReading costs one process tree against the previous snapshot.
 func treeReading(tree procmem.Tree, prev *procmem.Table, elapsed float64) domain.SessionMemory {
 	procs := make([]domain.SessionMemoryProcess, 0, len(tree.Processes))
 	for _, p := range tree.Processes {
@@ -143,8 +116,6 @@ func treeReading(tree procmem.Tree, prev *procmem.Table, elapsed float64) domain
 	}
 }
 
-// Pressure is the machine's memory-pressure verdict alone, for the board's
-// light. Unlike SystemMemory it never samples the process table.
 func (r *MemoryReader) Pressure(context.Context) (procmem.Pressure, error) {
 	if r == nil || r.ReadPressure == nil {
 		return procmem.Pressure{}, procmem.ErrUnsupported
@@ -152,10 +123,6 @@ func (r *MemoryReader) Pressure(context.Context) (procmem.Pressure, error) {
 	return r.ReadPressure()
 }
 
-// SystemMemory reports the host's headroom: RAM, swap, swapping rate since
-// the last call, and load. ErrUnsupported on platforms procmem can't read.
-// Readings are shared for CacheTTL, like the process table: on macOS each one
-// runs vm_stat, and every open window and `ao session top` polls this.
 func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, error) {
 	now := r.deps.Now()
 	r.mu.Lock()
@@ -165,8 +132,6 @@ func (r *MemoryReader) SystemMemory(ctx context.Context) (domain.SystemMemory, e
 		return out, nil
 	}
 	r.mu.Unlock()
-	// Detached from this caller's cancellation: the read is shared, and one
-	// caller going away must not fail the others waiting on it.
 	readCtx := context.WithoutCancel(ctx)
 	v, err, _ := r.systemFlight.Do("system", func() (any, error) {
 		out, err := r.readSystemMemory(readCtx)
@@ -212,12 +177,6 @@ func (r *MemoryReader) readSystemMemory(ctx context.Context) (domain.SystemMemor
 		out.CPUPercent = 100 * float64(sys.CPUBusyTicks-last.CPUBusyTicks) / float64(sys.CPUTotalTicks-last.CPUTotalTicks)
 		out.CPUMeasured = true
 	case sys.CPUTotalTicks == 0:
-		// No system-wide ticks on this platform (macOS today). The daemon
-		// already samples every process for the session rows, so the same
-		// table gives the machine's busy share: total CPU-seconds used by
-		// everything, divided by elapsed time and core count. This slightly
-		// undercounts processes that start and exit between two samples,
-		// which a whole-machine tick counter would not miss.
 		if table, prev, elapsed, err := r.table(ctx); err == nil && sys.CPUCount > 0 {
 			out.CPUPercent = min(100, procmem.CPUPercent(table.All(), prev, elapsed)/float64(sys.CPUCount))
 			out.CPUMeasured = prev != nil && elapsed > 0
@@ -226,14 +185,8 @@ func (r *MemoryReader) readSystemMemory(ctx context.Context) (domain.SystemMemor
 	return out, nil
 }
 
-// cpuRateMaxGap is the longest gap between samples a CPU rate is trusted over.
-// With the memory window closed the renderer samples once a minute, so this
-// must sit well above that; a real sleep is almost always longer.
 const cpuRateMaxGap = 3 * time.Minute
 
-// AppMemory sums AO's own processes and every live session tree. Roots are
-// deduplicated by Table.Tree, so a session that happens to be a daemon
-// descendant is counted once.
 func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) {
 	if r == nil || r.deps.Store == nil || r.deps.Runtime == nil {
 		return domain.AppMemory{}, fmt.Errorf("session memory reader is unavailable")
@@ -272,8 +225,6 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 		for _, h := range handles {
 			reviewerRoots, err := r.deps.Runtime.ProcessRootPIDs(ctx, ports.RuntimeHandle{ID: h.HandleID})
 			if err != nil || len(reviewerRoots) == 0 {
-				// A stale handle whose process is already gone is not a leak
-				// to report: omit it, same as an unmeasured session.
 				continue
 			}
 			reviewerTree := table.Tree(reviewerRoots...)
@@ -292,12 +243,6 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 		}
 	}
 	tree := table.Tree(roots...)
-	// The daemon starts tmux, so every session (and every reviewer pane still
-	// under it) is a descendant of the daemon and a plain walk from its pid
-	// would count them as AO's own. Own is the daemon tree with the session
-	// and reviewer trees cut out, so the rows stay disjoint and add up to the
-	// total. A detached reviewer (its worker already gone) was never in this
-	// tree to begin with — it reaches the total only through roots above.
 	ownTree := table.Tree(own...)
 	ownOnly := procmem.Tree{}
 	for _, p := range ownTree.Processes {
@@ -317,9 +262,6 @@ func (r *MemoryReader) AppMemory(ctx context.Context) (domain.AppMemory, error) 
 	}, nil
 }
 
-// rootPIDs names where a session's process tree starts: the runtime handle
-// for terminal sessions, the provider host for Chat sessions. Probe failures
-// yield no roots so the session is omitted rather than reported as zero.
 func (r *MemoryReader) rootPIDs(ctx context.Context, rec domain.SessionRecord) []int {
 	if rec.Mode == domain.SessionModeChat {
 		if r.deps.ChatHostPID == nil {
@@ -341,8 +283,6 @@ func (r *MemoryReader) rootPIDs(ctx context.Context, rec domain.SessionRecord) [
 	return roots
 }
 
-// table returns the current snapshot, the one before it, and the seconds
-// between them, so callers can turn CPU time into a rate.
 func (r *MemoryReader) table(ctx context.Context) (cur, prev *procmem.Table, elapsed float64, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -358,8 +298,6 @@ func (r *MemoryReader) table(ctx context.Context) (cur, prev *procmem.Table, ela
 		r.prev, r.prevAt = r.cached, r.cachedAt
 		r.cached, r.cachedAt = table, now
 	}
-	// Across a sleep the CPU deltas are garbage; a gap over a minute means the
-	// first sample after it reports no rate rather than a wrong one.
 	if r.prev != nil && r.cachedAt.Sub(r.prevAt) <= cpuRateMaxGap {
 		elapsed = r.cachedAt.Sub(r.prevAt).Seconds()
 	}

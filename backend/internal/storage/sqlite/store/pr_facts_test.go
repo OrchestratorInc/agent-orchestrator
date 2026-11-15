@@ -9,14 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ListPRFactsForSession is the real-SQLite batch read the multi-PR status
-// aggregator builds stacks from: every owned PR returned newest-first with its
-// state flags and branch pair projected (the stack model needs both).
-//
-// The branch pair is written via WriteSCMObservation (the observer path, the
-// source of truth for tracked PRs). The other writer, WritePR, deliberately
-// omits source/target branch (UpsertLegacyPR), so the stack model depends on the
-// observer having populated the row.
 func TestListPRFactsForSessionProjectsAllPRsNewestFirst(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -24,8 +16,6 @@ func TestListPRFactsForSessionProjectsAllPRsNewestFirst(t *testing.T) {
 	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
 	now := time.Now().UTC().Truncate(time.Second)
 
-	// A stack: root (open) -> child targets the root branch (open) -> a merged
-	// historical PR. Distinct updated_at so newest-first ordering is observable.
 	write := func(pr domain.PullRequest) {
 		t.Helper()
 		if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
@@ -43,7 +33,6 @@ func TestListPRFactsForSessionProjectsAllPRsNewestFirst(t *testing.T) {
 	if len(facts) != 3 {
 		t.Fatalf("ListPRFactsForSession = %d, want 3", len(facts))
 	}
-	// Newest-first by updated_at: old, child, root.
 	if facts[0].URL != "old" || facts[1].URL != "child" || facts[2].URL != "root" {
 		t.Fatalf("order = [%s %s %s], want [old child root]", facts[0].URL, facts[1].URL, facts[2].URL)
 	}
@@ -57,8 +46,6 @@ func TestListPRFactsForSessionProjectsAllPRsNewestFirst(t *testing.T) {
 	if !byURL["child"].Draft || byURL["child"].Merged {
 		t.Fatalf("draft child flags wrong: %+v", byURL["child"])
 	}
-	// The stack model is derived from the source/target branch pair, so it must
-	// survive the projection.
 	if byURL["child"].SourceBranch != "feat/x/child" || byURL["child"].TargetBranch != "feat/x" {
 		t.Fatalf("child branch pair lost: %+v", byURL["child"])
 	}
@@ -69,7 +56,6 @@ func TestListPRFactsForSessionProjectsAllPRsNewestFirst(t *testing.T) {
 		t.Fatalf("root CI = %q, want passing", byURL["root"].CI)
 	}
 
-	// A session with no PRs returns an empty (non-nil) slice, never an error.
 	empty, _ := s.CreateSession(ctx, sampleRecord("mer"))
 	got, err := s.ListPRFactsForSession(ctx, empty.ID)
 	if err != nil {
@@ -217,10 +203,6 @@ func TestListPRFactsForSessionsBatchesBySession(t *testing.T) {
 	}
 }
 
-// The session list orders mobile's workers by when something last changed, so
-// both PR-facts reads project the change timestamps: lifecycle, CI, and the
-// newest review by provider submission time. The review join must pick exactly
-// one review per PR, never fan a PR out into one row per review.
 func TestListPRFactsProjectsChangeTimestamps(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

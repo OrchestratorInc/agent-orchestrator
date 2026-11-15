@@ -30,11 +30,6 @@ async function fetchSessionWorkspaceTree(
 	return (data ?? { sessionId, path: dir, entries: [], truncated: false }) as WorkspaceTreeResponse;
 }
 
-// dir is a directory path relative to the workspace root, "" for the root.
-// Unlike the changed-files list this isn't polled: the daemon only pushes a
-// coarse "something changed" signal (see workspace-file-events.ts), which
-// invalidates every mounted directory query by key prefix — a directory the
-// user isn't currently looking at just stays stale until they revisit it.
 export function sessionWorkspaceTreeQueryOptions(
 	sessionId: string,
 	dir: string,
@@ -64,16 +59,10 @@ export type TreeNode = {
 	children?: TreeNode[];
 };
 
-// Synthesizes a full nested tree from the already-fetched, already-small
-// changed-files list — this is the entire data source for "changed only"
-// mode. It intentionally does not go through the lazy /workspace/tree
-// endpoint: the changed-files list is already warm and small, and a lazy
-// per-directory fetch would only add round trips for data already in hand.
 export function buildChangedOnlyTree(files: WorkspaceFileSummary[]): TreeNode[] {
 	return buildWorkspaceFileTree(files.filter(isChangedWorkspaceFile));
 }
 
-/** Builds a compact nested tree from a flat, already-filtered file result set. */
 export function buildWorkspaceFileTree(files: Array<Pick<WorkspaceFileSummary, "path" | "status" | "binary">>): TreeNode[] {
 	const root: TreeNode[] = [];
 	const dirs = new Map<string, TreeNode>();

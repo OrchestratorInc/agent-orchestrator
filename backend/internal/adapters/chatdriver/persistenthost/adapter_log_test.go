@@ -62,8 +62,6 @@ func TestAdapterLogAppendsAcrossHosts(t *testing.T) {
 }
 
 func TestAdapterLogNeverFailsTheProvider(t *testing.T) {
-	// A directory that does not exist disables the log; writes still succeed so
-	// the provider's stderr copier cannot fail the process wait.
 	log := openAdapterLog(filepath.Join(t.TempDir(), "missing"), adapterLogMaxBytes)
 	if n, err := log.Write([]byte("lost\n")); err != nil || n != 5 {
 		t.Fatalf("Write on a disabled log = %d, %v; want 5, nil", n, err)

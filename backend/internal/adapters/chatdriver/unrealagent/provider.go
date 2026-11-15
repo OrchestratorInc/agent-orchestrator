@@ -79,7 +79,6 @@ type providerRuntime struct {
 	usage ports.ChatUsage
 }
 
-// RunProvider runs the embedded Unreal Agent harness over AO's private JSONL protocol.
 func RunProvider(ctx context.Context, configPath string, input io.Reader, output io.Writer) error {
 	cfg, err := readProviderConfig(configPath)
 	if err != nil {
@@ -270,9 +269,6 @@ func (runtime *providerRuntime) interrupt(requested string) error {
 	select {
 	case err := <-done:
 		if err != nil && !errors.Is(err, context.Canceled) {
-			// The provider loop is the owner of coordinator failures. Preserve a
-			// failure observed while interrupt waits so the loop can project the
-			// terminal error and clear the active turn instead of being stranded.
 			done <- err
 			return err
 		}

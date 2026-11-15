@@ -56,7 +56,6 @@ describe("cloudOrchestratorModel", () => {
 		const older = session({});
 		expect(Object.prototype.hasOwnProperty.call(older, "currentModel")).toBe(false);
 		expect(cloudOrchestratorModel(older, undefined)).toEqual({ sessionId: "orch-1", harness: "claude-code", model: "opus" });
-		// The agent's own default names no model.
 		expect(cloudOrchestratorModel(session({ model: "default" }), undefined)).toBeUndefined();
 		expect(cloudOrchestratorModel(session({ model: "" }), {})).toBeUndefined();
 	});
@@ -65,7 +64,6 @@ describe("cloudOrchestratorModel", () => {
 		const orchestrator = session({ currentModel: "sonnet", currentReasoningEffort: "high" });
 		expect(cloudOrchestratorModel(orchestrator, { model: "haiku", reasoningEffort: "low" }))
 			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "haiku", reasoningEffort: "low" });
-		// A pick of only an effort keeps the model the session runs now.
 		expect(cloudOrchestratorModel(orchestrator, { reasoningEffort: "low" }))
 			.toEqual({ sessionId: "orch-1", harness: "claude-code", model: "sonnet", reasoningEffort: "low" });
 		expect(cloudOrchestratorModel(orchestrator, { model: "sonnet" }))
@@ -140,7 +138,6 @@ describe("useCloudOrchestratorModel", () => {
 
 	it("takes the orchestrator's live Chat settings while its Chat is open in this window", async () => {
 		const bridge = fakeBridge();
-		// The orchestrator's Chat, open elsewhere in the app, follows its live state.
 		cleanups.push(subscribeCloudSessionEvents({ baseUrl: BASE_URL, orgId: "org-1", sessionId: "orch-1" }, { live: true }, { bridge }));
 		const { result } = renderWith([session({ currentModel: "sonnet", currentReasoningEffort: "high" })]);
 		await waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(1));
@@ -150,7 +147,6 @@ describe("useCloudOrchestratorModel", () => {
 		};
 		act(() => bridge.emit("stream-1", { type: "chunk", data: `event: session.live\ndata: ${JSON.stringify(live)}\n\n` }));
 		await waitFor(() => expect(result.current).toEqual({ sessionId: "orch-1", harness: "claude-code", model: "haiku", reasoningEffort: "low" }));
-		// The hook itself opened nothing.
 		expect(bridge.openStream).toHaveBeenCalledTimes(1);
 	});
 
@@ -171,7 +167,6 @@ describe("useCloudOrchestratorModel", () => {
 		const answer = result.current;
 		const rendered = renders.count;
 
-		// Someone opens the Chat and takes the composer: the settings read here are unchanged.
 		act(() => bridge.emit("stream-1", live({
 			viewers: [{ userId: "user-2", name: "Ada", role: "member" }],
 			composer: { holder: { userId: "user-2", name: "Ada" }, epoch: 1, waitlist: [] },
@@ -180,7 +175,6 @@ describe("useCloudOrchestratorModel", () => {
 		expect(renders.count).toBe(rendered);
 		expect(result.current).toBe(answer);
 
-		// A poll that changes nothing it reports keeps the same answer.
 		act(() => queryClient.setQueryData([...cloudSessionsQueryKey, BASE_URL, "org-1"], [session({ currentModel: "sonnet", currentReasoningEffort: "high", status: "idle" })]));
 		expect(result.current).toBe(answer);
 	});

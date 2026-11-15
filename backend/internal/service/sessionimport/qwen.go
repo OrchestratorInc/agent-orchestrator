@@ -11,17 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// qwenHomeEnv overrides Qwen Code's state root; it defaults to ~/.qwen.
 const qwenHomeEnv = "QWEN_HOME"
 
-// Qwen Code is a Gemini-CLI fork. It stores one conversation per file at
-// <root>/projects/<sanitized-cwd>/chats/<sessionId>.jsonl, where the file name is
-// the native session id. On first open the Qwen adapter copies it to the
-// project's raw ACP launch-cwd lookup path before resuming the same native id.
-
-// qwenIsTranscript reports whether a walked file is a live Qwen chat transcript.
-// Archived chats live under chats/archive and are intentionally skipped, as are
-// the project directory's memory/, meta.json and other non-transcript files.
 func qwenKey(path, name string) string {
 	if qwenIsTranscript(path, name) {
 		return path
@@ -33,9 +24,6 @@ func qwenIsTranscript(path, name string) bool {
 	return strings.HasSuffix(name, ".jsonl") && filepath.Base(filepath.Dir(path)) == "chats"
 }
 
-// qwenRecord is one JSONL line. Provenance selects human/model messages;
-// systemPayload.displayText separates a human prompt from model-bound context.
-// UUID links select the active branch before projecting visible text.
 type qwenRecord struct {
 	UUID       string    `json:"uuid"`
 	ParentUUID string    `json:"parentUuid"`
@@ -45,10 +33,8 @@ type qwenRecord struct {
 	SessionID  string    `json:"sessionId"`
 	CWD        string    `json:"cwd"`
 	Timestamp  time.Time `json:"timestamp"`
-	// Omitted is set by the oversize-record rewriter when a record was too large
-	// to decode; its message parts are gone, so the history is reported shortened.
-	Omitted bool `json:"aoOmitted"`
-	Message struct {
+	Omitted    bool      `json:"aoOmitted"`
+	Message    struct {
 		Role  string `json:"role"`
 		Parts []struct {
 			Text         string          `json:"text"`
@@ -61,7 +47,6 @@ type qwenRecord struct {
 	} `json:"systemPayload"`
 }
 
-// qwenNode retains links and display facts, not model-bound context or tools.
 type qwenNode struct {
 	id, parent, role, text string
 	at                     time.Time
@@ -69,9 +54,6 @@ type qwenNode struct {
 	projected              bool
 }
 
-// qwenVisibleText joins a message's plain text parts. A part that also carries a
-// thought (reasoning) or a functionCall (tool call) is provider-internal, not a
-// display message, so it is left out.
 func qwenVisibleText(r qwenRecord) string {
 	var parts []string
 	for _, p := range r.Message.Parts {
@@ -85,8 +67,6 @@ func qwenVisibleText(r qwenRecord) string {
 	return strings.Join(parts, "")
 }
 
-// qwenAppendText bounds a logical message across physical fragments and keeps
-// a valid UTF-8 prefix when a fragment crosses the held-text budget.
 func qwenAppendText(text, fragment string) (string, bool) {
 	remaining := max(0, maxHeldText-len(text))
 	shortened := len(fragment) > remaining
@@ -101,9 +81,6 @@ func qwenPartPresent(raw json.RawMessage) bool {
 	return trimmed != "" && trimmed != "null"
 }
 
-// readQwenTranscript reads one Qwen conversation file into the shared transcript
-// shape. It drops injected context (anything not real_user/assistant_output),
-// tool results and thinking, and derives the title from the first real prompt.
 func readQwenTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessQwen, root: root}
 	root = canonical(root)
@@ -155,7 +132,7 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 		if r.Type == "system" {
 			switch r.Subtype {
 			case "session_artifact_event", "session_artifact_snapshot", "session_sources_snapshot", "managed_session_header_v1", "managed_session_event_v1", "managed_session_commit_v1", "managed_session_snapshot_base_v1":
-				return nil // Qwen excludes these records when selecting the active leaf.
+				return nil
 			}
 		}
 		if r.Timestamp.After(t.last) && r.Timestamp.Before(now.Add(time.Hour)) {
@@ -169,10 +146,9 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 		case r.Type == "user" && r.Provenance == "real_user":
 			node.role = "user"
 			if r.SystemPayload.DisplayText != nil {
-				// Presence matters: an empty projection must not expose model input.
 				node.text, node.projected = *r.SystemPayload.DisplayText, true
 			} else {
-				node.text = qwenVisibleText(r) // Older records have no display projection.
+				node.text = qwenVisibleText(r)
 			}
 		case r.Type == "assistant" && r.Provenance == "assistant_output":
 			node.role, node.text = "assistant", qwenVisibleText(r)
@@ -190,7 +166,6 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 		if idx < len(nodes) {
 			previous := nodes[idx]
 			held -= len(previous.text)
-			// Fragments keep the first record's parent, role and display projection.
 			if previous.role != "" && !previous.projected {
 				var shortened bool
 				previous.text, shortened = qwenAppendText(previous.text, qwenVisibleText(r))
@@ -215,7 +190,6 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 			nodes[idx].text = ""
 		}
 		held += len(nodes[idx].text)
-		// Bound text held across branches while preserving links and the opening prompt.
 		dropOldestHeld(nodes, &held, &drop, firstText, func(n *qwenNode) (*string, *bool) { return &n.text, &n.omitted })
 		return nil
 	}
@@ -227,7 +201,7 @@ func readQwenTranscript(ctx context.Context, root string, paths ...string) (tran
 	}
 	t.path = t.paths[len(t.paths)-1]
 
-	chain := nodes // Legacy records without UUIDs retain their linear order.
+	chain := nodes
 	if leaf != "" {
 		chain = activeBranch(nodes, index, leaf, func(n qwenNode) string { return n.parent })
 	}

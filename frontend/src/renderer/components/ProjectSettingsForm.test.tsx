@@ -327,7 +327,6 @@ describe("ProjectSettingsForm", () => {
 		renderSettings();
 		await screen.findByRole("button", { name: "Edit Project name" });
 
-		// Close button is now in SettingsDialog, not in the form itself
 		expect(screen.queryByRole("button", { name: "Close settings" })).not.toBeInTheDocument();
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
@@ -379,7 +378,6 @@ describe("ProjectSettingsForm", () => {
 
 		await userEvent.keyboard("{Escape}");
 
-		// Escape is handled by the Radix Dialog in SettingsDialog, not the form
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
@@ -796,9 +794,6 @@ describe("ProjectSettingsForm", () => {
 		const workerAgent = screen.getByRole("button", { name: "Worker agent" });
 		const orchestratorAgent = screen.getByRole("button", { name: "Orchestrator agent" });
 		const permissionMode = screen.getByRole("button", { name: "Worker approval" });
-		// The trigger shows the raw harness id until the agent catalog resolves,
-		// then its label ("codex" -> "Codex"). Both prove the configured value;
-		// exactly which one is on screen depends on unrelated query timing.
 		expect(workerAgent).toHaveTextContent(/^codex$/i);
 		expect(orchestratorAgent).toHaveTextContent(/^claude[- ]code$/i);
 		expect(permissionMode).toHaveTextContent("Auto");
@@ -816,13 +811,11 @@ describe("ProjectSettingsForm", () => {
 			body: {
 				displayName: "Project One",
 				config: expect.objectContaining({
-					// Hidden workflow config is preserved
 					canonicalRepoURL: "https://github.com/upstream/project-one",
 					defaultBranch: "develop",
 					sessionPrefix: "po",
 					env: { FOO: "bar" },
 					reviewers: [{ harness: "claude-code", agentConfig: { model: "claude-opus-4-5", permissions: "auto" } }],
-					// Agents changes applied
 					worker: {
 						agent: "opencode",
 						agentConfig: { model: "openai/gpt-5.4", permissions: "auto" },
@@ -923,8 +916,6 @@ describe("ProjectSettingsForm", () => {
 		expect(request?.body.config.reviewers).toBeUndefined();
 	});
 
-	// With no reviewer configured the daemon reviews with the default worker
-	// agent and its model, so the reviewer row must show that model.
 	it("shows the default worker model as the inherited reviewer model", async () => {
 		mockProject({
 			id: "proj-1",
@@ -2007,8 +1998,6 @@ describe("ProjectSettingsForm", () => {
 
 		await userEvent.click(await screen.findByLabelText("Enable issue intake"));
 
-		// Repository is display-only, derived from the project's own git origin — no input to
-		// fill. Assignee is the only eligibility rule in v1.
 		expect(screen.getByRole("link", { name: "acme/project-one" })).toHaveAttribute(
 			"href",
 			"https://github.com/acme/project-one",

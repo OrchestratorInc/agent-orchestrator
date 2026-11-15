@@ -32,11 +32,6 @@ func conversationTestServer(t *testing.T, service *fakeConversationService) *htt
 	return server
 }
 
-// The wire shape for streamed command output and turn diffs.
-//
-// Asserted through the real route rather than against the mapping helpers, so the
-// JSON a client actually parses is what is checked.
-
 type fakeConversationService struct {
 	switchRequest     domain.ProviderSwitchRequest
 	switchErr         error
@@ -233,8 +228,6 @@ func (f *fakeConversationService) Compact(context.Context, domain.SessionID) (po
 	return ports.ChatCompactionResult{}, nil
 }
 
-// History operations belong to a sibling slice; stubbed so this fake satisfies the
-// controller's interface without pretending to implement them.
 func (f *fakeConversationService) Rollback(context.Context, domain.SessionID, string, string) (int, error) {
 	return 0, nil
 }
@@ -264,7 +257,6 @@ func (f *fakeConversationService) SwitchProvider(ctx context.Context, _ domain.S
 	return f.switchErr
 }
 
-// SwitchProviderAndSend is the service's: a retry after the switch went through finds the target active.
 func (f *fakeConversationService) SwitchProviderAndSend(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, message ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
 	if err := f.SwitchProvider(ctx, id, request); err != nil && !errors.Is(err, domain.ErrProviderAlreadyActive) {
 		return domain.ConversationTurn{}, false, err
@@ -282,8 +274,6 @@ func (f *fakeConversationService) Skills(context.Context, domain.SessionID) ([]p
 	return f.skills, f.skillErr
 }
 
-// conversationSnapshotBody fetches the snapshot route and decodes it loosely, the
-// way a client sees it.
 func conversationSnapshotBody(t *testing.T, snapshot chatsvc.Snapshot) map[string]any {
 	t.Helper()
 	return conversationSnapshotBodyQuery(t, snapshot, "")
@@ -691,21 +681,17 @@ func TestSnapshotExposesTurnDiff(t *testing.T) {
 	if file["path"] != "new.txt" || file["status"] != "renamed" {
 		t.Errorf("file = %#v", file)
 	}
-	// A rename shown only as its new path reads as an addition, so both ends ship.
 	if file["oldPath"] != "old.txt" {
 		t.Errorf("oldPath = %#v", file["oldPath"])
 	}
 	if file["additions"] != float64(3) || file["deletions"] != float64(1) {
 		t.Errorf("counts = %#v / %#v", file["additions"], file["deletions"])
 	}
-	// No patch text: this body is polled once a second while a turn runs.
 	if _, present := file["patch"]; present {
 		t.Error("diff file carried patch text onto the polled snapshot")
 	}
 }
 
-// A turn the provider never reported a diff for must not claim an empty diff.
-// "Changed nothing" and "this agent does not report diffs" are different answers.
 func TestSnapshotOmitsAbsentTurnDiff(t *testing.T) {
 	body := conversationSnapshotBody(t, chatsvc.Snapshot{
 		SessionID: domain.SessionID("p1-1"),
@@ -721,9 +707,6 @@ func TestSnapshotOmitsAbsentTurnDiff(t *testing.T) {
 	}
 }
 
-// The accumulated stream replaces the provider's aggregate and says which source
-// the client is looking at. Both are partial for different reasons, so the hedge
-// stays either way.
 func TestSnapshotPrefersStreamedOutputOverAggregate(t *testing.T) {
 	aggregate, err := json.Marshal(map[string]any{
 		"command":            "go test ./...",
@@ -769,19 +752,14 @@ func TestSnapshotPrefersStreamedOutputOverAggregate(t *testing.T) {
 	if detail["outputTruncated"] != true {
 		t.Errorf("outputTruncated = %#v", detail["outputTruncated"])
 	}
-	// Still partial: the provider was measured dropping the first chunk from the
-	// delta stream too, so the stream is not a complete record either.
 	if detail["outputMayBePartial"] != true {
 		t.Errorf("outputMayBePartial = %#v, want true", detail["outputMayBePartial"])
 	}
-	// Fields the aggregate carried are untouched.
 	if detail["command"] != "go test ./..." {
 		t.Errorf("command = %#v", detail["command"])
 	}
 }
 
-// outputLimit keeps the head and tail of a long output on rune boundaries and
-// reports the full size; a short output is untouched.
 func TestSnapshotOutputLimitKeepsHeadAndTail(t *testing.T) {
 	long := "spawned session w-1\n" + strings.Repeat("é", 100) + "\nresult: ok\n"
 	body := conversationSnapshotBodyQuery(t, chatsvc.Snapshot{
@@ -823,7 +801,6 @@ func TestSnapshotOutputLimitKeepsHeadAndTail(t *testing.T) {
 	}
 }
 
-// With no streamed output at all the aggregate stands, labelled as such.
 func TestSnapshotKeepsAggregateWhenNoStreamArrived(t *testing.T) {
 	aggregate, err := json.Marshal(map[string]any{
 		"output":             "done\n",

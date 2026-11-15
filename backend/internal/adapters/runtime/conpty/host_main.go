@@ -1,6 +1,3 @@
-// host_main.go is the RunHost entrypoint for the "ao pty-host" subcommand.
-// It is cross-platform: the loopback TCP bind and signal wiring work on all
-// OSes; native PTY creation is OS-gated via build tags.
 package conpty
 
 import (
@@ -13,21 +10,6 @@ import (
 	"syscall"
 )
 
-// RunHost is the "ao pty-host" entrypoint. argv is everything after the
-// subcommand name: [--start=attach] <sessionId> <cwd> <shellCmd> [shellArg...]
-//
-// --start=attach defers starting the process until a client first reports its
-// grid (see deferredPTY), so it starts at the size its viewer shows. Without it
-// the process starts immediately at the default grid.
-//
-// It binds 127.0.0.1:0 (OS assigns the port), creates the native PTY, prints
-// "READY:<pid> <port>\n" to stdout (the parent process reads this to learn the
-// port), installs SIGTERM/SIGINT handlers, then runs Serve. Returns a process
-// exit code.
-//
-// ponytail: loopback bind only; any local process on this host can connect to
-// the assigned port. A per-session random token handshake is the upgrade path
-// if multi-user isolation is needed.
 func RunHost(args []string, stdout io.Writer) int {
 	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
@@ -44,7 +26,6 @@ func RunHost(args []string, stdout io.Writer) int {
 		return 1
 	}
 
-	// Bind before creating the PTY so we can report READY atomically.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pty-host [%s]: listen: %v\n", sessionID, err)
@@ -77,13 +58,11 @@ func RunHost(args []string, stdout io.Writer) int {
 		}
 	}
 
-	// Print READY after both the listener and the PTY are up.
 	_, _ = fmt.Fprintf(stdout, "READY:%d %d\n", pty.PID(), port)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Install signal handlers so SIGTERM/SIGINT trigger graceful shutdown.
 	sigC := make(chan os.Signal, 1)
 	signal.Notify(sigC, syscall.SIGTERM, syscall.SIGINT)
 	go func() {

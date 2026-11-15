@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	_ "modernc.org/sqlite" // register sqlite driver for OMP auth database probes
+	_ "modernc.org/sqlite"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -17,9 +17,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns OMP's local authentication status from its credential
-// stores. OMP has no non-interactive `auth status` command: unknown positional
-// arguments launch its interactive agent and must never be used as probes.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -135,10 +132,6 @@ func ompAgentDBAuthStatus(ctx context.Context, path string) (status ports.AgentA
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// ompCountCredentials counts stored and enabled credentials without writing.
-// agent.db uses WAL: while OMP is not running there is no -shm file, and a
-// read-only connection cannot create one, so the open fails. With no -wal
-// file every change is in the main file, so an immutable read is complete.
 func ompCountCredentials(ctx context.Context, path string) (total, enabled int, err error) {
 	count := func(dsn string) error {
 		db, err := sql.Open("sqlite", dsn)
@@ -163,8 +156,6 @@ func ompCountCredentials(ctx context.Context, path string) (total, enabled int, 
 		return os.IsNotExist(statErr)
 	}
 	if walAbsent() {
-		// OMP may have started meanwhile: an immutable read ignores its WAL,
-		// so the count stands only if there is still none.
 		if count(ompImmutableURI(path)) == nil && walAbsent() {
 			return total, enabled, nil
 		}
@@ -172,9 +163,6 @@ func ompCountCredentials(ctx context.Context, path string) (total, enabled int, 
 	return 0, 0, err
 }
 
-// ompImmutableURI opens path read-only as an immutable SQLite file. The URI
-// has no authority, so a Windows drive path is not read as one, and every
-// path character stays literal.
 func ompImmutableURI(path string) string {
 	return "file:" + (&url.URL{Path: path}).EscapedPath() + "?mode=ro&immutable=1"
 }

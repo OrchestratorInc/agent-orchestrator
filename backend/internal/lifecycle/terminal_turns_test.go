@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// turnRecordingStore captures what lifecycle writes to the terminal turn table.
 type turnRecordingStore struct {
 	*fakeStore
 	calls []string
@@ -28,22 +27,14 @@ func (s *turnRecordingStore) RecordTerminalTurnResponse(_ context.Context, _ dom
 
 func TestTerminalTurnsAreRecordedFromHooksInTerminalModeOnly(t *testing.T) {
 	signals := []ports.ActivitySignal{
-		// Claude and Codex report the request as a replay checkpoint too.
 		{Event: "user-prompt-submit", LatestUserPrompt: "fix the importer", TurnUserRequest: "fix the importer"},
-		// Codex reports its final message without making it a replay checkpoint.
 		{Event: "stop", FinalAssistantMessage: "importer fixed"},
-		// AO's own message opens a turn the user did not ask for.
 		{Event: "user-prompt-submit", ConversationCheckpointOrigin: domain.ConversationCheckpointOriginCoordination},
 		{Event: "pre-tool-use", LatestUserPrompt: "not a main-turn boundary", TurnUserRequest: "nor is this"},
-		// OpenCode and Grok report the request outside the replay-checkpoint field.
 		{Event: "user-prompt-submit", TurnUserRequest: "add a retry"},
-		// A helper agent finishing is not the end of the turn.
 		{Event: "stop", SubagentID: "helper-1", FinalAssistantMessage: "helper done"},
-		// Some agents report the end of a turn without its text. The turn
-		// still closes, so the next request starts one of its own.
 		{Event: "stop"},
 		{Event: "user-prompt-submit", TurnUserRequest: "now add a test"},
-		// A prompt hook with no text is not a request; it closes the open turn.
 		{Event: "user-prompt-submit"},
 	}
 	for _, tc := range []struct {
@@ -89,9 +80,6 @@ func TestTerminalTurnsAreRecordedFromHooksInTerminalModeOnly(t *testing.T) {
 	}
 }
 
-// After a provider switch the previous agent's hook config can still be in the
-// workspace. A signal that names an agent the session no longer runs is dropped
-// before it can record a turn or change activity.
 func TestHookSignalFromAPreviousAgentIsIgnored(t *testing.T) {
 	store := &turnRecordingStore{fakeStore: newFakeStore()}
 	store.sessions["s-1"] = domain.SessionRecord{ID: "s-1", Harness: domain.HarnessCodex, Mode: domain.SessionModeTUI,

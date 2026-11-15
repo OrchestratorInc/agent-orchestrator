@@ -2,10 +2,6 @@ package domain
 
 import "testing"
 
-// TestActivityState_StickyAndNeedsInput pins the two independent state
-// families: sticky states must survive the passage of time, and needs-input
-// states are those where the user is the unblocker (waiting_input = awaiting
-// the next instruction, blocked = pending permission/approval decision).
 func TestActivityState_StickyAndNeedsInput(t *testing.T) {
 	tests := []struct {
 		state      ActivityState

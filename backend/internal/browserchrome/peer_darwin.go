@@ -37,8 +37,6 @@ func peerIdentity(conn net.Conn) (int, int, error) {
 	return pid, uid, sockErr
 }
 
-// processExecutable reads the exec path the kernel recorded for pid
-// (KERN_PROCARGS2: argc, then the NUL-terminated executable path).
 func processExecutable(pid int) (string, error) {
 	data, err := unix.SysctlRaw("kern.procargs2", pid)
 	if err != nil {

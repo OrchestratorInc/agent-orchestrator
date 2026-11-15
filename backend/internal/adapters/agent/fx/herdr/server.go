@@ -16,18 +16,13 @@ import (
 )
 
 const (
-	maxMessageBytes = 16 * 1024
-	maxConnections  = 32
-	clientDuration  = 2 * time.Second
-	// Accept failures such as EMFILE/ENFILE are transient; back off like
-	// net/http rather than abandoning every future fx report.
+	maxMessageBytes  = 16 * 1024
+	maxConnections   = 32
+	clientDuration   = 2 * time.Second
 	minAcceptBackoff = 5 * time.Millisecond
 	maxAcceptBackoff = time.Second
 )
 
-// Server owns a private Unix socket and submits native reports exclusively to
-// the lifecycle write boundary. Stop closes active clients and waits for all
-// callbacks before removing the socket that this server created.
 type Server struct {
 	sink       activitySink
 	logger     *slog.Logger
@@ -43,8 +38,6 @@ type Server struct {
 	workers    sync.WaitGroup
 }
 
-// Start prepares the endpoint synchronously so a startup failure can be logged
-// by the daemon. Cancellation and Stop both gracefully stop the server.
 func Start(ctx context.Context, dataDir string, sink activitySink, logger *slog.Logger) (*Server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -117,8 +110,6 @@ func removeStaleSocket(path string) error {
 		_ = conn.Close()
 		return errors.New("fx Herdr socket is already listening")
 	}
-	// Only connection refused proves a dead listener. Permission failures and
-	// timeouts must never authorize unlinking another process's live endpoint.
 	if !errors.Is(dialErr, syscall.ECONNREFUSED) {
 		return fmt.Errorf("probe fx Herdr socket: %w", dialErr)
 	}
@@ -216,5 +207,4 @@ func (s *Server) shutdown() {
 	})
 }
 
-// Stop is safe to call repeatedly, with or without prior context cancellation.
 func (s *Server) Stop() { s.shutdown(); <-s.done }

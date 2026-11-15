@@ -12,20 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// TestSend_CoordinationAcceptanceMarker_RealStore is the real-data counterpart
-// to TestSend_ConfirmAcceptsCoordinationAcceptanceMarker. Instead of hand-setting
-// the checkpoint fields on a fake store, it drives the ACTUAL lifecycle hook
-// emission against a real sqlite store, so the test proves the production write
-// path yields exactly the fields semanticMessageAccepted reads.
-//
-// Scenario (the one the reviewer asked for): an ao send (coordination) delivery
-// is accepted and its turn finishes between activity polls. The harness emits a
-// coordination UserPromptSubmit (advancing the session to active, recording the
-// coordination checkpoint keyed to this delivery ID and scoped to the current
-// runtime launch) and then a Stop (returning the session to idle). By the time
-// send()'s confirmation polls, Active is gone — only the durable marker remains.
-// Confirmation must honor it and return nil instead of a false
-// ErrDeliveryUnconfirmed that would trigger a duplicate ao send.
 func TestSend_CoordinationAcceptanceMarker_RealStore(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
@@ -54,10 +40,6 @@ func TestSend_CoordinationAcceptanceMarker_RealStore(t *testing.T) {
 
 	lcm := lifecycle.New(st, nil)
 
-	// The harness accepts the coordination prompt: a coordination-origin
-	// UserPromptSubmit carrying this delivery's CoordinationID. This is what
-	// durably records ConversationCheckpointTurnID == deliveryID, scoped to the
-	// current launch.
 	if err := lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, Event: "user-prompt-submit", State: domain.ActivityActive,
 		LaunchID: launch, AgentSessionID: nativeID, ProviderTurnID: "turn-1",
@@ -67,7 +49,6 @@ func TestSend_CoordinationAcceptanceMarker_RealStore(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// The turn finishes and the session returns to idle before confirmation polls.
 	if err := lcm.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, Event: "stop", State: domain.ActivityIdle,
 		LaunchID: launch, AgentSessionID: nativeID, ProviderTurnID: "turn-1",
@@ -78,8 +59,6 @@ func TestSend_CoordinationAcceptanceMarker_RealStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Precondition: the real write path produced exactly the marker
-	// semanticMessageAccepted keys on, and the session is idle (Active gone).
 	seeded, ok, err := st.GetSession(ctx, rec.ID)
 	if err != nil || !ok {
 		t.Fatalf("read seeded session: ok=%v err=%v", ok, err)
@@ -100,15 +79,12 @@ func TestSend_CoordinationAcceptanceMarker_RealStore(t *testing.T) {
 		LookPath: func(string) (string, error) { return "/bin/true", nil },
 		Logger:   slog.New(slog.DiscardHandler),
 	})
-	// Shrink the confirmation budget so the loop runs in milliseconds.
 	m.sendConfirm = sendConfirmConfig{
 		pollInterval:    time.Millisecond,
 		attemptDeadline: 2 * time.Millisecond,
 		maxAttempts:     3,
 	}
 
-	// A coordination send carrying this exact delivery ID. Confirmation must
-	// recognize the retained acceptance marker and succeed without nudging.
 	if err := m.send(ctx, rec.ID, "status update please", deliveryID, ports.MessageDeliveryOptions{}); err != nil {
 		t.Fatalf("send error = %v, want nil (real coordination acceptance marker recognized)", err)
 	}

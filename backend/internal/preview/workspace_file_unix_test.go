@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// Opening a FIFO blocks until a writer appears; a FIFO at an entry path must
-// read as missing at once, for the poller and every serving route.
 func TestOpenWorkspaceFileRefusesAFIFOWithoutBlocking(t *testing.T) {
 	dir := t.TempDir()
 	if err := syscall.Mkfifo(filepath.Join(dir, "index.html"), 0o600); err != nil {

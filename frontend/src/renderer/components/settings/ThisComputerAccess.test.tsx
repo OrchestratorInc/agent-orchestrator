@@ -2,14 +2,6 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-// The two network edges are faked; the account sync code between them is real.
-// The daemon fake follows BridgeService: enable mints a new password, the
-// tunnel gets its address a few status reads later, enable-lan-only stops the
-// tunnel but keeps a running bridge's password, and the account token needs
-// the current password. A machine linked to the account serves its fixed
-// address, an unlinked one a quick tunnel. The cloud fake follows
-// remote_host_handlers: a host saved without a url is listed at its fixed
-// address, and an AO Cloud without fixed addresses refuses that save.
 const fake = vi.hoisted(() => {
 	const HOST_ID = "h_6f1c2b9e-0d4a-4c1e-9b7a-3f2d1e0c9b8a";
 	const TOKEN = "0f".repeat(32);
@@ -25,7 +17,6 @@ const fake = vi.hoisted(() => {
 		readsUntilTunnel: 0,
 		passwordsIssued: 0,
 		linked: false,
-		// Status reads left while the daemon downloads its own cloudflared.
 		downloadReads: 0,
 	};
 	const cloud = {
@@ -86,7 +77,6 @@ const fake = vi.hoisted(() => {
 				return { data: snapshot() };
 			case "/api/v1/mobile/remote-access":
 				if (daemon.enabled) daemon.noPublicTunnel = false;
-				// A running connector moves to the fixed address a link just gave it.
 				if (daemon.linked && cloud.hosts.has(HOST_ID) && daemon.tunnelHost !== FIXED) daemon.tunnelHost = "";
 				return { data: snapshot() };
 			case "/api/v1/mobile/enable-lan-only":
@@ -114,7 +104,6 @@ const fake = vi.hoisted(() => {
 				return { error: { error: { code: "not_found", message: `unexpected POST ${path}` } } };
 		}
 	};
-	// The desktop sends AO Cloud calls through the main process (window.ao.cloudCp).
 	const cloudRequest = async ({ path, method, body }: { path: string; method: string; body?: string }) => {
 		const reply = (status: number, json?: unknown) => ({ status, headers: { "content-type": "application/json" }, body: json === undefined ? "" : JSON.stringify(json) });
 		const match = /^\/api\/cloud\/v1\/me\/hosts(?:\/([^/?]+))?/.exec(path);
@@ -129,10 +118,8 @@ const fake = vi.hoisted(() => {
 		log.push(`cloud ${method} ${hostId}`);
 		if (method === "PUT") {
 			const input = JSON.parse(body ?? "{}") as { label: string; url?: string; token: string; hostKey?: string };
-			// This AO Cloud lists no hostKeys, so it refuses the field, as an older one does.
 			if (input.hostKey !== undefined) return reply(400);
 			if (cloud.failPut) return reply(503);
-			// An account that uses all its fixed addresses can still list more machines.
 			if (cloud.full && input.url === undefined) return reply(409, { code: "fixed_address_limit_reached" });
 			if (input.url === undefined && !cloud.fixedAddresses) return reply(422);
 			input.url ??= `https://${FIXED}:443`;
@@ -246,8 +233,6 @@ it("links at the quick tunnel's address when AO Cloud has no fixed addresses", a
 	expect(await screen.findByText("Your devices see this computer as Dhruv’s Mac mini.")).toBeVisible();
 	expect(toggle).toHaveAttribute("aria-checked", "true");
 	expect(fake.cloud.hosts.get(fake.HOST_ID)?.url).toBe(`https://${fake.TUNNEL}:443`);
-	// No address-free link is tried first: its token would be issued for a
-	// listing AO Cloud refuses.
 	expect(fake.log).toEqual([
 		"/api/v1/mobile/enable",
 		"/api/v1/mobile/remote-access",
@@ -358,7 +343,6 @@ it("shows off while remote access is off, even if the account still lists this c
 	fake.cloud.hosts.set(fake.HOST_ID, { label: "Dhruv’s Mac mini", url: "https://quiet-river.trycloudflare.com:443", token: fake.TOKEN });
 	renderAccess();
 	const toggle = await readySwitch();
-	// Let the account read land before judging the state.
 	await act(async () => {
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	});
@@ -427,7 +411,6 @@ it("shortens a long computer name to fit the account", async () => {
 
 it("waits for the daemon's own cloudflared download, however long it takes", async () => {
 	vi.useFakeTimers({ shouldAdvanceTime: true });
-	// About two minutes of status reads: longer than the tunnel's own wait.
 	Object.assign(fake.daemon, { connector: false, downloadReads: 60 });
 	renderAccess();
 	const toggle = await readySwitch();

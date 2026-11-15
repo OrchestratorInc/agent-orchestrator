@@ -49,7 +49,6 @@ func TestAutoSpawnStopsAfterThreeIdenticalFailures(t *testing.T) {
 	if spawnCode(err) != "AUTO_SPAWN_PAUSED" || *attempts != autoSpawnFailureLimit {
 		t.Fatalf("fourth automatic start = %v after %d attempts, want AUTO_SPAWN_PAUSED without a new attempt", err, *attempts)
 	}
-	// Schedules are automatic too.
 	runID := domain.AutomationRunID("run-1")
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AutomationRunID: &runID}); spawnCode(err) != "AUTO_SPAWN_PAUSED" {
 		t.Fatalf("scheduled start = %v, want AUTO_SPAWN_PAUSED", err)
@@ -59,7 +58,6 @@ func TestAutoSpawnStopsAfterThreeIdenticalFailures(t *testing.T) {
 		t.Fatalf("pauses = %+v, want one UNSUPPORTED_MODEL pause after %d failures", pauses, autoSpawnFailureLimit)
 	}
 
-	// A manual start is never paused, and its success re-arms automatic starts.
 	fc.spawnErr = nil
 	if _, _, _, err := svc.Spawn(context.Background(), manualStart); err != nil {
 		t.Fatalf("manual start = %v, want it to run while automatic starts are paused", err)
@@ -77,7 +75,6 @@ func TestAutoSpawnCountsOnlyIdenticalConsecutiveFailures(t *testing.T) {
 			t.Fatal("two different failure codes tripped the breaker")
 		}
 	}
-	// Manual failures do not count either.
 	svc2, _, fc2, _ := newBreakerService(t)
 	fc2.spawnErr = fmt.Errorf("spawn: %w", sessionmanager.ErrUnsupportedModel)
 	for i := 0; i < 5; i++ {
@@ -173,7 +170,6 @@ func TestAutoSpawnCooldownAllowsRecoveryWithoutSettingsChange(t *testing.T) {
 	if spawnCode(err) != "AUTO_SPAWN_PAUSED" {
 		t.Fatalf("before cooldown = %v", err)
 	}
-	// Logging in changes neither the project settings nor the harness.
 	fc.spawnErr = nil
 	now = now.Add(30 * time.Minute)
 	if pauses := svc.AutoSpawnPauses(t.Context(), st.projects["mer"]); len(pauses) != 0 {
@@ -222,7 +218,6 @@ func TestAutoSpawnCooldownAdmitsOnlyOneProbeAndRepauses(t *testing.T) {
 	if admitted.Load() != 1 {
 		t.Fatalf("concurrent probes = %d, want 1", admitted.Load())
 	}
-	// A slow probe remains the only probe even beyond another cooldown.
 	key := autoSpawnKey{project: "mer", model: "old-model", kind: domain.KindWorker}
 	settings := autoSpawnSettings(domain.ProjectRecord{Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "old-model"}}})
 	if _, paused := svc.autoSpawns.begin(key, settings, true, now.Add(time.Hour)); !paused {

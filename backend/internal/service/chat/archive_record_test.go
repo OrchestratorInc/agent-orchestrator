@@ -16,9 +16,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// legacyArchiveRow is the archive record projectEvent wrote before empty fields were
-// dropped: all 26 keys on every row, "" or null for the ones an event leaves empty.
-// Archives already on disk hold rows of this shape, so it is kept here as a fixture.
 func legacyArchiveRow(t *testing.T, event ports.ChatEvent) string {
 	t.Helper()
 	detail := json.RawMessage("null")
@@ -66,8 +63,6 @@ func legacyArchiveRow(t *testing.T, event ports.ChatEvent) string {
 	return string(encoded)
 }
 
-// decodedArchiveRow decodes an archive row into typed values, so a row compares by what
-// it says rather than by which empty spelling it used.
 type decodedArchiveRow struct {
 	Kind                   ports.ChatEventKind
 	ProviderEventID        string
@@ -96,9 +91,7 @@ type decodedArchiveRow struct {
 	MCPServers             []ports.ChatMCPServer
 	Diff                   *ports.ChatTurnDiff
 	Input                  *ports.ChatInputRequest
-	// Error is a pointer because its presence is meaningful: it is archived only for an
-	// event that has an error, and an empty message is still an error.
-	Error *string
+	Error                  *string
 }
 
 func decodeArchived(t *testing.T, row string) decodedArchiveRow {
@@ -110,7 +103,6 @@ func decodeArchived(t *testing.T, row string) decodedArchiveRow {
 	return decoded
 }
 
-// archiveCorpus gives every key of the record a non-empty value in at least one event.
 func archiveCorpus() []ports.ChatEvent {
 	failure := errors.New("boom")
 	return []ports.ChatEvent{
@@ -153,13 +145,10 @@ func archiveCorpus() []ports.ChatEvent {
 		{Kind: ports.ChatEventTurnStarted, ProviderEventID: "ev-started-failed", ProviderTurnID: "pt-2"},
 		{Kind: ports.ChatEventTurnCompleted, ProviderEventID: "ev-failed", ProviderTurnID: "pt-2", Err: failure},
 		{Kind: ports.ChatEventTurnStarted, ProviderEventID: "ev-started-silent", ProviderTurnID: "pt-3"},
-		// An error with no message is still an error.
 		{Kind: ports.ChatEventTurnCompleted, ProviderEventID: "ev-silent-failure", ProviderTurnID: "pt-3", Err: errors.New("")},
 	}
 }
 
-// emitCorpus sends every corpus event through a real controller and store and returns
-// the archived rows by provider event id.
 func emitCorpus(t *testing.T) map[string]string {
 	t.Helper()
 	h := newHarnessForHarness(t, domain.HarnessClaudeCode)
@@ -216,9 +205,6 @@ func TestArchiveRowOfADeltaHoldsOnlyWhatTheDeltaSays(t *testing.T) {
 	}
 }
 
-// Presence is meaningful for these two keys: they are archived only when the event
-// has an input request or an error, and SelectVerifiedAuthenticationTurn treats a
-// present error, however empty its message, as a failed completion.
 var archiveKeysKeptWhenPresent = []string{"input", "error"}
 
 func TestArchiveRowsOmitEmptyKeysAndKeepEverythingElse(t *testing.T) {
@@ -255,8 +241,6 @@ func TestArchiveRowsOmitEmptyKeysAndKeepEverythingElse(t *testing.T) {
 	}
 }
 
-// The reader a future replay tool would be: it decodes a row into typed values.
-// A full row and the slim row for the same event must decode to the same values.
 func TestSlimArchiveRowsDecodeToTheValuesOfFullRows(t *testing.T) {
 	rows := emitCorpus(t)
 

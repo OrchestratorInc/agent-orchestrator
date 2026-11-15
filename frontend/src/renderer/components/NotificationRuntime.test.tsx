@@ -42,7 +42,6 @@ const { setBadge, show, clickListeners, navigateToSession, cloud } = vi.hoisted(
 	show: vi.fn(),
 	clickListeners: new Set<(id: string) => void>(),
 	navigateToSession: vi.fn(),
-	// The Cloud inbox CloudNotificationRuntime keeps live; absent until a test loads one.
 	cloud: { data: undefined as { items: CloudCpNotification[]; unreadCount: number } | undefined, orgId: "org-1" },
 }));
 
@@ -81,7 +80,6 @@ function renderRuntimeOnly() {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<QueryClientProvider client={queryClient}>
-			{/* NotificationCenter (the bell) is intentionally NOT mounted here. */}
 			<NotificationRuntime />
 		</QueryClientProvider>,
 	);
@@ -93,9 +91,6 @@ describe("NotificationRuntime badge sync", () => {
 
 		renderRuntimeOnly();
 
-		// The badge must update purely from the always-mounted runtime, independent
-		// of NotificationCenter, which Linux hides from the topbar and only mounts
-		// on the sessions board.
 		await waitFor(() => expect(setBadge).toHaveBeenCalledWith(notifications.length));
 	});
 });
@@ -150,7 +145,6 @@ describe("NotificationRuntime Cloud notifications", () => {
 			act(() => { for (const listener of clickListeners) listener("cloud-notification:new"); });
 			expect(navigateToSession).toHaveBeenCalledWith("cloud-proj", "cloud-sess");
 
-			// Another organization's inbox is a new inbox, not a burst of new rows.
 			cloud.orgId = "org-2";
 			cloud.data = { items: [cloudNotification("other-org", { orgId: "org-2" })], unreadCount: 1 };
 			view.rerender(

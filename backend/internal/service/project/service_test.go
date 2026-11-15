@@ -28,8 +28,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// newManager builds a Manager over a real, isolated sqlite store cloned from a
-// current migrated template — no in-memory store.
 func newManager(t *testing.T) project.Manager {
 	t.Helper()
 	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
@@ -72,9 +70,6 @@ func cleanupPreparedClone(t *testing.T, m project.Manager, prepared project.Clon
 	}
 }
 
-// gitRepo creates a real git repository in a fresh temp dir and returns its
-// path. It pins the initial branch to `main` so default-branch detection is
-// deterministic regardless of the host's init.defaultBranch.
 func gitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -96,8 +91,6 @@ func isolatedPlainFolder(t *testing.T) string {
 	return dir
 }
 
-// gitRepoOnBranch creates a real git repository whose initial branch is
-// `branch`, used to exercise default-branch detection for non-`main` repos.
 func gitRepoOnBranch(t *testing.T, branch string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -108,10 +101,6 @@ func gitRepoOnBranch(t *testing.T, branch string) string {
 	return dir
 }
 
-// gitRepoWithOriginHead creates a repo whose remote default (origin/HEAD) points
-// at defaultBranch while the working tree is checked out on featureBranch. This
-// mirrors a user adding a project while sitting on a feature branch: detection
-// must record the remote default, not the active branch.
 func gitRepoWithOriginHead(t *testing.T, defaultBranch, featureBranch string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -126,8 +115,6 @@ func gitRepoWithOriginHead(t *testing.T, defaultBranch, featureBranch string) st
 	run("config", "user.email", "test@example.com")
 	run("config", "user.name", "test")
 	run("commit", "--allow-empty", "-m", "init")
-	// Fabricate a remote-tracking default without a real remote: point
-	// refs/remotes/origin/<defaultBranch> at HEAD, then set origin/HEAD to it.
 	run("remote", "add", "origin", "https://example.invalid/project.git")
 	run("update-ref", "refs/remotes/origin/"+defaultBranch, "HEAD")
 	run("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/"+defaultBranch)
@@ -143,7 +130,6 @@ func commitEmpty(t *testing.T, dir string) {
 }
 func ptr(s string) *string { return &s }
 
-// wantCode asserts err is an *apierr.Error carrying the given machine code.
 func wantCode(t *testing.T, err error, code string) {
 	t.Helper()
 	var e *apierr.Error
@@ -621,9 +607,6 @@ func TestManager_AddEmitsProjectAndFirstProjectTelemetry(t *testing.T) {
 	if sink.events[0].Name != "ao.projects.created" || sink.events[1].Name != "ao.projects.first_added" {
 		t.Fatalf("event names = %#v", []string{sink.events[0].Name, sink.events[1].Name})
 	}
-	// The emit path detaches from the request context on purpose; the request id
-	// must still be carried so the rows join to the HTTP request that added the
-	// project.
 	for _, ev := range sink.events {
 		if ev.RequestID != "req-1" {
 			t.Fatalf("%s RequestID = %q, want req-1", ev.Name, ev.RequestID)
@@ -755,8 +738,6 @@ func TestManager_DefaultsWhenUnconfigured(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	// A remoteless project stays in automatic mode instead of deriving a default
-	// from its current checkout. The empty config remains unpersisted.
 	got, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -818,7 +799,6 @@ func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	// A lone local branch is not authoritative default-branch metadata.
 	if proj.DefaultBranch != domain.DefaultBranchAuto {
 		t.Fatalf("DefaultBranch = %q, want auto", proj.DefaultBranch)
 	}
@@ -834,7 +814,6 @@ func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 		t.Fatalf("Get DefaultBranch = %#v, want auto", got.Project)
 	}
 
-	// An explicit config wins over detection.
 	mainRepo := gitRepoOnBranch(t, "trunk")
 	proj2, err := m.Add(ctx, project.AddInput{
 		Path:      mainRepo,
@@ -849,9 +828,6 @@ func TestManager_AddDoesNotTreatCurrentBranchAsAutomaticDefault(t *testing.T) {
 	}
 }
 
-// A repo checked out on a feature branch must NOT report that branch as the
-// project default — resolution must prefer the remote default (origin/HEAD), so a
-// repo whose origin/HEAD is `main` stays on `main` even when HEAD is elsewhere.
 func TestManager_AddPrefersOriginHeadOverCheckedOutBranch(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
@@ -861,15 +837,12 @@ func TestManager_AddPrefersOriginHeadOverCheckedOutBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	// Automatic mode resolves origin/HEAD to main — never the feature branch.
 	if proj.DefaultBranch != domain.DefaultBranchName {
 		t.Fatalf("DefaultBranch = %q, want %q (not the checked-out feature branch)",
 			proj.DefaultBranch, domain.DefaultBranchName)
 	}
 }
 
-// When origin/HEAD points at a non-main default (e.g. master), automatic mode
-// reports that — not the feature branch the user happens to be on.
 func TestManager_AddPrefersOriginHeadNonMain(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
@@ -920,7 +893,6 @@ func TestManager_UpdateSettings(t *testing.T) {
 		t.Fatalf("DefaultBranch = %q, want develop", proj.DefaultBranch)
 	}
 
-	// Both values persist and show up together on a fresh Get.
 	got, err := m.Get(ctx, "ao")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -932,7 +904,6 @@ func TestManager_UpdateSettings(t *testing.T) {
 		t.Fatalf("Get rules config = %#v", got.Project.Config)
 	}
 
-	// Invalid fields are rejected before either value is persisted.
 	_, err = m.UpdateSettings(ctx, "ao", project.UpdateSettingsInput{
 		DisplayName: "Should Not Persist",
 		Config:      domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: "yolo"}},
@@ -957,7 +928,6 @@ func TestManager_UpdateSettings(t *testing.T) {
 	_, err = m.UpdateSettings(ctx, "missing", project.UpdateSettingsInput{DisplayName: "Missing", Config: cfg})
 	wantCode(t, err, "PROJECT_NOT_FOUND")
 
-	// Unchanged legacy display name that exceeds maxDisplayNameLen should not block updating config.
 	legacyName := strings.Repeat("l", 110)
 	if _, err := store.UpdateProjectSettings(ctx, "ao", legacyName, cfg); err != nil {
 		t.Fatalf("UpdateProjectSettings: %v", err)
@@ -973,9 +943,6 @@ func TestManager_UpdateSettings(t *testing.T) {
 		t.Fatalf("UpdateSettings result = %#v, want unchanged legacy name with new branch", updatedWithLegacy)
 	}
 
-	// A legacy name stored with surrounding whitespace must also hit the
-	// exemption: the renderer seeds the settings field from project.name and
-	// sends .trim(), so compare against the trimmed stored value.
 	paddedLegacy := "  " + strings.Repeat("l", 110) + "  "
 	if _, err := store.UpdateProjectSettings(ctx, "ao", paddedLegacy, cfg); err != nil {
 		t.Fatalf("UpdateProjectSettings with padded legacy name: %v", err)
@@ -1338,7 +1305,7 @@ func TestManager_AddValidationAndConflicts(t *testing.T) {
 	_, err := m.Add(ctx, project.AddInput{Path: ""})
 	wantCode(t, err, "PATH_REQUIRED")
 
-	_, err = m.Add(ctx, project.AddInput{Path: t.TempDir()}) // exists but not a git repo
+	_, err = m.Add(ctx, project.AddInput{Path: t.TempDir()})
 	wantCode(t, err, "NOT_A_GIT_REPO")
 
 	configureCommitter(t)
@@ -1357,8 +1324,6 @@ func TestManager_AddValidationAndConflicts(t *testing.T) {
 	}
 	_, err = m.Add(ctx, project.AddInput{Path: unborn})
 	wantCode(t, err, "PROJECT_UNBORN")
-	// An embedded ".." passes the id pattern but would yield an invalid git
-	// branch (ao/a..b-1) at spawn time; reject it up front as a clear 400.
 	_, err = m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("a..b")})
 	wantCode(t, err, "INVALID_PROJECT_ID")
 
@@ -1516,8 +1481,6 @@ func TestManager_AddAllocatesUniqueIDForCollidingDerivedIDs(t *testing.T) {
 	})
 }
 
-// gitRepoWithOrigin creates a real git repo with an `origin` remote pointing
-// at `originURL`. Used to assert project.Add captures the origin at add time.
 func gitRepoWithOrigin(t *testing.T, originURL string) string {
 	t.Helper()
 	dir := gitRepo(t)
@@ -1650,7 +1613,6 @@ func TestManager_AddWorkspaceInsideAncestorRepo(t *testing.T) {
 	if len(proj.WorkspaceRepos) != 2 {
 		t.Fatalf("expected 2 child repos, got %d", len(proj.WorkspaceRepos))
 	}
-	// Verify that a .git directory was created in the workspace parent (nested)
 	if _, err := os.Stat(filepath.Join(parent, ".git")); err != nil {
 		t.Fatalf("expected .git to exist in workspace parent (nested), but it does not: %v", err)
 	}
@@ -1869,16 +1831,12 @@ func TestManager_AddWorkspaceAcceptsChildWithoutOriginAsNeedsInit(t *testing.T) 
 	}
 }
 
-// TestManager_AddWorkspaceAdoptsExistingParent verifies that when the parent is
-// already a git repo, Add commits only .gitignore changes, preserves the prior
-// commit history, and registers the children.
 func TestManager_AddWorkspaceAdoptsExistingParent(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
 	m := newManager(t)
 
 	parent := t.TempDir()
-	// Parent is an existing repo with one commit and a pre-existing .gitignore.
 	gitRepoWithCommit(t, parent)
 	if err := os.WriteFile(filepath.Join(parent, ".gitignore"), []byte("*.log\n"), 0o644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
@@ -1904,7 +1862,6 @@ func TestManager_AddWorkspaceAdoptsExistingParent(t *testing.T) {
 		t.Fatalf("WorkspaceRepos = %#v, want 2", proj.WorkspaceRepos)
 	}
 
-	// Original .gitignore line must be preserved.
 	ignored, err := os.ReadFile(filepath.Join(parent, ".gitignore"))
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
@@ -1918,13 +1875,11 @@ func TestManager_AddWorkspaceAdoptsExistingParent(t *testing.T) {
 		}
 	}
 
-	// Exactly one new commit must have been created, touching only .gitignore.
 	logOut, err := exec.Command("git", "-C", parent, "log", "--format=%s").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git log: %v (%s)", err, logOut)
 	}
 	lines := strings.Split(strings.TrimSpace(string(logOut)), "\n")
-	// Expect: AO workspace commit + "add gitignore" + "initial" = 3 commits.
 	if len(lines) != 3 {
 		t.Fatalf("expected 3 commits, got %d:\n%s", len(lines), logOut)
 	}
@@ -1966,8 +1921,6 @@ func TestManager_AddWorkspaceAdoptsRemotelessUnbornParent(t *testing.T) {
 	}
 }
 
-// TestManager_AddWorkspaceRejectsWorktreeParent verifies that a linked worktree
-// of another repository is rejected as a workspace parent.
 func TestManager_AddWorkspaceRejectsWorktreeParent(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -1978,22 +1931,16 @@ func TestManager_AddWorkspaceRejectsWorktreeParent(t *testing.T) {
 	wtDir := filepath.Join(base, "wt")
 	gitRepoWithCommit(t, mainRepo)
 
-	// Create a linked worktree from the main repo.
 	if out, err := exec.Command("git", "-C", mainRepo, "worktree", "add", wtDir).CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add: %v (%s)", err, out)
 	}
 
-	// Put a committed child repo inside the worktree dir.
 	gitRepoWithCommit(t, filepath.Join(wtDir, "child"))
 
 	_, err := m.Add(ctx, project.AddInput{Path: wtDir, ProjectID: ptr("wt"), AsWorkspace: true})
 	wantCode(t, err, "WORKSPACE_PARENT_IS_WORKTREE")
 }
 
-// TestManager_AddWorkspaceAdoptsSeparateGitDirParent verifies that a parent repo
-// created with `git init --separate-git-dir=<elsewhere>` (whose .git is a file,
-// not a dir) is correctly identified as a standalone repo and NOT rejected as a
-// linked worktree. Add with AsWorkspace must succeed and register the child.
 func TestManager_AddWorkspaceAdoptsSeparateGitDirParent(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -2004,13 +1951,10 @@ func TestManager_AddWorkspaceAdoptsSeparateGitDirParent(t *testing.T) {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		t.Fatalf("mkdir parent: %v", err)
 	}
-	// The git directory lives outside the parent tree — this is the
-	// separate-git-dir scenario. .git inside parent will be a file.
 	separateGitDir := filepath.Join(base, "parent.git")
 	if out, err := exec.Command("git", "init", "--separate-git-dir="+separateGitDir, "-b", "main", parent).CombinedOutput(); err != nil {
 		t.Fatalf("git init --separate-git-dir: %v (%s)", err, out)
 	}
-	// Commit a file in the parent so the parent is a valid (non-bare) repo.
 	if err := os.WriteFile(filepath.Join(parent, "README.md"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatalf("write readme: %v", err)
 	}
@@ -2021,7 +1965,6 @@ func TestManager_AddWorkspaceAdoptsSeparateGitDirParent(t *testing.T) {
 		t.Fatalf("git commit: %v (%s)", err, out)
 	}
 
-	// Put a committed child repo inside the parent.
 	gitRepoWithCommit(t, filepath.Join(parent, "svc"))
 
 	proj, err := m.Add(ctx, project.AddInput{Path: parent, ProjectID: ptr("sgd"), AsWorkspace: true})
@@ -2036,8 +1979,6 @@ func TestManager_AddWorkspaceAdoptsSeparateGitDirParent(t *testing.T) {
 	}
 }
 
-// TestManager_AddWorkspaceAcceptsWorktreeChildAsNeedsInit verifies that a
-// child whose .git is a file (linked worktree) is accepted as needs_init.
 func TestManager_AddWorkspaceAcceptsWorktreeChildAsNeedsInit(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -2048,11 +1989,9 @@ func TestManager_AddWorkspaceAcceptsWorktreeChildAsNeedsInit(t *testing.T) {
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		t.Fatalf("mkdir parent: %v", err)
 	}
-	// An external standalone repo used as the source for a worktree child.
 	extRepo := filepath.Join(base, "ext")
 	gitRepoWithCommit(t, extRepo)
 
-	// child is a linked worktree of extRepo, placed inside parent.
 	child := filepath.Join(parent, "child")
 	if out, err := exec.Command("git", "-C", extRepo, "worktree", "add", child).CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add child: %v (%s)", err, out)
@@ -2078,8 +2017,6 @@ func TestManager_AddWorkspaceAcceptsWorktreeChildAsNeedsInit(t *testing.T) {
 	}
 }
 
-// TestManager_AddWorkspaceRejectsReservedChildName verifies that a child repo
-// named __root__ is rejected to avoid a PK collision in session_worktrees.
 func TestManager_AddWorkspaceRejectsReservedChildName(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -2092,22 +2029,13 @@ func TestManager_AddWorkspaceRejectsReservedChildName(t *testing.T) {
 	wantCode(t, err, "WORKSPACE_CHILD_RESERVED_NAME")
 }
 
-// TestManager_AddWorkspaceNonGitChildWithNestedRepo verifies that a non-git
-// child folder containing a nested git repo is retained internally as an asset
-// but omitted from the repository list. The child is gitignored in the parent,
-// so the nested repo is never staged by git add -A and guardNoGitlinks never
-// fires.
 func TestManager_AddWorkspaceNonGitChildWithNestedRepo(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
 	m := newManager(t)
 
 	parent := t.TempDir()
-	// One direct committed child repo — valid on its own.
 	gitRepoWithCommit(t, filepath.Join(parent, "app"))
-	// A non-git child folder containing a nested git repo at depth 2.
-	// detectWorkspaceChildren registers packages/ as needs_init; it gets
-	// gitignored in the parent, so packages/foo is never staged as a gitlink.
 	pkgs := filepath.Join(parent, "packages")
 	if err := os.MkdirAll(pkgs, 0o755); err != nil {
 		t.Fatalf("mkdir packages: %v", err)
@@ -2129,7 +2057,6 @@ func TestManager_AddWorkspaceNonGitChildWithNestedRepo(t *testing.T) {
 		t.Fatalf("Get WorkspaceRepos = %#v, want only the direct git repo", got.Project)
 	}
 
-	// Parent git repo and .gitignore must exist (no rollback).
 	if _, statErr := os.Lstat(filepath.Join(parent, ".git")); statErr != nil {
 		t.Fatalf(".git missing after successful init: %v", statErr)
 	}
@@ -2138,9 +2065,6 @@ func TestManager_AddWorkspaceNonGitChildWithNestedRepo(t *testing.T) {
 	}
 }
 
-// TestManager_AddWorkspaceConcurrentSamePath verifies that two goroutines racing
-// on the same parent path result in exactly one success and one PATH_ALREADY_REGISTERED
-// error. The -race detector will catch any unsynchronised access.
 func TestManager_AddWorkspaceConcurrentSamePath(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -2180,8 +2104,6 @@ func TestManager_AddWorkspaceConcurrentSamePath(t *testing.T) {
 	}
 }
 
-// TestManager_AddWorkspaceRejectsBareParent verifies that a bare git repository
-// is rejected as a workspace parent before any mutation occurs.
 func TestManager_AddWorkspaceRejectsBareParent(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -2193,7 +2115,6 @@ func TestManager_AddWorkspaceRejectsBareParent(t *testing.T) {
 		t.Fatalf("git init --bare: %v (%s)", err, out)
 	}
 
-	// Place a committed child repo inside the bare parent directory.
 	gitRepoWithCommit(t, filepath.Join(bareParent, "child"))
 
 	_, err := m.Add(ctx, project.AddInput{Path: bareParent, ProjectID: ptr("bare"), AsWorkspace: true})
@@ -2207,7 +2128,6 @@ func TestManager_CanonicalRepositoryConfigPersistence(t *testing.T) {
 	if out, err := exec.Command("git", "-C", repo, "remote", "add", "origin", "https://gitlab.com/alice/repo").CombinedOutput(); err != nil {
 		t.Fatalf("origin: %v %s", err, out)
 	}
-	// An unrelated remote must never enter durable claim trust automatically.
 	if out, err := exec.Command("git", "-C", repo, "remote", "add", "upstream", "https://gitlab.com/unrelated/repo").CombinedOutput(); err != nil {
 		t.Fatalf("upstream: %v %s", err, out)
 	}
@@ -2338,8 +2258,6 @@ func TestEmptyCloneOnboardingCreatesFirstWorkspace(t *testing.T) {
 			if err != nil {
 				t.Fatalf("prepare clone: %v", err)
 			}
-			// Select the advertised unborn branch explicitly for Git versions that
-			// do not negotiate an empty remote's HEAD during clone.
 			if out, err := exec.Command("git", "-C", prepared.Path, "symbolic-ref", "HEAD", "refs/heads/"+branch).CombinedOutput(); err != nil {
 				t.Fatalf("select initial branch: %v (%s)", err, out)
 			}
@@ -2509,7 +2427,6 @@ func TestManager_AddFirstForInstallIsDurable(t *testing.T) {
 	if _, err := m.Remove(ctx, "ao"); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	// The table is empty again: the legacy event re-fires, the durable flag must not.
 	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
 		t.Fatalf("Add after remove: %v", err)
 	}
@@ -2525,7 +2442,6 @@ func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *te
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	// A build without markers added and then removed (archived) a project.
 	old := project.NewWithDeps(project.Deps{Store: store})
 	if _, err := old.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
 		t.Fatalf("Add on old build: %v", err)
@@ -2555,7 +2471,6 @@ func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *te
 	if created != 1 {
 		t.Fatalf("ao.projects.created count = %d, want 1", created)
 	}
-	// The deprecated event keeps its active-projects behavior.
 	if legacy != 1 {
 		t.Fatalf("first_project_added count = %d, want 1 (no active projects)", legacy)
 	}
@@ -2621,7 +2536,6 @@ func TestManager_InitializeRepositoryCreatesNewProjectFolder(t *testing.T) {
 
 	t.Run("removes the new folder when setup fails", func(t *testing.T) {
 		dir := newFolder(t)
-		// No git on PATH: git init fails after the folder was made.
 		t.Setenv("PATH", t.TempDir())
 		_, err := m.InitializeRepository(ctx, project.InitializeRepositoryInput{Path: dir, Create: true})
 		if err == nil {
@@ -2649,7 +2563,6 @@ func TestManager_InitializeRepositoryCreateResumesItsOwnFolder(t *testing.T) {
 		if _, err := m.InitializeRepository(ctx, in); err != nil {
 			t.Fatalf("first create: %v", err)
 		}
-		// The response was lost; the phone asks again.
 		result, err := m.InitializeRepository(ctx, in)
 		if err != nil {
 			t.Fatalf("retry: %v", err)

@@ -41,25 +41,23 @@ func seedSession(t *testing.T, s *sqlite.Store) domain.SessionRecord {
 	return r
 }
 
-// TestE2E_StoreWriteToBroadcast drives the whole path: a store write fires a DB
-// trigger that appends to change_log; the poller reads it and broadcasts.
 func TestE2E_StoreWriteToBroadcast(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
-	r := seedSession(t, s) // -> session_created (seq 1)
+	r := seedSession(t, s)
 
 	r.Activity.State = domain.ActivityIdle
-	if err := s.UpdateSession(ctx, r); err != nil { // -> session_updated (seq 2)
+	if err := s.UpdateSession(ctx, r); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.WritePR(ctx, domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: r.UpdatedAt}, nil, nil); err != nil { // -> pr_created (seq 3)
+	if err := s.WritePR(ctx, domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: r.UpdatedAt}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	var got []cdc.Event
 	bc := cdc.NewBroadcaster()
 	bc.Subscribe(func(e cdc.Event) { got = append(got, e) })
-	p := cdc.NewPoller(s, bc, cdc.PollerConfig{}) // StartSeq 0: read from the top
+	p := cdc.NewPoller(s, bc, cdc.PollerConfig{})
 	if err := p.Poll(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +76,6 @@ func TestE2E_StoreWriteToBroadcast(t *testing.T) {
 	if got[0].Type != cdc.EventSessionCreated || got[1].Type != cdc.EventSessionUpdated || got[2].Type != cdc.EventPRCreated {
 		t.Fatalf("types = %s, %s, %s", got[0].Type, got[1].Type, got[2].Type)
 	}
-	// the trigger-built JSON payload survives as a usable RawMessage.
 	var payload map[string]any
 	if err := json.Unmarshal(got[0].Payload, &payload); err != nil {
 		t.Fatalf("payload not JSON: %v", err)
@@ -87,7 +84,6 @@ func TestE2E_StoreWriteToBroadcast(t *testing.T) {
 		t.Fatalf("payload = %v", payload)
 	}
 
-	// idempotent: a second poll with no new rows delivers nothing more.
 	if err := p.Poll(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -96,20 +92,18 @@ func TestE2E_StoreWriteToBroadcast(t *testing.T) {
 	}
 }
 
-// TestE2E_ConcurrentPollerLiveDelivery runs the poller as a goroutine (the daemon
-// model) and asserts every store change is delivered exactly once, in order.
 func TestE2E_ConcurrentPollerLiveDelivery(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := newStore(t)
-	r := seedSession(t, s) // seq 1
+	r := seedSession(t, s)
 
 	var mu sync.Mutex
 	var got []cdc.Event
 	bc := cdc.NewBroadcaster()
 	bc.Subscribe(func(e cdc.Event) { mu.Lock(); got = append(got, e); mu.Unlock() })
 
-	p := cdc.NewPoller(s, bc, cdc.PollerConfig{}) // from the top
+	p := cdc.NewPoller(s, bc, cdc.PollerConfig{})
 	done := p.Start(ctx)
 
 	const n = 6
@@ -123,7 +117,7 @@ func TestE2E_ConcurrentPollerLiveDelivery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want := n // session_created + n-1 activity updates; first write is unchanged
+	want := n
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -153,15 +147,13 @@ func TestE2E_ConcurrentPollerLiveDelivery(t *testing.T) {
 	}
 }
 
-// TestBroadcasterRecoversPanickingSubscriber: one panicking subscriber must not
-// kill delivery to the others (or crash the poller goroutine).
 func TestBroadcasterRecoversPanickingSubscriber(t *testing.T) {
 	bc := cdc.NewBroadcaster()
 	good := 0
 	bc.Subscribe(func(cdc.Event) { panic("boom") })
 	bc.Subscribe(func(cdc.Event) { good++ })
 
-	bc.Publish(cdc.Event{Seq: 1}) // must not panic
+	bc.Publish(cdc.Event{Seq: 1})
 	bc.Publish(cdc.Event{Seq: 2})
 
 	if good != 2 {

@@ -2,8 +2,6 @@ package controllers
 
 import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
 
-// Display copies retain source/navigation metadata but omit frozen delivery context.
-// Never clear Turn on the original: it can still be in use by delivery or retries.
 func excerptSnapshotSummary(captured *domain.ChatExcerptSnapshot) *domain.ChatExcerptSnapshot {
 	if captured == nil {
 		return nil

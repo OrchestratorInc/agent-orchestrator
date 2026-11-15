@@ -18,8 +18,6 @@ import { messages as zhCN } from "../../locales/zh-CN/messages";
 import { messages as zhTW } from "../../locales/zh-TW/messages";
 import type { SupportedLocale } from "./locales";
 
-// The interface catalogs are a few dozen strings each, so every locale ships
-// with the page and switching languages never waits on a request.
 export const CATALOGS: Record<SupportedLocale, Messages> = {
   en,
   ja,

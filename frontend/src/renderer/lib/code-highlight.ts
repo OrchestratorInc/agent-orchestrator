@@ -1,24 +1,7 @@
-/**
- * Shared syntax highlighting for chat, Markdown previews and file diffs.
- * Shiki uses the JavaScript regex engine with bundled grammars and AO's CSS
- * palette. Settled trees use a bounded LRU; live fences send only appended
- * complete lines to a worker that retains their grammar state.
- */
-
 import type { Root } from "hast";
 import type { CodeEngine } from "./code-highlight-engine";
 import type { CodeLine, HighlightWorkerRequest, HighlightWorkerResponse, StreamingCode } from "./code-highlight-protocol";
 
-/**
- * Fence label → grammar. Labels are what agents type, so the aliases matter
- * more than the canonical names: `sh`, `console` and `zsh` all arrive in
- * practice and all mean bash here.
- *
- * A label that is absent is highlighted by nobody: `canonicalLanguage` returns
- * undefined, the block renders as plain monospace, and the grammar chunk is not
- * even fetched. That is the intended outcome for `text`, `log`, `output` and
- * anything this build does not know.
- */
 const GRAMMARS = {
 	bash: "bash",
 	sh: "bash",
@@ -61,48 +44,23 @@ const GRAMMARS = {
 
 export type GrammarName = (typeof GRAMMARS)[keyof typeof GRAMMARS];
 
-/** The grammar for a fence label, or undefined when there is nothing to load. */
 const grammarAliases = new Map<string, GrammarName>(Object.entries(GRAMMARS));
 
 export function canonicalLanguage(label: string | undefined): GrammarName | undefined {
 	return label ? grammarAliases.get(label.toLowerCase()) : undefined;
 }
 
-/* -------------------------------------------------------------------------- */
-/* cache                                                                      */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Bounded because a long session can scroll past thousands of blocks and this
- * holds parse trees, not strings. The caps are in source characters rather than
- * bytes: it is the only cost that can be measured for free, and a tree is a
- * near-constant multiple of the code it came from.
- */
 const MAX_ENTRIES = 200;
 const MAX_CHARS = 1_000_000;
 
-/**
- * Above this, tokenizing moves off the render path even when the grammars are
- * already in memory. A pasted 2000-line file is the case that would otherwise
- * drop a frame; everything a chat block normally holds is far below it.
- */
 const SYNC_LIMIT = 20_000;
 
-/** Insertion order is the LRU order: a hit is re-inserted at the back. */
 const cache = new Map<string, { tree: Root; chars: number }>();
 let cachedChars = 0;
 
 let engine: CodeEngine | undefined;
 let loading: Promise<CodeEngine | undefined> | undefined;
 
-/**
- * The highlighted tree, if it can be produced without waiting.
- *
- * Returns a cached tree, or tokenizes on the spot once the grammars are loaded
- * and the block is small. Both paths matter: the cache is what makes a
- * remounted block appear already highlighted, and the warm path is what keeps
- * every block after the first from flashing plain for a frame.
- */
 export function highlightSync(code: string, language: GrammarName): Root | undefined {
 	const key = cacheKey(code, language);
 	const hit = cache.get(key);
@@ -115,11 +73,6 @@ export function highlightSync(code: string, language: GrammarName): Root | undef
 	return undefined;
 }
 
-/**
- * The highlighted tree, loading the grammars first if this is the first fence in
- * the session. Resolves undefined when highlighting is simply not available, so
- * callers keep showing plain monospace instead of showing nothing.
- */
 export async function highlight(code: string, language: GrammarName): Promise<Root | undefined> {
 	const ready = highlightSync(code, language);
 	if (ready) return ready;
@@ -136,9 +89,6 @@ async function loadEngine(): Promise<CodeEngine | undefined> {
 			return engine;
 		})
 		.catch((cause: unknown) => {
-			// A chunk that will not load in a packaged app will not load on the next
-			// render either, so the failure is reported once and the rejected promise
-			// is kept: plain monospace is a fine outcome and retrying is not.
 			console.warn("chat: syntax grammars unavailable", cause);
 			return undefined;
 		});
@@ -151,8 +101,6 @@ function tokenize(code: string, language: GrammarName, key: string): Root | unde
 		store(key, tree, code.length);
 		return tree;
 	} catch (cause) {
-		// A grammar can throw on input it cannot make sense of. The block is still
-		// readable unhighlighted, which is better than losing the message.
 		console.warn(`chat: could not highlight ${language}`, cause);
 		return undefined;
 	}
@@ -164,7 +112,6 @@ function store(key: string, tree: Root, chars: number): void {
 		cachedChars -= existing.chars;
 		cache.delete(key);
 	}
-	// One pathological block must not be able to evict everything else.
 	if (chars > MAX_CHARS) return;
 	while (cache.size >= MAX_ENTRIES || cachedChars + chars > MAX_CHARS) {
 		const oldest = cache.keys().next().value;
@@ -176,14 +123,6 @@ function store(key: string, tree: Root, chars: number): void {
 	cachedChars += chars;
 }
 
-/**
- * FNV-1a over the source, with the length alongside it.
- *
- * The code is not used as the key directly because that would retain a second
- * copy of every block ever highlighted. A 32-bit hash collides eventually, so
- * the length is carried as a cheap guard — two different blocks then have to
- * agree on hash *and* length to be confused.
- */
 function cacheKey(code: string, language: GrammarName): string {
 	let hash = 0x811c9dc5;
 	for (let i = 0; i < code.length; i += 1) {
@@ -193,8 +132,6 @@ function cacheKey(code: string, language: GrammarName): string {
 	return `${language}:${code.length}:${(hash >>> 0).toString(36)}`;
 }
 
-// Keep large tokenization off the renderer thread. If a worker is unavailable,
-// saturated or stuck, leave the already-readable plain code in place.
 const MAX_PENDING = 32;
 const WORKER_TIMEOUT_MS = 10_000;
 let worker: Worker | undefined;
@@ -223,7 +160,6 @@ function stopWorker(): void {
 	pendingChars = 0;
 }
 
-/** A fence owns its worker state until disposed; a rewrite resets that state. */
 export function createCodeHighlightStream() {
 	const streamId = ++nextStreamId;
 	let committed: { source: string; language: GrammarName } | undefined;
@@ -240,7 +176,6 @@ export function createCodeHighlightStream() {
 				if (!reset && offset === code.length) return { source: code, language, lines };
 				let response = await sendWorker({ kind: "stream", id: ++nextRequestId, streamId, offset, reset, code: code.slice(offset), language });
 				if (disposed) return undefined;
-				// Worker LRU eviction is transparent: replay once from the source.
 				let replace = reset;
 				if (response?.kind === "reset") {
 					replace = true;

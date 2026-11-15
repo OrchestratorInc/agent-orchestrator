@@ -40,14 +40,10 @@ func TestClaudeSubagentActivityKeepsSessionWorkingUntilLastChildStops(t *testing
 	children := []string{"child-1"}
 	apply(8, "stop", "", domain.ActivityIdle, &children, domain.ActivityActive)
 	apply(14, "post-tool-use", "child-1", domain.ActivityActive, nil, domain.ActivityActive)
-	// A new lifecycle Manager simulates a daemon restart. It reads the retained
-	// parent and child facts rather than relying on its old in-memory map.
 	m = New(store, nil)
 	apply(16, "subagent-stop", "child-1", "", nil, domain.ActivityIdle)
 	apply(17, "post-tool-use", "child-1", domain.ActivityActive, nil, domain.ActivityIdle)
-	// A delayed Stop snapshot must not resurrect a completed child.
 	apply(7, "stop", "", domain.ActivityIdle, &children, domain.ActivityIdle)
-	// A delayed start for an unlisted child cannot override a newer empty snapshot.
 	empty := []string{}
 	apply(18, "stop", "", domain.ActivityIdle, &empty, domain.ActivityIdle)
 	apply(15, "subagent-start", "unlisted-child", "", nil, domain.ActivityIdle)
@@ -123,7 +119,6 @@ func TestCodexSpawnToolResultBridgesDelayedChildStart(t *testing.T) {
 	apply(7, "subagent-stop", "child-1", "", domain.ActivityActive)
 	apply(8, "subagent-start", "child-2", "", domain.ActivityActive)
 	apply(9, "subagent-stop", "child-2", "", domain.ActivityIdle)
-	// A child stop still clears the provisional spawn if its start hook was lost.
 	apply(10, "user-prompt-submit", "", domain.ActivityActive, domain.ActivityActive)
 	apply(11, "subagent-spawn", "call-3", "", domain.ActivityActive)
 	apply(12, "stop", "", domain.ActivityIdle, domain.ActivityActive)
@@ -194,8 +189,6 @@ func TestClaudeSubagentActivityWaitsForEveryChildAndPreservesPermissionBlock(t *
 	apply(4, "stop", "", domain.ActivityIdle, "", &children, domain.ActivityActive)
 	apply(5, "pre-tool-use", "child-1", domain.ActivityActive, "tool-1", nil, domain.ActivityActive)
 	apply(6, "permission-request", "child-1", domain.ActivityBlocked, "", nil, domain.ActivityBlocked)
-	// Claude's permission notification has no child id. It must not turn the
-	// parent into a blocked turn after the child's correlated tool completes.
 	apply(7, "notification", "", domain.ActivityBlocked, "", nil, domain.ActivityBlocked)
 	apply(8, "post-tool-use", "child-1", domain.ActivityActive, "tool-1", nil, domain.ActivityActive)
 	apply(9, "subagent-stop", "child-2", "", "", nil, domain.ActivityActive)
@@ -525,8 +518,6 @@ func TestClaudeStaleNotificationAfterChildStopDoesNotReblockParent(t *testing.T)
 	apply(4*time.Second, "permission-request", "child-1", domain.ActivityBlocked, nil, domain.ActivityBlocked)
 	apply(5*time.Second, "post-tool-use", "child-1", domain.ActivityActive, nil, domain.ActivityActive)
 	apply(6*time.Second, "subagent-stop", "child-1", "", nil, domain.ActivityIdle)
-	// This notification arrived after the child stopped. It has no identity, so
-	// its blocked state cannot be allowed to overwrite the completed child turn.
 	apply(7*time.Second, "notification", "", domain.ActivityBlocked, nil, domain.ActivityIdle)
 	apply(8*time.Second, "user-prompt-submit", "", domain.ActivityActive, nil, domain.ActivityActive)
 	apply(9*time.Second, "notification", "", domain.ActivityBlocked, nil, domain.ActivityBlocked)
@@ -546,8 +537,6 @@ func TestClaudeSubagentStopSnapshotClearsSiblingWithLostStopHook(t *testing.T) {
 		{Event: "subagent-start", SubagentID: "child-2", Timestamp: start.Add(2 * time.Second)},
 		{Valid: true, State: domain.ActivityIdle, Event: "stop", Timestamp: start.Add(3 * time.Second),
 			RunningSubagentIDs: &[]string{"child-1", "child-2"}},
-		// child-1's stop hook is lost. Claude's parent-scoped snapshot on
-		// child-2's stop proves neither child remains in flight.
 		{Event: "subagent-stop", SubagentID: "child-2", Timestamp: start.Add(4 * time.Second),
 			RunningSubagentIDs: &[]string{}},
 	} {
@@ -576,8 +565,6 @@ func TestClaudeDuplicateSubagentStopStillAppliesNewerSnapshot(t *testing.T) {
 		{Valid: true, State: domain.ActivityIdle, Event: "stop", Timestamp: start.Add(3 * time.Second),
 			RunningSubagentIDs: &[]string{"child-1", "child-2"}},
 		{Event: "subagent-stop", SubagentID: "child-2", Timestamp: start.Add(4 * time.Second)},
-		// This duplicate stop carries a newer snapshot. Child-1's stop hook
-		// was lost, and the registry now proves it is no longer running.
 		{Event: "subagent-stop", SubagentID: "child-2", Timestamp: start.Add(5 * time.Second),
 			RunningSubagentIDs: &[]string{}},
 	} {

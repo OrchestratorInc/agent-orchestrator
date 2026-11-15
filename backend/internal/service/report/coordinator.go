@@ -17,22 +17,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// ReportInterruptWindow is the durable per-worker urgent interruption limit.
 const ReportInterruptWindow = 3 * time.Minute
 
-// OrchestratorBusyRetry is how long a batch refused with ErrOrchestratorBusy
-// waits before its next delivery attempt.
 const OrchestratorBusyRetry = 30 * time.Second
 
-// ErrReportDeliveryModeUnsupported reports a target without semantic delivery.
 var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a semantic conversation")
 
-// ErrOrchestratorBusy marks a Submit refused because the orchestrator cannot
-// take the batch right now — its composer holds the operator's unsent draft —
-// and should be retried later rather than immediately.
 var ErrOrchestratorBusy = errors.New("orchestrator cannot take reports right now")
 
-// DeliveryStore is the durable report scheduling and routing boundary.
 type DeliveryStore interface {
 	ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error)
 	GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error)
@@ -44,13 +36,11 @@ type DeliveryStore interface {
 	AcquireReportInterrupt(context.Context, domain.SessionID, time.Time, time.Duration) (bool, time.Time, error)
 }
 
-// Delivery submits accepted semantic context and interrupts active work.
 type Delivery interface {
 	Submit(context.Context, domain.SessionID, string, string) error
 	Interrupt(context.Context, domain.SessionID) error
 }
 
-// Coordinator delivers durable report batches to active orchestrators.
 type Coordinator struct {
 	store      DeliveryStore
 	delivery   Delivery
@@ -61,7 +51,6 @@ type Coordinator struct {
 	mu         sync.Mutex
 }
 
-// CoordinatorDeps configures durable scheduling and delivery.
 type CoordinatorDeps struct {
 	Store      DeliveryStore
 	Delivery   Delivery
@@ -70,7 +59,6 @@ type CoordinatorDeps struct {
 	RetryDelay time.Duration
 }
 
-// NewCoordinator constructs an idle report delivery coordinator.
 func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	if d.Now == nil {
 		d.Now = time.Now
@@ -84,7 +72,6 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	return &Coordinator{store: d.Store, delivery: d.Delivery, now: d.Now, newToken: d.NewToken, retryDelay: d.RetryDelay, wake: make(chan struct{}, 1)}
 }
 
-// Wake asks the coordinator to inspect durable scheduling state.
 func (c *Coordinator) Wake() {
 	if c == nil {
 		return
@@ -95,7 +82,6 @@ func (c *Coordinator) Wake() {
 	}
 }
 
-// Start runs delivery until ctx is cancelled and returns its completion signal.
 func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() { defer close(done); c.run(ctx) }()
@@ -127,8 +113,6 @@ func (c *Coordinator) run(ctx context.Context) {
 	}
 }
 
-// RunDue performs bounded due delivery and returns the delay until the next
-// durable deadline. Tests call it directly with fake time.
 func (c *Coordinator) RunDue(ctx context.Context) (time.Duration, error) {
 	if c == nil || c.store == nil || c.delivery == nil {
 		return -1, errors.New("report coordinator dependencies are required")
@@ -165,9 +149,6 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err != nil || len(batch.Reports) == 0 {
 		return err
 	}
-	// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
-	// there cancels the running turn or a prompt that was just submitted, so
-	// stuck reports are delivered to them like any other report.
 	if batch.hasState(domain.ReportStuck) && domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat {
 		interrupted := false
 		var nextInterrupt time.Time
@@ -192,8 +173,6 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
 		if errors.Is(err, ErrOrchestratorBusy) {
-			// Released, the batch would stay the earliest due and every retry would
-			// stop RunDue before any other project's reports. Back off instead.
 			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), err.Error())
 			return deferErr
 		}
@@ -220,7 +199,6 @@ func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.P
 	return selected, selected.ID != "", nil
 }
 
-// PreparedBatch is a token-fenced durable batch awaiting acceptance.
 type PreparedBatch struct {
 	ProjectID domain.ProjectID
 	Token     string
@@ -244,8 +222,6 @@ func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (Pr
 	return PreparedBatch{ProjectID: projectID, Token: token, ID: batchID, Reports: reports}, err
 }
 
-// PreparePiggyback claims pending reports for the active Chat orchestrator.
-// The caller must acknowledge only after its user message is durably accepted.
 func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.SessionID) (PreparedBatch, error) {
 	if c == nil || c.store == nil {
 		return PreparedBatch{}, nil
@@ -260,7 +236,6 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	return c.claim(ctx, rec.ProjectID)
 }
 
-// AcceptPiggyback acknowledges reports after the combined user turn is accepted.
 func (c *Coordinator) AcceptPiggyback(ctx context.Context, batch PreparedBatch) error {
 	if len(batch.Reports) == 0 {
 		return nil
@@ -269,7 +244,6 @@ func (c *Coordinator) AcceptPiggyback(ctx context.Context, batch PreparedBatch) 
 	return err
 }
 
-// ReleasePiggyback makes a batch retryable when the combined turn was refused.
 func (c *Coordinator) ReleasePiggyback(ctx context.Context, batch PreparedBatch, cause error) error {
 	if len(batch.Reports) == 0 {
 		return nil
@@ -285,9 +259,6 @@ func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause er
 	return cause
 }
 
-// retryLater queues a refused submission behind every report that is already
-// due. Schedule selection takes the earliest pending report across projects,
-// so an orchestrator that keeps refusing must not hold that place.
 func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause error) error {
 	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), cause.Error())
 	if deferErr != nil {
@@ -301,9 +272,6 @@ const (
 	chatReportClose = "</ao-worker-reports>"
 )
 
-// AppendToUserMessage places reports after the user's text in one semantic turn.
-// The envelope lets AO's Chat UI hide daemon-authored context while preserving
-// the exact prompt accepted by the provider for retry and recovery.
 func (b PreparedBatch) AppendToUserMessage(message string) string {
 	if len(b.Reports) == 0 {
 		return message
@@ -311,7 +279,6 @@ func (b PreparedBatch) AppendToUserMessage(message string) string {
 	return message + "\n\n" + chatReportOpen + "\n" + b.Render() + "\n" + chatReportClose
 }
 
-// IdempotencyKey returns the stable durable delivery identity.
 func (b PreparedBatch) IdempotencyKey() string {
 	if b.ID != "" {
 		return b.ID
@@ -325,7 +292,6 @@ func (b PreparedBatch) IdempotencyKey() string {
 	return "report-batch:" + hex.EncodeToString(sum[:16])
 }
 
-// Render formats compact attributed report context for an orchestrator.
 func (b PreparedBatch) Render() string {
 	var out strings.Builder
 	out.WriteString("Reports since your previous turn:")
@@ -360,8 +326,6 @@ func reportDisplayNameOrID(r domain.ReportRecord) string {
 	return string(r.SessionID)
 }
 
-// reportSessionLink is the markdown attribution a standalone report shows.
-// Piggybacked copies stay inside the hidden user-message envelope.
 func reportSessionLink(r domain.ReportRecord) string {
 	label := strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]", "\n", " ").Replace(reportDisplayNameOrID(r))
 	href := "ao://sessions/" + url.PathEscape(string(r.ProjectID)) + "/" + url.PathEscape(string(r.SessionID))

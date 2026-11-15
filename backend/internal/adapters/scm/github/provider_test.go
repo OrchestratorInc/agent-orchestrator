@@ -21,12 +21,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ---------------------------------------------------------------------------
-// Test scaffolding: programmable httptest.Server with route-based dispatch.
-// Tests register handlers per "METHOD path" key; unmatched requests fail
-// loudly so an accidental extra call surfaces immediately.
-// ---------------------------------------------------------------------------
-
 type recordedReq struct {
 	Method string
 	Path   string
@@ -50,8 +44,6 @@ func newFakeGH(t *testing.T) *fakeGH {
 	return f
 }
 
-// on registers a handler for one METHOD + path tuple. Path is taken
-// verbatim (no query string).
 func (f *fakeGH) on(method, path string, h http.HandlerFunc) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -92,7 +84,6 @@ func (f *fakeGH) callsTo(method, path string) int {
 	return n
 }
 
-// newProviderForTest builds a Provider that talks only to the fake.
 func newProviderForTest(t *testing.T, f *fakeGH) *Provider {
 	t.Helper()
 	p, err := NewProvider(ProviderOptions{
@@ -149,18 +140,12 @@ func TestAuthenticatedIdentityClassifiesBot(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Fixture builders. Each test composes a REST pull + GraphQL response so
-// it can pin the exact shape it cares about without sharing global state
-// with other tests.
-// ---------------------------------------------------------------------------
-
 type prFixture struct {
 	owner, repo string
 	number      int
 	rest        map[string]any
 	graphql     map[string]any
-	jobLogs     map[int64]string // job_id -> log body
+	jobLogs     map[int64]string
 }
 
 func basePRFixture() *prFixture {
@@ -230,7 +215,6 @@ func basePRFixture() *prFixture {
 	}
 }
 
-// install wires REST + GraphQL handlers onto the fake.
 func (f *prFixture) install(t *testing.T, fake *fakeGH) {
 	restPath := "/repos/" + f.owner + "/" + f.repo + "/pulls/" + strconv.Itoa(f.number)
 	fake.on(http.MethodGet, restPath, func(w http.ResponseWriter, r *http.Request) {
@@ -250,7 +234,6 @@ func (f *prFixture) install(t *testing.T, fake *fakeGH) {
 	}
 }
 
-// prData mutates the nested GraphQL pullRequest map.
 func (f *prFixture) prData(mut func(pr map[string]any)) *prFixture {
 	repoData := f.graphql["data"].(map[string]any)["repository"].(map[string]any)
 	pr := repoData["pullRequest"].(map[string]any)
@@ -261,10 +244,6 @@ func (f *prFixture) prData(mut func(pr map[string]any)) *prFixture {
 func (f *prFixture) prURL() string {
 	return "https://github.com/" + f.owner + "/" + f.repo + "/pull/" + strconv.Itoa(f.number)
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 func TestParsePRURL(t *testing.T) {
 	cases := []struct {
@@ -581,8 +560,6 @@ func TestObserve_LogTailFetchFailureIsBestEffort(t *testing.T) {
 		}
 	})
 	fx.install(t, f)
-	// Job-log endpoint returns 500 — the observation must still come back
-	// Fetched=true with a synthetic LogTail.
 	f.on(http.MethodGet, "/repos/octocat/hello/actions/jobs/9001/logs", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"server exploded"}`, http.StatusInternalServerError)
 	})
@@ -608,8 +585,7 @@ func TestObserve_MergeabilityStates(t *testing.T) {
 		want       domain.Mergeability
 	}{
 		{
-			name: "mergeable",
-			// base fixture is the happy path
+			name:       "mergeable",
 			mutateREST: func(m map[string]any) {},
 			mutateGQL:  func(m map[string]any) {},
 			want:       domain.MergeMergeable,
@@ -659,11 +635,6 @@ func TestObserve_MergeabilityStates(t *testing.T) {
 			want: domain.MergeUnknown,
 		},
 		{
-			// Load-bearing aa-18 contract: CI failing must force
-			// MergeBlocked even when GitHub still reports the rollup
-			// as CLEAN (mergeStateStatus has not yet flipped to
-			// UNSTABLE). Without this guard the LCM would think a
-			// failing-CI PR is ready to merge.
 			name: "ci failing forces blocked even when mergeStateStatus is CLEAN",
 			mutateREST: func(m map[string]any) {
 				m["mergeable_state"] = "clean"
@@ -674,8 +645,6 @@ func TestObserve_MergeabilityStates(t *testing.T) {
 				commits := m["commits"].(map[string]any)["nodes"].([]any)[0].(map[string]any)
 				commit := commits["commit"].(map[string]any)
 				roll := commit["statusCheckRollup"].(map[string]any)
-				// databaseId=0 so the provider skips the per-job log
-				// fetch (this test is about mergeability, not log tail).
 				roll["contexts"].(map[string]any)["nodes"] = []any{
 					map[string]any{"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE", "databaseId": float64(0)},
 				}
@@ -752,7 +721,6 @@ func TestObserve_BotAuthorFiltering(t *testing.T) {
 					},
 				}},
 			},
-			// Bot thread — must be filtered out entirely.
 			map[string]any{
 				"id":         "T2",
 				"isResolved": false,
@@ -766,7 +734,6 @@ func TestObserve_BotAuthorFiltering(t *testing.T) {
 					},
 				}},
 			},
-			// Resolved thread — must also be filtered out.
 			map[string]any{
 				"id":         "T3",
 				"isResolved": true,
@@ -774,9 +741,6 @@ func TestObserve_BotAuthorFiltering(t *testing.T) {
 					map[string]any{"id": "C3", "body": "lgtm now", "author": map[string]any{"login": "bob", "__typename": "User"}},
 				}},
 			},
-			// Login like "robothon" — must NOT be treated as a bot (aa-18
-			// flagged the strings.Contains(login,"bot") fallback as a
-			// false-positive magnet; we use the typed signal only).
 			map[string]any{
 				"id":         "T4",
 				"isResolved": false,
@@ -813,11 +777,6 @@ func TestObserve_BotAuthorFiltering(t *testing.T) {
 	}
 }
 
-// TestObserve_AllBotThreadsYieldsNilComments pins that a PR whose review
-// threads are 100% bot-authored produces Comments == nil but a fully
-// fetched observation. The PR Manager downstream must handle a nil
-// Comments slice without panicking, and Fetched=true means lifecycle
-// can still apply the rest of the observation.
 func TestObserve_AllBotThreadsYieldsNilComments(t *testing.T) {
 	f := newFakeGH(t)
 	fx := basePRFixture()
@@ -858,9 +817,6 @@ func contains(ss []string, x string) bool {
 }
 
 func TestObserve_ETag304Cached(t *testing.T) {
-	// Second call to the REST pull endpoint must send If-None-Match and
-	// reuse the cached body, while still completing the rest of the
-	// observation (GraphQL is always re-fetched — there's no cache for it).
 	f := newFakeGH(t)
 	fx := basePRFixture()
 	var restHits int
@@ -899,7 +855,6 @@ func TestObserve_ETag304Cached(t *testing.T) {
 	if restHits != 2 {
 		t.Fatalf("expected 2 hits to the REST pull endpoint (one fresh, one 304), got %d", restHits)
 	}
-	// And: the second call must have actually sent If-None-Match.
 	var sentConditional bool
 	for _, r := range f.calls() {
 		if r.Method == http.MethodGet && r.Path == restPath && r.Header.Get("If-None-Match") != "" {
@@ -921,7 +876,6 @@ func TestObserve_PrimaryRateLimit(t *testing.T) {
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
 		http.Error(w, `{"message":"API rate limit exceeded"}`, http.StatusForbidden)
 	})
-	// GraphQL would never be reached in this scenario.
 	p := newProviderForTest(t, f)
 
 	obs, err := p.Observe(ctx(), fx.prURL())
@@ -1001,12 +955,11 @@ func TestObserve_MalformedJSONIsNotFetched(t *testing.T) {
 }
 
 func TestObserve_NetworkErrorIsNotFetched(t *testing.T) {
-	// Point the provider at a closed server to force a transport error.
 	f := newFakeGH(t)
 	p, err := NewProvider(ProviderOptions{
 		Token:      StaticTokenSource("tkn"),
 		HTTPClient: &http.Client{Timeout: 200 * time.Millisecond},
-		RESTBase:   "http://127.0.0.1:1", // reserved port; refuses connections
+		RESTBase:   "http://127.0.0.1:1",
 		GraphQLURL: "http://127.0.0.1:1/graphql",
 	})
 	if err != nil {
@@ -1019,8 +972,6 @@ func TestObserve_NetworkErrorIsNotFetched(t *testing.T) {
 	if obs.Fetched {
 		t.Fatalf("Fetched = true on network error; want false")
 	}
-	// Reference f so the test linter doesn't flag it; we don't use the
-	// fake here but the helper is the canonical way to scope a test.
 	_ = f
 }
 
@@ -1064,14 +1015,12 @@ func TestGHTokenSourceUsesInjectedHook(t *testing.T) {
 	if tok != "from-gh" {
 		t.Fatalf("Token = %q, want %q", tok, "from-gh")
 	}
-	// Second call within TTL must be cached.
 	if _, err := src.Token(context.Background()); err != nil {
 		t.Fatalf("second Token: %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("GH called %d times; want 1 (cache miss only)", calls)
 	}
-	// Invalidate and the next call must re-run.
 	src.InvalidateToken()
 	if _, err := src.Token(context.Background()); err != nil {
 		t.Fatalf("third Token: %v", err)
@@ -1081,13 +1030,6 @@ func TestGHTokenSourceUsesInjectedHook(t *testing.T) {
 	}
 }
 
-// TestObserve_CIPaginationDegradesPassingToUnknown pins the safety
-// guard for the GraphQL contexts pagination: when GitHub reports
-// hasNextPage=true, a visible "all passing" set could be hiding a
-// failure on the next page. The provider must degrade Passing /
-// Pending / Unknown to CIUnknown so downstream code doesn't treat a
-// possibly-broken PR as ready. A FAILING verdict from the visible
-// page is still safe (and must NOT degrade).
 func TestObserve_CIPaginationDegradesPassingToUnknown(t *testing.T) {
 	f := newFakeGH(t)
 	fx := basePRFixture()
@@ -1096,8 +1038,6 @@ func TestObserve_CIPaginationDegradesPassingToUnknown(t *testing.T) {
 		commit := commits["commit"].(map[string]any)
 		roll := commit["statusCheckRollup"].(map[string]any)
 		ctxs := roll["contexts"].(map[string]any)
-		// One visible passing context, but hasNextPage=true so a
-		// failure could be hiding in the unseen tail.
 		ctxs["nodes"] = []any{
 			map[string]any{"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "SUCCESS"},
 		}
@@ -1140,9 +1080,6 @@ func TestObserve_CIPaginationDoesNotMaskKnownFailure(t *testing.T) {
 	}
 }
 
-// TestObserve_StatusContextLegacyHasNoLogTail pins that we do NOT try to
-// fetch a job log for a legacy commit-status row (those have no Actions
-// job ID, so /actions/jobs/0/logs would 404 if we let the path leak).
 func TestObserve_StatusContextLegacyHasNoLogTail(t *testing.T) {
 	f := newFakeGH(t)
 	fx := basePRFixture()
@@ -1175,10 +1112,6 @@ func TestObserve_StatusContextLegacyHasNoLogTail(t *testing.T) {
 	}
 }
 
-// TestObserve_AssertsPRObservationShape is a belt-and-braces compile-time
-// guard that PRObservation has the fields we depend on. If the port adds
-// or renames a field, this test fails to compile rather than failing at
-// runtime.
 func TestObserve_AssertsPRObservationShape(t *testing.T) {
 	var o ports.PRObservation
 	o.Fetched = true
@@ -1280,9 +1213,6 @@ func actionsCheckRun(workflow, name, conclusion string, id float64) map[string]a
 	return n
 }
 
-// PR #7774: the same commit ran each workflow three times; the first run was
-// cancelled, and GitHub's rollup state stays FAILURE although every check's
-// newest run passed.
 func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 	superseded := []any{
 		actionsCheckRun("Go", "lint", "CANCELLED", 1),
@@ -1352,9 +1282,6 @@ func TestCISummaryIgnoresSupersededCheckRuns(t *testing.T) {
 	}
 }
 
-// GitHub's rollup state stays FAILURE for cancelled checks, so every case here
-// starts from that rollup. PR #7964: runs cancelled by a PR body edit showed
-// "CI failing" while their replacements ran.
 func TestCISummaryCancelledChecksAreNotFailures(t *testing.T) {
 	inProgress := func(workflow, name string, id float64) map[string]any {
 		n := actionsCheckRun(workflow, name, "", id)
@@ -1425,9 +1352,6 @@ func TestCISummaryCancelledChecksAreNotFailures(t *testing.T) {
 	}
 }
 
-// suiteCheckRun is actionsCheckRun with the conclusion of the check suite
-// (workflow run) the job belongs to; "" leaves it null, as GitHub reports it
-// while the run is still going.
 func suiteCheckRun(workflow, name, conclusion, suiteConclusion string, id float64) map[string]any {
 	n := actionsCheckRun(workflow, name, conclusion, id)
 	suite := n["checkSuite"].(map[string]any)
@@ -1439,11 +1363,6 @@ func suiteCheckRun(workflow, name, conclusion, suiteConclusion string, id float6
 	return n
 }
 
-// Issue #7823: a gate job such as build-test fails when the jobs it needs were
-// cancelled. Repro on PR #7822: run 42027469065 was cancelled by a PR edit,
-// its build-test ended FAILURE inside a check suite that concluded CANCELLED,
-// and AO told the worker "CI is failing ... build-test (failed)" while the
-// replacement run was still queued.
 func TestCISummaryGateFailureInCancelledSuiteIsNotAFailure(t *testing.T) {
 	running := func(workflow, name string, id float64) map[string]any {
 		n := suiteCheckRun(workflow, name, "", "", id)
@@ -1460,7 +1379,7 @@ func TestCISummaryGateFailureInCancelledSuiteIsNotAFailure(t *testing.T) {
 	cases := []struct {
 		name       string
 		nodes      []any
-		wantStatus domain.PRCheckStatus // of the build-test check
+		wantStatus domain.PRCheckStatus
 		wantCI     domain.CIState
 		wantFailed []string
 	}{
@@ -1623,8 +1542,6 @@ func TestCancelledGateFailureRequiresEvidence(t *testing.T) {
 	}
 }
 
-// A token without Actions read access gets FORBIDDEN on each
-// checkSuite.workflowRun; the PR must still be observed.
 func TestFetchPullRequestsToleratesWorkflowRunAccessErrors(t *testing.T) {
 	fake := newFakeGH(t)
 	var pr map[string]any
@@ -2001,12 +1918,6 @@ func TestFetchReviewThreadsFetchesOneOlderPageWhenOldestUnresolved(t *testing.T)
 	}
 }
 
-// installCheckRunsFake serves the per-commit check-runs endpoint exactly the way
-// GitHub does for ETag purposes: 304 when the representation GitHub would return
-// for the caller's per_page is unchanged, otherwise 200 with a fresh ETag. The
-// authoritative full run list is held behind mu so a test can pivot one run's
-// status between calls. This models the real GitHub contract, where the ETag
-// covers only the returned page (which is why the old per_page=1 bug existed).
 func installCheckRunsFake(t *testing.T, f *fakeGH, owner, repo, sha string, mu *sync.Mutex, runs *[]map[string]any) {
 	t.Helper()
 	path := repoPath(owner, repo, "commits", sha, "check-runs")
@@ -2037,12 +1948,6 @@ func installCheckRunsFake(t *testing.T, f *fakeGH, owner, repo, sha string, mu *
 	})
 }
 
-// TestCommitChecksGuard_OtherRunTransitionInvalidatesGuard is a regression test
-// for the "completed checks remain pending" bug: the guard used to condition on
-// per_page=1, so GitHub's ETag only covered the first returned run. When a
-// DIFFERENT workflow finished, the single-item representation was unchanged and
-// GitHub answered 304, leaving AO stuck on "Checks running" until the five-minute
-// forced refresh. The guard must now track the complete run set.
 func TestCommitChecksGuard_OtherRunTransitionInvalidatesGuard(t *testing.T) {
 	f := newFakeGH(t)
 	const owner, repo, sha = "octocat", "hello", "abc123"
@@ -2055,7 +1960,6 @@ func TestCommitChecksGuard_OtherRunTransitionInvalidatesGuard(t *testing.T) {
 	p := newProviderForTest(t, f)
 	repoRef := ports.SCMRepo{Provider: "github", Host: "github.com", Owner: owner, Name: repo, Repo: owner + "/" + repo}
 
-	// First poll: no cached ETag, must be a fresh fetch -> NotModified=false.
 	res, err := p.CommitChecksGuard(ctx(), repoRef, sha, "")
 	if err != nil {
 		t.Fatalf("first CommitChecksGuard: %v", err)
@@ -2067,7 +1971,6 @@ func TestCommitChecksGuard_OtherRunTransitionInvalidatesGuard(t *testing.T) {
 		t.Fatal("first poll returned an empty ETag")
 	}
 
-	// Second poll: representation unchanged -> 304 -> NotModified=true.
 	res, err = p.CommitChecksGuard(ctx(), repoRef, sha, res.ETag)
 	if err != nil {
 		t.Fatalf("unchanged CommitChecksGuard: %v", err)
@@ -2076,10 +1979,6 @@ func TestCommitChecksGuard_OtherRunTransitionInvalidatesGuard(t *testing.T) {
 		t.Fatal("unchanged check-runs representation reported NotModified=false")
 	}
 
-	// Third poll: the FIRST returned run is stable, but a DIFFERENT run
-	// transitions in_progress -> completed. With the old per_page=1 guard this
-	// returned 304 and AO kept "Checks running". With the complete-representation
-	// guard the full body changed, so GitHub sends a fresh ETag -> NotModified=false.
 	mu.Lock()
 	runs = []map[string]any{
 		{"id": 1, "name": "lint", "status": "completed", "conclusion": "success"},
@@ -2095,18 +1994,12 @@ func TestCommitChecksGuard_OtherRunTransitionInvalidatesGuard(t *testing.T) {
 	}
 }
 
-// TestCommitChecksGuard_PaginatedFingerprintInvalidatesLaterPageRun verifies the
-// paginated path: when a commit carries more than one page of check runs, the
-// guard fingerprints the complete set so a transition on a LATER page (invisible
-// to the first page's ETag) still invalidates the guard.
 func TestCommitChecksGuard_PaginatedFingerprintInvalidatesLaterPageRun(t *testing.T) {
 	f := newFakeGH(t)
 	const owner, repo, sha = "octocat", "hello", "abc123"
 	path := repoPath(owner, repo, "commits", sha, "check-runs")
 
 	var mu sync.Mutex
-	// 150 runs: page 1 holds runs 1..100, page 2 holds 101..150. The first-page
-	// ETag only reflects runs 1..100; the transition happens on a page-2 run.
 	page1 := make([]map[string]any, 0, githubCheckRunsPageSize)
 	for i := 1; i <= 100; i++ {
 		page1 = append(page1, map[string]any{"id": i, "name": fmt.Sprintf("job-%d", i), "status": "completed", "conclusion": "success"})
@@ -2115,7 +2008,6 @@ func TestCommitChecksGuard_PaginatedFingerprintInvalidatesLaterPageRun(t *testin
 	for i := 101; i <= 150; i++ {
 		status, conclusion := "completed", "success"
 		if i == 150 {
-			// The run whose transition the first page's ETag cannot see.
 			status, conclusion = "in_progress", ""
 		}
 		page2 = append(page2, map[string]any{"id": i, "name": fmt.Sprintf("job-%d", i), "status": status, "conclusion": conclusion})
@@ -2158,7 +2050,6 @@ func TestCommitChecksGuard_PaginatedFingerprintInvalidatesLaterPageRun(t *testin
 	}
 	firstFingerprint := res.ETag
 
-	// Unchanged set -> NotModified=true.
 	res, err = p.CommitChecksGuard(ctx(), repoRef, sha, firstFingerprint)
 	if err != nil {
 		t.Fatalf("unchanged paginated guard: %v", err)
@@ -2167,8 +2058,6 @@ func TestCommitChecksGuard_PaginatedFingerprintInvalidatesLaterPageRun(t *testin
 		t.Fatal("unchanged page-2 content reported NotModified=false")
 	}
 
-	// Only a page-2 run transitions; page 1 (whose ETag page-1 callers would see)
-	// is untouched. The fingerprint over the whole set must change.
 	mu.Lock()
 	state.page2[49] = map[string]any{"id": 150, "name": "job-150", "status": "completed", "conclusion": "success"}
 	mu.Unlock()
@@ -2181,10 +2070,6 @@ func TestCommitChecksGuard_PaginatedFingerprintInvalidatesLaterPageRun(t *testin
 	}
 }
 
-// A ref the batch query cannot resolve (null pullRequest — deleted repo,
-// revoked access, dead rename redirect) yields a positionally aligned
-// Fetched=false placeholder carrying ErrNotFound, so the observer can log the
-// permanent miss at Debug instead of warning every tick.
 func TestFetchPullRequestsStampsNotFoundPlaceholder(t *testing.T) {
 	fake := newFakeGH(t)
 	fx := basePRFixture()
@@ -2223,10 +2108,6 @@ func TestFetchPullRequestsStampsNotFoundPlaceholder(t *testing.T) {
 	}
 }
 
-// TestMergeabilityObservation_UnstableOutranksBlockers pins issue #2401: an
-// UNSTABLE PR is mergeable-with-a-failing-optional-check, so it must NOT be
-// downgraded to blocked by the ci/review/draft blockers. doc.go rule (3) beats
-// rules (5) and (6), matching the mergeabilityFromGraphQL sibling.
 func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -2240,8 +2121,6 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 		wantBehind   bool
 	}{
 		{
-			// The repro from the issue: optional codecov fails, rollup is
-			// FAILURE (-> ci failing), review approved, GitHub still merges.
 			name:      "unstable with failing ci stays unstable",
 			mergeable: "MERGEABLE", state: "UNSTABLE",
 			ci:     string(domain.CIFailing),
@@ -2262,7 +2141,6 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 			want:       domain.MergeBlocked,
 			wantBehind: true, wantBlockers: []string{"behind_base", "ci_failing"},
 		},
-		// Regressions guarded: the non-UNSTABLE paths must be untouched.
 		{
 			name:      "conflicting still wins",
 			mergeable: "CONFLICTING", state: "DIRTY",
@@ -2316,9 +2194,6 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 	}
 }
 
-// A branch lookup asks GitHub to filter by head owner:branch in one request,
-// so a repository's other open PRs are never paged through. It keeps each
-// PR's author, which decides whether AO may attach it.
 func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 	f := newFakeGH(t)
 	var query url.Values

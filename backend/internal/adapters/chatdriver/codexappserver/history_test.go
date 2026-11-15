@@ -11,10 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Every scripted reply below is a SINGLE line. readFrame is newline-delimited, so a
-// pretty-printed reply is read as a truncated frame and the client waits forever.
-
-// threadWithTurns is a thread/read result carrying an ordered turn list.
 const threadWithTurns = `{"thread":{"id":"thread-1","turns":[` +
 	`{"id":"turn-a","status":"completed"},` +
 	`{"id":"turn-b","status":"completed"},` +
@@ -186,9 +182,6 @@ func TestRefreshHistoryPerformsANewThreadRead(t *testing.T) {
 	}
 }
 
-// The provider takes a COUNT from the end of the thread, not a turn id, so the whole
-// correctness of rollback rests on turning the named turn into the right number.
-// Naming the middle of three turns must discard that turn and the one after it.
 func TestRollbackCountsTurnsFromTheNamedOneToTheEnd(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.reply("thread/read", threadWithTurns)
@@ -226,8 +219,6 @@ func TestRollbackCountsTurnsFromTheNamedOneToTheEnd(t *testing.T) {
 	}
 }
 
-// Naming the last turn is the common case and must ask for exactly one turn: the
-// provider rejects numTurns < 1, and asking for zero would be a silent no-op.
 func TestRollbackOfTheLastTurnDiscardsOne(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.reply("thread/read", threadWithTurns)
@@ -249,8 +240,6 @@ func TestRollbackOfTheLastTurnDiscardsOne(t *testing.T) {
 	}
 }
 
-// A turn the provider does not have must not produce a rollback at all. Guessing a
-// count would discard turns the user never named.
 func TestRollbackRefusesATurnTheProviderDoesNotHave(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.reply("thread/read", threadWithTurns)
@@ -267,9 +256,6 @@ func TestRollbackRefusesATurnTheProviderDoesNotHave(t *testing.T) {
 	}
 }
 
-// The provider refuses a rollback while a turn runs. That refusal must reach the
-// caller as a conflict, not as an internal failure: it is an ordinary thing to press
-// undo a moment too early.
 func TestRollbackUsesRevertWhenTheProviderRemovedRollback(t *testing.T) {
 	for _, code := range []int{-32600, -32601} {
 		t.Run(fmt.Sprint(code), func(t *testing.T) {
@@ -312,8 +298,6 @@ func TestRollbackTranslatesTheMidTurnRefusal(t *testing.T) {
 	}
 }
 
-// A transport failure is NOT a refusal. Reporting it as one would tell the user to
-// stop the agent when the real problem is that the provider is gone.
 func TestRollbackKeepsATransportFailureAsAFailure(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.replyError("thread/read", -32603, "internal error")
@@ -347,13 +331,9 @@ func TestForkReturnsTheNewThreadIDAndInheritsTheWorkingDirectory(t *testing.T) {
 	if params["threadId"] != "thread-1" {
 		t.Errorf("threadId = %v, want thread-1", params["threadId"])
 	}
-	// cwd must be absent so the fork inherits the source thread's directory. A fork
-	// pointed at another tree would remember editing files that are not there.
 	if _, ok := params["cwd"]; ok {
 		t.Errorf("thread/fork sent a cwd (%v); it must inherit the source thread's", params["cwd"])
 	}
-	// lastTurnId must be absent too: ChatForker names no turn, and a fork that
-	// quietly truncated would be a rollback wearing the wrong name.
 	if _, ok := params["lastTurnId"]; ok {
 		t.Error("thread/fork sent a lastTurnId; a fork copies the whole history")
 	}
@@ -417,8 +397,6 @@ func TestSetTitleSendsTheTrimmedName(t *testing.T) {
 	}
 }
 
-// The provider rejects a blank name. Refusing locally keeps the error about the
-// caller's input and spends no round trip on a call that cannot succeed.
 func TestSetTitleRefusesABlankName(t *testing.T) {
 	conv, srv := openConversation(t)
 
@@ -434,8 +412,6 @@ func TestSetTitleRefusesABlankName(t *testing.T) {
 	}
 }
 
-// A title AO did not set still has to reach it: another client naming the thread is
-// how a provider-derived title arrives at all.
 func TestThreadRenamedNotificationBecomesATitleEvent(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.push(`{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":"  Restore Canvas Renderer Fallback  "}}`)
@@ -446,8 +422,6 @@ func TestThreadRenamedNotificationBecomesATitleEvent(t *testing.T) {
 	}
 }
 
-// A cleared name is reported as an empty title rather than dropped: the projection
-// has to see that the thread no longer has one.
 func TestThreadRenamedNotificationReportsAClearedName(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.push(`{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":null}}`)
@@ -458,8 +432,6 @@ func TestThreadRenamedNotificationReportsAClearedName(t *testing.T) {
 	}
 }
 
-// The service feature-detects each of these, so a dropped method would read as "the
-// provider cannot do this" with nothing to notice.
 func TestConversationAdvertisesTheHistoryCapabilities(t *testing.T) {
 	caps := capabilities()
 	for _, want := range []ports.ChatCapability{
@@ -473,7 +445,6 @@ func TestConversationAdvertisesTheHistoryCapabilities(t *testing.T) {
 	}
 }
 
-// isRefusal asks the error the same question the Chat service does.
 func isRefusal(err error) bool {
 	var refusal interface{ ChatRefusal() bool }
 	return errors.As(err, &refusal) && refusal.ChatRefusal()

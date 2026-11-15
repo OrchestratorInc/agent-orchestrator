@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// permissionModesLauncher reports the permission modes each harness accepts;
-// nothing else is called.
 type permissionModesLauncher struct {
 	ChatLauncher
 	modes map[domain.AgentHarness][]ports.PermissionMode
@@ -19,9 +17,6 @@ func (l permissionModesLauncher) PermissionModes(_ context.Context, harness doma
 	return l.modes[harness], nil
 }
 
-// An import never chose a permission mode. Pi cannot ask for approval, so an
-// imported Pi chat must open bypassing permissions, as a new Pi chat does,
-// instead of failing on the project default.
 func TestImportedChatPermissionsFollowTheHarness(t *testing.T) {
 	m := &Manager{chat: permissionModesLauncher{modes: map[domain.AgentHarness][]ports.PermissionMode{
 		domain.HarnessPi:         {ports.PermissionModeBypassPermissions},

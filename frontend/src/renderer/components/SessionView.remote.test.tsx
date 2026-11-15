@@ -148,7 +148,6 @@ it("keeps a remote chat readable and open for typing while its host is away, and
 	expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 	fireEvent.keyDown(field, { key: "Enter" });
 	expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-	// The refused read of the outage must not take the chat away while the first read after it runs.
 	await act(async () => { await queryClient.refetchQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error");
 	await act(async () => { await connectHost("http://box-a:3001"); });
@@ -438,8 +437,6 @@ it("opens the frontend file from an absolute remote turn diff without a cwd", as
 		}));
 		if (url.pathname.endsWith("/workspace/manifest")) return Response.json({ sessionId: "session-1", workspaceVersion: "version-1", files, sections: { committed: [], staged: [], unstaged: [], untracked: files }, commits: [], summary: { additions: 2, deletions: 0, files: 2 }, truncated: false });
 		if (url.pathname.endsWith("/workspace/history")) return Response.json({ sessionId: "session-1", commits: [] });
-		// The daemon, which knows the worktree root, maps the absolute path; the
-		// file list alone cannot tell backend/src/index.ts from frontend/src/index.ts.
 		if (url.pathname.endsWith("/workspace/resolve")) {
 			return url.searchParams.get("path") === `/home/ao/.ao/data/worktrees/demo/session-1/${expectedPath}`
 				? Response.json({ sessionId: "session-1", kind: "workspace", path: expectedPath })
@@ -662,10 +659,8 @@ it("loads older remote history once while refreshing only the latest page", asyn
 	fireEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
 	await screen.findByText("Earlier work");
 	expect(conversationReads.map((url) => url.searchParams.get("beforeSequence"))).toContain("201");
-	// A remote chat reads a small live page, larger older pages, and cut tool output.
 	expect(conversationReads.map((url) => url.searchParams.get("limit"))).toEqual(["30", "100"]);
 	expect(conversationReads.every((url) => url.searchParams.get("outputLimit") === "512")).toBe(true);
-	// What the event stream does for each conversation event of an open chat.
 	act(() => refreshRemoteConversationOnce(queryClient, "session-1", "box-a"));
 	await screen.findByText("Latest update 2", {}, { timeout: 4_000 });
 	expect(screen.getByText("Sliding window edge")).toBeInTheDocument();
@@ -756,7 +751,6 @@ it.each([
 	const message = await screen.findByRole("combobox", { name: "Message the agent" });
 	await typeInLexicalEditor(message, "Continue the task");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
 	expect(screen.queryByText(raw)).not.toBeInTheDocument();
 	await act(async () => { await disconnectHost("box-a"); });
@@ -853,7 +847,6 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(await screen.findByText("Review on port 4001")).toBeInTheDocument();
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Review this change");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	// The lost send waits beside the box with its delivery ID.
 	await screen.findByTestId("unsent-message-strip");
 	await act(async () => { await disconnectHost("box-b"); });
 	expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
@@ -898,7 +891,6 @@ it("does not read reviewer models while the host is away", async () => {
 	await waitFor(() => expect(queryClient.getQueryData(modelsKey)).toBeDefined());
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(await screen.findByTestId("host-offline")).toBeInTheDocument();
-	// The cached catalog going stale (or the tab opening again) reads it once more.
 	await act(async () => {
 		await queryClient.refetchQueries({ queryKey: modelsKey });
 		await new Promise((resolve) => setTimeout(resolve, 20));

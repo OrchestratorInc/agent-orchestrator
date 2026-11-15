@@ -15,12 +15,6 @@ import (
 	acpsdk "github.com/coder/acp-go-sdk"
 )
 
-// ACP 0.13.5 removed the legacy model selector from its generated API while
-// deployed agents such as Kimi still advertise `models` and implement
-// session/set_model. This narrow wire shim preserves that compatibility without
-// downgrading or forking the SDK. Requests and responses still use the SDK;
-// update notifications use synchronous delivery so replay backpressure reaches
-// the provider socket instead of overflowing the SDK's notification queue.
 type legacyACPTransport struct {
 	writer *lockedWriteCloser
 	reader *io.PipeReader
@@ -189,9 +183,6 @@ func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID st
 	})
 }
 
-// call sends one request whose method the pinned SDK will not send, because it
-// lacks ACP's underscore extension prefix, and waits for its error or success.
-// The result body is not read.
 func (t *legacyACPTransport) call(ctx context.Context, method string, params any) error {
 	requestID := fmt.Sprintf("ao-legacy-%d", t.nextID.Add(1))
 	response := make(chan legacyACPResponse, 1)

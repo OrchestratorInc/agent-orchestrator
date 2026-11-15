@@ -43,8 +43,6 @@ describe("session links", () => {
 	});
 
 	it("searches every workspace sharing the project id before giving up", () => {
-		// Remote hosts merge into one list and each contributes its own
-		// standalone entry, so several workspaces can carry the same id.
 		const workspaces = [
 			{ id: "p", sessions: [{ id: "other" }] },
 			{ id: "p", sessions: [{ id: "s", status: "working" }] },
@@ -99,10 +97,8 @@ describe("session links", () => {
 		expect(artifactLinkForPath("/tmp/ao/artifacts/w/plan.md#L10", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
 		expect(artifactLinkForPath("/tmp/ao/artifacts/w/plan.md?raw", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
 		expect(artifactLinkForPath("C:%5Cao%5Cartifacts%5Cw%5Cplan.md", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
-		// Markdown percent-encodes a link's target; the session lists the name as written.
 		expect(artifactLinkForPath("/tmp/ao/artifacts/w/my%20plan.md", workspaces)).toBe("ao://sessions/p/w/artifacts/my%20plan.md");
 		expect(artifactLinkForPath("w/my%20plan.md", workspaces)).toBe("ao://sessions/p/w/artifacts/my%20plan.md");
-		// A name with a literal escape matches as written, before decoding.
 		expect(artifactLinkForPath("/tmp/ao/artifacts/w/50%25-done.md", workspaces)).toBe("ao://sessions/p/w/artifacts/50%2525-done.md");
 		expect(artifactLinkForPath("/tmp/ao/artifacts/w/plan.md%", workspaces)).toBeUndefined();
 	});
@@ -117,22 +113,17 @@ describe("session links", () => {
 
 	it("reads text naming an artifact as a file path, and a link target as a link", () => {
 		const workspaces = [{ id: "p", sessions: [{ id: "w", artifactFiles: [{ path: "issue#42.md" }, { path: "plan.md" }] }] }];
-		// Text (inline code, a report's artifact line): "#" is part of the name.
 		expect(artifactLinkForPath("w/issue#42.md", workspaces)).toBe("ao://sessions/p/w/artifacts/issue%2342.md");
 		expect(artifactLinkForPath("w/plan.md#L3", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
 		expect(artifactLinkForPath("w/plan.md#L3-L7", workspaces)).toBe("ao://sessions/p/w/artifacts/plan.md");
-		// An unlisted name with "#" or "?" in it is its own file, not the listed one before it.
 		expect(artifactLinkForPath("w/plan.md#draft", workspaces)).toBeUndefined();
 		expect(artifactLinkForPath("/tmp/ao/artifacts/w/plan.md?v2", workspaces)).toBeUndefined();
-		// A link target: "#" starts its fragment, which never names the file.
 		expect(artifactLinkForTarget("/tmp/ao/artifacts/w/issue%2342.md", workspaces)).toBe("ao://sessions/p/w/artifacts/issue%2342.md");
 		expect(artifactLinkForTarget("/tmp/ao/artifacts/w/issue#42.md", workspaces)).toBeUndefined();
 		expect(artifactLinkForTarget("/repo/src/notes.md?from=/artifacts/w/plan.md", workspaces)).toBeUndefined();
 	});
 
 	it("names an artifact whose file name holds a # or ? by its whole name", () => {
-		// A file opener gets file paths (a link's own query and fragment are cut
-		// before its escapes are decoded), and "#" and "?" are file name characters.
 		expect(sessionArtifactPath("/workspace/.ao/worker/artifacts/session-1/issue #42?.md", "session-1")).toBe("issue #42?.md");
 	});
 

@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// When another worktree holds the orchestrator branch, the spawn moves to
-// <branch>-N. Replacement must accept that branch instead of failing a
-// running orchestrator with a 500.
 func TestVerifyOrchestratorReplacementBranch(t *testing.T) {
 	s := &Service{dataDir: t.TempDir()}
 	project := domain.ProjectRecord{ID: "repro"}

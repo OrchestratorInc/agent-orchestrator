@@ -3,18 +3,12 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { listFeatureBuilds, parseFeatureBuild, reconcileFeaturePin } from "./feature-builds";
 import type { UpdateSettings } from "./update-settings";
 
-// Mock the electron module so `app.getVersion()` works outside Electron.
 vi.mock("electron", () => ({
 	app: { getVersion: () => "0.2.0" },
 }));
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Build a mock GitHub releases API response entry. */
 const DEFAULT_MARKER = '<!-- ao-feature-build: {"pr":2270,"base":"main","sha":"abc1234","slug":"pr2270"} -->';
 
 function makeRelease(
@@ -31,18 +25,15 @@ function makeRelease(
 		name: overrides.name ?? "Feature build pr2270",
 		prerelease: overrides.prerelease ?? true,
 		published_at: overrides.published_at ?? new Date(Date.now() - DAY_MS).toISOString(),
-		// Use "body" key with explicit null handling — ?? passes null through as null.
 		body: "body" in overrides ? overrides.body : DEFAULT_MARKER,
 	};
 }
 
-/** Stub fetch with a series of responses. The first call returns releases; subsequent calls return PR state. */
 function stubFetch(releasesPayload: unknown, prStates: Record<number, { state: string }> = {}) {
 	let callIndex = 0;
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (url: string) => {
-			// First call is always the /releases endpoint.
 			if (callIndex === 0) {
 				callIndex++;
 				return {
@@ -50,22 +41,16 @@ function stubFetch(releasesPayload: unknown, prStates: Record<number, { state: s
 					json: async () => releasesPayload,
 				};
 			}
-			// Subsequent calls are /pulls/<n> checks.
 			callIndex++;
 			const match = String(url).match(/\/pulls\/(\d+)$/);
 			const pr = match ? parseInt(match[1], 10) : -1;
 			if (pr in prStates) {
 				return { ok: true, json: async () => prStates[pr] };
 			}
-			// Default: open.
 			return { ok: true, json: async () => ({ state: "open" }) };
 		}),
 	);
 }
-
-// ---------------------------------------------------------------------------
-// parseFeatureBuild
-// ---------------------------------------------------------------------------
 
 describe("parseFeatureBuild", () => {
 	it("returns { pr } for a feature-build version", () => {
@@ -89,10 +74,6 @@ describe("parseFeatureBuild", () => {
 		expect(parseFeatureBuild("")).toBeNull();
 	});
 });
-
-// ---------------------------------------------------------------------------
-// listFeatureBuilds
-// ---------------------------------------------------------------------------
 
 describe("listFeatureBuilds", () => {
 	afterEach(() => {
@@ -179,12 +160,10 @@ describe("listFeatureBuilds", () => {
 					callIndex++;
 					return { ok: true, json: async () => [makeRelease()] };
 				}
-				// PR check: throw a network error.
 				throw new Error("rate limited");
 			}),
 		);
 		const result = await listFeatureBuilds();
-		// On error, isPrOpen returns true so the build is kept.
 		expect(result).toHaveLength(1);
 		expect(result[0].pr).toBe(2270);
 	});
@@ -211,7 +190,6 @@ describe("listFeatureBuilds", () => {
 		expect(build.slug).toBe("pr2270");
 		expect(build.buildId).toBe("v0.2.0-pr2270.202607061200");
 		expect(build.publishedAt).toBe(publishedAt);
-		// publishedMs must NOT be present (internal field stripped).
 		expect((build as unknown as Record<string, unknown>).publishedMs).toBeUndefined();
 	});
 
@@ -268,7 +246,6 @@ describe("listFeatureBuilds", () => {
 		);
 		const result = await listFeatureBuilds();
 		expect(result).toHaveLength(3);
-		// Should be sorted newest first: t2 > t3 > t1
 		expect(result[0].pr).toBe(2272);
 		expect(result[1].pr).toBe(2270);
 		expect(result[2].pr).toBe(2271);
@@ -300,10 +277,6 @@ describe("listFeatureBuilds", () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// reconcileFeaturePin
-// ---------------------------------------------------------------------------
-
 describe("reconcileFeaturePin", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
@@ -330,7 +303,7 @@ describe("reconcileFeaturePin", () => {
 	});
 
 	it("clears the pin (preserving the home channel) when the PR has no live build", async () => {
-		stubFetch([]); // no live feature builds at all -> pin is retired
+		stubFetch([]);
 		const r = await reconcileFeaturePin(pinned(2270));
 		expect(r.cleared).toBe(true);
 		expect(r.settings.feature).toBeNull();

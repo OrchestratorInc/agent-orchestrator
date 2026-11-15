@@ -20,7 +20,6 @@ import { BrowserImportDialog } from "./BrowserImportDialog";
 type ProfileBridge = AoBridge["browserProfiles"];
 type Profile = Awaited<ReturnType<ProfileBridge["list"]>>["profiles"][number];
 function profileError(reason: unknown, fallback: string): string {
-	// Electron wraps thrown main-process exceptions in raw IPC diagnostics.
 	return reason instanceof Error && !/Error invoking remote method|\b(?:BrowserProfileStoreError|Error):/.test(reason.message)
 		? reason.message : fallback;
 }
@@ -62,8 +61,6 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 
 	useEffect(() => {
 		void refresh();
-		// The bridge is fixed for the process lifetime; intentionally do not rerun
-		// the load for every i18n/theme render.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [bridge]);
 
@@ -106,7 +103,6 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 		if (!bridge || !name.trim()) return;
 		try {
 			const created = await bridge.create(name);
-			// Mirrors the store: the first profile becomes the default.
 			if (profiles.length === 0) setDefaultProfileIdState(created.id);
 			setProfiles((current) => [...current, created]);
 			setName("");
@@ -149,7 +145,6 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				if (result.error) throw new Error(result.error);
 				const deletedId = pendingAction.profile.id;
 				setProfiles((current) => current.filter((profile) => profile.id !== deletedId));
-				// Mirrors the store: deleting the default promotes the oldest remaining profile.
 				const promotedId = profiles.find((profile) => profile.id !== deletedId)?.id ?? null;
 				setDefaultProfileIdState((current) => (current === deletedId ? promotedId : current));
 			}
@@ -191,7 +186,6 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 					label={t("settings.browserProfiles.create")}
 					description={t("settings.browserProfiles.description")}
 				>
-					{/* One field with its submit embedded at the trailing edge. */}
 					<form
 						className="flex h-control-form w-52 min-w-0 items-center gap-1 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) pl-3 pr-1"
 						onSubmit={(event) => {
@@ -301,11 +295,6 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	);
 }
 
-/**
- * One named profile: its name, renamed in place, and a menu for the rest. The
- * menu keeps the row down to a single quiet control and names each action in
- * words, so clearing site data never hides behind an ambiguous icon.
- */
 function BrowserProfileRow({
 	profile,
 	isDefault,
@@ -331,17 +320,12 @@ function BrowserProfileRow({
 	const [draft, setDraft] = useState(profile.name);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const triggerRef = useRef<HTMLButtonElement>(null);
-	// The menu is still closing when Rename is chosen, and a modal menu pulls
-	// focus back into itself until it has gone, so focus the field only once
-	// the menu hands focus back.
 	const focusFieldOnMenuClose = useRef(false);
 	const cancelOnBlur = useRef(false);
 
 	return (
 		<div className="settings-row-bar min-w-0">
 			<UserRound aria-hidden="true" className="size-icon-lg shrink-0 text-settings-muted" />
-			{/* The name slot keeps the row's width whether it shows the name or the
-			    field, so the menu button never moves while renaming. */}
 			<div className="min-w-0 flex-1">
 				{renaming ? (
 					<input
@@ -350,8 +334,6 @@ function BrowserProfileRow({
 						data-settings-inline-edit=""
 						maxLength={64}
 						onBlur={() => {
-							// Blur is the one place an edit ends: Enter and Escape move focus
-							// to the row's menu button, so each path settles exactly once.
 							if (cancelOnBlur.current) {
 								cancelOnBlur.current = false;
 								onRenameCancel();

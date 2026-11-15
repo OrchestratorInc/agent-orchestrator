@@ -9,7 +9,6 @@ import (
 
 var museTerminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
 
-// DeriveActivityState maps Muse's AO hook callbacks onto activity states.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "user-prompt-submit":
@@ -25,15 +24,8 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	}
 }
 
-// ContinuouslyDetectTerminalActivity opts Muse into terminal reconciliation
-// on every observer tick. Unlike hook-driven agents, Muse's structured input
-// picker emits no lifecycle callback, and its answer likewise emits no prompt
-// callback, so both pause and resume must be observed from the TUI.
 func (p *Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
-// DetectTerminalActivity recognizes authoritative states in Meta Muse's TUI.
-// The newest authoritative marker wins so picker and generation text retained
-// in scrollback cannot override the current TUI state.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := museTerminalLines(output)
 	if len(lines) == 0 {

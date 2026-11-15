@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// fakeRunner answers each Codewhale subcommand. Args are the arguments after
-// the binary path, so args[0] is the subcommand ("auth", "doctor", ...).
 type fakeRunner func(args []string) ([]byte, error)
 
 func (f fakeRunner) bind(_ context.Context, _ string, _ string, _ map[string]string, args ...string) ([]byte, error) {

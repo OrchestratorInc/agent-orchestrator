@@ -1,13 +1,9 @@
-// Host identity. Local is a host like any other — the one whose requests skip
-// the proxy — so no code path has to special-case "is this remote?".
 export type HostId = string;
 
 export const LOCAL_HOST: HostId = "local";
 
-/** A host that did not answer, as opposed to one that answered with an error. */
 export const HOST_UNREACHABLE_CODES: ReadonlySet<string | undefined> = new Set(["UPSTREAM_UNAVAILABLE", "HOST_IDENTITY_UNVERIFIED"]);
 
-/** Anything addressable across hosts. A bare id is never enough to act on. */
 export type Ref = {
 	host: HostId;
 	id: string;
@@ -17,13 +13,10 @@ export function isLocal(host: HostId): boolean {
 	return host === LOCAL_HOST;
 }
 
-// A host id is a URL and an id may contain anything, so the key encodes both
-// halves rather than relying on a separator being absent from either.
 export function refKey(ref: Ref): string {
 	return `${encodeURIComponent(ref.host)}:${encodeURIComponent(ref.id)}`;
 }
 
-/** Keep existing local UI state while isolating equal IDs on different hosts. */
 export function sessionUiKey(id: string, host?: HostId): string {
 	return host && !isLocal(host) ? `remote:${refKey({ host, id })}` : id;
 }

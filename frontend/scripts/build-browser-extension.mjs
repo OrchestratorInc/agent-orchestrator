@@ -1,6 +1,3 @@
-// Builds the AO Browser Bridge Chrome extension (unpacked) into
-// frontend/browser-extension/. The daemon ships it beside its binary and
-// `ao browser chrome setup` installs it under the AO data directory.
 import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,8 +7,6 @@ const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const source = path.join(frontend, "src", "browser-extension");
 export const outDir = path.join(frontend, "browser-extension");
 
-// Each script is a self-contained classic script: the service worker,
-// the on-demand content script, and the three extension pages.
 export const entries = [
 	["background", "background.ts"],
 	["content", "content.ts"],

@@ -23,61 +23,39 @@ import (
 )
 
 const (
-	// maxSelectionCommits caps how many commits one selection may tick.
-	maxSelectionCommits = 250
-	// maxSelectionRuns caps the non-adjacent runs one selection replays.
-	maxSelectionRuns = 100
-	// maxSelectionRangeCommits caps the commits a since-base range is
-	// searched for membership. A ticked commit older than that is not found.
-	maxSelectionRangeCommits = 5000
-	// maxSelectionConflictPaths caps the paths a conflict reports.
+	maxSelectionCommits       = 250
+	maxSelectionRuns          = 100
+	maxSelectionRangeCommits  = 5000
 	maxSelectionConflictPaths = 20
-	// commitSelectionCacheSize is how many resolved selections stay cached.
-	commitSelectionCacheSize = 64
-	// gitTreeSizeBatch is how many paths one ls-tree call sizes.
-	gitTreeSizeBatch = 500
+	commitSelectionCacheSize  = 64
+	gitTreeSizeBatch          = 500
 )
 
-// WorkspaceCommitConflictReason says why ticked commits cannot be combined.
 type WorkspaceCommitConflictReason string
 
 const (
-	// WorkspaceCommitConflict means a later commit's changes do not apply
-	// without the commits between it and an earlier ticked one.
-	WorkspaceCommitConflict WorkspaceCommitConflictReason = "conflict"
-	// WorkspaceCommitUnsupportedHistory means a later ticked commit has no
-	// parent, so it has no changes to replay onto the earlier ones.
+	WorkspaceCommitConflict           WorkspaceCommitConflictReason = "conflict"
 	WorkspaceCommitUnsupportedHistory WorkspaceCommitConflictReason = "unsupported_history"
 )
 
-// WorkspaceCommitSelectionConflict names the commit a selection stopped at
-// and the paths that did not apply.
 type WorkspaceCommitSelectionConflict struct {
 	CommitSHA string
 	Paths     []string
 	Reason    WorkspaceCommitConflictReason
 }
 
-// WorkspaceCommitSelection is a set of ticked commits, or a view's whole
-// range, resolved to one (before, after) revision pair and its changed files.
-// A selection that cannot be combined has no files and names its Conflict.
 type WorkspaceCommitSelection struct {
-	SessionID  domain.SessionID
-	View       WorkspaceViewInfo
-	Contiguous bool
-	Combinable bool
-	Conflict   *WorkspaceCommitSelectionConflict
-	Files      []WorkspaceFileSummary
-	Summary    WorkspaceSummary
-	Truncated  bool
-	// root, before and after are the revisions every read of the selection
-	// uses. after is a commit, or a tree when non-adjacent runs were
-	// combined. before is empty when the range is empty.
+	SessionID           domain.SessionID
+	View                WorkspaceViewInfo
+	Contiguous          bool
+	Combinable          bool
+	Conflict            *WorkspaceCommitSelectionConflict
+	Files               []WorkspaceFileSummary
+	Summary             WorkspaceSummary
+	Truncated           bool
 	root, before, after string
 }
 
-// WorkspaceSelectionRevisionInput reads one side of a file in a commit
-// selection. CommitSHA is the legacy single-commit alias for CommitSHAs.
 type WorkspaceSelectionRevisionInput struct {
 	Snapshot         bool
 	Path             string
@@ -90,15 +68,10 @@ type WorkspaceSelectionRevisionInput struct {
 	ExpectedRevision string
 }
 
-// checkedOut reports whether v selects the checked-out worktree.
 func (v WorkspaceView) checkedOut() bool {
 	return v.Branch == "" && v.PRNumber == 0 && v.SourceURL == ""
 }
 
-// GetWorkspaceCommitSelection resolves ticked commits of a view, or its whole
-// range when shas is empty, to their combined changed files. A checked-out
-// selection is fenced by workspaceVersion; a branch or pull request view by
-// its expected SHAs.
 func (s *Service) GetWorkspaceCommitSelection(ctx context.Context, id domain.SessionID, v WorkspaceView, shas []string, workspaceVersion string) (WorkspaceCommitSelection, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
@@ -114,9 +87,6 @@ func (s *Service) GetWorkspaceCommitSelection(ctx context.Context, id domain.Ses
 	return selection, nil
 }
 
-// GetWorkspaceSelectionFileRevision reads one side of a file in a commit
-// selection: the selection's before revision, or its after revision. Both
-// are immutable, so the worktree is never read.
 func (s *Service) GetWorkspaceSelectionFileRevision(ctx context.Context, id domain.SessionID, input WorkspaceSelectionRevisionInput) (WorkspaceFileRevision, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
@@ -158,8 +128,6 @@ func (s *Service) GetWorkspaceSelectionFileRevision(ctx context.Context, id doma
 	if selection.after == "" {
 		return result, nil
 	}
-	// A path outside the selection's files is unchanged, so both sides read
-	// the same content.
 	status, previous := WorkspaceFileUnmodified, ""
 	for _, file := range selection.Files {
 		if file.Path == rel {
@@ -187,8 +155,6 @@ func (s *Service) GetWorkspaceSelectionFileRevision(ctx context.Context, id doma
 	return completeWorkspaceFileRevision(result, data, size, exists, truncated, input.ExpectedRevision)
 }
 
-// getSelectionDiffs is GetWorkspaceDiffs for a commit selection: one patch of
-// the selection's before..after for the requested paths.
 func (s *Service) getSelectionDiffs(ctx context.Context, id domain.SessionID, input WorkspaceDiffInput, shas []string) (WorkspaceDiffs, error) {
 	paths := make([]string, 0, len(input.Paths))
 	seen := map[string]struct{}{}
@@ -231,7 +197,6 @@ func (s *Service) getSelectionDiffs(ctx context.Context, id domain.SessionID, in
 	args = append(append(args, selection.before, selection.after, "--"), diffPaths...)
 	out, truncated, err := gitWorkspaceOutputCapped(ctx, selection.root, maxWorkspaceDiffGroupBytes, args...)
 	if err != nil {
-		// As in GetWorkspaceDiffs, a failed patch is reported on its group.
 		result.Groups[0].Errors = []WorkspaceDiffError{{Code: "WORKSPACE_DIFF_FAILED", Message: "Unable to load this repository's diff"}}
 		return result, nil //nolint:nilerr // The failure is carried on the group.
 	}
@@ -240,10 +205,6 @@ func (s *Service) getSelectionDiffs(ctx context.Context, id domain.SessionID, in
 	return result, nil
 }
 
-// workspaceSelection resolves a view and its ticked commits to a selection,
-// with the workspaceVersion reads of it report. A checked-out selection
-// reports, and is fenced by, the manifest version when withVersion is set or
-// a version was sent; a view reports its revision pair's hash instead.
 func (s *Service) workspaceSelection(ctx context.Context, id domain.SessionID, v WorkspaceView, shas []string, workspaceVersion string, withVersion bool) (WorkspaceCommitSelection, string, error) {
 	var version string
 	if v.checkedOut() && (withVersion || workspaceVersion != "") {
@@ -272,9 +233,6 @@ func (s *Service) workspaceSelection(ctx context.Context, id domain.SessionID, v
 	return selection, version, nil
 }
 
-// selectionCommitSHAs validates a selection's SHAs, trimmed and deduplicated
-// in their given order. commitSHA is the legacy single-commit alias. Only a
-// full SHA is accepted, so no unvalidated string reaches Git.
 func selectionCommitSHAs(commitSHA string, shas []string) ([]string, error) {
 	commitSHA = strings.TrimSpace(commitSHA)
 	if commitSHA != "" {
@@ -317,9 +275,6 @@ func commitsNotCombinable(conflict *WorkspaceCommitSelectionConflict) error {
 	return apierr.Conflict("WORKSPACE_COMMITS_NOT_COMBINABLE", "The selected commits cannot be combined", details)
 }
 
-// commitSelection is resolveCommitSelection behind the selection cache. Every
-// key part is an immutable SHA or argument, so a cached entry never goes
-// stale; a moved branch resolves to a new tip and so a new key.
 func (s *Service) commitSelection(ctx context.Context, view resolvedWorkspaceView, shas []string) (WorkspaceCommitSelection, error) {
 	if view.rangeBefore == "" || view.TipSHA == "" {
 		return resolveCommitSelection(ctx, view, shas)
@@ -338,19 +293,11 @@ func (s *Service) commitSelection(ctx context.Context, view resolvedWorkspaceVie
 	return selection, nil
 }
 
-// commitRun is a chain of ticked commits, each the first parent of the next,
-// or ticked commits whose history makes them one range base..last.
 type commitRun struct {
 	first, last string
-	// base is first's first parent, empty for a root commit.
-	base string
+	base        string
 }
 
-// resolveCommitSelection resolves shas, or the whole range when there are
-// none, to one (before, after) pair. Ticked commits split into runs of
-// adjacent commits: one run is the plain range base..last, and later runs are
-// replayed onto the first in a scratch index. Only objects are written; HEAD,
-// the index, the worktree and refs are never touched.
 func resolveCommitSelection(ctx context.Context, view resolvedWorkspaceView, shas []string) (WorkspaceCommitSelection, error) {
 	selection := WorkspaceCommitSelection{Contiguous: true, Combinable: true, Files: []WorkspaceFileSummary{}, root: view.root}
 	if view.rangeBefore == "" || view.TipSHA == "" {
@@ -408,9 +355,6 @@ func commitNotFound() error {
 	return apierr.NotFound("WORKSPACE_COMMIT_NOT_FOUND", "Commit is not available in this workspace comparison")
 }
 
-// selectionCommitRuns checks every SHA belongs to the view's range and splits
-// them, oldest first, into runs of adjacent commits. One rev-list call gives
-// membership, order and parents.
 func selectionCommitRuns(ctx context.Context, view resolvedWorkspaceView, shas []string) ([]commitRun, error) {
 	limit := maxSelectionRangeCommits
 	if view.RangeMode == WorkspaceRangeRecent {
@@ -443,10 +387,7 @@ func selectionCommitRuns(ctx context.Context, view resolvedWorkspaceView, shas [
 			return nil, commitNotFound()
 		}
 	}
-	// rev-list lists newest first, so the highest position is the oldest.
 	slices.SortFunc(ordered, func(a, b string) int { return position[b] - position[a] })
-	// A truncated listing hides ancestors, so only a complete one may stand
-	// in for the history between the ticked commits.
 	if len(position) < limit {
 		if run, ok := ancestryClosedRun(parents, view.rangeBefore, ordered); ok {
 			return []commitRun{run}, nil
@@ -463,14 +404,6 @@ func selectionCommitRuns(ctx context.Context, view resolvedWorkspaceView, shas [
 	return runs, nil
 }
 
-// ancestryClosedRun reads ticked commits (oldest first) as one range when the
-// history between them allows it, so a merged side branch ticked with its
-// merge is one diff rather than runs that each carry the side's changes. The
-// newest ticked commit n must reach every other one. The unticked listed
-// ancestors of n must then be nothing (the range rangeBefore..n) or exactly
-// the listed ancestors of one commit m (the range m..n). Either "before" must
-// descend from rangeBefore, as only then are the unlisted ancestors of n
-// already in it.
 func ancestryClosedRun(parents map[string][]string, rangeBefore string, ordered []string) (commitRun, bool) {
 	newest := ordered[len(ordered)-1]
 	reach := listedAncestors(parents, newest)
@@ -490,7 +423,6 @@ func ancestryClosedRun(parents map[string][]string, rangeBefore string, ordered 
 	if len(unticked) == 0 {
 		return commitRun{first: ordered[0], last: newest, base: rangeBefore}, descendsFrom(parents, reach, rangeBefore)
 	}
-	// m is the one unticked commit no other unticked commit has as a parent.
 	heads := maps.Clone(unticked)
 	for sha := range unticked {
 		for _, parent := range parents[sha] {
@@ -516,7 +448,6 @@ func ancestryClosedRun(parents map[string][]string, rangeBefore string, ordered 
 	return commitRun{first: ordered[0], last: newest, base: head}, true
 }
 
-// listedAncestors is sha and its ancestors among the listed commits.
 func listedAncestors(parents map[string][]string, sha string) map[string]struct{} {
 	seen := map[string]struct{}{sha: {}}
 	stack := []string{sha}
@@ -536,8 +467,6 @@ func listedAncestors(parents map[string][]string, sha string) map[string]struct{
 	return seen
 }
 
-// descendsFrom reports whether one of commits has rangeBefore as a parent.
-// rangeBefore is never listed, so that is the only way commits reach it.
 func descendsFrom(parents map[string][]string, commits map[string]struct{}, rangeBefore string) bool {
 	for sha := range commits {
 		if slices.Contains(parents[sha], rangeBefore) {
@@ -547,26 +476,18 @@ func descendsFrom(parents map[string][]string, commits map[string]struct{}, rang
 	return false
 }
 
-// replayCommitRuns applies each later run's changes onto the first run's tree
-// in a scratch index and writes the combined tree. The scratch index is a
-// temporary file, so the session's real index is never read or written. A
-// run whose changes do not apply returns a conflict instead of a tree.
 func replayCommitRuns(ctx context.Context, root string, runs []commitRun) (string, *WorkspaceCommitSelectionConflict, error) {
 	for _, run := range runs[1:] {
 		if run.base == "" {
 			return "", &WorkspaceCommitSelectionConflict{CommitSHA: run.first, Paths: []string{}, Reason: WorkspaceCommitUnsupportedHistory}, nil
 		}
 	}
-	// Git creates the index (and its .lock) itself inside a private
-	// directory, which is removed whole even after a killed git leaves the
-	// lock behind.
 	dir, err := os.MkdirTemp("", "ao-review-idx-*")
 	if err != nil {
 		return "", nil, fmt.Errorf("reserve a scratch index: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	indexPath := filepath.Join(dir, "index")
-	// A split index would write its shared part into the repository.
 	env := []string{"GIT_INDEX_FILE=" + indexPath}
 	if _, err := gitWorkspaceOutputEnv(ctx, root, env, "-c", "core.splitIndex=false", "read-tree", runs[0].last); err != nil {
 		return "", nil, err
@@ -587,13 +508,7 @@ func replayCommitRuns(ctx context.Context, root string, runs []commitRun) (strin
 	return strings.TrimSpace(out), nil, nil
 }
 
-// applyCommitRun pipes run's patch into the scratch index named by env. It
-// returns the paths that did not apply, non-nil exactly when the patch was
-// rejected.
 func applyCommitRun(ctx context.Context, root string, env []string, run commitRun) ([]string, error) {
-	// Explicit prefixes, context, submodule format and no color keep the
-	// patch in the shape git apply reads whatever diff configuration the
-	// repository carries.
 	diff := workspaceGitCommand(ctx, root, "diff", "--binary", "--full-index", "--find-renames", "--no-ext-diff", "--no-textconv", "--no-color", "--unified=3", "--submodule=short", "--ignore-submodules=none", "--src-prefix=a/", "--dst-prefix=b/", run.base, run.last, "--")
 	diffStderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	diff.Stderr = diffStderr
@@ -606,8 +521,6 @@ func applyCommitRun(ctx context.Context, root string, env []string, run commitRu
 	}
 	reader := bufio.NewReaderSize(patch, 64*1024)
 	if _, peekErr := reader.Peek(1); peekErr != nil {
-		// An empty patch (a run with no changes) has nothing to apply, and
-		// git apply rejects empty input.
 		_ = patch.Close()
 		if waitErr := diff.Wait(); waitErr != nil {
 			return nil, classifyWorkspaceGitError(ctx, root, "selection-diff", waitErr, strings.TrimSpace(diffStderr.buffer.String()))
@@ -624,7 +537,6 @@ func applyCommitRun(ctx context.Context, root string, env []string, run commitRu
 	applyStderr := &cappedWorkspaceOutput{limit: 64 * 1024}
 	apply.Stderr = applyStderr
 	applyErr := apply.Run()
-	// Closing the read side stops a diff that git apply gave up reading.
 	_ = patch.Close()
 	diffErr := diff.Wait()
 	if ctx.Err() != nil {
@@ -644,11 +556,8 @@ func applyCommitRun(ctx context.Context, root string, env []string, run commitRu
 	return nil, nil
 }
 
-// applyConflictLine matches the git apply errors that name a rejected path.
 var applyConflictLine = regexp.MustCompile(`^error: (?:patch failed: (.+):\d+|(.+): (?:does not exist in index|already exists in index|patch does not apply))$`)
 
-// applyConflictPaths reads the rejected paths from git apply's stderr,
-// deduplicated and capped. It is never nil.
 func applyConflictPaths(stderr string) []string {
 	paths := []string{}
 	seen := map[string]struct{}{}
@@ -673,8 +582,6 @@ func applyConflictPaths(stderr string) []string {
 	return paths
 }
 
-// selectionFiles lists the files changed between before and after. Sizes are
-// read from after's tree, never the worktree, and nothing is editable.
 func selectionFiles(ctx context.Context, root, before, after string) ([]WorkspaceFileSummary, bool, error) {
 	statuses, previous, counts, err := workspaceDiffStats(ctx, root, before, after)
 	if err != nil {
@@ -710,7 +617,6 @@ func selectionFiles(ctx context.Context, root, before, after string) ([]Workspac
 	return files, truncated, nil
 }
 
-// gitTreeBlobSizes reads the blob sizes of paths in tree, in batches.
 func gitTreeBlobSizes(ctx context.Context, root, tree string, paths []string) (map[string]int64, error) {
 	sizes := make(map[string]int64, len(paths))
 	for start := 0; start < len(paths); start += gitTreeSizeBatch {
@@ -734,8 +640,6 @@ func gitTreeBlobSizes(ctx context.Context, root, tree string, paths []string) (m
 	return sizes, nil
 }
 
-// commitSelectionCache is a small LRU of resolved selections. A nil cache
-// caches nothing.
 type commitSelectionCache struct {
 	mu      sync.Mutex
 	limit   int

@@ -88,8 +88,6 @@ func TestSideCloseRetiresOwnershipBeforeEffects(t *testing.T) {
 
 func TestSideCloseCannotCommitWhenJournalCannotBeWritten(t *testing.T) {
 	svc, side, conv := closeOwnershipFixture(t, t.TempDir(), true)
-	// Use a regular file as the data directory: the failure occurs while
-	// creating the durable cleanup path, before any logical/provider effect.
 	blocked := t.TempDir() + "/file"
 	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -227,7 +225,7 @@ func (d *staleSideOpenDriver) Start(context.Context, ports.ChatStartConfig) (por
 
 func TestSideCloseStaleOpeningCannotReplaceKnownFork(t *testing.T) {
 	svc, side, _ := closeOwnershipFixture(t, t.TempDir(), true)
-	side.ProviderForkID = "" // Snapshot queued before the first open registered its child.
+	side.ProviderForkID = ""
 	driver := &staleSideOpenDriver{}
 	svc.sides.open(side, StartConfig{}, driver)
 	if driver.starts.Load() != 0 {
@@ -259,7 +257,6 @@ func TestSideCloseLateForkRequiresFreshHostStop(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- svc.sides.stopSideHost(t.Context(), side) }()
 	<-entered
-	// A native child becomes known while the previous, fork-less stop is in flight.
 	if err := svc.sides.registerFork(t.Context(), side, "child"); !errors.Is(err, ErrSideClosed) {
 		t.Fatalf("late fork result: %v", err)
 	}

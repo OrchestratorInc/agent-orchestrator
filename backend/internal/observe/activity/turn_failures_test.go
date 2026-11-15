@@ -44,10 +44,6 @@ type turnFailureHarness struct {
 	rollout  string
 }
 
-// newTurnFailureHarness runs the real chain: a Codex UserPromptSubmit hook
-// signal makes the session active and records its rollout path, then the
-// observer reads that rollout through the Codex adapter and writes through
-// the lifecycle manager into SQLite.
 func newTurnFailureHarness(t *testing.T, promptAt time.Time) *turnFailureHarness {
 	t.Helper()
 	ctx := context.Background()
@@ -140,13 +136,10 @@ func TestTurnFailureObserverIdlesAFailedCodexTurn(t *testing.T) {
 	if got.Activity.State != domain.ActivityIdle {
 		t.Fatalf("failed turn: state = %q, want idle", got.Activity.State)
 	}
-	// Dated when the turn ended, so terminal input typed after the failure
-	// still outranks it for a Chat switch's idle proof.
 	if !got.Activity.LastActivityAt.Equal(failedAt) {
 		t.Fatalf("idle LastActivityAt = %v, want the failure time %v", got.Activity.LastActivityAt, failedAt)
 	}
 
-	// The next prompt starts a new turn; the old failure is not replayed.
 	nextPromptAt := failedAt.Add(5 * time.Second)
 	h.appendRollout(t, startedTurn(nextPromptAt))
 	if err := h.manager.ApplyActivitySignal(h.ctx, h.session.ID, ports.ActivitySignal{
@@ -159,8 +152,6 @@ func TestTurnFailureObserverIdlesAFailedCodexTurn(t *testing.T) {
 	}
 }
 
-// A resumed conversation whose last turn failed before this prompt must not
-// idle the new turn, even before Codex writes the new turn's start.
 func TestTurnFailureObserverDoesNotReplayAnEarlierFailure(t *testing.T) {
 	promptAt := time.Now().UTC().Add(-10 * time.Second).Truncate(time.Millisecond)
 	h := newTurnFailureHarness(t, promptAt)
@@ -179,8 +170,6 @@ func TestTurnFailureObserverLeavesSuccessfulTurnsToTheStopHook(t *testing.T) {
 	}
 }
 
-// Chat sessions report turn ends through their controller, so the store
-// query that feeds the observer leaves them out.
 func TestTurnFailureObserverIgnoresChatSessions(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlitetest.Open(t.TempDir())
@@ -246,7 +235,6 @@ func (f fakeTurnFailureSessions) ListTurnFailureCandidates(_ context.Context, ha
 	return out, nil
 }
 
-// countingHandler counts log records per level.
 type countingHandler struct {
 	mu     sync.Mutex
 	counts map[slog.Level]int
@@ -299,10 +287,6 @@ func turnFailureCandidate(t *testing.T, now time.Time) domain.TurnFailureCandida
 	}
 }
 
-// A failure the lifecycle accepted but did not act on (a running subagent
-// keeps the parent active, a stale launch is fenced) is sent and logged once,
-// even as later writes move the session revision. A new launch or a newer
-// failed turn is reported again.
 func TestTurnFailureObserverReportsAFailureOnce(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	session := turnFailureCandidate(t, now)
@@ -361,7 +345,6 @@ func TestTurnFailureObserverReportsAFailureOnce(t *testing.T) {
 	}
 }
 
-// A report that keeps failing is retried every tick but logged once.
 func TestTurnFailureObserverRateLimitsTheErrorLog(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	sink := &erroringSink{}

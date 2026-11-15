@@ -23,8 +23,6 @@ import (
 	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// A list read loads the cleanup facts of every archived session in one query,
-// so its cost does not grow with the number of archived sessions.
 func TestListLoadsCleanupFactsInOneBatchedQuery(t *testing.T) {
 	for _, archived := range []int{1, 7, 60} {
 		t.Run(fmt.Sprintf("%d archived", archived), func(t *testing.T) {
@@ -37,13 +35,12 @@ func TestListLoadsCleanupFactsInOneBatchedQuery(t *testing.T) {
 				st.sessions[id] = domain.SessionRecord{ID: id, ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}
 				archivedIDs = append(archivedIDs, id)
 				switch i % 3 {
-				case 0: // facts for the current cleanup generation
+				case 0:
 					st.cleanupFacts[id] = domain.SessionCleanupRecord{SessionID: id, SessionGeneration: 2, WorkspaceDisposition: domain.DispositionRemoved}
 					want[id] = domain.DispositionRemoved
-				case 1: // facts left by an earlier generation are not current
+				case 1:
 					st.cleanupFacts[id] = domain.SessionCleanupRecord{SessionID: id, SessionGeneration: 1, WorkspaceDisposition: domain.DispositionFailed}
 				}
-				// i%3 == 2: the session has no facts row at all.
 			}
 			st.sessions["mer-live"] = domain.SessionRecord{ID: "mer-live", ProjectID: "mer"}
 			st.cleanupFacts["mer-live"] = domain.SessionCleanupRecord{SessionID: "mer-live", WorkspaceDisposition: domain.DispositionRemoved}
@@ -76,7 +73,6 @@ func TestListLoadsCleanupFactsInOneBatchedQuery(t *testing.T) {
 	}
 }
 
-// Filters that drop every archived session leave nothing to look up.
 func TestListSkipsCleanupFactsWhenNoArchivedSessionIsListed(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer"}
@@ -94,18 +90,16 @@ func TestListSkipsCleanupFactsWhenNoArchivedSessionIsListed(t *testing.T) {
 	}
 }
 
-// listShape is one kind of session the board can hold: live or archived, with
-// or without a PR, artifact files, cleanup facts, or a stale output type.
 type listShape struct {
 	name       string
 	terminated bool
 	generation int64
-	facts      *domain.SessionCleanupRecord // the facts row; SessionID is filled in
+	facts      *domain.SessionCleanupRecord
 	pr         bool
-	files      []string // regular files written under the session's artifact dir
+	files      []string
 	persisted  domain.SessionOutputType
-	legacyDir  bool // artifact_dir stored as '' (rows older than the column)
-	mustRepair bool // the persisted output type disagrees with the disk
+	legacyDir  bool
+	mustRepair bool
 }
 
 func settledShapes() []listShape {
@@ -191,9 +185,6 @@ func addListSession(t *testing.T, store *sqlitestore.Store, dataDir string, shap
 	return rec.ID
 }
 
-// countingConnector hands database/sql connections that count the statements
-// they run. The counter tallies Query, Exec and Prepare calls; BEGIN and COMMIT
-// are not counted.
 type countingConnector struct {
 	dsn        string
 	statements *atomic.Int64
@@ -241,9 +232,6 @@ func (c *countingConn) CheckNamedValue(nv *driver.NamedValue) error {
 	return driver.ErrSkip
 }
 
-// openCountingStore opens a migrated SQLite store holding project "mer", whose
-// connections count their statements, with the same writer and reader pool
-// shape as sqlite.Open.
 func openCountingStore(t *testing.T, statements *atomic.Int64) (store *sqlitestore.Store, dataDir string) {
 	t.Helper()
 	dataDir = t.TempDir()
@@ -278,7 +266,6 @@ func newListFixtureService(store *sqlitestore.Store, dataDir string, reconciler 
 	})
 }
 
-// listFingerprint serializes everything a list or get response is built from.
 func listFingerprint(t *testing.T, sess domain.Session) string {
 	t.Helper()
 	out, err := json.Marshal(struct {
@@ -294,9 +281,6 @@ func listFingerprint(t *testing.T, sess domain.Session) string {
 	return string(out)
 }
 
-// Listing returns, for every kind of session, exactly what reading that session
-// on its own returns: the per-session read is the path the list used before it
-// batched, and it still reads cleanup facts one session at a time.
 func TestListMatchesGetForEverySessionShape(t *testing.T) {
 	var statements atomic.Int64
 	store, dataDir := openCountingStore(t, &statements)
@@ -331,8 +315,6 @@ func TestListMatchesGetForEverySessionShape(t *testing.T) {
 			t.Errorf("%s: list and get disagree\nlist: %s\nget:  %s", names[sess.ID], a, b)
 		}
 	}
-	// The self-repair fires for exactly the sessions whose persisted output type
-	// is wrong, on a list read as on a get.
 	sort.Slice(listReconciled, func(i, j int) bool { return listReconciled[i] < listReconciled[j] })
 	sort.Slice(reconciler.reconciled, func(i, j int) bool { return reconciler.reconciled[i] < reconciler.reconciled[j] })
 	var wantRepair []domain.SessionID
@@ -378,9 +360,6 @@ func TestListMatchesGetForEverySessionShape(t *testing.T) {
 	}
 }
 
-// The number of SQL statements behind a list read does not depend on how many
-// sessions it lists. Sessions whose output type needs a one-time repair are
-// left out on purpose: each repair is its own reconcile.
 func TestListIssuesTheSameStatementsForAnySessionCount(t *testing.T) {
 	measure := func(groups int) int64 {
 		var statements atomic.Int64

@@ -103,36 +103,21 @@ export function AgentModelCombobox({
 	retryAt?: string | null;
 	onChange: (value: string) => void;
 	onCustom?: (value: string) => void;
-	/** Offers the agent's native default as a choice, above the listed models. */
 	onUseDefault?: () => void;
-	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
-	/** A note under the models, such as where they come from. */
 	footer?: ReactNode;
-	/** A quiet note beside one model's name, such as the one the orchestrator runs. */
 	modelHint?: { id: string; label: string };
-	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
 	agentId?: string;
 	triggerLabel?: string;
 	triggerClassName?: string;
 	menuAlign?: "start" | "center" | "end";
 	menuClassName?: string;
 	renderTrigger?: (label: string) => ReactNode;
-	/** Persists explicit model choices for this agent and pins them below the current model. */
 	recentScope?: string;
-	/** Flat model names with no groups or badges.
-	 *  Search still shows once the catalog passes MODEL_SEARCH_THRESHOLD,
-	 *  same as non-compact mode; only the grouping/decoration is stripped. For
-	 *  contexts where the menu should read like a simple choice, not a
-	 *  model-management surface. */
 	compact?: boolean;
-	/** Keep the effort level inside the menu only, off the trigger label. */
 	showEffortInTrigger?: boolean;
-	/** Callers opt into a combined model and reasoning-effort menu. */
 	tuning?: ModelEffortSelection;
-	/** "chip" moves reasoning effort out of the model menu into its own picker beside it. */
 	effortPlacement?: "menu" | "chip";
-	/** Where the unsupported-effort warning sits in the caller's layout. */
 	warningClassName?: string;
 	disabled?: boolean;
 	"aria-label": string;
@@ -144,7 +129,6 @@ export function AgentModelCombobox({
 		[models],
 	);
 	const explicitModel = isConcreteModelID(value) ? value : "";
-	// Cursor lists one id per model setting: each model shows once, but the variant's id is saved.
 	const families = useMemo(
 		() => (listsModelVariants(agentId) ? collapseModelVariants(concreteModels.map((model) => ({ id: model.id, label: model.label }))) : undefined),
 		[agentId, concreteModels],
@@ -166,8 +150,6 @@ export function AgentModelCombobox({
 	const showEffort = Boolean(tuning && (effortOptions.length || explicitEffort));
 	const providerEffort = effortModel?.defaultEffort;
 	const defaultEffort = providerEffort && effortOptions.includes(providerEffort) ? providerEffort : "";
-	// No provider default for these levels: AO picks one and saves it when the
-	// model is chosen, so the control never reads as unset.
 	const aoDefaultEffort = fallbackEffort(effortOptions, providerEffort);
 	const effectiveEffort = explicitEffort || defaultEffort || aoDefaultEffort || "";
 	useApplyEffortDefault(
@@ -194,9 +176,7 @@ export function AgentModelCombobox({
 	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
 	const effectiveModel = explicitModel || defaultModel;
 	const variant = families ? findModelVariant(families, effectiveModel) : undefined;
-	// The row a Cursor variant id shows as is its model's.
 	const shownModel = variant?.family.id ?? effectiveModel;
-	// Cursor's effort is part of its model variant, so it stays in the model menu.
 	const effortChip = effortPlacement === "chip" && !variant;
 	const effortInMenu = showEffort && !effortChip;
 	const selected = searchIndex.byID.get(normalizeSearch(shownModel));
@@ -217,16 +197,12 @@ export function AgentModelCombobox({
 	const [otherOpen, setOtherOpen] = useState(false);
 	const selectedIsOther = Boolean(claude?.other.some((item) => item.id === selected?.id));
 	const showOther = otherOpen || selectedIsOther;
-	// Count what the menu lists up front: Claude's folded "Other models" don't
-	// count until expanded, so four visible models never get a search box.
 	const listedModelCount = claude && !showOther ? claude.current.length : concreteModels.length;
 	const showSearch = allowDirectCustom || listedModelCount >= MODEL_SEARCH_THRESHOLD;
 
 	const rankedModels = useMemo(() => {
 		if (!normalizedSearch) {
 			const base = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : searchIndex.models;
-			// Compact mode reads as a plain, stable list — picking a model
-			// shouldn't reorder it to the top on the next open.
 			return compact ? base : rankInitialModels(base, shownModel, recentModelIDs);
 		}
 		return searchModelIndex(searchIndex, normalizedSearch).models;
@@ -245,7 +221,6 @@ export function AgentModelCombobox({
 	);
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
-	// With no identified model, nothing is selected and the menu just lists models.
 	const currentLabel = (triggerLabel ?? selected?.label ?? explicitModel) || emptyLabel || t("settings.models.selectModel");
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const searchInputRef = useRef<HTMLInputElement>(null);
@@ -253,7 +228,6 @@ export function AgentModelCombobox({
 	useEdgeFade(scrollRef, "y", [menuOpen]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
 	const selectModel = (picked: string, want?: Partial<ModelVariant>) => {
-		// A Cursor model keeps the current effort, thinking and speed where it has them.
 		const family = families?.find((entry) => entry.id === picked) ?? (want ? variant?.family : undefined);
 		const modelID = family ? pickModelVariant(family, { ...(variant?.variant ?? family.defaultVariant), ...want }).id : picked;
 		if (recentScope) {
@@ -482,7 +456,6 @@ export function AgentModelCombobox({
 										</DropdownMenuItem>
 									)}
 									{item.model.requiresVersion && agentId === "claude-code" && (
-										// The model row is disabled; the way out is the usual update flow.
 										<DropdownMenuItem
 											onSelect={() => openGlobalSettings("harness", { hostId, focusAgentId: agentId, harnessView: "local", preserveProject: true })}
 											className="pl-6 text-xs text-settings-label"
@@ -563,7 +536,6 @@ export function AgentModelCombobox({
 						<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">{footer}</p>
 					</div>
 				)}
-				{/* Cursor's effort and thinking open beside the model like other agents' effort (no fast mode here, as for them). */}
 				{variant && tuning && (variant.family.efforts.length > 1 || variant.family.hasThinkingChoice) && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
@@ -619,11 +591,9 @@ export function AgentModelCombobox({
 		</DropdownMenu>
 	);
 	const effortRoleLabel = tuning?.roleLabel ? `${tuning.roleLabel} ` : "";
-	// Like useModelTuning: a listed model that reports no efforts hasn't ruled a saved effort out.
 	const effortAvailability = effortModel && effortModel.efforts === undefined ? "unknown" : "supported";
 	return (
 		<>
-			{/* The wrapper stays put while the catalog loads, so the model trigger is never remounted. */}
 			{effortPlacement === "chip" ? (
 				<div className="flex min-w-0 flex-wrap items-center gap-2">
 					{menu}
@@ -692,7 +662,6 @@ function rememberRecentModel(scope: string, modelID: string): string[] {
 	try {
 		recentModelsStorage()?.setItem(RECENT_MODELS_STORAGE_KEY, JSON.stringify(recentModels));
 	} catch {
-		// Recents are optional polish; model selection must still work without storage.
 	}
 	return next;
 }

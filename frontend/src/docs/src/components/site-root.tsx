@@ -27,11 +27,6 @@ export const siteMetadata: Metadata = {
   },
 };
 
-/**
- * The page shell. English pages are one tree whose interface language comes
- * from the saved choice. Each language with translated articles has its own
- * tree under `/<locale>/`, prerendered in that language.
- */
 export function siteLayout(locale: SupportedLocale) {
   return function Layout({ children }: { children: ReactNode }) {
     const translated = translations();

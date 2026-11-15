@@ -1,5 +1,3 @@
-// Real conversation HTTP, production CDC invalidation, and daemon scheduling.
-// The isolated backend fixture controls provider output; this page never retries on a timer.
 import { useEffect, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";

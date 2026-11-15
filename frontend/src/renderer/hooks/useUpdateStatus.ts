@@ -10,15 +10,11 @@ let revision = 0;
 let stop: (() => void) | undefined;
 let downloadPending = false;
 
-// Fast reconciliation only while progress is moving or a surface asked for it.
-// The waiting states can last all day (an update sitting downloaded), and main
-// already pushes every change, so they only need an occasional safety read.
 const ACTIVE_STATES = ["downloading", "preparing"];
 const WAITING_STATES = ["available", "downloaded", "error"];
 const POLL_MS = 3_000;
-const WAITING_POLL_EVERY = 10; // every 30s
+const WAITING_POLL_EVERY = 10;
 
-/** Labels add their own "v"; a tag-shaped "v1.2.3" would render "vv1.2.3". */
 function withBareVersion(status: UpdateStatus): UpdateStatus {
 	return /^v\d/i.test(status.version ?? "") ? { ...status, version: status.version!.slice(1) } : status;
 }
@@ -30,7 +26,6 @@ function receive(raw: UpdateStatus) {
 	for (const listener of listeners) listener(status);
 }
 
-/** Small plain IPC object built by one producer; JSON equality is exact enough. */
 function sameUpdateStatus(a: UpdateStatus, b: UpdateStatus): boolean {
 	return a === b || JSON.stringify(a) === JSON.stringify(b);
 }
@@ -39,7 +34,6 @@ function connect() {
 	let live = true;
 	let pending = false;
 	let ticks = 0;
-	// Subscribe before reading. A late local snapshot must never replace a push.
 	const off = aoBridge.updates.onStatus(receive);
 	const refresh = async () => {
 		if (pending) return;
@@ -47,10 +41,8 @@ function connect() {
 		const requestedRevision = revision;
 		try {
 			const next = withBareVersion(await aoBridge.updates.getStatus());
-			// An unchanged poll result would re-render every subscriber (the Sidebar).
 			if (live && requestedRevision === revision && !sameUpdateStatus(next, current)) receive(next);
 		} catch {
-			// Retain the last known status and retry the local read next time.
 		} finally {
 			pending = false;
 		}
@@ -68,7 +60,6 @@ function connect() {
 	};
 }
 
-/** One local status stream shared by the sidebar, Settings and confirmation. */
 export function useUpdateStatus(onStatusEvent?: (status: UpdateStatus) => void, reconcile = false): UpdateStatus {
 	const [status, setStatus] = useState(current);
 	const callback = useRef(onStatusEvent);
@@ -95,7 +86,6 @@ export function useUpdateStatus(onStatusEvent?: (status: UpdateStatus) => void, 
 	return status;
 }
 
-/** Show acknowledgment in every surface before the main process receives IPC. */
 export async function requestUpdateDownload(requestId?: string): Promise<void> {
 	if (downloadPending || current.state === "downloading" || current.state === "preparing") return;
 	downloadPending = true;

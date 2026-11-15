@@ -11,7 +11,7 @@ func TestSessionLastEventAtTakesLatestTransition(t *testing.T) {
 	session := func(activity time.Time, prs ...PRFacts) Session {
 		var s Session
 		s.CreatedAt = base
-		s.UpdatedAt = at(999) // never an event: advances on metadata writes and polls
+		s.UpdatedAt = at(999)
 		s.Activity = Activity{State: ActivityIdle, LastActivityAt: activity}
 		s.PRs = prs
 		return s

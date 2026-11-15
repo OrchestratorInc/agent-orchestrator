@@ -7,7 +7,6 @@ const workers = Array.from({ length: 10 }, (_, i) => ({
 	status: "idle", activity: "idle" as const,
 }));
 
-/** Real renderer routes and chat surfaces; daemon and native browser are fakes. */
 export async function installSessionSwitchFixture(page: Page) {
 	await installFakeAgent(page, { workers, expandProject: true });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
@@ -43,7 +42,6 @@ export async function installSessionSwitchFixture(page: Page) {
 	});
 }
 
-/** Click dispatch to the task after rAF with exact destination content and links. */
 export async function measureSessionSwitch(page: Page, id: number) {
 	return page.evaluate(async (id) => {
 		const button = document.querySelector<HTMLButtonElement>(`button[aria-label="Open Bench ${id}"]`);

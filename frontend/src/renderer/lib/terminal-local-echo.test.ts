@@ -26,10 +26,8 @@ describe("TerminalLocalEchoController", () => {
 		const { controller } = createController();
 		expect(controller.handleKeystroke("a")).toEqual({ localWrite: "\x1b[Ka" });
 		expect(controller.handleKeystroke("\r")).toEqual({ sendUpstream: "a", submitUpstream: "\r" });
-		// The echo of what we already rendered must not render again.
 		expect(controller.handleServerData("a")).toEqual({ write: "" });
 		expect(controller.pendingCount).toBe(0);
-		// Later output with nothing pending passes through verbatim.
 		expect(controller.handleServerData("$ ")).toEqual({ write: "$ " });
 	});
 
@@ -45,10 +43,6 @@ describe("TerminalLocalEchoController", () => {
 	});
 
 	it("wraps the flushed line in bracketed paste on Enter once the remote enables DECSET 2004", () => {
-		// An agent TUI (Codex) enables bracketed paste and reads a coalesced
-		// "line\r" as a paste that inserts without submitting, forcing a second
-		// Enter. Wrapping the line so the trailing Enter lands outside ESC[201~
-		// makes it submit on the first Enter even when the writes coalesce.
 		const { controller } = createController();
 		controller.observeServerOutput("\x1b[?2004h");
 		for (const char of [..."ls"]) controller.handleKeystroke(char);
@@ -67,7 +61,6 @@ describe("TerminalLocalEchoController", () => {
 
 	it("stops wrapping once the remote disables bracketed paste (last marker wins)", () => {
 		const { controller } = createController();
-		// A single chunk carrying enable then disable: the later marker wins.
 		controller.observeServerOutput("\x1b[?2004h...\x1b[?2004l");
 		controller.handleKeystroke("l");
 		controller.handleKeystroke("s");
@@ -76,8 +69,6 @@ describe("TerminalLocalEchoController", () => {
 
 	it("detects a DECSET 2004 marker split across two server chunks", () => {
 		const { controller } = createController();
-		// The 8-byte enable marker arrives split across two frames; the carry must
-		// still detect it so the Enter wrap is applied.
 		controller.observeServerOutput("prompt\x1b[?20");
 		controller.observeServerOutput("04h> ");
 		controller.handleKeystroke("l");
@@ -94,10 +85,8 @@ describe("TerminalLocalEchoController", () => {
 		controller.handleKeystroke("b");
 		controller.handleKeystroke("c");
 		controller.handleKeystroke("\r");
-		// The echo arrives split: first chunk confirms only "a".
 		expect(controller.handleServerData("a")).toEqual({ write: "" });
 		expect(controller.pendingCount).toBe(2);
-		// The rest confirms "bc" and carries new output.
 		expect(controller.handleServerData("bc$ ")).toEqual({ write: "$ " });
 		expect(controller.pendingCount).toBe(0);
 	});
@@ -107,7 +96,6 @@ describe("TerminalLocalEchoController", () => {
 		controller.handleKeystroke("a");
 		controller.handleKeystroke("b");
 		controller.handleKeystroke("\r");
-		// Non-echoing program (password prompt): first output mismatches.
 		expect(controller.handleServerData("X")).toEqual({ write: "\x1b[2D\x1b[KX" });
 		expect(controller.pendingCount).toBe(0);
 	});
@@ -117,7 +105,6 @@ describe("TerminalLocalEchoController", () => {
 		controller.handleKeystroke("a");
 		controller.handleKeystroke("b");
 		controller.handleKeystroke("\r");
-		// "a" echoes back, then the server diverges: only "b" is rolled back.
 		expect(controller.handleServerData("az")).toEqual({ write: "\x1b[1D\x1b[Kz" });
 		expect(controller.pendingCount).toBe(0);
 	});
@@ -165,12 +152,12 @@ describe("TerminalLocalEchoController", () => {
 
 	it("passes through everything that is not a single one-column printable character", () => {
 		const { controller } = createController();
-		expect(controller.handleKeystroke("\r")).toEqual({ sendUpstream: "\r" }); // Enter
-		expect(controller.handleKeystroke("\x1b[A")).toEqual({ sendUpstream: "\x1b[A" }); // arrow key
-		expect(controller.handleKeystroke("ab")).toEqual({ sendUpstream: "ab" }); // multi-char burst/paste
-		expect(controller.handleKeystroke("\x03")).toEqual({ sendUpstream: "\x03" }); // Ctrl-C
-		expect(controller.handleKeystroke("🚀")).toEqual({ sendUpstream: "🚀" }); // wide emoji
-		expect(controller.handleKeystroke("漢")).toEqual({ sendUpstream: "漢" }); // wide CJK
+		expect(controller.handleKeystroke("\r")).toEqual({ sendUpstream: "\r" });
+		expect(controller.handleKeystroke("\x1b[A")).toEqual({ sendUpstream: "\x1b[A" });
+		expect(controller.handleKeystroke("ab")).toEqual({ sendUpstream: "ab" });
+		expect(controller.handleKeystroke("\x03")).toEqual({ sendUpstream: "\x03" });
+		expect(controller.handleKeystroke("🚀")).toEqual({ sendUpstream: "🚀" });
+		expect(controller.handleKeystroke("漢")).toEqual({ sendUpstream: "漢" });
 		expect(controller.pendingCount).toBe(0);
 	});
 
@@ -271,7 +258,6 @@ describe("withLineBufferedLocalInput", () => {
 		expect(inner.inputs).toEqual([]);
 		wrapped.sendInput("h", "\r");
 		expect(inner.inputs).toEqual(["ab", "\r"]);
-		// The matching echo is stripped — nothing renders twice.
 		inner.emitData("ab");
 		expect(writes).toEqual(["\x1b[Ka", "b"]);
 	});
@@ -285,11 +271,9 @@ describe("withLineBufferedLocalInput", () => {
 		wrapped.sendInput("h", "\x1b[<35;10;4M");
 		wrapped.sendInput("h", "\x1b[<35;11;4M");
 		expect(inner.inputs).toEqual(["\x1b[<35;10;4M", "\x1b[<35;11;4M"]);
-		// The draft is still local and visible; no rollback is scheduled for it.
 		vi.advanceTimersByTime(10_000);
 		expect(writes).toEqual(["\x1b[Ka", "b"]);
 
-		// Enter still sends the whole line, in order, after the hover updates.
 		wrapped.sendInput("h", "\r");
 		expect(inner.inputs).toEqual(["\x1b[<35;10;4M", "\x1b[<35;11;4M", "ab", "\r"]);
 	});
@@ -317,7 +301,6 @@ describe("withLineBufferedLocalInput", () => {
 		wrapped.sendInput("h", "o");
 		expect(writes).toEqual(["\x1b[K/", "m", "o"]);
 		inner.emitData("/mo");
-		// The matching authoritative echo is already visible locally.
 		expect(writes).toEqual(["\x1b[K/", "m", "o"]);
 		wrapped.sendInput("h", "\r");
 		expect(inner.inputs).toEqual(["/", "m", "o", "\r"]);
@@ -328,8 +311,6 @@ describe("withLineBufferedLocalInput", () => {
 		inner.emitConnection("open");
 		wrapped.sendInput("h", "/");
 		inner.emitData("\x1b[2K\r/");
-		// The repaint replaces the optimistic slash without changing how the next
-		// ordinary prompt is buffered.
 		wrapped.sendInput("h", "m");
 		expect(writes).toEqual(["\x1b[K/", "\x1b[2K\r/", "m"]);
 		expect(inner.inputs).toEqual(["/", "m"]);
@@ -343,7 +324,6 @@ describe("withLineBufferedLocalInput", () => {
 		const secondHalf = "\x1b[26;1H›\x1b[26;3H/\x1b[?2026l";
 
 		inner.emitData(firstHalf);
-		// A clear without its matching redraw must never reach xterm alone.
 		expect(writes).toEqual(["\x1b[K/"]);
 		inner.emitData(secondHalf);
 		expect(writes).toEqual(["\x1b[K/", firstHalf + secondHalf]);
@@ -367,8 +347,6 @@ describe("withLineBufferedLocalInput", () => {
 		expect(writes).toEqual(["\x1b[K/", "m", "\x1b[2D\x1b[K"]);
 		expect(inner.inputs).toEqual(["/", "m", "\x1b"]);
 
-		// The next ordinary prompt is line-buffered again rather than remaining
-		// stuck in the slash command's per-key streaming mode.
 		wrapped.sendInput("h", "a");
 		expect(writes).toEqual(["\x1b[K/", "m", "\x1b[2D\x1b[K", "\x1b[Ka"]);
 		expect(inner.inputs).toEqual(["/", "m", "\x1b"]);
@@ -381,8 +359,6 @@ describe("withLineBufferedLocalInput", () => {
 		inner.emitData("/");
 		wrapped.sendInput("h", DEL);
 
-		// `slashPending` is already empty because the slash was acknowledged. The
-		// logical line state must still notice that backspace removed the slash.
 		wrapped.sendInput("h", "n");
 		expect(writes.at(-1)).toBe("\x1b[Kn");
 		expect(inner.inputs).toEqual(["/", DEL]);
@@ -431,7 +407,6 @@ describe("withLineBufferedLocalInput", () => {
 		wrapped.sendInput("h", "m");
 		wrapped.sendInput("h", "\r");
 
-		// A late command-selector repaint must not affect ordinary prompt state.
 		inner.emitData("\x1b[?2026h\x1b[2Jselector\x1b[?2026l");
 		wrapped.sendInput("h", "a");
 		expect(writes.at(-1)).toBe("\x1b[Ka");
@@ -443,16 +418,14 @@ describe("withLineBufferedLocalInput", () => {
 		inner.emitConnection("open");
 		for (const char of "/model") wrapped.sendInput("h", char);
 		inner.emitData("\x1b[?2026hcommand menu\x1b[?2026l");
-		wrapped.sendInput("h", "\r"); // open the model selector
+		wrapped.sendInput("h", "\r");
 		inner.emitData("\x1b[?2026hmodel selector\x1b[?2026l");
 		wrapped.sendInput("h", "\x1b[B");
-		wrapped.sendInput("h", "\r"); // choose a model
+		wrapped.sendInput("h", "\r");
 		inner.emitData("\x1b[?2026hprompt\x1b[?2026l");
 
 		for (const char of "hello") wrapped.sendInput("h", char);
 		expect(writes.slice(-5)).toEqual(["\x1b[Kh", "e", "l", "l", "o"]);
-		// Only slash/selector input reached the PTY. The normal prompt is local
-		// until its own Enter is pressed.
 		expect(inner.inputs).toEqual(["/", "m", "o", "d", "e", "l", "\r", "\x1b[B", "\r"]);
 	});
 
@@ -499,7 +472,7 @@ describe("withLineBufferedLocalInput", () => {
 	it("reassembles a UTF-8 codepoint split across server chunks", () => {
 		const { inner, writes } = createWrapped();
 		inner.emitConnection("open");
-		const encoded = new TextEncoder().encode("é"); // two bytes
+		const encoded = new TextEncoder().encode("é");
 		inner.emitData(encoded.subarray(0, 1));
 		inner.emitData(encoded.subarray(1));
 		expect(writes).toEqual(["é"]);
@@ -513,7 +486,6 @@ describe("withLineBufferedLocalInput", () => {
 		wrapped.dispose();
 		expect(inner.disposed).toBe(true);
 		vi.advanceTimersByTime(LOCAL_ECHO_PREDICTION_TIMEOUT_MS);
-		// No rollback after dispose: the listener set is gone and the timer cleared.
 		expect(writes).toEqual(["\x1b[Ka"]);
 	});
 });

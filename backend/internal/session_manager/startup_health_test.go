@@ -98,8 +98,6 @@ func TestStartupHealthUnavailableRuntimeProbePreservesSession(t *testing.T) {
 	}
 }
 
-// flakyStartupLauncher fails reattach attempts until failures runs out, then
-// reports a live controller the way a successful reconnect does.
 type flakyStartupLauncher struct {
 	recordingLauncher
 	mu       sync.Mutex
@@ -160,7 +158,6 @@ func waitFor(t *testing.T, what string, done func() bool) {
 
 func TestStartupChatCheckRetriesTransientFailure(t *testing.T) {
 	for name, cause := range map[string]error{
-		// The production failure: the check spent its deadline waiting for the writer.
 		"deadline":     fmt.Errorf("reconcile conversation authentication: %w", context.DeadlineExceeded),
 		"inconclusive": fmt.Errorf("persistent host: %w", ports.ErrChatRecoveryInconclusive),
 	} {
@@ -226,7 +223,7 @@ func TestStartupChatCheckRetryStopsOnceReattached(t *testing.T) {
 	if err := m.ReconcileBackground(ctx); err != nil {
 		t.Fatal(err)
 	}
-	launcher.setAttached() // Resume reconnected before the first retry.
+	launcher.setAttached()
 	time.Sleep(80 * time.Millisecond)
 	if got := launcher.attemptCount(); got != 1 {
 		t.Fatalf("attempts = %d, want the retry to leave a reattached chat alone", got)
@@ -248,8 +245,6 @@ func TestStartupChatCheckStaysCheckingWhileRetryPending(t *testing.T) {
 	if err := m.ReconcileBackground(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// The startup attempt failed, but a reattach is scheduled: clients must show
-	// a reconnect in progress, not offer Resume.
 	if got := m.SessionStatusReadiness(st.sessions[rec.ID]); got != "checking" {
 		t.Fatalf("readiness while a retry is pending = %s, want checking", got)
 	}
@@ -279,7 +274,6 @@ func TestStartupChatCheckRetryGivesUpAfterSchedule(t *testing.T) {
 	}
 }
 
-// Builds before background branch naming left this state; it is still rolled back.
 func TestStartupHealthCleansOnlyUncommittedSetup(t *testing.T) {
 	for _, scenario := range []string{"clean", "dirty", "committed", "runtime", "provider", "setup-done"} {
 		t.Run(scenario, func(t *testing.T) {

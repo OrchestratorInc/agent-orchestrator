@@ -9,30 +9,12 @@ import (
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 )
 
-// corsMiddleware grants cross-origin read access to the allowlisted browser
-// origins only. The daemon is a no-auth loopback service, so CORS is the one
-// boundary between it and hostile browser content running on the same
-// machine: the allowlist must never contain "*" or the opaque "null" origin
-// (every file:// page and sandboxed iframe on any website presents "null").
-// The packaged Electron renderer is served from app://renderer specifically
-// so it has a distinct, unforgeable origin this allowlist can name.
-//
-// Native requests without Origin or browser fetch metadata pass through.
-// Requests bearing an Origin outside the allowlist are
-// rejected with 403 before any handler runs: merely omitting CORS headers
-// would hide the response but NOT the side effect — a hostile page can issue
-// "simple" cross-origin POSTs (no-cors mode, text/plain body) that handlers
-// would otherwise execute. Same philosophy as localControlRequest on
-// /shutdown, applied to the whole surface.
 func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			// Native clients have no browser metadata. A browser cannot turn
-			// an omitted Origin into a native-client grant (e.g. same-origin
-			// GET, no-cors subresource, or a DNS-rebinding navigation).
 			w.Header().Add("Vary", "Origin")
 			w.Header().Add("Vary", "Sec-Fetch-Site")
 			if !browserRequestAllowed(r, allowed) {
@@ -53,8 +35,6 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 					h.Set("Access-Control-Allow-Headers", reqHeaders)
 				}
 				h.Set("Access-Control-Max-Age", "600")
-				// Chromium's Private Network Access preflight for requests
-				// reaching loopback from a less-private address space.
 				if r.Header.Get("Access-Control-Request-Private-Network") == "true" {
 					h.Set("Access-Control-Allow-Private-Network", "true")
 				}
@@ -67,12 +47,6 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	}
 }
 
-// rendererOriginMiddleware gives credential-management and desktop-control
-// routes a stricter browser boundary, including on authenticated LAN requests.
-// Previews may never manage these credentials or drive the desktop through Cua
-// Driver; paired mobile clients may manage only the subscription accounts.
-// Native clients do not send Origin and remain unauthenticated; browser
-// clients must present one of the exact configured renderer origins.
 func rendererOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {
@@ -111,10 +85,7 @@ func exactAllowedOrigins(origins []string) map[string]struct{} {
 	return allowed
 }
 
-// rendererOnlyArea names the area a path belongs to when only the configured
-// renderer origins may reach it from a browser, or "" for ordinary routes.
 func rendererOnlyArea(path string) string {
-	// Generic harness login operations can write native credentials.
 	if rest, ok := strings.CutPrefix(path, "/api/v1/agents/"); ok {
 		parts := strings.Split(rest, "/")
 		if len(parts) >= 3 && parts[0] != "" && parts[1] == "auth" && parts[2] == "operations" {
@@ -135,8 +106,6 @@ func rendererOnlyArea(path string) string {
 			"/api/v1/agents/claude-code/auth/operations",
 			"/api/v1/agents/provider-keys",
 		}},
-		// Cua Driver operates native apps with the user's OS permissions, and
-		// the settings toggle decides whether agents are told to use it.
 		{"computer use", []string{
 			"/api/v1/computer-use",
 			"/api/v1/settings/computer-use",
@@ -151,9 +120,6 @@ func rendererOnlyArea(path string) string {
 	return ""
 }
 
-// browserRequestAllowed guards browser access to REST routes. Local HTTP
-// origins are not principals: previews and unrelated local servers can serve
-// hostile content. Only exact renderer origins grant access to the daemon.
 func browserRequestAllowed(r *http.Request, allowed map[string]struct{}) bool {
 	origins := r.Header.Values("Origin")
 	if len(origins) > 1 || (len(origins) == 1 && origins[0] == "") {
@@ -169,12 +135,9 @@ func browserRequestAllowed(r *http.Request, allowed map[string]struct{}) bool {
 	if _, ok := allowed[origin]; ok {
 		return true
 	}
-	// React Native pins this Origin. It is not trusted on the primary
-	// listener, even if someone supplies an Authorization header there.
 	if origin == "http://localhost" && authenticatedLANBearer(r) {
 		return true
 	}
-	// A preview may use its own files, never the API or another preview.
 	u, err := url.Parse(origin)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil &&
 		u.Path == "" && u.RawQuery == "" && u.Fragment == "" &&
@@ -197,8 +160,6 @@ func isPreviewHost(host string) bool {
 	return ok
 }
 
-// Only document bytes, not session/control endpoints, may load without Origin
-// as browser navigations or sandbox subresources on the legacy preview paths.
 func isPreviewFileRequest(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
@@ -211,8 +172,6 @@ func isPreviewFileRequest(r *http.Request) bool {
 	return len(parts) == 4 && parts[0] != "" && parts[1] == "preview" && (parts[2] == "files" || parts[2] == "artifacts")
 }
 
-// Render documents are always served with an opaque-origin CSP sandbox. Allow
-// iframe and render-check navigations, never render publication or artifact APIs.
 func isRenderDocumentRequest(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false

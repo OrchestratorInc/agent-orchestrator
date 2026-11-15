@@ -55,8 +55,6 @@ func TestSpawnHelpListsOpenCodeV2Harness(t *testing.T) {
 	}
 }
 
-// TestSpawnCommand_MissingProjectContext asserts `ao spawn` gives a project
-// setup hint when neither --project, AO_PROJECT_ID, nor cwd can resolve one.
 func TestSpawnCommand_MissingProjectContext(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -84,8 +82,6 @@ func TestSpawnCommand_MissingProjectContext(t *testing.T) {
 	}
 }
 
-// TestProjectAddCommand_RequiresPath asserts `ao project add` rejects a missing
-// --path before touching the network.
 func TestProjectAddCommand_RequiresPath(t *testing.T) {
 	var out, errb bytes.Buffer
 	root := NewRootCommand(Deps{Out: &out, Err: &errb})
@@ -139,10 +135,6 @@ func TestSpawnClaimPRWiring(t *testing.T) {
 	}
 }
 
-// TestSpawnReviewTurnsSwitchesOffBeforeClaim: a reviewer spawned with
-// --review must have every switch off before the PR is claimed, so the
-// claimed PR's CI failures and review comments never reach the agent and the
-// native reviewer never starts on it. --review alone also implies --no-takeover.
 func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -205,8 +197,6 @@ func TestSpawnReviewTurnsSwitchesOffBeforeClaim(t *testing.T) {
 	}
 }
 
-// TestSpawnClaimPR_Draft covers #4171: `ao spawn --claim-pr` on a draft PR must
-// keep the spawned session instead of rolling it back with PR_NOT_OPEN.
 func TestSpawnClaimPR_Draft(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var requests []string
@@ -241,7 +231,6 @@ func TestSpawnClaimPR_Draft(t *testing.T) {
 	if !strings.Contains(out, "claimed https://github.com/aoagents/agent-orchestrator/pull/4168") {
 		t.Fatalf("output missing claimed label: %s", out)
 	}
-	// No rollback: the draft claim succeeded.
 	want := []string{"GET /api/v1/projects/demo", "POST /api/v1/agents/readiness/ensure", "POST /api/v1/sessions", "POST /api/v1/sessions/demo-9/pr/claim"}
 	if !reflect.DeepEqual(requests, want) {
 		t.Fatalf("requests=%#v want %#v", requests, want)
@@ -350,8 +339,6 @@ func TestSpawnReviewRequiresClaimPR(t *testing.T) {
 	}
 }
 
-// TestSpawnCommand_RequiresName asserts `ao spawn` rejects a missing --name
-// without contacting the daemon.
 func TestSpawnCommand_RequiresName(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--agent", "codex")
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "--name is required") {
@@ -359,8 +346,6 @@ func TestSpawnCommand_RequiresName(t *testing.T) {
 	}
 }
 
-// TestSpawnCommand_RejectsOverlongName asserts `ao spawn` rejects a --name
-// longer than 100 characters without contacting the daemon.
 func TestSpawnCommand_RejectsOverlongName(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", strings.Repeat("x", 101))
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), "100 characters or fewer") {
@@ -369,8 +354,6 @@ func TestSpawnCommand_RejectsOverlongName(t *testing.T) {
 }
 
 func TestSpawnConfirmationIncludesDisplayName(t *testing.T) {
-	// Issue #2592: the confirmation line echoed only the session id, forcing a
-	// follow-up lookup to map the id back to the --name just passed.
 	tests := []struct {
 		name        string
 		sessionJSON string
@@ -1107,21 +1090,13 @@ func TestSpawnUnknownAuthEnsureWarnsAndAllows(t *testing.T) {
 	}
 }
 
-// TestSpawnCommand_RejectsInvalidKind asserts `ao spawn` rejects a --kind value
-// outside worker/orchestrator at the CLI boundary, without contacting the daemon.
 func TestSpawnCommand_RejectsInvalidKind(t *testing.T) {
-	// Pass a valid --name so this exercises the --kind boundary specifically:
-	// spawn validates the required --name before --kind, so omitting it would
-	// trip the "--name is required" error instead of the kind error.
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "orch", "--kind", "orchestartor")
 	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), `--kind must be "worker" or "orchestrator"`) {
 		t.Fatalf("err=%v exit=%d, want --kind validation error", err, ExitCode(err))
 	}
 }
 
-// TestResolveSpawnHarness_OrchestratorDefault asserts the orchestrator role falls
-// back to the project's orchestrator agent (and worker to the worker agent), while
-// an explicit --agent always wins.
 func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 	project := projectDetails{
 		ID: "demo",
@@ -1139,20 +1114,15 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 	if got, err := resolveSpawnHarness("aider", "orchestrator", project); err != nil || got != "aider" {
 		t.Fatalf("explicit agent: got %q err %v, want aider", got, err)
 	}
-	// Unset kind is the default `ao spawn` path and must resolve to worker.agent.
 	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
 		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
 	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
 	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
 	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
 		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
 	}
 }
 
-// TestSpawnModelFlagWiring asserts `ao spawn --model` sends the model override
-// to the daemon without touching project config.
 func TestSpawnModelFlagWiring(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var req spawnRequest
@@ -1184,8 +1154,6 @@ func TestSpawnModelFlagWiring(t *testing.T) {
 	}
 }
 
-// TestSpawnEffortFlagWiring asserts `ao spawn --effort` sends the reasoning
-// effort override to the daemon without touching project config.
 func TestSpawnEffortFlagWiring(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var req spawnRequest
@@ -1217,10 +1185,6 @@ func TestSpawnEffortFlagWiring(t *testing.T) {
 	}
 }
 
-// TestSpawnEffortSurfacesDaemonUnsupportedEffort asserts `ao spawn --effort`
-// on a harness that cannot honor it fails with the daemon's UNSUPPORTED_EFFORT
-// envelope instead of a CLI-side harness allowlist: the daemon owns which
-// harnesses support effort, so the list cannot drift in the thin client.
 func TestSpawnEffortSurfacesDaemonUnsupportedEffort(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1249,8 +1213,6 @@ func TestSpawnEffortSurfacesDaemonUnsupportedEffort(t *testing.T) {
 	}
 }
 
-// spawnStartServer answers a project spawn as provisioning, then reports the
-// given provision states one GET at a time.
 func spawnStartServer(t *testing.T, states []string, requests *[]string, spawnBody *map[string]any) *httptest.Server {
 	t.Helper()
 	polls := 0
@@ -1279,8 +1241,6 @@ func spawnStartServer(t *testing.T, states []string, requests *[]string, spawnBo
 	}))
 }
 
-// `ao spawn` takes the async start, so the session opens as starting with its
-// prompt shown, and still answers only once the agent is running.
 func TestSpawnWaitsForBackgroundStart(t *testing.T) {
 	cfg := setConfigEnv(t)
 	spawnStartPollInterval = time.Millisecond
@@ -1307,8 +1267,6 @@ func TestSpawnWaitsForBackgroundStart(t *testing.T) {
 	}
 }
 
-// A start that fails in the background still fails the command, with the
-// daemon's reason.
 func TestSpawnReportsBackgroundStartFailure(t *testing.T) {
 	cfg := setConfigEnv(t)
 	spawnStartPollInterval = time.Millisecond

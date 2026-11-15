@@ -3,8 +3,6 @@ import { createCloudTerminalMux } from "./cloud-terminal-mux";
 import { subscribeCloudNotificationHints } from "./cloud-notification-hints";
 import { useUiStore } from "../stores/ui-store";
 
-// Minimal fake WebSocket: records its URL and every frame it sends, lets the
-// test deliver frames, and reports OPEN so sendJSON works.
 class FakeWebSocket {
 	static OPEN = 1;
 	readyState = FakeWebSocket.OPEN;
@@ -49,7 +47,6 @@ function makeMux(cursor?: { value: number }) {
 	});
 }
 
-// Let the async connect() mint its ticket and dial the socket.
 async function settle() {
 	await Promise.resolve();
 	await Promise.resolve();
@@ -59,8 +56,6 @@ describe("createCloudTerminalMux direct open", () => {
 	it("opens its socket directly at construction with no agent-ready wait", async () => {
 		FakeWebSocket.instances = [];
 		const mux = makeMux();
-		// The mux dials as soon as the ticket mint resolves — there is no SSE to
-		// wait on. Nothing is created synchronously (the mint is awaited).
 		expect(FakeWebSocket.instances).toHaveLength(0);
 		await settle();
 		expect(FakeWebSocket.instances).toHaveLength(1);
@@ -79,11 +74,8 @@ describe("createCloudTerminalMux direct open", () => {
 		mux.onOpened("agent", () => {
 			opened += 1;
 		});
-		// `starting` is the CP holding the pane while the terminal comes up: it
-		// carries no readiness, so the hook stays in its "connecting" state.
 		ws.deliver({ type: "starting", sequence: 0 });
 		expect(opened).toBe(0);
-		// `ready` is the server ack — the hook transitions to "attached".
 		ws.deliver({ type: "ready", sequence: 0 });
 		expect(opened).toBe(1);
 		mux.dispose();
@@ -95,12 +87,8 @@ describe("createCloudTerminalMux direct open", () => {
 		await settle();
 		const ws = FakeWebSocket.instances[0];
 		ws.sent.length = 0;
-		// A hidden/parked pane attaches at 0×0. The CP rejects a 0-dimension resize
-		// and closes the socket, so the mux must send nothing.
 		mux.open("agent", 0, 0);
 		expect(ws.sent).toHaveLength(0);
-		// Becoming visible (open for a visible pane, or resize on activation) sends
-		// the real, non-zero grid so the PTY resizes and the TUI redraws at width.
 		vi.useFakeTimers();
 		try {
 			mux.resize("agent", 100, 30);
@@ -118,17 +106,12 @@ describe("createCloudTerminalMux direct open", () => {
 		await settle();
 		const ws = FakeWebSocket.instances[0];
 		ws.sent.length = 0;
-		// A fit measured before font metrics / the pane box settle can propose a
-		// couple columns; forwarding that wraps the agent TUI to ~2 chars, and it
-		// would be cached in pendingResize and replayed on every reconnect. It must
-		// be dropped, never sent and never cached.
 		vi.useFakeTimers();
 		try {
 			mux.resize("agent", 2, 2);
 			mux.resize("agent", 8, 30);
 			vi.advanceTimersByTime(150);
 			expect(ws.sent).toHaveLength(0);
-			// A settled, plausible grid sends normally.
 			mux.resize("agent", 120, 40);
 			vi.advanceTimersByTime(150);
 			expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 120, rows: 40 }]);
@@ -141,14 +124,11 @@ describe("createCloudTerminalMux direct open", () => {
 	it("does not cache an implausibly small pre-open resize for replay on connect", async () => {
 		FakeWebSocket.instances = [];
 		const mux = makeMux();
-		// Resize BEFORE the socket is dialed — the pending-resize caching path that is
-		// flushed on (re)connect. A mis-fit here must not be cached, so it is never
-		// replayed when the socket opens; a plausible one is.
 		mux.resize("agent", 2, 2);
 		mux.resize("agent", 110, 44);
 		await settle();
 		const ws = FakeWebSocket.instances[0];
-		ws.emit("open", {}); // drive the on-open replay of the cached resize
+		ws.emit("open", {});
 		expect(sentJSON(ws)).toEqual([{ type: "resize", columns: 110, rows: 44 }]);
 		mux.dispose();
 	});
@@ -181,7 +161,6 @@ describe("createCloudTerminalMux resize coalescing", () => {
 
 	it("collapses a resize burst into one trailing send of the final size", async () => {
 		const { mux, ws } = await openMux();
-		// A dragged side panel: a fit every few milliseconds.
 		for (let cols = 80; cols <= 120; cols++) {
 			mux.resize("agent", cols, 40);
 			vi.advanceTimersByTime(10);
@@ -206,8 +185,6 @@ describe("createCloudTerminalMux resize coalescing", () => {
 		const { mux, ws } = await openMux();
 		mux.resize("agent", 148, 43);
 		vi.advanceTimersByTime(150);
-		// A side panel toggled open and closed quickly: the pane fits at the
-		// narrower width and back, and the program never sees a size change.
 		for (let toggle = 0; toggle < 24; toggle++) {
 			mux.resize("agent", toggle % 2 === 0 ? 81 : 148, 43);
 			vi.advanceTimersByTime(100);
@@ -218,7 +195,6 @@ describe("createCloudTerminalMux resize coalescing", () => {
 			{ type: "resize", columns: 148, rows: 43 },
 			{ type: "resize", columns: 148, rows: 43, repaint: true },
 		]);
-		// Nothing reflowed since, so a later fit at the same size sends nothing.
 		mux.resize("agent", 148, 43);
 		vi.advanceTimersByTime(150);
 		expect(resizes(ws)).toHaveLength(2);
@@ -229,7 +205,6 @@ describe("createCloudTerminalMux resize coalescing", () => {
 		const { mux, ws } = await openMux();
 		mux.resize("agent", 132, 43);
 		mux.sendInput("agent", "x");
-		// Input is not debounced; the resize follows on the same socket.
 		expect(sentJSON(ws)).toEqual([{ type: "input", data: "x" }]);
 		vi.advanceTimersByTime(150);
 		expect(sentJSON(ws)).toEqual([
@@ -241,7 +216,7 @@ describe("createCloudTerminalMux resize coalescing", () => {
 
 	it("delivers the final size once connected even if the debounce fired while disconnected", async () => {
 		const { mux, ws } = await openMux();
-		ws.readyState = 3; // CLOSED
+		ws.readyState = 3;
 		mux.resize("agent", 110, 35);
 		mux.resize("agent", 111, 36);
 		vi.advanceTimersByTime(150);
@@ -259,7 +234,6 @@ describe("createCloudTerminalMux resize coalescing", () => {
 		mux.resize("agent", 100, 30);
 		vi.advanceTimersByTime(150);
 		expect(resizes(ws)).toHaveLength(1);
-		// The same socket reopening stands in for a reconnect to a new worker PTY.
 		ws.emit("open", {});
 		expect(resizes(ws)).toEqual([
 			{ type: "resize", columns: 100, rows: 30 },
@@ -276,13 +250,11 @@ describe("createCloudTerminalMux cursor resume", () => {
 		const mux1 = makeMux(cursor);
 		await settle();
 		const ws1 = FakeWebSocket.instances[0];
-		expect(afterOf(ws1)).toBe("0"); // first connect starts at 0
+		expect(afterOf(ws1)).toBe("0");
 		ws1.deliver({ type: "output", sequence: 5, data: b64("hi") });
 		expect(cursor.value).toBe(5);
 		mux1.dispose();
 
-		// A fresh mux with the same cursor object sends after=5 (the CP decides
-		// whether to honor it or reset to 0; the plumbing preserves the position).
 		const mux2 = makeMux(cursor);
 		await settle();
 		const ws2 = FakeWebSocket.instances[1];
@@ -300,7 +272,6 @@ describe("createCloudTerminalMux cursor resume", () => {
 		mux.onData("agent", (bytes) => chunks.push(new TextDecoder().decode(bytes)));
 		ws.deliver({ type: "reset" });
 		expect(cursor.value).toBe(0);
-		// A clear-screen + scrollback-wipe sequence is emitted to the pane.
 		expect(chunks.join("")).toContain("\x1b[2J");
 		mux.dispose();
 	});

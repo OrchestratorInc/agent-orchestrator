@@ -13,43 +13,30 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// UsageMessageBatch contains only counts and local routing identifiers.
 type UsageMessageBatch struct {
 	SessionID          string
 	ProjectID          string
 	ProjectTelemetryID string
-	// Count is direct human Chat messages, as first measured. SteerCount and
-	// SendCount are the other human sends; the surface counts split all three.
-	Count        int64
-	SteerCount   int64
-	SendCount    int64
-	DesktopCount int64
-	MobileCount  int64
-	CLICount     int64
-	// Kind and Harness describe the session, for segmenting the counts.
-	Kind    string
-	Harness string
-	FirstAt time.Time
-	LastAt  time.Time
+	Count              int64
+	SteerCount         int64
+	SendCount          int64
+	DesktopCount       int64
+	MobileCount        int64
+	CLICount           int64
+	Kind               string
+	Harness            string
+	FirstAt            time.Time
+	LastAt             time.Time
 }
 
-// usageMessageKind is which human send a usage message count records.
 type usageMessageKind int
 
-// Usage message kinds.
 const (
-	// usageMessageChat is a direct Chat message, counted at its durable insert.
 	usageMessageChat usageMessageKind = iota
-	// usageMessageSteer is guidance steered into a running turn.
 	usageMessageSteer
-	// usageMessageSend is a person's `/send`: `ao send` outside an AO session,
-	// or a TUI session's composer.
 	usageMessageSend
 )
 
-// usageMessageIncrement adds one message of kind, attributed to the client
-// surface the request carried. A message with no request surface (none today)
-// still counts toward its kind.
 func usageMessageIncrement(ctx context.Context, session domain.SessionID, kind usageMessageKind, now time.Time) gen.IncrementUsageMessageSummaryParams {
 	p := gen.IncrementUsageMessageSummaryParams{
 		SessionID: string(session), FirstAt: sql.NullTime{Time: now, Valid: true}, LastAt: sql.NullTime{Time: now, Valid: true},
@@ -75,10 +62,6 @@ func usageMessageIncrement(ctx context.Context, session domain.SessionID, kind u
 	return p
 }
 
-// RecordUsageHumanSend counts a human send the Chat insert does not see: a
-// steer, or a `/send`. Callers decide authorship. Nothing is recorded while
-// usage telemetry is off, and standalone sessions are excluded like Chat
-// messages.
 func (s *Store) RecordUsageHumanSend(ctx context.Context, session domain.SessionID, steer bool) error {
 	if !s.usageAllowed() {
 		return nil
@@ -92,7 +75,6 @@ func (s *Store) RecordUsageHumanSend(ctx context.Context, session domain.Session
 	return s.qw.IncrementUsageMessageSummary(ctx, usageMessageIncrement(ctx, session, kind, time.Now().UTC()))
 }
 
-// UsagePRFact is one locally deduplicated provider PR association.
 type UsagePRFact struct {
 	Key                string
 	ProjectID          string
@@ -101,26 +83,19 @@ type UsagePRFact struct {
 	HistoricalMerged   bool
 	AssociationPending bool
 	MergePending       bool
-	// ClosePending is a PR closed without merging and not yet reported.
-	ClosePending bool
-	// MergedVia is the client that asked AO to merge; empty when the merge was
-	// only observed.
-	MergedVia string
-	// Detail for new outcomes. Provider is the SCM kind (github, gitlab); the
-	// session fields describe the owning worker; times are zero when unknown.
-	Provider         string
-	SessionKind      string
-	Harness          string
-	SessionCreatedAt time.Time
-	PRCreatedAt      time.Time
-	MergedAt         time.Time
-	ClosedAt         time.Time
-	ReviewRounds     int64
-	AOReviewUsed     bool
+	ClosePending       bool
+	MergedVia          string
+	Provider           string
+	SessionKind        string
+	Harness            string
+	SessionCreatedAt   time.Time
+	PRCreatedAt        time.Time
+	MergedAt           time.Time
+	ClosedAt           time.Time
+	ReviewRounds       int64
+	AOReviewUsed       bool
 }
 
-// UsageProjectID is random for each project and install. Neither project
-// slug nor repository data contributes to the exported ID.
 func (s *Store) UsageProjectID(ctx context.Context, projectID, installID string) (string, error) {
 	if projectID == "" || installID == "" {
 		return "", fmt.Errorf("usage identity requires project and install")
@@ -138,8 +113,6 @@ func (s *Store) UsageProjectID(ctx context.Context, projectID, installID string)
 	return id, err
 }
 
-// DrainUsageMessages atomically reserves at most limit session summaries.
-// The retained row is bounded even if the daemon restarts before a flush.
 func (s *Store) DrainUsageMessages(ctx context.Context, limit int, terminatedOnly bool, installID string) ([]UsageMessageBatch, error) {
 	if installID == "" {
 		return nil, fmt.Errorf("usage identity requires install")
@@ -204,7 +177,6 @@ func (s *Store) DrainUsageMessages(ctx context.Context, limit int, terminatedOnl
 	return out, tx.Commit()
 }
 
-// DiscardUsageMessages clears unsent counts when the installation opts out.
 func (s *Store) DiscardUsageMessages(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -214,8 +186,6 @@ func (s *Store) DiscardUsageMessages(ctx context.Context) error {
 	return err
 }
 
-// PendingWorkerPRUsage reads the durable association, not agent creation.
-// The PR table has one canonical row per provider identity.
 func (s *Store) PendingWorkerPRUsage(ctx context.Context, limit int) ([]UsagePRFact, error) {
 	if limit < 1 || limit > 1000 {
 		limit = 1000
@@ -256,8 +226,6 @@ func (s *Store) PendingWorkerPRUsage(ctx context.Context, limit int) ([]UsagePRF
 	return out, rows.Err()
 }
 
-// MarkWorkerPRUsageReported reserves an association, merge and close outcome
-// once each.
 func (s *Store) MarkWorkerPRUsageReported(ctx context.Context, key string, association, merge, closed bool) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -269,10 +237,6 @@ func (s *Store) MarkWorkerPRUsageReported(ctx context.Context, key string, assoc
 	return err
 }
 
-// WorkerPRUsageHistory reports whether any worker PR association, and any
-// merge, was already measured (reported, or backfilled as historical). The
-// flusher reads it before reporting a new outcome, to decide
-// first_for_install. The flusher is serialized, so nothing races it.
 func (s *Store) WorkerPRUsageHistory(ctx context.Context) (associated, merged bool, err error) {
 	err = s.readDB.QueryRowContext(ctx, `SELECT
 		EXISTS (SELECT 1 FROM usage_pr_measurement WHERE historical = 1 OR associated_reported = 1),
@@ -280,9 +244,6 @@ func (s *Store) WorkerPRUsageHistory(ctx context.Context) (associated, merged bo
 	return associated, merged, err
 }
 
-// RecordWorkerPRMergedVia notes which client asked AO to merge a worker PR.
-// Only an unreported merge is updated; a PR with no measurement row (an
-// orchestrator's or a standalone session's) is left alone.
 func (s *Store) RecordWorkerPRMergedVia(ctx context.Context, prURL, mergedVia string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -294,8 +255,6 @@ func (s *Store) RecordWorkerPRMergedVia(ctx context.Context, prURL, mergedVia st
 	return err
 }
 
-// DiscardPendingWorkerPRUsage is used while opted out. A later opt-in
-// cannot export associations or merges that occurred during the opt-out.
 func (s *Store) DiscardPendingWorkerPRUsage(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -316,7 +275,6 @@ func (s *Store) DiscardPendingWorkerPRUsage(ctx context.Context) error {
 		)`); err != nil {
 		return err
 	}
-	// Scan merged PRs once, then use the measurement primary key for matching.
 	if _, err := tx.ExecContext(ctx, `UPDATE usage_pr_measurement SET merged_reported = 1
 		WHERE merged_reported = 0 AND pr_key IN (
 			SELECT CASE WHEN provider_id <> '' AND provider <> ''

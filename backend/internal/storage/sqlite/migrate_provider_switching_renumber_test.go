@@ -9,7 +9,6 @@ import (
 func TestMigrateMovesProviderSwitchingFromItsBranchNumbers(t *testing.T) {
 	for _, old := range []int64{201, 216} {
 		db := openMigratedDatabaseCopy(t, providerSwitchingVersion)
-		// As a database that ran a preview build, where the migration had this number.
 		if _, err := db.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = ?`, old, providerSwitchingVersion); err != nil {
 			t.Fatalf("seed branch numbering: %v", err)
 		}
@@ -33,7 +32,6 @@ func TestMigrateMovesProviderSwitchingFromItsBranchNumbers(t *testing.T) {
 }
 
 func TestMigrateOpensAPreviewDatabaseThatRanProviderSwitchingAs0196(t *testing.T) {
-	// A preview build ran this migration as 0196, before main's 0196-0200 existed.
 	db := openMigratedDatabaseCopy(t, 195)
 	sqlText, err := os.ReadFile("migrations/20261020131539535_provider_switching.sql")
 	if err != nil {

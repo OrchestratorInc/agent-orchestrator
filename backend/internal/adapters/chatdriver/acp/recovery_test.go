@@ -48,10 +48,8 @@ func TestPersistentACPReplayBackpressure(t *testing.T) {
 	if err := conv.ActivateLiveReconnect(context.Background(), "durable-turn"); err != nil {
 		t.Fatal(err)
 	}
-	_ = nextEvent(t, conv.Events()) // Initialization ready event.
+	_ = nextEvent(t, conv.Events())
 
-	// A real failed restart retained 6,375 updates, exceeding both AO's event
-	// buffer and the SDK's notification queue. Pause projection during replay.
 	const frames = 6375
 	sent := make(chan error, 1)
 	go func() {
@@ -173,7 +171,7 @@ func TestACPDisconnectWithFullEventBufferCanClose(t *testing.T) {
 	if err := <-written; err != nil {
 		t.Fatal(err)
 	}
-	_ = conv.Close() // A failed projector stops consuming before Close.
+	_ = conv.Close()
 	select {
 	case <-conv.conn.Done():
 	case <-time.After(time.Second):
@@ -227,9 +225,6 @@ func TestPersistentACPReceivedPromptReceiptSurvivesDisconnect(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			// runTurn can obtain a terminal response before EOF closes SDK Done,
-			// then reach finishPrompt after that disconnect. Keep the receipt
-			// boundary separate from the event stream's independent close race.
 			conn := acpsdk.NewClientSideConnection(nil, io.Discard, strings.NewReader(""))
 			select {
 			case <-conn.Done():
@@ -255,9 +250,6 @@ func TestPersistentACPReceivedPromptReceiptSurvivesDisconnect(t *testing.T) {
 	}
 }
 
-// A daemon stopped mid-start can leave a persistent host that never got a
-// session. It holds no conversation, so it is replaced rather than blocking
-// every later start as an inconclusive recovery.
 func TestResumeReplacesAHostThatNeverFinishedStarting(t *testing.T) {
 	agent := &fakeAgent{capabilities: &acpsdk.AgentCapabilities{LoadSession: true}}
 	driver := New(Config{

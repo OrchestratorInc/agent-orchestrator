@@ -22,8 +22,6 @@ func TestDevLauncherBuildPaths(t *testing.T) {
 	}
 }
 
-// devLauncherFixture lays out what scripts/daemon-build.sh leaves behind: a
-// build under the cache directory and, in each of dirs, a link named ao to it.
 func devLauncherFixture(t *testing.T, root string, dirs ...string) (build string, buildPaths []string) {
 	t.Helper()
 	build = filepath.Join(root, "cache", "aoagents", "agent-orchestrator", "bin", "ao")
@@ -61,7 +59,6 @@ func TestIsDevLauncherNeedsTheExactBuildLink(t *testing.T) {
 		}
 		return path
 	}
-	// A cache cleaned up since the build still leaves AO's own link behind.
 	dangling := filepath.Join(root, "gone", "aoagents", "agent-orchestrator", "bin", "ao")
 	paths := append(slices.Clone(buildPaths), dangling)
 	for _, tc := range []struct {
@@ -72,7 +69,6 @@ func TestIsDevLauncherNeedsTheExactBuildLink(t *testing.T) {
 		{"link to the build", filepath.Join(root, "local-bin", "ao"), true},
 		{"dangling link to the build", link("dangling", dangling), true},
 		{"link to another ao", link("foreign-link", foreign), false},
-		// Only scripts/daemon-build.sh's own absolute link counts.
 		{"relative link", link("relative", filepath.Join("cache", "aoagents", "agent-orchestrator", "bin", "ao")), false},
 		{"copied launcher", foreign, false},
 		{"the build itself", build, false},

@@ -46,13 +46,11 @@ describe("admitArrivals", () => {
 	});
 
 	it("raises the floor past rows written before the reader started watching", () => {
-		// A stale copy refetched on return, or a hibernated chat woken: rows from while they were away.
 		const gate = gateAt(NOW);
 		admitArrivals(gate, snapshot(row(1, NOW - 20 * 60_000)));
 		const caughtUp = snapshot(row(1, NOW - 20 * 60_000), row(2, NOW - 10 * 60_000), row(3, NOW + 500));
 		expect(admitArrivals(gate, caughtUp)).toBe(true);
 		expect(gate.floor).toBe(3);
-		// The same snapshot again changes nothing.
 		expect(admitArrivals(gate, caughtUp)).toBe(false);
 	});
 

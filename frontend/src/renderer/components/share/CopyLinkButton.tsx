@@ -8,44 +8,25 @@ import { Input } from "../ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import type { LinkAccess } from "./linkAccess";
 
-/** How long the button says "Link copied". */
 export const COPIED_MS = 2_000;
 
-/** Whether Copy link can act now: there is a link, nothing is changing the links, and this device's URLs are known. */
 export function canCopy(access: LinkAccess): boolean {
 	const { mode, busy } = access.copy;
 	return !busy && (mode === "ready" || mode === "new" || mode === "replace");
 }
 
-/**
- * Copies the link general access describes. A link this device made is
- * copied as it is; one made elsewhere can't be shown again, so the button
- * makes a new link with the same access ("Copy new link"), asking first
- * when that link can write, as turning writing on does. A Trusted link, which
- * no new link can match, is replaced, after asking. With link access off there is nothing to copy, and the button says
- * how to get one. It stays focusable while it can't copy, so focus never
- * drops out of the dialog and the reason can be read.
- */
 export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef, size, fallbackHost }: {
 	access: LinkAccess;
-	/** Whether people can be added in this dialog, for the hint when link access is off. */
 	people: boolean;
-	/** Announces the copy, with who the link lets in. */
 	onCopied: () => void;
-	/**
-	 * Asks before making a link that can write: one replacing a Trusted link
-	 * made elsewhere, or a copy of a Can write one. Resolves to the new URL, or undefined.
-	 */
 	onAsk: () => Promise<string | undefined>;
 	buttonRef?: React.Ref<HTMLButtonElement>;
 	size?: "sm";
-	/** Where the link to select by hand shows when the clipboard refuses it; under the button by default. */
 	fallbackHost?: HTMLElement | null;
 }) {
 	const { t } = useTranslation();
 	const hintId = useId();
 	const [state, setState] = useState<"idle" | "copied">("idle");
-	// The URL to select by hand when the clipboard refused it.
 	const [fallback, setFallback] = useState<string>();
 	const timer = useRef<number | undefined>(undefined);
 	useEffect(() => () => window.clearTimeout(timer.current), []);
@@ -61,7 +42,6 @@ export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef, siz
 				? access.url
 				: mode === "new" && access.broadest?.role !== "editor" ? await access.copyNew.mutateAsync() : await onAsk();
 		} catch {
-			// The error shows with the dialog's others.
 			return;
 		}
 		if (!url) return;
@@ -93,7 +73,6 @@ export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef, siz
 			type="button"
 			variant="secondary"
 			size={size}
-			// Wide enough for every label, so the footer doesn't move as it changes.
 			className="min-w-34 gap-1.5 aria-disabled:cursor-default aria-disabled:opacity-50"
 			aria-disabled={!available || undefined}
 			aria-describedby={hint ? hintId : undefined}
@@ -113,7 +92,6 @@ export function CopyLinkButton({ access, people, onCopied, onAsk, buttonRef, siz
 						<TooltipTrigger asChild>{button}</TooltipTrigger>
 						<TooltipContent className="max-w-64">{hint}</TooltipContent>
 					</Tooltip>
-					{/* The reason, read with the button whether or not the tooltip is showing. */}
 					<span id={hintId} className="sr-only">{hint}</span>
 				</>
 			) : button}

@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// withFakePidAlive replaces the pidAlive var for the duration of the test.
 func withFakePidAlive(t *testing.T, fn func(pid int) bool) {
 	t.Helper()
 	orig := pidAlive
@@ -27,7 +26,6 @@ func withRegistryRewrite(t *testing.T, fn func(context.Context, []Entry) error) 
 	t.Cleanup(func() { rewriteRegistry = orig })
 }
 
-// setupHome points HOME at a temp dir and returns the expected registry path.
 func setupHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,9 +34,6 @@ func setupHome(t *testing.T) string {
 	return filepath.Join(dir, ".ao", "windows-pty-hosts.json")
 }
 
-// withRunFilePath sets the instance-scoped registry override for the
-// duration of the test and restores the previous value on cleanup, mirroring
-// withFakePidAlive above.
 func withRunFilePath(t *testing.T, path string) {
 	t.Helper()
 	orig := overrideDir
@@ -187,7 +182,6 @@ func TestRegisterAndUnregisterHonorCanceledContext(t *testing.T) {
 func TestListPrunesDeadPIDs(t *testing.T) {
 	regPath := setupHome(t)
 
-	// PID 1 alive, PID 2 dead.
 	alive := map[int]bool{1: true, 2: false}
 	withFakePidAlive(t, func(pid int) bool { return alive[pid] })
 
@@ -208,7 +202,6 @@ func TestListPrunesDeadPIDs(t *testing.T) {
 		t.Fatalf("expected [s1], got %v", got)
 	}
 
-	// Verify the on-disk file was rewritten with only the live entry.
 	data, err := os.ReadFile(regPath)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +223,6 @@ func TestEmptyResultDeletesFile(t *testing.T) {
 	if err := Register(context.Background(), e); err != nil {
 		t.Fatal(err)
 	}
-	// Unregister last entry -> file should be deleted.
 	if err := Unregister(context.Background(), "s1"); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +251,6 @@ func TestRegistryMalformedIsUnknown(t *testing.T) {
 	setupHome(t)
 	withFakePidAlive(t, func(int) bool { return true })
 
-	// Write malformed JSON directly.
 	path, _ := registryFile()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -381,9 +372,6 @@ func TestAtomicWriteProducesValidJSON(t *testing.T) {
 	}
 }
 
-// TestSetRunFilePathScopesRegistryToInstanceDir verifies that pinning the
-// registry to a run-file's directory writes there instead of ~/.ao, even
-// though HOME still resolves to a different temp dir.
 func TestSetRunFilePathScopesRegistryToInstanceDir(t *testing.T) {
 	homeRegPath := setupHome(t)
 	withFakePidAlive(t, func(int) bool { return true })
@@ -405,11 +393,6 @@ func TestSetRunFilePathScopesRegistryToInstanceDir(t *testing.T) {
 	}
 }
 
-// TestTwoInstancesWithDifferentRunFilePathsDoNotShareRegistry is the
-// regression test for the cross-instance session collision: two daemon
-// instances (e.g. a headless dev daemon and the desktop app) with different
-// AO_RUN_FILE locations must not clobber each other's same-named session
-// even though both resolve to one registry file today.
 func TestTwoInstancesWithDifferentRunFilePathsDoNotShareRegistry(t *testing.T) {
 	setupHome(t)
 	withFakePidAlive(t, func(int) bool { return true })
@@ -427,8 +410,6 @@ func TestTwoInstancesWithDifferentRunFilePathsDoNotShareRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Instance A's own registration for the same session id must be
-	// untouched by instance B registering a session of the same name.
 	withRunFilePath(t, filepath.Join(instanceA, "running.json"))
 	got, err := List(context.Background())
 	if err != nil {
@@ -439,11 +420,6 @@ func TestTwoInstancesWithDifferentRunFilePathsDoNotShareRegistry(t *testing.T) {
 	}
 }
 
-// TestSetRunFilePathEmptyClearsOverride verifies the documented contract: an
-// empty path clears any override and reverts to the ~/.ao default. This is
-// what lets conpty.New(Options{}) -- the zero value used throughout this
-// package's own tests -- always start from a clean, deterministic registry
-// resolution regardless of what an earlier test configured.
 func TestSetRunFilePathEmptyClearsOverride(t *testing.T) {
 	regPath := setupHome(t)
 	withFakePidAlive(t, func(int) bool { return true })

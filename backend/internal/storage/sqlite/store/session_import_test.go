@@ -69,7 +69,6 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// UpdateSession leaves the title to its narrow writers, so edit a field it writes.
 	renamed := created
 	renamed.Metadata.LatestUserPrompt = "sent during copy"
 	if err := s.UpdateSession(ctx, renamed); err != nil {
@@ -97,9 +96,6 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	}
 }
 
-// The archive owns the first sequences; live rows follow it. A refresh is
-// accepted until the conversation holds a row of its own, including after a
-// first open that failed once its conversation existed.
 func TestImportedConversationFollowsArchive(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -141,8 +137,6 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	if err != nil || conversation.LatestSequence != 3 {
 		t.Fatalf("conversation = %+v: %v", conversation, err)
 	}
-	// The first open failed after creating the conversation; turns made
-	// elsewhere since then still reach the archive, and the counter follows it.
 	if err := s.ReplaceImportedMessages(ctx, imported.ID, []domain.ImportedMessage{message("one"), message("two"), message("three"), message("four")}); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +144,6 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	if conversation, err := s.ConversationForSession(ctx, imported.ID); err != nil || conversation.LatestSequence != 4 {
 		t.Fatalf("counter after refresh = %+v: %v", conversation, err)
 	}
-	// A live row now follows the archive, so the archive no longer changes.
 	if _, err := db.Exec(`UPDATE conversations SET latest_sequence = latest_sequence + 1 WHERE id = ?`, "conv-hist"); err != nil {
 		t.Fatal(err)
 	}
@@ -160,8 +153,6 @@ func TestImportedConversationFollowsArchive(t *testing.T) {
 	archive("one", "two", "three", "four")
 }
 
-// Full-row writes come from snapshots that may predate a workspace transfer or
-// adoption; neither may be undone, and old rows must still match their source.
 func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -177,7 +168,6 @@ func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A row written before "transferred" and "prepared" existed still matches.
 	if _, err := db.Exec(`UPDATE sessions SET import_source = '{"nativeId":"native","configDir":"/codex","cwd":"","adopted":false}' WHERE id = ?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +198,6 @@ func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 	if source := got.Metadata.ImportSource; !source.Adopted || source.HistoryThrough != 7 || !source.Transferred {
 		t.Fatalf("older snapshot undid adoption: %+v", source)
 	}
-	// An agent switch changes the harness, not the conversation it came from.
 	got.Harness = domain.HarnessClaudeCode
 	if err := s.UpdateSession(ctx, got); err != nil {
 		t.Fatal(err)

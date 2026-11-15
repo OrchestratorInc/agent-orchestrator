@@ -24,7 +24,6 @@ func TestWithSkillMetadataNamesListedSkillsFromTheirOwnFiles(t *testing.T) {
 	roots := skillRoots(workspace, home)
 	writeSkillMetadata(t, filepath.Join(home, ".agents", "skills"), "better-interface",
 		"interface:\n  display_name: \"Better Interface\"\n  short_description: \"Cross-discipline interface review\"\n")
-	// A project skill wins over a user skill of the same name.
 	writeSkillMetadata(t, filepath.Join(home, ".claude", "skills"), "review", "interface:\n  display_name: \"User Review\"\n")
 	writeSkillMetadata(t, filepath.Join(workspace, ".claude", "skills"), "review", "interface:\n  display_name: \"Project Review\"\n")
 
@@ -42,10 +41,8 @@ func TestWithSkillMetadataNamesListedSkillsFromTheirOwnFiles(t *testing.T) {
 		{Name: "better-interface", DisplayName: "Better Interface", Description: "Cross-discipline interface review", Source: "agent"},
 		{Name: "skill:better-interface", DisplayName: "Better Interface", Description: "Cross-discipline interface review", Source: "agent"},
 		{Name: "review", DisplayName: "Project Review", Source: "agent"},
-		// No metadata file: the listed name stays exactly as it was.
 		{Name: "blast-radius", DisplayName: "blast-radius", Description: "Find what a change could break", Source: "agent"},
 		{Name: "anthropic-skills:deep-research", DisplayName: "anthropic-skills:deep-research", Source: "agent"},
-		// A label the agent already gave is kept.
 		{Name: "better-interface", DisplayName: "Codex Label", Source: "user"},
 	}
 	if len(got) != len(want) {
@@ -61,8 +58,6 @@ func TestWithSkillMetadataNamesListedSkillsFromTheirOwnFiles(t *testing.T) {
 	}
 }
 
-// The agent runs the project skill, so a same-named user skill's label must not
-// stand in for it when the project skill has no metadata of its own.
 func TestWithSkillMetadataKeepsAProjectSkillWithoutMetadataAsListed(t *testing.T) {
 	workspace, home := t.TempDir(), t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, ".claude", "skills", "review"), 0o755); err != nil {

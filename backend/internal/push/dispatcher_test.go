@@ -54,8 +54,8 @@ type fakeSender struct {
 	sendErr     error
 	sentCond    *sync.Cond
 	sent        bool
-	gotIDs      []string           // ids passed to GetReceipts
-	receipts    map[string]Receipt // returned by GetReceipts
+	gotIDs      []string
+	receipts    map[string]Receipt
 	receiptErr  error
 	receiptHook func()
 }
@@ -176,7 +176,6 @@ func TestDispatcherPrunesDeadTokens(t *testing.T) {
 		{Token: "ExponentPushToken[live]"},
 		{Token: "ExponentPushToken[dead]"},
 	}}
-	// Second ticket reports the token is gone.
 	dead := Ticket{Status: "error"}
 	dead.Details.Error = "DeviceNotRegistered"
 	sender := newFakeSender([]Ticket{{Status: "ok"}, dead})
@@ -189,7 +188,6 @@ func TestDispatcherPrunesDeadTokens(t *testing.T) {
 	sub.ch <- created(domain.NotificationRecord{ID: "ntf_1", Type: domain.NotificationNeedsInput, Title: "t", Body: "b"})
 	sender.waitSent(t)
 
-	// Give dispatch() a beat to finish the prune after Send returned.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		store.mu.Lock()
@@ -218,7 +216,6 @@ func TestDispatcherNoDevicesIsNoop(t *testing.T) {
 	go d.Run(ctx)
 
 	sub.ch <- created(domain.NotificationRecord{ID: "ntf_1", Type: domain.NotificationNeedsInput, Title: "t", Body: "b"})
-	// No devices → sender must never be called. Give the loop a moment.
 	time.Sleep(100 * time.Millisecond)
 	sender.mu.Lock()
 	defer sender.mu.Unlock()
@@ -251,8 +248,6 @@ func TestDispatcherWithoutHostIdentityDoesNotSend(t *testing.T) {
 	}
 }
 
-// Resolution events exist so open dashboards can drop a row. Nothing new
-// happened for the user, so a phone must not buzz for one.
 func TestDispatcherIgnoresResolvedEvents(t *testing.T) {
 	sub := &fakeSubscriber{ch: make(chan domain.NotificationEvent, 1)}
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{{Token: "ExponentPushToken[a]"}}}
@@ -285,7 +280,6 @@ func TestDispatcherSweepPrunesOnReceipt(t *testing.T) {
 
 	base := time.Now()
 	d.clock = func() time.Time { return base }
-	// A ticket sent 16 minutes ago is due for a receipt check.
 	d.trackAccepted([]sentTicket{{id: "tk1", token: "ExponentPushToken[dead]", sentAt: base.Add(-16 * time.Minute)}})
 	d.sweepReceipts(context.Background())
 
@@ -302,8 +296,6 @@ func TestDispatcherSweepPrunesOnReceipt(t *testing.T) {
 	}
 }
 
-// Every paired phone with a push token gets the notification; there is no
-// per-device opt-out on the daemon side any more.
 func TestDispatchSendsToEveryTokenedDevice(t *testing.T) {
 	now := time.Now().UTC()
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{
@@ -322,12 +314,6 @@ func TestDispatchSendsToEveryTokenedDevice(t *testing.T) {
 	}
 }
 
-// TestDispatchAllTokenlessNeverCallsSend pins the early return in dispatch:
-// when no registered device has a push token, the filtered messages slice is
-// empty and Send must never be called at all (not called-with-empty-slice,
-// which would draw a 400 from Expo). TestDispatchSkipsDevicesWithoutToken only
-// covers the mixed case, so a regression that dropped the `len(messages) == 0`
-// guard would slip past it silently.
 func TestDispatchAllTokenlessNeverCallsSend(t *testing.T) {
 	now := time.Now().UTC()
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{
@@ -346,11 +332,6 @@ func TestDispatchAllTokenlessNeverCallsSend(t *testing.T) {
 	}
 }
 
-// TestDispatchSkipsDevicesWithoutToken pins the dispatcher-side guard: a row
-// can represent a paired phone that never minted a push token (no permission
-// granted, or a build that can't mint one). Sending to an empty token would be
-// a wasted/erroring Expo call, so those rows must be filtered out, and the
-// survivor must still be the tokened one.
 func TestDispatchSkipsDevicesWithoutToken(t *testing.T) {
 	now := time.Now().UTC()
 	store := &fakeDeviceStore{devices: []mobilebridge.PushDevice{
@@ -380,8 +361,8 @@ func TestDispatcherSweepSkipsFreshAndDropsExpired(t *testing.T) {
 	base := time.Now()
 	d.clock = func() time.Time { return base }
 	d.trackAccepted([]sentTicket{
-		{id: "fresh", token: "ExponentPushToken[a]", sentAt: base.Add(-1 * time.Minute)}, // too new to check
-		{id: "expired", token: "ExponentPushToken[b]", sentAt: base.Add(-2 * time.Hour)}, // past max age → dropped
+		{id: "fresh", token: "ExponentPushToken[a]", sentAt: base.Add(-1 * time.Minute)},
+		{id: "expired", token: "ExponentPushToken[b]", sentAt: base.Add(-2 * time.Hour)},
 	})
 	d.sweepReceipts(context.Background())
 
@@ -643,9 +624,9 @@ func TestDispatcherReceiptAmbiguitySurvivesConflictingTicketExpiry(t *testing.T)
 		{id: "duplicate", token: "old-token", sentAt: now.Add(-receiptMaxAge + time.Minute)},
 		{id: "duplicate", token: "newer-token", sentAt: now.Add(-receiptDelay)},
 	})
-	d.sweepReceipts(t.Context()) // Neither conflicting record has a receipt yet.
+	d.sweepReceipts(t.Context())
 	now = now.Add(time.Minute)
-	d.sweepReceipts(t.Context()) // The older conflicting record expires.
+	d.sweepReceipts(t.Context())
 	if len(d.pending) != 1 || d.pending[0].token != "newer-token" {
 		t.Fatalf("expected only the unexpired conflicting ticket: %+v", d.pending)
 	}
@@ -695,7 +676,6 @@ func TestDispatcherReceiptAmbiguitySurvivesCapacityEviction(t *testing.T) {
 		tickets = append(tickets, sentTicket{id: fmt.Sprintf("fresh-%d", i), token: "fresh-token", sentAt: now})
 	}
 	d.trackAccepted(tickets)
-	// The old conflicting record is evicted before the first receipt sweep.
 	d.trackAccepted([]sentTicket{{id: "duplicate", token: "newer-token", sentAt: now}})
 	now = now.Add(receiptDelay)
 	dead := Receipt{Status: "error"}

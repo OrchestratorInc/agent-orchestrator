@@ -7,20 +7,10 @@ import (
 )
 
 const (
-	// daemonLogName is the file under AO_DATA_DIR that keeps the daemon's own
-	// log. The desktop app reads the daemon's stderr into a small in-memory
-	// buffer, so without this file a failure in the field leaves nothing to
-	// diagnose once the app restarts.
-	daemonLogName = "daemon.log"
-	// maxDaemonLogBytes caps daemon.log before it rotates to daemon.log.1, so
-	// the log never holds more than twice this on disk.
+	daemonLogName           = "daemon.log"
 	maxDaemonLogBytes int64 = 16 << 20
 )
 
-// rotatingLogFile appends to path and, when the next write would exceed maxBytes,
-// moves the current file to path.1 and starts a fresh one. Keeping one
-// previous file preserves the lines leading up to a failure even when a
-// rotation lands right after it.
 type rotatingLogFile struct {
 	mu       sync.Mutex
 	path     string
@@ -58,8 +48,6 @@ func (l *rotatingLogFile) open(truncate bool) error {
 func (l *rotatingLogFile) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	// One record never holds more than the cap: an oversized one keeps its
-	// start and ends with a newline. The whole record still counts as written.
 	record := p
 	if l.maxBytes > 0 && int64(len(record)) > l.maxBytes {
 		record = append(record[:l.maxBytes-1:l.maxBytes-1], '\n')
@@ -67,8 +55,6 @@ func (l *rotatingLogFile) Write(p []byte) (int, error) {
 	if l.file != nil && l.size > 0 && l.size+int64(len(record)) > l.maxBytes {
 		_ = l.file.Close()
 		l.file = nil
-		// A rename can fail when another process still holds the file open on
-		// Windows. Truncating then keeps the cap instead of retrying every write.
 		if err := os.Rename(l.path, l.path+".1"); err != nil {
 			if err := l.open(true); err != nil {
 				return 0, err
@@ -88,10 +74,6 @@ func (l *rotatingLogFile) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// deferredLogFile drops writes until a file is attached. The daemon attaches
-// daemon.log only once it holds the data-dir lock: a predecessor still shutting
-// down can rotate the file, which would leave this process writing into the
-// backup.
 type deferredLogFile struct {
 	mu   sync.Mutex
 	file io.Writer
@@ -113,8 +95,6 @@ func (d *deferredLogFile) attach(file io.Writer) {
 	d.mu.Unlock()
 }
 
-// teeLogWriter writes every record to stderr and the log file. A failing file
-// never drops the stderr copy, and a dead stderr pipe never drops the file copy.
 type teeLogWriter struct {
 	stderr io.Writer
 	file   io.Writer

@@ -8,10 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ListSkills exposes ACP's available commands through AO's existing named-skill
-// boundary. Invocation needs no protocol-specific method: ACP commands are sent
-// as ordinary prompt text beginning with /name, which is already how AO's
-// composer inserts a skill.
 func (c *conversation) ListSkills(ctx context.Context) ([]ports.ChatSkill, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -40,9 +36,7 @@ func (c *conversation) replaceAvailableCommands(commands []acpsdk.AvailableComma
 			DisplayName: command.Name,
 			Description: command.Description,
 			InputHint:   inputHint,
-			// ACP does not report command provenance. "agent" tells the user this
-			// came from the live provider without leaking protocol jargon into UI.
-			Source: "agent",
+			Source:      "agent",
 		})
 	}
 

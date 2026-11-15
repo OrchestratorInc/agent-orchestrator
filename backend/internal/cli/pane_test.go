@@ -21,7 +21,6 @@ func paneServer(t *testing.T, status int, respBody string) (*httptest.Server, *p
 	t.Helper()
 	capture := &paneCapture{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The CLI also reports its own telemetry; that is not a daemon API call.
 		if strings.HasPrefix(r.URL.Path, "/internal/") {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -128,8 +127,6 @@ func TestPaneNeedsASession(t *testing.T) {
 	}
 }
 
-// paneTerminalServer fakes a terminal whose screen shows the typed command's
-// output once it has been typed.
 func paneTerminalServer(t *testing.T) (*httptest.Server, *[]string) {
 	t.Helper()
 	var calls []string

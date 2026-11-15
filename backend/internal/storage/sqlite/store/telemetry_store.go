@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// TelemetryEventRecord is the store-facing representation of a telemetry row.
 type TelemetryEventRecord struct {
 	ID          string
 	OccurredAt  time.Time
@@ -23,7 +22,6 @@ type TelemetryEventRecord struct {
 	PayloadJSON string
 }
 
-// CreateTelemetryEvent persists one telemetry event row.
 func (s *Store) CreateTelemetryEvent(ctx context.Context, rec TelemetryEventRecord) error {
 	arg := gen.CreateTelemetryEventParams{
 		ID:          rec.ID,
@@ -46,8 +44,6 @@ func (s *Store) CreateTelemetryEvent(ctx context.Context, rec TelemetryEventReco
 	return nil
 }
 
-// ListTelemetryEventsSince returns telemetry rows oldest-first from a time
-// boundary, capped by limit.
 func (s *Store) ListTelemetryEventsSince(ctx context.Context, since time.Time, limit int64) ([]gen.TelemetryEvent, error) {
 	rows, err := s.qr.ListTelemetryEventsSince(ctx, gen.ListTelemetryEventsSinceParams{
 		OccurredAt: since.UTC(),
@@ -59,8 +55,6 @@ func (s *Store) ListTelemetryEventsSince(ctx context.Context, since time.Time, l
 	return rows, nil
 }
 
-// PruneTelemetryEventsBefore deletes at most limit rows older than before and
-// returns how many rows were removed.
 func (s *Store) PruneTelemetryEventsBefore(ctx context.Context, before time.Time, limit int64) (int64, error) {
 	n, err := s.qw.PruneTelemetryEventsBefore(ctx, gen.PruneTelemetryEventsBeforeParams{
 		OccurredAt: before.UTC(),
@@ -72,7 +66,6 @@ func (s *Store) PruneTelemetryEventsBefore(ctx context.Context, before time.Time
 	return n, nil
 }
 
-// FreelistCount returns the number of unused pages in the database file.
 func (s *Store) FreelistCount(ctx context.Context) (int64, error) {
 	var n int64
 	if err := s.writeDB.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&n); err != nil {
@@ -81,7 +74,6 @@ func (s *Store) FreelistCount(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
-// IncrementalVacuum reclaims up to pages free pages from the database file.
 func (s *Store) IncrementalVacuum(ctx context.Context, pages int64) error {
 	if _, err := s.writeDB.ExecContext(ctx, fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
 		return fmt.Errorf("incremental_vacuum: %w", err)

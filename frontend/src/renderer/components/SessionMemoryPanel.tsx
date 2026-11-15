@@ -55,12 +55,8 @@ import {
 import { SettingsSection } from "./settings/SettingsSection";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-// Stable identity for the loading state: `data ?? []` would hand useMemo a
-// fresh array every render, invalidating it (and the onRows effect below)
-// in a loop until the workspace query resolves.
 const EMPTY_WORKSPACES: readonly WorkspaceSummary[] = [];
 
-/** What the monitor knows about a session, from the board plus its reading. */
 export function toSessionFacts(session: WorkspaceSession, reading: SessionMemoryReading | undefined, now: number): ResourceSessionFacts {
 	const lastActivity = session.activity?.lastActivityAt ? Date.parse(session.activity.lastActivityAt) : Number.NaN;
 	return {
@@ -83,7 +79,6 @@ const stateText: Record<PressureState, string> = {
 	tight: "text-destructive",
 };
 
-/** The pressure state and what each live session holds, for the row chips. */
 function usePressureFacts(projectId?: string) {
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory().data;
@@ -97,11 +92,6 @@ function usePressureFacts(projectId?: string) {
 	return { state, facts };
 }
 
-/**
- * The board's memory light, beside the orchestrator button: a dot and AO's
- * size. Colour means something needs doing; grey means nothing does. The
- * tooltip holds the machine figures, the window behind it everything else.
- */
 export function AppMemoryIndicator() {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
@@ -144,7 +134,6 @@ export function AppMemoryIndicator() {
 	);
 }
 
-/** One graph as a card: its name and current value on top, the graph under it. */
 function MetricCard({ children, testId, title, value }: { children: ReactNode; testId: string; title: string; value: string }) {
 	return (
 		<div className="settings-grouped-rows" data-testid={testId}>
@@ -159,7 +148,6 @@ function MetricCard({ children, testId, title, value }: { children: ReactNode; t
 	);
 }
 
-/** One part of the memory bar named with its figure, so a colour is never the only clue. */
 function LegendItem({ dot, label, value }: { dot: string; label: string; value: string }) {
 	return (
 		<span className="inline-flex items-center gap-1.5">
@@ -169,12 +157,8 @@ function LegendItem({ dot, label, value }: { dot: string; label: string; value: 
 	);
 }
 
-/** AO's part of the memory bar and its dot: white on dark; grey on light,
- * where the near-black accent outweighed the free part beside it. */
 const aoFill = "bg-passive dark:bg-accent-strong";
 
-/** One bar: AO against free, and nothing else, with its key under it. The bar
- * is scaled to the two of them, so there is no gap standing in for other apps. */
 function MemoryBar({ app, system }: { app: AppMemoryReading; system: SystemMemoryReading }) {
 	const { t } = useTranslation();
 	const total = app.rssBytes + system.availableBytes || 1;
@@ -195,7 +179,6 @@ function MemoryBar({ app, system }: { app: AppMemoryReading; system: SystemMemor
 	);
 }
 
-/** The machine's memory: AO against what is free. `titleAction` sits by the heading. */
 export function MachineSection({ titleAction }: { titleAction?: ReactNode }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
@@ -207,7 +190,6 @@ export function MachineSection({ titleAction }: { titleAction?: ReactNode }) {
 				{system && app ? (
 					<MemoryBar app={app} system={system} />
 				) : (
-					// Never an empty card: until the first sample lands, one row holds its place.
 					<div className="settings-grouped-rows">
 						<p aria-busy="true" className="settings-row-bar text-sm text-settings-muted" data-testid="session-memory-loading">
 							<span className="inline-flex items-center gap-2">
@@ -222,36 +204,21 @@ export function MachineSection({ titleAction }: { titleAction?: ReactNode }) {
 	);
 }
 
-/**
- * Each column's width, padding and alignment, in one place: the header and
- * every row take their classes from here, so the columns line up.
- */
 const columnWidth = { type: "w-28", pid: "w-20", cpu: "w-20", memory: "w-24", share: "w-24" } as const;
 const cell = {
 	name: "pl-(--settings-row-inset) pr-3 text-left",
-	// One step in from the parent's title, as far as the title sits from its chevron.
 	process: "pl-13 pr-3 text-left",
 	type: "px-3 text-left",
-	// Figures start under their header's first letter, like every other column:
-	// right-aligned, they ended under the sort arrow instead of the word.
 	pid: "px-3 text-left",
 	cpu: "px-3 text-left",
 	memory: "px-3 text-left",
 	share: "pl-3 pr-(--settings-row-inset) text-left",
 } as const;
 
-/** A session-level row's cells sit on its title line, not between the title
- * and the line under it. */
 const topLine = "py-2.5 align-top leading-5";
 
-/** Every full-width row (group label, spacer, step heading) spans all six. */
 const columnCount = 6;
 
-/**
- * Sessions by CPU alone: memory plays no part. Sessions with exactly the same
- * CPU (most often every one idle at 0) fall back to their names, A to Z, in
- * either direction, so a tie never reads as some other order turned around.
- */
 function cpuOrder<T extends { id: string; session: WorkspaceSession; reading: SessionMemoryReading }>(rows: T[], ascending: boolean): T[] {
 	const direction = ascending ? 1 : -1;
 	return [...rows].sort(
@@ -262,18 +229,10 @@ function cpuOrder<T extends { id: string; session: WorkspaceSession; reading: Se
 	);
 }
 
-/**
- * A column header that orders the sessions by its own figure; a second click
- * flips the direction. Sorting moves session rows only, so with fewer than two
- * there is nothing to reorder and the header is plain text.
- */
 function SortHeader({ active, ascending, className, label, onSort, sortable }: { active: boolean; ascending: boolean; className: string; label: string; onSort: () => void; sortable: boolean }) {
 	if (!sortable) {
 		return <th className={cn("pb-2 pt-3 font-medium", className)} scope="col">{label}</th>;
 	}
-	// Visible whenever it works, so the header reads as sortable before any
-	// click: faint on an idle column, full strength showing the direction on
-	// the active one.
 	const Arrow = active && ascending ? ChevronUp : ChevronDown;
 	return (
 		<th aria-sort={active ? (ascending ? "ascending" : "descending") : undefined} className={cn("pb-2 pt-3 font-medium", className)} scope="col">
@@ -293,17 +252,13 @@ function SortHeader({ active, ascending, className, label, onSort, sortable }: {
 	);
 }
 
-/** Every live session and AO's own processes, largest first. */
 export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onRows?: (rows: ReportRow[]) => void; pinned?: boolean; projectId?: string; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const workspaces = useWorkspaceQuery().data ?? EMPTY_WORKSPACES;
 	const readings = useSessionMemory(projectId).data;
 	const app = useAppMemory().data?.app;
-	// Cost belongs in a shared report even though the window never shows it.
 	const usage = useSessionUsageSummaries(projectId).data;
 	const { state, facts } = usePressureFacts(projectId);
-	// Orchestrators are listed too: they hold memory like any session, and
-	// leaving them out made the rows add up to less than AO's total.
 	const sessions = useMemo(
 		() =>
 			workspaces
@@ -312,12 +267,8 @@ export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onR
 				.filter((session) => session.isTerminated !== true),
 		[workspaces, projectId],
 	);
-	// Rows with a reading are the live ones; a session without a process tree
-	// is not listed, never shown as 0 MB.
 	const orderRef = useRef<string[]>([]);
-	// Sessions only: AO's own row stays pinned below them whatever the order.
 	const [sort, setSort] = useState<{ by: "memory" | "cpu"; ascending: boolean }>({ by: "memory", ascending: false });
-	// Clicking the active column flips its direction; another column starts largest first.
 	const sortBy = (by: "memory" | "cpu") => setSort((current) => ({ by, ascending: current.by === by ? !current.ascending : false }));
 	const live = useMemo(() => {
 		const rows = sessions
@@ -330,17 +281,12 @@ export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onR
 		return sort.ascending ? [...largestFirst].reverse() : largestFirst;
 	}, [sessions, readings, sort]);
 	const largest = largestSession(facts);
-	// AO's total counts reviewer panes too; without their rows the window
-	// could never add up to it.
 	const reviewers = useMemo(() => [...(app?.reviewers ?? [])].sort((a, b) => b.memory.rssBytes - a.memory.rssBytes), [app?.reviewers]);
 	const titles = useMemo(() => sessionTitles(workspaces), [workspaces]);
 	const maxBytes = Math.max(app?.own?.rssBytes ?? 0, ...live.map((row) => row.rssBytes), ...reviewers.map((r) => r.memory.rssBytes), 1);
-	// The copy button sits above the table, so the rows it would copy travel
-	// up. Same order as the screen, so the text matches what was seen.
 	useEffect(() => {
 		onRows?.(live.map(({ session, reading }) => ({ session, reading, usage: usage?.get(session.id) })));
 	}, [live, usage, onRows]);
-	// Any number of rows open at once: comparing two trees is the point.
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
 	const toggleExpanded = (id: string) =>
 		setExpanded((current) => {
@@ -357,8 +303,6 @@ export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onR
 	}
 	return (
 		<SettingsSection title={t("shell.memoryGroupSessions")}>
-		{/* overflow-clip, not the card's overflow-hidden: hidden makes the card a
-		    scroll container, which would stop the header sticking to the page. */}
 		<div className="settings-grouped-rows overflow-clip!">
 		<table className="w-full table-fixed border-collapse text-xs" data-testid="session-memory-table">
 			<colgroup>
@@ -369,24 +313,17 @@ export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onR
 				<col className={columnWidth.memory} />
 				<col className={columnWidth.share} />
 			</colgroup>
-			{/* The columns stay readable however far the list scrolls. */}
-			{/* Below the pinned summary (h-8) and, on the settings page, the window's
-			    transparent toolbar strip. At rest the header is part of the card, only
-			    its divider showing; once pinned it is filled so rows scroll under it,
-			    not through it. */}
 			<thead className={cn("sticky z-10", pinned && "bg-popover", underToolbar ? "top-[calc(var(--spacing-toolbar)+--spacing(8))]" : "top-8")}>
 				<tr className="border-b border-(--color-border-settings-dialog-header) text-xs text-settings-muted">
 					<th className={cn("pb-2 pt-3 font-medium", cell.name)} scope="col">{t("shell.memoryColumnName")}</th>
 					<th className={cn("pb-2 pt-3 font-medium", cell.type)} scope="col">{t("shell.memoryColumnType")}</th>
 					<th className={cn("pb-2 pt-3 font-medium", cell.pid)} scope="col">{t("shell.memoryColumnPid")}</th>
 					<SortHeader active={sort.by === "cpu"} ascending={sort.ascending} className={cell.cpu} label={t("shell.memoryColumnCpu")} onSort={() => sortBy("cpu")} sortable={live.length > 1} />
-					{/* Memory next to Share: the bar is the memory figure drawn. */}
 					<SortHeader active={sort.by === "memory"} ascending={sort.ascending} className={cell.memory} label={t("shell.memoryColumnRss")} onSort={() => sortBy("memory")} sortable={live.length > 1} />
 					<th className={cn("pb-2 pt-3 font-medium", cell.share)} scope="col">{t("shell.memoryColumnShare")}</th>
 				</tr>
 			</thead>
 			<tbody className="[&_tr+tr.memory-group]:border-t [&_tr:not(.memory-group)+tr.memory-row]:border-t [&_tr.memory-group]:border-(--color-border-settings-dialog-header) [&_tr.memory-row]:border-(--color-border-settings-dialog-header)">
-				{/* No "Sessions" label: the section heading above the card already says it. */}
 				{live.map((row) => (
 					<SessionRow
 						chip={chipTone(state ?? "fine", facts.find((f) => f.id === row.id) ?? toSessionFacts(row.session, row.reading, Date.now()), largest)}
@@ -434,20 +371,17 @@ export function SessionsTable({ onRows, pinned, projectId, underToolbar }: { onR
 	);
 }
 
-/** The CPU: its size and load on the heading line, then the graphs. */
 export function CpuSection() {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
 	const system = appMemory?.system;
 	const cpuHistory = useCPUHistory();
-	// An unmeasured reading shows the last real point instead of a false zero.
 	const current = cpuSampleOf(system, appMemory?.app) ?? cpuHistory.at(-1);
 	if (!system || !current) return null;
 	return (
 		<SettingsSection
 			title={t("shell.cpuBarTitle", { cores: system.cpuCount })}
 			testId="session-cpu-graph"
-			// A negative load average is Windows' "not applicable" sentinel: the platform has no such concept, and printing 0.00 would read as an idle machine rather than a missing number.
 			action={system.load1 >= 0 ? (
 				<span className="text-xs tabular-nums text-settings-muted">{t("shell.cpuBarLoad", { load: system.load1.toFixed(2) })}</span>
 			) : undefined}
@@ -457,13 +391,6 @@ export function CpuSection() {
 	);
 }
 
-/**
- * The window and the settings page are the same thing: machine, CPU, then the
- * sessions, in one scroller. Nothing is pinned to the top or the bottom — on a
- * 680px dialog that cost ~290px of permanent chrome and left four rows of
- * list. The numbers stay reachable through the summary line, which only
- * appears once the graphs have scrolled away.
- */
 export function DiagnosticsBody({ projectId, scroller, underToolbar }: { projectId?: string; scroller?: RefObject<HTMLElement | null>; underToolbar?: boolean }) {
 	const { t } = useTranslation();
 	const appMemory = useAppMemory().data;
@@ -479,11 +406,7 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 				/>
 				<CpuSection />
 			</div>
-			{/* One block with the sessions, so the zero-height bar adds no section gap. */}
 			<div className="flex w-full flex-col">
-			{/* Zero height, so nothing shifts when the bar appears: the bar itself
-			    floats over the rows it is pinned above. On the settings page it pins
-			    below the window's transparent toolbar strip. */}
 			<div className={cn("sticky z-20 h-0 overflow-visible", underToolbar ? "top-toolbar" : "top-0")}>
 				<div
 					aria-hidden={!scrolledPast}
@@ -513,10 +436,6 @@ export function DiagnosticsBody({ projectId, scroller, underToolbar }: { project
 	);
 }
 
-/**
- * True once `target` has scrolled out of the top of its scroller. An observer
- * rather than a scroll listener: no work at all while the target is on screen.
- */
 function useScrolledPast(target: RefObject<HTMLElement | null>, scroller?: RefObject<HTMLElement | null>): boolean {
 	const [past, setPast] = useState(false);
 	useEffect(() => {
@@ -532,7 +451,6 @@ function useScrolledPast(target: RefObject<HTMLElement | null>, scroller?: RefOb
 	return past;
 }
 
-/** Settings page: the settings body is the scroller, so this only supplies content. */
 export function MemoryDiagnostics() {
 	useFastMemorySampling();
 	return (
@@ -577,9 +495,6 @@ export function SessionMemoryPanel({
 	);
 }
 
-/** A group label starts on the column headers' edge, under a rule that closes
- * the rows above it. The first one sits right under the header rule, so it
- * needs less space above. */
 function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="memory-group">
@@ -588,10 +503,6 @@ function GroupRow({ label }: { label: string }) {
 	);
 }
 
-/**
- * A session-level row's name cell: the chevron centred on the title line, the
- * title, and the line under it.
- */
 function RowTitle({ canExpand, children, isExpanded, title }: { canExpand: boolean; children?: ReactNode; isExpanded: boolean; title: string }) {
 	return (
 		<td className={cn("py-2.5 align-top", cell.name)}>
@@ -611,7 +522,6 @@ function RowTitle({ canExpand, children, isExpanded, title }: { canExpand: boole
 	);
 }
 
-/** Memory cell: the number alone, in the row's tone; its bar has a column of its own. */
 function MemoryCell({ bytes, tone }: { bytes: number; tone: ChipTone }) {
 	return (
 		<td
@@ -627,11 +537,6 @@ function MemoryCell({ bytes, tone }: { bytes: number; tone: ChipTone }) {
 	);
 }
 
-/**
- * A bar scaled to the biggest row, so "which one is the pig" reads at a
- * glance. A session or AO row takes its tone's colour; a process under it
- * (no tone) stays grey.
- */
 function ShareCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number; tone?: ChipTone }) {
 	return (
 		<td className={cn(tone ? topLine : "py-1 align-middle", cell.share)}>
@@ -650,8 +555,6 @@ function ShareCell({ bytes, maxBytes, tone }: { bytes: number; maxBytes: number;
 	);
 }
 
-/** Enter/Space activates a row the same way a click does, so an expandable
- * row is reachable without a mouse. */
 function toggleOnKeyDown(onToggle: () => void) {
 	return (event: KeyboardEvent<HTMLTableRowElement>) => {
 		if (event.key === "Enter" || event.key === " ") {
@@ -694,11 +597,9 @@ function SessionRow({
 				<RowTitle canExpand={canExpand} isExpanded={isExpanded} title={session.title}>
 					<StatusLine current={reading.activity?.current} processes={reading.processes.length} session={session} working={working} />
 				</RowTitle>
-				{/* A session's type is its role; its process lines carry their own. */}
 				<td className={cn("whitespace-nowrap text-xs text-passive", topLine, cell.type)} data-testid="session-memory-type">
 					{isOrchestratorSession(session) ? t("settings.models.orchestratorRole") : t("settings.models.workerRole")}
 				</td>
-				{/* A session is not a process: no PID. Its process count is under the title. */}
 				<td className={cell.pid} />
 				<td className={cn("whitespace-nowrap text-xs tabular-nums text-settings-muted", topLine, cell.cpu)}>
 					{formatCPU(reading.cpuPercent)}
@@ -713,7 +614,6 @@ function SessionRow({
 	);
 }
 
-/** Seconds under a minute, then minutes, then hours: "38s", "4m 10s", "1h 2m". */
 export function formatDuration(ms: number): string {
 	const total = Math.max(0, Math.round(ms / 1000));
 	if (total < 60) return `${total}s`;
@@ -722,11 +622,6 @@ export function formatDuration(ms: number): string {
 	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/**
- * The one line under a title. Working with a known step: the step and how
- * long it has run. Working otherwise: just "working". Idle: how long for.
- * The row re-renders on every sample, so the duration ticks with it.
- */
 function statusText(current: SessionStepReading | undefined, session: WorkspaceSession, working: boolean, t: TFunction): string {
 	if (isOrchestratorSession(session) && !current) return t("shell.memoryRowOrchestrator");
 	if (current) return `${current.tool} · ${formatDuration(Date.now() - Date.parse(current.startedAt))}`;
@@ -737,8 +632,6 @@ function statusText(current: SessionStepReading | undefined, session: WorkspaceS
 
 function StatusLine({ current, processes, session, working }: { current?: SessionStepReading; processes: number; session: WorkspaceSession; working: boolean }) {
 	const { t } = useTranslation();
-	// Which agent runs the session, with its name rather than in the Type column,
-	// and how many processes the row opens to.
 	return (
 		<div className="truncate text-xs text-settings-muted">
 			{session.provider ? <span data-testid="session-memory-agent">{session.provider} · </span> : null}
@@ -748,12 +641,6 @@ function StatusLine({ current, processes, session, working }: { current?: Sessio
 	);
 }
 
-/**
- * One session as plain text: who it is, what it is doing,
- * what it costs the machine, and what it has been running. Process IDs are
- * deliberately left out — they mean nothing to whoever reads the report —
- * and so are tool arguments, which can carry paths and prompts.
- */
 export function sessionReport(
 	session: WorkspaceSession,
 	reading: SessionMemoryReading,
@@ -763,9 +650,6 @@ export function sessionReport(
 	const working = session.activity?.state === "active";
 	const identity = [session.workspaceName, session.kind ?? "worker", session.provider, session.mode].filter(Boolean).join(" · ");
 	const lines = [session.title, identity];
-	// The daemon's lane ("Awaiting review") and what the agent is doing right now
-	// ("Bash · 38s") are different facts, but on an idle session they collapse
-	// to the same word; print it once.
 	const lane = session.displayStatus ?? session.status;
 	const doing = statusText(reading.activity?.current, session, working, t);
 	lines.push(`Status   ${doing.toLowerCase().startsWith(lane.toLowerCase()) ? doing : `${lane} · ${doing}`}`);
@@ -805,26 +689,16 @@ export function sessionReport(
 	return `${lines.join("\n")}\n`;
 }
 
-/** Every session's title by id, terminated ones included: a reviewer can
- * outlive the worker it reviews. */
 function sessionTitles(workspaces: readonly WorkspaceSummary[]): Map<string, string> {
 	return new Map(workspaces.flatMap((workspace) => workspace.sessions.map((session) => [session.id, session.title] as const)));
 }
 
-/** A reviewer is named by the session it reviews; the id stands in once that session is gone. */
 function reviewerLabel(reviewer: ReviewerMemoryReading, titles: Map<string, string>, t: TFunction): string {
 	return t("shell.memoryReviewerRow", { session: titles.get(reviewer.sessionId) ?? reviewer.sessionId });
 }
 
-/** One row of the report: a session with its reading, in the order shown. */
 export type ReportRow = { session: WorkspaceSession; reading: SessionMemoryReading; usage?: SessionUsageSummary };
 
-/**
- * Everything the window shows, as plain text for a bug report: the machine,
- * then every session in the order they are listed. One button copies the lot
- * — a reader needs the neighbours to judge whether one session is the
- * problem or the machine is simply full.
- */
 export function diagnosticsReport(
 	machine: { app?: AppMemoryReading; system?: SystemMemoryReading },
 	rows: ReportRow[],
@@ -839,7 +713,6 @@ export function diagnosticsReport(
 		lines.push(`Memory   Orchestrator ${formatMemory(app.rssBytes)}`);
 	}
 	if (system) {
-		// A negative load average is Windows' "not applicable" sentinel, never a real reading.
 		const load = system.load1 >= 0 ? ` · load ${system.load1.toFixed(2)}` : "";
 		lines.push(`CPU      ${formatCPU(system.cpuPercent)} of ${system.cpuCount} cores · Orchestrator ${formatCPU(Math.min(100, (app?.cpuPercent ?? 0) / Math.max(1, system.cpuCount)))}${load}`);
 		if (system.swapBytesPerSec > 0) lines.push(`Swapping ${formatMemory(system.swapBytesPerSec)}/s`);
@@ -848,8 +721,6 @@ export function diagnosticsReport(
 	return [`${lines.join("\n")}\n`, ...rows.map((row) => sessionReport(row.session, row.reading, row.usage, t)), ...aoReport(app, titles, t)].join("\n");
 }
 
-/** What AO holds besides the sessions, so the report's rows add up to its total
- * the same way the window's do: each reviewer pane, then the daemon and app. */
 function aoReport(app: AppMemoryReading | undefined, titles: Map<string, string>, t: TFunction): string[] {
 	if (!app) return [];
 	const line = (label: string, reading: SessionMemoryReading) => `${label}\nMemory   ${formatMemory(reading.rssBytes)} · CPU ${formatCPU(reading.cpuPercent)}\n`;
@@ -860,7 +731,6 @@ function aoReport(app: AppMemoryReading | undefined, titles: Map<string, string>
 	];
 }
 
-/** The last few tool calls under an expanded row, newest first. */
 function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 	const { t } = useTranslation();
 	return (
@@ -894,8 +764,6 @@ function RecentSteps({ steps }: { steps: SessionStepReading[] }) {
 	);
 }
 
-/** A row that is real cost but not a session, so it has no action: AO's
- * daemon and desktop shell, or a reviewer pane. */
 function FixedRow({ isExpanded, label, maxBytes, onToggle, own = false, reading, subtitle, testId, type }: {
 	isExpanded: boolean;
 	label: string;
@@ -909,7 +777,6 @@ function FixedRow({ isExpanded, label, maxBytes, onToggle, own = false, reading,
 }) {
 	const { t } = useTranslation();
 	const canExpand = reading.processes.length > 0;
-	// The harness, if any, then how many processes the row opens to.
 	const detail = [subtitle, canExpand ? t("shell.memoryProcessCount", { count: reading.processes.length }) : undefined].filter(Boolean).join(" · ");
 	return (
 		<>
@@ -938,7 +805,6 @@ function FixedRow({ isExpanded, label, maxBytes, onToggle, own = false, reading,
 	);
 }
 
-/** Breathing room under an expanded block, so the next rule is not glued to the last child. */
 function SpacerRow() {
 	return (
 		<tr aria-hidden="true">
@@ -947,14 +813,8 @@ function SpacerRow() {
 	);
 }
 
-// The copied report and older imports still name processes the same way.
 export { processKind };
 
-/**
- * Each process under its parent, siblings largest first, depth as indent. A
- * child whose parent is outside the row starts at the top. Shared by the
- * rendered tree and the copied report.
- */
 export function processTree(processes: SessionMemoryReading["processes"]): { process: SessionMemoryReading["processes"][number]; depth: number; last: boolean }[] {
 	const pids = new Set(processes.map((p) => p.pid));
 	const children = new Map<number, SessionMemoryReading["processes"]>();
@@ -974,11 +834,6 @@ export function processTree(processes: SessionMemoryReading["processes"]): { pro
 	return rows;
 }
 
-/**
- * The process list on screen: one flat line per program, plumbing folded in,
- * the small tail summed into "N other processes". The rows add up to the
- * session; the copied report keeps every raw process instead.
- */
 function ProcessRows({ maxBytes, processes, own = false }: { maxBytes: number; processes: SessionMemoryReading["processes"]; own?: boolean }) {
 	const { t } = useTranslation();
 	const { rows, other } = useMemo(() => processList(processes, { own }), [processes, own]);
@@ -1021,8 +876,6 @@ function ProcessRow({ maxBytes, row }: { maxBytes: number; row: ProcessListRow }
 	const { t } = useTranslation();
 	return (
 		<tr className="text-xs" data-testid="session-memory-process-row">
-			{/* The program's name in the UI font, like the rows around it; the
-			    command line it stands for is in the tooltip. */}
 			<td className={cn("py-1 text-settings-muted", cell.process)}>
 				<span className="block truncate" title={row.commands.join("\n")}>{row.kind}</span>
 			</td>
@@ -1046,10 +899,6 @@ function ProcessRow({ maxBytes, row }: { maxBytes: number; row: ProcessListRow }
 	);
 }
 
-/**
- * Copies `value()` to the clipboard and reports it for a moment. A failure
- * leaves `copied` alone rather than claiming success.
- */
 function useCopy(value: () => string) {
 	const [copied, setCopied] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1069,8 +918,6 @@ function useCopy(value: () => string) {
 	return { copied, copy };
 }
 
-/** An icon beside the Machine heading: the whole window as text for a bug
- * report. The tooltip names it, and says so once it has copied. */
 function CopyReportButton({ value }: { value: () => string }) {
 	const { t } = useTranslation();
 	const { copied, copy } = useCopy(value);
@@ -1094,11 +941,6 @@ function CopyReportButton({ value }: { value: () => string }) {
 	);
 }
 
-/**
- * A PID that copies itself. A tick for a moment says it worked. The icon
- * hangs off the PID's right edge, out of the flow: a hidden icon that still
- * took space pushed the PIDs off the edge their column header lines up on.
- */
 function CopyControl({
 	children,
 	copiedLabel,
@@ -1128,7 +970,6 @@ function CopyControl({
 			{copied ? (
 				<Check aria-hidden="true" className="absolute left-full ml-1 size-icon-2xs text-success" />
 			) : (
-				// A hint that fades in on hover or focus.
 				<Copy
 					aria-hidden="true"
 					className="absolute left-full ml-1 size-icon-2xs opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100"
@@ -1138,47 +979,35 @@ function CopyControl({
 	);
 }
 
-/** Graph geometry: a wide, short strip like btop's, in SVG user units. */
 const graphWidth = 600;
 const graphHeight = 56;
 
-/** Where the oldest of `count` samples sits: newest on the right edge, one step apart. */
 function graphX0(count: number): number {
 	return graphWidth - (graphWidth / (sampleHistoryLength - 1)) * (count - 1);
 }
 
-/** The graph's top: the first of 10, 25, 50 and 100% that clears every
- * sample, so a quiet machine still draws a shape. */
 export function graphCeiling(values: number[]): number {
 	const peak = Math.max(0, ...values);
 	return [10, 25, 50].find((step) => peak <= step) ?? 100;
 }
 
-/** Each sample as an "x,y" point in graph units, `ceiling` at the top. */
 function graphPoints(values: number[], ceiling: number): string[] {
 	const step = graphWidth / (sampleHistoryLength - 1);
 	const x0 = graphX0(values.length);
 	return values.map((v, i) => `${(x0 + i * step).toFixed(1)},${(graphHeight - (Math.min(ceiling, Math.max(0, v)) / ceiling) * graphHeight).toFixed(1)}`);
 }
 
-/** An SVG path along the samples, newest on the right. */
 export function linePath(values: number[], ceiling = 100): string {
 	if (values.length === 0) return "";
 	const points = graphPoints(values, ceiling);
 	return points.length > 1 ? `M${points[0]} L${points.slice(1).join(" L")}` : `M${points[0]}`;
 }
 
-/** The same samples closed down to the baseline: the area under a line. */
 function areaPoints(values: number[], ceiling: number): string {
 	if (values.length < 2) return "";
 	return [...graphPoints(values, ceiling), `${graphWidth},${graphHeight}`, `${graphX0(values.length).toFixed(1)},${graphHeight}`].join(" ");
 }
 
-/**
- * Two graphs over the last two minutes, side by side: how busy the machine
- * is, and AO's share of it. No per-core detail — the number that matters is
- * whether the machine has room left.
- */
 function CpuGraphs({ current, history }: { current: CPUSample; history: CPUSample[] }) {
 	const { t } = useTranslation();
 	return (
@@ -1203,9 +1032,7 @@ function CpuGraphs({ current, history }: { current: CPUSample; history: CPUSampl
 	);
 }
 
-/** One line over the samples, newest on the right, its area filled. */
 function CpuGraph({ fill, stroke, testId, title, value, values }: { fill: string; stroke: string; testId: string; title: string; value: number; values: number[] }) {
-	// The figure in the corner counts too: it can be a reading the history has not taken yet.
 	const ceiling = graphCeiling([...values, value]);
 	return (
 		<MetricCard testId={testId} title={title} value={formatCPU(value)}>
@@ -1217,7 +1044,6 @@ function CpuGraph({ fill, stroke, testId, title, value, values }: { fill: string
 					<polygon className={fill} points={areaPoints(values, ceiling)} />
 					<path className={cn("fill-none", stroke)} d={linePath(values, ceiling)} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
 				</svg>
-				{/* The top line's value, so a graph that fills its card at 10% never reads as a pegged CPU. */}
 				<span className="absolute left-0 top-0 -translate-y-1/2 bg-(--color-bg-secondary) pr-1.5 text-2xs leading-none tabular-nums text-passive" data-testid="session-cpu-ceiling">
 					{formatCPU(ceiling)}
 				</span>

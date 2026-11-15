@@ -34,12 +34,10 @@ class RecoveryHTTPError extends Error {
 function attempt(): Attempt {
 	let resolve!: () => void, reject!: (error: unknown) => void;
 	const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-	// Recovery starts on status changes even when no IPC caller is waiting yet.
 	void promise.catch(() => undefined);
 	return { promise, resolve, reject };
 }
 
-/** One recovery sequence and one snapshot read at a time for this daemon attachment. */
 export class SideLaunchRecovery {
 	private current?: Recovery;
 	constructor(private readonly options: {
@@ -153,8 +151,6 @@ export class SideLaunchRecovery {
 				await response.body?.cancel();
 				return undefined as T;
 			})();
-			// Bound the complete response lifecycle even when a transport or body
-			// reader ignores AbortSignal; later capture batches must still run.
 			return await Promise.race([work, interrupted]);
 		} finally {
 			clearTimeout(timer);
@@ -183,8 +179,6 @@ export class SideLaunchRecovery {
 				this.options.onRestore(offered);
 				await this.request(recovery, "/state", { method: "POST", headers, body: recovery.payload }, 60_000);
 				if (this.current !== recovery) return;
-				// Only acknowledged cleanup owns absence as shutdown evidence.
-				// An OPEN payload may predate a locally pinned close intent.
 				for (const record of offered.sides as { side?: { id?: string }; cleanupOnly?: boolean }[]) if (record.cleanupOnly && record.side?.id) recovery.coverage.add(record.side.id);
 				this.options.onRestoreAccepted?.(offered);
 			}
@@ -212,7 +206,6 @@ export class SideLaunchRecovery {
 	private async read(recovery: Recovery): Promise<void> {
 		recovery.reading = true;
 		while (this.current === recovery && recovery.waiters.length) {
-			// Calls after this read starts need one subsequent snapshot of their mutations.
 			const batch = recovery.waiters.splice(0);
 			const coverage = { ids: [...recovery.coverage], ready: recovery.ready };
 			try {

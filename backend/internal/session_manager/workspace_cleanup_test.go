@@ -134,7 +134,6 @@ func TestCleanupReleasesProjectGateAndRechecksOwnership(t *testing.T) {
 	go func() { gate <- m.acquireWorkspaceGate(rec.ProjectID) }()
 	select {
 	case release := <-gate:
-		// Model a different session claiming this worktree while the script runs.
 		successor := mkLive("mer-2")
 		successor.Metadata.WorkspacePath = rec.Metadata.WorkspacePath
 		st.sessions[successor.ID] = successor
@@ -358,8 +357,6 @@ func TestRequestKillCleanupFailureRemainsRetryable(t *testing.T) {
 	}
 }
 
-// A Cleanup step runs without a limit unless it sets one; one that sets one
-// is stopped at it and reported as timed out, keeping the worktree.
 func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
 	previous := scriptStepTimeoutUnit
 	scriptStepTimeoutUnit = 100 * time.Millisecond
@@ -379,8 +376,6 @@ func TestCleanupStepUsesItsOwnTimeLimit(t *testing.T) {
 	}
 }
 
-// A step that exits cleanly at the very moment its limit expires succeeded and
-// must not be reported as timed out.
 func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
 	previousMinute, previousRun := scriptStepTimeoutUnit, runCleanupStep
 	scriptStepTimeoutUnit = 20 * time.Millisecond
@@ -395,10 +390,6 @@ func TestCleanupStepSucceedingAtItsDeadlineIsNotATimeout(t *testing.T) {
 	}
 }
 
-// A shell that exits 0 just as its step's context ends can still have Wait
-// report the context's error: the tree kill finds the group gone and reports
-// no error. That race cannot be forced with a real shell, so this pins the
-// rule runWorkspaceStep applies to the real process states it gets.
 func TestWorkspaceStepExitingCleanlyAtCancelSucceeds(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell exit status")
@@ -433,7 +424,6 @@ func TestWorkspaceStepExitingCleanlyAtCancelSucceeds(t *testing.T) {
 	}
 }
 
-// A step its deadline really stops still fails.
 func TestWorkspaceStepStoppedAtItsDeadlineFails(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell")

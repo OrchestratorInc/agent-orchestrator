@@ -1,31 +1,3 @@
-// Package pi implements the Pi agent adapter: launching new interactive Pi
-// sessions and resuming sessions when a native Pi session id is known.
-//
-// Pi (badlogic / "@earendil-works/pi-coding-agent", binary "pi") is a minimal
-// terminal coding harness. AO runs Pi interactively in the session terminal
-// pane. The initial prompt is delivered in-command as a trailing positional
-// message; Pi's argument parser does not honor a `--` options terminator, so AO
-// relies on prompts not beginning with a literal "-".
-//
-// System prompts are appended to Pi's default coding-assistant prompt via
-// `--append-system-prompt <text>`. Pi's flag takes inline text only (no file
-// variant), so a system-prompt file is read from disk and its contents are
-// inlined into the flag; a read failure aborts the launch.
-//
-// Permissions: Pi has no permission/approval CLI flags ("No permission popups" --
-// confirmation flows are built via TypeScript extensions), so AO emits no
-// permission flag and defers to Pi's own behavior.
-//
-// Restore: AO pins Pi sessions under its configured data directory and resumes
-// interactively by id with `--session <id>` (partial UUIDs accepted). The native
-// session id is emitted on the first line of `--mode json` output as
-// {"type":"session","id":"<uuid>",...} and is captured into session metadata
-// out-of-band; GetRestoreCommand reads it back from metadata. ok=false when no
-// native id is known (manager falls back to a fresh launch).
-//
-// Hooks/activity: AO installs a workspace-local TypeScript extension and passes
-// it explicitly with --extension. It reports Pi's session and agent lifecycle
-// without depending on project-local extension auto-discovery or trust state.
 package pi
 
 import (
@@ -42,28 +14,22 @@ import (
 
 const adapterID = "pi"
 
-// Plugin is the Pi agent adapter. It is safe for concurrent use; the binary
-// path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Pi adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
 
-// EmitsSemanticMessageAcceptance reports that AO's Pi extension includes the
-// accepted prompt text in its user-prompt-submit callback.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -76,7 +42,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys Pi understands.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -92,13 +57,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// GetLaunchCommand builds the argv to start a new interactive Pi session:
-//
-//	pi --session-dir <ao data>/pi/sessions [--append-system-prompt <system prompt>] [--model <model>] [<prompt>]
-//
-// The prompt is delivered in-command as a trailing positional message. Pi does
-// not honor a `--` options terminator, so the prompt must not begin with "-".
-// Pi has no permission flags, so none are emitted.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.piBinary(ctx)
 	if err != nil {
@@ -124,10 +82,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Pi session when
-// a native session id is available in metadata. Pi resumes by id with
-// `--session <id>` (partial UUIDs accepted). Until that id exists, ok is false
-// and callers fall back to fresh launch behavior.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -160,8 +114,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo surfaces the native Pi session id captured by the managed
-// extension's lifecycle callbacks.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -192,8 +144,6 @@ var piBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolvePiBinary finds the `pi` binary, searching PATH then common install
-// locations. It returns a wrapped ports.ErrAgentBinaryNotFound when Pi is absent.
 func ResolvePiBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, piBinarySpec)
 }
@@ -214,17 +164,12 @@ func (p *Plugin) piBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
 
-// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
-// The restore command re-applies session options and explicitly selects the
-// captured native conversation rather than selecting the latest session.
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 
 var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

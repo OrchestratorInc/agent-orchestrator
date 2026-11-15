@@ -31,8 +31,6 @@ func TestMigratePRReviewPartialUpgrade(t *testing.T) {
 			dataDir := t.TempDir()
 			db := openMigratedDatabaseCopyAt(t, dataDir, tt.baseVersion, pragmas)
 			if tt.legacyVersion != 0 {
-				// Reproduce the migration actually shipped in intermediate PR
-				// builds, including its applied Goose version and FALSE default.
 				func() {
 					gooseMu.Lock()
 					defer gooseMu.Unlock()
@@ -113,8 +111,6 @@ func TestMigratePRReviewPartialUpgrade(t *testing.T) {
 			}
 			pr := assertObservation(tt.wantPartial, observedAt)
 
-			// A successful full refresh restores an exact count. Reopening must
-			// not invalidate that observation again, even on the FALSE schema.
 			pr.ReviewPartial = false
 			pr.ReviewObservedAt = observedAt.Add(time.Hour)
 			threads := []domain.PullRequestReviewThread{{ThreadID: "thread-1", UpdatedAt: pr.ReviewObservedAt}}

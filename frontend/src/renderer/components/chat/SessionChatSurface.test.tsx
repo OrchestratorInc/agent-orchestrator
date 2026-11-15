@@ -114,7 +114,6 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 }));
 
-// Every agent's permission modes are known, as once the daemon has answered, unless a test says not.
 const permissionModesState = vi.hoisted(() => ({ known: true }));
 const conversationCommandArgs = vi.hoisted(() => [] as unknown[][]);
 vi.mock("../../hooks/useChatPermissionModes", () => ({
@@ -346,7 +345,6 @@ describe("SessionChatSurface pending switch effort", () => {
 		await act(async () => {
 			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message");
 		});
-		// The switch and the message go out in one request.
 		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({
 			text: "Recall the code word.",
 			clientMessageId: "switch-message",
@@ -393,7 +391,6 @@ describe("SessionChatSurface pending switch effort", () => {
 		await act(async () => {
 			await sideMocks.workspaceSend?.("Only edit after approval", undefined, "permission-race").catch((error) => { failure = error; });
 		});
-		// The bar may still show the chat's mode, which Pi does not run in.
 		expect(conversationCommandState.send).not.toHaveBeenCalled();
 		expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
 		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "pi" });
@@ -412,7 +409,6 @@ describe("SessionChatSurface pending switch effort", () => {
 		});
 		expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
 		expect(await screen.findByText("Couldn't switch agent")).toBeInTheDocument();
-		// The previous agent keeps the chat, so the composer shows it again.
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});
 
@@ -421,7 +417,6 @@ describe("SessionChatSurface pending switch effort", () => {
 		const client = new QueryClient();
 		const view = render(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		expect(clearCatalogsMock).not.toHaveBeenCalled();
-		// Switched from another window: this one only sees the new agent.
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
 		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		expect(clearCatalogsMock).toHaveBeenCalledWith(client, session.id, undefined);
@@ -438,10 +433,7 @@ describe("SessionChatSurface pending switch effort", () => {
 		await act(async () => {
 			await sideMocks.workspaceSend?.("Recall the code word.", undefined, "switch-message").catch(() => undefined);
 		});
-		// The daemon may not have switched, so a retry still asks for Codex.
 		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
-		// It had: the chat now runs Codex, and the pick is done.
-		// A new session object re-renders the memoized surface with the new snapshot.
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "codex" };
 		view.rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
@@ -460,7 +452,6 @@ describe("SessionChatSurface pending switch effort", () => {
 			await (sideMocks.workspaceSend as unknown as (text: string, attachments: unknown[], id: string) => Promise<void>)?.(
 				"Inspect this image.", attachments, "switch-message");
 		});
-		// No other switch can come between them and take the image.
 		expect(conversationCommandState.send).toHaveBeenCalledWith(expect.objectContaining({
 			text: "Inspect this image.",
 			attachments,
@@ -475,7 +466,6 @@ describe("SessionChatSurface pending switch effort", () => {
 describe("SessionChatSurface search reveal", () => {
 	it("forwards a search result's matched message to the timeline", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-		// A palette result hands its match over before navigating here.
 		requestSessionSearchReveal("sess-1", {
 			messageId: "msg-1",
 			text: "the flaky login test",
@@ -485,17 +475,11 @@ describe("SessionChatSurface search reveal", () => {
 				<SessionChatSurface session={session} />
 			</Wrapper>,
 		);
-		// The timeline is what scrolls to and highlights the match, so the surface
-		// must pass it through rather than only rendering the session.
 		await waitFor(() => expect(screen.getByTestId("annotation-request")).toHaveTextContent("msg-1"));
 		expect(screen.getByTestId("annotation-text")).toHaveTextContent("the flaky login test");
-		// Consumed once: remounting must not jump again.
 		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
 	});
 
-	// Found in review: a session first opened from a result consumed that target
-	// and never listened for the next, so picking another result in the same
-	// session (navigation keeps the surface mounted) left it pending.
 	it("follows a second result in the session a result opened, without remounting", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky" });
@@ -512,9 +496,6 @@ describe("SessionChatSurface search reveal", () => {
 		expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
 	});
 
-	// Main's find in chat (useChatFind) searches the whole history; a result
-	// opens it on the matched word, anchored at the opened message, so
-	// Enter/Shift+Enter step through that word's other occurrences.
 	it("opens find in chat on the matched word, anchored at the opened message", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky", find: true });
@@ -543,10 +524,6 @@ describe("SessionChatSurface search reveal", () => {
 		expect(screen.getByTestId("find-request").dataset.requestId).not.toBe(first);
 	});
 
-	// Found in review: an orchestrator with nothing cached first renders a
-	// placeholder conversation whose id is the session's. Find opened on it
-	// closed when the real conversation replaced it, and the unchanged request
-	// never opened it again. The match is held until its conversation is shown.
 	it("holds an orchestrator result's match until its conversation has loaded", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const orchestrator = { ...session, kind: "orchestrator" } satisfies WorkspaceSession;
@@ -557,11 +534,9 @@ describe("SessionChatSurface search reveal", () => {
 			requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "flaky", find: true });
 			const tree = () => <Wrapper client={client}><SessionChatSurface session={orchestrator} /></Wrapper>;
 			const view = render(tree());
-			// The placeholder is on screen, and the match is not handed to it.
 			expect(screen.getByTestId("conversation-id")).toHaveTextContent("sess-1");
 			expect(screen.getByTestId("find-request")).toBeEmptyDOMElement();
 			expect(screen.getByTestId("annotation-request")).toBeEmptyDOMElement();
-			// Taken from the hand-off all the same: a later visit must not replay it.
 			expect(peekSessionSearchReveal("sess-1")).toBeUndefined();
 
 			conversationState.snapshot = loaded;
@@ -589,8 +564,6 @@ describe("SessionChatSurface search reveal", () => {
 		expect(screen.getByTestId("find-request")).toBeEmptyDOMElement();
 	});
 
-	// Find in chat searches user and assistant text only; a word matched in a
-	// command's output would open it on "No results".
 	it("opens no find for a match outside the message's words", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		requestSessionSearchReveal("sess-1", { messageId: "msg-1", text: "ECONNRESET" });
@@ -1062,8 +1035,6 @@ describe("SessionChatSurface link routing", () => {
 	});
 
 	it("never opens or reveals Browser from a finished agent reply's links, but a click still opens them", async () => {
-		// The app must not guess from reply text: agents open Browser explicitly
-		// with `ao preview` or `ao browser open`.
 		workspacePathsState.paths = ["test-ui.html"];
 		const user = userEvent.setup();
 		const localSession = { ...session, id: "session-reply-links" };
@@ -1082,7 +1053,6 @@ describe("SessionChatSurface link routing", () => {
 			<Wrapper client={queryClient}><SessionChatSurface session={localSession} onOpenLinkInBrowser={openInBrowser} /></Wrapper>
 		);
 
-		// A reply already finished when the chat mounts, then one that finishes while it is open.
 		conversationState.snapshot = { capabilities: [], items: [userMessage, reply(false, 1)], latestSequence: 2 };
 		const view = render(renderSurface());
 		conversationState.snapshot = { capabilities: [], items: [userMessage, reply(true, 2)], latestSequence: 2 };
@@ -1307,9 +1277,6 @@ describe("project remembering waits for provider permissions", () => {
 		expect(screen.getByTestId("remember-available")).toHaveTextContent("false");
 		configState.loaded = true;
 		configState.options = [{ id: "model", name: "Model", category: "model", type: "select", choices: [] }];
-		// The real query observer schedules this component when catalog data lands.
-		// The lightweight hook mock has no subscription, so change the parent
-		// session identity to model that notification through the memo boundary.
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session }} /></Wrapper>);
 		expect(screen.getByTestId("remember-available")).toHaveTextContent("true");
 	});
@@ -1396,7 +1363,6 @@ describe("side command routing", () => {
 				results.push(await sideMocks.workspaceSend!("/btw second", undefined, "submission-2"));
 				results.push(await sideMocks.workspaceSend!("/btw second", undefined, "submission-2"));
 			});
-			// None went to the main transcript, so none moves its reader to the end.
 			expect(results).toEqual([sideMocks.sentOutsideTranscript, sideMocks.sentOutsideTranscript, sideMocks.sentOutsideTranscript]);
 			expect(sideMocks.create.mock.calls).toEqual([
 				[undefined, true, "submission-1"],
@@ -1560,7 +1526,6 @@ describe("selection side-chat operation ownership", () => {
 		sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockRejectedValueOnce(closed).mockResolvedValue({id:"new"});
 		await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
 		const originalKey = sideMocks.create.mock.calls[0][2];
-		// Polling discovers the original destination, which the user then closes.
 		sideMocks.activeId="original";sideMocks.sides=[{id:"original",hasWork:false}];view.advance();
 		sideMocks.activeId=undefined;sideMocks.sides=[];view.advance();
 		await act(async()=>{await expect(sideMocks.attach!({...excerpt,id:"reselected"})).rejects.toEqual(closed);});

@@ -8,16 +8,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// fakeLAN is a minimal httpd.LANController fake for exercising
-// restoreMobileOnBoot without a real listener.
 type fakeLAN struct {
-	started bool
-	hash    string
-	port    int
-	// returnPort, when non-zero, is what Start returns instead of the port it
-	// was asked for — simulating LANManager's ephemeral-port fallback when the
-	// requested port is already taken (e.g. by another AO instance). Left zero,
-	// Start behaves like a normal listener and echoes the requested port back.
+	started    bool
+	hash       string
+	port       int
 	returnPort int
 }
 
@@ -53,8 +47,6 @@ func TestRestoreEnabledStartsListener(t *testing.T) {
 	if !lan.started {
 		t.Fatal("expected LAN listener started from persisted enabled state")
 	}
-	// Restore derives the auth hash from the persisted plaintext password (no
-	// rotation), so the fake must have received HashPassword(persisted password).
 	if want := mobilebridge.HashPassword("secret12"); lan.hash != want {
 		t.Fatalf("expected hash derived from persisted password %q, got %q", want, lan.hash)
 	}
@@ -125,19 +117,6 @@ func TestRestoreWakeWithoutEnablingMobile(t *testing.T) {
 	}
 }
 
-// TestRestoreAppliesServeToStartReturnedPort is the regression test for the
-// bridge's named primary failure mode: LANManager.Start falls back to an
-// ephemeral port when its persisted default is taken (observed live: asked
-// for 3011, got 54014 because another AO instance held 3011). A `tailscale
-// serve` config pinned to the stale persisted port is exactly what secure
-// pairing exists to prevent — and serve's config persists inside tailscaled
-// across AO restarts, so a stale entry silently proxies the tailnet at this
-// machine's hostname to whatever now holds that dead port.
-//
-// fakeLAN.returnPort is deliberately set to diverge from the requested port
-// here — do not "simplify" it back to echoing the request, or this test stops
-// being able to catch a regression to the old lan.Start(state.LastPort)-then-
-// applyServe(state.LastPort) bug.
 func TestRestoreAppliesServeToStartReturnedPort(t *testing.T) {
 	dir := t.TempDir()
 	path := mobilebridge.Path(dir)

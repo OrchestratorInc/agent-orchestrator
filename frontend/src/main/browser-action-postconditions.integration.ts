@@ -20,8 +20,6 @@ const fixturePath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_FIXTUR
 const userDataPath = requiredEnvironmentVariable("AO_BROWSER_POSTCONDITION_USER_DATA");
 app.setPath("userData", userDataPath);
 
-// Exercise the extension's actual input loop against Chromium, rather than a
-// fake that cannot observe click default actions such as form submission.
 async function testCancelledTrustedClick(): Promise<void> {
 	const window = new BrowserWindow({ show: false, width: 500, height: 400 });
 	try {
@@ -82,7 +80,6 @@ async function testCancelledTrustedClick(): Promise<void> {
 			},
 		} as unknown as ChromeApi;
 		const input = new TrustedInput(chrome);
-		// Sanity check: normal trusted input activates the full-viewport button.
 		await input.click(1, { x: 50, y: 50 });
 		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown", "mouseup", "click", "submit"]);
 		await window.webContents.executeJavaScript("window.events = []");
@@ -90,7 +87,6 @@ async function testCancelledTrustedClick(): Promise<void> {
 		await assert.rejects(input.click(1, { x: 50, y: 50 }, { signal: controller.signal }),
 			(error: unknown) => (error as { code?: string }).code === "BROWSER_COMMAND_CANCELED");
 		assert.deepEqual(await window.webContents.executeJavaScript("window.events"), ["mousedown"]);
-		// Pointer capture routes releases back to the button even outside its box.
 		await window.webContents.executeJavaScript(`
 			document.querySelector("button").addEventListener("pointerdown", event => {
 				event.target.setPointerCapture(event.pointerId);
@@ -108,7 +104,6 @@ async function testCancelledTrustedClick(): Promise<void> {
 		const capturedEvents = await window.webContents.executeJavaScript("window.events") as string[];
 		assert.equal(capturedEvents.includes("click"), false, "cancelled captured pointer must not click");
 		assert.equal(capturedEvents.includes("submit"), false, "cancelled captured pointer must not submit");
-		// Cleanup must not leave the browser's mouse button stuck down.
 		controller = new AbortController();
 		cancelOnPress = false;
 		await window.webContents.executeJavaScript("window.events = []");
@@ -217,9 +212,6 @@ async function run(): Promise<void> {
 
 	const window = new BrowserWindow({ show: true, width: 800, height: 600 });
 	await testCancelledTrustedClick();
-	// Initialize the owning window before attaching a WebContentsView. On
-	// Windows and Xvfb, a never-navigated BrowserWindow can leave the child
-	// renderer unscheduled even though the native view is marked visible.
 	await window.loadURL("data:text/html,<title>AO browser integration host</title>");
 	window.show();
 	let browserView: WebContentsView | undefined;
@@ -229,8 +221,6 @@ async function run(): Promise<void> {
 		const view = new WebContentsView(options);
 		browserView = view;
 		browserViews.set(view.webContents.id, view);
-		// Warm the initial blank view before this fixture can show the panel.
-		// Native scenarios then honor AO's real active/inactive tab layout.
 		const setBounds = view.setBounds.bind(view);
 		view.setBounds = (bounds) => setBounds(forceInitialPresentation ? { x: 0, y: 0, width: 800, height: 600 } : bounds);
 		const setVisible = view.setVisible.bind(view);
@@ -256,10 +246,6 @@ async function run(): Promise<void> {
 					await Promise.race([pendingLoad, deadline]);
 					return;
 				}
-				// Electron 33 can leave a redundant initial about:blank load promise
-				// unresolved after the document itself is ready. This exception is only
-				// for the initialization URL; real fixture navigations await loadURL so
-				// their committed navigation event cannot leak into the action baseline.
 				if (!domReady) throw new Error("about:blank readiness observer was not installed");
 				await Promise.race([pendingLoad, domReady, deadline]);
 			} finally {
@@ -301,11 +287,6 @@ async function run(): Promise<void> {
 					await activeWebContents().loadURL(String(args.url));
 					return {};
 				case "snapshot":
-					// A real provider snapshot cannot complete before Chromium has produced
-					// a frame. Force the same readiness before dispatching native input.
-					// Electron 44 rejects capturePage() with UnknownVizError until the
-					// first frame exists (Electron 33 resolved an empty image), so retry
-					// briefly until a non-empty frame is captured.
 					await waitForFirstFrame(activeWebContents());
 					return {
 						snapshot: [
@@ -321,10 +302,6 @@ async function run(): Promise<void> {
 					};
 				case "click": {
 					const element = args.ref === "e1" ? "continue" : args.ref === "e2" ? "no-effect" : "guarded";
-					// Dispatch a real Chromium click through the DevTools input domain used by
-					// browser automation runtimes. This gives the page the user activation that
-					// beforeunload requires. Await the page's click event before returning so
-					// the fixture synchronizes on browser evidence instead of renderer timing.
 					const contents = activeWebContents();
 					const clickObserved = contents.executeJavaScript(`
 						new Promise((resolve) => {
@@ -417,8 +394,6 @@ async function run(): Promise<void> {
 	let nativeHost: ReturnType<typeof createBrowserViewHost> | undefined;
 
 	try {
-		// Exercise Chromium's actual CSS cascade: a mock of insertCSS cannot
-		// prove that user-origin rules defeat author !important and inline styles.
 		const dragURL = `http://127.0.0.1:${address.port}/drag-regions`;
 		for (const zoom of [1, 2]) {
 			await host.execute("integration-session", "open", { url: dragURL });
@@ -489,8 +464,6 @@ async function run(): Promise<void> {
 			interactive: true,
 		});
 
-		// Exercise the production host with real Chromium window handles. Unit
-		// fakes cannot prove that the child retains its native opener linkage.
 		const opener = activeWebContents();
 		await opener.executeJavaScript("guardEnabled = false");
 		await opener.loadURL(`http://127.0.0.1:${address.port}/destination`);
@@ -539,7 +512,6 @@ async function run(): Promise<void> {
 			`);
 			assert.equal(await deadline(opener.executeJavaScript("window.authComplete")), true);
 			await deadline(closed);
-			// Main can observe destruction before the opener updates its WindowProxy.
 			assert.equal(await deadline(opener.executeJavaScript(`
 				new Promise(resolve => {
 					const checkClosed = () => {
@@ -688,8 +660,6 @@ async function run(): Promise<void> {
 				})());
 				return contents;
 			}
-			// Popup activation also queues a native synchronization. Hold that
-			// boundary until t2 is gone so the daemon cannot discover it early.
 			const originalRunAction = nativeRuntime.runAction.bind(nativeRuntime);
 			let backgroundEntered: (() => void) | undefined;
 			let releaseBackground: (() => void) | undefined;
@@ -729,8 +699,6 @@ async function run(): Promise<void> {
 			let snapshot = await nativeSnapshot(sessionId, "Change Third", "t3");
 			if (restart) {
 				await stopNativeDaemon(sessionId);
-				// Read before explicit selection: the host still caches t3 while
-				// a freshly connected native daemon may default to opener t1.
 				try {
 					const result = await nativeCommand(sessionId, "get", { property: "title" }) as { value: string; target: { tabId: string } };
 					assert.equal(result.target.tabId, "t3");
@@ -779,8 +747,6 @@ async function run(): Promise<void> {
 				try {
 					await deadline(started);
 					const second = nativeCommand(sessionId, "tab-select", { tabId: "t1" });
-					// Let the admitted command enqueue behind the held native operation
-					// before the independent renderer selects its final page.
 					await new Promise<void>(resolve => setImmediate(resolve));
 					const human = Promise.resolve(select({ sender: shellWebContents }, { viewId: state.viewId, tabId: "t3" }));
 					release?.();
@@ -810,10 +776,6 @@ async function run(): Promise<void> {
 	} finally {
 		nativeHost?.destroyAll();
 		await nativeRuntime?.dispose();
-		// Tear down native views synchronously before exiting. Electron can leave a
-		// graceful app-level dispose pending after a beforeunload interaction even
-		// though all assertions completed; the standalone process must not turn that
-		// shutdown delay into a false test timeout.
 		host.destroyAll();
 		void host.dispose().catch(() => undefined);
 		window.destroy();
@@ -823,9 +785,6 @@ async function run(): Promise<void> {
 }
 
 function reportIntegrationResult(code: number): void {
-	// The outer runner owns process-tree termination. Keeping the Electron main
-	// process alive until it consumes this marker lets it terminate Chromium's
-	// renderer children too, even after the fixture exercised beforeunload.
 	process.stdout.write(`AO_BROWSER_POSTCONDITION_RESULT:${code}\n`);
 }
 

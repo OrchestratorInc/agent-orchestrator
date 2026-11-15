@@ -5,9 +5,6 @@ import { aoBridge } from "../../lib/bridge";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { MermaidBlock } from "./MermaidBlock";
 
-// The engine chunk is heavy and needs real SVG layout APIs jsdom lacks, so
-// these pin the boundary: the block calls render once per settled diagram,
-// shows source while streaming, and falls back to source on any failure.
 vi.mock("../../lib/mermaid-diagram", () => ({
 	isRenderableDiagram: (code: string) => code.trim().length > 0 && code.length <= 20_000,
 	renderMermaidDiagram: vi.fn(),
@@ -95,7 +92,6 @@ describe("MermaidBlock", () => {
 		);
 		render(<MermaidBlock code={CODE} onLinkOpen={onLinkOpen} />);
 
-		// Without interception jsdom would attempt a real navigation here.
 		await user.click(await screen.findByText("docs"));
 		expect(onLinkOpen).toHaveBeenCalledWith("https://example.com/i/1");
 	});
@@ -120,8 +116,6 @@ describe("MermaidBlock", () => {
 		);
 		render(<MermaidBlock code={CODE} onLinkOpen={onLinkOpen} />);
 
-		// Middle-click fires auxclick, not click: without interception it
-		// would skip the chat link policy for the window-open guard.
 		fireEvent(await screen.findByText("docs"), new MouseEvent("auxclick", { bubbles: true, button: 1 }));
 		expect(onLinkOpen).toHaveBeenCalledWith("https://example.com/i/1");
 	});

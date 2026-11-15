@@ -8,15 +8,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// createdByStore persists created_by for ao.sessions.ended. It is optional so
-// focused service fakes need not implement it.
 type createdByStore interface {
 	RecordSessionCreatedBy(ctx context.Context, id domain.SessionID, createdBy domain.SessionCreator) error
 }
 
-// spawnCreatedBy says who caused this spawn. Only daemon-side facts count: an
-// explicit unattended source, a schedule occurrence, or the AO session that ran
-// `ao spawn` (validated against the store, never trusted from the caller).
 func (s *Service) spawnCreatedBy(ctx context.Context, cfg ports.SpawnConfig) domain.SessionCreator {
 	switch {
 	case cfg.CreatedBy.Valid():
@@ -45,17 +40,10 @@ func (s *Service) recordCreatedBy(ctx context.Context, id domain.SessionID, crea
 	}
 }
 
-// usageSendStore counts human sends into the per-session usage summary that
-// ao.usage.messages_sent exports. Optional so focused fakes need not have it.
 type usageSendStore interface {
 	RecordUsageHumanSend(ctx context.Context, id domain.SessionID, steer bool) error
 }
 
-// RecordUserMessage counts a steer or `/send` a person sent to a session.
-// Direct Chat messages are already counted where they are durably inserted,
-// so the HTTP controllers call this only for the two sends that insert does
-// not see, and only for requests no AO session sent. The message itself is
-// never read; the request surface rides the context.
 func (s *Service) RecordUserMessage(ctx context.Context, id domain.SessionID, isSteer bool) {
 	store, ok := s.store.(usageSendStore)
 	if !ok {
@@ -66,9 +54,6 @@ func (s *Service) RecordUserMessage(ctx context.Context, id domain.SessionID, is
 	}
 }
 
-// liveSessionBeforeEnd returns the record of a session that is about to be
-// ended, or ok=false when it is unknown or already terminated (so a repeated
-// kill reports nothing).
 func (s *Service) liveSessionBeforeEnd(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool) {
 	if s.delivery == nil || s.store == nil {
 		return domain.SessionRecord{}, false
@@ -87,13 +72,6 @@ func (s *Service) recordKilled(ctx context.Context, before domain.SessionRecord,
 	s.delivery.SessionEnded(ctx, before, deliverytelemetry.EndKilled)
 }
 
-// recordKillOutcome reports a kill that ended a live session. Teardown can
-// fail after termination is durable (cleanup runs after the terminal write),
-// so an error alone does not mean the session survived: the row decides, and
-// the pre-termination record keeps the activity the session ended in. The
-// end report is claimed once per termination, so a later retry cannot double
-// it, and a session that was already terminated before the call (live=false)
-// is never reported here.
 func (s *Service) recordKillOutcome(ctx context.Context, before domain.SessionRecord, live bool, killErr error) {
 	if !live {
 		return

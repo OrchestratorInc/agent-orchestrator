@@ -6,11 +6,6 @@ import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationItem, ConversationSnapshot, TurnState } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 
-// A live turn's work sits in the conversation itself, not in a scroll box of its
-// own: the transcript is the one thing that scrolls, and whatever the agent shows
-// along the way (an image it rendered, say) stays where it is while the next steps
-// arrive under it.
-
 function render(ui: ReactElement) {
 	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
 }
@@ -64,8 +59,6 @@ describe("live turn", () => {
 	});
 });
 
-// A reader who scrolled up into a running turn keeps their place when it settles
-// and its steps fold under "Worked for" all at once.
 describe("settling under a reader who scrolled up", () => {
 	const secondNote: ConversationItem = { kind: "message", id: "note-2", turnId: "t", sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Now the tests.", streaming: false, createdAt: at };
 	const testRun: ConversationItem = { kind: "activity", id: "cmd-2", turnId: "t", sequence: 5, revision: 0, activityKind: "command", status: "completed", summary: "npm test", detail: { command: "npm test", exitCode: 0 }, createdAt: at };
@@ -74,8 +67,6 @@ describe("settling under a reader who scrolled up", () => {
 	let restoreLayout: (() => void) | undefined;
 	afterEach(async () => {
 		cleanup();
-		// TanStack Virtual's scroll-reset debounce survives unmount in jsdom.
-		// Drain it while window still exists, before this file's DOM is torn down.
 		await act(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 200));
 		});
@@ -83,11 +74,8 @@ describe("settling under a reader who scrolled up", () => {
 		restoreLayout = undefined;
 	});
 
-	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row reserved for it are 28px) under a scrollable log. */
 	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
-		// The empty row reserved under the prompt is as tall as "Worked for", which
-		// takes its place as the turn settles.
 		const height = (row: Element) =>
 			row.hasAttribute("data-turn-worked") || row.hasAttribute("data-turn-worked-gap") ? 28 : 100;
 		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
@@ -105,8 +93,6 @@ describe("settling under a reader who scrolled up", () => {
 		Object.defineProperty(log, "clientHeight", { configurable: true, value: 800 });
 		Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: log.scrollHeight });
 		restoreLayout = () => spy.mockRestore();
-		// Browser wheel intent precedes the viewport movement. Cancelling a recent
-		// programmatic scroll must record the old position, not the reader's destination.
 		fireEvent.wheel(log, { deltaY: -120 });
 		log.scrollTop = scrollTop;
 		fireEvent.scroll(log);
@@ -119,13 +105,10 @@ describe("settling under a reader who scrolled up", () => {
 	it("lands Worked for at the top of the view when the reader was among the steps", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// Rows: prompt 20, reserved row 120, note 148, ls 248, second note 348, npm test 448, reply 548.
-		// At 350 the second note sits across the top edge.
 		stubTurnLayout(log, 350);
 
 		settle(rerender);
 
-		// Folded: prompt 20, "Worked for" 120, reply 148.
 		expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
 		expect(log.scrollTop).toBe(120);
 	});
@@ -133,12 +116,10 @@ describe("settling under a reader who scrolled up", () => {
 	it("holds the reply still when the reader was already on it", () => {
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", items)} />);
 		const log = screen.getByRole("log", { name: "Conversation" });
-		// The reply starts at 548, 40px above the top edge.
 		stubTurnLayout(log, 588);
 
 		settle(rerender);
 
-		// Folded, the reply starts at 148: still 40px above the top edge.
 		expect(log.scrollTop).toBe(188);
 	});
 });

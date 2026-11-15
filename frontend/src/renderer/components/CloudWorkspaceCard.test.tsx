@@ -139,7 +139,6 @@ describe("CloudWorkspaceCard", () => {
 		await user.type(screen.getByLabelText("Workspace name"), "Notes");
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 
-		// Said once, naming the files.
 		expect(await screen.findByText("The history of notes holds files that look like secrets (.env), so Orchestrator does not upload it. Remove them from its history, or push it to GitHub yourself and add its repository from GitHub.")).toBeInTheDocument();
 		expect(screen.queryByText(/notes's history holds/)).not.toBeInTheDocument();
 		expect(screen.queryByLabelText("Repository name for notes")).not.toBeInTheDocument();
@@ -179,8 +178,6 @@ describe("CloudWorkspaceCard", () => {
 		const user = userEvent.setup();
 		renderCard();
 		mocks.chooseDirectory.mockResolvedValue("/Users/me/notes");
-		// The scan reports origin's default branch ("auto" without one); the
-		// main process pushes, and names, what is checked out.
 		mocks.scanImportFolder.mockResolvedValue(scanned("/Users/me/notes", { branch: "main" }));
 		mocks.previewFolderUpload.mockResolvedValue({ status: "ok", source: "head", branch: "draft", leftOut: [] });
 
@@ -206,14 +203,12 @@ describe("CloudWorkspaceCard", () => {
 	it("says what the main process uploads, whatever the scan made of the folder", async () => {
 		const user = userEvent.setup();
 		renderCard();
-		// A linked worktree, whose .git file the scan reads as a plain folder.
 		mocks.chooseDirectory.mockResolvedValueOnce("/Users/me/notes-wt");
 		mocks.scanImportFolder.mockResolvedValueOnce(scanned("/Users/me/notes-wt", { isRepo: false, hasCommit: false, needsGitInit: true, branch: "" }));
 		mocks.previewFolderUpload.mockResolvedValueOnce({ status: "ok", source: "head", branch: "wt-branch", leftOut: [] });
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 		expect(await screen.findByText("Uploads the commits of wt-branch, not uncommitted changes")).toBeInTheDocument();
 
-		// A repository with a commit the main process imports as files.
 		mocks.chooseDirectory.mockResolvedValueOnce("/Users/me/draft");
 		mocks.scanImportFolder.mockResolvedValueOnce(scanned("/Users/me/draft", {}));
 		mocks.previewFolderUpload.mockResolvedValueOnce({ status: "ok", source: "import", leftOut: [] });
@@ -233,7 +228,6 @@ describe("CloudWorkspaceCard", () => {
 		expect(await screen.findByRole("button", { name: "Create" })).toBeEnabled();
 		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
 		await waitFor(() => expect(mocks.chooseDirectory).toHaveBeenCalledOnce());
-		// The dialog does not block the window, so Create is still on the screen.
 		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
 
 		pick("/Users/me/notes");
@@ -271,7 +265,6 @@ describe("CloudWorkspaceCard", () => {
 		await addRepository(user, "acme/api");
 		await addRepository(user, "acme/web");
 		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
-		// The folder's repository is named after it, editable before it exists.
 		expect(await screen.findByLabelText("Repository name for My Notes")).toHaveValue("My-Notes");
 		await user.click(await screen.findByRole("button", { name: "Create" }));
 
@@ -292,7 +285,6 @@ describe("CloudWorkspaceCard", () => {
 				repos: [{ url: "https://github.com/acme/web" }, { url: "https://github.com/acme/My-Notes" }],
 			},
 		}, { idempotencyKey: expect.any(String) });
-		// A Freestyle workspace opens on its orchestrator, already starting.
 		expect(useUiStore.getState().autoStartOrchestratorProjectIds.has("ws-1")).toBe(true);
 	});
 
@@ -325,11 +317,9 @@ describe("CloudWorkspaceCard", () => {
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 		await user.click(await screen.findByRole("button", { name: "Create" }));
 
-		// The reason in the app's language, with git's own words beside it.
 		expect((await screen.findAllByText("Could not upload notes.")).length).toBeGreaterThan(0);
 		expect(screen.getByText("Could not upload notes: remote hung up")).toBeInTheDocument();
 		expect(mocks.createGitHubProject).not.toHaveBeenCalled();
-		// Once made, the repository's name is fixed.
 		expect(screen.queryByLabelText("Repository name for notes")).not.toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Create" }));
@@ -342,7 +332,6 @@ describe("CloudWorkspaceCard", () => {
 		["shallow_repository", "notes is a shallow clone, which GitHub does not accept as a new repository. Fetch its full history (git fetch --unshallow), then try again.", false],
 		["lfs_unsupported", "notes uses Git LFS, which folder uploads do not support. Push it to GitHub yourself, then add it as a repository.", false],
 		["branch_exists", "The repository for notes already has commits, and Orchestrator only uploads a folder into an empty repository. If an earlier upload finished, remove notes and add its repository from GitHub instead.", false],
-		// GitHub's own refusal may name the files, so it stays as detail.
 		["workflows_refused", "GitHub refused notes because it contains .github/workflows files and the Orchestrator GitHub App lacks the workflows permission. Remove them or grant the permission, then try again.", true],
 		["file_too_large", "notes has a file larger than GitHub's 100 MB limit. Add it to its .gitignore, then try again.", true],
 	])("explains a %s upload refusal in the app's language", async (code, text, keepsDetail) => {
@@ -356,7 +345,6 @@ describe("CloudWorkspaceCard", () => {
 		await user.click(await screen.findByRole("button", { name: "Create" }));
 
 		expect((await screen.findAllByText(text)).length).toBeGreaterThan(0);
-		// A message that says nothing more is not repeated.
 		expect(screen.queryByText("English text from the main process") !== null).toBe(keepsDetail);
 	});
 
@@ -409,7 +397,6 @@ describe("CloudWorkspaceCard", () => {
 		expect(onBusyChange).toHaveBeenLastCalledWith(false);
 		finishPush({ status: "pushed", branch: "main", commit: "abc", source: "import" });
 		await new Promise((resolve) => setTimeout(resolve, 20));
-		// Nothing more runs for a card that is gone: no project, no navigation.
 		expect(mocks.createGitHubProject).not.toHaveBeenCalled();
 		expect(card).not.toHaveBeenCalled();
 	});
@@ -458,7 +445,6 @@ describe("CloudWorkspaceCard", () => {
 		await user.click(screen.getByRole("button", { name: "Remove other/lib" }));
 		mocks.chooseDirectory.mockResolvedValue("/Users/me/api");
 		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
-		// A new acme/api would be the repository already listed.
 		expect(await screen.findByText("acme/api is listed twice.")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
 		await user.clear(screen.getByLabelText("Repository name for api"));
@@ -490,7 +476,6 @@ describe("CloudWorkspaceCard", () => {
 
 		await user.click(await screen.findByRole("button", { name: "Add a local folder" }));
 		await waitFor(() => expect(mocks.previewFolderUpload).toHaveBeenCalledWith({ folder: "/Users/me/slow" }));
-		// While slow is checked, a repository and another folder join.
 		await addRepository(user, "acme/api");
 		await user.click(screen.getByRole("button", { name: "Add a local folder" }));
 		expect(await screen.findByLabelText("Repository name for fast")).toBeInTheDocument();

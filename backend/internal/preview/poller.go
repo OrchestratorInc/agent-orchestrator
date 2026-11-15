@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// DefaultPollInterval is the preview poller's scan interval when none is configured.
 const DefaultPollInterval = 250 * time.Millisecond
 
 type sessionPreviewSource interface {
@@ -21,16 +20,11 @@ type previewSetter interface {
 	SetPreview(ctx context.Context, id domain.SessionID, previewURL string) (domain.Session, error)
 }
 
-// PollerConfig configures preview poller timing and logging.
 type PollerConfig struct {
 	Interval time.Duration
 	Logger   *slog.Logger
 }
 
-// Poller watches explicitly selected workspace previews and persists refreshes
-// through the normal session service path. It never chooses a preview for a
-// fresh worker: selection belongs to `ao preview`, a managed server start, or
-// deliberate user navigation.
 type Poller struct {
 	source   sessionPreviewSource
 	setter   previewSetter
@@ -44,13 +38,9 @@ type entryState struct {
 	path    string
 	modUnix int64
 	size    int64
-	// cleared is set when the poller itself cleared the preview URL because the
-	// workspace entry was missing. When the file reappears, shouldRefresh uses
-	// this to re-discover even though the revision was bumped by the clear.
 	cleared bool
 }
 
-// NewPoller constructs a preview poller over the supplied session source and setter.
 func NewPoller(source sessionPreviewSource, setter previewSetter, baseURL string, cfg PollerConfig) *Poller {
 	p := &Poller{
 		source:   source,
@@ -69,8 +59,6 @@ func NewPoller(source sessionPreviewSource, setter previewSetter, baseURL string
 	return p
 }
 
-// Start runs an immediate poll followed by interval polling until ctx is
-// cancelled. The returned channel closes after the goroutine exits.
 func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -96,7 +84,6 @@ func (p *Poller) pollAndLog(ctx context.Context) {
 	}
 }
 
-// Poll performs one deterministic scan of active worker sessions.
 func (p *Poller) Poll(ctx context.Context) error {
 	if p.source == nil || p.setter == nil {
 		return nil
@@ -118,9 +105,6 @@ func (p *Poller) Poll(ctx context.Context) error {
 		previous, seenBefore := p.seen[sess.ID]
 		restoringCleared := false
 		if !workspaceOwned {
-			// Only restore an entry after the poller itself cleared it because
-			// the selected file temporarily disappeared. A blank fresh session
-			// or an explicit user clear must remain blank.
 			if !seenBefore || !previous.cleared || previous.path == "" {
 				continue
 			}

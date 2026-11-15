@@ -195,7 +195,6 @@ it("shows a saved host's last lists without reading it, and its session while it
 	expect(result.current.saved.data.map((project) => [project.name, project.hostId])).toEqual([["Remote", "box-a"]]);
 	expect(result.current.saved.failedHostIds).toEqual([]);
 	expect(result.current.saved.loadedProjectHostIds).toEqual([]);
-	// The new-task pickers list only hosts that can take work.
 	expect(result.current.connectedOnly.data).toEqual([]);
 	expect(result.current.session.data?.id).toBe("session-1");
 	expect(fetchMock).not.toHaveBeenCalled();
@@ -213,7 +212,6 @@ it("keeps the same lists across re-renders until a host's data changes", async (
 	});
 	const { data, failedHostIds, loadedProjectHostIds, loadedSessionHostIds } = result.current;
 	rerender();
-	// The shell passes these to the memoized sidebar; new lists on every render would re-render it.
 	expect(result.current.data).toBe(data);
 	expect(result.current.failedHostIds).toBe(failedHostIds);
 	expect(result.current.loadedProjectHostIds).toBe(loadedProjectHostIds);
@@ -239,8 +237,6 @@ it("labels remote sessions with their program title without Developer Mode", asy
 	await waitFor(() => expect(result.current.data[0]?.sessions[0]?.title).toBe("vim main.go"));
 });
 
-// A saved host whose lists are only in the cache: nothing below refetches, so
-// each change has to reach the memoized lists without new host data.
 function renderCachedHost(sessions: unknown[], projects: unknown[] = [{ id: "project-1", name: "Remote", path: "/remote" }]) {
 	vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -279,11 +275,9 @@ it("marks a remote session terminated while its kill is in flight, and rolls it 
 		act(() => trackOptimisticSessionKill("session-1", "box-a"));
 		expect(result.current.data[0]?.sessions[0]?.isTerminated).toBe(true);
 
-		// A poll lands mid-kill: the mapped lists now hold the terminated row.
 		act(() => client.setQueryData(sessionsKey, [{ ...live }]));
 		expect(result.current.data[0]?.sessions[0]?.isTerminated).toBe(true);
 	} finally {
-		// The kill fails. Nothing touches this host's raw lists on rollback.
 		const rawSessions = client.getQueryData(sessionsKey);
 		act(() => clearOptimisticSessionKill("session-1", "box-a"));
 		expect(client.getQueryData(sessionsKey)).toBe(rawSessions);
@@ -300,17 +294,14 @@ it("hides a remote project while its removal is in flight, even when a poll retu
 		act(() => trackOptimisticProjectRemoval("project-1", "box-a"));
 		expect(result.current.data).toEqual([]);
 
-		// The host still lists the project while it tears it down.
 		act(() => client.setQueryData(projectsKey, [{ id: "project-1", name: "Remote", path: "/remote" }]));
 		expect(result.current.data).toEqual([]);
-		// A local project with the same id is a different project.
 		act(() => trackOptimisticProjectRemoval("project-1"));
 		act(() => clearOptimisticProjectRemoval("project-1"));
 		expect(result.current.data).toEqual([]);
 	} finally {
 		act(() => clearOptimisticProjectRemoval("project-1", "box-a"));
 	}
-	// Rolled back: the host's list shows it again.
 	expect(result.current.data.map((project) => project.id)).toEqual(["project-1"]);
 });
 

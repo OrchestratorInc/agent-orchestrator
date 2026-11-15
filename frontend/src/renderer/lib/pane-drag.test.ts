@@ -56,7 +56,6 @@ describe("pane tab drag completion", () => {
 	it("selects a held tab once when released in place", () => {
 		holdTab();
 		window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, clientX: 20, clientY: 20 }));
-		// The browser's captured click is swallowed before the intended one is replayed.
 		source.click();
 		vi.runAllTimers();
 

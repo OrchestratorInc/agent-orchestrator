@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A preparer's copy replaces the source identity before the first launch. The
-// session and a conversation opened for it bind the copy; the source stays.
 func TestPreparedImportIdentityMovesSessionAndConversation(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)

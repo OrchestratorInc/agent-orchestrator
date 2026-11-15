@@ -167,8 +167,6 @@ func TestContinuationDeliveryQueuedPromptRetainsFrozenContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.advance(time.Second)
-	// Model the interval after the durable stop commits but before the provider
-	// completion event clears the controller's busy gate.
 	if err := h.st.SettleTurnByID(ctx, first.ID, domain.TurnStateInterrupted, "", h.now()); err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +213,7 @@ func TestContinuationDeliveryRetrySurvivesControllerRestart(t *testing.T) {
 	}
 
 	provider := newFakeConversation()
-	provider.turnSeq = 10 // a reconnected provider's turn IDs are still unique
+	provider.turnSeq = 10
 	svc := chatsvc.New(chatsvc.Options{
 		Store: h.st, Reader: fullSnapshotReader(h.st), PageReader: boundedSnapshotReader(h.st), Sessions: h.st,
 		Drivers: fakeRegistry{driver: fakeDriver{conv: provider}},

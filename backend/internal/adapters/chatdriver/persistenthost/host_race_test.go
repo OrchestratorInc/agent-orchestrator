@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// Two daemons can observe the same dead descriptor before either starts its
-// replacement. A stale observer must never delete ownership published by the
-// winner; the host's O_EXCL launch lock is the only replacement authority.
 func TestConnectOrStartConcurrentStaleProbeDoesNotStartRivalHost(t *testing.T) {
 	dataDir := t.TempDir()
 	sessionID := "stale-race"
@@ -87,8 +84,6 @@ func TestConnectOrStartConcurrentStaleProbeDoesNotStartRivalHost(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = syscall.Kill(-firstHost, syscall.SIGKILL) })
 
-	// Release the second stale probe only after the first host owns the lock and
-	// has published its descriptor. The old code deleted both files here.
 	_ = json.NewEncoder(secondProbe).Encode(helloResponse{Error: ErrUnauthorized.Error()})
 	_ = secondProbe.Close()
 	time.Sleep(300 * time.Millisecond)

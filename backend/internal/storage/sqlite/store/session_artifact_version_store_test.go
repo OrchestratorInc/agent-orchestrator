@@ -54,7 +54,6 @@ func TestSessionArtifactVersionStoreAppendsListsAndPrunes(t *testing.T) {
 	if len(latest) != 2 || latest[0].Path != "notes.md" || latest[0].Version != 1 || latest[1].Path != "page.html" || latest[1].SHA256 != "ddd" {
 		t.Fatalf("latest = %+v", latest)
 	}
-	// v3 still references aaa after v1 was pruned.
 	if n, err := s.CountSessionArtifactVersionsBySHA(ctx, sess.ID, "aaa"); err != nil || n != 1 {
 		t.Fatalf("count aaa = %d err=%v, want 1", n, err)
 	}
@@ -92,7 +91,7 @@ func TestSessionArtifactVersionStoreKeepsSourceAndHarness(t *testing.T) {
 	}
 	add("aaa", domain.ArtifactVersionSourceUser, domain.HarnessClaudeCode)
 	restoredFrom = 1
-	add("bbb", "", "") // an unset source is the agent's, with no harness recorded
+	add("bbb", "", "")
 
 	got, err := s.ListSessionArtifactVersions(ctx, sess.ID, "plan.md")
 	if err != nil || len(got) != 2 {

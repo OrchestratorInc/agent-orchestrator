@@ -8,7 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// actingProvider is a fakeProvider that also supports PR state and comments.
 type actingProvider struct {
 	fakeProvider
 	stateRequests   []ports.SCMPRStateRequest

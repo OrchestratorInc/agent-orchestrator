@@ -144,7 +144,6 @@ func TestPRCommitListStopsAtTheCapButEveryPRCommitStillOpens(t *testing.T) {
 		t.Fatalf("commits run %s to %s, want newest first from %s to %s", files.Commits[0].SHA, files.Commits[maxCommitLogCommits-1].SHA, head, commits[10])
 	}
 
-	// The oldest commit is past the list's cap but still part of the PR.
 	detail, err := svc.GetPRFileAtCommit(ctx, "ao-1", 42, "", "changes.txt", commits[0])
 	if err != nil || detail.Content != "change 0\n" || detail.Status != WorkspaceFileAdded {
 		t.Fatalf("oldest commit file = %#v, %v", detail, err)
@@ -154,7 +153,6 @@ func TestPRCommitListStopsAtTheCapButEveryPRCommitStillOpens(t *testing.T) {
 		t.Fatalf("oldest commit after = %#v, %v", after, err)
 	}
 
-	// Only a full SHA inside base..head reaches git, and never as an option.
 	escaped := filepath.Join(t.TempDir(), "escaped")
 	for _, sha := range []string{base, outside, commits[0][:12], strings.ToUpper(commits[0]), "--output=" + escaped} {
 		_, err := svc.GetPRFileAtCommit(ctx, "ao-1", 42, "", "changes.txt", sha)
@@ -171,9 +169,6 @@ func TestPRCommitListStopsAtTheCapButEveryPRCommitStillOpens(t *testing.T) {
 func TestCommitLogCapsLeaveOutWholeCommitsOnly(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	base := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
-	// Sixty files with four-digit line counts make a commit's numstat output
-	// about 260 bytes longer than its name-status output, so some byte caps
-	// cut the numstat pass inside a commit the name-status pass read whole.
 	lines := strings.Repeat("line\n", 1000)
 	wide := func(name string) fixtureCommit {
 		files := map[string]string{}
@@ -202,8 +197,6 @@ func TestCommitLogCapsLeaveOutWholeCommitsOnly(t *testing.T) {
 		t.Fatalf("a cap of 3 commits = %d commits, truncated=%v; want the newest 3", len(got), truncated)
 	}
 
-	// Every byte cap yields the newest commits, each exactly as the uncapped
-	// log reads it, and flags the rest as left out.
 	for limit := 1; ; limit += 50 {
 		got, changes, counts, truncated, err := gitCommitLogChanges(ctx, repo, revRange, maxCommitLogCommits, limit)
 		if err != nil {

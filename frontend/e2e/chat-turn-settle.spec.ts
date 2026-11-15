@@ -1,13 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// A turn that finishes hands its live row (orb, step, timer) under the reply over to
-// "Worked for" above it, and folds its steps away in the same commit. These run the
-// real renderer in a browser, sample the turn's rows on every frame of that handover,
-// and check that nothing jumps: the prompt and the scroll position hold still, the
-// reply only ever moves up into the room its steps left, and the live row fades out
-// where it was.
-
 const sessionId = "turn-settle";
 const at = "2026-11-05T10:00:00Z";
 const replyText = [
@@ -57,11 +50,9 @@ function conversation(settled: boolean, withSteps: boolean, priorTurns: number) 
 	};
 }
 
-/** Serves a running turn until `settle()`, which finishes it and tells the app, as the daemon would. */
 async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: boolean; priorTurns: number }) {
 	await page.setViewportSize({ width: 900, height: 700 });
 	await installFakeAgent(page, { workers: [{ id: sessionId, title: "Turn settle", mode: "chat" }] });
-	// Keep the fake CDC streams reachable, to announce the finished turn on them.
 	await page.addInitScript(() => {
 		const Base = window.EventSource as unknown as new (url: string) => object;
 		const sources: object[] = [];
@@ -86,7 +77,6 @@ async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: bool
 	await page.goto(`/#/projects/fake-proj/sessions/${sessionId}`);
 	await expect(page.getByRole("log", { name: "Conversation" })).toBeVisible();
 	await expect(page.locator("[data-turn-live-row]")).toBeVisible();
-	// Past the opening snap, so the follow behaves as it does mid-session.
 	await page.waitForTimeout(1_500);
 	return {
 		settle: async () => {
@@ -102,11 +92,6 @@ async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: bool
 	};
 }
 
-/**
- * Samples the latest turn's rows on every animation frame until the returned stop is
- * called. Returns once the first frame is in, so a frame that runs late still sees
- * the turn as it was before the caller settles it.
- */
 async function recordFrames(page: Page) {
 	await page.evaluate(() => new Promise<void>((resolve) => {
 		const state = window as unknown as { __settleFrames: Frame[]; __settleStop: boolean };
@@ -162,11 +147,8 @@ for (const priorTurns of [1, 30]) {
 
 		expectSteady(frames, "scrollTop");
 		expectSteady(frames, "prompt");
-		// The reply rises into the room its steps left, and only rises. The steps are
-		// already folded to one summary line while the turn runs, so that room is one row.
 		expectOnlyRising(frames);
 		expect(frames.at(-1)!.reply).toBeLessThan(frames[settled - 1]!.reply - 20);
-		// The live row fades out where it was rather than jumping away.
 		const live = frames.slice(settled).flatMap((frame) => (frame.live === null ? [] : [frame.live]));
 		for (const top of live) expect(Math.abs(top - frames[settled - 1]!.live!)).toBeLessThan(1);
 	});
@@ -177,14 +159,12 @@ test("a turn that went straight to its answer gets Worked for as plain text, wit
 	const turn = await openTurn(page, { withSteps: false, priorTurns: 1 });
 	const stop = await recordFrames(page);
 	await turn.settle();
-	// Every finished turn has one; the earlier turn's says 20s.
 	const worked = page.locator("[data-chat-turn]").last().locator("[data-turn-worked]");
 	await expect(worked).toHaveText("Worked for 42s");
 	await expect(page.locator("[data-turn-worked]").first()).toHaveText("Worked for 20s");
 	await page.waitForTimeout(600);
 	const frames = await stop();
 
-	// Nothing to open: no control and no chevron.
 	await expect(page.getByRole("button", { name: /^Worked for/ })).toHaveCount(0);
 	await expect(worked.locator("svg")).toHaveCount(0);
 	expectSteady(frames, "scrollTop");
@@ -207,7 +187,6 @@ test("opening and closing Worked for in a windowed chat keeps the view still @T0
 		const frames = await stop();
 		expectSteady(frames, "scrollTop");
 		expectSteady(frames, "prompt");
-		// The reply moves one way only: down while the steps open, back up as they close.
 		for (let index = 1; index < frames.length; index += 1) {
 			const step = frames[index]!.reply - frames[index - 1]!.reply;
 			expect(opening ? step : -step, `reply top, frame ${index}`).toBeGreaterThanOrEqual(-0.5);

@@ -31,7 +31,7 @@ func TestStepsPairPreWithPostByToolUseID(t *testing.T) {
 	pre("t2", "Read")
 	post("t2", "Read", "post-tool-use")
 	post("t1", "Bash", "post-tool-use-failure")
-	post("t9", "Bash", "post-tool-use") // unmatched post: ignored
+	post("t9", "Bash", "post-tool-use")
 
 	steps := m.Steps("mer-1")
 	if len(steps) != 2 {
@@ -106,14 +106,9 @@ func TestStepsClearedWhenRuntimeEnds(t *testing.T) {
 	})
 }
 
-// TestStepsOnlyLandForAcceptedSignals: a tool step is recorded only once every
-// fence has accepted the signal and its projection is applied. A rejected or
-// failed signal must not leave a phantom current or recent step behind.
 func TestStepsOnlyLandForAcceptedSignals(t *testing.T) {
 	ctx := context.Background()
 	pre := ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Event: "pre-tool-use", ToolName: "Bash", ToolUseID: "t1"}
-	// Idle, so the active pre-tool-use is a state change the store must write;
-	// an active row would skip the write and never reach the failure paths.
 	idle := func() domain.SessionRecord {
 		rec := working("mer-1")
 		rec.Activity.State = domain.ActivityIdle

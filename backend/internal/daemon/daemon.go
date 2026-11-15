@@ -1,6 +1,3 @@
-// Package daemon owns the Agent Orchestrator backend process: config loading,
-// loopback HTTP serving, durable storage, CDC fan-out, lifecycle wiring, and
-// graceful shutdown.
 package daemon
 
 import (
@@ -96,19 +93,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
-// usageReconcileTick is the safety-net interval for the usage pipeline
-// reconcile: hookless resume transcripts and silently lost fsnotify watches
-// are healed on this cadence even when no event or hook fires.
 const usageReconcileTick = 3 * time.Minute
 
 const chatHibernateSweepTick = 30 * time.Second
 
-// workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
-// Its work is retry and bookkeeping, not anything a user waits on.
 const workspaceCleanupSweepTick = 10 * time.Minute
 
-// sentryEnvironment maps the daemon's app version to a Sentry environment so a
-// nightly/edge build's issues do not mix with stable release health.
 func sentryEnvironment(version string) string {
 	v := strings.ToLower(strings.TrimSpace(version))
 	switch {
@@ -123,14 +113,8 @@ func sentryEnvironment(version string) string {
 	}
 }
 
-// publishedVersion matches a release-stamped stable (0.14.10) or nightly
-// (0.14.11-nightly.202611100625) version, the same pattern as the desktop app
-// (frontend/src/shared/sentry-config.ts).
 var publishedVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-nightly\.\d{12})?$`)
 
-// publishedSentryDSN keeps Sentry off for any version that is not a published
-// stable or nightly build (an edge, PR, forked or unversioned copy). The
-// desktop app also withholds the DSN from self-built copies.
 func publishedSentryDSN(dsn, version string) string {
 	if publishedVersion.MatchString(strings.TrimSpace(version)) {
 		return dsn
@@ -138,9 +122,6 @@ func publishedSentryDSN(dsn, version string) string {
 	return ""
 }
 
-// Session Manager asserts the terminal input gate's optional capabilities at
-// runtime: a signature drift compiles but silently turns the send guard's
-// keystroke fence off (#5711).
 var _ interface {
 	sessionmanager.TerminalInputGate
 	sessionmanager.TerminalInputObserver
@@ -148,28 +129,19 @@ var _ interface {
 	sessionmanager.TerminalInputForgetter
 } = (*terminal.Manager)(nil)
 
-// daemonShutdownContext separates worker cancellation from signal cleanup.
-// Keep stopSignals deferred until restoration and all shutdown stages finish:
-// a second SIGTERM must not restore the default process-termination behavior.
 func daemonShutdownContext() (ctx context.Context, cancelWorkers, stopSignals context.CancelFunc) {
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	ctx, cancelWorkers = context.WithCancel(signalCtx)
 	return ctx, cancelWorkers, stopSignals
 }
 
-// Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
-// graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) (retErr error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
 	cfg.Telemetry.AppVersion = telemetryAppVersion(cfg.Telemetry.AppVersion, buildVersion)
-	// Children inherit os.Environ(); the export settings stay in cfg only.
 	config.ScrubTelemetryEnv()
-	// A daemon started from an AO shell tab must not pass that tab's marker to
-	// the agents it launches, or none of them would name itself to the daemon.
-	// Shell tabs set it again explicitly.
 	_ = os.Unsetenv(caller.ShellTerminalEnv)
 	if cwd, err := os.Getwd(); err == nil {
 		cfg.StartupWorkingDirectory = cwd
@@ -179,10 +151,6 @@ func Run(buildVersion string) (retErr error) {
 	}
 	ignoreBrokenPipeSignal()
 
-	// Persistent lifecycle record under <dataDir>/logs. stderr belongs to the
-	// desktop app and is lost with it, so without this a daemon exit or crash
-	// left no evidence of why.
-	// Beside the desktop's logs (normally ~/.ao/logs), next to running.json.
 	logRoot := cfg.DataDir
 	if cfg.RunFilePath != "" {
 		logRoot = filepath.Dir(cfg.RunFilePath)
@@ -233,42 +201,12 @@ func Run(buildVersion string) (retErr error) {
 	}
 	browserStreamBroker := browserstream.New(log, browserRuntimeToken)
 
-	// Fail fast only if a daemon is genuinely still serving the recorded port.
-	// CheckStale confirms the run-file's PID is alive, but that alone is not
-	// proof a predecessor owns the port: the file leaks when the daemon is hard
-	// killed without a graceful shutdown (the norm on Windows, where the desktop
-	// supervisor can only TerminateProcess it), and Windows reuses the recorded
-	// PID for unrelated processes. So a "live" PID is verified against an actual
-	// /healthz probe; a run-file left by a crashed/hard-killed/reused-PID
-	// predecessor is treated as stale and overwritten when the new server starts.
 	if live, err := runfile.CheckStale(cfg.RunFilePath); err != nil {
 		return fmt.Errorf("inspect run-file: %w", err)
 	} else if live != nil && runFileOwnerServing(&http.Client{Timeout: staleProbeTimeout}, config.LoopbackHost, live) {
 		return fmt.Errorf("daemon already running (pid %d, port %d); refusing to start", live.PID, live.Port)
 	}
 
-	// Take the data-directory lock before touching SQLite. The run-file check
-	// above only proves nobody else owns this port/run file; it says nothing
-	// about the data dir, so a second daemon with a different AO_PORT/AO_RUN_FILE
-	// but the same AO_DATA_DIR would otherwise open and hot-migrate the database
-	// underneath the first daemon, invalidating its prepared statements against
-	// the new schema (issue #3716). The lock is scoped to the data dir alone and
-	// is held until Run returns; a crashed holder's lock is dropped by the OS, so
-	// a successor reclaims it with no stale-lock bookkeeping.
-	//
-	// A desktop takeover spawns this daemon as soon as the old one's /healthz
-	// goes dark, which happens when its shutdown starts. With T = ShutdownTimeout
-	// and I = installerShutdownTimeout, capped shutdown takes at most 7T+I+18s:
-	//   - the HTTP drain and six stages capped at T each: failure dispatcher,
-	//     background workers, agent-switch workers, Codex account-switch workers,
-	//     chat StopAll, LAN listener; the harness installer gets I;
-	//   - fixed caps: 5s agent-switch fault enqueue, 3s `tailscale serve off`,
-	//     5s closed-lid lease release plus 3s caffeinate exit (keep-awake), and
-	//     a 2s Sentry flush.
-	// Wait 8T+I+18s (382s by default), one stage of margin. Run's uncapped waits
-	// (startup reconcile, preview servers, chat side stops, usage, pricing,
-	// lifecycle stack) are not covered: a predecessor stuck in one past the
-	// wait still makes this daemon exit 75.
 	installerShutdownTimeout := max(cfg.ShutdownTimeout, cmp.Or(cfg.InstallerShutdownTimeout, systeminstall.DefaultShutdownTimeout()))
 	dataDirLock, err := lockDataDir(context.Background(), cfg.DataDir, dataDirTakeoverWait(cfg.ShutdownTimeout, installerShutdownTimeout), log)
 	if err != nil {
@@ -277,9 +215,6 @@ func Run(buildVersion string) (retErr error) {
 	openLogFile(cfg.DataDir)
 	defer func() { _ = dataDirLock.Release() }()
 
-	// Open the durable store and bring up the CDC substrate: DB triggers capture
-	// changes into change_log, the poller tails it, and the broadcaster fans
-	// events out to live transports.
 	store, err := sqlite.Open(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
@@ -288,21 +223,13 @@ func Run(buildVersion string) (retErr error) {
 	if _, err := store.RequeueClaimedReports(context.Background()); err != nil {
 		return fmt.Errorf("recover report delivery claims: %w", err)
 	}
-	// Refresh the embedded using-ao skill into the data dir so worker sessions
-	// in any project can read the ao CLI catalog from a stable absolute path.
-	// Non-fatal: the skill is an enhancement over `ao --help`, not required.
 	if err := skillassets.Install(cfg.DataDir); err != nil {
 		log.Warn("install AO skills", "err", err)
 	}
-	// Before any session starts: an AppImage remounts under a new path on every
-	// launch, so sessions get a link under the data dir that follows it.
 	if err := agentlaunch.UseStableExecutable(cfg.DataDir, os.Getenv); err != nil {
 		log.Warn("link a stable ao for sessions of this AppImage", "err", err)
 	}
 
-	// The app owns the user's "Share error events" choice and writes it to the
-	// policy file. It gates Sentry capture only: product telemetry answers to
-	// AO_TELEMETRY_EVENTS alone, as documented.
 	telemetryPolicy := policyauthority.New(filepath.Join(cfg.DataDir, policyauthority.FileName))
 	sentryobs.SetPolicyCheck(func(ctx context.Context) bool {
 		return telemetryPolicy.EventsAllowed(ctx, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
@@ -316,9 +243,6 @@ func Run(buildVersion string) (retErr error) {
 	if telemetryIdentity != nil {
 		installID = telemetryIdentity.Snapshot().InstallID
 	}
-	// Initialize daemon Sentry once so a later policy opt-in works without a
-	// restart. The policy gate is checked before every capture. An unavailable
-	// install ID omits the tag without disabling error reporting.
 	if err := sentryobs.Init(sentryobs.Config{
 		DSN:         publishedSentryDSN(cfg.Telemetry.SentryDSN, cfg.Telemetry.AppVersion),
 		InstallID:   installID,
@@ -340,8 +264,6 @@ func Run(buildVersion string) (retErr error) {
 	})
 	emitInstallLifecycleEvents(cfg, telemetryIdentity, telemetrySink, storeHasPriorState(store), log)
 
-	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
-	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop, stopSignals := daemonShutdownContext()
 	defer stopSignals()
 	defer stop()
@@ -360,23 +282,13 @@ func Run(buildVersion string) (retErr error) {
 		return err
 	}
 
-	// Terminal streaming: the selected platform runtime supplies the
-	// attach Stream and liveness; the CDC broadcaster feeds the session-state channel. The manager
-	// is handed to httpd, which mounts it at /mux. Raw PTY bytes never flow
-	// through the CDC change_log -- only session-state events do.
 	runtimeAdapter := runtimeselect.New(log, cfg.RunFilePath)
 	managedPreview := previewserver.New(log, cfg.DataDir)
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
-	// Agents split the desktop window's panes through this relay; the window
-	// links to it over the terminal mux (ch "panes").
 	paneBroker := panes.NewBroker()
 	termMgr.SetPanes(paneSource{paneBroker})
 	defer termMgr.Close()
 
-	// The agent messenger sends validated user input to the session's live
-	// runtime pane. Keep this path small until durable inbox semantics are needed.
-	// Built before the Lifecycle Manager so the LCM can use it for SCM-driven
-	// agent nudges (CI failure, review feedback, merge conflict).
 	lifecycleMessenger := newModeAwareMessenger()
 	notificationHub := notify.NewHub()
 	notificationBarrier := &sync.Mutex{}
@@ -384,19 +296,10 @@ func Run(buildVersion string) (retErr error) {
 		Store: store, Publisher: notificationHub, Barrier: notificationBarrier, Logger: log,
 	})
 	notificationWriter := notify.New(notify.Deps{Store: store, Publisher: notificationHub, Barrier: notificationBarrier})
-	// Resolution transitions that happened while the daemon was down never
-	// reached lifecycle, so re-check open notifications against the durable
-	// session/PR facts before serving. Best-effort: a failure here only leaves
-	// stale rows in the unresolved list, never blocks startup.
 	if err := notificationWriter.Reconcile(ctx); err != nil {
 		log.Warn("notification resolution reconcile failed", "err", err)
 	}
 
-	// Bring up the Lifecycle Manager and the reaper first: it makes the session
-	// lifecycle write path live (reducer write -> store -> DB trigger ->
-	// change_log -> poller -> broadcaster) and gives startSession the shared LCM.
-	// The agent resolver is built before the LCM so lifecycle can consume the
-	// adapter-declared active-turn steering capability; startSession reuses it.
 	defaultAgent := cfg.Agent
 	if defaultAgent == "" {
 		defaultAgent = config.DefaultAgent
@@ -412,8 +315,6 @@ func Run(buildVersion string) (retErr error) {
 	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
 	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
-	// ao.sessions.ended joins the usage summaries through the same grouping IDs,
-	// which are scoped to the install and only minted while export is on.
 	lcStack.LCM.DeliveryTelemetry().SetInstallID(func() string {
 		if telemetryIdentity == nil || telemetryIdentity.OptedOut() || telemetryIdentity.ExportSuppressed() {
 			return ""
@@ -421,10 +322,6 @@ func Run(buildVersion string) (retErr error) {
 		return telemetryIdentity.Snapshot().InstallID
 	})
 
-	// Wire the controller-facing session service over the same store + LCM, the
-	// selected runtime, routed git/scratch workspaces, the per-session agent
-	// resolver (AO_AGENT validated here for compatibility), and the agent
-	// messenger, then mount it on the API.
 	var agentSvc *agentsvc.Service
 	var agentAccountSvc *agentaccounts.Service
 	chatDrivers := chatdriverregistry.Build(log, func() {
@@ -435,9 +332,6 @@ func Run(buildVersion string) (retErr error) {
 		agentSvc.RecheckAgent(string(domain.HarnessClaudeCode))
 	})
 
-	// Daemon-owned preferences. The store's type is field-compatible with the
-	// service's, adapted here so neither package imports the other. Offering
-	// gates ride along: they are boot-time config, not stored preferences.
 	settingsSvc := settingssvc.New(
 		settingsStore{store: store},
 		chatDrivers,
@@ -445,12 +339,7 @@ func Run(buildVersion string) (retErr error) {
 		func() time.Time { return time.Now().UTC() },
 	)
 
-	// Chat service. The driver registry is the capability gate: a harness with no
-	// registered driver cannot start in chat mode, so an unsupported request fails
-	// loudly instead of silently becoming a TUI session.
 	var sessMgr sessionLifecycle
-	// The session's own account (a saved one, or this computer's login) is read
-	// again off the chat path; the CLI probe can take seconds.
 	recheckSessionAccount := func(sessionID domain.SessionID, harness domain.AgentHarness) {
 		if accounts := agentAccountSvc; accounts != nil {
 			go func() {
@@ -459,8 +348,6 @@ func Run(buildVersion string) (retErr error) {
 			}()
 		}
 	}
-	// The review and chat services and the hook route start before the SCM
-	// observer they ask for early refreshes, so they hold a late-bound handle.
 	reviewRefresher := &scmReviewRefresher{}
 	chatSvc := chatsvc.New(chatsvc.Options{
 		PRChanged:           reviewRefresher.RequestSessionRefresh,
@@ -477,8 +364,6 @@ func Run(buildVersion string) (retErr error) {
 		StopProviderHost: func(ctx context.Context, id domain.SessionID) error {
 			return persistenthost.Shutdown(ctx, cfg.DataDir, string(id))
 		},
-		// Adapts the store's own snapshot type, so the chat service never has to
-		// import the storage layer.
 		Reader: chatsvc.SnapshotReaderFunc(func(ctx context.Context, conversationID string) (chatsvc.ConversationRows, error) {
 			rows, err := store.LoadConversationSnapshot(ctx, conversationID)
 			if err != nil {
@@ -518,9 +403,7 @@ func Run(buildVersion string) (retErr error) {
 				AfterSequence:                    rows.AfterSequence,
 			}, nil
 		}),
-		Drivers: chatDrivers,
-		// The LCM satisfies ActivityRecorder directly: a chat turn is a pure
-		// lifecycle reduction, same as a hook signal from a terminal session.
+		Drivers:  chatDrivers,
 		Activity: lcStack.LCM,
 		Log:      log,
 		NewID:    uuid.NewString,
@@ -545,8 +428,6 @@ func Run(buildVersion string) (retErr error) {
 			}
 			agentSvc.ObserveActiveCodexAccountCapacity(observation)
 		},
-		// Sync ChatUI's model choice, including clearing its override, before a
-		// later TUI rebuild reads the session metadata.
 		OnModelChanged: func(sessionID domain.SessionID, model string) {
 			if sessMgr == nil {
 				return
@@ -602,10 +483,6 @@ func Run(buildVersion string) (retErr error) {
 				}, request.WorkingDir, domain.HarnessHermes, log)
 			},
 		},
-		// Claude's model IDs are provider-specific — first-party aliases,
-		// Bedrock ARNs-in-miniature, Vertex @-versions — so the list has to come
-		// from whichever provider is configured. On failure, the service retains
-		// the matching persisted catalog instead of inventing model aliases.
 		ClaudeModels: func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.AgentModelInfo, error) {
 			return claudecodeagent.ProviderModels(listCtx, request.Binary, request.WorkingDir, request.Env)
 		},
@@ -613,13 +490,6 @@ func Run(buildVersion string) (retErr error) {
 			return claudecodeagent.ProviderCatalogFingerprint(fingerprintCtx, request.Binary, request.WorkingDir, request.Env)
 		},
 	}
-	// Build the multi-tracker dispatching to both GitHub and GitLab once,
-	// shared between the session service and the intake observer below.
-	// Env-configured tokens are validated eagerly here; CLI credential probing
-	// (`gh auth token`) stays lazy inside the multi-tracker so boot is not
-	// blocked. May be nil (no usable credentials) — the session service's
-	// nil-guard and the intake resolver's backoff both tolerate that
-	// (issue #2685).
 	tracker := newMultiTracker(cfg.GitLab, log)
 	codexPlugin := codexagent.New()
 	codexHome, err := codexPlugin.NativeSessionConfigDir(ctx, nil)
@@ -647,8 +517,6 @@ func Run(buildVersion string) (retErr error) {
 		CodexOperationGate: codexOperationGate,
 		ModelGate:          claudeModelGate,
 	}
-	// Minimum Claude Code versions the API has reported per model persist
-	// across restarts so a model stays marked unavailable until the CLI updates.
 	claudecodeagent.ConfigureModelVersionRequirements(
 		filepath.Join(cfg.StateDir, "harnesses", "claude-code", "model-versions.json"))
 	agentSvc = agentsvc.NewWithDeps(agentDeps)
@@ -683,17 +551,11 @@ func Run(buildVersion string) (retErr error) {
 		ChatHostPID: func(id domain.SessionID) (int, bool) {
 			return persistenthost.HostPID(cfg.DataDir, string(id))
 		},
-		// The desktop shell spawns an app-owned daemon, so its parent is
-		// the Electron main process and that tree is the rest of AO. Once
-		// Electron dies the daemon is reparented to init, whose tree is the
-		// whole host, so PID 1 is never a root.
 		AppRootPIDs: func() []int {
 			roots := []int{os.Getpid()}
 			if p := os.Getppid(); p > 1 && os.Getenv("AO_OWNER") == "app" {
 				roots = append(roots, p)
 			}
-			// The tmux server behind AO's sessions detaches and reparents to
-			// init, so it is a descendant of neither of the above.
 			if pid, ok := runtimeAdapter.ServerPID(context.Background()); ok {
 				roots = append(roots, pid)
 			}
@@ -707,7 +569,6 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
-	// The mode-aware messenger, so a Chat original is told as a chat message.
 	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
@@ -724,8 +585,6 @@ func Run(buildVersion string) (retErr error) {
 		agentAccountSvc.SetAgentStopper(stopper.ExitAgentsOnAccount)
 	}
 	sessionSvc.SetComputerLoginCheck(agentAccountSvc.RunsOnComputerLogin)
-	// A chat refused its credentials keeps asking for a sign-in until a reading
-	// of its own account finds the login working again, however it came back.
 	agentAccountSvc.SetLoginConfirmed(func(account domain.AgentAccount, at time.Time) {
 		go func() {
 			defer sentryobs.RecoverBackground()
@@ -792,17 +651,12 @@ func Run(buildVersion string) (retErr error) {
 		tunable.SetModelCatalog(agentSvc)
 	}
 
-	// servers isn't clobbered. See preview_wiring.go (issue #4500).
 	wireManagedPreviewExit(managedPreview, sessionSvc, log)
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
-	// Lifecycle reactions deliberately do not hold Session Manager's input
-	// lease: they reach the agent through sessMgr.Send, which leases its own
-	// pane writes. Holding it here deadlocked every reaction to a hibernated
-	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	githubRepos := newGitHubRepoResolver(log)
@@ -867,7 +721,6 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetHarnessUseGate(systemInstall)
 	systemInstall.SetHarnessUpdateObserver(sessMgr)
 	systemInstall.SetIdleUpdateCoordinator(sessMgr)
-	// Harness resolvers prefer AO's managed launchers once an update created them.
 	binaryutil.SetManagedBinDir(systemInstall.ManagedBinDir())
 	binaryCaches := []harnessBinaryCache{
 		resolverBinaryCache{agents: agents},
@@ -880,18 +733,13 @@ func Run(buildVersion string) (retErr error) {
 			invalidateHarnessBinary(agentSvc, harness, binaryCaches...)
 		}
 	})
-	// Cua Driver installs to ~/.local/bin or %LOCALAPPDATA%, which a
-	// desktop-launched daemon's PATH rarely includes.
 	cuaDriver := cuadriver.New()
 	systemInstall.SetSystemTargetResolver(systeminstall.TargetCuaDriver, cuaDriver.Locate)
 	computerUse := computeruse.New(cuaDriver, cfg.DataDir)
-	// Computer-use calls run only while "Let agents use this computer" is on,
-	// and it turns on only with Cua Driver installed.
 	computerUse.SetEnabled(settingsSvc.ComputerUseEnabled)
 	settingsSvc.SetCuaDriverInstalled(computerUse.Installed)
 	systemInstall.SetTelemetry(telemetrySink)
 	sessMgr.SetVersionTelemetry(telemetrySink)
-	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
@@ -906,13 +754,6 @@ func Run(buildVersion string) (retErr error) {
 		agentSvc.RecheckAgent(harness)
 	})
 
-	// Connect Mobile: the bridge service needs the LAN listener, but the LAN
-	// listener needs the built router's handler, which only exists once srv is
-	// constructed — and srv's router mounts the mobile controller, which needs
-	// the bridge service. Break the cycle with late binding: build bs with LAN
-	// left nil, hand its controller into NewWithDeps, then once srv exists,
-	// build the LAN listener over srv.Handler() and assign it onto bs.LAN.
-	// Shared by the bridge service and the LAN listener. A damaged registry starts empty.
 	accessDevices, accessErr := mobilebridge.LoadAccessDevices(mobilebridge.AccessDevicesPath(cfg.DataDir))
 	if accessErr != nil {
 		log.Warn("load access device registry failed; paired devices must pair again", "err", accessErr)
@@ -924,11 +765,7 @@ func Run(buildVersion string) (retErr error) {
 		Devices:     accessDevices,
 		Codes:       pairingCodes,
 	}
-	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
-	// Session search: a local, read-only index over past sessions. It starts
-	// its own bounded backfill and sweep, so a slow transcript read can never
-	// delay the daemon's first response.
 	sessionSearchSvc := startSessionSearch(ctx, store, cfg.StateDir, log)
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
 	var browserChrome controllers.BrowserChromeService
@@ -942,19 +779,13 @@ func Run(buildVersion string) (retErr error) {
 	}, log)
 	bs.OnBrowserRemoteAccessDisabled = browserLive.CloseAll
 
-	// Standalone shell terminals: user-opened shells with no agent session
-	// behind them. They reuse the same runtime adapter (and therefore the same
-	// terminal mux) as session panes, but keep their own ids, storage, and
-	// lifetime — see internal/service/shellterm.
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, termMgr, log)
 	var shellTrackers []shelltermsvc.TerminalTracker
-	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
 		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
-	// Titles are followed whether or not any terminal UI is open.
 	if rt, ok := runtimeAdapter.(ports.TerminalTitleWatcher); ok {
 		titles := terminaltitle.NewManager(ctx, rt, store, log)
 		shellTrackers = append(shellTrackers, titles)
@@ -966,9 +797,6 @@ func Run(buildVersion string) (retErr error) {
 	defer agentAuthSvc.Close()
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
-	// Late-bound so Kill/Cleanup close a session's scoped shells before its
-	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
-	// SetShellTerminalCloser).
 	sessMgr.SetShellTerminalCloser(shellTermSvc)
 	var (
 		usageCollector *usagesvc.Collector
@@ -1031,12 +859,6 @@ func Run(buildVersion string) (retErr error) {
 			},
 			ReconcilePath: usageCollector.ReconcilePath,
 		})
-		// Safety-net reconcile tick. The pipeline is event-driven otherwise:
-		// a silently lost fsnotify watch or a resume transcript that arrived
-		// without a hook would otherwise never be re-checked. NotifySourcesChanged
-		// fans into the coordinator's refresh, which reconciles sources (registering
-		// continuation transcripts) and rebuilds the watch set. Survives
-		// coordinator restarts because the pipeline forwards to the live instance.
 		go func() {
 			defer sentryobs.RecoverBackground()
 			ticker := time.NewTicker(usageReconcileTick)
@@ -1091,17 +913,10 @@ func Run(buildVersion string) (retErr error) {
 		log.Warn("pr action service disabled: no usable SCM provider")
 	}
 
-	// Codex switch recovery is best effort and never blocks unrelated daemon
-	// startup. Its own credential gate still protects any local mutation.
 	if reconcileErr := agentSvc.ReconcileCodexAccountSwitches(ctx); reconcileErr != nil {
 		log.Warn("Codex account switch recovery deferred", "err", reconcileErr)
 	}
 
-	// Durable interface-transition recovery is the startup
-	// safety boundary. The in-memory input fence disappeared with the previous
-	// daemon; every active saga must be closed or explicitly quarantined before
-	// binding a usable API, without accidentally reopening input. Runtime/worktree
-	// restoration follows in the background after the listener is live.
 	if reconcileErr := sessMgr.ReconcileStartupSafety(ctx); reconcileErr != nil {
 		stop()
 		managedPreview.Close()
@@ -1116,18 +931,6 @@ func Run(buildVersion string) (retErr error) {
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
-	// Push-device registry: persisted phones that receive OS push notifications.
-	// A load failure must not block boot — degrade to no push rather than refusing
-	// to start the daemon. pushRegistry (interface) is assigned only when load
-	// succeeds so a failure leaves a true nil interface (not a non-nil interface
-	// wrapping a nil pointer), which the controller's nil guard relies on to
-	// return 501. pushDevices keeps the concrete registry for the dispatcher.
-	// deviceRoster (interface) mirrors the same nil-guard as pushRegistry: it is
-	// assigned only when load succeeds, so a failed load leaves a true nil
-	// interface rather than a non-nil interface wrapping a nil *DeviceRegistry
-	// (which would panic on first method call). The roster controller answers
-	// 503 DEVICE_REGISTRY_UNAVAILABLE in that state instead of crashing or
-	// silently no-oping.
 	var (
 		pushRegistry controllers.PushRegistry
 		pushDevices  *mobilebridge.DeviceRegistry
@@ -1142,24 +945,13 @@ func Run(buildVersion string) (retErr error) {
 		bs.PushDevices = reg
 	}
 
-	// One presence tracker instance shared by APIDeps.Presence (the
-	// heartbeat middleware that touches it) and APIDeps.DeviceLive (the roster
-	// controller that reads it) — must be the same instance or every device
-	// would silently report offline.
 	presenceTracker := presence.NewTracker()
 
-	// Stable, machine-bound host identity, served by the unauthenticated
-	// GET /api/v1/identity probe. A failure here is not fatal: the probe then
-	// answers 501 and the phone falls back to pairing without identity
-	// verification, which is how it behaved before the probe existed.
 	hostIdentity, identityErr := mobilebridge.EnsureLocalIdentity(cfg.DataDir)
 	if identityErr != nil {
 		log.Warn("could not establish host identity; /api/v1/identity will report unimplemented", "error", identityErr)
 	}
 
-	// Managed remote-access connector. Reap first: a daemon that died without
-	// stopping its connector leaves a public tunnel to this machine running
-	// with nobody watching it.
 	tunnelPID := mobilebridge.TunnelPIDPath(cfg.DataDir)
 	if reapErr := mobilebridge.ReapStaleTunnel(tunnelPID, mobilebridge.IsLiveCloudflared, mobilebridge.KillProcess); reapErr != nil {
 		log.Warn("could not reap a stale mobile tunnel", "error", reapErr)
@@ -1167,19 +959,12 @@ func Run(buildVersion string) (retErr error) {
 	managedTunnel := func(res mobilebridge.CloudflaredResolution) controllers.TunnelController {
 		log.Info("mobile remote access available", "cloudflared", res.Path, "source", res.Source)
 		deps := mobilebridge.ManagedTunnelDeps{Binary: res.Path, PIDPath: tunnelPID, Log: log}
-		// A machine a signed-in device links gets a fixed address from AO
-		// Cloud; it needs the host identity that AO Cloud registered.
 		if cfg.CloudControlPlaneURL != "" && hostIdentity.HostID != "" {
 			deps.Fixed = mobilebridge.NewFixedTunnelSource(cfg.CloudControlPlaneURL, cfg.DataDir)
 			deps.HostID = hostIdentity.HostID
 		}
 		return mobilebridge.NewManagedTunnel(deps)
 	}
-	// Looked up again whenever the bridge is enabled, so a cloudflared installed
-	// since boot is picked up without restarting AO. Finding none on a machine
-	// an AO account links starts AO's own pinned download, and the connector
-	// starts once it lands. Any other machine waits for the desktop's Install,
-	// as before fixed addresses.
 	bs.ConnectorInstalling = systemInstall.CloudflaredInstalling
 	bs.ResolveTunnel = func() controllers.TunnelController {
 		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir, systeminstall.PinnedCloudflared))
@@ -1191,15 +976,9 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return managedTunnel(res)
 	}
-	// A system cloudflared is version-checked by running it (30-120ms, up to a
-	// 5s timeout), so resolve off the boot path. Status reads and anything that
-	// needs a connector, such as restoring an enabled bridge, wait for this
-	// lookup rather than racing it.
 	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
 		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir, systeminstall.PinnedCloudflared))
 		if res.NeedsInstall {
-			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
-			// Mobile behaves exactly as it did before remote access existed.
 			log.Info("mobile remote access unavailable; cloudflared not installed",
 				"rejectedSystemPath", res.SystemPath)
 			return nil
@@ -1208,8 +987,6 @@ func Run(buildVersion string) (retErr error) {
 	})
 
 	bs.HostID = hostIdentity.HostID
-	// Pushes include the authoritative host identity so a phone can reject
-	// same-numbered sessions on another machine. No identity means no push.
 	if pushDevices != nil && hostIdentity.HostID != "" {
 		dispatcher := push.NewDispatcher(notificationHub, pushDevices, push.NewExpoClient(os.Getenv("EXPO_ACCESS_TOKEN")), hostIdentity.HostID, log)
 		go func() {
@@ -1239,8 +1016,6 @@ func Run(buildVersion string) (retErr error) {
 		nativeSessions, _ = codewhaleAgent.(ports.AgentNativeSessionResolver)
 	}
 
-	// Terminal hooks pass the hook process gate: a Claude process other than
-	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		SessionForks:       sessionForkSvc,
@@ -1369,20 +1144,10 @@ func Run(buildVersion string) (retErr error) {
 	}
 	var usageDone <-chan struct{}
 
-	// Late-bind: the LAN listener shares the exact loopback router instance so
-	// the LAN surface and loopback surface never drift apart.
 	lan := httpd.NewMobileLAN(srv.Handler(), hostIdentity.HostID, mobilebridge.DefaultPort, log, telemetrySink)
 	lan.UseDeviceCredentials(accessDevices, pairingCodes)
 	bs.LAN = lan
 
-	// Restore Connect Mobile across a daemon restart: if the bridge was left
-	// enabled, re-arm the listener on its last port with the same password
-	// hash so an already-paired phone keeps working with no new password, and
-	// (via bs.RestoreOnBoot) re-apply the secure-pairing proxy against the
-	// port Start actually bound. Routed through bs, not lan directly, so the
-	// proxy never gets pinned to a dead port after an ephemeral fallback.
-	// Saved wake ownership is restored even when Connect Mobile is off.
-	// Best-effort: never blocks boot.
 	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
 		log.Warn("restore mobile and awake settings on boot failed", "err", err)
 	}
@@ -1394,12 +1159,9 @@ func Run(buildVersion string) (retErr error) {
 	if usagePipeline != nil {
 		usageDone = usagePipeline.Start(ctx)
 	}
-	// ponytail: 5s tolerates a brief frontend restart; tune if dev hot-reload trips it.
 	const supervisorGrace = 5 * time.Second
 
 	if ln, addr, err := supervisor.Listen(cfg.RunFilePath); err != nil {
-		// Non-fatal: without the link the daemon still works (e.g. headless "ao start"),
-		// it just will not auto-stop when a frontend dies. Do not block startup on it.
 		log.Warn("supervisor: listener unavailable; frontend-death auto-stop disabled", "err", err)
 	} else {
 		log.Info("supervisor: listening", "addr", addr)
@@ -1418,10 +1180,6 @@ func Run(buildVersion string) (retErr error) {
 	var startupReconcileDone <-chan struct{}
 	var usageLimitResumeDone <-chan struct{}
 	runErr := srv.RunWithReady(ctx, func() {
-		// Agent-readiness warming is advisory and idempotent, and request paths
-		// lazily Ensure on demand. Kick it here, after the listener is live, so its
-		// bounded subprocess probes no longer contend with the synchronous
-		// migration and fencing reconcile that gate the port bind.
 		readinessDone := agentSvc.WarmReadiness()
 		if cfg.HarnessUpdateChecks {
 			go func() {
@@ -1442,9 +1200,6 @@ func Run(buildVersion string) (retErr error) {
 				sentryobs.CaptureBackground(ctx, reconcileErr, "chat", "reconcile", map[string]string{"reason": "chat_host"})
 			}
 			close(persistentHostsReconciled)
-			// Reviewer-owned Chat controllers wait for persistent host reconciliation.
-			// Recover them only after the listener is ready and the gate is closed, or
-			// startup can deadlock before the daemon binds its port.
 			if reconcileErr := reviewSvc.RecoverChatReviewers(ctx); reconcileErr != nil {
 				log.Warn("reviewer chat recovery deferred", "err", reconcileErr)
 			}
@@ -1459,8 +1214,6 @@ func Run(buildVersion string) (retErr error) {
 		}()
 		go func() {
 			defer sentryobs.RecoverBackground()
-			// The session operation gate skips reconciliation in progress, so
-			// a slow provider reconnect must not stall hibernation of others.
 			ticker := time.NewTicker(chatHibernateSweepTick)
 			defer ticker.Stop()
 			for {
@@ -1479,8 +1232,6 @@ func Run(buildVersion string) (retErr error) {
 		}()
 		go func() {
 			defer sentryobs.RecoverBackground()
-			// Boot restore and reconciliation settle which terminated sessions
-			// are coming back before this pass looks at any of them.
 			select {
 			case <-done:
 			case <-ctx.Done():
@@ -1512,8 +1263,6 @@ func Run(buildVersion string) (retErr error) {
 			defer close(resumeDone)
 			var sweeps sync.WaitGroup
 			defer sweeps.Wait()
-			// Recovery must attach existing provider work before scheduled retries
-			// inspect controller readiness. The durable opt-in survives shutdown.
 			select {
 			case <-done:
 			case <-ctx.Done():
@@ -1525,8 +1274,6 @@ func Run(buildVersion string) (retErr error) {
 				if ctx.Err() != nil {
 					return
 				}
-				// The service bounds overlapping scans and provider attempts. A wake
-				// must not stop the next tick discovering another session's deadline.
 				sweeps.Go(func() {
 					defer sentryobs.RecoverBackground()
 					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
@@ -1563,16 +1310,6 @@ func Run(buildVersion string) (retErr error) {
 	}
 	lifecycle.RecordError("daemon_shutdown_begin", runErr, shutdownFields)
 
-	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
-	// srv.Run returning. Desktop exit, including loss of its supervisor, requests
-	// agent shutdown; daemon replacement preserves processes for the next boot.
-
-	// Shut the background goroutines down in order: cancel the context FIRST so
-	// their loops exit, then wait for them to drain. Doing this explicitly (not
-	// via defer) avoids the LIFO trap where a Stop() that blocks on ctx-cancel
-	// runs before the cancel: a non-signal exit path would hang otherwise.
-	// stop only cancels workers; deferred stopSignals keeps a second automatic
-	// SIGTERM from terminating the process while installer restoration runs.
 	stop()
 	if usageLimitResumeDone != nil {
 		<-usageLimitResumeDone
@@ -1607,8 +1344,6 @@ func Run(buildVersion string) (retErr error) {
 	codexSwitchCancel()
 	managedPreview.Close()
 	<-previewDone
-	// Daemon replacement detaches providers. Desktop exit stops processes
-	// while keeping the sessions and worktrees available for resume.
 	chatStopTimeout := cfg.ShutdownTimeout
 	if srv.StopAgentsRequested() {
 		chatStopTimeout = max(chatStopTimeout, 30*time.Second)
@@ -1632,16 +1367,7 @@ func Run(buildVersion string) (retErr error) {
 		usagePricing.Wait()
 	}
 	lcStack.Stop()
-	// Tear the tailnet proxy down before the listener it fronts. `tailscale
-	// serve --bg` state lives in tailscaled and outlives this process, so
-	// leaving it would keep publishing a local port that no longer has the
-	// authenticated LAN listener behind it. Best-effort and never blocking:
-	// boot restore re-applies it against the next bound port.
 	bs.ShutdownServe()
-	// And the connector before that again, for the same reason: cloudflared is
-	// a separate process that outlives this one, so leaving it would keep a
-	// public hostname resolving to a port that is about to close. Stopping it
-	// does not disable the bridge — boot restore starts a new one.
 	bs.ShutdownTunnel()
 	bs.ShutdownKeepAwake()
 	lanStopCtx, lanCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
@@ -1727,12 +1453,10 @@ func installedAgentHarness(target systeminstall.Target) (string, bool) {
 	return "", false
 }
 
-// harnessBinaryCache holds agent plugins that cache the executable they resolved.
 type harnessBinaryCache interface {
 	InvalidateBinaryResolution(harness domain.AgentHarness)
 }
 
-// resolverBinaryCache is the plugins an AgentResolver hands out.
 type resolverBinaryCache struct{ agents ports.AgentResolver }
 
 func (c resolverBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarness) {
@@ -1743,7 +1467,6 @@ func (c resolverBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarn
 	}
 }
 
-// pluginBinaryCache is one harness's plugin held outside any resolver.
 type pluginBinaryCache struct {
 	harness domain.AgentHarness
 	plugin  ports.AgentBinaryResolutionInvalidator
@@ -1755,11 +1478,6 @@ func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarnes
 	}
 }
 
-// invalidateHarnessBinary makes the harness's executable resolve again
-// everywhere. Launches and install verification, the agent service, Chat
-// drivers and model discovery each hold their own plugin instances, each
-// caching the path it found: missing one leaves it on the binary from before
-// the install.
 func invalidateHarnessBinary(readiness ports.AgentReadinessProvider, harness string, caches ...harnessBinaryCache) {
 	readiness.InvalidateAgentInstallation(harness)
 	for _, cache := range caches {
@@ -1789,11 +1507,6 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	}
 }
 
-// newDaemonLogger returns the daemon's slog logger. It writes to stderr so
-// supervisors can capture it separately from any structured stdout protocol
-// added later, and, from when openFile is called, to $AO_DATA_DIR/daemon.log so
-// the log outlives the process that read it. Run opens the file only after it
-// holds the data-dir lock (see deferredLogFile).
 func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 	file := &deferredLogFile{}
 	log := slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -1807,21 +1520,13 @@ func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 	}
 }
 
-// dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
-// stage of margin. Installer draining can outlast an ordinary shutdown stage.
 func dataDirTakeoverWait(shutdownTimeout, installerShutdownTimeout time.Duration) time.Duration {
 	return 8*shutdownTimeout + max(shutdownTimeout, installerShutdownTimeout) + 18*time.Second
 }
 
-// lockDataDir takes the data-dir lock. When another AO process holds it, as a
-// predecessor still shutting down during a takeover does, it logs and waits up
-// to wait for that process to exit, then refuses to start. On a file system
-// that cannot lock it returns a nil lock (Release is a no-op) and no error.
 func lockDataDir(ctx context.Context, dataDir string, wait time.Duration, log *slog.Logger) (*datadirlock.Lock, error) {
 	lock, err := datadirlock.Acquire(ctx, dataDir, 0)
 	if errors.Is(err, datadirlock.ErrUnsupported) {
-		// Some NFS, SMB and FUSE mounts cannot lock files. Start unguarded, as AO
-		// did before the lock, rather than refuse to run on them.
 		log.Warn("data dir file system cannot lock files; starting without the single-daemon guard", "err", err)
 		return nil, nil
 	}
@@ -1854,9 +1559,6 @@ func stabilizeWorkingDirectory(dataDir string) error {
 	return nil
 }
 
-// newAgentAccounts builds the Claude Code and Codex account catalog. Each
-// account is a config folder under the state dir; "This computer" is the CLI's
-// own folder, which AO never changes the login of.
 func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, codexAccounts ports.CodexAccountClientFactory, log *slog.Logger) *agentaccounts.Service {
 	claudeHome, claudeConfig := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")), ""
 	if claudeHome != "" {
@@ -1868,8 +1570,6 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	providers := []ports.AgentAccountProviderCLI{
 		&agentaccount.Claude{
 			Binary: claudePlugin.ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig,
-			// The daemon exports AO's saved keys to itself; the account check
-			// must not see one Claude Code's sessions never get.
 			DeviceEnv: func(ctx context.Context) map[string]string {
 				return claudePlugin.RuntimeCredentialEnv(cfg.DataDir, providerkeys.HoldBack(ctx, nil, cfg.DataDir, "claude-code"))
 			},
@@ -1879,8 +1579,6 @@ func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, 
 	return agentaccounts.New(store, providers, filepath.Join(cfg.StateDir, "agent-accounts"), nil, log)
 }
 
-// claudeModelGate marks Claude models the installed Claude Code is too old to
-// use. Other agents' catalogs pass through unchanged.
 func claudeModelGate(ctx context.Context, agentID string, catalog ports.AgentModelCatalog) ports.AgentModelCatalog {
 	if agentID != string(domain.HarnessClaudeCode) {
 		return catalog

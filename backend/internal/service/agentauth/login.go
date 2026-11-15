@@ -28,14 +28,10 @@ import (
 
 const loginLifetime = 15 * time.Minute
 
-// claudeSetupTokenMethod saves a token from `claude setup-token` for local
-// sessions instead of running a native login command. It matches option 4 of
-// AO's terminal Claude login menu.
 const claudeSetupTokenMethod = "setup_token"
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
 
-// LoginMethod describes a reviewed native login method, never a command.
 type LoginMethod struct {
 	ID     string `json:"id"`
 	Label  string `json:"label"`
@@ -43,8 +39,6 @@ type LoginMethod struct {
 }
 
 func loginMethods(agentID string) []LoginMethod {
-	// A harness with a provider catalog on this device offers every provider
-	// in it through one picker instead of a fixed list of key methods.
 	if _, ok := catalogProviders(agentID); ok {
 		methods := []LoginMethod{{catalogKeyMethod, "Provider API key", true}}
 		for _, method := range nativeLoginMethods(agentID) {
@@ -87,14 +81,10 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 	case "deepseek-harness":
 		return []LoginMethod{{"deepseek_api_key", "DeepSeek API key", true}, {"native", "Other native setup", false}}
 	case "copilot":
-		// GitHub Enterprise and Microsoft Entra stay in Copilot's own picker.
 		return []LoginMethod{{"browser", "GitHub account in browser", false}, {"device_code", "Device code", false}, {"copilot_token", "GitHub token", true}, {"native", "Other native sign-in", false}}
 	case "kimi":
 		return []LoginMethod{{"device_code_global", "Kimi account (kimi.ai)", false}, {"device_code_cn", "Kimi account (kimi.com)", false}, {"native", "Other native sign-in", false}}
 	default:
-		// A plan whose login screen opens only when the user types terminalInput
-		// (Droid, Qwen, Prime Agent) has no reviewed way to reach it in a hidden
-		// PTY: those keep the visible terminal login.
 		if plan, ok := planByAgentID[agentID]; ok && len(plan.command) > 0 && plan.LaunchMode == LaunchTerminal && (plan.terminalInput == "" || plan.initialInput != "") {
 			return []LoginMethod{{"native", "Native sign-in", false}}
 		}
@@ -102,23 +92,17 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 	}
 }
 
-// LoginSnapshot contains only recognized prompts and process state. A successful
-// process must still be checked through the harness's authentication probe.
 type LoginSnapshot struct {
-	ID             string   `json:"id"`
-	AgentID        string   `json:"agentId"`
-	Method         string   `json:"method"`
-	Status         string   `json:"status" enum:"running,succeeded,failed,cancelled,timed_out"`
-	LoginURL       string   `json:"loginUrl,omitempty"`
-	DeviceCode     string   `json:"deviceCode,omitempty"`
-	AcceptsCode    bool     `json:"acceptsCode,omitempty"`
-	NativePrompt   string   `json:"nativePrompt,omitempty" enum:"waiting,menu,terminal_required"`
-	SelectedOption string   `json:"selectedOption,omitempty"`
-	NativeOptions  []string `json:"nativeOptions,omitempty"`
-	// WithdrawFailed reports, for a key saved with sharing turned off, that
-	// AO could not take its copy back out of the OS user environment: the
-	// save succeeded, but programs started outside AO may still see the key
-	// until the user signs out.
+	ID             string    `json:"id"`
+	AgentID        string    `json:"agentId"`
+	Method         string    `json:"method"`
+	Status         string    `json:"status" enum:"running,succeeded,failed,cancelled,timed_out"`
+	LoginURL       string    `json:"loginUrl,omitempty"`
+	DeviceCode     string    `json:"deviceCode,omitempty"`
+	AcceptsCode    bool      `json:"acceptsCode,omitempty"`
+	NativePrompt   string    `json:"nativePrompt,omitempty" enum:"waiting,menu,terminal_required"`
+	SelectedOption string    `json:"selectedOption,omitempty"`
+	NativeOptions  []string  `json:"nativeOptions,omitempty"`
 	WithdrawFailed bool      `json:"withdrawFailed,omitempty"`
 	ExpiresAt      time.Time `json:"expiresAt"`
 }
@@ -131,40 +115,25 @@ type loginOperation struct {
 	cleanupFailed bool
 	stdin         io.WriteCloser
 	codeSubmitted bool
-	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
-	// printed for it.
-	nativeDigits []string
+	nativeDigits  []string
 }
 
-// StartLogin runs a fixed native login or saves a reviewed provider key.
-// Native CLI credentials travel through stdin; no credentials enter API
-// snapshots, terminal replay, or application logs.
 func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string) (LoginSnapshot, error) {
 	return s.StartLoginWithModel(ctx, agentID, method, secret, "")
 }
 
-// StartLoginWithModel supplies the model identifier required by Qwen,
-// Continue, and OpenHands provider-key setup. Other methods reject it.
 func (s *Service) StartLoginWithModel(ctx context.Context, agentID, method, secret, model string) (LoginSnapshot, error) {
 	return s.StartLoginWithOptions(ctx, agentID, method, secret, LoginOptions{Model: model})
 }
 
-// LoginOptions carries the optional parts of a provider-key login.
 type LoginOptions struct {
-	// Model is required by Qwen, Continue, and OpenHands provider-key setup.
-	Model string
-	// Device also publishes the key to the OS user environment, for programs
-	// started outside AO. AO-launched sessions receive it either way. Nil
-	// keeps the key's current setting.
-	Device *bool
-	// Provider is the catalog provider a provider_key login configures.
+	Model    string
+	Device   *bool
 	Provider string
 }
 
 func (o LoginOptions) sharesDevice() bool { return o.Device != nil && *o.Device }
 
-// StartLoginWithOptions is StartLogin with a model and device setting for
-// provider-key methods. An empty secret reuses the key AO already saved.
 func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, secret string, opts LoginOptions) (LoginSnapshot, error) {
 	model := opts.Model
 	if (method == catalogKeyMethod) != (opts.Provider != "") {
@@ -177,7 +146,6 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_DEVICE_INVALID", "Only provider keys can be added to the device environment.", nil)
 	}
 	if name, ok := environmentMethod(agentID, method); ok && strings.TrimSpace(secret) == "" {
-		// Reuse the saved key, for example to choose another model.
 		if keys, err := providerkeys.Load(s.dataDir); err == nil {
 			secret = keys[name]
 		}
@@ -222,17 +190,11 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return LoginSnapshot{}, err
 	}
 	defer release()
-	// Key methods write their store under this harness's reservation only.
-	// s.mu is taken just to record the result, so a slow store (`omp auth
-	// import`, a systemd user bus) never stalls other harnesses' logins.
 	withdrawFailed := false
 	if isKey, err := s.saveLoginKey(ctx, plan, method, secret, model, opts, &withdrawFailed); isKey {
 		if err != nil {
 			return LoginSnapshot{}, err
 		}
-		// A key in the harness's own store replaces an AO-saved key that
-		// would override it; an env_ method is that AO-saved key itself, and
-		// Gemini's API key method saves that same key for Gemini's sessions.
 		if !strings.HasPrefix(method, "env_") && (agentID != "gemini" || method != "gemini_api_key") {
 			if _, err := s.releaseSubscriptionKey(ctx, agentID); err != nil {
 				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The key was saved, but AO could not stop passing this harness its earlier API key. Try again.")
@@ -262,7 +224,6 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")
 		}
 	}
-	// AO's copy of a key that would override this sign-in stays out of it.
 	cmd.Env = providerkeys.EnvList(append(os.Environ(), "NO_COLOR=1", "TERM=dumb"), providerkeys.WithheldForSignIn(agentID))
 	if agentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)
@@ -312,18 +273,12 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_START_FAILED", "The native login could not start. Try the terminal login.")
 	}
 	s.operations[op.snapshot.ID] = op
-	// Cleanup after the process exits outlives this request but keeps its
-	// values; each step adds its own timeout.
 	afterLogin := context.WithoutCancel(ctx)
 	go func() {
 		err := cmd.Wait()
 		if op.stdin != nil {
 			_ = op.stdin.Close()
 		}
-		// A successful sign-in also replaces an AO-saved key that would
-		// override it. Do that before "succeeded" is visible, so no session
-		// started after it still gets the key. A failed release fails the
-		// sign-in. Runs outside s.mu.
 		var releaseErr error
 		if err == nil && loginCtx.Err() == nil {
 			releaseCtx, releaseCancel := context.WithTimeout(afterLogin, 5*time.Second)
@@ -338,15 +293,9 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 			case err != nil:
 				op.snapshot.Status = "failed"
 			case releaseErr != nil:
-				// The earlier API key would still be passed to new sessions
-				// and could bill another account, so the switch is not
-				// complete. Failed lets the panel offer a retry.
 				op.snapshot.Status = "failed"
 			default:
 				op.snapshot.Status = "succeeded"
-				// The newest sign-in wins, as in the terminal login menu: an
-				// earlier setup token would otherwise keep signing sessions in.
-				// The native login already succeeded, so cleanup is best effort.
 				if agentID == "claude-code" && s.dataDir != "" {
 					_ = claudecode.RemoveLocalOAuthToken(s.dataDir)
 				}
@@ -361,14 +310,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 	return op.snapshot, nil
 }
 
-// saveClaudeSetupToken records the token as a finished operation so the
-// renderer verifies it through the same authentication probe as other logins.
-// The caller holds s.mu. The token never enters the snapshot.
 func (s *Service) saveClaudeSetupToken(token string, expires time.Time) (LoginSnapshot, error) {
-	// Claude Code's own ANTHROPIC_API_KEY would otherwise keep winning over
-	// the token in new sessions. Release it first, and give it back if the
-	// token cannot be written, so a failure leaves the previous sign-in fully
-	// in place rather than half switched.
 	ctx := context.Background()
 	released, err := s.releaseSubscriptionKey(ctx, "claude-code")
 	if err != nil {
@@ -387,8 +329,6 @@ func (s *Service) saveClaudeSetupToken(token string, expires time.Time) (LoginSn
 	return op.snapshot, nil
 }
 
-// guidedAuthTerminal is daemon-internal: the reviewed plan creates its PTY,
-// and the UI can send only fixed menu navigation actions.
 type guidedAuthTerminal interface {
 	TerminalOpener
 	ObserveAuthTerminal(context.Context, string) (shellterm.AuthTerminalObservation, error)
@@ -431,7 +371,6 @@ func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSn
 		}
 	}
 	expires := time.Now().Add(s.loginTimeout)
-	// The native login outlives the HTTP request but keeps its trace values.
 	loginCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), expires)
 	op := &loginOperation{
 		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: "native", Status: "running", NativePrompt: "waiting", ExpiresAt: expires},
@@ -444,8 +383,6 @@ func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSn
 	return op.snapshot, nil
 }
 
-// watchNativeLogin reduces private PTY frames to reviewed states. It retains
-// ownership until CloseShellTerminal confirms that the child is destroyed.
 func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTerminal, op *loginOperation) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -464,7 +401,7 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 			observation, err := terminal.ObserveAuthTerminal(ctx, op.terminalID)
 			if err != nil {
 				continue
-			} // A probe error is not proof of exit.
+			}
 			if observation.Alive {
 				kind, selected, options, digits := nativePrompt(observation.Output)
 				s.mu.Lock()
@@ -475,16 +412,6 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 				s.mu.Unlock()
 				continue
 			}
-			// The PTY reports no exit status, and the user may have pressed Esc
-			// or the CLI may have failed, so the harness's own probe decides.
-			// The old AO-saved key is released first so the probe cannot be
-			// satisfied by it, and given back unless the probe finds the
-			// harness's own sign-in. Authorized confirms it. Configured, all
-			// some harnesses (Gemini, Hermes, MiMo Code) can report, means
-			// their own credentials are there without the old key; the
-			// operation succeeds and the panel shows it as configured, not
-			// verified. A signed-out or inconclusive probe fails the operation
-			// so the panel offers a retry or the terminal.
 			probeCtx, probeCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			released, releaseErr := s.releaseSubscriptionKey(probeCtx, op.snapshot.AgentID)
 			state := domain.AgentAuthenticationUnknown
@@ -530,22 +457,15 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 	}
 }
 
-// nativeSignInFound reports whether the probe after a native sign-in found
-// the harness's own credential: verified, or present where the harness can
-// only say configured.
 func nativeSignInFound(state domain.AgentAuthenticationState) bool {
 	return state == domain.AgentAuthenticationAuthorized || state == domain.AgentAuthenticationConfigured
 }
 
-// signInProber runs a harness's own authentication probe. AO's agent service,
-// the daemon's binary resolver, provides it.
 type signInProber interface {
 	InvalidateAgentAuthentication(agentID string)
 	EnsureAgentReadiness(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error)
 }
 
-// nativeSignInState probes agentID afresh after its native sign-in exited.
-// Without a prober, or when the probe fails, the state is unknown.
 func (s *Service) nativeSignInState(ctx context.Context, agentID string) domain.AgentAuthenticationState {
 	prober, ok := s.agents.(signInProber)
 	if !ok {
@@ -560,43 +480,26 @@ func (s *Service) nativeSignInState(ctx context.Context, agentID string) domain.
 }
 
 var (
-	nativeSelectedLine = regexp.MustCompile(`(?m)^\s*[>❯●◉‣▸►]\s*([^\r\n]+?)\s*$`)
-	// A cursor glyph may lead the highlighted entry of a numbered picker.
+	nativeSelectedLine     = regexp.MustCompile(`(?m)^\s*[>❯●◉‣▸►]\s*([^\r\n]+?)\s*$`)
 	nativeNumberedLine     = regexp.MustCompile(`(?m)^\s*(?:[>❯●◉‣▸►]\s*)?([1-9])[.)]\s+([^\r\n]+?)\s*$`)
 	nativeInteractiveWords = regexp.MustCompile(`(?i)\b(select|choose|enter|password|api key|token|credential)s?\b`)
-	// What may follow a numbered menu's last entry while it is still the
-	// prompt on screen: cursor glyphs, key hints, and a final input prompt
-	// holding at most the digit typed into it.
-	nativeMenuGlyphs  = regexp.MustCompile(`^[\s>❯›»?:·•●○◉*-]*$`)
-	nativeMenuPrompt  = regexp.MustCompile(`^.{0,60}[:?>❯›]\s*[1-9]?$`)
-	nativeMenuHint    = regexp.MustCompile(`(?i)(arrow|↑|↓|enter|esc|navigate|confirm|cancel|number)`)
-	nativeSecretWords = regexp.MustCompile(`(?i)(api key|token|password|secret|credential|paste|\bcode\b)`)
+	nativeMenuGlyphs       = regexp.MustCompile(`^[\s>❯›»?:·•●○◉*-]*$`)
+	nativeMenuPrompt       = regexp.MustCompile(`^.{0,60}[:?>❯›]\s*[1-9]?$`)
+	nativeMenuHint         = regexp.MustCompile(`(?i)(arrow|↑|↓|enter|esc|navigate|confirm|cancel|number)`)
+	nativeSecretWords      = regexp.MustCompile(`(?i)(api key|token|password|secret|credential|paste|\bcode\b)`)
 )
 
-// nativeScreenLines bounds how far above the end of the output an arrow
-// picker's highlighted entry may sit and still be on screen.
 const nativeScreenLines = 40
 
-// Only canonical menu names can cross the credential boundary. Native CLIs
-// with other prompts retain an explicit terminal fallback.
 var nativeOptions = map[string]string{
 	"anthropic": "Anthropic", "anthropic console": "Anthropic Console", "openai": "OpenAI", "openrouter": "OpenRouter", "google": "Google", "google cloud": "Google Cloud", "gemini": "Gemini", "github": "GitHub", "github.com": "GitHub.com", "github enterprise": "GitHub Enterprise", "github copilot": "GitHub Copilot", "copilot": "Copilot", "microsoft entra": "Microsoft Entra", "chatgpt": "ChatGPT", "claude": "Claude", "kiro": "Kiro", "aws builder id": "AWS Builder ID", "api key": "API key", "oauth": "OAuth", "browser": "Browser", "device code": "Device code", "qwen": "Qwen", "deepseek": "DeepSeek", "kimi": "Kimi", "mistral": "Mistral", "grok": "Grok", "xai": "xAI", "azure": "Azure", "vertex ai": "Vertex AI", "vercel": "Vercel", "ollama": "Ollama",
 }
 
-// nativePrompt reduces PTY frames to reviewed UI states. An arrow-key picker
-// reports its highlighted option; a numbered picker reports the recognized
-// choices so the UI can offer them as buttons. Anything unrecognized keeps
-// the explicit terminal fallback. A line-oriented CLI leaves answered menus
-// and prompts in scrollback, so only what is still the prompt counts: a menu
-// followed by later output is history, and so are words above the last lines.
 func nativePrompt(output string) (kind, selected string, options, digits []string) {
 	plain := terminalui.PlainTerminalText(output)
 	if len(plain) > 16*1024 {
 		plain = plain[len(plain)-16*1024:]
 	}
-	// Prompt libraries such as clack and cliclack draw a gutter before each
-	// line ("│  ● OpenAI", or "|  > OpenAI" on Windows consoles); the line
-	// itself starts after it.
 	var lines []string
 	for _, line := range strings.Split(plain, "\n") {
 		line = strings.TrimRight(strings.TrimLeft(line, " \t|│┃║"), " \t\r")
@@ -604,8 +507,6 @@ func nativePrompt(output string) (kind, selected string, options, digits []strin
 			lines = append(lines, line)
 		}
 	}
-	// A numbered picker with at least two entries is drivable from the UI only
-	// when every choice is a reviewed label; otherwise hand it to the terminal.
 	if options, digits, entries := currentNumberedMenu(lines); entries > 1 {
 		if len(options) == entries {
 			return "menu", "", options, digits
@@ -616,11 +517,11 @@ func nativePrompt(output string) (kind, selected string, options, digits []strin
 	for i := len(screen) - 1; i >= 0; i-- {
 		match := nativeSelectedLine.FindStringSubmatch(screen[i])
 		if match == nil || nativeNumberedLine.MatchString(screen[i]) {
-			continue // an entry of a numbered menu already answered
+			continue
 		}
 		label := strings.ToLower(strings.TrimSpace(match[1]))
 		if strings.Trim(label, "0123456789") == "" {
-			continue // the digit typed into an answered numbered menu
+			continue
 		}
 		if canonical, ok := nativeOptions[label]; ok {
 			return "menu", canonical, nil, nil
@@ -633,9 +534,6 @@ func nativePrompt(output string) (kind, selected string, options, digits []strin
 	return "waiting", "", nil, nil
 }
 
-// lastTextLines returns up to n of the last lines that hold letters, skipping
-// the borders, cursors and input markers a prompt library draws below its
-// question ("└", "_").
 func lastTextLines(lines []string, n int) []string {
 	var out []string
 	for i := len(lines) - 1; i >= 0 && len(out) < n; i-- {
@@ -646,10 +544,6 @@ func lastTextLines(lines []string, n int) []string {
 	return out
 }
 
-// currentNumberedMenu reads the numbered menu that is still the prompt, if
-// any: the latest one, which starts at its last "1." entry, with nothing
-// after its last entry but a menu's own tail. It keeps the digit the CLI
-// printed for each recognized choice and counts every distinct entry.
 func currentNumberedMenu(lines []string) (options, digits []string, entries int) {
 	last := -1
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -689,9 +583,6 @@ func currentNumberedMenu(lines []string) (options, digits []string, entries int)
 	return options, digits, entries
 }
 
-// nativeMenuTail reports whether line may follow a menu that is still on
-// screen. Only the final line may be an input prompt, and it may hold the
-// digit typed into it before Enter; a line asking for a secret never is.
 func nativeMenuTail(line string, final bool) bool {
 	text := strings.TrimSpace(line)
 	switch {
@@ -705,12 +596,6 @@ func nativeMenuTail(line string, final bool) bool {
 	return len(text) <= 80 && !strings.ContainsAny(text, "0123456789") && nativeMenuHint.MatchString(text)
 }
 
-// ActOnLogin sends a reviewed menu choice to a running native login. For a
-// numbered picker a digit names the Nth listed option, sent as the digit the
-// CLI printed for it; Select sends Enter. option, when given, is the label the
-// user chose; a digit is refused when the menu now offers something else
-// there, so a menu redrawn between render and click never takes the wrong
-// choice. The PTY write runs outside s.mu.
 func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action, option string) (LoginSnapshot, error) {
 	s.mu.Lock()
 	op := s.operations[id]
@@ -722,8 +607,6 @@ func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action, option st
 		s.mu.Unlock()
 		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_ACTION_UNAVAILABLE", "There is no recognized native menu to control.", nil)
 	}
-	// Numbered pickers accept their listed options and Enter; arrow-key
-	// pickers accept only navigation. No free-form bytes ever reach the PTY.
 	key := action
 	if len(op.snapshot.NativeOptions) > 0 {
 		switch {
@@ -760,8 +643,6 @@ func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action, option st
 	return op.snapshot, nil
 }
 
-// SubmitLoginCode forwards one Claude fallback code to the existing native
-// process. The pipe write never holds the registry/output lock.
 func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string) (LoginSnapshot, error) {
 	code = strings.TrimSpace(code)
 	if code == "" || len(code) > 4096 || strings.ContainsAny(code, "\r\n\x00") {
@@ -780,8 +661,6 @@ func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string)
 		s.mu.Unlock()
 		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_CODE_UNAVAILABLE", "This sign-in no longer accepts a code.", nil)
 	}
-	// Claim the single submission before releasing the lock. Stop parsing output
-	// now as a native CLI could echo the submitted code.
 	op.snapshot.AcceptsCode = false
 	op.codeSubmitted = true
 	op.snapshot.LoginURL = ""
@@ -834,7 +713,6 @@ func loginArgs(agentID, method string) ([]string, bool, error) {
 		case "sso":
 			return []string{"auth", "login", "--sso"}, false, nil
 		case claudeSetupTokenMethod:
-			// Saved by AO itself; no native command runs.
 			return nil, true, nil
 		}
 	}
@@ -894,7 +772,6 @@ func loginArgs(agentID, method string) ([]string, bool, error) {
 		case "device_code":
 			return []string{"login", "--device-code"}, false, nil
 		case "copilot_token":
-			// Copilot reads the token from stdin into its own credential store.
 			return []string{"login", "--with-token"}, true, nil
 		}
 	}
@@ -909,8 +786,6 @@ func loginArgs(agentID, method string) ([]string, bool, error) {
 	return nil, false, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This harness does not support that UI login method. Use terminal login instead.", nil)
 }
 
-// directKeyWriter returns the reviewed credential-store writer for harnesses
-// whose documented key stores AO can write directly, without running the CLI.
 func directKeyWriter(agentID string) (func(context.Context, string, string) error, bool) {
 	switch agentID {
 	case "opencode":
@@ -925,11 +800,7 @@ func directKeyWriter(agentID string) (func(context.Context, string, string) erro
 	return nil, false
 }
 
-// saveLoginKey saves the credential of a key method in its store and reports
-// isKey=false for a method that runs a native CLI login instead.
 func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, model string, opts LoginOptions, withdrawFailed *bool) (isKey bool, err error) {
-	// store saves an AO-managed key and notes when AO could not take its copy
-	// back out of the OS user environment, so the panel can say so.
 	store := func(name, value string, share *bool, harness string) error {
 		failed, storeErr := s.storeProviderKeyReporting(ctx, name, value, share, harness)
 		*withdrawFailed = *withdrawFailed || failed
@@ -943,9 +814,6 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 		if err := writer(ctx, method, secret); err != nil {
 			return true, err
 		}
-		// Gemini CLI reads ~/.gemini/.env only in trusted folders without a
-		// .env of their own, and AO worktrees start untrusted. Its sessions
-		// receive the key through their environment, which wins.
 		if agentID == "gemini" && strings.TrimSpace(s.dataDir) != "" {
 			return true, store("GEMINI_API_KEY", strings.TrimSpace(secret), nil, agentID)
 		}
@@ -965,13 +833,10 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 			if err := providerkeys.Save(ctx, s.dataDir, "LLM_MODEL", model); err != nil {
 				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be saved.")
 			}
-			// Like the key itself, so removing it restores what the user had.
 			if err := providerkeys.ExportForProbes("LLM_MODEL", model); err != nil {
 				undoOpenHandsModel(ctx, s.dataDir, previous, hadPrevious)
 				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be activated.")
 			}
-			// The model and key go together: a failed key save puts the
-			// earlier model back.
 			if err := store(name, secret, opts.Device, agentID); err != nil {
 				undoOpenHandsModel(ctx, s.dataDir, previous, hadPrevious)
 				return true, err
@@ -1005,8 +870,6 @@ func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, m
 	return false, nil
 }
 
-// undoOpenHandsModel puts OpenHands' saved model back after the key save
-// that went with it failed.
 func undoOpenHandsModel(ctx context.Context, dataDir, previous string, had bool) {
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -1019,8 +882,6 @@ func undoOpenHandsModel(ctx context.Context, dataDir, previous string, had bool)
 	_ = providerkeys.RestoreInherited("LLM_MODEL")
 }
 
-// recordCompletedLogin registers a finished key save as the harness's latest
-// operation, so the panel can poll it like any other login.
 func (s *Service) recordCompletedLogin(agentID, method string, withdrawFailed bool) (LoginSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1034,12 +895,6 @@ func (s *Service) recordCompletedLogin(agentID, method string, withdrawFailed bo
 	return complete.snapshot, nil
 }
 
-// RecordSignIn applies what a completed sign-in changes in AO's state when
-// the harness's own terminal login ran it, as `ao claude-login` does: AO
-// stops passing the harness an API key saved from its own panel, which would
-// override the new sign-in, and for Claude Code it removes an earlier setup
-// token. The key stays saved for other harnesses. It returns the variable
-// whose claim it withdrew, or "".
 func (s *Service) RecordSignIn(ctx context.Context, agentID string) (string, error) {
 	if _, ok := planByAgentID[agentID]; !ok {
 		return "", apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", fmt.Sprintf("unknown agent authentication target %q", agentID), nil)
@@ -1056,9 +911,6 @@ func (s *Service) RecordSignIn(ctx context.Context, agentID string) (string, err
 	return released, nil
 }
 
-// pruneOperationsLocked keeps only the latest operation per harness. A stale
-// tab cannot cancel its replacement, and repeated logins cannot grow the
-// registry unbounded. The caller holds s.mu.
 func (s *Service) pruneOperationsLocked(agentID string) {
 	for id, op := range s.operations {
 		if op.snapshot.AgentID == agentID {
@@ -1067,7 +919,6 @@ func (s *Service) pruneOperationsLocked(agentID string) {
 	}
 }
 
-// Login returns an operation only when it belongs to the selected harness.
 func (s *Service) Login(_ context.Context, agentID, id string) (LoginSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1078,8 +929,6 @@ func (s *Service) Login(_ context.Context, agentID, id string) (LoginSnapshot, e
 	return op.snapshot, nil
 }
 
-// CancelLogin waits for the child tree to stop before a terminal fallback can
-// start and write to the same native credential store.
 func (s *Service) CancelLogin(ctx context.Context, agentID, id string) (LoginSnapshot, error) {
 	s.mu.Lock()
 	op := s.operations[id]
@@ -1108,7 +957,6 @@ func (s *Service) CancelLogin(ctx context.Context, agentID, id string) (LoginSna
 	}
 }
 
-// Close stops background logins when the daemon shuts down.
 func (s *Service) Close() {
 	s.mu.Lock()
 	s.closed = true
@@ -1137,8 +985,6 @@ var (
 	deviceCodePattern = regexp.MustCompile(`\b[A-Z0-9]{4}-[A-Z0-9]{4,5}\b`)
 )
 
-// loginOutput consumes a bounded rolling window, including prompts split over
-// writes. Raw CLI output is never returned, logged, or persisted.
 type loginOutput struct {
 	service   *Service
 	operation *loginOperation
@@ -1158,14 +1004,12 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 	if len(w.tail) > 16*1024 {
 		w.tail = w.tail[len(w.tail)-16*1024:]
 	}
-	// Never publish a link whose query string might still be arriving.
 	end := strings.LastIndexAny(w.tail, "\r\n")
 	if end < 0 {
 		return len(p), nil
 	}
 	output := loginANSIPattern.ReplaceAllString(w.tail[:end+1], "")
 	for _, indices := range loginURLPattern.FindAllStringIndex(output, -1) {
-		// A write may stop in the middle of the URL. Wait for a delimiter.
 		if indices[1] == len(output) {
 			continue
 		}
@@ -1173,8 +1017,6 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 		if safeLoginURL(w.operation.snapshot.AgentID, match) {
 			if w.operation.snapshot.AgentID == "claude-code" {
 				parsed, _ := url.Parse(match)
-				// Only publish the manual-code fallback. A localhost callback
-				// belongs to the CLI's host and cannot be reopened remotely.
 				if parsed.Query().Get("code") != "true" {
 					continue
 				}
@@ -1206,7 +1048,6 @@ func safeLoginURL(agentID, raw string) bool {
 		return u.Hostname() == "github.com" && (u.Path == "/login/device" || u.Path == "/login/oauth/authorize")
 	}
 	if agentID == "kimi" {
-		// Kimi Code's device flow: auth.kimi.ai (global) or auth.kimi.com.
 		switch u.Hostname() {
 		case "auth.kimi.ai", "auth.kimi.com", "www.kimi.ai", "www.kimi.com", "kimi.ai", "kimi.com":
 			return true

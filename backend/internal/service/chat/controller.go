@@ -1,17 +1,3 @@
-// Package chat owns the daemon side of a Chat-mode session: one controller per
-// session, the projection of provider events into durable conversation rows, and
-// the typed commands a client can issue against it.
-//
-// Ownership rules this package enforces:
-//
-//   - exactly one live controller per session, and it is the only writer to that
-//     session's provider conversation;
-//   - provider events are archived and projected together, so the raw record can
-//     never disagree with the timeline derived from it;
-//   - an event carrying a stale controller generation is dropped, so a controller
-//     that is dying cannot mutate the session that replaced it;
-//   - a turn left in flight when its provider ends settles as failed. Deliberate
-//     daemon detach from a persistent provider is not provider termination.
 package chat
 
 import (
@@ -39,16 +25,10 @@ const (
 	retryClientMessagePrefix   = "retry-attempt/"
 )
 
-// nativeHistoryLoadAttemptLimit bounds one provider re-observation inside the
-// settle budget. An ACP refresh is a full session/load; without this bound a
-// single stalled load consumes the whole nativeHistorySettleLimit before the
-// loop can classify anything. A variable so tests can shorten it.
 var nativeHistoryLoadAttemptLimit = 30 * time.Second
 
 var errNativeHistoryLoadAttemptTimeout = errors.New("native history load attempt exceeded its time limit")
 
-// Store is the durable conversation surface the controller needs. Implemented by
-// the SQLite store.
 type Store interface {
 	CreateConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
 	CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error)
@@ -92,9 +72,6 @@ type Store interface {
 
 	SetConversationSettings(ctx context.Context, conversationID string, settings domain.ConversationSettings, now time.Time) error
 
-	// Usage and rate limits are current state, not timeline entries: each write
-	// replaces the last. The provider reports usage after every tool call, so an
-	// append-per-report is what buried the conversation the first time round.
 	RecordUsage(ctx context.Context, conversationID string, usage domain.ConversationUsage) error
 	RecordRateLimits(ctx context.Context, conversationID string, limits domain.ConversationRateLimits) error
 
@@ -144,16 +121,11 @@ type Store interface {
 	SetTurnDiff(ctx context.Context, conversationID, providerTurnID string, diff domain.ConversationTurnDiff, now time.Time) (bool, error)
 	SetTurnArtifacts(ctx context.Context, conversationID, providerTurnID string, artifacts []domain.ConversationTurnArtifact) (bool, error)
 
-	// Streamed provider prose for an activity: reasoning summaries, terminal
-	// keystrokes, tool progress. Appended many times and then replaced by the
-	// settled form, which is why it is two calls rather than one upsert.
 	AppendActivityStreamedText(ctx context.Context, conversationID, providerItemID, delta string, now time.Time) (bool, error)
 	SettleActivityStreamedText(ctx context.Context, conversationID, providerItemID, text string, now time.Time) (bool, error)
 
 	SetTurnPlan(ctx context.Context, conversationID, providerTurnID string, plan domain.ConversationPlan) (bool, error)
 
-	// Latest-wins provider state that belongs to the conversation rather than to a
-	// turn. Each write replaces the last.
 	RecordModelReroute(ctx context.Context, conversationID string, reroute domain.ConversationModelReroute) error
 	ConversationAccount(ctx context.Context, conversationID string) (*domain.ConversationAccount, error)
 	RecordAccount(ctx context.Context, conversationID string, account domain.ConversationAccount, now time.Time) error
@@ -174,25 +146,14 @@ type Store interface {
 	LoadSessionImportMessages(ctx context.Context, id domain.SessionID, before, limit int64) ([]domain.ConversationMessage, bool, error)
 }
 
-// ActivityRecorder feeds derived session status.
-//
-// Chat reports activity through the SAME lifecycle reduction terminal sessions
-// use, rather than persisting a second display status. Without it a chat session
-// reads as idle while the agent is working, because the hook and terminal signals
-// that normally drive activity never fire for a chat controller.
 type ActivityRecorder interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
 
-// IDFactory mints the identifiers AO assigns. Injected so tests get stable ids.
 type IDFactory func() string
 
-// Clock is injected so tests do not depend on wall time.
 type Clock func() time.Time
 
-// controllerHandoff is the controller's dispatch gate. Keeping the lifecycle in
-// one state avoids invalid combinations such as "handoff=true, drain=false"
-// meaning either an interrupt transition or an idle branch mutation.
 type controllerHandoff uint8
 
 const (
@@ -210,15 +171,12 @@ func interfaceHandoff(policy domain.SessionInterfaceTransitionPolicy) controller
 	return controllerHandoffInterfaceInterrupt
 }
 
-// Controller drives one Chat session.
 type Controller struct {
-	sessionID    domain.SessionID
-	reviewID     string
-	conversation domain.ConversationRecord
-	generation   string
-	harness      domain.AgentHarness
-	// workspacePath is the worktree whose files are snapshotted before each turn
-	// and restored by a rollback.
+	sessionID     domain.SessionID
+	reviewID      string
+	conversation  domain.ConversationRecord
+	generation    string
+	harness       domain.AgentHarness
 	workspacePath string
 
 	conv                   ports.ChatConversation
@@ -233,114 +191,45 @@ type Controller struct {
 	prChanged              func(domain.SessionID)
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 
-	// sendMu serializes command dispatch so only one operation mutates the
-	// provider conversation at a time.
-	sendMu sync.Mutex
-	// A current-context copy fences dispatch, but Stop cancels it before waiting.
+	sendMu     sync.Mutex
 	forkCancel context.CancelFunc
 	forkDone   chan struct{}
 	interrupts int
-	// configMu serializes live provider setting changes. Each response replaces
-	// the complete option catalog and updates durable next-turn settings, so
-	// concurrent writes could otherwise persist an older catalog last.
-	configMu sync.Mutex
+	configMu   sync.Mutex
 
-	mu sync.Mutex
-	// suppressStoppedActivity marks a deliberate branch-controller retirement.
-	// The replacement generation owns lifecycle state; publishing an exited fact
-	// from the source would make that replacement unable to report active work.
+	mu                      sync.Mutex
 	suppressStoppedActivity bool
-	// activeTurn maps a provider turn id to AO's turn id for the turn currently
-	// in flight, so a completion can be attributed without a round trip.
-	pendingTurnID string
-	// dispatchedApproval is the approval mode the latest turn was sent with,
-	// the one its sandbox runs under; settings hold the next turn's. Unset
-	// until this controller sends a turn.
-	dispatchedApproval    ports.PermissionMode
-	hasDispatchedApproval bool
-	// dispatchingTurnID is AO's durable turn row while SendTurn is in flight.
-	// Eager providers can emit turn/started before SendTurn returns with the
-	// provider id; that event must bind this row instead of adopting a duplicate.
-	dispatchingTurnID string
-	// sendingTurnID is the last turn Send decided to dispatch rather than queue. Its
-	// row is written queued before dispatch moves it on, so a snapshot read in that
-	// gap would show an idle agent's message as waiting in the queue. It is kept after
-	// the send returns: a snapshot can load the row while it is still queued and read
-	// this marker afterward, and only a queued row is ever overlaid.
-	sendingTurnID string
-	// A compact request can be accepted before its provider turn starts.
-	compactionPending bool
-	// Provider calls keep automatic hibernation out without blocking explicit Kill.
-	operations int
-	// ackedTurnID is the turn the PROVIDER has confirmed it started, which lags
-	// pendingTurnID by the round trip between turn/start returning and the
-	// turn-started notification arriving. Interrupt needs the distinction: a
-	// provider refuses to cancel a turn it has not acknowledged yet.
-	ackedTurnID string
-	// artifactsShown holds the artifact paths the thread already shows in
-	// provider turn artifactsShownTurn: pages reported there, and renders
-	// kept as artifacts. A new turn replaces the set.
-	artifactsShownTurn string
-	artifactsShown     map[string]bool
-	// artifactDir is the session's artifact directory, empty for a review or a
-	// session without one. Set once, before the controller is published.
-	artifactDir string
-	// artifactBaseline is the artifact directory as the turn in flight started,
-	// compared when it ends to record which artifacts it created or edited. Nil
-	// when no turn is being watched.
-	artifactBaseline map[string]artifactStamp
-	state            ports.ChatControllerState
-	// settings are the provider choices applied to the next dispatch. Held here as
-	// well as on disk so a dispatch does not need a read, and updated together with
-	// the row so the two cannot drift.
-	settings domain.ConversationSettings
-	// cancelQueuedAt is set when the user interrupts, and is the cutoff for the
-	// queue that interrupt cancels. Zero means nothing is being cancelled.
-	cancelQueuedAt time.Time
-	// handoff closes source-controller intake while ownership is being changed.
-	// Interface drain keeps dispatching accepted rows; interface interrupt and an
-	// idle branch mutation stop dispatch entirely. The target controller is not
-	// started until this controller reports quiescent and is closed.
-	handoff controllerHandoff
-	// handoffInterrupted is the provider turn an interrupt-policy handoff
-	// stopped, so the move can say on that exact turn why it ended.
-	handoffInterrupted string
-	branchHandoffDone  chan struct{}
-	// preserveProviderOnStop is set before deliberate daemon detach. It prevents
-	// the closing controller from projecting a false provider exit or failing work
-	// that the detached host continues to run.
-	preserveProviderOnStop bool
-	transportInterrupted   bool
-	explicitClose          bool
+	pendingTurnID           string
+	dispatchedApproval      ports.PermissionMode
+	hasDispatchedApproval   bool
+	dispatchingTurnID       string
+	sendingTurnID           string
+	compactionPending       bool
+	operations              int
+	ackedTurnID             string
+	artifactsShownTurn      string
+	artifactsShown          map[string]bool
+	artifactDir             string
+	artifactBaseline        map[string]artifactStamp
+	state                   ports.ChatControllerState
+	settings                domain.ConversationSettings
+	cancelQueuedAt          time.Time
+	handoff                 controllerHandoff
+	handoffInterrupted      string
+	branchHandoffDone       chan struct{}
+	preserveProviderOnStop  bool
+	transportInterrupted    bool
+	explicitClose           bool
 
-	// account, threadState and mcpServers are merged here before being written,
-	// because the provider reports each of them in pieces: account/updated carries
-	// auth mode and plan but never a credential demand, a thread-status report says
-	// nothing about archiving, and MCP servers are announced one at a time. Writing
-	// each report straight through would make every field blank the one before it.
-	threadState domain.ConversationThreadState
-	// usage is merged in memory because providers may split context occupancy and
-	// cumulative accounting across separate events. Writing either half as a full
-	// replacement erases the other half and turns a percentage meter into a bare
-	// token count.
-	usage domain.ConversationUsage
-	// turnlessPlanItemID keys the plan row of the agent's current run of work
-	// outside any turn; see planItemID. Cleared when an event names a turn.
-	turnlessPlanItemID string
-	// mcpServers is keyed by name; mcpServerOrder preserves first-seen order so the
-	// list a client renders does not reshuffle on every turn.
+	threadState           domain.ConversationThreadState
+	usage                 domain.ConversationUsage
+	turnlessPlanItemID    string
 	mcpServers            map[string]domain.ConversationMCPServer
 	mcpServerOrder        []string
 	mcpServerRevision     uint64
 	mcpServerSeenRevision map[string]uint64
-	// mcpPersistMu orders durable MCP replacements with individual notification
-	// writes. Reload runs outside the event pump, so c.mu alone cannot prevent an
-	// older notification write from landing after an authoritative replacement.
-	mcpPersistMu sync.Mutex
+	mcpPersistMu          sync.Mutex
 
-	// flushRequests asks the projector to write the deltas it is batching; it
-	// closes the sent channel once that write has finished, whether or not it
-	// succeeded.
 	flushRequests chan chan struct{}
 
 	stopped  chan struct{}
@@ -359,40 +248,18 @@ func (c *Controller) beginOperation() func() {
 	}
 }
 
-// ErrNoActiveTurn reports an interrupt with nothing to cancel.
 var ErrNoActiveTurn = errors.New("no active turn")
 
-// ErrControllerHandoff reports a send attempted after a controller handoff has
-// closed source intake. The client should retain the draft and retry after the
-// session_updated event announces the target mode.
 var ErrControllerHandoff = errors.New("chat controller is switching interfaces")
 
-// ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
-// this conversation, not failed, was rolled back, or carries no durable prompt
-// the user authored. A retry is only ever offered for an eligible failed human
-// turn.
 var ErrTurnNotRetryable = errors.New("turn is not retryable")
 
-// ErrRetryStaleBranch reports a durable failed turn that is no longer visible
-// on the conversation's active branch. Retrying it would inject abandoned
-// history into the provider thread the user is currently viewing.
 var ErrRetryStaleBranch = errors.New("turn is not on the active conversation branch")
 
-// ErrRetryDeliveryUncertain reports a failed turn whose dispatch was never
-// acknowledged by the provider. Settling it failed was AO's safe guess rather
-// than a fact about delivery: the provider may have accepted the work. Because
-// a retry re-sends the prompt as a new turn, an uncertain source could execute
-// it twice, so these turns are refused until delivery is confirmed.
 var ErrRetryDeliveryUncertain = errors.New("turn was never confirmed as delivered to the provider")
 
-// ErrRetryContentInvalid reports durable structured prompt content that can no
-// longer be reconstructed safely. Retrying must fail clearly rather than drop
-// an attachment or hand corrupt data to the provider.
 var ErrRetryContentInvalid = errors.New("stored retry content is invalid")
 
-// ErrRetryUnsupported reports structured prompt content the current provider
-// cannot accept. This can happen after an in-place agent switch: the failed
-// prompt remains visible, but the new provider may negotiate fewer capabilities.
 var ErrRetryUnsupported = errors.New("current agent cannot retry this prompt content")
 
 func newController(
@@ -468,10 +335,6 @@ func (c *Controller) owner() domain.ConversationOwner {
 	return domain.SessionConversationOwner(c.sessionID)
 }
 
-// restoreLiveTurnOwnership rebuilds the volatile busy gate from durable facts
-// before a replacement daemon publishes a reconnected controller. The provider
-// kept running while AO was detached, so forgetting this turn would let a new
-// Send start a second root turn on the same native conversation.
 func (c *Controller) restoreLiveTurnOwnership(turns []domain.ConversationTurn) string {
 	var latest *domain.ConversationTurn
 	for i := range turns {
@@ -492,9 +355,6 @@ func (c *Controller) restoreLiveTurnOwnership(turns []domain.ConversationTurn) s
 	return latest.ProviderTurnID
 }
 
-// start begins live provider consumption after any durable native history has
-// been imported. Keeping construction and consumption separate prevents a resume
-// notification from racing ahead of the older turns it follows.
 func (c *Controller) start() {
 	go c.project(deltaFlushInterval)
 	if c.harness != domain.HarnessCodex {
@@ -514,10 +374,6 @@ type nativeHistoryHighWater struct {
 	detail         []byte
 }
 
-// nativeHistoryCheckpoint combines the newest source-TUI facts with AO's last
-// settled projection of this same provider thread. The hook facts cover work
-// completed while Chat was not attached; the AO high-water mark covers an
-// immediate round trip before a resumed TUI has emitted another hook.
 type nativeHistoryCheckpoint struct {
 	harness                 domain.AgentHarness
 	latestUserPromptAt      time.Time
@@ -536,21 +392,6 @@ type nativeHistoryCheckpoint struct {
 	replayIndex             *nativeHistoryTurnIndex
 }
 
-// dropUnsettledHookFacts retires legacy checkpoint text that AO recorded on a
-// turn the provider never settled. A provider promises to reproduce settled work
-// during history load, but a cancelled, interrupted or failed turn carries no
-// such promise: Claude forks its next prompt from the pre-failure transcript
-// entry, so `session/load` never replays that prompt as a completed user
-// message. Requiring one is unsatisfiable — the settle loop then spends its full
-// `nativeHistorySettleLimit` and the interface transition rolls back to Terminal
-// on every future attempt, which is the same trap the high-water anchor below
-// already avoids by only anchoring on completed turns.
-//
-// Evidence is required to drop a fact. A checkpoint AO cannot tie to any of its
-// own turns is left in place: absence of a row is not proof the work was
-// unsettled, and these facts are what stop a stale replay from being imported as
-// if it were current. Trusted source-TUI facts belong to a newer controller
-// epoch; matching an old Chat turn's text cannot retire that evidence.
 func (p *nativeHistoryCheckpoint) dropUnsettledHookFacts(
 	turnsByID map[string]*domain.ConversationTurn,
 	messages []domain.ConversationMessage,
@@ -565,8 +406,6 @@ func (p *nativeHistoryCheckpoint) dropUnsettledHookFacts(
 			if turn == nil {
 				continue
 			}
-			// The newest matching turn decides: the same prompt can be sent again
-			// after a cancellation, and that later completed turn is replayable.
 			if newest == nil || turn.RequestedAt.After(newest.RequestedAt) {
 				newest = turn
 			}
@@ -594,10 +433,6 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 		turnsByID[turns[i].ID] = &turns[i]
 	}
 	p.dropUnsettledHookFacts(turnsByID, messages)
-	// An agent switch starts a new provider-native thread with an AO coordination
-	// turn. Completed turns before it belong to the previous provider: their
-	// opaque ids remain useful timeline facts, but the new provider cannot replay
-	// them and they must not gate this native-history import.
 	var providerBoundary *domain.ConversationTurn
 	var providerBoundarySequence int64
 	turnEvidence := make(map[string]nativeHistoryHighWater, len(turns))
@@ -636,7 +471,7 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 		switch activity.Kind {
 		case domain.ActivityKindCommand, domain.ActivityKindFileChange, domain.ActivityKindReasoning, domain.ActivityKindMCPTool:
 		default:
-			continue // AO control-plane rows are not provider replay evidence.
+			continue
 		}
 		if activity.Status == domain.ActivityStatusCompleted || activity.Status == domain.ActivityStatusFailed {
 			turnEvidence[activity.TurnID] = nativeHistoryHighWater{
@@ -650,19 +485,10 @@ func (p *nativeHistoryCheckpoint) captureAOHighWater(
 		boundary.providerTurnID = turn.ProviderTurnID
 		return boundary
 	}
-	// Queue reordering updates RequestedAt, not the message sequence. Preserve
-	// that order. Tied turns require all completed boundaries: item sequences
-	// alone cannot order an empty response after a reordered queued prompt.
 
 	var latest *domain.ConversationTurn
 	for i := range turns {
 		turn := &turns[i]
-		// Only completed turns anchor the high-water mark. A provider promises to
-		// reproduce settled work during history load, but a failed or interrupted
-		// turn's items carry no such promise: Claude forks its next prompt from the
-		// pre-failure transcript entry, leaving the failed turn (e.g. a synthetic
-		// auth-error message) on a dead branch that session/load never replays.
-		// Requiring one of those items would make every future switch time out.
 		if turn.HandledBySessionID != sessionID || turn.RolledBackAt != nil || turn.State != domain.TurnStateCompleted || turn.ProviderTurnID == "" {
 			continue
 		}
@@ -772,11 +598,6 @@ func (p nativeHistoryCheckpoint) mismatches(
 		turnText[event.ProviderTurnID] = text
 	}
 
-	// A trusted checkpoint describes one main-thread turn. Selecting the latest
-	// user and assistant independently can splice an older repeated answer onto a
-	// newer incomplete turn and incorrectly admit a truncated provider replay.
-	// Only an exact native turn ID can match an earlier occurrence. Repeated
-	// prompt/answer pairs are not identities. Unidentified text stays latest-only.
 	latestText := turnText[latestCompletedTurnID]
 	checkpointMatched := p.latestUserPrompt == "" && p.latestAssistantUpdate == "" && p.providerTurnID == ""
 	if p.completedUserPrompt && p.providerTurnID != "" {
@@ -792,7 +613,6 @@ func (p nativeHistoryCheckpoint) mismatches(
 			}
 		}
 	} else {
-		// Without an identified completion, retain the latest-turn gate.
 		checkpointMatched =
 			(p.latestUserPrompt == "" || nativeHistoryTextMatches(p.latestUserPrompt, latestText.user.Text)) &&
 				(p.latestAssistantUpdate == "" || nativeHistoryTextMatches(p.latestAssistantUpdate, latestText.assistant.Text)) &&
@@ -853,9 +673,6 @@ func (p nativeHistoryCheckpoint) mismatches(
 		if boundary.providerItemID != "" && event.ProviderItemID == boundary.providerItemID {
 			matched = true
 		}
-		// ACP identifiers are opaque and can be reassigned by a conforming
-		// provider during load. Exact settled content is the fallback identity
-		// used by reconciliation for that same reason.
 		if boundary.kind != "" && event.Kind == boundary.kind &&
 			nativeHistoryTextMatches(boundary.text, event.Text) {
 			matched = true
@@ -904,10 +721,6 @@ func nativeHistoryTextMatches(checkpoint, replayed string) bool {
 	return domain.NativeCheckpointTextMatches(checkpoint, replayed)
 }
 
-// readNativeHistory loads and validates the settled provider thread without
-// mutating AO's timeline. A pending provider boundary uses this split phase so
-// the caller can project the events inside the same transaction that publishes
-// the boundary and controller generation.
 func (c *Controller) readNativeHistory(
 	ctx context.Context,
 	existingTurns []domain.ConversationTurn,
@@ -951,10 +764,6 @@ func (c *Controller) readNativeHistory(
 			return nil, nil
 		}
 		if errors.Is(err, ports.ErrChatHistoryLoadFailed) {
-			// The provider failed the replay or one attempt hit its bound while
-			// the settle budget was still live. Another identical load cannot
-			// settle anything, and this must not read as the settle wait's own
-			// deadline even though the bounded attempt carries a context error.
 			return nil, fmt.Errorf("read native conversation history: %w", err)
 		}
 		if sawUnsettled && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
@@ -988,11 +797,6 @@ func (c *Controller) readNativeHistory(
 	return events, nil
 }
 
-// refreshNativeHistoryAttempt runs one provider re-observation under its own
-// deadline, a child of the settle context so parent cancellation still wins.
-// Only a timeout the attempt bound caused, while the settle budget is still
-// live, is reported as a load failure; the parent's own expiry keeps its
-// context error so the caller's settle-wait reporting is unchanged.
 func refreshNativeHistoryAttempt(
 	parent context.Context,
 	refresher ports.ChatHistoryRefresher,
@@ -1010,12 +814,6 @@ func refreshNativeHistoryAttempt(
 	return events, err
 }
 
-// nativeHistorySettleDelay is the pause before the refresh-th provider
-// re-observation. Each refresh is a full ACP session/load transcript replay,
-// so the poll backs off exponentially from nativeHistorySettlePoll to
-// nativeHistorySettlePollMax instead of hammering the provider every 100ms
-// for the whole nativeHistorySettleLimit budget. The first retry stays fast
-// because a turn that is about to settle usually does so within a beat.
 func nativeHistorySettleDelay(refresh int) time.Duration {
 	delay := nativeHistorySettlePoll
 	for i := 0; i < refresh && delay < nativeHistorySettlePollMax; i++ {
@@ -1027,9 +825,6 @@ func nativeHistorySettleDelay(refresh int) time.Duration {
 	return delay
 }
 
-// projectNativeHistory durably imports a previously reconciled snapshot.
-// Re-running it is safe because history events carry stable identities and
-// ProjectProviderEvent deduplicates archive+projection together.
 func (c *Controller) projectNativeHistory(ctx context.Context, events []ports.ChatEvent) error {
 	for _, event := range events {
 		if _, _, err := c.projectEvent(ctx, event); err != nil {
@@ -1039,10 +834,6 @@ func (c *Controller) projectNativeHistory(ctx context.Context, events []ports.Ch
 	return nil
 }
 
-// nativeHistoryTurn is the durable identity AO already assigned to one native
-// turn. ProviderTurnID is the value every replay event must use before it reaches
-// the projector; the other fields are progressively stronger ways to recognize
-// it when an ACP agent assigned a different replay turn id.
 type nativeHistoryTurn struct {
 	providerTurnID string
 	state          domain.TurnState
@@ -1051,8 +842,7 @@ type nativeHistoryTurn struct {
 	text           string
 	messages       map[string]int
 	activities     map[string]int
-	// steers counts the user-message fingerprints of inputs steered into this turn.
-	steers map[string]int
+	steers         map[string]int
 }
 
 func nativeHistoryMessageFingerprint(role domain.MessageRole, text string) string {
@@ -1090,8 +880,6 @@ func nativeHistoryActivityFingerprint(
 	return string(kind) + "\x00" + string(status) + "\x00" + summary + "\x00" + string(detail)
 }
 
-// The durable snapshot is invariant during history settling. Keep its index
-// separate from per-replay matching so refreshes do not rebuild it.
 type nativeHistoryTurnIndex struct {
 	harness          domain.AgentHarness
 	byProviderTurnID map[string]*nativeHistoryTurn
@@ -1099,9 +887,6 @@ type nativeHistoryTurnIndex struct {
 	ordered          []*nativeHistoryTurn
 }
 
-// nativeHistoryMessageText restores AO-owned text context for native transcript
-// matching. Public message text stays short; opaque provider IDs can change on
-// load, so reconciliation must compare the exact prompt that was dispatched.
 func nativeHistoryMessageText(message domain.ConversationMessage) string {
 	if message.Role != domain.MessageRoleUser || message.DeliveryContentJSON == "" {
 		return message.Text
@@ -1163,8 +948,6 @@ func indexNativeHistoryTurnsForHarness(
 		return nil
 	}
 
-	// A provider item is useful only when it identifies exactly one durable turn.
-	// Treat collisions as ambiguous rather than guessing across turns.
 	providerItems := make(map[string]*nativeHistoryTurn)
 	ambiguousItems := make(map[string]bool)
 	rememberProviderItem := func(itemID string, candidate *nativeHistoryTurn) {
@@ -1228,9 +1011,6 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 			return
 		}
 		if previous, exists := mapped[replayTurnID]; exists && previous != candidate {
-			// One replay turn claiming stable items from two durable turns is
-			// malformed/ambiguous. Preserve the first strong observation rather than
-			// moving already-associated events between turns.
 			return
 		}
 		mapped[replayTurnID] = candidate
@@ -1253,8 +1033,6 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 		}
 		return match
 	}
-	// Gather mappings from the complete replay before rewriting TurnStarted, which
-	// necessarily arrives before the assistant/tool item that can identify it.
 	for _, event := range events {
 		if candidate := byProviderTurnID[event.ProviderTurnID]; candidate != nil {
 			bind(event.ProviderTurnID, candidate)
@@ -1303,8 +1081,6 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 				if used[candidate] || candidate.text == "" {
 					continue
 				}
-				// Hermes strips persisted text. Other providers keep exact
-				// prompt matching so whitespace-distinct turns stay distinct.
 				if candidate.text == event.Text ||
 					(index.harness == domain.HarnessHermes && nativeHistoryTextMatches(candidate.text, event.Text)) {
 					match = candidate
@@ -1320,18 +1096,6 @@ func (index *nativeHistoryTurnIndex) mapReplay(events []ports.ChatEvent) (map[st
 	return mapped, providerItems
 }
 
-// splitTurnOwners finds the durable turn of each replay turn that holds only a
-// user message.
-//
-// ACP history starts a new turn at every user message, and Claude stores each
-// steer as its own user message. A steer taken while Claude waits on the model
-// therefore splits one AO turn into several replay turns: the prompt alone,
-// each steer alone, then the answer. Only the last has an assistant or tool
-// item to match. A user-only turn belongs to the closest matched turn before or
-// after it when that turn's prompt, or a steer it recorded, has the same text.
-// Messages replayed inside matched turns claim their text first, so each
-// recorded prompt or steer absorbs at most one replayed message. Claims stay
-// local because the index is reused across replays.
 func (index *nativeHistoryTurnIndex) splitTurnOwners(
 	events []ports.ChatEvent,
 	mapped map[string]*nativeHistoryTurn,
@@ -1407,15 +1171,6 @@ func (index *nativeHistoryTurnIndex) splitTurnOwners(
 	return attached
 }
 
-// reconcileNativeHistory maps a provider replay onto AO's existing durable
-// turns before any event is projected.
-//
-// ACP intentionally treats message ids as opaque. Well-behaved agents may echo
-// the client's id, while others persist their own user uuid. Assistant/tool item
-// ids are usually replay-stable, so they are the strongest cross-restart signal;
-// the original client id is next, and exact prompt text in conversation order is
-// the compatibility fallback. This belongs above every driver: Codex history is
-// already identity-stable, while all ACP bindings need the same reconciliation.
 func reconcileNativeHistory(
 	events []ports.ChatEvent,
 	existingTurns []domain.ConversationTurn,
@@ -1454,12 +1209,6 @@ func reconcileNativeHistoryForHarness(
 		}
 		return match
 	}
-	// A native provider may omit persisted item ids even though its live stream
-	// supplied them. Codex does this today: a live assistant message can be
-	// `msg_...`, while thread/read later calls the same item `item-2`. Stable turn
-	// identity still tells us which AO turn owns the replay, so suppress already
-	// projected message/activity facts by semantic fingerprint. Counts preserve
-	// legitimate repeated identical items within one turn.
 	dropEvent := make([]bool, len(events))
 	dropItem := make(map[string]bool)
 	itemKey := func(event ports.ChatEvent) string {
@@ -1475,10 +1224,6 @@ func reconcileNativeHistoryForHarness(
 		}
 		matched := false
 		if aliased := providerItemAliasCandidate(event); aliased != nil && aliased == candidate {
-			// The adapter identified the exact pre-namespacing item. Its detail can
-			// legitimately differ only because nested provider ids inside that JSON
-			// were namespaced too; do not re-import the same durable item under its
-			// new outer id.
 			matched = true
 		}
 		if fingerprint, ok := nativeHistoryEventFingerprintForHarness(harness, event); ok && candidate.messages[fingerprint] > 0 {
@@ -1514,9 +1259,6 @@ func reconcileNativeHistoryForHarness(
 			continue
 		}
 		event.ProviderTurnID = candidate.providerTurnID
-		// A replay may have no portable turn-outcome field. Preserve AO's stronger
-		// known result only when the adapter reports recovered. Conversely, a known
-		// replay outcome upgrades an older recovered observation.
 		if event.Kind == ports.ChatEventTurnCompleted &&
 			event.TurnState == domain.TurnStateRecovered && knownTurnOutcome(candidate.state) {
 			event.TurnState = candidate.state
@@ -1535,20 +1277,8 @@ func knownTurnOutcome(state domain.TurnState) bool {
 	}
 }
 
-// rateLimitReadTimeout bounds the startup quota read. It is a local IPC call, and
-// a provider that cannot answer it quickly must not hold up a conversation.
 const rateLimitReadTimeout = 10 * time.Second
 
-// readRateLimits seeds the account's quota position when the controller opens.
-//
-// The provider only pushes account/rateLimits/updated alongside a turn, which is
-// too late for the thing this signal is for: a user wants to know they are near a
-// wall BEFORE spending a turn discovering it. Reading once at startup closes that
-// gap without giving clients a provider RPC to poll.
-//
-// Off the critical path on purpose, and failure is logged rather than surfaced: a
-// conversation whose quota AO could not read is entirely usable, and refusing to
-// start one over a missing readout would be a worse outcome than showing no meter.
 func (c *Controller) readRateLimits() {
 	reporter, ok := c.conv.(ports.ChatUsageReporter)
 	if !ok {
@@ -1563,9 +1293,6 @@ func (c *Controller) readRateLimits() {
 		c.log.Debug("chat rate limit read failed", "session", c.sessionID, "error", err)
 		return
 	}
-	// Racing a pushed update is benign: both come from the same provider, and these
-	// are percentages of a multi-day window that barely move between two reads
-	// seconds apart.
 	if err := c.store.RecordRateLimits(ctx, c.conversation.ID, domain.ConversationRateLimits{
 		PrimaryUsedPercent:       limits.PrimaryUsedPercent,
 		SecondaryUsedPercent:     limits.SecondaryUsedPercent,
@@ -1577,39 +1304,22 @@ func (c *Controller) readRateLimits() {
 	}
 }
 
-// ProviderConversationID is the handle to persist for resume.
 func (c *Controller) ProviderConversationID() string { return c.conv.ProviderConversationID() }
 
-// ConversationID is the durable conversation this controller writes to.
 func (c *Controller) ConversationID() string { return c.conversation.ID }
 
-// Generation fences events from a controller that has been replaced.
 func (c *Controller) Generation() string { return c.generation }
 
-// State reports controller health.
 func (c *Controller) State() ports.ChatControllerState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.state
 }
 
-// Capabilities reports what this session's provider can do, so a client can gate
-// a control before drawing it rather than discovering the answer from a refusal.
 func (c *Controller) Capabilities() ports.ChatCapabilities {
 	return c.conv.Capabilities()
 }
 
-// Send records a message and dispatches it, or queues it if the agent is busy.
-//
-// The durable record is written first: if the provider call then fails, the user
-// can see their message and its delivery state rather than having it vanish. A
-// retry carrying the same client message id is a no-op, so a flaky client cannot
-// produce two provider turns.
-//
-// A message that arrives mid-turn stays queued rather than being pushed at the
-// provider. Two reasons: the agent is a single conversation and a second
-// concurrent turn is not a thing it can run, and a queued row is a promise AO can
-// keep across a restart, which a message dropped into a busy provider is not.
 func (c *Controller) Send(ctx context.Context, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -1637,7 +1347,6 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
 
-	// Bind retries to the client request before adding durable continuation context.
 	var err error
 	msg, err = c.prepareContinuation(ctx, msg)
 	if err != nil {
@@ -1661,9 +1370,6 @@ func (c *Controller) sendLocked(
 		markedSending = true
 	}
 	dispatched := false
-	// The marker outlives a send that dispatched, but not one that did not. A failed
-	// insert, a duplicate, a queued row or a dispatch error leaves no running turn,
-	// and a stale marker would report a still-queued row as running.
 	defer func() {
 		if markedSending && !dispatched {
 			c.clearSendingTurn(turnID)
@@ -1703,16 +1409,12 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, fmt.Errorf("record user message: %w", err)
 	}
 	if !created {
-		// Already delivered under this client message id. Returning the empty turn
-		// signals "nothing new happened" without claiming a second dispatch.
 		c.log.Debug("duplicate chat send ignored",
 			"session", c.sessionID, "clientMessageId", msg.ClientMessageID)
 		return domain.ConversationTurn{}, nil
 	}
 
 	if shouldQueue {
-		// AppendUserMessage wrote it as queued, which is exactly where it belongs
-		// until the running turn ends. drain picks it up from there.
 		c.mu.Lock()
 		c.log.Info("chat send queued behind busy controller",
 			"session", c.sessionID, "clientMessageId", msg.ClientMessageID, "turn", turnID,
@@ -1743,19 +1445,6 @@ func (c *Controller) sendLocked(
 	return turn, err
 }
 
-// RetryTurn re-dispatches a failed turn's durable prompt as a new turn.
-//
-// The content is loaded from AO's own rows, never from the caller, so the daemon
-// owns what gets sent again. The original failed turn is never mutated or
-// relabeled: the retry is a brand-new turn and both attempts stay in history.
-//
-// Idempotency: each retry turn stores an explicit, unique link to its source.
-// A replayed request — an uncertain network round trip, a double-click, a
-// client retry — looks that relation up before anything else and returns the
-// turn that already exists, so caller-controlled message ids cannot counterfeit
-// or consume a retry. A deliberate further attempt retries the failed child:
-// the chain A -> B -> C is built from distinct sources, never by re-sending A.
-// The current next-turn settings apply.
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -1792,16 +1481,10 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrTurnNotRetryable, turnID)
 	}
 
-	// A dispatch the provider never acknowledged may still have been accepted:
-	// settling it failed was AO's safe guess, not a fact about delivery.
-	// Re-dispatching such a prompt could run the work twice, which is the one
-	// outcome a retry must never have. Refuse until the caller confirms.
 	if source.ProviderTurnID == "" {
 		return domain.ConversationTurn{}, fmt.Errorf("%w: %s", ErrRetryDeliveryUncertain, turnID)
 	}
 
-	// The replay check comes before the busy check on purpose: returning an
-	// already-recorded attempt must stay true even while that attempt runs.
 	if existingID, found, lookupErr := c.store.RetryTurnIDForSource(ctx, c.conversation.ID, turnID); lookupErr != nil {
 		return domain.ConversationTurn{}, lookupErr
 	} else if found {
@@ -1851,8 +1534,6 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 		return domain.ConversationTurn{}, fmt.Errorf("record retried message: %w", err)
 	}
 	if !created {
-		// Lost a race with a concurrent identical click. Report the turn it
-		// created rather than opening a second one.
 		if existingID, found, lookupErr := c.store.RetryTurnIDForSource(ctx, c.conversation.ID, turnID); lookupErr == nil && found {
 			if existing, existingErr := c.store.TurnByID(ctx, existingID); existingErr == nil {
 				return existing, nil
@@ -1870,9 +1551,6 @@ func (c *Controller) retryTurnLocked(ctx context.Context, turnID string, autoRes
 	}, now, false, nil)
 }
 
-// retryPromptContent reconstructs provider-neutral durable prompt blocks and
-// refuses anything that would be corrupted or silently discarded by the
-// currently attached provider.
 func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]ports.ChatContent, error) {
 	if raw == "" {
 		return nil, nil
@@ -1929,17 +1607,12 @@ func retryPromptContent(raw string, capabilities ports.ChatCapabilities) ([]port
 	return content, nil
 }
 
-// Settings reports the provider choices for the next turn.
 func (c *Controller) Settings() domain.ConversationSettings {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.settings
 }
 
-// SetSettings records the provider choices for the next turn.
-//
-// The row is written first: if that fails, the in-memory copy must not move, or a
-// restart would silently revert a choice the user watched take effect.
 func (c *Controller) SetSettings(ctx context.Context, settings domain.ConversationSettings) error {
 	if err := c.store.SetConversationSettings(ctx, c.conversation.ID, settings, c.now()); err != nil {
 		return fmt.Errorf("record conversation settings: %w", err)
@@ -1950,7 +1623,6 @@ func (c *Controller) SetSettings(ctx context.Context, settings domain.Conversati
 	return nil
 }
 
-// turnSettings converts the stored choices into what a driver takes per turn.
 func (c *Controller) turnSettings() ports.ChatTurnSettings {
 	current := c.Settings()
 	return ports.ChatTurnSettings{
@@ -1962,10 +1634,6 @@ func (c *Controller) turnSettings() ports.ChatTurnSettings {
 	}
 }
 
-// mergeUsage combines independently reported usage groups. Explicit flags are
-// authoritative, including a meaningful zero after compaction. The inference is
-// compatibility for existing drivers/tests that predate the flags and report a
-// complete non-zero snapshot in one event.
 func (c *Controller) mergeUsage(update ports.ChatUsage) domain.ConversationUsage {
 	contextKnown := update.ContextKnown
 	totalsKnown := update.TotalsKnown
@@ -2009,23 +1677,18 @@ func (c *Controller) clearSendingTurn(turnID string) {
 	c.mu.Unlock()
 }
 
-// DispatchingTurnIDs are the turns AO is handing, or has just handed, to the
-// provider, whether still being recorded or already crossing the provider boundary.
-// A client must not present one as queued: nothing is ahead of it.
 func (c *Controller) DispatchingTurnIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return []string{c.sendingTurnID, c.dispatchingTurnID}
 }
 
-// busy reports whether a provider turn is in flight.
 func (c *Controller) busy() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.pendingTurnID != "" || c.compactionPending
 }
 
-// dispatch hands a recorded turn to the provider. Callers must hold sendMu.
 func (c *Controller) dispatch(
 	ctx context.Context,
 	turnID string,
@@ -2034,10 +1697,6 @@ func (c *Controller) dispatch(
 	claimed bool,
 	followers []string,
 ) (domain.ConversationTurn, error) {
-	// Every dispatch carries the conversation's choices, including one AO makes on
-	// the user's behalf: a queued message draining, or a relay from `ao send`. A
-	// setting that only applied when the user pressed send would silently stop
-	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
 	msg = excerptDeliveryMessage(msg)
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
@@ -2062,10 +1721,6 @@ func (c *Controller) dispatch(
 			c.log.Error("failed to settle queued batch", "error", err)
 		}
 	}
-	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
-	// Move it out of the durable queue before crossing that boundary, or a live
-	// reconnect can drain the same prompt after the provider completes it. ACP's
-	// deferred start crosses the provider boundary only after binding succeeds.
 	if !hasDeferredStart && !claimed {
 		if err := c.store.MarkTurnDispatching(ctx, turnID); err != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("mark turn dispatching: %w", err)
@@ -2073,7 +1728,6 @@ func (c *Controller) dispatch(
 	}
 
 	c.snapshotFiles(ctx, append([]string{turnID}, followers...))
-	// Before the provider has the prompt, so nothing the turn writes predates it.
 	c.captureArtifactBaseline(ctx, true)
 	c.mu.Lock()
 	c.dispatchingTurnID = turnID
@@ -2089,11 +1743,6 @@ func (c *Controller) dispatch(
 		}
 		c.artifactBaseline = nil
 		c.mu.Unlock()
-		// The provider may or may not have accepted it. Settle the turn as failed
-		// rather than retrying: a duplicate turn would run the work twice. Settling
-		// by AO's own turn id is required here — an undispatched turn has no
-		// provider id, so looking one up by the empty string would hit whichever
-		// undispatched turn the database returned first.
 		completedAt := c.now()
 		if settleErr := c.store.SettleTurnByID(
 			ctx, turnID, domain.TurnStateFailed, err.Error(), completedAt); settleErr != nil {
@@ -2128,15 +1777,9 @@ func (c *Controller) dispatch(
 	if c.dispatchingTurnID == turnID {
 		c.dispatchingTurnID = ""
 	}
-	// Dispatched, not yet acknowledged: turn/start returning is AO's fact, and the
-	// provider's own turn-started notification is the one an interrupt needs.
 	c.ackedTurnID = ""
 	c.mu.Unlock()
 
-	// ACP's session/prompt request stays open until the turn finishes, so an ACP
-	// driver prepares the request in SendTurn and starts it here. The durable
-	// provider-id binding above must exist before the first streamed update can be
-	// projected. Eager drivers do not implement this optional interface.
 	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			failFollowers("batch provider start is uncertain: " + err.Error())
@@ -2167,13 +1810,7 @@ func (c *Controller) dispatch(
 	}, nil
 }
 
-// excerptDeliveryMessage renders captured and legacy excerpts into deterministic prompt
-// text, so every provider receives them regardless of embedded-context support.
-// The durable message still retains the structured blocks for retry and
-// transcript provenance.
 func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
-	// Hydration appends chat excerpts after file blocks. Restore the attachment
-	// order without moving any non-annotation content or mutating durable data.
 	ordered := append([]ports.ChatContent(nil), msg.Content...)
 	var annotations []ports.ChatContent
 	var annotationSlots []int
@@ -2238,8 +1875,6 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 		}
 		ctx := item.Excerpt
 		annotationIndex++
-		// Turns queued before a controller existed store only the reference;
-		// retrying one of those has the selection but not the paired turn.
 		selected := ctx.SelectedText
 		if selected == "" {
 			selected = strings.TrimSpace(ctx.Reference.Text)
@@ -2295,12 +1930,6 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 	return msg
 }
 
-// drain sends the next queued message now that the agent is free.
-//
-// Runs on the projection goroutine, so it observes turn completion in order with
-// everything else the provider said. One turn per call (see drainRun for what it
-// takes): the turn it starts makes the controller busy again, and the next
-// completion drains the next.
 func (c *Controller) drain(ctx context.Context) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -2313,12 +1942,6 @@ func (c *Controller) drainOne(ctx context.Context) error {
 	return c.drainLockedWithLimit(ctx, true, 1)
 }
 
-// drainLocked is drain with the dispatch lock already held. Turn completion
-// uses it so committing the completion, clearing primary ownership, and claiming
-// the next queued request are one serialized lifecycle transition.
-//
-// allowDispatch gates sending the next queued turn. A pending Stop cutoff forces
-// it true so messages typed after Stop still send.
 func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error {
 	return c.drainLockedWithLimit(ctx, allowDispatch, 0)
 }
@@ -2332,13 +1955,10 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	c.mu.Unlock()
 
 	if busy {
-		// Something already claimed the agent, so this drain has nothing to do.
 		return nil
 	}
 
 	if !cutoff.IsZero() {
-		// The user stopped the agent. Everything queued at that moment is
-		// cancelled; anything typed afterwards is still theirs to send.
 		if err := c.store.CancelQueuedTurns(ctx, c.conversation.ID, cutoff, c.now()); err != nil {
 			c.log.Error("failed to cancel queued turns", "session", c.sessionID, "error", err)
 			return err
@@ -2400,14 +2020,6 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	return nil
 }
 
-// ArmHandoff is the linearization point for an interface transition. It closes
-// source intake and queue dispatch synchronously while sendMu makes promotion
-// impossible. Once this method returns, no queued turn accepted before the
-// transition can cross the provider seam.
-//
-// This phase is deliberately reversible and performs no provider or durable
-// queue mutation: target preflight can still fail. BeginHandoff settles the queue
-// only after that preflight has succeeded.
 func (c *Controller) ArmHandoff(
 	ctx context.Context,
 	policy domain.SessionInterfaceTransitionPolicy,
@@ -2437,10 +2049,6 @@ func (c *Controller) ArmHandoff(
 	return nil
 }
 
-// BeginHandoff quiesces a controller whose dispatch gate is already armed. It
-// remains safe to call directly: focused callers and tests use this single deep
-// interface, while Session Manager calls ArmHandoff synchronously before its
-// background preflight and then reaches this method later.
 func (c *Controller) BeginHandoff(
 	ctx context.Context,
 	policy domain.SessionInterfaceTransitionPolicy,
@@ -2450,9 +2058,6 @@ func (c *Controller) BeginHandoff(
 	}
 
 	if policy == domain.SessionInterfaceTransitionInterrupt {
-		// Target preflight has succeeded. Settle every accepted queue row while
-		// sendMu and the armed gate make dispatch and explicit promotion impossible.
-		// Local durable state is committed before the external provider side effect.
 		c.sendMu.Lock()
 		c.mu.Lock()
 		active := c.pendingTurnID != ""
@@ -2469,9 +2074,6 @@ func (c *Controller) BeginHandoff(
 				return err
 			}
 		}
-		// Provider acceptance is the source-side cancellation boundary. Some
-		// adapters never report turn/completed for a killed long-running tool, so
-		// waiting for that notification would make Terminal unreachable again.
 		return nil
 	}
 
@@ -2479,9 +2081,6 @@ func (c *Controller) BeginHandoff(
 	active := c.pendingTurnID != ""
 	c.mu.Unlock()
 	if !active {
-		// A queued row can exist in the narrow gap after a completion was
-		// projected and before its drain ran. Claim it now so drain mode cannot
-		// report quiescent while accepted work is still waiting.
 		if err := c.drain(ctx); err != nil {
 			c.AbortHandoff()
 			return fmt.Errorf("drain queued turns before handoff: %w", err)
@@ -2491,10 +2090,6 @@ func (c *Controller) BeginHandoff(
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		// Quiescence is a dispatch boundary, not merely "pendingTurnID is empty".
-		// dispatch marks the durable row running before it installs pendingTurnID;
-		// without sendMu a handoff can observe that narrow middle state as neither
-		// queued nor active and start the target controller too early.
 		c.sendMu.Lock()
 		c.mu.Lock()
 		busy := c.pendingTurnID != ""
@@ -2529,10 +2124,6 @@ func (c *Controller) BeginHandoff(
 	}
 }
 
-// BeginIdleBranchHandoff installs a persistent intake fence only when the
-// controller is already quiescent. Unlike an interface handoff it never drains
-// or interrupts accepted work: branch changes are refused until the user stops
-// the active turn and the durable queue is empty.
 func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -2555,8 +2146,6 @@ func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 	return nil
 }
 
-// AbortHandoff reopens source intake when a drain is cancelled before the source
-// controller is stopped. Any queued work resumes through the ordinary drain.
 func (c *Controller) AbortHandoff() {
 	c.mu.Lock()
 	resumeDispatch := c.handoff == controllerHandoffInterfaceDrain ||
@@ -2570,14 +2159,11 @@ func (c *Controller) AbortHandoff() {
 	}
 	if resumeDispatch {
 		go func() {
-			_ = c.drain(context.Background()) // drain logs failures; no caller waits on abort.
+			_ = c.drain(context.Background())
 		}()
 	}
 }
 
-// completeBranchHandoff releases stopped-controller registry cleanup without
-// reopening the obsolete source's intake. Commands may already hold a pointer
-// captured before the registry swap, so the fence must remain closed forever.
 func (c *Controller) completeBranchHandoff() {
 	c.mu.Lock()
 	branchHandoffDone := c.branchHandoffDone
@@ -2588,9 +2174,6 @@ func (c *Controller) completeBranchHandoff() {
 	}
 }
 
-// waitForBranchHandoff keeps the registry's stopped-controller cleanup from
-// deleting a deliberately closed source while its forked replacement is being
-// resumed and installed. Ordinary stops have no latch and return immediately.
 func (c *Controller) waitForBranchHandoff() {
 	c.mu.Lock()
 	done := c.branchHandoffDone
@@ -2600,8 +2183,6 @@ func (c *Controller) waitForBranchHandoff() {
 	}
 }
 
-// Resolve answers a pending approval. The provider is told first: if it rejects
-// the decision, AO must not have already recorded the approval as answered.
 func (c *Controller) Resolve(ctx context.Context, requestID string, decision ports.ChatDecision) error {
 	if err := c.conv.ResolveRequest(ctx, requestID, decision); err != nil {
 		return fmt.Errorf("resolve request %s: %w", requestID, err)
@@ -2615,9 +2196,6 @@ func (c *Controller) Resolve(ctx context.Context, requestID string, decision por
 	return nil
 }
 
-// ResolveInput answers a structured form/URL request through the optional driver
-// capability. The provider is told first for the same consent reason as an
-// approval: AO must not record an answer that the live provider rejected.
 func (c *Controller) ResolveInput(
 	ctx context.Context,
 	requestID string,
@@ -2642,35 +2220,10 @@ func (c *Controller) ResolveInput(
 	return nil
 }
 
-// ErrCompactionUnsupported reports a driver whose provider cannot summarize
-// history. Distinct from a failed compaction: "this agent has no way to reclaim
-// context" is a permanent answer a client should stop offering, not something to
-// retry.
 var ErrCompactionUnsupported = errors.New("chat driver cannot compact history")
 
-// ErrCompactionWhileBusy reports a compaction requested while a turn is running.
-//
-// Refused rather than forwarded because of what the provider does with it:
-// `thread/compact/start` mid-turn silently INTERRUPTS the running turn, reports it
-// as interrupted, and then compacts. Measured twice against a live app-server.
-// Losing work the user is waiting on as a side effect of a housekeeping action is
-// not something they should discover afterwards from the timeline, so AO makes them
-// stop the turn themselves.
 var ErrCompactionWhileBusy = errors.New("cannot compact while a turn is in flight")
 
-// Compact summarizes earlier history to reclaim context.
-//
-// Without it a long conversation eventually cannot accept another turn at all:
-// every turn re-sends the history, so context fills whether or not the user is
-// doing anything unusual.
-//
-// It takes sendMu for the same reason a dispatch does, and the reason matters here:
-// the busy check and the provider call have to be one step. Split, a message
-// arriving in between would start a turn that the compaction then destroys — the
-// exact outcome the check exists to prevent.
-//
-// The lock is released as soon as the provider accepts. Until its turn-started
-// event commits, compactionPending keeps sends queued and idle hibernation out.
 func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, error) {
 	compactor, ok := c.conv.(ports.ChatCompactor)
 	if !ok || !c.Capabilities().Has(ports.ChatCapabilityCompaction) {
@@ -2698,19 +2251,8 @@ func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, e
 	return result, err
 }
 
-// turnAckWait bounds how long Interrupt waits for the provider to acknowledge a
-// turn it has only just been handed.
-//
-// Stop appears the instant a message is sent, so a user can press it before the
-// provider has started the turn — and a provider refuses to cancel a turn it does
-// not yet consider active. Waiting out that gap is what makes the button reliable
-// in the moment someone is most likely to use it: right after realizing they sent
-// the wrong thing.
 const turnAckWait = 3 * time.Second
 
-// interruptForHandoff cancels only the provider turn. BeginHandoff has already
-// cancelled the durable queue under the dispatch lock, so reusing Interrupt here
-// would reintroduce a second, callback-ordered cancellation path.
 func (c *Controller) interruptForHandoff(ctx context.Context) error {
 	turn, ok := c.awaitAcknowledgedTurn(ctx)
 	if !ok {
@@ -2718,8 +2260,6 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 	}
 	if err := c.conv.Interrupt(ctx, turn); err != nil {
 		if errors.Is(err, ports.ErrChatNoActiveTurn) {
-			// Completion won the race after the dispatch gate was armed. The queue is
-			// already terminal, so there is no remaining source work to release.
 			return nil
 		}
 		return fmt.Errorf("interrupt turn %s for handoff: %w", turn, err)
@@ -2730,34 +2270,12 @@ func (c *Controller) interruptForHandoff(ctx context.Context) error {
 	return nil
 }
 
-// HandoffInterruptedTurn is the provider turn the handoff's interrupt stopped,
-// or "" when it stopped none.
 func (c *Controller) HandoffInterruptedTurn() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.handoffInterrupted
 }
 
-// Interrupt cancels the in-flight turn, and with it anything queued behind it.
-//
-// The queue is cancelled because stop is the user's brake: a brake that releases
-// the next message instead of stopping would be the opposite of what the button
-// says. The cutoff is recorded before the provider call, so a completion that
-// races back cannot drain the queue the interrupt was about to cancel.
-// Durable state is what the UI renders, so it is also what Stop must be able to
-// act on. Two recovery paths reconcile the cases where in-memory tracking and the
-// durable turn row disagree:
-//
-//   - Memory says nothing is running but SQLite has a turn in 'running'. Either a
-//     projection failure kept the completion from committing, or Stop landed in
-//     the dispatch window after BindTurnToProvider wrote 'running' but before
-//     pendingTurnID was set. Taking sendMu first means dispatch has finished (and
-//     set pendingTurnID) before the disk is consulted — if a turn appeared while
-//     we waited, the normal interrupt path runs instead.
-//   - The provider answers ErrChatNoActiveTurn for a turn memory still tracks.
-//     The provider is the authority that the work already ended; surfacing a bare
-//     "no active turn" would leave the user staring at a Working bar they cannot
-//     dismiss. Reconcile the durable row instead.
 func (c *Controller) Interrupt(ctx context.Context) error {
 	c.mu.Lock()
 	c.interrupts++
@@ -2766,9 +2284,6 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
-	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
-	// it so Stop does not wait for that steer to time out. Withdrawing also
-	// refuses later steers for the turn; a Stop that fails gives them back.
 	var restore func()
 	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
 		restore = withdrawer.WithdrawPendingSteers()
@@ -2778,20 +2293,12 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 			restore()
 		}
 	}
-	// Commit the current batch before Stop settles the turn. The store keeps any
-	// later deltas settled while retaining text that arrives during cancellation.
 	c.flushDeltas(ctx)
-	// Stop's linearization point is the dispatch lock. A Send that acquired the
-	// lock first is existing work Stop should cancel; a Send that arrives after
-	// this point waits and is therefore post-Stop work that must survive.
 	c.sendMu.Lock()
 	cutoff := c.now()
 	c.mu.Lock()
 	turn := c.pendingTurnID
 	if turn != "" {
-		// Publish the queue cutoff before releasing sendMu. A completion can then
-		// win the provider race, but it cannot drain pre-Stop work as if Stop had
-		// never happened.
 		c.cancelQueuedAt = cutoff
 	}
 	c.mu.Unlock()
@@ -2807,8 +2314,6 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 			c.sendMu.Unlock()
 			return ErrNoActiveTurn
 		}
-		// The list uses the snapshot's visibility and ordering rules, so its first
-		// row is the same running turn whose Working bar the user pressed Stop on.
 		providerTurnID := providerTurnIDs[0]
 		if err := c.conv.Interrupt(ctx, providerTurnID); err != nil &&
 			!errors.Is(err, ports.ErrChatNoActiveTurn) {
@@ -2821,23 +2326,15 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.sendMu.Unlock()
 
-	// sendMu proved dispatch is complete, but the provider's turn-started event
-	// may still be in transit. Wait for this exact turn: if it completes and a
-	// post-Stop survivor starts, Stop must not follow ownership to that new turn.
 	if !c.awaitTurnAcknowledged(ctx, turn) {
 		return nil
 	}
 
 	if err := c.conv.Interrupt(ctx, turn); err != nil {
 		if errors.Is(err, ports.ErrChatNoActiveTurn) {
-			// Serialize durable settlement, memory cleanup, and queue promotion so
-			// a message arriving after Stop cannot slip between those steps.
 			c.sendMu.Lock()
 			defer c.sendMu.Unlock()
 
-			// A committed completion may have won the sendMu race after the
-			// provider answered. It already consumed the cutoff and drained the
-			// queue, so do not overwrite its terminal state or a successor turn.
 			c.mu.Lock()
 			stillPending := c.pendingTurnID == turn
 			c.mu.Unlock()
@@ -2850,8 +2347,6 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 			}
 			return c.reconcileDurableTurnsLocked(ctx, turn, providerTurnIDs, cutoff)
 		}
-		// The interrupt did not happen, so the queue it was going to cancel is
-		// still the user's to send, and the turn can still be steered.
 		c.mu.Lock()
 		c.cancelQueuedAt = time.Time{}
 		c.mu.Unlock()
@@ -2861,13 +2356,6 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	return nil
 }
 
-// reconcileDurableTurnsLocked settles work the controller can no longer cancel
-// through the normal path but durable state still shows as running. Every visible
-// running row is settled because nested provider turns can coexist with the root;
-// leaving any one of them running would leave the same Working bar behind. Callers
-// hold sendMu so settlement, memory cleanup, queue cancellation, and survivor
-// dispatch are one serialized transition. The cutoff is the original Stop time: a
-// prompt submitted while provider cancellation was pending is new work and survives.
 func (c *Controller) reconcileDurableTurnsLocked(
 	ctx context.Context,
 	targetProviderTurnID string,
@@ -2905,19 +2393,9 @@ func (c *Controller) reconcileDurableTurnsLocked(
 	c.mu.Unlock()
 
 	c.reportActivity(ctx, domain.ActivityIdle, "chat.interrupt.reconciled", now)
-	// drainLocked consumes cancelQueuedAt, cancels only the pre-Stop queue, and
-	// immediately dispatches the oldest surviving post-Stop prompt.
 	return c.drainLocked(ctx, true)
 }
 
-// awaitAcknowledgedTurn returns the turn to interrupt once the provider has
-// confirmed it started, or reports that there is nothing to cancel.
-//
-// It gives up immediately when no turn is in flight — that is a plain "nothing to
-// stop" and must stay fast. It only waits in the narrow window where AO has
-// dispatched a turn and the provider has not yet said so. On expiry it returns the
-// turn anyway: the provider is the authority on whether it can be cancelled, and
-// its refusal is already translated into a typed answer.
 func (c *Controller) awaitAcknowledgedTurn(ctx context.Context) (string, bool) {
 	c.mu.Lock()
 	pending := c.pendingTurnID
@@ -2928,9 +2406,6 @@ func (c *Controller) awaitAcknowledgedTurn(ctx context.Context) (string, bool) {
 	return pending, true
 }
 
-// awaitTurnAcknowledged waits only for the named turn. Ownership can move to a
-// queued post-Stop survivor while this wait is in progress; following that move
-// would interrupt new work the user submitted after pressing Stop.
 func (c *Controller) awaitTurnAcknowledged(ctx context.Context, turn string) bool {
 	deadline := time.Now().Add(turnAckWait)
 	for {
@@ -2955,22 +2430,6 @@ func (c *Controller) awaitTurnAcknowledged(ctx context.Context, turn string) boo
 	}
 }
 
-// Rollback discards a turn and everything after it, and reports how many turns went.
-// With filePlanID, the PlanID of the RollbackPreview the user confirmed, it also puts
-// the worktree back to how it was before the turn.
-//
-// Order is deliberate: files first, the provider second, AO's rows last. Files are
-// the only step that can be reversed, so they go before the provider call and are
-// put back if the provider refuses. If the provider refuses, AO must not already
-// have hidden anything — a timeline missing turns the agent still remembers is the
-// same lie in the other direction. If AO's write then fails, the error is returned
-// and logged loudly: the provider call cannot be undone, and the raw provider-event
-// archive plus the surviving turn rows are what make the disagreement repairable
-// rather than invisible.
-//
-// The busy check is inside sendMu, which is also what dispatch holds, so a turn
-// cannot start between the check and the provider call. That is the difference
-// between refusing a rollback and racing one.
 func (c *Controller) Rollback(ctx context.Context, turnID, filePlanID string) (int, error) {
 	rollbacker, ok := c.conv.(ports.ChatRollbacker)
 	if !ok {
@@ -2984,8 +2443,6 @@ func (c *Controller) Rollback(ctx context.Context, turnID, filePlanID string) (i
 	}
 
 	if c.busy() {
-		// Not a failure and not permanent: the agent is mid-thought, and the same
-		// request works the moment it finishes.
 		return 0, ErrTurnRunning
 	}
 
@@ -3013,9 +2470,6 @@ func (c *Controller) Rollback(ctx context.Context, turnID, filePlanID string) (i
 		}
 	}
 	if turn.ProviderTurnID == "" {
-		// The provider never accepted this turn, so it holds no history to discard.
-		// Hiding AO's rows anyway would leave the agent remembering more than the
-		// timeline shows, which is the failure this whole operation exists to avoid.
 		return 0, fmt.Errorf("%w: %s", ErrTurnNotRollbackable, turnID)
 	}
 
@@ -3039,10 +2493,6 @@ func (c *Controller) Rollback(ctx context.Context, turnID, filePlanID string) (i
 	return discarded, nil
 }
 
-// Close detaches this daemon's controller. Persistent provider hosts keep the
-// native connection and any in-flight turn alive; non-persistent drivers retain
-// their historical process-close behavior. The persistent host replays detached
-// output and unresolved provider requests to the replacement controller.
 func (c *Controller) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.explicitClose = true
@@ -3066,9 +2516,6 @@ func (c *Controller) Close(ctx context.Context) error {
 	}
 }
 
-// Terminate closes the controller and explicitly destroys a persistent provider
-// host. Daemon shutdown uses Close so the host survives; user/session teardown
-// and controller replacement use Terminate.
 func (c *Controller) Terminate(ctx context.Context) error {
 	c.mu.Lock()
 	c.explicitClose = true
@@ -3094,10 +2541,6 @@ func (c *Controller) Terminate(ctx context.Context) error {
 	}
 }
 
-// closeForBranchHandoff retires and terminates a source controller without
-// publishing a session-level exit. Branch replacement is an in-place writer
-// handoff, not the end of the session; the replacement generation continues the
-// lifecycle, but the old persistent host must release exclusive ownership.
 func (c *Controller) closeForBranchHandoff(ctx context.Context) error {
 	c.prepareBranchHandoffStop()
 	return c.Terminate(ctx)
@@ -3115,7 +2558,6 @@ func (c *Controller) reportFailedBranchHandoff(ctx context.Context) {
 	stopped := c.state == ports.ChatControllerStopped
 	c.mu.Unlock()
 	if !stopped {
-		// project will publish the ordinary stop boundary when the stream ends.
 		return
 	}
 	reportCtx, cancel := context.WithTimeout(
@@ -3124,17 +2566,11 @@ func (c *Controller) reportFailedBranchHandoff(ctx context.Context) {
 	c.reportActivity(reportCtx, domain.ActivityExited, "chat.controller.stopped", c.now())
 }
 
-// Wait blocks until the controller's event stream has ended.
 func (c *Controller) Wait() { <-c.stopped }
 
-// project consumes the driver's normalized events and writes them down. It runs
-// until this controller's stream closes. That can mean provider termination or a
-// deliberate detach from a provider that remains alive in a persistent host.
 func (c *Controller) project(flushInterval time.Duration) {
 	defer close(c.stopped)
 
-	// Detached from any request context: this outlives the call that started the
-	// controller, and must keep persisting until the provider stream ends.
 	ctx := context.WithoutCancel(context.Background())
 	acknowledger, persistent := c.conv.(ports.ChatProviderEventAcknowledger)
 
@@ -3150,27 +2586,11 @@ func (c *Controller) project(flushInterval time.Duration) {
 	preserveProvider := c.preserveProviderOnStop
 	hibernating := c.handoff == controllerHandoffHibernate
 	c.mu.Unlock()
-	// Hibernate admitted no running work, but Send can append an optimistic
-	// message during shutdown. Keep that queue for the replacement controller.
 	if preserveProvider || hibernating {
 		return
 	}
 
-	// The stream has ended, so nothing more can arrive for this controller. This
-	// is the only place that reliably knows that — a provider process can die on
-	// its own, in which case no AO code path called Close — so it is where
-	// in-flight work gets settled.
-	//
-	// A turn the controller was running is not evidence the work finished, and an
-	// approval still pending can never be answered because the provider call it
-	// was blocking is gone. Both are closed out honestly rather than left looking
-	// live forever.
 	now := c.now()
-	// The provider stream ending is the one universal stop signal. Some drivers
-	// emit an explicit controller-state event first, but a process crash or lost
-	// transport cannot. Report the same lifecycle boundary here so the session
-	// does not remain durably active, idle, or blocked after its controller died.
-	// ControllerGeneration fences this write from a replacement controller.
 	if !suppressStoppedActivity {
 		c.reportActivity(ctx, domain.ActivityExited, "chat.controller.stopped", now)
 	}
@@ -3179,9 +2599,6 @@ func (c *Controller) project(flushInterval time.Duration) {
 	}
 }
 
-// projectUnit commits one unit from the event pump: a single event, or a run of
-// deltas for one provider item. It reports false when consumption must stop
-// because a persistent provider's projection failed.
 func (c *Controller) projectUnit(
 	ctx context.Context,
 	unit []ports.ChatEvent,
@@ -3191,8 +2608,6 @@ func (c *Controller) projectUnit(
 	event := unit[0]
 	if event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped &&
 		errors.Is(event.Err, ports.ErrChatRecoveryInconclusive) {
-		// A lost attachment is not proof the persistent provider stopped. Keep
-		// its turn/request correlation and queued intake for a replacement.
 		c.mu.Lock()
 		preserver, persistentProvider := c.conv.(ports.ChatProviderPreserver)
 		c.transportInterrupted = !c.explicitClose && persistentProvider && preserver.PreservesProviderOnClose()
@@ -3211,9 +2626,6 @@ func (c *Controller) projectUnit(
 	if preserveWork && event.Kind == ports.ChatEventControllerState && event.ControllerState == ports.ChatControllerStopped {
 		return true
 	}
-	// A lifecycle event and a concurrent Send must agree on whether the root
-	// conversation is busy. Holding the same lock Send/dispatch use closes the
-	// window between the durable projection and the in-memory ownership update.
 	lifecycle := event.Kind == ports.ChatEventTurnStarted || event.Kind == ports.ChatEventTurnCompleted || event.Kind == ports.ChatEventCompacted
 	if lifecycle {
 		c.sendMu.Lock()
@@ -3226,9 +2638,6 @@ func (c *Controller) projectUnit(
 		return c.projectEvent(ctx, event)
 	}
 	projected, primaryTurn, err := project()
-	// A terminal receipt compacts the entire prompt, so it cannot pass a
-	// failed earlier projection. Retry transient store errors in order; if
-	// still failing, detach and leave the journal for a replacement controller.
 	for attempt := 0; err != nil && persistent && attempt < 3; attempt++ {
 		time.Sleep(20 * time.Millisecond)
 		projected, primaryTurn, err = project()
@@ -3253,9 +2662,6 @@ func (c *Controller) projectUnit(
 		return false
 	}
 	if err != nil {
-		// A projection failure must not kill the provider stream. The store
-		// rolls the archive back with its projection, so durable state remains
-		// internally consistent and a later provider replay may retry it.
 		c.log.Error("failed to project chat event",
 			"session", c.sessionID, "kind", event.Kind, "error", err)
 		captureChatFault(ctx, err, c.harness, "chat_projection", "")
@@ -3277,8 +2683,6 @@ func (c *Controller) cleanupOwnedControllerWork(ctx context.Context, now time.Ti
 	return err
 }
 
-// projectEvent archives one normalized provider event and applies its durable
-// projection in the same SQLite transaction.
 func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (bool, bool, error) {
 	projected, err := c.archive(ctx, event, func(txCtx context.Context) error { return c.apply(txCtx, event) })
 	if err != nil || !projected {
@@ -3287,9 +2691,6 @@ func (c *Controller) projectEvent(ctx context.Context, event ports.ChatEvent) (b
 	return true, c.applyCommittedTurnLifecycle(event), nil
 }
 
-// archive records event in the provider archive and runs project in the same
-// transaction. It reports false without projecting when the controller
-// generation is stale or the event's native identity is already archived.
 func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project func(context.Context) error) (bool, error) {
 	record := map[string]any{
 		"kind":                   event.Kind,
@@ -3320,10 +2721,6 @@ func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project
 		"mcpServers":             event.MCPServers,
 	}
 	if c.harness == domain.HarnessCodex {
-		// Codex account identity and subscription capacity are daemon-memory
-		// account state. Conversation provider archives must not become a second
-		// persistence path for email, plan, percentages, reset times, or raw
-		// account payloads.
 		if event.Kind == ports.ChatEventAccountChanged {
 			record["account"] = nil
 		}
@@ -3351,10 +2748,6 @@ func (c *Controller) archive(ctx context.Context, event ports.ChatEvent, project
 		c.generation, event.ProviderEventID, string(event.Kind), string(payload), c.now(), project)
 }
 
-// applyCommittedTurnLifecycle updates the controller's volatile ownership only
-// after the matching durable projection commits. Codex streams events for nested
-// child threads over the root connection, so only events from the conversation AO
-// opened are allowed to claim or release the primary turn.
 func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 	if event.Kind != ports.ChatEventTurnStarted && event.Kind != ports.ChatEventTurnCompleted {
 		return false
@@ -3367,8 +2760,6 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 	defer c.mu.Unlock()
 	switch event.Kind {
 	case ports.ChatEventTurnStarted:
-		// AO serializes root dispatch. A different turn id while one is pending is
-		// auxiliary provider work, even for a protocol that cannot name its thread.
 		if c.pendingTurnID != "" && c.pendingTurnID != event.ProviderTurnID {
 			return false
 		}
@@ -3379,8 +2770,6 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 		return true
 	case ports.ChatEventTurnCompleted:
 		if c.pendingTurnID != event.ProviderTurnID && (!c.compactionPending || c.pendingTurnID != "") {
-			// A completion that names a different turn leaves the controller busy. If
-			// the pending turn never completes, every later send queues behind it.
 			c.log.Info("chat turn completion ignored: provider turn does not match pending turn",
 				"session", c.sessionID, "completedTurn", event.ProviderTurnID,
 				"pendingTurn", c.pendingTurnID, "compactionPending", c.compactionPending)
@@ -3417,11 +2806,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 					return fmt.Errorf("bind early provider-started turn %s: %w", event.ProviderTurnID, err)
 				}
 			} else {
-				// A turn AO dispatched already has a row, bound in dispatch. This covers
-				// the turn AO did NOT dispatch: a compaction, or work the provider resumed
-				// from its own history. Adopting it is what keeps every item it emits
-				// correlated, and without that the activities arrive with no turn and the
-				// timeline quietly stops grouping them.
 				var adoptErr error
 				if c.reviewID == "" {
 					adoptErr = c.store.AdoptProviderTurn(ctx, c.conversation.ID, c.sessionID, c.generation, c.newID(), event.ProviderTurnID, now)
@@ -3432,7 +2816,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 					return fmt.Errorf("adopt provider-started turn %s: %w", event.ProviderTurnID, adoptErr)
 				}
 				if rootConversation {
-					// AO did not dispatch this turn, so its start is the earliest point to look.
 					c.captureArtifactBaseline(ctx, false)
 				}
 			}
@@ -3460,8 +2843,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		}
 		state := settledTurnState(event)
 		failureCode := event.FailureCode
-		// Every driver reports a refused login as ErrChatAuthRequired, so the turn
-		// carries one code the chat can offer a sign-in for, whatever the agent.
 		if failureCode == "" && state == domain.TurnStateFailed && errors.Is(event.Err, ports.ErrChatAuthRequired) {
 			failureCode = domain.ConversationFailureAuthRequired
 		}
@@ -3470,7 +2851,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			return err
 		}
 		if event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID() {
-			// Best effort: a turn that ends without its artifact list still ended.
 			if err := c.recordTurnArtifacts(ctx, event.ProviderTurnID); err != nil {
 				c.log.Warn("turn artifacts not recorded", "session", c.sessionID, "providerTurn", event.ProviderTurnID, "error", err)
 			}
@@ -3498,12 +2878,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			event.ProviderItemID, event.ProviderTurnID, event.Text, c.newID(), now)
 
 	case ports.ChatEventCommandOutputDelta:
-		// Appended to the command's own activity row, not added to the timeline: a
-		// row per delta would bury the conversation under one noisy command.
-		//
-		// A delta whose activity does not exist yet is dropped. The provider can
-		// emit output before the item/started that creates the row, and inventing an
-		// activity from a delta would mint a timeline entry with no command on it.
 		found, err := c.store.AppendCommandOutput(ctx, c.conversation.ID,
 			event.ProviderItemID, event.Delta, now)
 		if err != nil {
@@ -3516,9 +2890,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		return nil
 
 	case ports.ChatEventTurnDiff:
-		// Per-turn state, overwritten. The provider re-sends the whole diff on every
-		// update, so appending a timeline row per notification would show the same
-		// edits over and over as if they had happened repeatedly.
 		if event.Diff == nil {
 			return nil
 		}
@@ -3540,22 +2911,12 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			return err
 		}
 		if !found {
-			// A turn from before this controller existed, seen after a restart.
 			c.log.Debug("turn diff had no turn to attach to",
 				"session", c.sessionID, "providerTurn", event.ProviderTurnID)
 		}
 		return nil
 
 	case ports.ChatEventReasoningDelta, ports.ChatEventCommandInput, ports.ChatEventActivityText:
-		// Provider prose for one activity, appended to that activity's own stream.
-		// Deliberately not a timeline row per delta, and deliberately not the same
-		// column as command output: a PTY echoes the keystrokes the agent sends, so
-		// merging the two streams would show every typed line twice.
-		//
-		// A delta whose activity does not exist yet is dropped for the same reason a
-		// command output delta is: the provider can stream before the item/started
-		// that creates the row, and minting an activity from a delta would put a
-		// timeline entry there with nothing on it.
 		found, err := c.store.AppendActivityStreamedText(ctx, c.conversation.ID,
 			event.ProviderItemID, event.Delta, now)
 		if err != nil {
@@ -3583,10 +2944,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			event.ActivityKind == domain.ActivityKindCommand && c.prChanged != nil && commandDetailMayChangePR(event.Detail) {
 			c.prChanged(c.sessionID)
 		}
-		// After the upsert, so the row exists to settle. Only when the provider
-		// actually settled something: an empty settle would erase an accumulation the
-		// user watched arrive, and a reasoning item with an empty summary array is the
-		// normal shape on a build that streams no summaries at all.
 		if event.Text != "" {
 			if _, err := c.store.SettleActivityStreamedText(ctx, c.conversation.ID,
 				event.ProviderItemID, event.Text, now); err != nil {
@@ -3596,9 +2953,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		return nil
 
 	case ports.ChatEventPlanUpdated:
-		// Per-turn state, overwritten. The provider re-sends the whole plan on every
-		// change, so a row per update would read as though the agent had planned three
-		// separate times in one turn.
 		if event.Plan == nil {
 			return nil
 		}
@@ -3607,16 +2961,9 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			return err
 		}
 		if !found {
-			// A turn from before this controller existed, seen after a restart.
 			c.log.Debug("plan had no turn to attach to",
 				"session", c.sessionID, "providerTurn", event.ProviderTurnID)
 		}
-		// Also a timeline row, upserted so the plan mutates in place rather than
-		// stacking. The turn column answers "what is the plan now" without walking the
-		// timeline; this row answers "where in the conversation did the agent plan",
-		// which the column cannot. The compaction projection already sets this
-		// precedent, and the two cannot disagree because both are written from one
-		// event.
 		itemID := c.planItemID(event.ProviderTurnID)
 		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
@@ -3632,15 +2979,9 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if !event.Plan.SpansTurns {
 			return nil
 		}
-		// Every earlier turn and run holds a copy of this same list. The daemon sees
-		// the writes in order, so it marks which copy is current on the active path
-		// rather than leaving each client to date the copies.
 		return c.store.ReconcileSpanningPlans(ctx, c.conversation.ID, now)
 
 	case ports.ChatEventModelRerouted:
-		// A correction to a claim AO has already made. The composer names the model it
-		// is sending to, so a substitution nobody recorded leaves every later reading
-		// of the turn attributing the answer to a model that did not produce it.
 		if event.Reroute == nil || event.Reroute.ToModel == "" {
 			return nil
 		}
@@ -3654,9 +2995,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			}); err != nil {
 			return err
 		}
-		// And a timeline row, because the substitution happened at a point in the
-		// conversation: everything above it was answered by one model and everything
-		// below by another, and conversation state alone cannot say where the line is.
 		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
 				ID:     c.newID(),
@@ -3693,26 +3031,13 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		return c.applyMCPServers(ctx, event.MCPServers)
 
 	case ports.ChatEventCompacted:
-		// A fact about the conversation, emitted from a provider-owned turn that AO
-		// did not dispatch. Keep that native turn correlation even though the UI
-		// renders it as a boundary between user turns: rollback needs to hide the
-		// compaction when the provider forgets the turn that produced it.
-		//
-		// Recorded because it is the one thing the timeline cannot show without a
-		// row: after a restart the reclaim figures are gone from memory, and a
-		// conversation that silently lost half its history with nothing to mark where
-		// reads as if the agent simply forgot.
 		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
-				ID:     c.newID(),
-				Kind:   domain.ActivityKindSystem,
-				Status: domain.ActivityStatusCompleted,
-				// Falls back to a plain label rather than an empty row: a driver that
-				// reports a compaction without a summary still happened.
-				Summary: firstNonEmpty(event.Summary, "Compacted the conversation history"),
-				Detail:  compactionDetail(event),
-				// The provider's own item id, so a compaction replayed across a
-				// reconnect updates the existing row instead of adding a second.
+				ID:             c.newID(),
+				Kind:           domain.ActivityKindSystem,
+				Status:         domain.ActivityStatusCompleted,
+				Summary:        firstNonEmpty(event.Summary, "Compacted the conversation history"),
+				Detail:         compactionDetail(event),
 				ProviderItemID: event.ProviderItemID,
 			}, now); err != nil {
 			return err
@@ -3736,8 +3061,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		return c.applyThreadTitle(ctx, event.Title, now)
 
 	case ports.ChatEventApprovalResolved:
-		// The provider resolved it, possibly through another client. Mark it so a
-		// card still on screen elsewhere stops being actionable.
 		detail := event.Detail
 		if len(detail) == 0 {
 			detail, _ = json.Marshal(map[string]string{"resolvedBy": "provider"})
@@ -3777,9 +3100,6 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		if event.Usage == nil {
 			return nil
 		}
-		// Overwrites rather than appends. Deliberately not reported as activity
-		// either: token accounting arriving is not the agent doing work, and
-		// treating it as such would keep a finished session looking busy.
 		return c.store.RecordUsage(ctx, c.conversation.ID, c.mergeUsage(*event.Usage))
 
 	case ports.ChatEventRateLimits:
@@ -3831,24 +3151,16 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			}, now)
 
 	default:
-		// An event kind this build does not model is archived but not projected.
 		return nil
 	}
 }
 
-// afterProject performs effects that intentionally live outside the SQLite
-// archive/projection transaction. Lifecycle writes touch the sessions table and
-// draining may call the provider, so either one inside the store transaction
-// would hold the single writer connection across another subsystem.
 func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, primaryTurn bool) {
 	now := c.now()
 	switch event.Kind {
 	case ports.ChatEventTurnStarted:
 		if primaryTurn {
 			c.reportActivity(ctx, domain.ActivityActive, "chat.turn.started", now)
-			// A turn after a refused login hints the login is back. Reading the
-			// account again confirms it and clears the sign-in notice now, not
-			// when this turn ends.
 			if c.recheckAccount != nil {
 				if account, err := c.store.ConversationAccount(ctx, c.conversation.ID); err == nil && account != nil && account.ReauthRequiredAt != nil {
 					c.recheckAccount(c.sessionID, c.harness)
@@ -3870,13 +3182,9 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 			activityEvent = "chat.account.reauth"
 		}
 		c.reportActivity(ctx, activityState, activityEvent, now)
-		// Only a completed turn releases queued work; a failed or recovered one holds
-		// the queue so it cannot cascade through the same outage (issue #4861). A
-		// prompt the host's watchdog failed for silence is not an outage: the
-		// provider never answered, so the queued messages get their own turns.
 		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
 			errors.Is(event.Err, ports.ErrChatPromptStalled)
-		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
+		_ = c.drainLocked(ctx, releaseQueue)
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:
@@ -3902,14 +3210,7 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 			_ = c.drainLocked(ctx, true)
 		}
 	case ports.ChatEventControllerState:
-		// Volatile state moves only after the provider event and all of its durable
-		// cleanup committed. Otherwise a rollback can say "stopped" in memory while
-		// SQLite still contains live work.
 		c.mu.Lock()
-		// ACP initialization queues a generic ready notification before live
-		// reconnect restores ownership of a durable running turn. That stale
-		// notification must not release the reconstructed busy state: only the
-		// matching committed turn completion may release pendingTurnID.
 		if event.ControllerState != ports.ChatControllerReady || c.pendingTurnID == "" {
 			c.state = event.ControllerState
 		}
@@ -3932,9 +3233,6 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 	}
 }
 
-// settledTurnState resolves the only ambiguous terminal combination once. An
-// attached error is authoritative failure unless the provider explicitly says
-// the user interrupted the turn; an absent state is never evidence of success.
 func settledTurnState(event ports.ChatEvent) domain.TurnState {
 	if event.TurnState == domain.TurnStateInterrupted {
 		return domain.TurnStateInterrupted
@@ -3945,10 +3243,6 @@ func settledTurnState(event ports.ChatEvent) domain.TurnState {
 	return event.TurnState
 }
 
-// reportProviderState covers work the agent runs on its own between AO turns,
-// such as answering a finished background task. While AO has a turn in flight,
-// the turn events own the activity: a provider idle can lag behind the next
-// turn's start, so it must not end that turn early.
 func (c *Controller) reportProviderState(ctx context.Context, state *ports.ChatThreadState, now time.Time) {
 	if state == nil {
 		return
@@ -3963,7 +3257,6 @@ func (c *Controller) reportProviderState(ctx context.Context, state *ports.ChatT
 	case domain.ThreadStatusActive:
 		c.reportActivity(ctx, domain.ActivityActive, "chat.provider.running", now)
 	case domain.ThreadStatusIdle:
-		// An open approval or question still waits on the user.
 		if pending, err := c.store.HasPendingConversationInteractions(ctx, c.conversation.ID); err != nil || pending {
 			return
 		}
@@ -3984,20 +3277,6 @@ func (c *Controller) reportInteractionResolved(ctx context.Context, event string
 	c.reportActivity(ctx, domain.ActivityActive, event, now)
 }
 
-// applyThreadTitle records a title the provider reports for the thread and, when
-// it may, adopts it as the session's label.
-//
-// The session's display name is the field that already exists for this, so a
-// provider title lands there rather than in a parallel one — every surface that
-// shows a session name picks it up with no change, and the sessions CDC trigger
-// fans it out on the event clients already listen to.
-//
-// It never overwrites a name a person chose. The store's compare-and-set is what
-// enforces that in one statement; a false result here means the user's label won,
-// which is the correct outcome and not an error.
-//
-// A cleared title is recorded but never applied: the provider having no name for
-// the thread is not a reason to strip the label off AO's session.
 func (c *Controller) applyThreadTitle(ctx context.Context, title string, now time.Time) error {
 	normalized := NormalizeTitle(title)
 	if err := c.store.SetProviderTitle(ctx, c.conversation.ID, normalized, now); err != nil {
@@ -4007,13 +3286,9 @@ func (c *Controller) applyThreadTitle(ctx context.Context, title string, now tim
 		return nil
 	}
 	if c.reviewID != "" {
-		// A reviewer title belongs only to its durable conversation. Applying it
-		// through the worker-session CAS would rename the reviewed task.
 		return nil
 	}
 	if c.conversation.Scope == domain.ConversationScopeProject {
-		// Only the project orchestrator owns a project conversation, and it is
-		// never renamed. Its own agent must not rename it by naming the thread.
 		return nil
 	}
 	applied, err := c.store.ApplyProviderTitle(
@@ -4028,25 +3303,11 @@ func (c *Controller) applyThreadTitle(ctx context.Context, title string, now tim
 	return nil
 }
 
-// applyAccount folds an account report into what AO already knows and records the
-// result.
-//
-// A merge rather than a replace because the provider reports the account in pieces:
-// account/updated carries the auth mode and plan and says nothing about credentials,
-// while a credential demand carries only the demand. Writing either straight through
-// would blank the other, so a session whose tokens expired would lose the plan label
-// and one that changed plan would look like its credentials were fine again.
-//
-// A demand for credentials also gets a timeline row. It is the one account fact the
-// user has to act on, and a turn that failed because the provider wanted a login it
-// could not get is otherwise indistinguishable from any other failed turn.
 func (c *Controller) applyAccount(
 	ctx context.Context,
 	update ports.ChatAccount,
 	now time.Time,
 ) error {
-	// Uncorrelated account reports cannot establish recovery. Successful turn
-	// completion is projected separately with its provider identity and fence.
 	if update.ReauthRecovered && !update.ReauthRequired && update.AuthMode == "" && update.PlanLabel == "" {
 		return nil
 	}
@@ -4062,28 +3323,20 @@ func (c *Controller) applyAccount(
 	})
 	return c.store.UpsertActivity(ctx, c.conversation.ID, "",
 		domain.ConversationActivity{
-			ID:      c.newID(),
-			Kind:    domain.ActivityKindSystem,
-			Status:  domain.ActivityStatusFailed,
-			Summary: "The provider needs you to sign in again",
-			Detail:  detail,
-			// Keyed on the reason so a provider retrying its demand updates one row
-			// instead of filling the timeline with the same notice.
+			ID:             c.newID(),
+			Kind:           domain.ActivityKindSystem,
+			Status:         domain.ActivityStatusFailed,
+			Summary:        "The provider needs you to sign in again",
+			Detail:         detail,
 			ProviderItemID: "ao-reauth-" + firstNonEmpty(update.ReauthReason, "unknown"),
 		}, now)
 }
 
-// recordAccount updates the latest account projection without creating a
-// timeline row. A terminal provider failure already occupies the turn's outcome;
-// recording recovery state here lets persistent UI explain what to do next
-// without duplicating the same provider prose as another event.
 func (c *Controller) recordAccount(
 	ctx context.Context,
 	update ports.ChatAccount,
 	now time.Time,
 ) error {
-	// Read the durable projection in the event transaction. Snapshot reconciliation
-	// may have recovered it since this controller's last account report.
 	previous, err := c.store.ConversationAccount(ctx, c.conversation.ID)
 	if err != nil {
 		return err
@@ -4111,12 +3364,6 @@ func (c *Controller) recordAccount(
 	return c.store.RecordAccount(ctx, c.conversation.ID, account, now)
 }
 
-// applyThreadState folds a thread report into what AO already knows.
-//
-// Tri-state on purpose. A status report says nothing about archiving and an archive
-// report says nothing about status, so each report updates only what it actually
-// spoke about — otherwise an ordinary idle report would silently un-archive a
-// thread.
 func (c *Controller) applyThreadState(
 	ctx context.Context,
 	update ports.ChatThreadState,
@@ -4125,9 +3372,6 @@ func (c *Controller) applyThreadState(
 	c.mu.Lock()
 	if update.Status != "" {
 		c.threadState.Status = update.Status
-		// The flags belong to the status report that carried them: an active thread
-		// that is no longer waiting on an approval reports active with no flags, and
-		// keeping the old list would leave it looking blocked forever.
 		c.threadState.WaitingOn = update.WaitingOn
 	}
 	if update.Archived != nil {
@@ -4149,11 +3393,6 @@ func (c *Controller) applyThreadState(
 	return c.store.RecordThreadState(ctx, c.conversation.ID, state)
 }
 
-// applyMCPServers merges one server's report into the list and records it.
-//
-// The provider announces servers one at a time and re-announces all of them on
-// every turn, so this is a merge by name. First-seen order is preserved so the list
-// a client renders does not reshuffle between polls.
 func (c *Controller) applyMCPServers(ctx context.Context, updates []ports.ChatMCPServer) error {
 	c.mcpPersistMu.Lock()
 	defer c.mcpPersistMu.Unlock()
@@ -4191,17 +3430,8 @@ func (c *Controller) mcpServersLocked() []domain.ConversationMCPServer {
 	return servers
 }
 
-// ErrMCPReloadUnsupported reports a driver whose provider cannot restart its tool
-// servers. Permanent rather than transient, so a client should stop offering it.
 var ErrMCPReloadUnsupported = errors.New("chat driver cannot reload MCP servers")
 
-// ReloadMCPServers restarts the provider's tool servers.
-//
-// It takes sendMu for the reason a compaction does: the reload tears down and
-// re-establishes every tool the agent has, and doing that under a running turn would
-// pull tools out from under work in flight. Refusing while busy makes the user stop
-// the turn themselves rather than discovering afterwards from the timeline that
-// their request failed for a reason they caused.
 func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.ConversationMCPServer, error) {
 	reloader, ok := c.conv.(ports.ChatMCPReloader)
 	if !ok {
@@ -4227,20 +3457,12 @@ func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.Conversatio
 		return nil, err
 	}
 	if !result.Authoritative {
-		// Reload succeeded, but its inventory read did not. Preserve what is known:
-		// an empty unavailable result cannot distinguish no configured servers from a
-		// provider that could not enumerate them.
 		c.mu.Lock()
 		current := c.mcpServersLocked()
 		c.mu.Unlock()
 		return current, nil
 	}
 
-	// Startup notifications are individual deltas, while this inventory is a full
-	// replacement. Keep only notifications observed after reload began, then overlay
-	// positively initialized inventory entries as ready. Holding mcpPersistMu through
-	// the write keeps a notification that raced the reload from persisting stale state
-	// after this replacement.
 	c.mcpPersistMu.Lock()
 	defer c.mcpPersistMu.Unlock()
 	c.mu.Lock()
@@ -4258,9 +3480,6 @@ func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.Conversatio
 		}
 		current, seen := fresh[server.Name]
 		if seen && current.Status != "ready" {
-			// The status list is a snapshot, while this non-ready state came from
-			// a startup notification observed after the reload began. Keep the
-			// newer failure/transition instead of promoting it back to ready.
 			continue
 		}
 		if !seen {
@@ -4294,15 +3513,6 @@ func (c *Controller) handoffActive() bool {
 	return c.handoff != controllerHandoffNone
 }
 
-// planItemID keys a plan's timeline row. The provider sends no item id with a plan
-// update — a plan is not an item — so the key is synthesized from the turn, which
-// is what makes repeated updates rewrite one row. The prefix keeps it from ever
-// colliding with a provider item id.
-//
-// A plan with no turn comes from work the agent does on its own, outside any AO
-// turn. Each run of that work gets one row, so its revisions rewrite it. A run
-// ends when the agent next works on a turn; the provider reports nothing when
-// such work stops, so two runs with no turn between them share a row.
 func (c *Controller) planItemID(providerTurnID string) string {
 	if providerTurnID != "" {
 		return "ao-plan-" + providerTurnID
@@ -4313,7 +3523,6 @@ func (c *Controller) planItemID(providerTurnID string) string {
 	return c.turnlessPlanItemID
 }
 
-// rerouteItemID keys a reroute notice the same way, for the same reason.
 func rerouteItemID(providerTurnID string) string {
 	if providerTurnID == "" {
 		return "ao-reroute"
@@ -4321,9 +3530,6 @@ func rerouteItemID(providerTurnID string) string {
 	return "ao-reroute-" + providerTurnID
 }
 
-// planActivityStatus reports a plan as still running until every step is done.
-// Status here is about the plan, not about the turn: a plan with work left is not a
-// completed thing, and showing it as one would tick off steps the agent is still on.
 func planActivityStatus(plan domain.ConversationPlan) domain.ActivityStatus {
 	if len(plan.Steps) == 0 {
 		return domain.ActivityStatusCompleted
@@ -4336,13 +3542,6 @@ func planActivityStatus(plan domain.ConversationPlan) domain.ActivityStatus {
 	return domain.ActivityStatusCompleted
 }
 
-// planDetail is the plan's typed payload. The steps go in as structure rather than
-// as rendered text: a client that wants checkboxes needs the per-step status, and a
-// client that wants prose can join them, but the reverse is not recoverable.
-//
-// A cross-turn list's row also records when it was written. One run's revisions
-// rewrite one row in place, so neither its position nor its updated_at says
-// which copy of the list is newest; this does.
 func planDetail(plan domain.ConversationPlan, writtenAt time.Time) []byte {
 	steps := make([]map[string]any, 0, len(plan.Steps))
 	for _, step := range plan.Steps {
@@ -4352,8 +3551,6 @@ func planDetail(plan domain.ConversationPlan, writtenAt time.Time) []byte {
 	if plan.Explanation != "" {
 		detail["explanation"] = plan.Explanation
 	}
-	// For a row no turn holds, the row is the only copy a client gets, so every
-	// row of a cross-turn list carries the flag.
 	if plan.SpansTurns {
 		detail["spansTurns"] = true
 		detail["writtenAt"] = writtenAt.UTC()
@@ -4365,7 +3562,6 @@ func planDetail(plan domain.ConversationPlan, writtenAt time.Time) []byte {
 	return encoded
 }
 
-// rerouteDetail is the reroute notice's typed payload.
 func rerouteDetail(reroute ports.ChatModelReroute) []byte {
 	detail := map[string]any{
 		"event":   "model.rerouted",
@@ -4384,9 +3580,6 @@ func rerouteDetail(reroute ports.ChatModelReroute) []byte {
 	return encoded
 }
 
-// mergeApprovalDetail folds the provider's offered decisions into the activity
-// payload, so the client renders buttons from what the provider actually allows
-// rather than from a fixed set.
 func mergeApprovalDetail(event ports.ChatEvent) []byte {
 	merged := map[string]any{}
 	if len(event.Detail) > 0 {
@@ -4418,14 +3611,6 @@ func normalizeOrigin(origin domain.MessageOrigin) domain.MessageOrigin {
 	}
 }
 
-// compactionDetail stamps the driver's reclaim figures with what kind of system
-// event this row is.
-//
-// `system` is a general bucket, so a reader cannot tell a compaction from whatever
-// else lands there next. The discriminator is set here rather than in a driver
-// because the choice of kind is this projection's, not the provider's — and a
-// compaction rendered as a generic notice would lose the one thing that matters
-// about it: that the history above it is no longer what the agent sees.
 func compactionDetail(event ports.ChatEvent) []byte {
 	merged := map[string]any{}
 	if len(event.Detail) > 0 {
@@ -4455,15 +3640,6 @@ func nonEmptyJSON(raw []byte) []byte {
 	return raw
 }
 
-// reportActivity feeds the lifecycle reduction that derives user-facing status.
-//
-// Chat uses the same pipeline terminal sessions use rather than persisting a
-// second display status — AO derives status from durable facts at read time, and
-// a parallel chat-only status would be a second source of truth to keep in sync.
-//
-// Best-effort: a rejected signal must not stop the durable projection, which is
-// the record that actually matters. Lifecycle also rejects signals it considers
-// stale, which is a legitimate outcome rather than an error to surface.
 func (c *Controller) reportActivity(
 	ctx context.Context,
 	state domain.ActivityState,
@@ -4485,8 +3661,6 @@ func (c *Controller) reportActivity(
 	}
 }
 
-// commandDetailMayChangePR reads a finished command activity's normalized
-// detail and reports whether the command probably changed a pull request.
 func commandDetailMayChangePR(detail []byte) bool {
 	var d struct {
 		Command string `json:"command"`

@@ -373,8 +373,6 @@ func TestGetAgentHooksInstallsQwenHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	settingsPath := filepath.Join(settingsDir, "settings.json")
-	// Pre-seed an unrelated top-level setting and a user-owned Stop hook; both
-	// must be preserved.
 	existing := `{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"custom stop hook","timeout":3}]}]}}`
 	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
@@ -388,7 +386,6 @@ func TestGetAgentHooksInstallsQwenHooks(t *testing.T) {
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must not duplicate AO hook commands.
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +395,6 @@ func TestGetAgentHooksInstallsQwenHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Unrelated top-level setting survives.
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(data, &top); err != nil {
 		t.Fatal(err)
@@ -420,11 +416,9 @@ func TestGetAgentHooksInstallsQwenHooks(t *testing.T) {
 			t.Fatalf("%s command count = %d, want 1 in %#v", spec.Event, count, entries)
 		}
 	}
-	// User-owned Stop hook survives.
 	if countQwenHookCommand(config.Hooks["Stop"], "custom stop hook") != 1 {
 		t.Fatalf("existing Stop hook was not preserved: %#v", config.Hooks["Stop"])
 	}
-	// SessionStart lands under the startup/resume matcher.
 	assertSessionStartMatcher(t, config.Hooks["SessionStart"])
 }
 
@@ -486,7 +480,6 @@ func TestUninstallHooksRemovesQwenHooks(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own Stop hook; it must survive uninstall.
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -835,10 +828,6 @@ func TestGetLaunchCommandAppliesToolRestrictions(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandKeepsReadOnlyToolsOutOfAutoApproval guards the read-only
-// contract: an allowlisted tool must reach Qwen's fail-closed allowlist, never
-// `--allowed-tools`, which only auto-approves and would leave the tool set
-// unrestricted.
 func TestGetLaunchCommandKeepsReadOnlyToolsOutOfAutoApproval(t *testing.T) {
 	p := &Plugin{resolvedBinary: "qwen"}
 
@@ -944,8 +933,6 @@ printf '%s' "$PATH" > "$QWEN_TEST_PATH_OUT"
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The wrapper polls startup for up to ten seconds. Allow that bounded
-	// window plus process scheduling under parallel race-test load.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if output, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput(); err != nil {
@@ -960,17 +947,12 @@ printf '%s' "$PATH" > "$QWEN_TEST_PATH_OUT"
 	}
 }
 
-// A task at the 100 KiB spawn cap must start Qwen and reach its input file
-// byte for byte. Linux caps each exec argument at 128 KiB (MAX_ARG_STRLEN with
-// 4 KiB pages), so the task must not ride inside the sh -c script.
 func TestRemoteInputWorkerLaunchesMaxSizeTask(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix remote-input wrapper")
 	}
 	const linuxMaxArgLen = 32 * 4096
 	dir := t.TempDir()
-	// JSON escapes < as < and shell quoting turns ' into '\'', so this is
-	// the worst case for any copy of the task kept in the script.
 	prompt := strings.Repeat("<'\"\n", (100<<10)/4)
 	out := filepath.Join(dir, "observed-input")
 	binary := filepath.Join(dir, "qwen")
@@ -1006,7 +988,6 @@ cp "$input" ` + qwenShellQuote(out) + `
 	if string(got) != string(want)+"\n" {
 		t.Fatalf("input file got %d bytes, want the %d-byte submit line", len(got), len(want)+1)
 	}
-	// macOS allows 1 MiB in total, so hold every platform to the Linux limit.
 	for i, arg := range argv {
 		if len(arg) >= linuxMaxArgLen {
 			t.Fatalf("argv[%d] is %d bytes; Linux exec rejects arguments of %d bytes or more", i, len(arg), linuxMaxArgLen)

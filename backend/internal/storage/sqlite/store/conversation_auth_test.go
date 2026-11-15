@@ -89,7 +89,6 @@ func TestPersistedAuthenticationDemandReconcilesOnlyVerifiedCurrentSuccess(t *te
 				t.Fatal(err)
 			}
 			defer func() { _ = s.Close() }()
-			// Page loading must reconcile even if the successful turn is outside the page.
 			snapshot, err := s.LoadConversationSnapshotPage(ctx, conversation.ID, 0, 1)
 			if err != nil {
 				t.Fatal(err)
@@ -267,7 +266,6 @@ func TestConfirmedLoginClearsOnlyAnOlderDemand(t *testing.T) {
 		waiting[0].SessionID != session.ID || waiting[0].Harness != domain.HarnessClaudeCode {
 		t.Fatalf("waiting = %+v, %v", waiting, err)
 	}
-	// A check that began before or at the demand cannot answer it.
 	for _, at := range []time.Time{failureAt.Add(-time.Second), failureAt} {
 		if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, at, at); err != nil || cleared {
 			t.Fatalf("check at %v cleared=%v, %v", at, cleared, err)

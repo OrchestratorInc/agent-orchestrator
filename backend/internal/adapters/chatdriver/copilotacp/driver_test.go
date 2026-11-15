@@ -44,8 +44,6 @@ func TestDriverIdentity(t *testing.T) {
 	}
 }
 
-// Bypass launches without --allow-all: Copilot cannot leave bypass once it
-// starts with that flag, so bypass goes through allow_all instead.
 func TestConfigureApprovalArgs(t *testing.T) {
 	cases := map[ports.PermissionMode][]string{
 		ports.PermissionModeDefault:           {"--acp", "--no-auto-update"},

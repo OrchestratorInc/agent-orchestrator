@@ -28,7 +28,6 @@ func TestClientTimeZoneMiddlewareRecordsHeader(t *testing.T) {
 		t.Fatalf("recorded zone = %q, want Pacific/Chatham", got)
 	}
 
-	// Requests without the header leave the recorded zone alone.
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil))
 	if got := clienttz.Read(context.Background(), dir); got != "Pacific/Chatham" {
 		t.Fatalf("recorded zone = %q after headerless request", got)
@@ -61,14 +60,12 @@ func TestClientTimeZoneMiddlewareIgnoresUntrustedLANRequests(t *testing.T) {
 		h.ServeHTTP(httptest.NewRecorder(), req)
 	}
 
-	// The unauthenticated identity probe and a pairing-code request are ignored.
 	send(http.MethodGet, identityProbePath, requestscope.Credential{}, "Pacific/Chatham")
 	send(http.MethodPost, devicePairPath, requestscope.Credential{Kind: requestscope.CredentialPairingCode}, "Pacific/Chatham")
 	if got := clienttz.Read(context.Background(), dir); got != "" {
 		t.Fatalf("untrusted LAN request recorded %q", got)
 	}
 
-	// An authenticated device is trusted.
 	send(http.MethodPost, "/api/v1/sessions", requestscope.Credential{Kind: requestscope.CredentialDevice, DeviceID: "d1"}, "Asia/Kolkata")
 	if got := clienttz.Read(context.Background(), dir); got != "Asia/Kolkata" {
 		t.Fatalf("authenticated LAN request recorded %q, want Asia/Kolkata", got)

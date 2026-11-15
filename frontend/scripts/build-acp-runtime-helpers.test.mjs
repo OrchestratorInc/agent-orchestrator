@@ -151,14 +151,12 @@ describe("patchClaudeHibernationCheck", () => {
 		expect(check(ctx)).toEqual({ canHibernate: true });
 		tasks.set("ended", { isSubagent: true, endedPerLevel: "ended" });
 		expect(check(ctx)).toEqual({ canHibernate: true });
-		// A finished task's notification starts a cycle AO has no turn for.
 		agent.sessions.native.lastSessionState = "running";
 		expect(check(ctx)).toEqual({ canHibernate: false });
 		agent.sessions.native.lastSessionState = "requires_action";
 		expect(check(ctx)).toEqual({ canHibernate: false });
 		agent.sessions.native.lastSessionState = "idle";
 		expect(check(ctx)).toEqual({ canHibernate: true });
-		// The notification cycle is reported as running a moment after the task leaves.
 		tasks.set("shell", { isSubagent: false });
 		agent.endTask(agent.sessions.native, { task_id: "shell" });
 		expect(check(ctx)).toEqual({ canHibernate: false });
@@ -295,7 +293,6 @@ describe("patchClaudeContextUsage", () => {
 });
 
 describe("patchClaudeContextWindowProbe", () => {
-	// The pinned adapter's top-level stream branch, as 0.70.0 ships it.
 	const streamBranch = `
                 switch (message.type) {
                     case "stream_event": {
@@ -345,8 +342,6 @@ describe("patchClaudeContextWindowProbe", () => {
                 }
 `;
 
-	// One consumer per session, holding its usage counters across messages the
-	// way the adapter's runConsumer closure does.
 	function patchedConsumer() {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
 		writeFileSync(adapterPath, streamBranch);
@@ -422,7 +417,6 @@ describe("patchClaudeContextWindowProbe", () => {
 
 	it("publishes nothing more when the probe fails, confirms 200k, loses a race, or a new turn starts", async () => {
 		const { consume, updates, errors } = patchedConsumer();
-		// A result, then a model switch, set the window while the probe ran.
 		const racing = (change) => async (session) => { await null; Object.assign(session, change); return { rawMaxTokens: 1000000 }; };
 		const cases = [
 			[async () => { throw new Error("closed"); }, [200000, false]],
@@ -450,7 +444,6 @@ describe("patchClaudeContextWindowProbe", () => {
 			const answers = [];
 			const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
 			const turn = consume(session);
-			// The adapter's switch path replaces session.models and reseeds the window from the "1m" heuristic.
 			const switchTo = (model) => Object.assign(session, {
 				models: { currentModelId: model }, contextWindowSize: model.includes("[1m]") ? 1000000 : 200000,
 			});
@@ -463,7 +456,6 @@ describe("patchClaudeContextWindowProbe", () => {
 			switchTo("claude-fable-5-1");
 			await turn.stream(start("claude-fable-5-1", 310));
 			expect(answers).toHaveLength(2);
-			// Still pending, the first answer may describe the other model.
 			answers[0].resolve({ rawMaxTokens: 1 });
 			await settle();
 			expect(session.contextWindowSize).toBe(200000);
@@ -484,13 +476,11 @@ describe("patchClaudeContextWindowProbe", () => {
 		expect(answers).toHaveLength(1);
 		answers[0].reject(new Error("closed"));
 		await settle();
-		// This turn has not asked yet.
 		await turn.stream(start("claude-fable-5-1", 210));
 		answers[1].resolve({ rawMaxTokens: 0 });
 		await settle();
 		await turn.stream(start("claude-fable-5-1", 220));
 		expect(answers).toHaveLength(2);
-		// The turn was cancelled before its result corrected the window.
 		turn.newTurn();
 		await turn.stream(start("claude-fable-5-1", 230));
 		answers[2].resolve({ rawMaxTokens: 1000000 });
@@ -510,9 +500,7 @@ describe("patchClaudeContextWindowProbe", () => {
 			streamBranch.replace("if (nextUsage !== lastAssistantTotalUsage)", "if (nextUsage !== lastAssistantTotalUsage && false)"),
 			streamBranch.replace(publish, (code) => `/* ${code} */`),
 			streamBranch + streamBranch,
-			// A brace in a comment must not become the insertion point.
 			streamBranch.replace("session.contextWindowSize = inferred;", "$&\n// } end heuristic"),
-			// The branch is commented out from outside the compared text.
 			streamBranch.replace(/if \(message\.parent_tool_use_id[\s\S]*?(?=break;)/, (code) => `/*\n${code}*/ `),
 			streamBranch.replace("if (message.parent_tool_use_id === null &&", "if (message.event &&\n// $&"),
 			streamBranch.replace('case "stream_event": {', 'case "assistant": {'),
@@ -617,9 +605,6 @@ describe("patchClaudeStaleIdleDebt", () => {
 });
 
 describe("patchClaudeSteerSettlement", () => {
-	// claude-agent-acp 0.70's steer and settle lanes, cut down to the lines the
-	// settlement patches anchor on. Each test replays an SDK frame order a real
-	// session produces.
 	const consumerSource = `
 function isSteering(turn) {
     return turn != null && turn.steeredEchoes !== undefined && !turn.settled;
@@ -725,7 +710,6 @@ function onMessage(message) {
 	function steerConsumer({ fold = true } = {}) {
 		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
 		writeFileSync(adapterPath, consumerSource);
-		// Same order as scripts/build-acp-runtime.mjs.
 		if (fold) patchClaudeFoldedPromptSettlement(adapterPath);
 		patchClaudeStaleIdleDebt(adapterPath);
 		expect(patchClaudeSteerSettlement(adapterPath)).toBe(true);
@@ -755,7 +739,6 @@ function onMessage(message) {
 		expect(turn.settled).toBe("steered");
 		expect(session.owedTrailingIdles).toBe(1);
 
-		// The next prompt's echo can land before that trailing idle.
 		const next = { promptUuid: "next" };
 		session.turnQueue.push(next);
 		session.activeTurn = next;
@@ -771,7 +754,7 @@ function onMessage(message) {
 		steer("steer");
 		result({ result: "interrupted", user_message_uuid: "prompt" });
 		echo("steer");
-		state("idle"); // the autonomous cycle's lagging trailer
+		state("idle");
 		expect(turn.settled).toBeUndefined();
 
 		result({ result: "steered" });
@@ -787,7 +770,7 @@ function onMessage(message) {
 		result({ result: "interrupted", user_message_uuid: "prompt" });
 		echo("steer");
 		result({ result: "steered" });
-		state("idle"); // Claude Code coalesced the autonomous trailer into this idle
+		state("idle");
 		expect(turn.settled).toBe("steered");
 		expect(session.owedTrailingIdles).toBe(1);
 		state("running");
@@ -805,7 +788,7 @@ function onMessage(message) {
 
 	it.each([true, false])("settles a queued prompt whose steer an autonomous cycle folded in (fold patch: %s)", (fold) => {
 		const { session, turn, steer, result } = steerConsumer({ fold });
-		session.activeTurn = undefined; // Claude Code's own cycle is running; the prompt is still queued
+		session.activeTurn = undefined;
 		steer("steer");
 		result({
 			origin: { kind: "task-notification" },
@@ -892,9 +875,6 @@ function temporaryDirectory() {
 }
 
 describe("archiveExtraction", () => {
-	// Extraction must not go through PowerShell's Expand-Archive: it is bound by
-	// MAX_PATH, and with LongPathsEnabled=0 a deep checkout pushes Node's bundled
-	// npm tree past 260 characters, where it fails while still exiting zero.
 	it("uses bsdtar for the Windows zip", () => {
 		expect(archiveExtraction("C:\\w\\node.zip", "C:\\w", {
 			platform: "win32",

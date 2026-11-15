@@ -26,13 +26,10 @@ vi.mock("./settings/HarnessSettingsSection", () => ({
 	},
 }));
 
-// The real section reads the cloud gate and /me; here it only marks where the
-// General page places it.
 vi.mock("./settings/DefaultCloudSandboxRow", () => ({
 	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
 }));
 
-// The real section polls the daemon's /computer-use routes; ComputerUseSection.test covers it.
 vi.mock("./settings/ComputerUseSection", () => ({
 	ComputerUseSection: () => <div data-testid="computer-use-section" />,
 }));
@@ -90,8 +87,6 @@ const {
 	setKeybindings: vi.fn(),
 	setKeybindingRecording: vi.fn(),
 	setMacDifferentialUpdates: vi.fn().mockResolvedValue(undefined),
-	// install the per-test policy response. Preserve the bridge's Promise
-	// contract for that initial read as well.
 	getTelemetryPolicy: vi.fn().mockResolvedValue(undefined),
 	setTelemetryEvents: vi.fn(),
 	onTelemetryPolicy: vi.fn(),
@@ -247,7 +242,6 @@ beforeEach(async () => {
 		preferredEditorId: "cursor",
 	});
 	setPreferredEditor.mockImplementation(async (editorId: string) => editorId);
-	// Locale defaults to English so existing copy assertions stay green.
 	await appI18n.changeLanguage("en");
 	useLocaleStore.setState({ locale: "en", loaded: false, saving: false, saveError: false });
 	useSoundNotificationsStore.setState({ enabled: true, loaded: false, saving: false, saveError: false });
@@ -302,7 +296,6 @@ describe("GlobalSettingsForm", () => {
 		renderForm("harness", "cursor");
 
 		expect(await screen.findByTestId("harness-settings-section")).toBeInTheDocument();
-		// Headings that repeat the page title are now hidden by SettingsSection, not this flag.
 		expect(harnessSettingsSectionMock).toHaveBeenCalledWith({ focusAgentId: "cursor", titleHidden: false });
 	});
 
@@ -325,8 +318,6 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByLabelText("Settings")).toBeInTheDocument();
 		expect(screen.getByText("Appearance")).toBeInTheDocument();
 		expect(screen.getByText("Language")).toBeInTheDocument();
-		// UpdatesSection is lazy-loaded and can take longer than the default async query timeout.
-		// Its sections are "Version" and "Preferences" ("Updates" is the page title).
 		expect(await screen.findByRole("heading", { name: "Version" }, { timeout: 5_000 })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Preferences" })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
@@ -347,8 +338,6 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByRole("menuitem", { name: "Feature Releases" })).toBeInTheDocument();
 	});
 
-	// Admins pick the org's cloud sandbox without turning on Developer Mode or
-	// the preview Cloud toggle, which builds that force cloud leave off.
 	it("shows the default cloud sandbox outside Developer mode", async () => {
 		renderForm("general");
 		expect(await screen.findByRole("switch", { name: "Developer mode" })).toHaveAttribute("aria-checked", "false");
@@ -490,7 +479,6 @@ describe("GlobalSettingsForm", () => {
 
 		await waitFor(() => expect(setAnalyticsOptOut).toHaveBeenCalledWith(true));
 		await waitFor(() => expect(toggle).not.toBeChecked());
-		// The error-event policy is a separate control and was not touched.
 		expect(setTelemetryEvents).not.toHaveBeenCalled();
 	});
 
@@ -647,7 +635,6 @@ describe("GlobalSettingsForm", () => {
 
 		await user.keyboard("{Escape}");
 
-		// Escape is handled by the wrapping Radix Dialog, not the form itself
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
@@ -678,7 +665,6 @@ describe("GlobalSettingsForm", () => {
 				expect.objectContaining({ channel: "nightly", enabled: false, nightlyAck: true, feature: null }),
 			),
 		);
-		// The installed build stays the stable one: no nightly stamp under the version.
 		expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0");
 		expect(screen.queryByText(/^1\.4\.0-nightly/)).toBeNull();
 		expect(await screen.findByText(/Nightly updates daily and may be unstable or cause data loss/i)).toBeInTheDocument();
@@ -732,8 +718,6 @@ describe("GlobalSettingsForm", () => {
 	it("shows the installed Nightly build separately from the selected update feed", async () => {
 		getVersion.mockResolvedValue("1.4.0-nightly.202608271030");
 		renderForm();
-		// The channel badge is gone (it repeated the channel picker); an installed
-		// nightly is identified by its full stamp under the base version.
 		await waitFor(() => expect(screen.getByTestId("app-version")).toHaveTextContent("v1.4.0"));
 		expect(await screen.findByText("1.4.0-nightly.202608271030")).toBeInTheDocument();
 	});
@@ -792,7 +776,6 @@ describe("GlobalSettingsForm", () => {
 		const statusLine = screen.getByTestId("update-status-line");
 		expect(statusLine).not.toHaveTextContent("Checking for updates…");
 		expect(statusLine.querySelector("svg")).toBeNull();
-		// The slot keeps one description line while the button owns the feedback.
 		expect(statusLine).toHaveClass("min-h-4");
 
 		act(() => finishCheck());
@@ -846,19 +829,11 @@ describe("GlobalSettingsForm", () => {
 			{ timeout: 1_500 },
 		);
 		expect(screen.getByRole("button", { name: "Restart & install" })).toBeInTheDocument();
-		// The check control stays available alongside the restart action. Hiding it
-		// once something was staged left a user whose staged build would not
-		// install with a single dead button and no way to re-check.
 		const recheck = await screen.findByRole("button", { name: "Check for updates" }, { timeout: 2_000 });
 		expect(recheck).toBeEnabled();
 	});
 
 	it("accepts a check click while a background check is already running", async () => {
-		// Regression: gating the button on any "checking" status swallowed the
-		// first click whenever Settings was opened during a background check --
-		// as often as every 15 minutes on nightly -- which is what made the button
-		// look like it needed a double-click. The main process serializes updater
-		// operations, so a click during a background check simply queues.
 		updGetStatus.mockResolvedValue({ state: "checking" });
 		updCheck.mockResolvedValue(undefined);
 		renderForm();
@@ -907,9 +882,6 @@ describe("GlobalSettingsForm", () => {
 		const installBtn = await screen.findByRole("button", { name: "Restart & install" });
 		await userEvent.click(installBtn);
 
-		// Installing quits the app, which costs a turn on any chat session running
-		// a daemon-owned driver, so the click opens the confirmation instead of
-		// tearing the app down on one click.
 		expect(updInstall).not.toHaveBeenCalled();
 		expect(useUiStore.getState().updateInstallPromptOpen).toBe(true);
 	});
@@ -921,7 +893,6 @@ describe("GlobalSettingsForm", () => {
 			"Updates haven't been able to check for a while — restarting the app usually fixes this.",
 		);
 		expect(nudge).toBeInTheDocument();
-		// The nudge is a warning, not an error, and the normal status still shows.
 		expect(screen.getByText("You're on the latest version.")).toBeInTheDocument();
 	});
 
@@ -957,14 +928,10 @@ describe("GlobalSettingsForm", () => {
 	});
 
 	it("surfaces a Return action for a persisted feature pin", async () => {
-		// A pin persists in settings but is not yet running; updates are on the stable channel.
 		getUpdate.mockResolvedValue({ enabled: true, channel: "latest", nightlyAck: false, feature: { pr: 2270 } });
 		featGetActive.mockResolvedValue(null);
 		renderForm();
-		// The concealed pin is announced even though the channel option/picker are hidden.
 		expect(await screen.findByText("PR #2270 is pinned but not yet installed.")).toBeInTheDocument();
-		// The fall-home copy must be truthful: automatic updates keep tracking the pin,
-		// they do NOT silently return the user home on the next check.
 		expect(
 			screen.getByText(
 			/Automatic updates, if enabled, keep tracking PR #2270 until you return home or the build retires\./i,
@@ -972,7 +939,6 @@ describe("GlobalSettingsForm", () => {
 		).toBeInTheDocument();
 		await userEvent.click(screen.getByLabelText("Updates channel"));
 		await userEvent.keyboard("{Escape}");
-		// Return delegates to the single updater-serialized returnHome operation.
 		await userEvent.click(screen.getByRole("button", { name: "Return to Stable" }));
 		await waitFor(() => expect(updReturnHome).toHaveBeenCalledWith(expect.any(String)));
 		expect(updCheck).not.toHaveBeenCalled();
@@ -1006,7 +972,6 @@ it("keeps running version separate while live download progress becomes install 
 	updOnStatus.mockImplementation((listener) => { emit = listener; return () => undefined; });
 	renderForm("updates");
 	await screen.findByTestId("app-version");
-	// Assert detailed progress in the status row, independently of the action label.
 	const statusLine = within(screen.getByTestId("update-status-line"));
 	act(() => emit({ state: "downloading", version: "2.0.0" }));
 	expect(statusLine.getByText("Starting download…")).toBeVisible();

@@ -52,9 +52,6 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// System prompt is never injected via a flag for cursor; the prompt is
-	// positional and last, guarded by a `--` end-of-options sentinel so a
-	// leading "-" is not parsed as a flag.
 	want := []string{
 		"cursor-agent",
 		"--yolo",
@@ -287,8 +284,6 @@ func TestContextCancellationPerMethod(t *testing.T) {
 	if _, err := plugin.GetConfigSpec(ctx); err == nil {
 		t.Fatal("GetConfigSpec: want context error")
 	}
-	// GetLaunchCommand surfaces ctx cancellation only via binary resolution; with
-	// a cached binary it short-circuits, so it is not asserted here (mirrors codex).
 	if _, err := plugin.GetPromptDeliveryStrategy(ctx, ports.LaunchConfig{}); err == nil {
 		t.Fatal("GetPromptDeliveryStrategy: want context error")
 	}
@@ -319,7 +314,6 @@ func TestGetAgentHooksInstallsCursorHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	hooksPath := filepath.Join(hooksDir, "hooks.json")
-	// Pre-existing user hook on an event AO also manages, plus a non-AO field.
 	existing := `{"version":1,"customField":"keep me","hooks":{"stop":[{"command":"custom stop hook"}]}}`
 	if err := os.WriteFile(hooksPath, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
@@ -333,7 +327,6 @@ func TestGetAgentHooksInstallsCursorHooks(t *testing.T) {
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must not duplicate AO hook commands.
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +363,6 @@ func TestGetAgentHooksInstallsCursorHooks(t *testing.T) {
 	if countCursorHookCommand(stopEntries, "custom stop hook") != 1 {
 		t.Fatalf("existing stop hook was not preserved: %#v", stopEntries)
 	}
-	// Unmanaged top-level fields must be preserved.
 	if !strings.Contains(string(data), "keep me") {
 		t.Fatalf("unmanaged field 'customField' was dropped: %s", data)
 	}
@@ -612,8 +604,6 @@ func TestUninstallHooksRemovesOnlyAOHooks(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed user-owned hooks, including a command that shares AO's prefix;
-	// every field must survive install and uninstall unchanged.
 	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

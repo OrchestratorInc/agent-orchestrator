@@ -2,11 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { Element, Root, RootContent } from "hast";
 import { canonicalLanguage, highlight, highlightSync, type GrammarName } from "./code-highlight";
 
-// The contract these pin down is not "the colours are right" — Shiki owns
-// that — but the four things the chat surface depends on: a fence label resolves
-// to a grammar or to nothing, tokenizing produces classed spans, the same block is
-// never parsed twice, and nothing here can throw into a message.
-
 function classesIn(tree: Root): string[] {
 	const found: string[] = [];
 	const walk = (nodes: readonly RootContent[]): void => {
@@ -67,9 +62,6 @@ describe("highlight", () => {
 		const tree = await highlight(code, "go");
 		expect(tree).toBeDefined();
 		expect(classesIn(tree!)).toContain("hljs-keyword");
-		// The rendered text has to be the code, character for character: a
-		// highlighter that quietly reformats would make the block disagree with the
-		// record the daemon stored.
 		expect(textIn(tree!)).toBe(code);
 	});
 
@@ -91,8 +83,6 @@ describe("highlight", () => {
 	});
 
 	it("degrades to no tree for a grammar that was never registered", async () => {
-		// Reachable only if the alias table and the engine's language list drift, and
-		// the answer then has to be plain monospace rather than a thrown render.
 		const tree = await highlight("x = 1", "elixir" as GrammarName);
 		expect(tree).toBeUndefined();
 	});
@@ -108,8 +98,6 @@ describe("highlightSync", () => {
 
 	it("tokenizes on the spot once the grammars are warm", async () => {
 		await highlight("x = 1", "python");
-		// Nothing has ever asked for this block, so a synchronous answer proves the
-		// warm path — which is what keeps every fence after the first from flashing.
 		expect(highlightSync("def later():\n\treturn 1", "python")).toBeDefined();
 	});
 });

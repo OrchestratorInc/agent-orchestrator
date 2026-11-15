@@ -149,7 +149,6 @@ func TestPreviewAndSelectedImport(t *testing.T) {
 	if err != nil || repeated[0].SessionID != rec.ID || len(st.sessions) != 1 {
 		t.Fatalf("repeat: %v %v", repeated, err)
 	}
-	// An agent switch changes the session's harness, not the conversation it came from.
 	st.sessions[0].Harness = domain.HarnessCodex
 	if preview, err := svc.Scan(ctx); err != nil || !slices.ContainsFunc(preview.Candidates, func(c Candidate) bool { return c.ID == oldID && c.SessionID == rec.ID }) {
 		t.Fatalf("switched session offered again: %v %v", preview, err)
@@ -250,7 +249,6 @@ func TestClaudeImportFollowsActiveAncestry(t *testing.T) {
 			if err := os.WriteFile(path, []byte(body+tail+"\n"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			// The reachable branch stays readable instead of hiding the conversation.
 			history, err := readTranscript(context.Background(), domain.HarnessClaudeCode, root, path)
 			if err != nil || len(history.messages) != 1 || history.messages[0].Text != strings.Fields(name)[0] {
 				t.Fatalf("history = %#v, %v", history.messages, err)
@@ -259,7 +257,6 @@ func TestClaudeImportFollowsActiveAncestry(t *testing.T) {
 	}
 }
 
-// Turns added in another app between import and first open stay visible.
 func TestRefreshArchiveRereadsBeforeFirstOpen(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -295,7 +292,6 @@ func TestRefreshArchiveRereadsBeforeFirstOpen(t *testing.T) {
 	}
 }
 
-// An import that runs out of time still reports every row it was given.
 func TestImportOutOfTimeReportsEveryRow(t *testing.T) {
 	root := t.TempDir()
 	st := &importStore{}
@@ -315,8 +311,6 @@ func TestImportOutOfTimeReportsEveryRow(t *testing.T) {
 	}
 }
 
-// AO's own sessions are skipped before their histories are read; imported
-// ones are still listed as already in AO.
 func TestScanSkipsHistoriesAOStarted(t *testing.T) {
 	root := t.TempDir()
 	own, imported := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
@@ -338,8 +332,6 @@ func TestScanSkipsHistoriesAOStarted(t *testing.T) {
 	}
 }
 
-// A chat from a repository no project holds names that folder; once the folder
-// is a project, the next scan routes the chat there and it imports.
 func TestScanOffersFolderNoProjectHolds(t *testing.T) {
 	ctx := context.Background()
 	root, repo := t.TempDir(), filepath.Join(t.TempDir(), "widgets")

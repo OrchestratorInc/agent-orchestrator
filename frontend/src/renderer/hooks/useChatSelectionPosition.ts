@@ -1,7 +1,6 @@
 import { selectionToolbarPosition } from "../lib/selection-toolbar";
 import { useLayoutEffect, useState, type RefObject } from "react";
 
-/** Follow the selection's first line without changing the reader's scroll. */
 export function useChatSelectionPosition(
 	range: Range | undefined,
 	viewportRef: RefObject<HTMLDivElement | null>,

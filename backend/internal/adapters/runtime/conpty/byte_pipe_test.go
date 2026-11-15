@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// Small host frames must reach the reader together: one Read per frame meant
-// one WebSocket message per frame downstream.
 func TestBytePipeReadReturnsAllBufferedOutput(t *testing.T) {
 	p := newBytePipe()
 	for _, chunk := range []string{"a", "b", "c"} {
@@ -22,8 +20,6 @@ func TestBytePipeReadReturnsAllBufferedOutput(t *testing.T) {
 	}
 }
 
-// Back-pressure still reaches the pty-host: a full pipe holds the writer until
-// the reader drains it.
 func TestBytePipeWriterWaitsWhenFull(t *testing.T) {
 	p := newBytePipe()
 	if _, err := p.Write(make([]byte, maxPipeBuffered)); err != nil {
@@ -44,8 +40,6 @@ func TestBytePipeWriterWaitsWhenFull(t *testing.T) {
 	}
 }
 
-// Output written before the host ends (e.g. the process exited) is delivered
-// before the closing error.
 func TestBytePipeDeliversBufferedOutputBeforeTheCloseError(t *testing.T) {
 	p := newBytePipe()
 	_, _ = p.Write([]byte("last words"))

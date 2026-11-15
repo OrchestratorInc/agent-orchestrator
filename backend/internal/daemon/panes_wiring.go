@@ -7,8 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
-// paneSource links desktop windows on the terminal mux to the split-pane
-// relay, translating the mux's raw JSON frames to the relay's types.
 type paneSource struct{ broker *panes.Broker }
 
 func (s paneSource) ConnectPanes(send func(json.RawMessage)) terminal.PaneConn {

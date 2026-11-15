@@ -29,9 +29,6 @@ func TestVersionProbeAcceptsSupportedCLIAndRejectsOldCLI(t *testing.T) {
 	}
 }
 
-// An npm-installed Gemini is a `#!/usr/bin/env node` launcher. The probe must
-// find a Node manager's runtime when the daemon PATH omits it, as a Dock-
-// launched daemon's PATH does when the login-shell probe fails.
 func TestVersionProbeFindsNodeOutsideDaemonPATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("npm env-node launcher is Unix-specific")

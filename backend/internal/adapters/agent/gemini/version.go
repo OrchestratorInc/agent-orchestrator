@@ -29,8 +29,6 @@ func checkVersion(ctx context.Context, binary string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(ctx, binary, "--version")
-	// The npm launcher is `#!/usr/bin/env node`; a daemon PATH without the
-	// user's Node manager would fail the probe though Gemini works in a shell.
 	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, binary)
 	output, err := cmd.Output()
 	if err != nil {

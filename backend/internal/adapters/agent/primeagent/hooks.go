@@ -23,9 +23,6 @@ const (
 //go:embed assets/ao-activity.ts
 var primeAgentExtensionSource string
 
-// GetAgentHooks installs the AO-managed extension at a stable path under
-// AO_DATA_DIR. Prime receives this exact path through --extension. The install
-// is atomic and skips rewriting identical content.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

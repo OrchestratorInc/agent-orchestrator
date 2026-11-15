@@ -1,9 +1,4 @@
 #!/usr/bin/env node
-/** Build API: await buildRepairInstaller({ app, output, identity, keychainProfile,
- * unsignedForTesting: false, dataDir: process.env.AO_DATA_DIR }); returns output.
- * Input must be the exact signed/stapled release .app. Never installs or launches AO.
- * The optional second argument injects command execution for unit tests only.
- */
 import { spawnSync } from 'node:child_process';
 import { constants } from 'node:fs';
 import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -80,7 +75,6 @@ export async function buildRepairInstaller(options, execute = run) {
     const plist = path.join(app, 'Contents/Info.plist');
     const read = (key) => execute('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, plist]);
     const id = await read('CFBundleIdentifier'), version = await read('CFBundleShortVersionString'), build = await read('CFBundleVersion'), executable = await read('CFBundleExecutable');
-    // Validate the executable name before constructing a path for a native tool.
     validateMetadata({ id, version, build, executable, archs: 'arm64' });
     const metadata = validateMetadata({ id, version, build, executable, archs: await execute('/usr/bin/lipo', ['-archs', path.join(app, 'Contents/MacOS', executable)]) });
     const root = path.join(work, 'payload'), scripts = path.join(work, 'scripts'), resources = path.join(work, 'resources');
@@ -100,7 +94,6 @@ export async function buildRepairInstaller(options, execute = run) {
     await writeFile(definition, distribution(version, metadata.architectures));
     const product = path.join(work, 'repair.pkg');
     await execute('/usr/bin/productbuild', ['--distribution', definition, '--resources', resources, '--package-path', work, ...(unsignedForTesting ? [] : ['--sign', identity, '--timestamp']), product]);
-    // Prove that payload packaging preserves the source app's seal and ticket.
     const expanded = path.join(work, 'expanded');
     await execute('/usr/sbin/pkgutil', ['--expand-full', product, expanded]);
     await execute('/bin/bash', [verifier, path.join(expanded, 'repair-component.pkg/Payload', appName)]);

@@ -16,8 +16,6 @@ func TestClaudeQueuedPromptDoesNotCertifyCrossTurnAnswer(t *testing.T) {
 		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "native", AgentSessionIDLaunchID: "launch"},
 	}
 	manager := New(store, nil)
-	// Observed with Claude 2.1.270: a queued submission carries the RUNNING
-	// prompt's ID, not its eventual native user promptId.
 	for _, signal := range []ports.ActivitySignal{
 		{Event: "user-prompt-submit", ProviderTurnID: "A", LatestUserPrompt: "prompt A", SubmissionID: "submission-A"},
 		{Event: "user-prompt-submit", ProviderTurnID: "A", LatestUserPrompt: "queued B", SubmissionID: "submission-B"},

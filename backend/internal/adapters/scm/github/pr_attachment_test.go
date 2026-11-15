@@ -49,9 +49,6 @@ type commitBody struct {
 	Parents []string `json:"parents"`
 }
 
-// onGitData answers the blob, tree, commit and ref calls of one stored batch,
-// recording what was sent: each blob gets "blob-<n>", the tree "tree-sha" and
-// the commit "commit-sha".
 func onGitData(t *testing.T, f *fakeGH) (*[][]byte, *treeBody, *commitBody, *map[string]string) {
 	t.Helper()
 	var blobs [][]byte
@@ -108,8 +105,6 @@ func TestStoreAttachments_CommitsTheCommentsFilesUnderTheirOwnHiddenRef(t *testi
 	if len(*blobs) != 3 || string((*blobs)[2]) != string(batch.Files[2].Data) {
 		t.Fatalf("blobs = %q", *blobs)
 	}
-	// One tree, with no base: the commit holds only this comment's files, and a
-	// repeated name keeps its own path.
 	if tree.BaseTree != nil {
 		t.Fatalf("tree has a base: %q", *tree.BaseTree)
 	}
@@ -123,11 +118,9 @@ func TestStoreAttachments_CommitsTheCommentsFilesUnderTheirOwnHiddenRef(t *testi
 	if strings.Join(gotPaths, "|") != "shot.png|2-shot.png|a b#?.png" {
 		t.Fatalf("tree paths = %q", gotPaths)
 	}
-	// An orphan commit that CI systems skip.
 	if len(commit.Parents) != 0 || commit.Tree != "tree-sha" || !strings.Contains(commit.Message, "[skip ci]") || !strings.Contains(commit.Message, "PR #42") {
 		t.Fatalf("commit = %#v", *commit)
 	}
-	// Under the hidden namespace, never refs/heads.
 	if (*ref)["ref"] != attachRef || (*ref)["sha"] != "commit-sha" {
 		t.Fatalf("ref = %#v", *ref)
 	}
@@ -151,7 +144,7 @@ func TestStoreAttachments_NoWriteAccessIsForbiddenAndARuleIsARejection(t *testin
 	}{
 		{http.StatusNotFound, ports.ErrSCMForbidden},
 		{http.StatusForbidden, ports.ErrSCMForbidden},
-		{http.StatusConflict, ports.ErrSCMRejected}, // empty repository
+		{http.StatusConflict, ports.ErrSCMRejected},
 		{http.StatusUnprocessableEntity, ports.ErrSCMRejected},
 	} {
 		f := newFakeGH(t)
@@ -163,7 +156,6 @@ func TestStoreAttachments_NoWriteAccessIsForbiddenAndARuleIsARejection(t *testin
 			t.Errorf("status %d: error = %v, want %v", tc.status, err, tc.want)
 		}
 	}
-	// A repository rule refusing the ref is a rejection too.
 	f := newFakeGH(t)
 	onGitData(t, f)
 	f.on(http.MethodPost, attachRefsPath, func(w http.ResponseWriter, _ *http.Request) {
@@ -207,7 +199,6 @@ func TestDiscardAttachments_DeletesOnlyAnAttachmentsRef(t *testing.T) {
 	if n := f.callsTo(http.MethodDelete, attachRefPath); n != 1 {
 		t.Fatalf("deletes = %d", n)
 	}
-	// Anything outside the namespace is never deleted.
 	for _, handle := range []string{"refs/heads/main", "refs/ao/attachments/", "refs/ao/attachments/../../heads/main", ""} {
 		if err := p.DiscardAttachments(ctx(), pr, handle); err == nil {
 			t.Errorf("handle %q accepted", handle)

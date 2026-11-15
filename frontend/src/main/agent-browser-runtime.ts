@@ -18,7 +18,6 @@ const RUNTIME_OWNER_FILE = "owner.json";
 const RUNTIME_ROOT_PATTERN = /^(?:run-(\d+)-[0-9a-f]{12}|r-[0-9a-f]{10})$/;
 const SOCKET_ALIAS_PATTERN = /^ao-br-(\d+)-[0-9a-f]{12}$/;
 const STREAM_ALREADY_DISABLED_MESSAGE = "Streaming is not enabled for this session";
-/** Agent Browser's Unix preflight uses the macOS-sized 103-byte limit on all Unix builds. */
 export const AGENT_BROWSER_UNIX_SOCKET_PATH_MAX_BYTES = 103;
 
 const NATIVE_ENV_ALLOWLIST = new Set([
@@ -103,10 +102,8 @@ export type NativeProcessResult = Pick<AgentBrowserRunResult, "stdout" | "stderr
 export type AgentBrowserRuntimeOptions = {
 	binaryPath: string;
 	dataDir: string;
-	/** Internal seam for testing path validation; production derives a per-run private directory. */
 	socketDir?: string;
 	log?: (message: string) => void;
-	/** Internal seams used by lifecycle tests; production uses the defaults. */
 	platform?: NodeJS.Platform;
 	processRunner?: NativeProcessRunner;
 	bridgeFactory?: (provider: AgentBrowserTargetProvider) => AgentBrowserBridge;
@@ -169,7 +166,6 @@ export class AgentBrowserRuntime {
 		this.socketDirOverride = options.socketDir;
 	}
 
-	/** Reclaim confirmed-dead run roots before the browser UI is created. */
 	async prepare(): Promise<void> {
 		if (this.disposed) throw runtimeError("AGENT_BROWSER_RUNTIME_CLOSED", "Browser automation runtime is closed");
 		if (this.platform !== "win32") {
@@ -208,11 +204,6 @@ export class AgentBrowserRuntime {
 		signal: AbortSignal | undefined,
 		timeoutMs: number,
 	): Promise<AgentBrowserRunResult> {
-		// The native daemon can expire and be recreated independently while this
-		// AO session runtime remains alive. Its replacement starts streaming by
-		// default, so reassert the input-surface policy immediately before every
-		// command. agent-browser reports "already disabled" as a non-zero result;
-		// that state is the policy we need, while every other failure remains fatal.
 		const disabled = await this.processRunner(
 			this.options.binaryPath,
 			["stream", "disable"],
@@ -252,15 +243,11 @@ export class AgentBrowserRuntime {
 			if (!provider.listTargets().some((target) => target.id === requestedTabId)) {
 				throw runtimeError("AGENT_BROWSER_COMMAND_FAILED", `Unable to resolve Orchestrator browser tab ${requestedTabId}`);
 			}
-			// A native daemon restart can renumber tabs between list and close.
-			// Close the exact AO-owned target, then notify an existing daemon.
 			await provider.closeTarget(requestedTabId);
 			this.sessions.get(sessionId)?.bridge.reconcileTargets();
 			return { tabId: requestedTabId, targetId: requestedTabId, closed: true, untrustedExternalContent: true };
 		}
 		if (requestedTabId) {
-			// AO target IDs and the native daemon's sequential tab IDs have
-			// independent lifetimes. Resolve by CDP identity for every selection.
 			const listed = await this.run(sessionId, ["tab", "list", "--json"], provider, signal);
 			const tabs = parseAgentBrowserJSON(listed.stdout).tabs;
 			const matches = Array.isArray(tabs)
@@ -295,8 +282,6 @@ export class AgentBrowserRuntime {
 			}
 			return { annotations: parsed.annotations, boundary: parsed._boundary };
 		} catch (error) {
-			// agent-browser reporting its own failure is the caller's error, not a
-			// missing extra; only unreadable output degrades to "no annotations".
 			if ((error as { code?: string }).code !== "AGENT_BROWSER_INVALID_OUTPUT") throw error;
 			this.log(`agent-browser screenshot annotations were unreadable: ${(error as Error).message}`);
 			return undefined;
@@ -323,9 +308,6 @@ export class AgentBrowserRuntime {
 		try {
 			const command = ["screenshot", target, "--json", ...(options.annotate === true ? ["--annotate"] : [])];
 			const result = await this.run(sessionId, command, provider, signal, SCREENSHOT_TIMEOUT_MS);
-			// Read the envelope before the file: a native capture that failed with a
-			// reason reports it here, and its message beats the ENOENT that reading a
-			// PNG it never wrote would raise.
 			const annotated = options.annotate === true ? this.nativeAnnotations(result.stdout) : undefined;
 			const image = await readFile(target);
 			if (image.length > MAX_SCREENSHOT_BYTES) {
@@ -483,10 +465,6 @@ export class AgentBrowserRuntime {
 				let socketDir = actualSocketDir;
 				let socketDirAlias: string | null = null;
 				if (!this.socketDirOverride && process.platform !== "win32") {
-					// agent-browser applies the macOS 103-byte Unix socket limit on
-					// every Unix build. Keep the real runtime state under ~/.ao, but
-					// hand the native process a short symlink path whose length does
-					// not depend on the user's home directory or username.
 					socketDirAlias = path.join("/tmp", `ao-br-${process.pid}-${randomBytes(6).toString("hex")}`);
 					await symlink(actualSocketDir, socketDirAlias, "dir");
 					socketDir = socketDirAlias;
@@ -534,10 +512,6 @@ export class AgentBrowserRuntime {
 	}
 
 	private environment(runtime: SessionRuntime): NodeJS.ProcessEnv {
-		// The native runtime is a third-party executable. Inheriting Electron's
-		// complete environment would expose shell credentials, cloud/API tokens,
-		// proxy credentials, and runtime injection flags to it. Keep only process
-		// execution/locale essentials and add AO's explicitly scoped contract below.
 		const environment: NodeJS.ProcessEnv = {};
 		for (const [name, value] of Object.entries(process.env)) {
 			if (value !== undefined && NATIVE_ENV_ALLOWLIST.has(name.toLowerCase())) environment[name] = value;
@@ -600,8 +574,6 @@ export async function scavengeBrowserRuntime(
 		try {
 			owner = JSON.parse(await readFile(ownerPath, "utf8")) as RuntimeOwner;
 		} catch {
-			// An unmarked directory may belong to another process that is between
-			// mkdir and owner-marker creation. Preserve it rather than guessing.
 			continue;
 		}
 		if (!validRuntimeOwner(owner, match[1])) continue;
@@ -622,7 +594,6 @@ function streamAlreadyDisabled(result: NativeProcessResult): boolean {
 	return result.stderr.includes(STREAM_ALREADY_DISABLED_MESSAGE) || result.stdout.includes(STREAM_ALREADY_DISABLED_MESSAGE);
 }
 
-/** Remove only confirmed-dead frontend aliases owned by this AO data root. */
 export async function scavengeBrowserSocketAliases(
 	dataDir: string,
 	processAlive: (pid: number) => boolean = defaultProcessAlive,
@@ -850,9 +821,6 @@ export function parseAgentBrowserJSON(stdout: string): AgentBrowserJSONResult {
 	}
 	const boundary = validContentBoundary(envelope._boundary);
 	const result: Record<string, unknown> = isRecord(envelope.data) ? { ...envelope.data } : { value: envelope.data };
-	// `_boundary` is native-output metadata. Never forward a page-shaped field
-	// with the same name as trusted metadata, but preserve the root field emitted
-	// by agent-browser 0.38.1 so downstream adapters retain its nonce and origin.
 	delete result._boundary;
 	if (boundary) result._boundary = boundary;
 	return { ...result, untrustedExternalContent: true };
@@ -900,9 +868,6 @@ function stringError(value: unknown): string {
 const STALE_REFERENCE_MESSAGE = /^(?:Unknown ref:|Could not locate element with)/;
 const WAIT_TIMEOUT_MESSAGE = /^Wait timed out after \d+ms$/;
 
-// Preserve only the stale-reference signal needed by `act`. Other native
-// command failures stay generic so tab drift and close recovery paths continue
-// to recognize AGENT_BROWSER_COMMAND_FAILED.
 function staleReferenceCode(value: unknown): "STALE_REFERENCE" | undefined {
 	if (isRecord(value) && value.code === "STALE_REFERENCE") return "STALE_REFERENCE";
 	return typeof value === "string" && STALE_REFERENCE_MESSAGE.test(value) ? "STALE_REFERENCE" : undefined;
@@ -998,11 +963,6 @@ async function runNativeProcess(
 		});
 		child.once("error", (error) => finish(error));
 		child.once("close", (code) => finish(undefined, code ?? -1));
-		// The native CLI starts a long-lived daemon. On Windows that daemon can
-		// briefly retain inherited pipe handles after the short-lived CLI exits,
-		// delaying Node's `close` event even though the command is complete.
-		// `exit` is therefore the primary completion signal; one event-loop turn
-		// still lets already-buffered stdout/stderr data handlers drain.
 		child.once("exit", (code) => setImmediate(() => finish(undefined, code ?? -1)));
 		const abort = () => {
 			child.kill();

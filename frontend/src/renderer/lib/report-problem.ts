@@ -16,8 +16,6 @@ export type ReportProblemDiagnostics = {
 	routeSurface: string;
 };
 
-// Sent as an agent instruction, so it stays in English in every locale. A session's
-// PATH is pinned to its daemon's own ao, so this reaches the right install.
 export const REPORT_PROBLEM_PROMPT = "Use the bug-triage skill to help me report a problem with Orchestrator. Run `ao triage --no-launch`, then read the prompt file it prints and follow it.";
 
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
@@ -58,12 +56,10 @@ export function sanitizeReportText(value: string): string {
 		.replace(GITHUB_TOKEN_PATTERN, REDACTED_SECRET);
 }
 
-/** What a session started from this brief is called: a report goes by its action, not its long prompt. */
 export function sessionNameFromBrief(brief: string): string {
 	return brief.startsWith(REPORT_PROBLEM_PROMPT) ? appI18n.t("settings.reportProblem") : brief.trim().slice(0, 100);
 }
 
-/** Drafts are shared per host, so a normal new chat takes the report prompt out and keeps what was typed. */
 export function dropReportPrompt(scope: ChatDraftScope) {
 	const draft = readChatSessionDraft(scope).composer.text;
 	if (!draft.startsWith(REPORT_PROBLEM_PROMPT)) return;
@@ -71,7 +67,6 @@ export function dropReportPrompt(scope: ChatDraftScope) {
 	useUiStore.setState((state) => ({ newChatDraftRevision: state.newChatDraftRevision + 1 }));
 }
 
-/** Opens a standalone agent on the new chat page with the prompt above anything already typed. */
 function openReportAgent() {
 	const scope = newChatDraftScope();
 	const draft = readChatSessionDraft(scope).composer.text;
@@ -85,11 +80,6 @@ function openReportAgent() {
 	ui.requestNewTask(STANDALONE_WORKSPACE_ID, undefined, { report: true });
 }
 
-/**
- * Every Report a problem entry point runs this: an agent when the daemon is
- * ready, otherwise `ao triage` in the OS terminal. Returns the text to show if
- * it failed.
- */
 export async function startProblemReport(daemonState: DaemonStatus["state"]): Promise<string | undefined> {
 	const t = appI18n.t;
 	const destination = daemonState === "ready" ? "agent" : "terminal";
@@ -133,8 +123,6 @@ export function reportProblemDestinationUrl(diagnostics: ReportProblemDiagnostic
 	return url.toString();
 }
 
-// Reports go to support in another timezone, so pair the reporter's local
-// wall-clock time with an unambiguous UTC reference.
 export function formatReportTimestamp(value: string, timeZone?: string): string {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return value;

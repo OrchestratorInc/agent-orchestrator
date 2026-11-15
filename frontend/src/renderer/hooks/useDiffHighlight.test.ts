@@ -18,8 +18,6 @@ describe("useDiffHighlight", () => {
 		const { result } = renderHook(() => useDiffHighlight(rows, "notes.unknown", undefined));
 		expect(result.current.newSide).toHaveLength(rows.length);
 		expect(result.current.oldSide).toHaveLength(rows.length);
-		// No grammar resolved -> never colored, but the existing word-diff highlight
-		// (the "changed" flag) must still come through unaffected.
 		const delIndex = rows.findIndex((r) => r.kind === "del");
 		const delRun = result.current.oldSide[delIndex];
 		expect(classesOf(delRun)).toEqual([]);
@@ -27,9 +25,6 @@ describe("useDiffHighlight", () => {
 	});
 
 	it("colors a del line using state carried over from a preceding context line", async () => {
-		// "old body" is only recognizable as a comment when tokenized together with
-		// the opening "/* start" context line in the same call — this is the
-		// per-hunk-side (not per-line) tokenization the design depends on.
 		const diff = "@@ -1,4 +1,4 @@\n /* start\n-old body\n+new body\n end */\n";
 		const rows = parseUnifiedDiff(diff);
 		const { result, rerender } = renderHook(({ r, p }) => useDiffHighlight(r, p, undefined), {
@@ -45,12 +40,9 @@ describe("useDiffHighlight", () => {
 			{ timeout: 5000 },
 		);
 
-		// The paired add line resolves through the new-side blob the same way.
 		const addIndex = rows.findIndex((r) => r.kind === "add");
 		expect(classesOf(result.current.newSide[addIndex])).toContain("hljs-comment");
 
-		// A second render with the identical rows array and path must not throw and
-		// must keep returning the same shape (memoized — no re-tokenization needed).
 		act(() => rerender({ r: rows, p: "src/App.ts" }));
 		expect(result.current.newSide).toHaveLength(rows.length);
 	});
@@ -74,10 +66,6 @@ describe("useDiffHighlight", () => {
 	});
 
 	it("keeps old-side and new-side syntax state independent for a shared context row", async () => {
-		// The change opens a comment that only exists on the old side: "shared
-		// context" is inside a /* ... */ block on the old side, but not on the new
-		// side (the new side never opens a comment before it). A single shared
-		// `runs[rowIndex]` can only hold one answer; split view needs both.
 		const diff = "@@ -1,3 +1,3 @@\n-/* old-only\n+const value = 1;\n shared context\n end */\n";
 		const rows = parseUnifiedDiff(diff);
 		const { result } = renderHook(() => useDiffHighlight(rows, "src/App.ts", undefined));
@@ -95,13 +83,11 @@ describe("useDiffHighlight", () => {
 			.spyOn(codeHighlight, "highlight")
 			.mockResolvedValueOnce(undefined)
 			.mockResolvedValueOnce(undefined)
-			.mockReturnValue(new Promise(() => {})); // any further call would hang the test if made
+			.mockReturnValue(new Promise(() => {}));
 
 		const rows = parseUnifiedDiff("@@ -1,1 +1,1 @@\n-const before = 0;\n+const after = 1;\n");
 		renderHook(() => useDiffHighlight(rows, "src/App.ts", undefined));
 
-		// One highlight() call per hunk side (old, new); both resolve to undefined
-		// (highlighting unavailable) so there is nothing to retry from.
 		await waitFor(() => expect(highlightSpy).toHaveBeenCalledTimes(2));
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		expect(highlightSpy).toHaveBeenCalledTimes(2);

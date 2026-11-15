@@ -1,29 +1,3 @@
-// TerminalMux implementation for cloud sessions.
-//
-// A cloud session's PTY lives inside its control-plane sandbox, reached over a
-// single WebSocket at `${cpOrigin}/api/cloud/v1/terminal`. The socket is
-// authorized by a single-use ticket (minted via the CP proxy in the Electron
-// main process, so the WorkOS token never reaches the renderer), not by an
-// Authorization header, so the renderer can dial it directly.
-//
-// This adapts the CP's structured terminal protocol (protocol=2) onto the same
-// TerminalMux interface the local daemon mux implements, so useTerminalSession's
-// attach/replay/reconnect lifecycle works unchanged. Each connection mints its
-// own ticket, so the hook's reconnect (which builds a fresh mux) transparently
-// gets a fresh ticket.
-//
-// Both the agent and workspace kinds open their socket DIRECTLY at construction
-// and drive readiness off the CP's structured `starting`/`ready` messages —
-// there is no separate agent-ready SSE wait. The CP's OpenTerminal(agent) is
-// find-or-create for the current worker epoch (it reuses a running agent's
-// terminal), so opening a healthy session's terminal is safe and immediate, and
-// a not-yet-started agent is held in `starting` up to the CP's ready deadline.
-//
-// CP wire (see cloud/internal/httpapi/terminal_handlers.go):
-//   client -> {type:"input",data} | {type:"resize",columns,rows}
-//   server -> {type:"starting"|"ready"|"reset"|"replay_complete"|"input_ack"}
-//             {type:"output",data:<base64>,sequence}
-
 import { base64ToBytes, type MuxConnectionState, type TerminalMux } from "./terminal-mux";
 import { PLAN_REFUSAL_CODES } from "./cloud-cp/client";
 import { publishCloudNotificationHint } from "./cloud-notification-hints";
@@ -31,30 +5,11 @@ import { appI18n } from "../i18n";
 import { useUiStore } from "../stores/ui-store";
 
 export interface CloudTerminalMuxOptions {
-	/** WebSocket base including the API mount, e.g. "wss://host/api/cloud/v1". */
 	wsBaseUrl: string;
-	/** "agent" attaches the running coding agent; "workspace" opens a shell. */
 	kind: "agent" | "workspace";
-	/** Dedicated agent terminal to attach, rather than the session's primary agent terminal. */
 	terminalId?: string;
-	/** Mints a fresh single-use terminal ticket (goes through the CP proxy). */
 	mintTicket: (kind: "agent" | "workspace") => Promise<string>;
-	/**
-	 * Replay cursor shared across mux rebuilds for the same pane. The hook
-	 * discards a mux and builds a fresh one on every reconnect; without a shared
-	 * cursor each new mux would send `after=0` and the control plane would
-	 * replay the whole scrollback again, so the terminal never settles and just
-	 * flickers. Passing a stable ref object lets a rebuilt mux resume from the
-	 * last sequence it received. Omit for a fresh pane (starts at 0).
-	 *
-	 * The mux always sends `after=cursor.value`; the CP decides whether to honor
-	 * it or reset to 0. Today the CP sends `{type:"reset"}` for both kinds, so
-	 * the effective replay is always from 0 (correct across worker-epoch bumps,
-	 * whose per-terminal output sequences restart). The cursor plumbing is kept
-	 * so a future epoch-aware CP can resume within an epoch instead.
-	 */
 	cursor?: { value: number };
-	/** Typed into the terminal once, when it first reports ready (a command cue's command). */
 	initialInput?: string;
 	WebSocketImpl?: typeof WebSocket;
 }
@@ -74,9 +29,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	const connectionListeners = new Set<ConnectionListener>();
 
 	let socket: WebSocket | null = null;
-	// Resume from the shared cursor so a rebuilt mux does not replay the whole
-	// scrollback from sequence 0 (the flicker/never-settle bug). advanceCursor
-	// keeps the shared ref in step with our local position.
 	let after = options.cursor?.value ?? 0;
 	const advanceCursor = (sequence: number) => {
 		after = sequence;
@@ -85,14 +37,9 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	let disposed = false;
 	let exited = false;
 	let connectionState: MuxConnectionState | undefined;
-	// pendingResize is the newest size the pane asked for; it is replayed on
-	// every (re)connect. sentResize is the size last sent on the current socket,
-	// so an unchanged size is never sent twice.
 	let pendingResize: { cols: number; rows: number } | null = null;
 	let sentResize: { cols: number; rows: number } | null = null;
 	let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-	// reflowed records that the pane fitted to a size other than the last one
-	// sent since that send, so the screen no longer matches the program's.
 	let reflowed = false;
 	const pendingInput: string[] = [];
 	let initialInput = options.initialInput;
@@ -114,10 +61,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		);
 	};
 
-	// The org's plan does not allow waking this session (a usage limit, no
-	// plan). That holds for hours or days, so it is reported once as a pane
-	// error rather than polled like a worker that is still starting; the client
-	// already raised the plan prompt for this refusal.
 	const planRefusal = (error: unknown): string | undefined => {
 		if (typeof error !== "object" || error === null) return undefined;
 		const { code, message } = error as { code?: unknown; message?: unknown };
@@ -145,8 +88,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			case "ready":
 				if (typeof message.sequence === "number") advanceCursor(message.sequence);
 				openedListeners.forEach((listener) => listener());
-				// Typed only once the shell is up, so it is never lost to a
-				// terminal that has not started yet.
 				if (initialInput && sendJSON({ type: "input", data: initialInput })) initialInput = undefined;
 				break;
 			case "output":
@@ -157,11 +98,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 				}
 				break;
 			case "reset":
-				// The CP deliberately restarts the stream from sequence 0 (a fresh
-				// workspace shell, or an agent open whose replay must start clean).
-				// Drop our resume cursor and wipe the pane's stale content (clear
-				// screen + scrollback, home the cursor) so the fresh replay does not
-				// stack on top of the old buffer.
 				advanceCursor(0);
 				{
 					const clear = new TextEncoder().encode("\x1b[3J\x1b[H\x1b[2J");
@@ -175,14 +111,10 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 				}
 				break;
 			case "input_refused":
-				// A shared session's agent terminal dropped this keystroke: someone
-				// else is writing to the agent. Said once, not per keystroke.
 				useUiStore.getState().showGlobalToast(appI18n.t("chat.shared.terminalRefused"), undefined, {
 					placement: "top-center", dedupeKey: "composer-terminal-refused",
 				});
 				break;
-			// starting / replay_complete / input_ack carry no terminal output the
-			// pane must render.
 			default:
 				break;
 		}
@@ -202,8 +134,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		socket = ws;
 		ws.addEventListener("open", () => {
 			if (disposed || socket !== ws) return;
-			// A new socket may reach a new worker PTY, so the current size always
-			// goes out once, without waiting for the debounce.
 			sentResize = null;
 			flushResize();
 			for (const input of pendingInput.splice(0)) sendJSON({ type: "input", data: input });
@@ -231,10 +161,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 			ticket = await options.mintTicket(kind);
 		} catch (error) {
 			if (disposed) return;
-			// A control plane that reports the agent terminal has exited (410
-			// TERMINAL_SESSION_EXITED) is terminal: surface it and stop, rather than
-			// looping the ticket mint forever as if the worker were merely not up yet
-			// (the "Connected, but stuck Connecting…" symptom).
 			if (terminalExited(error)) {
 				reportTerminalExited();
 				return;
@@ -244,13 +170,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 				errorListeners.forEach((listener) => listener(refusal));
 				return;
 			}
-			// A freshly created session's worker may not be connected yet while its
-			// sandbox provisions; the control plane reports that as 409
-			// WORKER_UNAVAILABLE on the ticket request. Report this as "waiting",
-			// distinct from a socket-level "closed", so the hook keeps polling for
-			// readiness WITHOUT counting it against the connect-failure circuit
-			// breaker: nothing failed to connect, the worker is simply not up yet.
-			// Only a genuine post-mint socket failure trips the breaker.
 			setConnectionState("waiting");
 			return;
 		}
@@ -258,35 +177,10 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		openSocket(kind, ticket);
 	};
 
-	// Open directly for both kinds. The CP's find-or-create OpenTerminal plus its
-	// structured starting/ready messages drive readiness, so there is no separate
-	// agent-ready SSE to wait for — that wait was the orchestrator "Connecting…"
-	// stall (a large event log never redelivered the old, low-sequence agent.ready,
-	// so the socket was never even attempted).
 	void connect(options.kind);
 
-	// A hidden/parked pane attaches at 0×0 to keep receiving output WITHOUT
-	// claiming a size — the shared PTY must never be resized from an off-screen
-	// grid. The CP rejects a 0-dimension resize as invalid and closes the socket
-	// (which would loop a parked reconnect), so a 0×0 open/resize sends nothing;
-	// the real size follows from the first visible fit (open for a visible pane,
-	// or resize() when the pane becomes visible).
-	// A real terminal grid is never a handful of columns. A fit measured before the
-	// font metrics or the pane box have settled can propose e.g. 2 columns, and
-	// forwarding that to the remote PTY makes the agent TUI wrap every token to ~2
-	// chars — and because the value is cached in pendingResize and replayed on every
-	// reconnect (worker-epoch flips), it stays broken until an unrelated fit fires.
-	// Ignore an implausibly small grid so only a settled fit ever reaches the PTY.
-	// (This also subsumes the old cols<=0 guard: a parked 0×0 pane still sends
-	// nothing, so the shared PTY is never resized from an off-screen grid.)
 	const MIN_RESIZE_COLS = 20;
 	const MIN_RESIZE_ROWS = 4;
-	// Every resize the PTY receives makes a full-screen TUI redraw its whole
-	// screen, and a dragged side panel fires dozens of fits a second. Coalesce
-	// them: a trailing debounce sends only the size the pane settles on, an
-	// unchanged size is not sent again, and the final size always goes out.
-	// Resizes travel on the open terminal socket, the same live path as input;
-	// while disconnected the newest size waits and is sent on open.
 	const RESIZE_DEBOUNCE_MS = 150;
 	const flushResize = () => {
 		if (resizeTimer !== null) {
@@ -295,10 +189,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		}
 		if (!pendingResize) return;
 		if (sentResize && sentResize.cols === pendingResize.cols && sentResize.rows === pendingResize.rows) {
-			// The burst ended at the size the program already has, so no size
-			// change goes out; but the screen reflowed at the sizes in between.
-			// Ask the program to redraw it (an older control plane ignores the
-			// flag and applies a same-size resize, which changes nothing).
 			if (reflowed && sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows, repaint: true })) {
 				reflowed = false;
 			}
@@ -332,7 +222,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 				try {
 					socket.close(1000, "closed by client");
 				} catch {
-					// already closing.
 				}
 			}
 		},
@@ -370,7 +259,6 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 				try {
 					socket.close();
 				} catch {
-					// already closing.
 				}
 			}
 			socket = null;

@@ -22,7 +22,6 @@ vi.mock("../../hooks/useEditorHandoff", () => ({
 	useSetPreferredEditor: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
 }));
 
-// The real rows read the cloud gate and the CLI link; this file covers retention.
 vi.mock("./DefaultCloudSandboxRow", () => ({ DefaultCloudSandboxSection: () => null }));
 vi.mock("./CliLinkSettingsRow", () => ({ CliLinkSettings: () => null }));
 

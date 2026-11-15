@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// lockedLineage is fakeLineage safe for concurrent forks.
 type lockedLineage struct {
 	mu sync.Mutex
 	fakeLineage
@@ -38,8 +37,6 @@ func (l *lockedLineage) ListSessionForks(ctx context.Context, id domain.SessionI
 	return l.fakeLineage.ListSessionForks(ctx, id)
 }
 
-// gatedSpawner holds every spawn until all of them have started, the way two
-// forks overlap while each one's worktree is being set up.
 type gatedSpawner struct {
 	mu      sync.Mutex
 	names   []string
@@ -56,7 +53,6 @@ func (g *gatedSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.S
 	return domain.SessionRecord{ID: domain.SessionID(fmt.Sprintf("p-f%d", n)), DisplayName: cfg.DisplayName}, 0, 0, nil
 }
 
-// Forks of one session started at the same time each get their own number.
 func TestForksStartedTogetherGetTheirOwnNumbers(t *testing.T) {
 	spawner := &gatedSpawner{}
 	spawner.started.Add(2)
@@ -88,7 +84,6 @@ func TestForksStartedTogetherGetTheirOwnNumbers(t *testing.T) {
 	if len(numbers) != 2 {
 		t.Fatalf("recorded numbers = %v, want two different ones", lineage.rows)
 	}
-	// The next fork follows both.
 	opts, err := s.Options(context.Background(), "p-1")
 	if err != nil || opts.SuggestedName != "Fork 3 of Retry failed webhook deliveries" {
 		t.Fatalf("next name = %q, %v", opts.SuggestedName, err)
@@ -102,7 +97,7 @@ type cancellingSpawner struct {
 
 func (c *cancellingSpawner) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
 	rec, a, b, err := c.fakeSpawner.Spawn(ctx, cfg)
-	c.cancel() // the caller goes away just as the session is created
+	c.cancel()
 	return rec, a, b, err
 }
 
@@ -115,8 +110,6 @@ func (l *ctxCheckingLineage) RecordSessionFork(ctx context.Context, fork domain.
 	return l.fakeLineage.RecordSessionFork(ctx, fork)
 }
 
-// A fork whose request is cancelled once its session exists still records
-// where it came from, so retry and cleanup can find its original.
 func TestForkLineageIsRecordedEvenIfTheRequestIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	spawner := &cancellingSpawner{cancel: cancel}
@@ -141,8 +134,6 @@ func (f freezingSources) ForkSource(context.Context, domain.SessionRecord, strin
 	return Source{LatestTurnID: "turn-4", ContextMode: domain.ForkContextTextHandoff, Freeze: func(context.Context) { *f.froze++ }}, nil
 }
 
-// A source fixes its conversation where the fork's files are captured, so
-// the two match; checking whether it can fork doesn't capture anything.
 func TestForkFreezesTheSourceOnlyWhenForking(t *testing.T) {
 	froze := 0
 	s, _, _ := newService(source(), func(s *Service) { s.deps.Sources = freezingSources{froze: &froze} })
@@ -160,8 +151,6 @@ func TestForkFreezesTheSourceOnlyWhenForking(t *testing.T) {
 	}
 }
 
-// activeDuringCapture is a seed store whose capture runs while the source
-// takes a new command.
 type activeDuringCapture struct {
 	fakeSeeds
 	sessions fakeSessions
@@ -174,8 +163,6 @@ func (a activeDuringCapture) Capture(ctx context.Context, workspace, ref string)
 	return a.fakeSeeds.Capture(ctx, workspace, ref)
 }
 
-// A source that acts between its freeze and the file capture could give the
-// fork files its copied conversation doesn't explain, so the fork is refused.
 func TestForkRefusesASourceThatActsWhileItsFilesAreCaptured(t *testing.T) {
 	froze := 0
 	var deleted []string
@@ -197,7 +184,6 @@ func TestForkRefusesASourceThatActsWhileItsFilesAreCaptured(t *testing.T) {
 	}
 }
 
-// spawnerRequests looks requests up in what the fake spawner made.
 type spawnerRequests struct{ sp *fakeSpawner }
 
 func (r spawnerRequests) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
@@ -205,8 +191,6 @@ func (r spawnerRequests) GetSessionByClientRequestID(_ context.Context, id strin
 	return rec, ok, nil
 }
 
-// A retry of a fork whose response was lost returns the fork it made, even
-// once the original has moved on: busy, archived, or deleted.
 func TestRetriedForkReturnsItsSessionAfterTheOriginalMovesOn(t *testing.T) {
 	sessions := fakeSessions{"p-1": source()}
 	s, sp, _ := newService(source(), func(s *Service) { s.deps.Sessions = sessions })

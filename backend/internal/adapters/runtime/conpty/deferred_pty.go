@@ -8,33 +8,23 @@ import (
 	"sync"
 )
 
-// maxDeferredInput bounds input buffered before a deferred process starts.
 const maxDeferredInput = 64 * 1024
 
-// errDeferredInputFull reports input the not-yet-started process could not
-// take: the pre-start buffer is full.
 var errDeferredInputFull = errors.New("deferred pty: input buffer full before the process started")
 
-// deferredPTY is a ptyConn whose process starts on the first Resize, at the
-// grid the host applies for its first sized client. A shell terminal is created
-// as soon as the user opens its tab, before that tab's terminal has measured
-// itself; starting the shell at a guessed grid lays its first prompt out for a
-// different width than the viewer shows (zsh's partial-line marker then leaks
-// as a stray "%"). Starting on the first real grid gives every shell its true
-// size from its first byte, with no client-side bookkeeping.
 type deferredPTY struct {
 	start func(cols, rows uint16) (ptyConn, error)
 
 	mu      sync.Mutex
-	conn    ptyConn // nil until started
-	pending []byte  // input written before the start
-	closed  bool    // closed before the process started
-	failed  bool    // the process could not be started
+	conn    ptyConn
+	pending []byte
+	closed  bool
+	failed  bool
 
 	startedOnce sync.Once
-	startedC    chan struct{} // closed once conn is set, the start failed, or it closed first
+	startedC    chan struct{}
 	doneOnce    sync.Once
-	doneC       chan struct{} // closed when the process exits, the start fails, or it closed first
+	doneC       chan struct{}
 }
 
 func newDeferredPTY(start func(cols, rows uint16) (ptyConn, error)) *deferredPTY {
@@ -44,8 +34,6 @@ func newDeferredPTY(start func(cols, rows uint16) (ptyConn, error)) *deferredPTY
 func (d *deferredPTY) markStarted() { d.startedOnce.Do(func() { close(d.startedC) }) }
 func (d *deferredPTY) markDone()    { d.doneOnce.Do(func() { close(d.doneC) }) }
 
-// Read blocks until the process starts, then reads its output. A process that
-// never starts (closed first, or failed to start) reads as EOF.
 func (d *deferredPTY) Read(b []byte) (int, error) {
 	<-d.startedC
 	d.mu.Lock()
@@ -57,9 +45,6 @@ func (d *deferredPTY) Read(b []byte) (int, error) {
 	return conn.Read(b)
 }
 
-// Write forwards input once the process runs and buffers it until then, so
-// keystrokes typed while the terminal is still sizing itself are not lost.
-// Input past the buffer's bound is reported as a short write, not accepted.
 func (d *deferredPTY) Write(b []byte) (int, error) {
 	d.mu.Lock()
 	conn := d.conn
@@ -79,7 +64,6 @@ func (d *deferredPTY) Write(b []byte) (int, error) {
 	return conn.Write(b)
 }
 
-// Resize starts the process at the first grid it is given and resizes it after.
 func (d *deferredPTY) Resize(cols, rows int) error {
 	d.mu.Lock()
 	if conn := d.conn; conn != nil {
@@ -130,8 +114,6 @@ func (d *deferredPTY) Close() error {
 
 func (d *deferredPTY) Done() <-chan struct{} { return d.doneC }
 
-// ExitCode reports a not-yet-started process as running: the terminal exists
-// and is waiting for its first viewer. A failed start reports exit code -1.
 func (d *deferredPTY) ExitCode() (int, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -147,7 +129,6 @@ func (d *deferredPTY) ExitCode() (int, bool) {
 	}
 }
 
-// PID is 0 until the process starts.
 func (d *deferredPTY) PID() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -157,7 +138,6 @@ func (d *deferredPTY) PID() int {
 	return d.conn.PID()
 }
 
-// ForegroundPGID forwards to the started PTY; shell terminals start on attach.
 func (d *deferredPTY) ForegroundPGID() (int, bool) {
 	d.mu.Lock()
 	conn := d.conn

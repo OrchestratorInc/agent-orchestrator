@@ -257,12 +257,6 @@ func TestGetLaunchCommandOmitsBlankModel(t *testing.T) {
 	}
 }
 
-// Restore path intentionally does not forward a configured model override —
-// see appendModelFlag's doc comment (issue #2895; --model + --resume
-// composition could not be verified — the test account's Copilot Free plan
-// only grants "auto" regardless of --model). This test locks that decision
-// in so a future "just mirror the launch path" edit doesn't silently wire
-// it without re-verifying.
 func TestGetRestoreCommandDoesNotForwardModelOverride(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "copilot"}
 
@@ -343,8 +337,6 @@ func TestResolveCopilotBinaryRunsTheManagedNativeBinary(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("npm loader native binary naming is covered on Unix-like platforms")
 	}
-	// AO's managed layout: bin/copilot -> copilot/current/bin/copilot, the
-	// npm loader of release v1.
 	root := t.TempDir()
 	release := filepath.Join(root, "copilot", "versions", "v1")
 	packageDir := filepath.Join(release, "lib", "node_modules", "@github", "copilot")
@@ -379,7 +371,6 @@ func TestResolveCopilotBinaryRunsTheManagedNativeBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Through current, not v1, so the resolved path follows the next update.
 	want := filepath.Join(root, "copilot", "current", "lib", "node_modules", "@github", "copilot", "node_modules", ".bin", nativeName)
 	if got != want {
 		t.Fatalf("resolved %q, want %q", got, want)
@@ -462,8 +453,6 @@ func TestResolveCopilotBinaryFallbacks(t *testing.T) {
 	}
 }
 
-// VS Code's Copilot Chat extension installs a `copilot` launcher that only
-// forwards to a CLI found elsewhere on PATH, and asks to install one otherwise.
 func writeVSCodeCopilotLauncher(t *testing.T, home string) string {
 	t.Helper()
 	dir := filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage", "github.copilot-chat", "copilotCli")
@@ -783,8 +772,6 @@ func TestGetAgentHooksInstallsCopilotHooks(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Seed a user-owned agentStop hook plus an unrelated top-level field; both
-	// must survive install.
 	existing := `{"version":1,"disableAllHooks":false,"hooks":{"agentStop":[{"type":"command","bash":"custom stop hook","powershell":"custom stop hook"}]}}`
 	if err := os.WriteFile(hooksPath, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
@@ -798,7 +785,6 @@ func TestGetAgentHooksInstallsCopilotHooks(t *testing.T) {
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must not duplicate AO hook commands.
 	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -1046,7 +1032,6 @@ func TestUninstallHooksRemovesCopilotHooks(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own agentStop hook; it must survive uninstall.
 	if err := os.MkdirAll(filepath.Dir(hooksPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1114,11 +1099,6 @@ func TestHookMethodsRequireWorkspacePath(t *testing.T) {
 	}
 }
 
-// TestCopilotManagedHooksUseDocumentedEventNames pins the JSON keys AO writes
-// into .github/hooks/ao.json to the camelCase names Copilot CLI documents
-// (https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-hooks).
-// Drifting back to lowercase-dashed or any other casing silently disables the
-// hooks, so this is a tripwire for that class of regression.
 func TestCopilotManagedHooksUseDocumentedEventNames(t *testing.T) {
 	wantEventByCommand := map[string]string{
 		"session-start":      "sessionStart",
@@ -1205,7 +1185,6 @@ func TestOnlyASwitchTargetTrustsTheWorkspaceForCopilot(t *testing.T) {
 	t.Setenv("COPILOT_HOME", home)
 	workspace := t.TempDir()
 	config := filepath.Join(home, "config.json")
-	// A new task leaves folder trust to the user.
 	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace, SessionID: "s-1"}); err != nil {
 		t.Fatal(err)
 	}

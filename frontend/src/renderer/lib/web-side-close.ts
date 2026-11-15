@@ -1,6 +1,5 @@
 import { SIDE_CLOSE_PROTOCOL_VERSION, type SideCloseEntry, type SideCloseRequest, type SideCloseState } from "../../shared/side-close";
 
-/** Explicit browser-preview transport; desktop IPC errors never enter this path. */
 export function createWebSideCloseBridge() {
 	const entries = new Map<string, SideCloseEntry>();
 	const active = new Map<string, Promise<SideCloseState>>();
@@ -12,7 +11,7 @@ export function createWebSideCloseBridge() {
 	let revision = 0;
 	const key = (session: string, side: string) => JSON.stringify([session, side]);
 	const summary = (sessionId: string | null): SideCloseState => ({ protocolVersion: SIDE_CLOSE_PROTOCOL_VERSION, epoch, revision, recovery: "ready", sessionId, sides: [...entries.values()].filter(side => !sessionId || side.sessionId === sessionId).map(side => ({ ...side })) });
-	const publish = () => { revision++; for (const listener of listeners) { try { listener(summary(null)); } catch { /* another subscriber cannot revoke proof */ } } };
+	const publish = () => { revision++; for (const listener of listeners) { try { listener(summary(null)); } catch { } } };
 	const transport = async () => {
 		const client = await import("./api-client");
 		const next = client.getApiBaseUrl();

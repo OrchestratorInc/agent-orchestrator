@@ -12,8 +12,6 @@ func TestForkWorktreeStartsAtSourceCommit(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
 	repo := setupOriginClone(t, git, tmp)
-	// An unpushed commit on a side branch: the fork must start from it, not
-	// from the project's base branch.
 	runGit(t, git, repo, "checkout", "-q", "-b", "source")
 	runGit(t, git, repo, "commit", "-q", "--allow-empty", "-m", "unpushed")
 	source := gitOutput(t, git, repo, "rev-parse", "HEAD")

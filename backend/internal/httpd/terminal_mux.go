@@ -16,15 +16,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
-// terminalMuxReadLimit caps a single inbound frame. Client→server frames are small
-// (keystrokes, resize, control), so a generous 1 MiB is ample headroom while
-// still bounding memory per message.
 const terminalMuxReadLimit = 1 << 20
 
-// mountTerminalMux registers the long-lived terminal-multiplexing WebSocket at /mux. It
-// is intentionally outside the per-request Timeout middleware (the connection is
-// long-lived). When mgr is nil the route is not mounted — the daemon simply has
-// no terminal surface yet.
 func mountTerminalMux(r chi.Router, mgr *terminal.Manager, log *slog.Logger, allowedOrigins []string) {
 	if mgr == nil {
 		return
@@ -32,9 +25,6 @@ func mountTerminalMux(r chi.Router, mgr *terminal.Manager, log *slog.Logger, all
 	r.Get("/mux", terminalMuxHandler(mgr, log, allowedOrigins))
 }
 
-// terminalMuxHandler upgrades the request to a WebSocket and hands the connection to the
-// terminal manager. httpd owns only the upgrade and the transport adaptation;
-// all stream logic lives in internal/terminal.
 func terminalMuxHandler(mgr *terminal.Manager, log *slog.Logger, allowedOrigins []string) http.HandlerFunc {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -44,30 +34,21 @@ func terminalMuxHandler(mgr *terminal.Manager, log *slog.Logger, allowedOrigins 
 			envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN", "Origin is not allowed to attach terminals", nil)
 			return
 		}
-		// The explicit exact-origin check above supports app://renderer and the
-		// authenticated native mobile Origin, unlike the library's same-host rule.
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
 			log.Warn("terminal mux: websocket upgrade failed", "err", err)
 			return
 		}
 		c.SetReadLimit(terminalMuxReadLimit)
-		// A browser page always sends an Origin (already checked above); a local
-		// program may not. Only the former may drive split panes.
 		mgr.Serve(r.Context(), &terminalMuxConn{c: c, fromPage: r.Header.Get("Origin") != ""})
 	}
 }
 
-// terminalMuxConn adapts a coder/websocket connection to terminal.wsConn. JSON framing
-// uses wsjson (text messages); Ping is a control frame; Close sends a normal
-// closure.
 type terminalMuxConn struct {
 	c        *websocket.Conn
 	fromPage bool
 }
 
-// AllowsPanes tells the terminal manager this connection came from an allowed
-// page, not a bare local client.
 func (a *terminalMuxConn) AllowsPanes() bool { return a.fromPage }
 
 func (a *terminalMuxConn) ReadJSON(ctx context.Context, v any) error { return wsjson.Read(ctx, a.c, v) }
@@ -79,8 +60,6 @@ func (a *terminalMuxConn) Close(reason string) error {
 	return a.c.Close(websocket.StatusNormalClosure, reason)
 }
 
-// Terminal attachment grants access to existing PTYs, so loopback/preview page
-// origins must never inherit the general API's permissive CORS policy.
 func terminalMuxRequestAllowed(r *http.Request, allowed map[string]struct{}) bool {
 	if _, ok := previewutil.SessionIDFromHost(r.Host); ok {
 		return false
@@ -99,7 +78,6 @@ func terminalMuxRequestAllowed(r *http.Request, allowed map[string]struct{}) boo
 		return false
 	}
 	origin := origins[0]
-	// Configuration names origins, never URL paths or opaque/wildcard origins.
 	u, err := url.Parse(origin)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "app") || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(origin, " ,\t\r\n") {
 		return false
@@ -107,6 +85,5 @@ func terminalMuxRequestAllowed(r *http.Request, allowed map[string]struct{}) boo
 	if _, ok := allowed[origin]; ok {
 		return true
 	}
-	// This compatibility Origin comes from React Native, not a browser grant.
 	return origin == "http://localhost" && authenticatedLANBearer(r)
 }

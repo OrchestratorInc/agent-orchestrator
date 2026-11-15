@@ -34,7 +34,6 @@ func TestHermesTaglessSourceBannerReportsCheckoutTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	head := git("rev-parse", "HEAD")
-	// Hermes prints vgit.<sha> when its own tag lookup comes up empty.
 	output := "Hermes Agent vgit." + head[:7] + " (2026.9.24) · stable · local " + head[:12] + "\nPython 3.11.9\n"
 	if got := installedVersionText(TargetHermes, launcher, output); got != "v0.22.2" {
 		t.Fatalf("installedVersionText = %q, want v0.22.2", got)

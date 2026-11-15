@@ -5,9 +5,6 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { toSnapshot } from "./CloudSessionChatSurface";
 
-// A Cloud chat that loaded only its newest events: the turns whose prompts are
-// above them must still read in the order they happened.
-
 const session = {
 	id: "session-1",
 	workspaceId: "project-1",
@@ -22,7 +19,6 @@ const session = {
 	prs: [],
 } satisfies WorkspaceSession;
 
-/** An orchestrator's history as the control plane records it, from sequence 1. */
 function history() {
 	const events: CloudCpClientEvent[] = [];
 	const at = () => new Date(Date.UTC(2026, 10, 8, 10, 0, 0) + events.length * 1000).toISOString();
@@ -37,10 +33,6 @@ function history() {
 	};
 }
 
-/**
- * Reports queued while the turn before ran: each report's prompt sits inside
- * that turn, ahead of its last reply.
- */
 function fanIn(reports: number) {
 	const h = history();
 	h.prompt("r0");
@@ -58,12 +50,10 @@ function fanIn(reports: number) {
 	return h.events;
 }
 
-/** The newest events from the first one of the given type and text. */
 function from(events: CloudCpClientEvent[], text: string) {
 	return events.slice(events.findIndex((event) => (event.payload as { text?: string }).text === text));
 }
 
-/** What the transcript shows, top to bottom: each prompt and each turn's answer. */
 function shown(events: CloudCpClientEvent[], partial: boolean) {
 	const view = render(<ChatWorkspace snapshot={toSnapshot(session, events, undefined, { partial })} session={session} />);
 	const texts = Array.from(document.querySelectorAll("[data-chat-message-id]"))
@@ -81,8 +71,6 @@ describe("a Cloud chat read back from its newest events", () => {
 	});
 
 	it("shows the end of a turn whose prompt is above the window before the report that queued inside it", () => {
-		// The window starts at report 2's prompt: report 1's prompt is older, and
-		// report 1's last reply follows report 2's prompt.
 		const window = from(fanIn(3), "P:r2");
 		expect(shown(window, true)).toEqual(["A:r1.b", "P:r2", "A:r2.b", "P:r3", "A:r3.b"]);
 	});
@@ -90,9 +78,7 @@ describe("a Cloud chat read back from its newest events", () => {
 	it("keeps that order as the older page brings the turn's prompt in", () => {
 		const events = fanIn(3);
 		expect(shown(from(events, "P:r2"), true)).toEqual(["A:r1.b", "P:r2", "A:r2.b", "P:r3", "A:r3.b"]);
-		// The page before reaches report 1's prompt (itself queued inside report 0).
 		expect(shown(from(events, "P:r1"), true)).toEqual(["A:r0.b", "P:r1", "A:r1.b", "P:r2", "A:r2.b", "P:r3", "A:r3.b"]);
-		// And the whole history, once the first page is read.
 		expect(shown(events, false)).toEqual(["P:r0", "A:r0.b", "P:r1", "A:r1.b", "P:r2", "A:r2.b", "P:r3", "A:r3.b"]);
 	});
 
@@ -103,7 +89,6 @@ describe("a Cloud chat read back from its newest events", () => {
 		const before = group();
 		expect(before?.textContent).toContain("A:r1.b");
 		expect(before?.textContent).not.toContain("P:r1");
-		// The older page brings report 1's prompt in: the same group grows upward.
 		view.rerender(<ChatWorkspace snapshot={toSnapshot(session, from(events, "P:r1"), undefined, { partial: true })} session={session} />);
 		expect(group()).toBe(before);
 		expect(group()?.textContent).toContain("P:r1");
@@ -122,8 +107,6 @@ describe("a Cloud chat read back from its newest events", () => {
 		h.started("next");
 		h.reply("next", "a");
 		h.completed("next");
-		// The cap cuts the page partway through "long": at its first reply, or at
-		// the prompt that queued inside it, ahead of its later replies.
 		const cutAt = (text: string) => h.events.slice(h.events.findIndex((event) => (event.payload as { text?: string }).text === text));
 		expect(shown(cutAt("A:long.a"), true)).toEqual(["A:long.c", "P:next", "A:next.a"]);
 		expect(shown(cutAt("P:next"), true)).toEqual(["A:long.c", "P:next", "A:next.a"]);
@@ -144,8 +127,6 @@ describe("a Cloud chat read back from its newest events", () => {
 		h.started("z");
 		h.reply("z", "a");
 		h.completed("z");
-		// The window starts at x's reply: x and y both began above it, y first
-		// seen at its start.
 		const window = h.events.slice(h.events.findIndex((event) => (event.payload as { text?: string }).text === "A:x.a"));
 		const snapshot = toSnapshot(session, window, undefined, { partial: true });
 		const anchors = Object.fromEntries(snapshot.turns.map((turn) => [turn.id, turn.anchorSequence]));

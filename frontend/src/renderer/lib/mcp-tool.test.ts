@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../types/conversation";
 import { aoToolView, isShownAORender, mcpResultTexts, mcpToolArguments, mcpToolName } from "./mcp-tool";
 
-// The shapes below are copied from rows the two harnesses recorded in a dev app.
-
 function activity(overrides: Partial<ConversationActivity> = {}): ConversationActivity {
 	return {
 		kind: "activity",
@@ -18,7 +16,6 @@ function activity(overrides: Partial<ConversationActivity> = {}): ConversationAc
 	};
 }
 
-/** Claude Code over ACP: internal name as the title, arguments under `input`. */
 function claude(tool: string, input: unknown, content: string[], status: ConversationActivity["status"] = "completed") {
 	return activity({
 		status,
@@ -33,7 +30,6 @@ function claude(tool: string, input: unknown, content: string[], status: Convers
 	});
 }
 
-/** Codex: server and tool sent apart, the MCP result under `result`. A tool error still arrives completed. */
 function codex(tool: string, args: unknown, texts: string[]) {
 	return activity({
 		summary: `Called ao/${tool}`,

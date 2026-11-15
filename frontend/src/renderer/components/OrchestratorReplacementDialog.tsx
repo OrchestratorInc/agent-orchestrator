@@ -16,7 +16,6 @@ import {
 type OrchestratorReplacementDialogProps = {
 	projectId: string | null;
 	pending?: boolean;
-	/** Number of projects with a pending replacement failure (including this one). */
 	pendingCount?: number;
 	error?: OrchestratorReplacementFailure;
 	workspaces: WorkspaceSummary[];

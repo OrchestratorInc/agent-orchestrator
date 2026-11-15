@@ -12,21 +12,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// codexKnownShared are shared even before the computer's own home has them, so
-// a conversation started under an account is visible to every other one.
 var codexKnownShared = []string{
 	"sessions", "archived_sessions", "sqlite", "shell_snapshots", "worktrees",
 	"skills", "plugins", "cache", "logs", "mcp-oauth-locks", "thread-writer-locks",
 }
 
-// codexKnownSharedFiles are files Codex writes in a fresh home itself. Shared
-// before the computer's own home has them, or the account's first launch keeps
-// a private copy.
 var codexKnownSharedFiles = []string{"config.toml", "history.jsonl"}
 
-// codexPrivate stay inside the account's home: its sign-in, the models its plan
-// offers, scratch space, and the app-server daemon's control files, so a
-// terminal on one account never attaches to a daemon running as another.
 var codexPrivate = map[string]bool{
 	"auth.json": true, "models_cache.json": true,
 	"log": true, "memories": true, "tmp": true, ".tmp": true,
@@ -34,28 +26,20 @@ var codexPrivate = map[string]bool{
 	".codex-global-state.json": true, ".codex-global-state.json.bak": true,
 }
 
-// codexReplaceable are runtime locks Codex creates itself when it starts in a
-// fresh home; they guard shared state, so a local copy gives way to the link.
 var codexReplaceable = map[string]bool{"mcp-oauth-locks": true, ".sqlite-maintenance.lock": true}
 
-// codexCredentialEnv are variables that make Codex use something other than
-// the home's own login.
 var codexCredentialEnv = []string{"OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"}
 
-// Codex runs the `codex` CLI under an account home (CODEX_HOME). Identity,
-// limits and resets come from Codex's own app-server account methods.
 type Codex struct {
 	Binary     func(context.Context) (string, error)
 	Accounts   ports.CodexAccountClientFactory
-	DeviceHome string // the computer's own CODEX_HOME (~/.codex)
+	DeviceHome string
 }
 
 var _ ports.AgentAccountProviderCLI = (*Codex)(nil)
 
-// Provider names Codex.
 func (*Codex) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderCodex }
 
-// LaunchEnv points Codex at home.
 func (*Codex) LaunchEnv(home string) map[string]string {
 	if home == "" {
 		return nil
@@ -65,8 +49,6 @@ func (*Codex) LaunchEnv(home string) map[string]string {
 	return env
 }
 
-// LoginArgv is Codex's own sign-in with a device code, so the user picks the
-// ChatGPT account in any browser instead of the one already signed in there.
 func (c *Codex) LoginArgv(ctx context.Context) ([]string, error) {
 	bin, err := c.Binary(ctx)
 	if err != nil {
@@ -82,7 +64,6 @@ func (c *Codex) open(ctx context.Context, home string) (ports.CodexAccountClient
 	return c.Accounts.Open(ctx, ports.CodexAccountContext{Home: home})
 }
 
-// Logout asks Codex to sign home out, revocation included.
 func (c *Codex) Logout(ctx context.Context, home string) error {
 	client, err := c.open(ctx, home)
 	if err != nil {
@@ -92,7 +73,6 @@ func (c *Codex) Logout(ctx context.Context, home string) error {
 	return client.Logout(ctx)
 }
 
-// Identity asks Codex's app-server which account home uses.
 func (c *Codex) Identity(ctx context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
 	client, err := c.open(ctx, home)
 	if err != nil {
@@ -118,7 +98,6 @@ func (c *Codex) Identity(ctx context.Context, home string) (domain.AgentAccountI
 	return out, nil
 }
 
-// Limits reads the account's windows, resets and activity through Codex.
 func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLimits, error) {
 	client, err := c.open(ctx, home)
 	if err != nil {
@@ -179,7 +158,6 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 	return out, nil
 }
 
-// ConsumeResetCredit spends one of the account's usage-limit resets.
 func (c *Codex) ConsumeResetCredit(ctx context.Context, home, idempotencyKey string) (domain.CodexResetCreditOutcome, error) {
 	client, err := c.open(ctx, home)
 	if err != nil {
@@ -202,9 +180,6 @@ func codexWindowLabel(minutes *int64) string {
 	}
 }
 
-// Prepare shares everything in the computer's own Codex home with home except
-// its private entries. Directory links keep the rollout files real, which
-// `codex resume` requires.
 func (c *Codex) Prepare(home string) error {
 	if home == "" {
 		return nil
@@ -214,7 +189,7 @@ func (c *Codex) Prepare(home string) error {
 	}
 	names := map[string]bool{}
 	for _, name := range codexKnownShared {
-		names[name] = false // a directory
+		names[name] = false
 	}
 	for _, name := range codexKnownSharedFiles {
 		names[name] = true

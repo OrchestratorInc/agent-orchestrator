@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { expect, it } from "vitest";
 
-// CI source guard: API display wrappers must retain transport ownership.
 function unsafeWrappers(source: string, filename = "source.ts"): number[] {
 	const file = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true);
 	const names = new Set<string>();

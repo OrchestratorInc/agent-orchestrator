@@ -9,14 +9,9 @@ import { PanelMessage } from "./WorkspaceDiffView";
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-/**
- * A CSV or TSV file's rendered view: the first row is the header, and clicking
- * a header sorts by that column (ascending, descending, then file order).
- */
 export function TableFileView({ content, path }: { content: string; path: string }) {
 	const { t } = useTranslation();
 	const [sort, setSort] = useState<TableSort | null>(null);
-	// Numeric columns right-align so their digits line up.
 	const { header, rows, numeric } = useMemo(() => delimitedTable(content, path), [content, path]);
 	const sortedRows = useMemo(() => sortTableRows(rows, numeric, sort, collator.compare), [numeric, rows, sort]);
 

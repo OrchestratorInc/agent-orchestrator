@@ -6,15 +6,6 @@ import { captureRendererEvent, telemetryStorage } from "../lib/telemetry";
 import { useAgentReadinessQuery } from "./useAgentReadinessQuery";
 import { githubAuthRequirementQueryOptions, useSystemRequirementsGate } from "./useSystemRequirementsGate";
 
-/**
- * Reports the install's agent inventory once per app launch.
- *
- * Mounted from the shell so it runs once, and reads the cached agents query, so
- * it adds no request of its own. Reported a single time per launch because the
- * inventory only changes when someone installs or authorizes an agent. Surface
- * and focus ensures update the display copy, which would otherwise make this a
- * repeating stream.
- */
 export function useAgentInventoryTelemetry(): void {
   const { data } = useAgentReadinessQuery();
   const reported = useRef(false);
@@ -41,23 +32,11 @@ function readSetupCheckRecord(storage: ReturnType<typeof telemetryStorage>): Set
   }
 }
 
-/**
- * Whether a check differs from the last one sent. Only the fields this check
- * knows are compared: the GitHub probe often has not answered at launch, and an
- * unanswered probe is not a change.
- */
 export function setupCheckChanged(check: SetupCheckRecord, sent: SetupCheckRecord | null): boolean {
   if (!sent) return true;
   return Object.entries(check).some(([key, value]) => sent[key] !== value);
 }
 
-/**
- * Sends ao.setup.checked the first time the startup system check and agent
- * readiness have both settled, then again when a known value changes (a tool
- * or agent installed or signed in, or GitHub sign-in becoming known). Reuses
- * the startup checks' cached results and never runs a probe of its own, so the
- * GitHub credential probe is reported only once the app already ran it.
- */
 export function useSetupCheckedTelemetry(): void {
   const { query } = useSystemRequirementsGate();
   const { data: catalog } = useAgentReadinessQuery();
@@ -65,7 +44,6 @@ export function useSetupCheckedTelemetry(): void {
   const requirements = query.data?.requirements;
   useEffect(() => {
     if (!requirements || !catalog) return;
-    // Agent probes still running would report a count that is about to change.
     if (catalog.agents.some((agent) => agent.installation.freshness === "checking" || agent.authentication.freshness === "checking")) return;
     const check: SetupCheckRecord = buildSetupCheck(requirements, catalog, githubAuth?.satisfied);
     const storage = telemetryStorage();
@@ -76,7 +54,6 @@ export function useSetupCheckedTelemetry(): void {
       try {
         storage?.setItem(SETUP_CHECK_STORAGE_KEY, JSON.stringify({ ...sent, ...check }));
       } catch {
-        // Best effort: a lost record re-sends the same state once.
       }
     });
   }, [requirements, catalog, githubAuth?.satisfied]);

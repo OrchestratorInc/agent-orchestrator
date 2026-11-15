@@ -27,21 +27,15 @@ type cdcSubscriber interface {
 	Subscribe(func(cdc.Event)) (unsubscribe func())
 }
 
-// EventsController owns the client-facing CDC stream. Durable replay comes from
-// change_log through Source; Broadcaster remains a live-only pub/sub seam.
 type EventsController struct {
 	Source cdc.Source
 	Live   cdcSubscriber
 }
 
-// Register mounts the CDC SSE stream route.
 func (c *EventsController) Register(r chi.Router) {
 	r.Get("/events", c.stream)
 }
 
-// eventsHeartbeatInterval paces the idle comment frame. Short enough that a
-// buffering intermediary forwards a real event promptly, long enough to be
-// negligible on a metered connection. A var so tests need not wait it out.
 var eventsHeartbeatInterval = 10 * time.Second
 
 func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
@@ -62,11 +56,6 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 			"Could not inspect the event cursor", nil)
 		return
 	}
-	// A cursor ahead of head means the change_log was truncated or replaced. Fall
-	// back to head rather than zero: replaying from zero costs the client the whole
-	// backlog, and since every connected client is reset at the same moment, they
-	// stampede together. Falling back to head loses at most the events in the gap,
-	// which clients recover from their next snapshot fetch.
 	startAtHead := r.URL.Query().Get("after") == "latest" && r.Header.Get("Last-Event-ID") == ""
 	if startAtHead || after > latestSeq {
 		after = latestSeq
@@ -87,8 +76,6 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case live <- e:
 		default:
-			// Never block the broadcaster. Closing the stream is safer than
-			// silently dropping a live event; the client replays on reconnect.
 			cancel()
 		}
 	})
@@ -102,8 +89,6 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 	h.Set(eventAfterHeader, strconv.FormatInt(after, 10))
 	w.WriteHeader(http.StatusOK)
 	if startAtHead {
-		// Give EventSource a Last-Event-ID before the first live change so an
-		// immediate reconnect replays the gap instead of starting at head again.
 		if _, err := fmt.Fprintf(w, "id: %d\nevent: cursor\ndata: {}\n\n", after); err != nil { //nolint:gosec // G705: an int64 formatted with %d cannot inject SSE fields.
 			return
 		}
@@ -115,16 +100,6 @@ func (c *EventsController) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Keep the pipe moving while nothing is happening.
-	//
-	// An idle stream that writes nothing is fine on a LAN but not behind a
-	// proxy: an intermediary buffers a lone small write and has nothing to push
-	// it through, so a single event can sit unseen for minutes while the same
-	// stream is instant directly. The bulk replay always arrives because it is
-	// large enough to flush on its own.
-	//
-	// A named heartbeat lets remote clients verify that an intermediary actually
-	// delivers stream frames; it does not move the cursor.
 	heartbeat := time.NewTicker(eventsHeartbeatInterval)
 	defer heartbeat.Stop()
 
@@ -168,8 +143,6 @@ func (c *EventsController) replay(ctx context.Context, w http.ResponseWriter, fl
 func parseEventsAfter(r *http.Request) (int64, error) {
 	raw := r.URL.Query().Get("after")
 	if raw == "latest" || raw == "" {
-		// An EventSource reconnects to the same URL; its cursor must override
-		// this initial head sentinel or events during the gap would be lost.
 		raw = r.Header.Get("Last-Event-ID")
 	}
 	if raw == "" {

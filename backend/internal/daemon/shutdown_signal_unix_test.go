@@ -15,8 +15,6 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Use a subprocess because restoring SIGTERM's default behavior would kill
-// the test runner. Exercise both signal and HTTP-style worker cancellation.
 func TestShutdownRetainsSignalHandlingThroughRestoration(t *testing.T) {
 	if mode := os.Getenv("AO_DAEMON_SHUTDOWN_SIGNAL_HELPER"); mode != "" {
 		ctx, stop, stopSignals := daemonShutdownContext()
@@ -35,7 +33,6 @@ func TestShutdownRetainsSignalHandlingThroughRestoration(t *testing.T) {
 		if !input.Scan() {
 			t.Fatal("missing restoration request")
 		}
-		// Give the repeated signal time to take effect before restoration.
 		time.Sleep(100 * time.Millisecond)
 		fmt.Println("restored")
 		return

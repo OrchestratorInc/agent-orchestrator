@@ -35,7 +35,6 @@ func TestCopyForkMessageContentRestoresImages(t *testing.T) {
 	add(sourceConv, source, "s1", "Write a report", "", 1)
 	add(sourceConv, source, "s2", "What colour is this?", image, 2)
 	add(sourceConv, source, "s3", "Later message", image, 3)
-	// The fork imported the agent's own history, where an image is text.
 	add(forkConv.ID, forkSession.ID, "f1", "Write a report", "", 1)
 	add(forkConv.ID, forkSession.ID, "f2", "What colour is this?[Image]", "", 2)
 
@@ -60,8 +59,6 @@ func TestCopyForkMessageContentRestoresImages(t *testing.T) {
 	}
 }
 
-// A rolled-back prompt isn't in the fork's history, so its image must not be
-// taken for a later prompt with the same text.
 func TestCopyForkMessageContentSkipsRolledBackMessages(t *testing.T) {
 	s, source, sourceConv := conversationFixture(t)
 	ctx := context.Background()

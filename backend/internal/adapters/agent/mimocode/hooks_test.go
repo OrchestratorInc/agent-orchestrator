@@ -93,8 +93,6 @@ func TestUninstallHooksRemovesOnlyOwnedArtifacts(t *testing.T) {
 }
 
 func TestMimoAgentAllowsEveryPermissionForBypass(t *testing.T) {
-	// Bypass goes through the agent file: the CLI flag stops at a consent screen
-	// on every terminal launch.
 	for _, mode := range []ports.PermissionMode{ports.PermissionModeAuto, ports.PermissionModeBypassPermissions} {
 		if got := mimoAgentPermission(mode); got != "permission:\n  \"*\": allow\n" {
 			t.Fatalf("%s permission = %q, want every permission allowed", mode, got)

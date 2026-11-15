@@ -6,10 +6,8 @@ const layout = { columns: 3, pitch: 216, gap: 16 };
 
 describe("gridWindow", () => {
 	it("builds the rows asked for and keeps the height of the rest", () => {
-		// 100 cards in 3 columns: 34 rows, each 200 tall with a 16 gap below.
 		const range = gridWindow(100, layout, 10, 14);
 		expect(range).toEqual({ start: 30, end: 45, before: 10 * 216 - 16, after: (33 - 14) * 216 - 16 });
-		// The spacers, the gaps and the built rows add up to the whole list.
 		const built = 5 * 200 + 4 * 16;
 		expect(range.before + 16 + built + 16 + range.after).toBe(34 * 200 + 33 * 16);
 	});

@@ -113,8 +113,6 @@ func TestPrepareSessionHomeKeepsTheUsersOwnMemory(t *testing.T) {
 		t.Fatalf("real user memory = %q (%v), want it untouched", original, err)
 	}
 
-	// Restoring re-prepares from the real file, so the user's text is composed
-	// once rather than folded into the session copy again.
 	prepareHome(t, dataDir, domain.SessionID("mer-1"), "You are an AO worker.")
 	restored := readHomeFile(t, filepath.Join(home, ".commandcode", "AGENTS.md"))
 	if string(restored) != want {
@@ -296,7 +294,6 @@ func TestMigrateNativeHistoryBringsTheCapturedConversationHome(t *testing.T) {
 		t.Fatal("migration carried an unrelated conversation")
 	}
 
-	// A second restore must not clobber the session's own newer copy.
 	migrated := filepath.Join(home, ".commandcode", "projects", "c-users-work", "native-1.jsonl")
 	writeHomeFile(t, migrated, []byte("session's own newer copy"))
 	MigrateNativeHistory(dataDir, domain.SessionID("mer-1"), "native-1")
@@ -393,8 +390,6 @@ func TestPrepareSessionHomeLinksDeveloperCredentials(t *testing.T) {
 		makeHomeDir(t, filepath.Dir(path))
 		writeHomeFile(t, path, []byte("original"))
 	}
-	// Detect platforms without symlink privilege explicitly, rather than
-	// treating a missing credential link as a passing test.
 	if err := os.Symlink(filepath.Join(realHome, ".npmrc"), filepath.Join(t.TempDir(), "probe")); err != nil {
 		if runtime.GOOS == "windows" {
 			t.Skipf("symlink privilege unavailable: %v", err)
@@ -414,7 +409,7 @@ func TestPrepareSessionHomeLinksDeveloperCredentials(t *testing.T) {
 		got, err = os.ReadFile(destination)
 		want := "rotated"
 		if name == ".config/git/config" {
-			want = "original" // Git's session copy must stay separate.
+			want = "original"
 		}
 		if err != nil || string(got) != want {
 			t.Fatalf("session %s after rotation = %q (%v), want %q", name, got, err, want)
@@ -462,8 +457,6 @@ func TestSessionProcessEnvRespectsExplicitConfiguration(t *testing.T) {
 
 	base := map[string]string{"GH_CONFIG_DIR": "/work/gh-profile", "git_config_global": "/work/gitconfig"}
 	env := SessionProcessEnv(dataDir, domain.SessionID("mer-1"), base)
-	// The overlay omits keys the caller already defined, so merging it over the
-	// base can never overwrite an explicit value -- in either key case.
 	if _, ok := env["GH_CONFIG_DIR"]; ok {
 		t.Fatalf("GH_CONFIG_DIR emitted despite explicit configuration")
 	}
@@ -509,8 +502,6 @@ func TestPrepareSessionHomeRebasesSettingsHomeReferences(t *testing.T) {
 
 	home := prepareHome(t, dataDir, domain.SessionID("mer-1"), "worker role")
 	contents := readHomeFile(t, filepath.Join(home, ".commandcode", "settings.json"))
-	// Compare parsed values: JSON encoding doubles Windows backslashes, so
-	// raw text matching would never agree with filepath.Join.
 	var mirrored struct {
 		Skills []string `json:"skills"`
 		Mods   struct {
@@ -546,8 +537,6 @@ func TestPrepareSessionHomeRebasesSettingsHomeReferences(t *testing.T) {
 			}
 		}
 	}
-	// Windows accepts mixed separators, and the rebased prefix keeps the OS-native
-	// real-home spelling, so compare separator-blind.
 	if filepath.ToSlash(command) != "bash \""+filepath.ToSlash(filepath.Join(source, ".commandcode", "hooks", "guard.sh"))+"\"" {
 		t.Fatalf("hook command = %q, want rebased to the real home", command)
 	}
@@ -558,8 +547,6 @@ func TestPrepareSessionHomeRebasesSettingsHomeReferences(t *testing.T) {
 
 func TestSessionProcessEnvRespectsInheritedTooling(t *testing.T) {
 	dataDir := t.TempDir()
-	// When the caller or the inherited environment already carries a pointer,
-	// the overlay must omit the key entirely so that value flows through.
 	env := SessionProcessEnv(dataDir, domain.SessionID("mer-1"), map[string]string{
 		"GH_CONFIG_DIR":     "/work/gh-profile",
 		"GIT_CONFIG_GLOBAL": "/work/git-profile",
@@ -575,9 +562,6 @@ func TestSessionProcessEnvRespectsInheritedTooling(t *testing.T) {
 		t.Fatalf("HOME = %q, want the session home", env["HOME"])
 	}
 
-	// The same holds for values inherited by the daemon rather than passed per
-	// call: both defaults exist in the fake real home, so without the ambient
-	// values below both defaults would have been emitted.
 	userHome := t.TempDir()
 	writeHomeFile(t, filepath.Join(userHome, ".gitconfig"), []byte("x"))
 	makeHomeDir(t, filepath.Join(userHome, ".config", "gh"))
@@ -595,9 +579,6 @@ func TestSessionProcessEnvRespectsInheritedTooling(t *testing.T) {
 		t.Fatalf("GH_CONFIG_DIR emitted despite the inherited pointer")
 	}
 
-	// A project-configured XDG counts for gh, which reads $XDG/gh directly,
-	// while git gets no pointer at all: its session-home include keeps the real
-	// ~/.gitconfig applying next to that XDG file.
 	xdg := t.TempDir()
 	defer t.Setenv("XDG_CONFIG_HOME", "")
 	env = SessionProcessEnv(dataDir, domain.SessionID("mer-1"), map[string]string{"XDG_CONFIG_HOME": xdg})
@@ -630,8 +611,6 @@ func TestPrepareSessionHomeMirrorsUserMods(t *testing.T) {
 		t.Fatalf("mirrored .store package: v = %q, err = %v", installed, err)
 	}
 
-	// A later change to the real mods tree, including `mods update` run
-	// inside an earlier session, must land on the next launch refresh.
 	writeHomeFile(t, filepath.Join(mods, "index.js"), []byte("export const name = 'weather-2';\n"))
 	prepareHome(t, dataDir, domain.SessionID("mer-1"), "worker role")
 	refreshed, err := os.ReadFile(filepath.Join(home, ".commandcode", "mods", "weather-mod", "index.js"))
@@ -639,8 +618,6 @@ func TestPrepareSessionHomeMirrorsUserMods(t *testing.T) {
 		t.Fatalf("refreshed drop-in: v = %q, err = %v", refreshed, err)
 	}
 
-	// Nothing session-side is ever deleted: a file the session itself wrote
-	// into its own mods tree survives the refresh.
 	sessionSide := filepath.Join(home, ".commandcode", "mods", "session-out.log")
 	writeHomeFile(t, sessionSide, []byte("log"))
 	prepareHome(t, dataDir, domain.SessionID("mer-1"), "worker role")
@@ -703,7 +680,6 @@ func TestPrepareSessionHomePreservesBothGlobalGitSources(t *testing.T) {
 				t.Fatalf("GIT_CONFIG_GLOBAL = %q, want native discovery", value)
 			}
 
-			// A restore rewrites the include rather than stacking another one.
 			prepareHome(t, dataDir, domain.SessionID("mer-1"), "worker role")
 			sessionConfig := readHomeFile(t, filepath.Join(home, ".gitconfig"))
 			if count := strings.Count(string(sessionConfig), sessionGitConfigIncludeBegin); count != 1 {
@@ -767,8 +743,6 @@ func TestPrepareSessionHomeDropsGitGlobalScopeWhenNoLongerNeeded(t *testing.T) {
 				t.Fatalf("http.extraHeader = %q before restore, want one entry", headers)
 			}
 
-			// The session writes a setting of its own, then the user folds the
-			// include into the XDG file so nothing needs anchoring any more.
 			if test.sessionSetting {
 				existing := readHomeFile(t, sessionConfig)
 				sessionOwned := append(existing, []byte("[user]\n\tname = Session Name\n")...)
@@ -815,17 +789,11 @@ func TestPrepareSessionHomeDropsGitGlobalScopeWhenNoLongerNeeded(t *testing.T) {
 	}
 }
 
-// effectiveGitConfig reports what git resolves for the session home, using the
-// same environment the child would receive plus a clean config environment so
-// the developer's own machine cannot answer the question. It runs in a directory
-// without a repository, so conditional includes match nothing.
 func effectiveGitConfig(t *testing.T, home, xdg string) map[string]string {
 	t.Helper()
 	return effectiveGitConfigIn(t, home, xdg, t.TempDir())
 }
 
-// effectiveGitConfigIn is effectiveGitConfig run inside dir, which lets a test
-// put a repository where a gitdir condition expects one.
 func effectiveGitConfigIn(t *testing.T, home, xdg, dir string) map[string]string {
 	t.Helper()
 	env := map[string]string{"HOME": home, "USERPROFILE": home}
@@ -835,10 +803,6 @@ func effectiveGitConfigIn(t *testing.T, home, xdg, dir string) map[string]string
 	return effectiveGitConfigEnv(t, env, dir)
 }
 
-// effectiveGitConfigEnv is effectiveGitConfig with the exact child environment,
-// so an entry SessionProcessEnv adds (such as GIT_CONFIG_GLOBAL) is part of the
-// answer. Map semantics keep the last value, which is what the scalar assertions
-// want; use effectiveGitConfigAll for multivalued keys.
 func effectiveGitConfigEnv(t *testing.T, env map[string]string, dir string) map[string]string {
 	t.Helper()
 	values := make(map[string]string)
@@ -850,15 +814,11 @@ func effectiveGitConfigEnv(t *testing.T, env map[string]string, dir string) map[
 	return values
 }
 
-// effectiveGitConfigAll reports every value git resolves for a multivalued key,
-// which is where reading a config twice becomes visible.
 func effectiveGitConfigAll(t *testing.T, env map[string]string, dir, key string) []string {
 	t.Helper()
 	return gitConfigOutput(t, env, dir, "config", "--get-all", key)
 }
 
-// gitConfigOutput runs git with the child's environment plus a clean config
-// environment so the developer's own machine cannot answer the question.
 func gitConfigOutput(t *testing.T, env map[string]string, dir string, args ...string) []string {
 	t.Helper()
 	git, err := exec.LookPath("git")
@@ -931,8 +891,6 @@ func TestPrepareSessionHomeRebasesNestedGitIncludes(t *testing.T) {
 		}
 	}
 
-	// Every session-owned copy is anchored to the real filesystem, so nothing
-	// still depends on HOME, and the session config points at the copies.
 	copies, err := os.ReadDir(filepath.Join(home, sessionGitConfigCopiesDir))
 	if err != nil || len(copies) == 0 {
 		t.Fatalf("session git config copies = %v (%v), want the rewritten chain", copies, err)
@@ -997,8 +955,6 @@ func TestPrepareSessionHomeAnchorsConditionalIncludeHeaders(t *testing.T) {
 		t.Fatalf("user.email in a projects repo = %q, want the gitdir:./ include to keep matching", got)
 	}
 
-	// The copy is self-contained: no condition may still depend on HOME or on
-	// the copy's own directory.
 	copies, err := os.ReadDir(filepath.Join(home, sessionGitConfigCopiesDir))
 	if err != nil || len(copies) == 0 {
 		t.Fatalf("session git config copies = %v (%v), want the rewritten config", copies, err)
@@ -1021,8 +977,6 @@ func TestPrepareSessionHomeAnchorsConditionalIncludeHeaders(t *testing.T) {
 	}
 }
 
-// Git resolves symlinks in the config file's path and in HOME before it
-// expands gitdir:./ and gitdir:~/, so the rebased conditions must too.
 func TestPrepareSessionHomeAnchorsConditionalIncludesBehindSymlinkedHome(t *testing.T) {
 	git, err := exec.LookPath("git")
 	if err != nil {
@@ -1084,8 +1038,6 @@ func TestPrepareSessionHomeAnchorsXDGGlobalIncludes(t *testing.T) {
 				xdg = t.TempDir()
 				secondDir = filepath.Join(xdg, "git")
 			}
-			// The extraHeader is multivalued in git: a second copy of this file
-			// means a second Authorization header, not a replaced value.
 			write(filepath.Join(secondDir, "config"), "[user]\n\temail = split@example.com\n[core]\n\tpager = xdg\n"+
 				"[http]\n\textraHeader = Authorization: Bearer token\n"+
 				"[include]\n\tpath = ~/.gitconfig-xdg\n[include]\n\tpath = extra.gitconfig\n")
@@ -1102,8 +1054,6 @@ func TestPrepareSessionHomeAnchorsXDGGlobalIncludes(t *testing.T) {
 			if env["HOME"] != home {
 				t.Fatalf("child HOME = %q, want %q", env["HOME"], home)
 			}
-			// The child inherits the daemon's XDG layer; only the global-scope
-			// decision is ours to make.
 			if xdg != "" {
 				env["XDG_CONFIG_HOME"] = xdg
 			}
@@ -1126,8 +1076,6 @@ func TestPrepareSessionHomeAnchorsXDGGlobalIncludes(t *testing.T) {
 				t.Fatalf("http.extraHeader = %q, want the XDG file applied exactly once", headers)
 			}
 
-			// Only a rebased XDG chain needs git to read the session file as its
-			// global scope; otherwise native discovery stays in charge.
 			if got, want := env["GIT_CONFIG_GLOBAL"], filepath.Join(home, ".gitconfig"); test.xdg {
 				if got != want {
 					t.Fatalf("GIT_CONFIG_GLOBAL = %q, want %q so the XDG file is read once", got, want)
@@ -1136,8 +1084,6 @@ func TestPrepareSessionHomeAnchorsXDGGlobalIncludes(t *testing.T) {
 				t.Fatalf("GIT_CONFIG_GLOBAL = %q, want native discovery for an XDG-free layout", got)
 			}
 
-			// Whatever git reads has to be anchored: the mirrored file when XDG
-			// is unset, the session copy when the XDG file needed one.
 			for _, dir := range []string{filepath.Join(home, ".config", "git"), filepath.Join(home, sessionGitConfigCopiesDir)} {
 				entries, err := os.ReadDir(dir)
 				if err != nil {

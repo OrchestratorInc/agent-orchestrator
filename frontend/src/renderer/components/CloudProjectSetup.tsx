@@ -1,7 +1,3 @@
-// Pieces both cloud creation cards share (CreateProjectFlow's CloudProjectCard
-// and CloudWorkspaceCard): the GitHub App connection, the Coder template
-// fields, and the agent step that creates the project.
-
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -31,8 +27,6 @@ import { Label } from "./ui/label";
 import { Pressable } from "./ui/pressable";
 import { Tabs, TabsList, TabsTrigger } from "./ui/tabs";
 
-// sleepWithAbort resolves after `ms`, or rejects with an AbortError the moment
-// the signal aborts, so a polling loop can stop immediately on unmount/cancel.
 export function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
 		if (signal.aborted) {
@@ -51,15 +45,6 @@ export function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
 	});
 }
 
-// Cloud project creation goes straight to the control plane
-// (client.createGitHubProject) instead of the daemon POST the local flow uses;
-// the repository is cloned in a cloud sandbox, so no folder picker.
-
-/** Second half of cloud project creation: which agent runs the worker and
- * which plans as orchestrator. Reuses the exact field local's own agent
- * sheet uses (RequiredAgentField) against cloud provider-connection state
- * instead of daemon agent readiness — same component, different source of
- * truth, per the onboarding design. */
 export function CloudAgentSetupStep({
 	onBack,
 	onCreate,
@@ -73,7 +58,6 @@ export function CloudAgentSetupStep({
 	isCreating: boolean;
 	createError: string | null;
 	templateMissing: boolean;
-	/** Another field (e.g. an invalid Coder workspace prefix) blocks create; it shows its own error. */
 	createBlocked?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -84,9 +68,6 @@ export function CloudAgentSetupStep({
 	const [workerAgent, setWorkerAgent] = useState(readyAgentId);
 	const [orchestratorAgent, setOrchestratorAgent] = useState(readyAgentId);
 
-	// A login made from Harness settings (opened by the nudge below) lands here
-	// once the connections list refetches — fill the still-empty selects with it
-	// rather than forcing the user to reopen this step.
 	useEffect(() => {
 		if (readyAgentId === "") return;
 		setWorkerAgent((current) => (current === "" ? readyAgentId : current));
@@ -103,8 +84,6 @@ export function CloudAgentSetupStep({
 					{createError}
 				</div>
 			) : null}
-			{/* Only harnesses connected for cloud are offered; the menu links to
-			    Harness settings' Cloud view to connect more. */}
 			<div className="grid grid-cols-2 gap-3">
 				<RequiredAgentField
 					id="cloudWorkerAgent"
@@ -125,8 +104,6 @@ export function CloudAgentSetupStep({
 					onChange={setOrchestratorAgent}
 				/>
 			</div>
-			{/* Harness login lives only in Harness settings; project creation just
-			    points there when no cloud harness is logged in yet. */}
 			{connections.isSuccess && !anyAgentReady ? (
 				<div className="flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-[var(--color-bg-import-card)] px-4 py-3">
 					<p className={onboardingFieldHintClass}>
@@ -167,16 +144,6 @@ export function CloudAgentSetupStep({
 	);
 }
 
-/**
- * The org's GitHub App connection, which a cloud project's repositories come
- * from: its installations (polled while they sync), the repositories they
- * grant, and the secure connect flow. The control plane builds the
- * install/authorize URL (it holds the client id and secret), the browser
- * completes it against the CP's own callback, and this polls the CP until the
- * installation is recorded, then asks it to enumerate the granted
- * repositories before they are read. No GitHub credential ever touches the
- * desktop.
- */
 export function useCloudGitHubAppConnection(onAuthRequired: () => void) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
@@ -198,7 +165,6 @@ export function useCloudGitHubAppConnection(onAuthRequired: () => void) {
 				(installation) => installation.status === "active" && installation.syncStatus !== "ready",
 			);
 			if (syncing) return 2500;
-			// GitHub may have removed an installation while this step stays open.
 			return installations.some((installation) => installation.status === "active") ? 15_000 : false;
 		},
 		queryFn: async () => {
@@ -228,8 +194,6 @@ export function useCloudGitHubAppConnection(onAuthRequired: () => void) {
 		if (readyInstallationKey === "") return;
 		void queryClient.invalidateQueries({ queryKey: ["cloud-github-app-repos", baseUrl, org?.id] });
 	}, [baseUrl, org?.id, queryClient, readyInstallationKey]);
-	// GitHub is connected but grants no repositories yet: same next step as a
-	// fresh start, so show the same "Connect repository" card.
 	const noRepositoriesShared = appConnected && allActiveInstallationsReady && repositories.isSuccess && repositories.data.length === 0;
 
 	const connect = async () => {
@@ -250,8 +214,6 @@ export function useCloudGitHubAppConnection(onAuthRequired: () => void) {
 			);
 			const { installationUrl } = await client.startGitHubInstallation(org.id, { signal: abort.signal });
 			await aoBridge.app.openExternal(installationUrl);
-			// Poll for the installation the CP records once the user finishes in the
-			// browser. Bounded so a browser left open does not spin forever.
 			const deadline = Date.now() + 5 * 60_000;
 			let connectedInstallation;
 			for (;;) {
@@ -272,18 +234,9 @@ export function useCloudGitHubAppConnection(onAuthRequired: () => void) {
 					return;
 				}
 			}
-			// Always sync before reading repositories. A new installation's grants
-			// may still be syncing, and an existing installation that just gained
-			// repositories ("Connect more repositories") is already marked ready
-			// while GitHub's webhook for the new grant can land seconds later. The
-			// sync endpoint enumerates the grants from GitHub before it returns, so
-			// the repository query below sees exactly what was just granted.
 			await client.syncGitHubInstallation(org.id, connectedInstallation.id, { signal: abort.signal });
 		} catch (err) {
 			if (abort.signal.aborted) return;
-			// If the AO Cloud session lapsed mid-connect, the control plane returns
-			// a 401 from its auth middleware. Re-authenticate rather than reporting
-			// it as a GitHub failure.
 			if (err instanceof CloudCpError && err.status === 401) {
 				setError(
 					t("createProject.cloudSessionExpiredForConnect", {
@@ -348,7 +301,6 @@ export function useCloudGitHubAppConnection(onAuthRequired: () => void) {
 
 export type CloudGitHubAppConnection = ReturnType<typeof useCloudGitHubAppConnection>;
 
-/** The "Connect repository" card shown until the org's GitHub App grants a repository. */
 export function CloudGitHubConnectCard({ connection, disabled }: { connection: CloudGitHubAppConnection; disabled: boolean }) {
 	const { t } = useTranslation();
 	return (
@@ -379,7 +331,6 @@ export function CloudGitHubConnectCard({ connection, disabled }: { connection: C
 	);
 }
 
-/** While GitHub is open in the browser, a way out; then the repositories' sync state and errors. */
 export function CloudGitHubConnectionStatus({ connection }: { connection: CloudGitHubAppConnection }) {
 	const { t } = useTranslation();
 	const { appConnected, appRepositoriesReady, allActiveInstallationsReady, appRepositorySyncFailed, noRepositoriesShared, repositories, busy, error } = connection;
@@ -441,23 +392,11 @@ export function CloudGitHubConnectionStatus({ connection }: { connection: CloudG
 	);
 }
 
-/**
- * The Coder options a new project carries (template, its parameters, and for
- * an org that brought its own Coder, the workspace name prefix), kept in the
- * coder session options store and reset with the card.
- */
 export function useCloudCoderSetup(orgId: string | undefined, usesCoder: boolean, hasCoder: boolean) {
-	// A coder project must pick a concrete template before it is created. With no
-	// template, session start fails later with a 422 (coder_template_required) —
-	// there is no implicit org-default for a bring-your-own-Coder deployment. So
-	// require a selection whenever coder is active and the org has selectable
-	// templates, and block create until one is chosen.
 	const coderTemplates = useCoderTemplates(orgId, usesCoder);
 	const templateId = useCoderSessionOptionsStore((s) => s.templateId);
 	const templateMissing = usesCoder && coderTemplates.templates.length > 0 && templateId.trim() === "";
 	const workspaceNamePrefix = useCoderSessionOptionsStore((s) => s.workspaceNamePrefix);
-	// Workspace naming is a bring-your-own-Coder control: only an org that
-	// connected its own Coder deployment sees and sends the prefix.
 	const orgOwnsCoder = useOrgCoderConfig(hasCoder).data != null;
 	const showWorkspaceNamePrefix = usesCoder && orgOwnsCoder;
 	const workspaceNamePrefixInvalid = showWorkspaceNamePrefix && !isValidCoderWorkspaceNamePrefix(workspaceNamePrefix.trim());
@@ -466,7 +405,6 @@ export function useCloudCoderSetup(orgId: string | undefined, usesCoder: boolean
 		resetCoderOptions();
 		return () => resetCoderOptions();
 	}, [resetCoderOptions]);
-	/** The project's config.coder, or undefined when its sessions do not run on Coder. */
 	const coderConfig = () => {
 		if (!usesCoder) return undefined;
 		const options = useCoderSessionOptionsStore.getState();
@@ -477,11 +415,9 @@ export function useCloudCoderSetup(orgId: string | undefined, usesCoder: boolean
 
 export type CloudCoderSetup = ReturnType<typeof useCloudCoderSetup>;
 
-/** Coder template and size are inherited by every session. */
 export function CloudCoderSetupFields({ setup, disabled, projectName, repositoryUrls }: {
 	setup: CloudCoderSetup;
 	disabled: boolean;
-	/** Names the default workspace prefix. */
 	projectName: string;
 	repositoryUrls: string[];
 }) {
@@ -532,11 +468,6 @@ export function CloudCoderSetupFields({ setup, disabled, projectName, repository
 	);
 }
 
-/**
- * After the control plane created a project: it goes to the top of the
- * sidebar, the project list refetches, and a Freestyle project opens on its
- * orchestrator, already starting (a Coder one opens on its board).
- */
 export function useFinishCloudProjectCreate() {
 	const queryClient = useQueryClient();
 	return async (project: CloudCpProject, offering: Pick<ResolvedCloudOffering, "defaultProvider">) => {
@@ -548,11 +479,6 @@ export function useFinishCloudProjectCreate() {
 	};
 }
 
-/**
- * Tells the card's container whether it is creating, so a dialog holding it
- * stays open (Escape, an outside click) until the work ends: a folder upload
- * runs for minutes and cannot be cancelled. Reports false when it unmounts.
- */
 export function useReportBusy(busy: boolean, onBusyChange?: (busy: boolean) => void) {
 	const report = useRef(onBusyChange);
 	report.current = onBusyChange;
@@ -562,7 +488,6 @@ export function useReportBusy(busy: boolean, onBusyChange?: (busy: boolean) => v
 	useEffect(() => () => report.current?.(false), []);
 }
 
-/** False once the component unmounts, so work that outlives it stops instead of acting for it. */
 export function useMountedRef() {
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -574,10 +499,8 @@ export function useMountedRef() {
 	return mounted;
 }
 
-/** What a new cloud project is: one main repository (and more beside it), or a workspace. */
 export type CloudCreateKind = "project" | "workspace";
 
-/** Switches the cloud creation card between a project and a workspace. */
 export function CloudCreateKindTabs({ value, onChange, disabled }: { value: CloudCreateKind; onChange: (kind: CloudCreateKind) => void; disabled?: boolean }) {
 	const { t } = useTranslation();
 	return (

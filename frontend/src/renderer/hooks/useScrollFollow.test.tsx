@@ -14,16 +14,13 @@ describe("useScrollFollow", () => {
 	it("lands on the end and recognizes the resulting scroll as its own by position", () => {
 		const node = viewport({ scrollHeight: 2000, clientHeight: 500, scrollTop: 100 });
 		const { result } = renderHook(() => useScrollFollow(() => node));
-		// Tests snap (no layout to animate): the plain snap writes scrollHeight.
 		result.current.glideToEnd();
 		expect(node.scrollTop).toBe(2000);
 		expect(result.current.isOwnScroll(2000)).toBe(true);
-		// A reader scroll lands somewhere else, however soon after the write.
 		expect(result.current.isOwnScroll(1700)).toBe(false);
 	});
 
 	it("leaves a viewport that is already at its end alone", () => {
-		// The app's plain snap writes scrollHeight (the browser clamps it), so "at the end" is that value.
 		const node = viewport({ scrollHeight: 2000, clientHeight: 500, scrollTop: 2000 });
 		const { result } = renderHook(() => useScrollFollow(() => node));
 		result.current.followEnd();

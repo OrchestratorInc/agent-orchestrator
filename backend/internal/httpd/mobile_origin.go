@@ -7,9 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
-// Mobile controls create remote access and disclose pairing credentials. They
-// require exact renderer origins even when other APIs allow paired mobile clients.
-// Run this before CORS so rejected preflights cannot acquire a browser grant.
 func mobileControlOriginMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 	allowed := exactAllowedOrigins(allowedOrigins)
 	return func(next http.Handler) http.Handler {

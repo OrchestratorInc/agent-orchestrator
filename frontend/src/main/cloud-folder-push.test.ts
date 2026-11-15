@@ -35,7 +35,6 @@ const execFileAsync = promisify(execFile);
 const CP = "https://cp.example.com";
 const PUSH_PATH = "/api/cloud/v1/orgs/org-1/github/git/acme/notes.git";
 
-// No user or system config leaks into the fixture repositories.
 const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", HOME: os.tmpdir() };
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -65,7 +64,6 @@ function deps(overrides: Partial<PushFolderDeps> = {}): PushFolderDeps & { calls
 	const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
 	const runner: GitRunner = async (args, options) => {
 		calls.push({ args, env: options.env });
-		// The app's own runner holds up to 64 MB of output.
 		const { stdout, stderr } = await execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 		return { stdout, stderr };
 	};
@@ -128,10 +126,8 @@ describe("pushFolderToRepository", () => {
 
 		expect(result).toMatchObject({ status: "pushed", branch: "main", source: "import" });
 		expect(await git(remote, "ls-tree", "-r", "--name-only", "main")).toBe(".gitignore\nREADME.md");
-		// Without a configured identity the commit is AO's.
 		expect(await git(remote, "log", "-1", "--format=%ae", "main")).toBe(FALLBACK_COMMIT_EMAIL);
 		expect((await fs.readdir(folder)).sort()).toEqual(before);
-		// The import's git directory is gone.
 		expect(await fs.readdir(tmpRoot)).toEqual([]);
 	});
 
@@ -147,13 +143,11 @@ describe("pushFolderToRepository", () => {
 		const config = Object.fromEntries(Array.from({ length: Number(push?.env.GIT_CONFIG_COUNT) }, (_, i) => [push?.env[`GIT_CONFIG_KEY_${i}`], push?.env[`GIT_CONFIG_VALUE_${i}`]]));
 		expect(config).toMatchObject({
 			[`http.${CP}${PUSH_PATH}.extraHeader`]: "Authorization: Bearer token-1",
-			// Scoped to the push URL like the header, so no other config can turn redirects back on for it.
 			[`http.${CP}${PUSH_PATH}.followRedirects`]: "false",
 			"credential.helper": "",
 		});
 		expect(config).not.toHaveProperty(["http.followRedirects"]);
 		expect(push?.env.GIT_TERMINAL_PROMPT).toBe("0");
-		// Only the push step ever sees the token.
 		expect(d.calls.filter((call) => JSON.stringify(call.env).includes("token-1"))).toHaveLength(1);
 	});
 
@@ -226,7 +220,6 @@ describe("pushFolderToRepository", () => {
 		await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
 		await fs.writeFile(path.join(folder, "b.txt"), "b");
 
-		// The branch exists now; git refuses on its own ("fetch first").
 		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
 
 		expect(result).toMatchObject({ status: "error", code: "branch_exists" });
@@ -236,7 +229,6 @@ describe("pushFolderToRepository", () => {
 	it("retries an unchanged import to the commit already uploaded", async () => {
 		await fs.writeFile(path.join(folder, "a.txt"), "a");
 		const first = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
-		// A push whose reply was lost: the retry makes the same commit and finds it there.
 		const retry = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
 
 		expect(first).toMatchObject({ status: "pushed", source: "import" });
@@ -260,7 +252,6 @@ describe("pushFolderToRepository", () => {
 
 	it.each([
 		["fatal: unable to access 'https://cp.example.com/x.git/': The requested URL returned error: 401", "signed_out", /Sign in again/],
-		// What git really prints for a 401 with prompts disabled.
 		["fatal: could not read Username for 'https://cp.example.com': terminal prompts disabled", "signed_out", /Sign in again/],
 		["fatal: Authentication failed for 'https://cp.example.com/x.git/'", "signed_out", /Sign in again/],
 		["fatal: unable to access 'https://cp.example.com/x.git/': The requested URL returned error: 403", "push_forbidden", /did not let you upload notes/],
@@ -398,19 +389,14 @@ async function commitAll(dir: string, message = "commit"): Promise<void> {
 
 type StreamOptions = { cwd?: string; env: NodeJS.ProcessEnv; input?: string; encoding?: "utf8" | "latin1" };
 
-/** git's whole output, as a stream runner would hand it on: fed its input, in its encoding. */
 async function streamOutput(args: string[], options: StreamOptions): Promise<string> {
 	const run = execFileAsync("git", args, { cwd: options.cwd, env: options.env, encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
-	// git can exit before it reads stdin it never needed (`git log`); the write
-	// then fails with EPIPE, which the runner ignores (cloud-folder-push.ts).
 	run.child.stdin?.on("error", () => undefined);
 	run.child.stdin?.end(options.input ?? "");
 	return (await run).stdout.toString(options.encoding ?? "utf8");
 }
 
 describe("previewFolderUpload", () => {
-	// Each folder an upload refuses, set up in the test's folder; setup returns
-	// the dependencies both the preview and the upload run with.
 	const refused: Array<[string, () => Promise<Partial<PushFolderDeps>>, PushFolderErrorCode]> = [
 		["a shallow clone", async () => {
 			const source = path.join(root, "source");
@@ -520,7 +506,6 @@ describe("previewFolderUpload", () => {
 
 	it("refuses a repository git cannot read instead of importing its files", async () => {
 		await fs.writeFile(path.join(folder, "a.txt"), "a");
-		// A .git git cannot use, as with "detected dubious ownership".
 		await fs.writeFile(path.join(folder, ".git"), `gitdir: ${path.join(root, "missing.git")}\n`);
 		const preview = await previewFolderUpload({ folder }, deps());
 		const upload = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps());
@@ -529,7 +514,6 @@ describe("previewFolderUpload", () => {
 		}
 		expect(await git(remote, "branch", "--list")).toBe("");
 
-		// git's own refusal reaches the person.
 		const dubious: GitRunner = async (args, options) => {
 			if (args.includes("--show-toplevel")) throw Object.assign(new Error("exit 128"), { code: 128, stderr: "fatal: detected dubious ownership in repository at '/x'\n" });
 			return deps().git!(args, options);
@@ -541,7 +525,6 @@ describe("previewFolderUpload", () => {
 });
 
 describe("checks the upload repeats after its preview", () => {
-	/** A history walk that counts how often it runs. */
 	function countingStream(): GitStreamRunner & { walks: number } {
 		const stream = Object.assign(async (args: string[], options: StreamOptions, onChunk: (chunk: string) => void) => {
 			if (args.includes("log")) stream.walks += 1;
@@ -566,7 +549,6 @@ describe("checks the upload repeats after its preview", () => {
 
 		expect(gitStream.walks).toBe(1);
 		expect(upload.calls.some((call) => call.args.includes("ls-tree"))).toBe(false);
-		// Whether the repository is shallow is not the commit's to say: asked every time.
 		expect(upload.calls.some((call) => call.args.includes("--is-shallow-repository"))).toBe(true);
 	});
 
@@ -658,7 +640,6 @@ describe("registerCloudFolderPushIpc", () => {
 	});
 });
 
-// Every pushed blob's content, to check what reached the remote.
 async function pushedContents(ref: string): Promise<Map<string, { mode: string; content: string }>> {
 	const out = new Map<string, { mode: string; content: string }>();
 	for (const line of (await git(remote, "ls-tree", "-r", ref)).split("\n").filter(Boolean)) {
@@ -711,7 +692,6 @@ describe("secret-looking files", () => {
 		for (const header of ["PRIVATE KEY", "RSA PRIVATE KEY", "EC PRIVATE KEY", "OPENSSH PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "PGP PRIVATE KEY BLOCK"]) {
 			expect(contentHoldsSecret("test/fixtures/server.key", `-----BEGIN ${header}-----\n${FAKE}\n-----END ${header}-----\n`), header).toBe(true);
 		}
-		// A certificate bundled with its key, a binary key, and a key without its PEM header.
 		expect(contentHoldsSecret("server.pem", `${cert}-----BEGIN PRIVATE KEY-----\n${FAKE}\n-----END PRIVATE KEY-----\n`)).toBe(true);
 		expect(contentHoldsSecret("server.key", "\u0030\u0082\u0004\u00a4")).toBe(true);
 		expect(contentHoldsSecret("server.key", FAKE)).toBe(true);
@@ -784,14 +764,12 @@ describe("secret-looking files", () => {
 		await fs.writeFile(path.join(folder, "c.txt"), "c");
 		await commitAll(folder, "c");
 		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "merge", "--quiet", "--no-ff", "--no-commit", "side");
-		// Added in the merge commit itself, on neither side.
 		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
 		await git(folder, "add", ".env");
 		await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--quiet", "-m", "merge");
 
 		const d = deps();
 		expect(await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, d)).toMatchObject({ status: "error", code: "secret_files", files: [".env"] });
-		// The history streams through its own runner, never buffered whole.
 		expect(d.calls.some((call) => call.args.includes("log"))).toBe(false);
 		expect(await git(remote, "branch", "--list")).toBe("");
 	});
@@ -804,13 +782,11 @@ describe("secret-looking files", () => {
 		await commitAll(folder);
 		await git(folder, "rm", "--quiet", "config/.env.production");
 		await commitAll(folder, "drop");
-		// Three characters at a time, so names and changes are cut anywhere.
 		const gitStream: GitStreamRunner = async (args, options, onChunk) => {
 			const stdout = await streamOutput(args, options);
 			for (let i = 0; i < stdout.length; i += 3) onChunk(stdout.slice(i, i + 3));
 		};
 		expect(await previewFolderUpload({ folder }, deps({ gitStream }))).toMatchObject({ status: "error", code: "secret_files", files: ["config/.env.production"] });
-		// A history git fails to read is a failure, not a pass.
 		const failing: GitStreamRunner = async () => { throw Object.assign(new Error("exit 128"), { stderr: "fatal: bad object HEAD" }); };
 		expect(await previewFolderUpload({ folder }, deps({ gitStream: failing }))).toMatchObject({ status: "error", code: "import_failed", message: expect.stringContaining("bad object") });
 	});
@@ -833,7 +809,6 @@ describe("secret-looking files", () => {
 		const pushed = await pushedContents("main");
 		expect([...pushed.keys()].sort()).toEqual([".env.example", "README.md", "keys/id_rsa.pub"]);
 		for (const { content } of pushed.values()) expect(content).not.toContain(FAKE);
-		// The folder itself is untouched.
 		expect(await fs.readFile(path.join(folder, ".env"), "utf8")).toContain(FAKE);
 	});
 
@@ -847,7 +822,6 @@ describe("secret-looking files", () => {
 		const result = await pushFolderToRepository({ folder, pushPath: PUSH_PATH, branch: "main" }, deps({ homeDir: home }));
 		expect(result).toMatchObject({ status: "pushed", source: "import" });
 		const pushed = await pushedContents("main");
-		// Git stores a symlink as a link (mode 120000) to its target path.
 		expect(pushed.get("key-link")).toEqual({ mode: "120000", content: path.join(home, ".ssh", "deploy_key") });
 		expect(pushed.get("ssh-dir")?.mode).toBe("120000");
 		for (const { content } of pushed.values()) expect(content).not.toContain(FAKE);
@@ -876,17 +850,14 @@ describe("secret-looking files", () => {
 	});
 });
 
-/** A PEM block; its label is passed in, so no key header is written in this file. */
 function pem(label: string, body: string): string {
 	return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
 }
 
-/** A line of base64, as a key body is written (64 characters), made here rather than written out. */
 const BASE64_LINE = Buffer.from("Man is distinguished, not only by his reason, but by this").toString("base64").slice(0, 64);
 
 describe("history checks the person's git settings cannot change", () => {
 	let settings: string;
-	/** Dependencies whose git reads the person's own (global) settings. */
 	async function configured(text: string) {
 		await fs.writeFile(settings, text);
 		return deps({ env: () => ({ ...gitEnv, GIT_CONFIG_GLOBAL: settings }) });
@@ -937,7 +908,6 @@ describe("history checks the person's git settings cannot change", () => {
 			await git(folder, "add", ".env");
 			await git(folder, "-c", "user.name=T", "-c", "user.email=t@e", "-c", "gpg.format=ssh", "-c", `user.signingkey=${key}`, "commit", "--quiet", "-S", "-m", "signed");
 		} catch {
-			// No ssh-keygen, or a git without SSH signing (before 2.34).
 			context.skip();
 		}
 		expect(await git(folder, "cat-file", "commit", "HEAD")).toContain("gpgsig");
@@ -950,7 +920,6 @@ describe("history checks the person's git settings cannot change", () => {
 		await commitAll(folder, "a");
 		await fs.writeFile(path.join(folder, ".env"), `${FAKE}=${FAKE}\n`);
 		await commitAll(folder, "env");
-		// What a signature check, or another setting, puts ahead of a commit's changes.
 		const chatty: GitStreamRunner = async (args, options, onChunk) => {
 			const stdout = await streamOutput(args, options);
 			onChunk(args.includes("log") ? `Good "git" signature for t@e with ED25519 key SHA256:${FAKE}\n${stdout}` : stdout);
@@ -992,19 +961,15 @@ describe("credentials read by content", () => {
 
 	it("finds a secret beside public certificates, and keeps a certificate chain", () => {
 		const cert = pem("CERTIFICATE", `${BASE64_LINE}\n${BASE64_LINE}\nMIIB`);
-		// A key without its header, a setting, and text that is not plain.
 		expect(contentHoldsSecret("server.pem", `${cert}${BASE64_LINE}\n${BASE64_LINE}\n`)).toBe(true);
 		expect(contentHoldsSecret("bundle.pem", `${cert}api_key=${FAKE}\n`)).toBe(true);
 		expect(contentHoldsSecret("bundle.pem", `${cert}export API_TOKEN="${FAKE}"\n`)).toBe(true);
 		expect(contentHoldsSecret("server.key", `${cert}\0`)).toBe(true);
-		// An unfinished public block keeps its body.
 		expect(contentHoldsSecret("server.pem", `${cert}-----BEGIN CERTIFICATE-----\n${BASE64_LINE}\n`)).toBe(true);
-		// A chain as openssl and curl write them: subjects, issuers, attributes and comments.
 		const chain = [
 			"##\n## Bundle of CA Root Certificates\n## Source: https://hg.mozilla.org/releases/mozilla-release/raw-file/default/security/nss/lib/ckfw/builtins/certdata.txt\n##\n",
 			"Example Root CA\n===============\n",
 			"Bag Attributes\n    friendlyName: example.com\n    localKeyID: 01 00 00 00\n",
-			// A bundle's hashes and serial numbers: hex in one case, or decimal.
 			`# SHA256 Fingerprint: ${"e5".repeat(32)}\n# Serial: ${"6870496496".repeat(5)}\n## SHA256: ${"E5".repeat(32)}\n`,
 			"subject=/C=US/O=Example Inc/CN=example.com\nissuer=/C=US/O=Example CA/CN=Example Intermediate\n",
 			cert,
@@ -1034,7 +999,6 @@ describe("committed files read by content", () => {
 		await commitAll(folder, "npmrc");
 		await fs.writeFile(path.join(folder, "ca.pem"), both);
 		await commitAll(folder, "certificate");
-		// As a certificate it holds nothing; as an .npmrc it holds a token.
 		expect(contentHoldsSecret("ca.pem", both)).toBe(false);
 		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files", files: [".npmrc"] });
 	});
@@ -1056,7 +1020,6 @@ describe("committed files read by content", () => {
 		expect(runs.filter((args) => args.includes("cat-file"))).toEqual([["-C", folder, "cat-file", "--batch"]]);
 		expect(d.calls.some((call) => call.args.includes("cat-file"))).toBe(false);
 
-		// A version too large to check is taken as holding a secret, and skipped unread.
 		await fs.writeFile(path.join(folder, "certs", "big.pem"), `${pem("CERTIFICATE", "MIIB")}${"#".repeat(1024 * 1024 + 1)}\n`);
 		await commitAll(folder, "big");
 		expect(await previewFolderUpload({ folder }, deps())).toMatchObject({ status: "error", code: "secret_files", files: ["certs/big.pem"] });

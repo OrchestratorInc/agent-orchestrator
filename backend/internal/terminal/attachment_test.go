@@ -165,9 +165,6 @@ func TestAttachmentReleasesBufferedInputLeaseWhenClosedBeforePTYReady(t *testing
 	}
 }
 
-// A size requested before the PTY exists (the open frame's cols/rows, or a
-// resize racing the attach) must not be lost: the attach applies it the moment
-// the PTY is up, instead of leaving the pane at the kernel default grid.
 func TestAttachmentAppliesRequestedSizeOnAttach(t *testing.T) {
 	pty := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{pty}}
@@ -188,19 +185,12 @@ func TestAttachmentAppliesRequestedSizeOnAttach(t *testing.T) {
 	})
 }
 
-// The Stream must be OPENED at the recorded grid, not sized after attach: the
-// attach client reads the tty size once at startup, and a post-attach resize
-// depends on SIGWINCH delivery that can race the client installing its handler
-// — a missed signal left the session laid out for the previous client's size
-// (the "terminal doesn't repaint after a resize" desync). Also covers
-// re-attach: a later resize must reach the NEXT attach, not the first grid
-// forever.
 func TestAttachmentSpawnsPTYAtRecordedSize(t *testing.T) {
 	first := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{first}}
 	src := &fakeSource{alive: true, spawner: sp}
 	a := newTestAttachment(src, nil, nil)
-	a.resetGrace = time.Hour // keep the failure counter deterministic
+	a.resetGrace = time.Hour
 
 	if err := a.resize(37, 115); err != nil {
 		t.Fatalf("resize before attach: %v", err)
@@ -215,8 +205,6 @@ func TestAttachmentSpawnsPTYAtRecordedSize(t *testing.T) {
 		return len(ss) == 1 && ss[0] == [2]uint16{37, 115}
 	})
 
-	// Client resized, then the PTY dropped: the re-attach spawn must start at
-	// the latest grid.
 	if err := a.resize(40, 148); err != nil {
 		t.Fatalf("resize while attached: %v", err)
 	}
@@ -231,7 +219,7 @@ func TestAttachmentSpawnsPTYAtRecordedSize(t *testing.T) {
 func TestAttachmentSkipsReattachOnCleanExit(t *testing.T) {
 	pty := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{pty}}
-	src := &fakeSource{alive: true, spawner: sp} // alive for the first attach
+	src := &fakeSource{alive: true, spawner: sp}
 
 	exited := make(chan struct{})
 	a := newTestAttachment(src, nil, func() { close(exited) })
@@ -241,8 +229,8 @@ func TestAttachmentSkipsReattachOnCleanExit(t *testing.T) {
 	go a.run(ctx)
 
 	eventually(t, time.Second, func() bool { return sp.calls() == 1 })
-	src.setAlive(false) // runtime session gone -> no re-attach
-	pty.Close()         // pane ends
+	src.setAlive(false)
+	pty.Close()
 	select {
 	case <-exited:
 	case <-time.After(time.Second):
@@ -253,11 +241,6 @@ func TestAttachmentSkipsReattachOnCleanExit(t *testing.T) {
 	}
 }
 
-// TestAttachmentNeverAttachesToDeadRuntime covers the resurrection bug: a mux
-// attach on a killed-but-cached session resurrects it, re-running the agent
-// command. An attachment whose runtime probes definitively dead must therefore
-// report exited WITHOUT ever opening an attach Stream — even on the very first
-// open (the original code only checked liveness on re-attach).
 func TestAttachmentNeverAttachesToDeadRuntime(t *testing.T) {
 	sp := &fakeSpawner{}
 	src := &fakeSource{alive: false, spawner: sp}
@@ -276,10 +259,6 @@ func TestAttachmentNeverAttachesToDeadRuntime(t *testing.T) {
 	}
 }
 
-// TestAttachmentRetriesProbeErrorsBeforeAttaching pins the hard rule that a
-// failed liveness probe is NOT proof of death: a transient probe error must
-// not flip the terminal to exited, and the attach proceeds once the probe
-// recovers.
 func TestAttachmentRetriesProbeErrorsBeforeAttaching(t *testing.T) {
 	pty := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{pty}}
@@ -290,7 +269,6 @@ func TestAttachmentRetriesProbeErrorsBeforeAttaching(t *testing.T) {
 	defer cancel()
 	go a.run(ctx)
 
-	// While probes error the attachment must neither exit nor attach.
 	time.Sleep(50 * time.Millisecond)
 	if a.isExited() {
 		t.Fatal("probe error must not be treated as runtime death")
@@ -299,7 +277,6 @@ func TestAttachmentRetriesProbeErrorsBeforeAttaching(t *testing.T) {
 		t.Fatalf("attach must wait for a successful probe, got %d attaches", got)
 	}
 
-	// Probe recovers -> the attach goes through.
 	src.setAliveResult(true, nil)
 	eventually(t, 2*time.Second, func() bool { return sp.calls() == 1 })
 	if a.isExited() {
@@ -310,7 +287,7 @@ func TestAttachmentRetriesProbeErrorsBeforeAttaching(t *testing.T) {
 func TestAttachmentReattachesWhileSessionAlive(t *testing.T) {
 	p1, p2 := newFakePTY(), newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{p1, p2}}
-	src := &fakeSource{alive: true, spawner: sp} // session still alive -> re-attach on drop
+	src := &fakeSource{alive: true, spawner: sp}
 	a := newTestAttachment(src, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -321,11 +298,9 @@ func TestAttachmentReattachesWhileSessionAlive(t *testing.T) {
 	if err := a.resize(24, 80); err != nil {
 		t.Fatalf("resize: %v", err)
 	}
-	p1.Close() // first attach drops
+	p1.Close()
 	eventually(t, 2*time.Second, func() bool { return sp.calls() >= 2 })
 
-	// The client's grid survives the re-attach: the fresh PTY is sized to the
-	// last requested grid without waiting for the client to resize again.
 	eventually(t, time.Second, func() bool {
 		for _, rs := range p2.resizeCalls() {
 			if rs == [2]uint16{24, 80} {
@@ -335,23 +310,17 @@ func TestAttachmentReattachesWhileSessionAlive(t *testing.T) {
 		return false
 	})
 
-	// Now the session is gone: the next drop must not re-attach.
 	src.setAlive(false)
 	p2.Close()
 	eventually(t, 2*time.Second, func() bool { return a.isExited() })
 }
 
-// A persistent Attach error is treated like the old spawn-error path: it backs
-// off and retries up to the failure cap, then reports exited. (The old
-// AttachCommand-error path failed immediately; folding the argv build into
-// Attach means an attach failure now shares the spawn-failure retry policy,
-// which is the correct behavior for a transient dial/exec failure.)
 func TestAttachmentFailsWhenAttachErrors(t *testing.T) {
 	src := &fakeSource{alive: true, attachErr: io.ErrUnexpectedEOF}
 
 	exited := make(chan struct{})
 	a := newTestAttachment(src, nil, func() { close(exited) })
-	a.maxReattach = 2 // keep the retry budget small so the test is fast
+	a.maxReattach = 2
 
 	go a.run(context.Background())
 	select {
@@ -361,9 +330,6 @@ func TestAttachmentFailsWhenAttachErrors(t *testing.T) {
 	}
 }
 
-// close() is a detach, not a pane death: it must stop the attach loop and kill
-// the client's PTY without firing onExit — the runtime session is still alive
-// and an exited frame would wrongly flip the client UI to its terminal state.
 func TestAttachmentCloseDoesNotFireExit(t *testing.T) {
 	pty := newFakePTY()
 	sp := &fakeSpawner{ptys: []*fakePTY{pty}}

@@ -28,15 +28,6 @@ const (
 	accountHomeAccessDeniedCallbackObjectACEType uint8 = 0x0c
 )
 
-// managedHomePrivate reports whether an AO-owned Codex credential home is still
-// private to this user.
-//
-// Windows has no POSIX mode bits: a directory created with os.Mkdir(path, 0o700)
-// is reported back by Lstat as 0777, so the Unix mode comparison can never
-// succeed here and every managed-home open failed. AO instead protects a managed
-// home with an explicit owner-only DACL when it creates it, so that is what gets
-// verified: the current user owns the directory, its DACL is protected from
-// inheritance, and no untrusted principal holds any allow ACE on it.
 func managedHomePrivate(path string, _ os.FileInfo) bool {
 	ptr, err := windows.UTF16PtrFromString(path)
 	if err != nil {
@@ -116,11 +107,8 @@ func managedHomeDACLPrivate(dacl *windows.ACL, user, system, administrators *win
 			accountHomeAccessDeniedObjectACEType,
 			accountHomeAccessDeniedCallbackACEType,
 			accountHomeAccessDeniedCallbackObjectACEType:
-			// Deny ACEs cannot make the managed home less private.
 			continue
 		default:
-			// Only the simple allow layout above is decoded. Fail closed for
-			// every other effective ACE instead of guessing where its SID lives.
 			return false
 		}
 	}

@@ -327,8 +327,6 @@ func (f *fakeAgentAuthService) RecordSignIn(_ context.Context, agentID string) (
 	return f.releasedKey, f.recordErr
 }
 
-// `ao claude-login` reports a completed terminal sign-in here instead of
-// writing AO's key claims itself.
 func TestAgentSignInRecordRunsInTheDaemon(t *testing.T) {
 	svc := &fakeAgentAuthService{releasedKey: "ANTHROPIC_API_KEY"}
 	server := newAgentAuthTestServer(t, svc)
@@ -343,7 +341,6 @@ func TestAgentSignInRecordRunsInTheDaemon(t *testing.T) {
 	}
 }
 
-// An option label may run to the 256 characters the API allows, in any script.
 func TestAgentUILoginActionAcceptsTheLongestOptionLabel(t *testing.T) {
 	svc := &fakeAgentAuthService{uiResult: agentauth.LoginSnapshot{ID: "login-1", AgentID: "goose", Method: "native", Status: "running", NativePrompt: "menu"}}
 	label := strings.Repeat("認", 256)

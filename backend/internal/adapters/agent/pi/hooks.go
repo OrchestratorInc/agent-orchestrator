@@ -29,9 +29,6 @@ func piExtensionPath(workspacePath string) string {
 	return filepath.Join(workspacePath, ".pi", piExtensionsDirName, piExtensionFileName)
 }
 
-// GetAgentHooks installs AO's project-local Pi extension. Launch and restore
-// pass it explicitly with --extension, so activity reporting does not depend on
-// Pi's trust-gated project auto-discovery.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

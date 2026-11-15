@@ -18,7 +18,6 @@ func TestTelemetryIncrementalVacuumUpgrade(t *testing.T) {
 	}
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { _ = db.Close() })
-	// Apply the pre-PR schema in one pass; no intermediate snapshots are needed.
 	func() {
 		gooseMu.Lock()
 		defer gooseMu.Unlock()

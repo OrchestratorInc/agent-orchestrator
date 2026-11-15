@@ -1,18 +1,3 @@
-// WebSocket client for the daemon's terminal multiplexer (`/mux`).
-//
-// The wire protocol mirrors backend/internal/terminal/protocol.go: a single
-// JSON-framed socket tagged by channel ("ch"). Terminal payloads carry the PTY
-// bytes base64-encoded in `data` because PTY output is arbitrary bytes that a
-// raw JSON string cannot represent.
-//
-//   ch "terminal" — per-pane byte stream keyed by an opaque runtime handle id
-//     client → open{id,cols,rows} | data{id,data} | resize{id,cols,rows,force?} | close{id}
-//     server → opened{id} | data{id,data} | exited{id} | error{id?,error}
-//   ch "system"   — ping/pong liveness
-//
-// The renderer connects directly to the loopback daemon (same host/port as the
-// REST API, path `/mux`); it is not proxied through the Electron main process.
-
 type ServerFrame = {
 	ch: string;
 	id?: string;
@@ -20,8 +5,6 @@ type ServerFrame = {
 	data?: string;
 	error?: string;
 };
-
-// ---- pure framing helpers (unit-tested in terminal-mux.test.ts) ----
 
 export function bytesToBase64(bytes: Uint8Array): string {
 	let binary = "";
@@ -68,17 +51,12 @@ function pingFrame(): string {
 	return JSON.stringify({ ch: "system", type: "ping" });
 }
 
-// Derive the ws(s)://.../mux URL from the REST API base. The mux is mounted at
-// the router root (backend router.go), not under /api/v1.
 export function muxUrlFromApiBase(apiBaseUrl: string): string {
 	if (apiBaseUrl === "" && typeof window !== "undefined") {
 		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 		return `${protocol}//${window.location.host}/mux`;
 	}
 
-	// http://host → ws://host and https://host → wss://host (the trailing "s" is left
-	// in place by the anchored replace). apiBaseUrl is the host root (e.g.
-	// http://127.0.0.1:4317); strip any trailing slash before appending /mux.
 	const ws = apiBaseUrl.replace(/^http/i, "ws");
 	return `${ws.replace(/\/+$/, "")}/mux`;
 }
@@ -88,45 +66,24 @@ type ExitListener = () => void;
 type OpenedListener = () => void;
 type ErrorListener = (message: string) => void;
 
-// "waiting" is a cloud-only state: the control plane answered the terminal
-// ticket mint with 409 WORKER_UNAVAILABLE because the sandbox worker has not
-// checked in yet (normal during a cold start). It reconnects like "closed" but
-// must NOT count against the connect-failure circuit breaker, because nothing
-// actually failed to connect. The local daemon mux never emits it.
 export type MuxConnectionState = "open" | "closed" | "waiting";
 type ConnectionListener = (state: MuxConnectionState) => void;
 
 export type TerminalMux = {
-	/** Open a PTY pane for the given runtime/session id at an initial size. */
 	open: (id: string, cols: number, rows: number) => void;
-	/** Forward user-originated keyboard/paste data to the pane. */
 	sendInput: (id: string, input: string) => void;
-	/** Resize normally, or explicitly re-signal an unchanged grid for recovery. */
 	resize: (id: string, cols: number, rows: number, force?: boolean) => void;
 	close: (id: string) => void;
 	onData: (id: string, listener: DataListener) => () => void;
 	onExit: (id: string, listener: ExitListener) => () => void;
-	/** Server ack that the pane is attached; the output replay follows it. */
 	onOpened: (id: string, listener: OpenedListener) => () => void;
-	/**
-	 * Server `error` frames. A frame carrying a pane id reaches that pane's
-	 * listeners; an id-less frame is connection-scoped and reaches every error
-	 * listener.
-	 */
 	onError: (id: string, listener: ErrorListener) => () => void;
-	/** Socket-level state: "open" on connect, "closed" on close or socket error. */
 	onConnectionChange: (listener: ConnectionListener) => () => void;
-	/** Close the socket and drop all listeners. */
 	dispose: () => void;
 };
 
 export type TerminalMuxPool = {
-	/**
-	 * Acquire an independently disposable attachment lease over the shared
-	 * browser-to-daemon mux socket.
-	 */
 	acquire: () => TerminalMux;
-	/** Release the current shared socket and every listener (the pool stays reusable). */
 	dispose: () => void;
 };
 
@@ -140,12 +97,6 @@ function subscribeById<T>(map: Map<string, Set<T>>, id: string, listener: T): ()
 	return () => set.delete(listener);
 }
 
-/**
- * Create a mux client over a single WebSocket. Frames sent before the socket is
- * OPEN are queued and flushed on connect. There is no auto-reconnect at this
- * layer: a dropped socket is reported through onConnectionChange("closed") and
- * the owner (useTerminalSession) decides whether to build a fresh client.
- */
 export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket = WebSocket): TerminalMux {
 	const socket = new WebSocketImpl(url);
 	const encoder = new TextEncoder();
@@ -159,8 +110,6 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 	let pingTimer: ReturnType<typeof setInterval> | undefined;
 	let disposed = false;
 
-	// Dedupes transitions: a socket "error" event is typically followed by
-	// "close", and only the first should notify.
 	const setConnectionState = (next: MuxConnectionState) => {
 		if (disposed || connectionState === next) return;
 		connectionState = next;
@@ -237,7 +186,6 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 		try {
 			socket.close();
 		} catch {
-			// socket may already be closing; ignore.
 		}
 	};
 
@@ -272,15 +220,6 @@ export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket =
 	};
 }
 
-/**
- * Share the mux transport without sharing attachment ownership.
- *
- * The daemon protocol already multiplexes frames by terminal id. A lease keeps
- * listener and cleanup ownership local to one useTerminalSession instance while
- * avoiding one WebSocket and ping timer per retained xterm. The last lease
- * closes the underlying client. A socket-level failure retires that client so
- * reconnecting leases converge on one replacement socket.
- */
 export function createTerminalMuxPool(createMux: () => TerminalMux): TerminalMuxPool {
 	type Connection = {
 		closed: boolean;

@@ -25,8 +25,6 @@ func TestEnsureWorkspaceGitignoreWritesSelfIgnoringFile(t *testing.T) {
 	if !strings.Contains(content, GitignoreSentinel) {
 		t.Fatalf("content missing sentinel: %q", content)
 	}
-	// Entries are anchored so only AO's files in THIS directory are ignored —
-	// an agent's own files (even in the same dir) must keep counting as dirt.
 	for _, want := range []string{"/.gitignore\n", "/hooks.json\n", "/config.toml\n"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("content missing entry %q: %q", want, content)
@@ -61,8 +59,6 @@ func TestFileExistsIgnoresExecBit(t *testing.T) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// FileExists must return true for a non-executable regular file — Cline
-	// uses it as a do-not-clobber guard for existing user hook files.
 	if !FileExists(path) {
 		t.Fatalf("FileExists returned false for non-executable regular file")
 	}
@@ -83,7 +79,6 @@ func TestIsExecutableFileChecksExecBit(t *testing.T) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	// IsExecutableFile must return false for a non-executable regular file.
 	if IsExecutableFile(path) {
 		t.Fatalf("IsExecutableFile returned true for non-executable file")
 	}
@@ -123,7 +118,6 @@ func TestBugTriageSkillInstallsCleanlyAndUninstalls(t *testing.T) {
 		t.Fatalf("git init: %v: %s", err, out)
 	}
 	skillsDir := filepath.Join(workspace, ".harness", "skills")
-	// The using-ao install owns this .gitignore and rewrites it with only its marker.
 	if err := EnsureWorkspaceGitignore(skillsDir, ".using-ao.ao-managed"); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +133,6 @@ func TestBugTriageSkillInstallsCleanlyAndUninstalls(t *testing.T) {
 	if !bytes.Equal(skill, skillassets.BugTriageSkill()) {
 		t.Fatal("installed skill differs from the embedded one")
 	}
-	// Untracked files here would make git worktree remove refuse at teardown.
 	status, err := exec.Command("git", "-C", workspace, "status", "--porcelain", "--untracked-files=all").CombinedOutput()
 	if err != nil {
 		t.Fatalf("git status: %v: %s", err, status)
@@ -162,7 +155,6 @@ func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
 			if out, err := exec.Command("git", "-C", workspace, "init", "-q").CombinedOutput(); err != nil {
 				t.Fatalf("git init: %v: %s", err, out)
 			}
-			// Pattern characters in the project path must not change which files match.
 			skillsDir := filepath.Join(workspace, "notes[draft", "skills")
 			skillDir := filepath.Join(skillsDir, "bug-triage")
 			if err := os.MkdirAll(skillDir, 0o750); err != nil {
@@ -188,7 +180,6 @@ func TestBugTriageSkillRepairsAnInterruptedInstall(t *testing.T) {
 			if managed, err := bugTriageManaged(skillDir); err != nil || !managed {
 				t.Fatalf("repaired skill is not marked as AO's: managed=%v err=%v", managed, err)
 			}
-			// An interrupted write's temp file must not stay behind as dirt.
 			status, err := exec.Command("git", "-C", workspace, "status", "--porcelain", "--untracked-files=all").CombinedOutput()
 			if err != nil || len(status) != 0 {
 				t.Fatalf("repair left untracked files: %v\n%s", err, status)

@@ -27,7 +27,6 @@ const examples = [
 	"A\n\nB\n\n```py\ndef f(rows: list[int]) -> dict[str, int]:\n```\n\nlast",
 ];
 
-// A display formula's lines can look like a list item or end at a blank line.
 const mathExamples = [
 	"A\n\nB\n\n$$\n(a-b)^2 = a^2\n- 2ab + b^2\n\n# not a heading\n$$\n\nlast",
 	"A\n\nB\n\n\\[\nx\n\n- y\n\\]\n\nlast",

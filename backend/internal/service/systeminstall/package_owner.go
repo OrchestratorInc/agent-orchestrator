@@ -7,26 +7,16 @@ import (
 	"strings"
 )
 
-// derivedOwner is the package manager and package that installed a harness
-// binary, read from where that manager keeps its files rather than from AO's
-// fixed method list, so a user's own install through a supported manager is
-// maintainable even when AO does not list that package for the harness.
 type derivedOwner struct {
 	method string
 	pkg    string
 	cask   bool
 }
 
-// npmInstallerTargets install through npm from a vendor release tarball that
-// the npm registry does not carry. Their npm layout belongs to the vendor
-// installer, which updates through the harness's own command.
 var npmInstallerTargets = map[Target]bool{
 	TargetPrimeAgent: true,
 }
 
-// deriveOwnerFromPath names the package manager and package whose layout holds
-// binaryPath. Shims are followed to the file they launch. The result is only a
-// claim: callers must confirm it with the manager before acting on it.
 func deriveOwnerFromPath(binaryPath string) (derivedOwner, bool) {
 	if binaryPath == "" || packageLayout(binaryPath) == layoutVersionManager {
 		return derivedOwner{}, false
@@ -38,8 +28,6 @@ func deriveOwnerFromPath(binaryPath string) (derivedOwner, bool) {
 	if target := nodeShimTarget(resolved); target != "" {
 		resolved = target
 	}
-	// pnpm, Yarn and Bun keep node_modules too; only npm's own layout is
-	// derived, and only the outermost package installed the binary.
 	match := layoutOf(resolved)
 	if match.pkg == "" {
 		return derivedOwner{}, false
@@ -58,9 +46,6 @@ func deriveOwnerFromPath(binaryPath string) (derivedOwner, bool) {
 	}
 }
 
-// homebrewTappedName qualifies a formula or cask from a third-party tap with
-// that tap (owner/tap/name), read from Homebrew's install receipt. The short
-// name would otherwise resolve to a different core package of the same name.
 func homebrewTappedName(match pathLayout) string {
 	body, err := os.ReadFile(match.receipt)
 	if err != nil {
@@ -85,8 +70,6 @@ func homebrewTappedName(match pathLayout) string {
 	}
 }
 
-// nodeShimTarget returns the package file a Windows (.cmd/.ps1) or POSIX npm
-// shim launches, or "" when path is not such a shim.
 func nodeShimTarget(path string) string {
 	targets, err := nodeShimTargets(path)
 	if err != nil || len(targets) == 0 {
@@ -95,8 +78,6 @@ func nodeShimTarget(path string) string {
 	return targets[0]
 }
 
-// derivedOwnerPlan builds the install plan for a derived owner through the
-// same builders as listed methods, so availability checks still apply.
 func (s requestPlanner) derivedOwnerPlan(target Target, owner derivedOwner) (Plan, bool) {
 	switch owner.method {
 	case "homebrew":
@@ -115,9 +96,6 @@ func (s requestPlanner) derivedOwnerPlan(target Target, owner derivedOwner) (Pla
 	}
 }
 
-// withDerivedOwner lists a confirmed derived owner among a harness's methods.
-// It replaces a listed plan for the same manager, whose package is not the one
-// installed, so method ids stay unique.
 func withDerivedOwner(plans []Plan, derived Plan) []Plan {
 	out := make([]Plan, 0, len(plans)+1)
 	replaced := false

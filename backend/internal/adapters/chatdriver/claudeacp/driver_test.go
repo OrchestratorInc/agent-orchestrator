@@ -415,7 +415,6 @@ func TestClaudeReadOnlySessionPinsDefaultMode(t *testing.T) {
 
 func TestReviewerPermissionPolicyAllowsOnlyTheSubmitCommands(t *testing.T) {
 	const worker = "proj-7"
-	// The options claude-agent-acp offers on an ordinary tool permission.
 	options := []acpsdk.PermissionOption{
 		{OptionId: "reject", Name: "Deny", Kind: acpsdk.PermissionOptionKindRejectOnce},
 		{OptionId: "allow", Name: "Allow Once", Kind: acpsdk.PermissionOptionKindAllowOnce},
@@ -448,7 +447,6 @@ func TestReviewerPermissionPolicyAllowsOnlyTheSubmitCommands(t *testing.T) {
 			{OptionId: "never", Kind: acpsdk.PermissionOptionKindRejectAlways},
 			{OptionId: "allow", Kind: acpsdk.PermissionOptionKindAllowOnce},
 		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, "never"},
-		// Nothing selectable must still be answered, never parked for a human.
 		{"no reject option", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
 			{OptionId: "allow_always", Kind: acpsdk.PermissionOptionKindAllowAlways},
 		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, acpdriver.CancelPermission},

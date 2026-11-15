@@ -53,7 +53,6 @@ for (const role of ["Worker agent", "Orchestrator agent"] as const) {
 		await page.getByRole("option", { name: /Manage agents/ }).click();
 		await expect(page.getByTestId("settings-page")).toBeVisible();
 		const search = page.getByRole("textbox", { name: "Search harnesses", exact: true });
-		// A real pointer click catches a scrim that a programmatic fill could bypass.
 		await search.click({ timeout: 5_000 });
 		await search.fill("Codex");
 		await expect(search).toHaveValue("Codex");

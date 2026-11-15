@@ -1,7 +1,3 @@
-// Package previewserver owns deterministic, session-scoped development server
-// processes used by the desktop preview. It deliberately does not scan global
-// localhost ports: a server is started from an explicit project configuration,
-// so its worker, command, working directory, and URL are known.
 package previewserver
 
 import (
@@ -28,7 +24,6 @@ import (
 )
 
 const (
-	// ConfigPath is the workspace-relative managed preview configuration file.
 	ConfigPath              = ".ao/launch.json"
 	defaultReadyTimeout     = 30 * time.Second
 	maxReadyTimeout         = 55 * time.Second
@@ -42,34 +37,23 @@ const (
 	processRegistryFile     = "preview-processes.json"
 )
 
-// State is the lifecycle state of a managed preview process.
 type State string
 
 const (
-	// StateStopped indicates that no preview process is running.
-	StateStopped State = "stopped"
-	// StateStarting indicates that the preview process is waiting to become ready.
+	StateStopped  State = "stopped"
 	StateStarting State = "starting"
-	// StateReady indicates that the configured preview URL is responding.
-	StateReady State = "ready"
-	// StateStopping indicates that AO is terminating the preview process.
+	StateReady    State = "ready"
 	StateStopping State = "stopping"
-	// StateFailed indicates that the preview process could not start, become ready, or stop.
-	StateFailed State = "failed"
+	StateFailed   State = "failed"
 )
 
-// TargetKind distinguishes browser applications from non-browser API servers.
 type TargetKind string
 
 const (
-	// TargetApp is a preview that should open in the Browser panel.
 	TargetApp TargetKind = "app"
-	// TargetAPI is a server that should run without replacing the Browser panel.
 	TargetAPI TargetKind = "api"
 )
 
-// Error is a stable service error that the HTTP controller can map without
-// parsing platform-specific process errors.
 type Error struct {
 	Code    string
 	Message string
@@ -77,7 +61,6 @@ type Error struct {
 
 func (e Error) Error() string { return e.Message }
 
-// Status is the public state for one session's managed preview server.
 type Status struct {
 	SessionID     domain.SessionID `json:"sessionId"`
 	State         State            `json:"state"`
@@ -95,8 +78,6 @@ type launchFile struct {
 	Configurations []Configuration `json:"configurations"`
 }
 
-// Configuration is one named server entry in .ao/launch.json. ${PORT} is
-// expanded in runtimeArgs, url, and env values after AO chooses the port.
 type Configuration struct {
 	Name               string            `json:"name"`
 	RuntimeExecutable  string            `json:"runtimeExecutable"`
@@ -114,15 +95,10 @@ type serverRun struct {
 	status     Status
 	projectEnv map[string]string
 	cmd        *exec.Cmd
-	// startTime pins cmd's PID to the process AO launched (kernel start time,
-	// captured right after Start). Every group/tree kill re-verifies against
-	// it: once the child is reaped the bare PID may already belong to an
-	// unrelated process group (issue #3475). Written once before the run is
-	// published; immutable afterwards.
-	startTime string
-	done      chan struct{}
-	logs      *lineBuffer
-	stopping  bool
+	startTime  string
+	done       chan struct{}
+	logs       *lineBuffer
+	stopping   bool
 }
 
 type sessionOperation struct {
@@ -135,20 +111,11 @@ type persistedProcess struct {
 	PID       int              `json:"pid"`
 	Port      int              `json:"port"`
 	StartedAt time.Time        `json:"startedAt"`
-	// StartTime is the kernel-reported start time of PID at launch. A PID from
-	// a previous daemon generation is stale by construction; reap refuses to
-	// kill unless the live process still carries this identity.
-	StartTime string `json:"startTime,omitempty"`
+	StartTime string           `json:"startTime,omitempty"`
 }
 
-// OnExitFunc is invoked from the manager's wait goroutine when a managed
-// preview process exits on its own (i.e. the caller did not request the
-// stop). It runs synchronously off the manager's lock, so it is safe to call
-// back into the session service. The status passed in carries the post-failure
-// State/Error so callers can decide whether to clear the session's preview URL.
 type OnExitFunc func(ctx context.Context, sessionID domain.SessionID, status Status)
 
-// Manager supervises at most one managed preview server per AO session.
 type Manager struct {
 	log    *slog.Logger
 	client *http.Client
@@ -164,7 +131,6 @@ type Manager struct {
 	onExit   OnExitFunc
 }
 
-// New creates a managed preview-server supervisor.
 func New(log *slog.Logger, dataDir ...string) *Manager {
 	if log == nil {
 		log = slog.Default()
@@ -199,10 +165,6 @@ func New(log *slog.Logger, dataDir ...string) *Manager {
 	return manager
 }
 
-// SetOnExit registers a callback fired from the wait goroutine when a managed
-// preview process exits without being stopped. Pass nil to clear. The callback
-// is invoked with a fresh context that is not tied to any request; it runs off
-// the manager's mutex so it may safely call back into the session service.
 func (m *Manager) SetOnExit(fn OnExitFunc) {
 	m.onExitMu.Lock()
 	m.onExit = fn
@@ -215,8 +177,6 @@ func (m *Manager) onExitCallback() OnExitFunc {
 	return m.onExit
 }
 
-// Start loads a named configuration, replaces any existing managed server for
-// the session, and waits until the configured loopback URL responds.
 func (m *Manager) Start(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -300,9 +260,6 @@ func (m *Manager) Start(
 		done: make(chan struct{}),
 		logs: logs,
 	}
-	// Arbitrary project servers cannot inherit a generic pre-bound socket. Keep
-	// the selected port reserved through command construction, then release it
-	// at the last possible moment before launch to minimize the bind race.
 	if err := reservation.Close(); err != nil {
 		return stoppedStatus(sessionID), serviceError("PREVIEW_PORT_UNAVAILABLE", fmt.Sprintf("release selected preview port: %v", err))
 	}
@@ -323,10 +280,6 @@ func (m *Manager) Start(
 	m.runs[sessionID] = run
 	m.persistProcessesLocked()
 	m.mu.Unlock()
-	// Pass the request-scoped context into the wait goroutine so OnExit
-	// callbacks (issue #4500) inherit a context the gosec G118 check accepts.
-	// The wait goroutine detaches cancellation with context.WithoutCancel so a
-	// caller request ending after launch does not cancel the OnExit call.
 	go m.waitForExit(context.WithoutCancel(ctx), sessionID, run)
 	releaseOperation()
 	operationLocked = false
@@ -385,7 +338,6 @@ func (m *Manager) Start(
 	}
 }
 
-// Stop terminates the exact process tree AO launched for the session.
 func (m *Manager) Stop(ctx context.Context, sessionID domain.SessionID) (Status, error) {
 	releaseOperation := m.acquireOperation(sessionID)
 	defer releaseOperation()
@@ -420,10 +372,6 @@ func (m *Manager) stop(ctx context.Context, sessionID domain.SessionID) (Status,
 	}
 	select {
 	case <-done:
-		// The root has exited and been reaped. Descendants that ignored
-		// SIGTERM may survive it, but the PID no longer provably belongs to
-		// AO's preview, so nothing is killed: a leaked preview process is
-		// safer than a group kill landing on a recycled PID (issue #3475).
 	case <-ctx.Done():
 		go m.forceStopAfterGrace(sessionID, run, cmd, startTime, done)
 		return m.Status(sessionID), ctx.Err()
@@ -483,7 +431,6 @@ func (m *Manager) acquireOperation(sessionID domain.SessionID) func() {
 	}
 }
 
-// Status returns the latest managed preview state for a session.
 func (m *Manager) Status(sessionID domain.SessionID) Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -494,14 +441,11 @@ func (m *Manager) Status(sessionID domain.SessionID) Status {
 	return m.statusForLocked(run)
 }
 
-// StopSession implements session_manager.PreviewLifecycle without exposing status
-// to lifecycle callers that only need best-effort teardown.
 func (m *Manager) StopSession(ctx context.Context, sessionID domain.SessionID) error {
 	_, err := m.Stop(ctx, sessionID)
 	return err
 }
 
-// Close stops every server owned by the daemon. It is safe to call repeatedly.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	ids := make([]domain.SessionID, 0, len(m.runs))
@@ -518,10 +462,6 @@ func (m *Manager) Close() {
 
 func (m *Manager) waitForExit(ctx context.Context, sessionID domain.SessionID, run *serverRun) {
 	err := run.cmd.Wait()
-	// Wait has returned, so the PID is back in the OS pool and no longer
-	// provably AO's. No escalation happens here: descendants the dead root
-	// left behind are leaked rather than group-killed on a number that may
-	// already belong to something else (issue #3475).
 	crashed := false
 	m.mu.Lock()
 	if m.runs[sessionID] == run {
@@ -545,14 +485,6 @@ func (m *Manager) waitForExit(ctx context.Context, sessionID domain.SessionID, r
 	m.mu.Unlock()
 	close(run.done)
 	if crashed {
-		// Snapshot the failed status under the lock and notify the registered
-		// listener (e.g. the daemon's session service) so the Browser panel
-		// can be told the backing server is gone. After failedStatusRetention
-		// the failed run is removed and status reports "stopped" with no
-		// error, so this is the only window to surface the failure.
-		// ctx is the request-scoped context passed by Start with
-		// context.WithoutCancel, so caller cancellation cannot kill the
-		// callback (gosec G118 wants a request-scoped ancestor).
 		status := m.statusFor(run)
 		if fn := m.onExitCallback(); fn != nil {
 			notifyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -589,7 +521,6 @@ func (m *Manager) failAndStop(
 		_ = terminatePreviewProcess(cmd, startTime)
 		select {
 		case <-run.done:
-			// Reaped: the PID is no longer provably AO's, nothing to escalate.
 		case <-time.After(3 * time.Second):
 			_ = forceKillPreviewProcess(cmd, startTime)
 		}
@@ -765,9 +696,6 @@ func resolveWorkingDirectory(workspacePath, relative string) (string, error) {
 	if err != nil || !info.IsDir() {
 		return "", serviceError("PREVIEW_CONFIG_INVALID", fmt.Sprintf("preview cwd %q is not a directory", relative))
 	}
-	// Reject symlinked descendants instead of resolving them. This prevents a
-	// configured cwd from escaping the worker workspace while avoiding
-	// platform-specific canonicalization of trusted workspace ancestors.
 	current := workspaceAbs
 	if rel != "." {
 		for _, part := range strings.Split(rel, string(filepath.Separator)) {
@@ -872,7 +800,6 @@ func (m *Manager) forceStopAfterGrace(
 ) {
 	select {
 	case <-done:
-		// Reaped: the PID is no longer provably AO's, nothing to escalate.
 	case <-time.After(5 * time.Second):
 		_ = forceKillPreviewProcess(cmd, startTime)
 		select {
@@ -906,10 +833,6 @@ func (m *Manager) reapPersistedProcesses() {
 		if process.PID <= 0 {
 			continue
 		}
-		// PIDs recorded by a previous daemon generation are stale by
-		// construction: the number may have been recycled by anything since
-		// (one recycled group kill destroyed a whole tmux server, #3475).
-		// Kill only what still carries the recorded launch identity.
 		if process.StartTime == "" {
 			m.log.Warn("skip reaping preview process without a recorded start time",
 				"session", process.SessionID, "pid", process.PID)

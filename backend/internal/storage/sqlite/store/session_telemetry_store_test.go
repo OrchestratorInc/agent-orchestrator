@@ -23,11 +23,9 @@ func TestSessionTelemetryFactsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A session created before facts were recorded reads as unknown.
 	if facts, err := s.GetSessionTelemetry(ctx, sess.ID); err != nil || facts != (domain.SessionTelemetryFacts{}) {
 		t.Fatalf("facts = %+v, %v; want zero", facts, err)
 	}
-	// The counter may arrive before created_by is written; neither overwrites the other.
 	if err := s.IncrementSessionWaitingInputCount(ctx, sess.ID); err != nil {
 		t.Fatal(err)
 	}

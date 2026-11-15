@@ -14,24 +14,14 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// serverPathEnvVar points AO at an exact agy_acp_server executable, like
-// AO_CLAUDE_ACP_COMMAND does for Claude's adapter.
 const serverPathEnvVar = "AO_AGY_ACP_SERVER_PATH"
 
-// harnessPathEnvVar is how the server finds its localharness_external helper
-// when it is not on PATH, for example when agy_acp_server is a symlink.
 const harnessPathEnvVar = "ANTIGRAVITY_HARNESS_PATH"
 
-// disableWorkspaceTrustEnvVar tells agy_acp_server to treat all workspaces as
-// trusted for executing automated hooks, bypassing the interactive prompt.
 const disableWorkspaceTrustEnvVar = "AGY_ACP_DISABLE_WORKSPACE_TRUST"
 
 const harnessFileName = "localharness_external"
 
-// serverSpec is the user-installed Antigravity ACP server. Google ships it as a
-// separate download (ACP registry entry "antigravity-acp"), not with the agy
-// CLI, so AO looks for it the way it looks for any user-installed binary and
-// never downloads it.
 var serverSpec = binaryutil.BinarySpec{
 	Label:    "agy_acp_server",
 	Names:    []string{"agy_acp_server", "agy_acp_server.par"},
@@ -45,15 +35,12 @@ var serverSpec = binaryutil.BinarySpec{
 	},
 }
 
-// resolver finds the user's Antigravity ACP server and GEMINI_HOME. Its lookups
-// are injectable so tests never touch the real home directory or PATH.
 type resolver struct {
 	getenv      func(string) string
 	isFile      func(string) bool
 	agyCLI      func(context.Context) (string, error)
 	resolveSpec func(context.Context, binaryutil.BinarySpec) (string, error)
-	// cliVersion reports the agy CLI's version. Nil never launches `agy acp`.
-	cliVersion func(context.Context, string) (string, error)
+	cliVersion  func(context.Context, string) (string, error)
 }
 
 func newResolver(agyCLI func(context.Context) (string, error)) resolver {
@@ -64,17 +51,11 @@ func newResolver(agyCLI func(context.Context) (string, error)) resolver {
 	}
 }
 
-// launchTarget is the ACP server AO starts: the agy CLI's built-in `agy acp`,
-// or Google's separate agy_acp_server.
 type launchTarget struct {
 	path string
 	cli  bool
 }
 
-// target picks the server to launch. An explicit AO_AGY_ACP_SERVER_PATH keeps
-// the separate server. Otherwise an agy CLI new enough to steer runs as
-// `agy acp`, which needs no second install; older CLIs fall back to the
-// separate server.
 func (r resolver) target(ctx context.Context) (launchTarget, error) {
 	if strings.TrimSpace(r.getenv(serverPathEnvVar)) == "" && r.agyCLI != nil && r.cliVersion != nil {
 		if cli, err := r.agyCLI(ctx); err == nil && cli != "" {
@@ -92,8 +73,6 @@ func (r resolver) target(ctx context.Context) (launchTarget, error) {
 	return launchTarget{path: server}, nil
 }
 
-// cliVersionTimeout bounds `agy --version`, which answers in well under a
-// second.
 const cliVersionTimeout = 10 * time.Second
 
 type cliVersionKey struct {
@@ -102,9 +81,7 @@ type cliVersionKey struct {
 	modTime time.Time
 }
 
-// cliVersions caches `agy --version` per binary, so a launch does not run it
-// again until the CLI is replaced or updated.
-var cliVersions sync.Map // cliVersionKey -> string
+var cliVersions sync.Map
 
 func cachedCLIVersion(ctx context.Context, cli string) (string, error) {
 	info, err := os.Stat(cli)
@@ -128,10 +105,6 @@ func cachedCLIVersion(ctx context.Context, cli string) (string, error) {
 	return version, nil
 }
 
-// serverPath resolves, in order: the explicit override, the server installed
-// beside the agy CLI, then PATH and the usual install directories. An override
-// that does not exist is an error rather than a silent fallback, because it
-// states exactly which binary to run.
 func (r resolver) serverPath(ctx context.Context) (string, error) {
 	if override := strings.TrimSpace(r.getenv(serverPathEnvVar)); override != "" {
 		if !r.isFile(override) {
@@ -155,9 +128,6 @@ func (r resolver) serverPath(ctx context.Context) (string, error) {
 	return path, nil
 }
 
-// sibling returns an executable server in the agy CLI's directory. Beside the
-// resolved CLI is a better answer than a fresh PATH search: it cannot pick up a
-// different installation.
 func (r resolver) sibling(cli string) string {
 	dir := filepath.Dir(cli)
 	names := serverSpec.Names
@@ -172,9 +142,6 @@ func (r resolver) sibling(cli string) string {
 	return ""
 }
 
-// harnessPath is the localharness_external helper shipped in the same archive as
-// the server, found beside the server's real location so a symlinked server
-// still finds it.
 func (r resolver) harnessPath(server string) string {
 	target, err := filepath.EvalSymlinks(server)
 	if err != nil {

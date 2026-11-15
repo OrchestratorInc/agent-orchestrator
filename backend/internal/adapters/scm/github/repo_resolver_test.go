@@ -14,8 +14,6 @@ import (
 
 func TestRepoResolverFollowsRename(t *testing.T) {
 	f := newFakeGH(t)
-	// GitHub answers a renamed or transferred repository's old path with a
-	// redirect to its immutable /repositories/{id} URL.
 	f.on(http.MethodGet, "/repos/Untrivial-ai/agent-orchestrator", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/repositories/42", http.StatusMovedPermanently)
 	})
@@ -42,8 +40,6 @@ func TestRepoResolverFollowsRename(t *testing.T) {
 func TestRepoResolverUnchangedRepository(t *testing.T) {
 	f := newFakeGH(t)
 	f.on(http.MethodGet, "/repos/acme/widgets", func(w http.ResponseWriter, _ *http.Request) {
-		// An avatar on any other host is dropped: the renderer only loads
-		// GitHub avatars from avatars.githubusercontent.com.
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 7, "full_name": "acme/widgets", "owner": map[string]any{"avatar_url": "https://evil.example/acme.png"}})
 	})
 	r := NewRepoResolver(newProviderForTest(t, f))

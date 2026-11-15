@@ -16,34 +16,27 @@ import (
 	"unicode"
 )
 
-// AccessDevice is a paired device. Only its token's SHA-256 is stored.
 type AccessDevice struct {
-	ID        string `json:"id"`
-	Name      string `json:"name,omitempty"`
-	Platform  string `json:"platform,omitempty"`
-	TokenHash string `json:"tokenHash"`
-	// InstallID links the device to its push registration.
+	ID         string    `json:"id"`
+	Name       string    `json:"name,omitempty"`
+	Platform   string    `json:"platform,omitempty"`
+	TokenHash  string    `json:"tokenHash"`
 	InstallID  string    `json:"installId,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 	LastSeenAt time.Time `json:"lastSeenAt"`
 }
 
-// Keys of the shared credentials' last-used times.
 const (
 	SharedPassword = "password"
 	SharedAccount  = "account"
 )
 
-// DeviceTokenPrefix keeps a device token from looking like an account token.
 const DeviceTokenPrefix = "aod_"
 
-// maxAccessDevices bounds the tokens a holder of the pairing password can mint.
 const maxAccessDevices = 64
 
-// touchInterval limits how often last-seen times are written to disk.
 const touchInterval = 5 * time.Minute
 
-// ErrTooManyDevices is returned by Issue when the registry is full.
 var ErrTooManyDevices = errors.New("too many paired devices; revoke one first")
 
 type accessDevicesFile struct {
@@ -51,24 +44,19 @@ type accessDevicesFile struct {
 	SharedLastUsed map[string]time.Time `json:"sharedLastUsed,omitempty"`
 }
 
-// AccessDevicesPath returns the registry's path in dataDir.
 func AccessDevicesPath(dataDir string) string {
 	return filepath.Join(dataDir, "mobile", "access-devices.json")
 }
 
-// AccessDevices is the registry of device tokens the remote listener accepts.
 type AccessDevices struct {
-	mu   sync.RWMutex
-	path string
-	// writeErr refuses every write when a damaged file could not be moved aside.
+	mu       sync.RWMutex
+	path     string
 	writeErr error
 	devices  map[string]AccessDevice
 	byHash   map[string]string
 	shared   map[string]time.Time
 }
 
-// LoadAccessDevices reads the registry. A damaged or unreadable file is moved
-// aside and reported, and the registry starts empty.
 func LoadAccessDevices(path string) (*AccessDevices, error) {
 	r := &AccessDevices{path: path, devices: map[string]AccessDevice{}, byHash: map[string]string{}, shared: map[string]time.Time{}}
 	raw, err := os.ReadFile(path)
@@ -105,7 +93,6 @@ func (r *AccessDevices) moveAside(cause error) error {
 	return cause
 }
 
-// Issue registers a new device and returns it with its token.
 func (r *AccessDevices) Issue(name, platform string, now time.Time) (AccessDevice, string, error) {
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -139,7 +126,6 @@ func (r *AccessDevices) Issue(name, platform string, now time.Time) (AccessDevic
 	return device, token, nil
 }
 
-// Match returns the device a token belongs to.
 func (r *AccessDevices) Match(token string) (AccessDevice, bool) {
 	if !strings.HasPrefix(token, DeviceTokenPrefix) {
 		return AccessDevice{}, false
@@ -151,7 +137,6 @@ func (r *AccessDevices) Match(token string) (AccessDevice, bool) {
 	return device, ok
 }
 
-// Touch updates the device's last-seen time.
 func (r *AccessDevices) Touch(id string, now time.Time) {
 	r.mu.RLock()
 	device, ok := r.devices[id]
@@ -169,7 +154,6 @@ func (r *AccessDevices) Touch(id string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// TouchShared updates a shared credential's last-used time.
 func (r *AccessDevices) TouchShared(kind string, now time.Time) {
 	r.mu.RLock()
 	last := r.shared[kind]
@@ -183,14 +167,12 @@ func (r *AccessDevices) TouchShared(kind string, now time.Time) {
 	_ = r.persistLocked()
 }
 
-// SharedLastUsed returns when a shared credential last authenticated a request.
 func (r *AccessDevices) SharedLastUsed(kind string) time.Time {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.shared[kind]
 }
 
-// LinkInstall records the push-registry row of the phone holding this token.
 func (r *AccessDevices) LinkInstall(id, installID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -209,7 +191,6 @@ func (r *AccessDevices) LinkInstall(id, installID string) error {
 	return nil
 }
 
-// Revoke removes a device and reports whether it existed.
 func (r *AccessDevices) Revoke(id string) (AccessDevice, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -227,7 +208,6 @@ func (r *AccessDevices) Revoke(id string) (AccessDevice, bool, error) {
 	return device, true, nil
 }
 
-// RevokeAll removes every device.
 func (r *AccessDevices) RevokeAll() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -243,7 +223,6 @@ func (r *AccessDevices) RevokeAll() error {
 	return nil
 }
 
-// List returns the devices, oldest first.
 func (r *AccessDevices) List() []AccessDevice {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -27,7 +27,6 @@ vi.mock("@sentry/electron/main", () => ({
 	getCurrentScope: () => ({ clear: sdk.clearCurrent }),
 	getIsolationScope: () => ({ clear: sdk.clearIsolation }),
 }));
-// sha256("ins_sampled_5") % 10 == 0: this install is in the 1-in-10 error sample.
 const installId = vi.hoisted(() => ({ value: "ins_sampled_5" }));
 vi.mock("../shared/telemetry", () => ({ loadOrCreateTelemetryInstallId: vi.fn(async () => installId.value) }));
 
@@ -140,7 +139,6 @@ describe("Electron main Sentry configuration", () => {
 		vi.stubEnv("AO_TELEMETRY_APP_VERSION", "1.0.1-nightly.202610291200");
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		expect(sdk.init.mock.calls.at(-1)?.[0]).toMatchObject({ release: "1.0.0", environment: "nightly" });
-		// Only an explicit DSN override initializes Sentry for any other version.
 		vi.stubEnv("AO_TELEMETRY_APP_VERSION", undefined);
 		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "https://electron.example/2");
 		for (const [version, environment] of [["1.0.1-edge.1", "development"], ["1.0.1-pr7386.1", "development"], ["", "unknown"]]) {
@@ -508,7 +506,6 @@ describe("Electron main error sampling and budget", () => {
 	const crash = (): ErrorEvent => ({ type: undefined, level: "fatal", message: "'renderer' process exited with 'crashed'" });
 
 	it("samples non-fatal errors by install, sends crashes from every install, and tags the rate", async () => {
-		// Pinned against sentryobs.InstallInErrorSample in the daemon.
 		expect(installInErrorSample("ins_sampled_5")).toBe(true);
 		expect(installInErrorSample("ins_unsampled_0")).toBe(false);
 		expect(installInErrorSample("")).toBe(false);
@@ -536,7 +533,6 @@ describe("Electron main error sampling and budget", () => {
 		expect(sent.debug_meta?.images).toEqual([{ type: "sourcemap", code_file: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", debug_id: debugId }]);
 		const event = beforeSendOf()(sent);
 		expect(event?.message).toBe("Renderer TypeError in assets/useSessionWorkspaceFiles:123:45 (unknown)");
-		// Sentry applies source maps only to javascript or node events.
 		expect(event?.platform).toBe("javascript");
 		expect(event?.exception?.values?.[0]?.value).toBe("");
 		expect(event?.exception?.values?.[0]?.stacktrace?.frames?.[0]).toMatchObject({ abs_path: "app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45 });
@@ -579,10 +575,8 @@ describe("Electron main error sampling and budget", () => {
 
 	it("keeps the budget across a restart and caps on the scrubbed fingerprint", async () => {
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
-		// Different raw text, same scrubbed fingerprint.
 		const sent = ["private one", "private two", "private three", "private four"].map((message) => beforeSendOf()({ ...mainError("main"), message }));
 		expect(sent.map((event) => event !== null)).toEqual([true, true, true, false]);
-		// A fresh init, as after a reload or restart, reads the persisted counters.
 		await initMainSentry("1.0.0", dataDir, "/tmp/ao-electron-test");
 		expect(beforeSendOf()(mainError("main"))).toBeNull();
 		expect(beforeSendOf()(mainError("other"))).not.toBeNull();

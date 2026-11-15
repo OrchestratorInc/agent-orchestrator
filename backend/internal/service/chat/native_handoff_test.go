@@ -15,9 +15,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// Provider I/O is outside the transaction; publication must recheck the source
-// narrative and target controller afterwards. These cases exercise the real
-// Service -> Lifecycle -> SQLite transaction, not just a mocked commit callback.
 func TestNativeChatHandoffAtomicPublication(t *testing.T) {
 	for scenario, wantError := range map[string]string{
 		"success": "", "provider_failure": "provider unavailable",
@@ -55,8 +52,6 @@ func TestNativeChatHandoffAtomicPublication(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Unlike the historical fixture, the new owner has not rebound the
-			// narrative. That is the transaction's responsibility after replay.
 			conversation, err := f.store.CreateConversation(ctx, "unused", domain.ConversationScopeProject, testProject, f.source.ID, f.now)
 			if err != nil {
 				t.Fatal(err)
@@ -75,8 +70,6 @@ func TestNativeChatHandoffAtomicPublication(t *testing.T) {
 				provider.err = errors.New("transcript unavailable")
 			}
 			if scenario == "projection_failure" {
-				// Invalid activity fails after the transaction stages the new head
-				// and the visible boundary, exercising rollback of partial replay.
 				provider.events = append(provider.events, ports.ChatEvent{
 					Kind: ports.ChatEventActivityCompleted, ProviderEventID: "bad-event", ProviderItemID: "bad-item",
 					ActivityKind: domain.ActivityKind("invalid-kind"), ActivityStatus: domain.ActivityStatusCompleted,

@@ -60,21 +60,9 @@ export function getAttentionZoneViewForZone(
 export type SessionStatusDotView = {
 	className: string;
 	breathe: boolean;
-	/** The agent is waiting on the user; the sidebar swaps the dot for an alert icon. */
 	needsInput?: true;
 };
 
-// The session dot carries two independent signals. Colour matches the card on
-// the board: the lane the session sits in (building, validating, in review,
-// ready; a merged PR is purple), which survives a running agent — `status` is
-// activity-first, so it collapses to `working` the moment an agent wakes and
-// would otherwise take every pull request tone with it. A session that needs
-// the user overrides the lane with the card's needs-attention tone. Finished
-// sessions (archive lane) go grey.
-//
-// Motion stays on raw agent activity, except once the PR is done for good
-// (merged or closed): the card drops its loader there, so the dot holds still
-// even if the agent keeps running.
 export function getSessionStatusDotView(
 	session: {
 		activity?: SessionActivity | null;
@@ -97,7 +85,6 @@ export function getSessionStatusDotView(
 	if (sessionNeedsYou(session)) return dot("bg-status-needs-you");
 
 	const column = toKanbanColumn(session.kanbanColumn, sectionStatus);
-	// The card paints a merged PR purple inside the Ready lane; the dot follows.
 	const merged = session.displayStatus ? session.displayStatus === "Merged" : sectionStatus === "merged";
 	if (column === "ready" && merged) {
 		return { className: getSessionStatusView("merged", t).dotClassName, breathe: false };
@@ -105,24 +92,8 @@ export function getSessionStatusDotView(
 	return dot(getKanbanColumnView(column, t).dotClassName);
 }
 
-/**
- * The things a sidebar row may flag, in order of how much they ask of the
- * user. Everything else (working aside, which has its own spinner) is quiet, so
- * the few icons that appear stand out:
- *  - "attention", red: the session needs you now (input or blocked, CI failing,
- *    or changes requested)
- *  - "ready", green: a PR you can merge
- *  - "review", orange alert: a person's review is next
- *  - "merged", purple and dimmed: a PR that has landed, nothing left to do
- */
 export type SessionRowMarker = "attention" | "ready" | "review" | "merged";
 
-/**
- * What a sidebar row says about its session, if anything, from the daemon's
- * display status (with a fallback to the status for an older daemon). Idle,
- * exited, draft, AO's active review and closed sessions get no marker: they need
- * nothing from the user, and the hover card has the detail.
- */
 export function getSessionRowMarker(session: {
 	activity?: SessionActivity | null;
 	displayStatus?: string;
@@ -142,11 +113,8 @@ export function getSessionRowMarker(session: {
 
 	switch (toKanbanColumn(session.kanbanColumn, sectionStatus)) {
 		case "needs_review":
-			// The review lane is the person's turn, short of the red states above.
-			// A draft is still the author's, so it stays quiet.
 			return (display ? display === "Draft" : sectionStatus === "draft") ? null : "review";
 		case "validating":
-			// AO's own review loop needs nothing from the user unless it failed.
 			return display === "Review failed" ? "review" : null;
 		case "ready":
 			if (display ? display === "Merged" : sectionStatus === "merged") return "merged";
@@ -158,11 +126,6 @@ export function getSessionRowMarker(session: {
 	}
 }
 
-/**
- * A sidebar row spins while its agent works, from the moment it is set up.
- * Working wins over any PR state: the agent may already be on its next PR, and
- * the hover card has the PR detail.
- */
 export function isSessionRowWorking(session: {
 	activity?: SessionActivity | null;
 	displayStatus?: string;
@@ -172,18 +135,12 @@ export function isSessionRowWorking(session: {
 	return session.provisionState === "provisioning" || isAgentActivityWorking(session.activity);
 }
 
-/**
- * The icon that leads a sidebar row: the working spinner while the agent works,
- * then what the user has to act on (input, CI, review), then the PR state.
- * Null leaves the quiet dot.
- */
 export function getSessionRowIndicator(
 	session: Parameters<typeof getSessionRowMarker>[0] & Parameters<typeof isSessionRowWorking>[0],
 ): "working" | SessionRowMarker | null {
 	return isSessionRowWorking(session) ? "working" : getSessionRowMarker(session);
 }
 
-// The agent has stopped and is waiting on the user (a question or a decision).
 export function sessionNeedsInput(session: {
 	activity?: SessionActivity | null;
 	displayStatus?: string;
@@ -198,8 +155,6 @@ export function sessionNeedsInput(session: {
 	);
 }
 
-// Mirrors the board card's needs-attention check; waiting on input is handled
-// before this by sessionNeedsInput.
 function sessionNeedsYou(session: {
 	displayStatus?: string;
 	status: SessionStatus;
@@ -210,7 +165,6 @@ function sessionNeedsYou(session: {
 		case "Changes requested":
 			return true;
 		case undefined:
-			// A daemon too old to send `displayStatus`: the card falls back to the zone.
 			return attentionZone(session.status) === "action";
 		default:
 			return false;
@@ -231,7 +185,6 @@ export function getSessionTimelinePillView(
 	return getPortableSessionTimelinePillView(status, translator(t));
 }
 
-/** Live labels for the current locale (getters re-resolve on each access). */
 export const attentionZoneLabel: Record<AttentionZone, string> = {
 	get merge() {
 		return getAttentionZoneViewForZone("merge").label;

@@ -16,13 +16,10 @@ import (
 )
 
 const (
-	// DefaultListLimit keeps the first dashboard history page bounded.
 	DefaultListLimit = 100
-	// MaxListLimit keeps every notification history page bounded.
-	MaxListLimit = 100
+	MaxListLimit     = 100
 )
 
-// Manager reads stored notifications for REST controllers.
 type Manager struct {
 	store         Store
 	publisher     Publisher
@@ -33,12 +30,10 @@ type Manager struct {
 	clearSequence int64
 }
 
-// Publisher sends notification changes to live dashboard subscribers.
 type Publisher interface {
 	Publish(ctx context.Context, event domain.NotificationEvent) error
 }
 
-// ClearResult describes one completed notification-history clear.
 type ClearResult struct {
 	ClearedCount  int64
 	ClearID       string
@@ -46,7 +41,6 @@ type ClearResult struct {
 	ClearSequence int64
 }
 
-// Deps configures a Manager.
 type Deps struct {
 	Store      Store
 	Publisher  Publisher
@@ -56,7 +50,6 @@ type Deps struct {
 	ClearEpoch string
 }
 
-// New constructs a notification Manager.
 func New(d Deps) *Manager {
 	m := &Manager{
 		store: d.Store, publisher: d.Publisher, barrier: d.Barrier,
@@ -77,7 +70,6 @@ func New(d Deps) *Manager {
 	return m
 }
 
-// List returns one stable newest-first page of notification history.
 func (m *Manager) List(ctx context.Context, filter ListFilter) (ListPage, error) {
 	if m == nil || m.store == nil {
 		return ListPage{}, errors.New("notification: store is required")
@@ -124,7 +116,6 @@ func (m *Manager) List(ctx context.Context, filter ListFilter) (ListPage, error)
 	return page, nil
 }
 
-// MarkRead marks one unread notification read.
 func (m *Manager) MarkRead(ctx context.Context, id string) (Notification, bool, error) {
 	if m == nil || m.store == nil {
 		return Notification{}, false, errors.New("notification: store is required")
@@ -142,11 +133,6 @@ func (m *Manager) MarkRead(ctx context.Context, id string) (Notification, bool, 
 	return notificationFromRecord(row), true, nil
 }
 
-// MarkAllRead acknowledges notifications as seen. With ids it acknowledges
-// exactly those rows — the ones a client actually rendered — which keeps
-// anything past the client's last loaded page unread and therefore still
-// reachable. With no ids it falls back to acknowledging every unread row, for
-// clients that do not paginate.
 func (m *Manager) MarkAllRead(ctx context.Context, ids []string) (int64, error) {
 	if m == nil || m.store == nil {
 		return 0, errors.New("notification: store is required")
@@ -157,7 +143,6 @@ func (m *Manager) MarkAllRead(ctx context.Context, ids []string) (int64, error) 
 	return m.store.MarkNotificationsRead(ctx, ids)
 }
 
-// Delete removes one notification without changing its session or PR state.
 func (m *Manager) Delete(ctx context.Context, id string) (Notification, error) {
 	if m == nil || m.store == nil {
 		return Notification{}, errors.New("notification: store is required")
@@ -182,9 +167,6 @@ func (m *Manager) Delete(ctx context.Context, id string) (Notification, error) {
 	return notificationFromRecord(row), nil
 }
 
-// ClearAll deletes notification history and publishes the same ordered clear
-// generation that the HTTP response returns. Clients use the epoch and sequence
-// to reject a stale response when concurrent clears complete out of order.
 func (m *Manager) ClearAll(ctx context.Context) (ClearResult, error) {
 	if m == nil || m.store == nil {
 		return ClearResult{}, errors.New("notification: store is required")

@@ -57,7 +57,6 @@ test("question replies remain readable after another question and a reload @T0",
 	await expect(page.getByRole("log", { name: "Conversation" })).toBeVisible({ timeout: 15_000 });
 	const dock = page.getByTestId("elicitation-composer-dock");
 	await expect(dock.getByText(prompt)).toBeVisible();
-	// The borderless Other field shows focus on its row, by Tab and by its 0 key.
 	const other = dock.getByRole("textbox", { name: "Other" });
 	const otherRowShadow = () => other.locator("xpath=../..").evaluate((row) => getComputedStyle(row).boxShadow);
 	await expect.poll(otherRowShadow).toBe("none");
@@ -71,7 +70,6 @@ test("question replies remain readable after another question and a reload @T0",
 	await expect(other).toBeFocused();
 	await expect.poll(otherRowShadow).not.toBe("none");
 	await dock.getByRole("radio", { name: /fix\/login/ }).check();
-	// A choice and an Other answer are alternatives: typing replaces the pick.
 	await dock.getByRole("textbox", { name: "Other" }).fill(feedback);
 	await expect(dock.getByRole("radio", { name: /fix\/login/ })).not.toBeChecked();
 	await dock.getByRole("button", { name: "Continue" }).click();

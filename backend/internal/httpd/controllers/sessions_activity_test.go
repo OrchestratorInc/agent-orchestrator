@@ -413,9 +413,6 @@ func TestSessionsAPI_ActivityForwardsClaudeSubagentFacts(t *testing.T) {
 }
 
 func TestSessionsAPI_ActivityThreadsCorrelationFields(t *testing.T) {
-	// The optional correlation fields ride into the signal (sanitized); a
-	// body without them (old CLIs) keeps producing a plain state-only signal,
-	// which the other tests in this file pin.
 	rec := &fakeActivityRecorder{}
 	srv := newActivityTestServer(t, rec)
 
@@ -512,9 +509,6 @@ func TestSessionsAPI_ActivityThreadsAgentSessionIDWithState(t *testing.T) {
 }
 
 func TestSessionsAPI_ActivityCapsOverlongCorrelationFields(t *testing.T) {
-	// Overlong values are dropped, not truncated: a truncated id could never
-	// match its pre/post counterpart, so an empty value (fail-safe: no
-	// correlated clear) is strictly better.
 	rec := &fakeActivityRecorder{}
 	srv := newActivityTestServer(t, rec)
 

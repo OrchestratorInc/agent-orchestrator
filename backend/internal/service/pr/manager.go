@@ -1,4 +1,3 @@
-// Package pr records SCM observations for pull requests associated with sessions.
 package pr
 
 import (
@@ -13,22 +12,18 @@ type lifecycle interface {
 	ApplyPRObservation(ctx context.Context, id domain.SessionID, o ports.PRObservation) error
 }
 
-// Manager persists PR observations and forwards them to lifecycle for agent
-// nudges and direct lifecycle effects.
 type Manager struct {
 	writer    ports.PRWriter
 	lifecycle lifecycle
 	clock     func() time.Time
 }
 
-// Deps are the collaborators a PR Manager needs.
 type Deps struct {
 	Writer    ports.PRWriter
 	Lifecycle lifecycle
 	Clock     func() time.Time
 }
 
-// New builds a PR Manager from its dependencies, defaulting the clock to time.Now.
 func New(d Deps) *Manager {
 	m := &Manager{writer: d.Writer, lifecycle: d.Lifecycle, clock: d.Clock}
 	if m.clock == nil {
@@ -37,8 +32,6 @@ func New(d Deps) *Manager {
 	return m
 }
 
-// ApplyObservation records a successfully fetched PR observation. Failed fetches
-// are ignored because their fields are not authoritative facts.
 func (m *Manager) ApplyObservation(ctx context.Context, id domain.SessionID, o ports.PRObservation) error {
 	if !o.Fetched {
 		return nil

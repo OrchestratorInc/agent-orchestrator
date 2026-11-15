@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// The released launch is written only by its narrow write, only while it is
-// the session's current launch, and a full-row update leaves it in place.
 func TestSessionRuntimeReleaseNamesTheCurrentLaunchOnly(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

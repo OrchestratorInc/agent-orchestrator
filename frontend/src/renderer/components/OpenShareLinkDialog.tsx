@@ -26,13 +26,6 @@ import { Input } from "./ui/input";
 
 const OPEN_SHARE_LINK_EVENT = "ao:open-share-link";
 
-/**
- * What went wrong opening a link, in terms the person can act on: a link that
- * no longer works, or one for someone else, rather than the control plane's
- * generic access error. A short link the control plane refuses as a bad
- * request (a code it can't read, or a control plane from before codes) says
- * to ask for a new link instead of showing the server's text.
- */
 export function shareLinkErrorMessage(
 	error: unknown,
 	t: (key: "shareLink.expired" | "shareLink.notForYou" | "shareLink.unavailable") => string,
@@ -44,22 +37,14 @@ export function shareLinkErrorMessage(
 	return error instanceof Error ? error.message : String(error);
 }
 
-/** Asks the shell to open a shared session's link: with one, opens it; without, asks for it. */
 export function requestOpenShareLink(link?: string): void {
 	window.dispatchEvent(new CustomEvent<string | undefined>(OPEN_SHARE_LINK_EVENT, { detail: link }));
 }
 
-/** Redeems a share by its short code, or by the organization and token of a link from before codes. */
 export function redeemShareTarget(client: Pick<CloudCpClient, "redeemShareLink" | "redeemShareLinkCode">, target: ShareLinkTarget) {
 	return "code" in target ? client.redeemShareLinkCode(target.code) : client.redeemShareLink(target.orgId, target.token);
 }
 
-/**
- * Opens shared cloud sessions: a link opened from outside the app
- * (ao-app://share/...), one pasted here, or the command palette's request.
- * Redeeming a link gives this person their own access to the session, which
- * then appears beside their projects; the session opens at once.
- */
 export function ShareLinkHost() {
 	const { t } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
@@ -92,8 +77,6 @@ export function ShareLinkHost() {
 			redeemRef.current.reset();
 			setText(link ?? "");
 			setOpen(true);
-			// A link from outside the app opens at once; the dialog shows only
-			// what happened (or that sign-in is needed first).
 			if (link && autoOpened.current !== link) {
 				autoOpened.current = link;
 				if (ready) redeemRef.current.mutate(link);

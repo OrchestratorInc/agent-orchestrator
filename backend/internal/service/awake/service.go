@@ -1,4 +1,3 @@
-// Package awake owns desktop wake intent independently of Connect Mobile.
 package awake
 
 import (
@@ -15,13 +14,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Store persists desktop wake intent.
 type Store interface {
 	LoadAwake(context.Context) (string, error)
 	SaveAwake(context.Context, string) error
 }
 
-// Host defines native ownership and observation operations.
 type Host interface {
 	Supported() bool
 	Active() bool
@@ -42,27 +39,24 @@ type Host interface {
 	Capabilities() []domain.AwakeCapability
 }
 
-// Bindings resolves session and application ownership.
 type Bindings interface {
 	Alive(context.Context, string, string, string) (bool, string, error)
 	AgentActive(context.Context) (bool, error)
 }
 
-// Service serializes requests, rules, and recovery.
 type Service struct {
-	mu          sync.Mutex
-	store       Store
-	host        Host
-	bindings    Bindings
-	doc         domain.AwakeDocument
-	observation domain.AwakeObservation
-	deadlines   map[string]time.Time
-	activeRules []string
-	ruleMatches map[string]ruleMatch
-	started     *time.Time
-	reason      string
-	now         func() time.Time
-	// Download events are fed by the desktop, expire independently of the renderer.
+	mu            sync.Mutex
+	store         Store
+	host          Host
+	bindings      Bindings
+	doc           domain.AwakeDocument
+	observation   domain.AwakeObservation
+	deadlines     map[string]time.Time
+	activeRules   []string
+	ruleMatches   map[string]ruleMatch
+	started       *time.Time
+	reason        string
+	now           func() time.Time
 	downloads     map[string]bool
 	downloadsSeen time.Time
 	networkOutage time.Time
@@ -73,18 +67,13 @@ type Service struct {
 	agentCancel   context.CancelFunc
 	agentBusy     bool
 
-	// Reconciliation keeps failed document changes in memory; retry until durable.
 	reconcileSavePending   bool
 	powerAuthorizationBusy bool
-	// Only resume rules that this daemon paused for a battery stop. A restart
-	// keeps persisted rules paused rather than guessing their previous intent.
-	resumeBatteryRules bool
+	resumeBatteryRules     bool
 }
 
-// ErrValidation identifies invalid wake requests.
 var ErrValidation = errors.New("invalid stay-awake request")
 
-// New loads intent and ends interrupted manual requests.
 func New(ctx context.Context, store Store, host Host, bindings Bindings) (*Service, error) {
 	s := &Service{store: store, host: host, bindings: bindings, now: time.Now, deadlines: map[string]time.Time{}, downloads: map[string]bool{}, ruleMatches: map[string]ruleMatch{}}
 	raw, err := store.LoadAwake(ctx)
@@ -103,10 +92,7 @@ func New(ctx context.Context, store Store, host Host, bindings Bindings) (*Servi
 			return nil, errors.New("unsupported awake settings version")
 		}
 	}
-	// Older PR builds could persist deferred opt-ins. Disable them durably
-	// before any automatic rule or host action is allowed to run.
 	changed := clearDeferredSettings(&s.doc.Settings)
-	// A daemon restart never resurrects an unbounded manual request.
 	for i := range s.doc.Sessions {
 		if s.doc.Sessions[i].EndedAt == nil {
 			now := s.now()
@@ -137,12 +123,10 @@ func (s *Service) save(ctx context.Context) error {
 	if err := s.store.SaveAwake(ctx, string(data)); err != nil {
 		return err
 	}
-	// Every successful save includes any pending reconciliation changes.
 	s.reconcileSavePending = false
 	return nil
 }
 
-// Status returns current wake state.
 func (s *Service) Status() domain.AwakeState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -175,7 +159,6 @@ func (s *Service) Status() domain.AwakeState {
 }
 func invalid(message string) error { return fmt.Errorf("%w: %s", ErrValidation, message) }
 
-// Start starts a wake request.
 func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -276,7 +259,6 @@ func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error
 		}
 	}
 	previous := clone(s.doc)
-	// A new explicit request can rearm only after fresh observations are safe.
 	s.refresh(ctx)
 	if reason := s.safety(); reason != "" {
 		return fmt.Errorf("stay awake stopped: %s", reason)
@@ -300,7 +282,6 @@ func (s *Service) Start(ctx context.Context, req domain.StartAwakeRequest) error
 	return nil
 }
 
-// End ends one owned request.
 func (s *Service) End(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -328,7 +309,6 @@ func (s *Service) End(ctx context.Context, id string) error {
 	return s.reconcile(ctx)
 }
 
-// Extend extends a finite request.
 func (s *Service) Extend(ctx context.Context, id string, seconds int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -368,7 +348,6 @@ func (s *Service) Extend(ctx context.Context, id string, seconds int) error {
 	return invalid("awake session not found")
 }
 
-// StopAll ends desktop requests and pauses rules.
 func (s *Service) StopAll(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -392,7 +371,6 @@ func (s *Service) StopAll(ctx context.Context) error {
 	return s.reconcile(ctx)
 }
 
-// Resume checks fresh host readings before clearing a safety stop.
 func (s *Service) Resume(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -417,9 +395,6 @@ func (s *Service) Resume(ctx context.Context) error {
 	return s.reconcile(ctx)
 }
 
-// clearDeferredSettings returns whether a previous build enabled a policy that
-// is outside this release's supported surface. Low Power Mode and display wake
-// assertions remain supported; optional brightness/audio/app/network effects do not.
 func clearDeferredSettings(settings *domain.AwakeSettings) bool {
 	changed := settings.MuteAudio || settings.DarkenKeyboard || settings.RestoreDisplay ||
 		len(settings.PauseApps) != 0 || settings.HotspotName != "" || settings.HotspotRecovery ||
@@ -431,7 +406,6 @@ func clearDeferredSettings(settings *domain.AwakeSettings) bool {
 	return changed
 }
 
-// UpdateSettings validates and persists host policy.
 func (s *Service) UpdateSettings(ctx context.Context, settings domain.AwakeSettings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -451,7 +425,6 @@ func (s *Service) UpdateSettings(ctx context.Context, settings domain.AwakeSetti
 	if settings.StopBatteryPercent < 10 || settings.StopBatteryPercent > 90 {
 		return invalid("battery stop threshold must be between 10 and 90 percent")
 	}
-	// An unavailable operation is rejected rather than saved as if effective.
 	if len(settings.PauseApps) > 20 {
 		return invalid("choose at most twenty background apps")
 	}
@@ -508,7 +481,6 @@ func (s *Service) UpdateSettings(ctx context.Context, settings domain.AwakeSetti
 	return s.reconcile(ctx)
 }
 
-// UpdateRules validates and persists activation rules.
 func (s *Service) UpdateRules(ctx context.Context, rules []domain.AwakeRule) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -557,7 +529,6 @@ func (s *Service) UpdateRules(ctx context.Context, rules []domain.AwakeRule) err
 	return s.reconcile(ctx)
 }
 
-// Downloads updates typed download heartbeats.
 func (s *Service) Downloads(ids []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -602,8 +573,6 @@ func (s *Service) safety() string {
 	return ""
 }
 
-// batteryRecovered requires a current reading above the stop threshold, with
-// one percent of hysteresis to avoid repeatedly restarting at the boundary.
 func (s *Service) batteryRecovered() bool {
 	o := s.observation
 	return !o.ObservedAt.IsZero() && s.now().Sub(o.ObservedAt) < 15*time.Second &&
@@ -614,8 +583,6 @@ func (s *Service) batteryRecovered() bool {
 func (s *Service) reconcile(ctx context.Context) error {
 	now := s.now()
 	changed := s.reconcileSavePending
-	// Battery stops are temporary. Only fresh, complete observations may
-	// restore the existing owners; expiry and binding checks still run below.
 	recoveredBattery := s.doc.StopReason == "low_battery" && s.batteryRecovered()
 	if recoveredBattery {
 		s.doc.StopReason = ""
@@ -625,9 +592,6 @@ func (s *Service) reconcile(ctx context.Context) error {
 	count := 0
 	unknownBinding := false
 	lid := false
-	// One native lease carries every contribution. Bound the entire aggregate
-	// by its earliest finite deadline so independent sequence renewal cannot
-	// preserve stale lid permission or policy effects from a shorter owner.
 	var earliest time.Time
 	for i := range s.doc.Sessions {
 		source := &s.doc.Sessions[i]
@@ -707,8 +671,6 @@ func (s *Service) reconcile(ctx context.Context) error {
 	}
 	_, _, nativeReason := s.host.LidStatus()
 	reason := s.safety()
-	// A recovered battery stop creates a new lease; the helper may still
-	// report the old lease's latch until its next scan.
 	if reason == "" && (nativeReason != "low_battery" || !recoveredBattery) && (nativeReason == "critical_heat" || nativeReason == "low_battery" || nativeReason == "battery_unknown") {
 		reason = nativeReason
 	}
@@ -773,7 +735,6 @@ func (s *Service) reconcile(ctx context.Context) error {
 	return nil
 }
 
-// Run reconciles requests until shutdown.
 func (s *Service) Run(ctx context.Context) {
 	s.mu.Lock()
 	if s.needsObservations() {
@@ -823,7 +784,6 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 
-// Recover ends requests and restores journaled effects.
 func (s *Service) Recover(ctx context.Context) error {
 	if err := s.StopAll(ctx); err != nil {
 		return err
@@ -833,8 +793,6 @@ func (s *Service) Recover(ctx context.Context) error {
 	return s.host.RequestRecovery()
 }
 
-// RelaunchBrowser journals intent before the external action. Replaying an
-// uncertain request never closes the browser a second time automatically.
 func (s *Service) RelaunchBrowser(ctx context.Context, id, browser string, confirmed bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -909,8 +867,6 @@ func (s *Service) networkTask(ctx context.Context) *networkTask {
 	if *connected {
 		previous := s.doc.Network
 		if previous.Episode != "" || previous.Attempts != 0 || previous.LastAttempt != nil {
-			// Closing an outage must be durable before a later outage can use
-			// a fresh retry budget. Keep the last action outcome for status.
 			s.doc.Network = domain.AwakeNetworkAttempt{Outcome: previous.Outcome}
 			if err := s.save(ctx); err != nil {
 				s.doc.Network = previous
@@ -978,9 +934,6 @@ func (s *Service) runNetwork(ctx context.Context, task networkTask) {
 
 const maxAwakeSessions = 1000
 
-// pruneEndedSessions drops the oldest ended sessions once the document is at
-// capacity, so history never blocks a new request. Only active sessions count
-// toward the limit.
 func (s *Service) pruneEndedSessions() {
 	excess := len(s.doc.Sessions) - maxAwakeSessions + 1
 	if excess <= 0 {
@@ -997,7 +950,6 @@ func (s *Service) pruneEndedSessions() {
 	s.doc.Sessions = kept
 }
 
-// ClearHistory removes ended sessions while preserving replay protection.
 func (s *Service) ClearHistory(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1116,8 +1068,6 @@ func (s *Service) runAgent(ctx context.Context, task agentTask) {
 	}
 }
 
-// Detailed observations are requested only by General settings or active
-// policy. An unused feature must not spawn a native process every five seconds.
 func (s *Service) needsObservations() bool {
 	if s.doc.StopReason != "" {
 		return s.doc.StopReason == "low_battery"
@@ -1137,7 +1087,6 @@ func (s *Service) needsObservations() bool {
 	return false
 }
 
-// ObserveStatus refreshes settings-page observations at a bounded rate.
 func (s *Service) ObserveStatus(ctx context.Context) domain.AwakeState {
 	s.mu.Lock()
 	if !s.closed && (s.observation.ObservedAt.IsZero() || s.now().Sub(s.observation.ObservedAt) >= 4*time.Second) {
@@ -1147,8 +1096,6 @@ func (s *Service) ObserveStatus(ctx context.Context) domain.AwakeState {
 	return s.Status()
 }
 
-// finishPowerAuthorization refreshes permissions without holding the policy lock
-// across a macOS administrator dialog.
 func (s *Service) finishPowerAuthorization(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1158,7 +1105,6 @@ func (s *Service) finishPowerAuthorization(ctx context.Context) {
 	}
 }
 
-// AuthorizeLowPower requests explicit macOS consent without holding the policy lock.
 func (s *Service) AuthorizeLowPower(ctx context.Context) error {
 	authorizer, ok := s.host.(interface{ AuthorizeLowPower(context.Context) error })
 	if !ok {
@@ -1175,8 +1121,6 @@ func (s *Service) AuthorizeLowPower(ctx context.Context) error {
 	return authorizer.AuthorizeLowPower(ctx)
 }
 
-// RevokeLowPower disables automation durably before restoring owned changes and
-// removing its account-specific grant. Cancellation never silently re-enables it.
 func (s *Service) RevokeLowPower(ctx context.Context) error {
 	revoker, ok := s.host.(interface{ RevokeLowPower(context.Context) error })
 	if !ok {

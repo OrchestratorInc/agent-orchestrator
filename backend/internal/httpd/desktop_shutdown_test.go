@@ -46,9 +46,6 @@ func TestDesktopExitShutdownPolicy(t *testing.T) {
 	}
 }
 
-// A SIGTERM replacement cancels ctx while the supervisor link drops at the
-// same time. If teardown outlasts the supervisor grace, its callback must not
-// mark the replacement as a desktop exit.
 func TestSignalReplacementWinsOverLateSupervisorDrop(t *testing.T) {
 	t.Setenv("AO_OWNER", "app")
 	srv, err := NewWithDeps(config.Config{

@@ -24,15 +24,10 @@ import (
 const lidHelperVersion = 5
 const lidHelperLabel = "com.aoagents.mobile-wake"
 
-// IsLidHelperUpgrade reports whether err means the registered wake helper must be
-// upgraded before the native coordinator can be used.
 func IsLidHelperUpgrade(err error) bool { return errors.Is(err, errLidHelperUpgrade) }
 
 var errLidHelperUpgrade = errors.New("registered wake helper is incompatible; open the lid, turn closed-lid wake off in every Orchestrator instance and wait for recovery to finish, then run in Terminal: launchctl bootout gui/$(id -u)/com.aoagents.mobile-wake; turn closed-lid wake on again")
 
-// LidAwake is a lease client for the independent, launchd-owned coordinator.
-// Default-data AO instances for this login share ~/.ao/data/wake. Custom data
-// roots cannot enable host control, which would break isolation.
 type LidAwake struct {
 	mu                     sync.Mutex
 	transitionMu           sync.Mutex
@@ -85,16 +80,12 @@ type lidStatus struct {
 	EffectsBlocked map[string]string `json:"effectsBlocked,omitempty"`
 }
 
-// NewLidAwake probes without changing power state or registering a job. The
-// helper is optional for CLI-only/non-desktop installations.
 func NewLidAwake(pid int, binary, dataDir string) *LidAwake {
 	l := &LidAwake{pid: pid, binary: binary, reason: "helper_missing"}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return l
 	}
-	// Host power is global. Scratch/custom data roots must not install or
-	// join the production coordinator; independent roots cannot own that bit.
 	if filepath.Clean(dataDir) != filepath.Join(home, ".ao", "data") {
 		l.reason = "isolated_data_dir"
 		return l
@@ -132,10 +123,8 @@ func NewLidAwake(pid int, binary, dataDir string) *LidAwake {
 	return l
 }
 
-// Status separates a saved request from the coordinator's fresh acknowledgement.
 func (l *LidAwake) Status() (supported, active bool, reason string) { return l.status(false) }
 
-// WakeActive reports idle wake ownership independently of lid control.
 func (l *LidAwake) WakeActive() bool { _, active, _ := l.status(true); return active }
 func (l *LidAwake) status(wake bool) (supported, active bool, reason string) {
 	l.mu.Lock()
@@ -205,9 +194,6 @@ func (l *LidAwake) readStatus() (lidStatus, error) {
 	return st, nil
 }
 
-// Start requires explicit user opt-in. Registration never runs on boot merely
-// because the helper binary exists. A restored preference can renew an already
-// registered helper, but cannot silently install one.
 func (l *LidAwake) Start(allowSetup bool) error {
 	l.transitionMu.Lock()
 	defer l.transitionMu.Unlock()
@@ -250,9 +236,6 @@ func (l *LidAwake) renew() error {
 	l.sequence++
 	lease := lidLease{LowPowerBatteryPercent: l.lowPowerBatteryPercent, LowPowerOnSeriousHeat: l.lowPowerOnSeriousHeat, ID: l.id, PID: l.pid, Started: l.started, Sequence: l.sequence, WrittenAt: float64(time.Now().UnixMilli()) / 1000, LidClosed: l.requestedLid, DisplayAwake: l.displayAwake, StopBatteryPercent: l.stopBatteryPercent, MuteAudio: l.muteAudio, PauseApps: l.pauseApps, RestoreDisplay: l.restoreDisplay, DarkenKeyboard: l.darkenKeyboard}
 	if !l.deadline.IsZero() {
-		// The Go service retires finished owners on its own tick; give it
-		// that margin so the helper never drops the lease (and the lid
-		// override) before the surviving aggregate is renewed.
 		end := float64(l.deadline.Add(idleRenewalMargin).UnixMilli()) / 1000
 		lease.ExpiresAt = &end
 	}
@@ -273,11 +256,8 @@ func (l *LidAwake) run(ctx context.Context, done chan struct{}) {
 			return
 		case <-ticker.C:
 			l.mu.Lock()
-			// Stop does not clear cancel until this goroutine has returned.
 			st, err := l.readStatus()
 			if err == nil && st.Blocked[l.id] != "" {
-				// Keep the same lease identity while latched. Only an explicit off/on
-				// generates a new identity and permits the native coordinator to rearm.
 				l.reason = st.Blocked[l.id]
 			}
 			if err = l.renew(); err != nil {
@@ -288,7 +268,6 @@ func (l *LidAwake) run(ctx context.Context, done chan struct{}) {
 	}
 }
 
-// Stop withdraws this daemon's lease and waits for native cleanup acknowledgement.
 func (l *LidAwake) Stop() {
 	l.transitionMu.Lock()
 	defer l.transitionMu.Unlock()
@@ -309,7 +288,6 @@ func (l *LidAwake) Stop() {
 	if err := os.Remove(filepath.Join(l.directory, "leases", id+".json")); err != nil && !os.IsNotExist(err) {
 		reason = "lease_failed"
 	} else {
-		// Poll without the status mutex. Only lifecycle operations are serialized.
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			st, err := l.readStatus()
@@ -398,8 +376,6 @@ func (l *LidAwake) setup() error {
 	defer unlock()
 	domain := fmt.Sprintf("gui/%d", os.Getuid())
 	if _, err := l.command(ctx, "/bin/launchctl", "print", domain+"/"+lidHelperLabel); err == nil {
-		// Never boot out a registered coordinator: another build may hold a
-		// live lease. Reuse only its compatible protocol, including when idle.
 		return l.checkRegisteredHelper(ctx)
 	}
 	data, err := os.ReadFile(l.binary)
@@ -407,8 +383,6 @@ func (l *LidAwake) setup() error {
 		return err
 	}
 	digest := sha256.Sum256(data)
-	// Immutable version paths let an old registered job recover safely across an
-	// app replacement; no launchd job points into a disappearing .app bundle.
 	binary := filepath.Join(l.directory, "ao-wake-"+hex.EncodeToString(digest[:12]))
 	if err := writeWakeFile(binary, data, 0o700); err != nil {
 		return err
@@ -429,8 +403,6 @@ func (l *LidAwake) setup() error {
 	if _, err := l.command(ctx, "/bin/launchctl", "bootstrap", domain, name); err != nil {
 		return err
 	}
-	// No previous job was registered, and setup is serialized between clients.
-	// Keep the newly registered executable; remove only obsolete helper copies.
 	entries, err := os.ReadDir(l.directory)
 	if err == nil {
 		for _, entry := range entries {
@@ -454,8 +426,6 @@ func (l *LidAwake) checkRegisteredHelper(ctx context.Context) error {
 	data, err := os.ReadFile(filepath.Join(l.directory, "agent.plist"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			// The label may still belong to a coordinator using the legacy
-			// ~/.ao/wake layout. Never replace it while it could own leases.
 			return fmt.Errorf("registered wake helper metadata is missing: %w", errLidHelperUpgrade)
 		}
 		return err
@@ -492,7 +462,6 @@ func (l *LidAwake) checkRegisteredHelper(ctx context.Context) error {
 	return nil
 }
 
-// Setup registers the fixed recovery executable without acquiring wake ownership.
 func (l *LidAwake) Setup() error {
 	l.transitionMu.Lock()
 	defer l.transitionMu.Unlock()
@@ -512,8 +481,6 @@ func (l *LidAwake) Setup() error {
 	return nil
 }
 
-// SetDeadline writes a native deadline before renewing an active request. A
-// hung daemon cannot extend a finite closed-lid session beyond that deadline.
 func (l *LidAwake) SetDeadline(deadline time.Time) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -527,8 +494,6 @@ func (l *LidAwake) SetDeadline(deadline time.Time) error {
 	return nil
 }
 
-// ConfigurePolicy is used by desktop wake leases; legacy mobile lid leases
-// omit lidClosed and retain their explicit closed-lid meaning.
 func (l *LidAwake) ConfigurePolicy(lid, display bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -543,7 +508,6 @@ func (l *LidAwake) ConfigurePolicy(lid, display bool) error {
 	return nil
 }
 
-// SetProtection sets the minimum battery level for native policy.
 func (l *LidAwake) SetProtection(percent int) error {
 	if percent < 10 || percent > 90 {
 		return errors.New("battery safety threshold must be 10–90")
@@ -560,7 +524,6 @@ func (l *LidAwake) SetProtection(percent int) error {
 	return nil
 }
 
-// ConfigureEffects sets optional journaled native effects.
 func (l *LidAwake) ConfigureEffects(mute bool, apps []string, restoreDisplay, darkenKeyboard bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -576,7 +539,6 @@ func (l *LidAwake) ConfigureEffects(mute bool, apps []string, restoreDisplay, da
 	return nil
 }
 
-// RequestRecovery requests restoration of AO-owned native effects.
 func (l *LidAwake) RequestRecovery() error {
 	if err := l.Setup(); err != nil {
 		return err
@@ -591,7 +553,6 @@ func (l *LidAwake) RequestRecovery() error {
 	return writeWakeFile(filepath.Join(l.directory, "effects-recovery.json"), data, 0o600)
 }
 
-// RecoveryReason reports pending restoration failures.
 func (l *LidAwake) RecoveryReason() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -609,7 +570,6 @@ func (l *LidAwake) RecoveryReason() string {
 	return ""
 }
 
-// ConfigureLowPower updates automatic native power-saving policy for this lease.
 func (l *LidAwake) ConfigureLowPower(percent int, serious bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

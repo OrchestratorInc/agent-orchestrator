@@ -9,9 +9,6 @@ import {
 
 const FEED = "https://github.com/AgentWrapper/agent-orchestrator/releases/latest";
 
-// The shape from #5755: GitHub answers /releases/latest with a 504, and the
-// provider wraps that HttpError's stack inside "Cannot parse releases feed",
-// so one message carries the HTML body, the header block and app.asar paths.
 function releasesFeedDump(status = "504 Gateway Time-out"): Error {
 	const err = new Error(
 		`Cannot parse releases feed: Error: Unable to find latest version on GitHub (${FEED}), please ensure a production release exists: HttpError: ${status}\n` +
@@ -100,9 +97,6 @@ describe("userFacingUpdateError", () => {
 		);
 	});
 
-	// The status line still swaps this for localized restart guidance off
-	// netError (#3526); the check-error notice, a download and the restart
-	// dialog have no such flag and render the sentence.
 	it("explains a bare net:: failure", () => {
 		expect(userFacingUpdateError(new Error("net::ERR_INTERNET_DISCONNECTED"), "check")).toBe(
 			"Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
@@ -112,8 +106,6 @@ describe("userFacingUpdateError", () => {
 		);
 	});
 
-	// These arrive under the releases-feed code, which alone would read as a feed
-	// that could not be parsed.
 	it.each([
 		["Error: Request timed out", "the update server timed out. Try again in a few minutes."],
 		["Error: connect ETIMEDOUT 140.82.112.3:443", "the update server timed out. Try again in a few minutes."],
@@ -171,7 +163,6 @@ describe("userFacingUpdateError", () => {
 		expect(userFacingUpdateError(new Error("x".repeat(1001)), "check")).toBe("Couldn't check for updates. Try again in a few minutes.");
 	});
 
-	// Retrying downloads the same build, so this must not say "try again".
 	it("explains a Windows signature rejection instead of asking for a retry", () => {
 		const err = Object.assign(
 			new Error(

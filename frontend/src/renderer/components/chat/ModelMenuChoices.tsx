@@ -8,7 +8,6 @@ const INITIAL_VISIBLE_COUNT = 100;
 const MAX_SEARCH_RESULTS = 50;
 const BATCH_SIZE = 50;
 
-/** Mounted inside menu content so closing either menu also clears its query. */
 export function ModelMenuChoices<T extends { id: string; label: string }>({
 	models,
 	selectedId,
@@ -17,11 +16,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	children,
 }: {
 	models: T[];
-	/** The currently active or selected model, ensuring it is included in initial visible rows if known. */
 	selectedId?: string;
-	/** Whether to show the search field, ruled off from the list. Unset shows a plain one on a long list. */
 	searchable?: boolean;
-	/** Set where the rows are a menu that search replaces with matches; nothing is "not found" before a query. */
 	searchPlaceholder?: string;
 	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string, query?: string) => ReactNode;
 }) {
@@ -30,8 +26,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const showSearch = searchable ?? models.length >= 10;
 	const query = showSearch ? search.trim() : "";
 	const normalizedQuery = query.toLocaleLowerCase();
-	// A query or large catalog can contain hundreds of rows (e.g. OpenCode has 500+ models);
-	// rendering them all at once freezes the menu on open. Window initial render and append on scroll.
 	const lowered = useMemo(() => models.map((model) => model.label.toLocaleLowerCase()), [models]);
 	const allMatches = useMemo(() => {
 		if (!normalizedQuery) return models;
@@ -49,8 +43,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		return INITIAL_VISIBLE_COUNT;
 	}, [normalizedQuery, selectedId, allMatches]);
 
-	// Rows loaded past the initial window, per query. Reset while rendering, not in an
-	// effect, so a new query never commits the previous query's longer list first.
 	const [loaded, setLoaded] = useState({ query: normalizedQuery, count: 0 });
 	if (loaded.query !== normalizedQuery) setLoaded({ query: normalizedQuery, count: 0 });
 	const visibleCount = loaded.query === normalizedQuery ? Math.max(initialLimit, loaded.count) : initialLimit;
@@ -60,7 +52,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		[allMatches, visibleCount],
 	);
 	const hasMore = matches.length < allMatches.length;
-	// From the rendered length, so several scroll events before a commit add one batch, not several.
 	const loadMore = useCallback(() => {
 		if (hasMore) setLoaded({ query: normalizedQuery, count: matches.length + BATCH_SIZE });
 	}, [hasMore, matches.length, normalizedQuery]);
@@ -79,9 +70,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		if (!element) return;
 		if (element.scrollHeight - element.scrollTop - element.clientHeight < 150) loadMore();
 	}, [loadMore]);
-	// A new search starts at the top; a refreshed (polled) list keeps its scroll.
-	// Not on mount: the list opens at the top, and reading scrollTop then forces a
-	// style pass over the whole page while the menu is still being inserted.
 	const searchedQuery = useRef(normalizedQuery);
 	useLayoutEffect(() => {
 		if (searchedQuery.current === normalizedQuery) return;
@@ -92,8 +80,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		<div className="flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col">
 			{showSearch && (
 				<div
-					// No inline padding: the field then shares the menu rows' silhouette,
-					// since their highlight spans the same content box.
 					className={cn("relative shrink-0 pb-1", searchable ? "mb-1 border-b border-border" : undefined)}
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
@@ -154,10 +140,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {
-						// A submenu's keys bubble here through React, not the DOM; they are its own.
 						if (!event.currentTarget.contains(event.target as Node)) return;
 						if (event.key === "ArrowDown" && hasMore) {
-							// Load the next batch only as focus nears the last rendered row.
 							const items = event.currentTarget.querySelectorAll('[role^="menuitem"]');
 							const index = Array.prototype.indexOf.call(items, event.target);
 							if (index >= items.length - 10) loadMore();
@@ -165,7 +149,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						if (!searchRef.current) return;
 						const firstItem = event.currentTarget.querySelector('[role^="menuitem"]');
 						if ((event.key === "ArrowUp" && event.target === firstItem) || (event.key === "Tab" && event.shiftKey)) {
-							// Return to search before the menu's roving focus handles the key.
 							event.preventDefault();
 							event.stopPropagation();
 							searchRef.current.focus();
@@ -179,9 +162,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 							return;
 						}
 						if (event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey) {
-							// Narrow the catalog instead of letting the menu's typeahead jump
-							// to whichever row starts with the typed character. Space stays
-							// with the menu, where it selects the focused row.
 							event.preventDefault();
 							event.stopPropagation();
 							searchRef.current.focus();

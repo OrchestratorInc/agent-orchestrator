@@ -20,7 +20,7 @@ func (crashDuringForkLoadDriver) ForkIntoHost(ctx context.Context, _, _ string, 
 	if err := cfg.RecordFork(ctx, "returned-child"); err != nil {
 		return nil, err
 	}
-	os.Exit(17) // A daemon crash after session/fork returned, before session/load returned.
+	os.Exit(17)
 	return nil, nil
 }
 
@@ -74,7 +74,6 @@ func TestReturnedForkSurvivesDaemonCrashForCleanup(t *testing.T) {
 	if err != nil || len(files) != 1 {
 		t.Fatalf("failed cleanup lost record: %v %v", files, err)
 	}
-	// A second crash may recover the pending cleanup through Electron's JSON snapshot.
 	body, err := json.Marshal(svc.sides.store.(*memorySideStore).export("launch"))
 	if err != nil {
 		t.Fatal(err)

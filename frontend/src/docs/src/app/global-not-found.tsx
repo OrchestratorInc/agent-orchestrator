@@ -11,7 +11,6 @@ export const metadata: Metadata = {
   robots: { index: false },
 };
 
-// Each language has its own root layout, so the 404 page brings its own.
 export default function NotFoundPage() {
   return (
     <html lang="en" className={`dark overscroll-none ${GeistSans.variable}`} suppressHydrationWarning>

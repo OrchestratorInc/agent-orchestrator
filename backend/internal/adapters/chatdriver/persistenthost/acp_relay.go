@@ -14,30 +14,14 @@ import (
 )
 
 const (
-	// ACPEventIDMetaKey identifies one replayable provider event. AO assigns the
-	// value to every durable event derived from that frame.
 	ACPEventIDMetaKey = "ao.persistentEventId"
 
-	// ACPPromptStalledDataKey marks the error data of a prompt the stall
-	// watchdog failed. The daemon reads it to tell a silent adapter from a
-	// provider that answered with an error.
 	ACPPromptStalledDataKey = "ao.promptStalled"
 
-	// promptStallTimeout is how long an in-flight session/prompt may hear
-	// nothing from the adapter, while the adapter is not waiting on the client,
-	// before the relay settles it synthetically. A live turn streams tool
-	// calls, message chunks, or state changes continuously, so a silent gap
-	// this long means the adapter's turn state machine lost the completion
-	// (upstream claude-agent-acp#1145 class) and no response will ever arrive.
 	promptStallTimeout = 15 * time.Minute
 
-	// promptStallCheckInterval is how often the host re-checks for a stalled
-	// prompt.
 	promptStallCheckInterval = 30 * time.Second
 
-	// promptStallCancelGrace is how long the relay waits, after cancelling a
-	// stalled prompt, for the adapter to answer it before giving up on the
-	// adapter and settling the prompt itself.
 	promptStallCancelGrace = 30 * time.Second
 )
 
@@ -80,46 +64,29 @@ type acpClientFrames struct {
 	client   []byte
 }
 
-// acpRelay is deliberately only a JSON-RPC correlation layer. The pinned ACP
-// SDK and all provider semantics remain in the adapter; the host owns only the
-// connection state that cannot be reconstructed after a daemon dies.
 type acpRelay struct {
-	identity          string
-	nextRequestID     int64
-	nextEventID       uint64
-	nextInteractionID uint64
-	pending           map[string]acpClientRequest
-	serverRequests    map[string]acpServerRequest
-	serverOrder       []string
-	commands          map[string]acpInteractionCommand
-	commandOrder      []string
-	promptReplay      []acpReplayEntry
-	state             ACPState
-	promptJournal     *acpPromptJournal
-	promptResult      []byte
-	// availableCommands holds the latest command catalog the adapter announced
-	// and availableCommandsSession the session it belongs to; see
-	// ACPState.AvailableCommands.
+	identity                 string
+	nextRequestID            int64
+	nextEventID              uint64
+	nextInteractionID        uint64
+	pending                  map[string]acpClientRequest
+	serverRequests           map[string]acpServerRequest
+	serverOrder              []string
+	commands                 map[string]acpInteractionCommand
+	commandOrder             []string
+	promptReplay             []acpReplayEntry
+	state                    ACPState
+	promptJournal            *acpPromptJournal
+	promptResult             []byte
 	availableCommands        json.RawMessage
 	availableCommandsSession string
 	cancelRequested          bool
-	// lastActivityAt stamps the last adapter output, prompt registration, or
-	// client answer to an adapter request, so the stall watchdog can tell a
-	// live turn from a lost one.
-	lastActivityAt time.Time
-	// stallCancelledAt is when the watchdog cancelled the active prompt for
-	// silence. The prompt stays active until the adapter answers it, so output
-	// the cancelled turn still emits is not attributed to the next prompt.
-	stallCancelledAt time.Time
-	// abandonedPrompts holds provider ids of prompts the watchdog failed. The
-	// adapter's own late answer to one is dropped, not forwarded.
-	abandonedPrompts map[string]struct{}
-	// heldResult is the answer that settles the turn, kept back while a steer
-	// command (keepsTurn) is still running. See providerFrame.
-	heldResult *acpHeldResult
+	lastActivityAt           time.Time
+	stallCancelledAt         time.Time
+	abandonedPrompts         map[string]struct{}
+	heldResult               *acpHeldResult
 }
 
-// acpHeldResult is a prompt answer the relay settles the turn with later.
 type acpHeldResult struct {
 	id       json.RawMessage
 	request  acpClientRequest
@@ -155,8 +122,6 @@ func (r *acpRelay) snapshot() *ACPState {
 	return &state
 }
 
-// captureAvailableCommands keeps the latest available_commands_update. ACP
-// updates replace the whole catalog, so only the last one matters.
 func (r *acpRelay) captureAvailableCommands(method string, params json.RawMessage) {
 	if method != "session/update" {
 		return
@@ -289,7 +254,6 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 	id := envelope["id"]
 	if method == "" && len(id) > 0 {
 		r.removeServerRequest(string(id))
-		// The adapter resumes the turn once the client answers it.
 		r.lastActivityAt = time.Now()
 	}
 	if method == "" || len(id) == 0 || string(id) == "null" {
@@ -299,14 +263,10 @@ func (r *acpRelay) clientFrame(ctx context.Context, frame []byte, generation uin
 	steer := false
 	if method == "session/prompt" {
 		steer = isSteerPrompt(envelope["params"])
-		// A turn being cancelled, by Stop or by the stall watchdog, takes no more
-		// steers: the agent would run one as fresh work once the cancel lands.
 		live := r.state.ActivePrompt && r.state.PendingResultEventID == "" &&
 			!r.cancelRequested && r.stallCancelledAt.IsZero()
 		switch {
 		case steer && !live:
-			// The turn this steer was meant for has ended or is ending. Forwarded,
-			// the agent would start a turn of its own that AO has no row for.
 			return acpClientFrames{client: steerTurnEndedFrame(id)}, nil
 		case !steer && (r.state.ActivePrompt || r.state.PendingResultEventID != ""):
 			return acpClientFrames{client: rpcErrorFrame(id, -32602, "previous ACP prompt is active or not acknowledged", nil)}, nil
@@ -404,9 +364,6 @@ func (r *acpRelay) clientCancellation(
 	return fallback
 }
 
-// providerFrame returns the daemon-facing frame and whether the ACP profile owns
-// its replay. A retained frame must not also enter the generic detached buffer or
-// it would be replayed twice.
 func (r *acpRelay) providerFrame(
 	ctx context.Context,
 	frame []byte,
@@ -463,8 +420,6 @@ func (r *acpRelay) providerFrame(
 	r.captureResponse(request, envelope)
 
 	if request.method == "session/prompt" && keepsTurn(request.params) {
-		// A steer command's answer is never the turn's result; that comes from
-		// the turn's own prompts.
 		var answer []byte
 		if attached && request.generation == generation {
 			answer = rewriteResponseID(envelope, request.clientID, frame)
@@ -473,31 +428,20 @@ func (r *acpRelay) providerFrame(
 		if held == nil || r.pendingSteerCommand() {
 			return answer, false, nil
 		}
-		// The turn's own prompt answered while this command still ran, so its
-		// answer waited for this one and settles the turn now.
 		r.heldResult = nil
 		result, retained, err := r.settleTurn(held.id, held.request, held.envelope, held.frame, generation, attached)
 		return append(answer, result...), retained, err
 	}
 	if request.method == "session/prompt" && r.newestPendingPrompt() != "" {
-		// Another prompt of the turn still runs, so this answer is a handoff or a
-		// refused steer prompt: the turn goes on, and its result is the answer of
-		// the last prompt to return.
 		if !attached {
 			return nil, false, nil
 		}
 		if request.generation != generation {
-			// A prompt the previous attachment sent. The reattached controller
-			// adopted its turn and learns of the handoff this way.
 			return promptAnswerNotification(ACPPromptHandoffMethod, envelope, ""), false, nil
 		}
 		return rewriteResponseID(envelope, request.clientID, frame), false, nil
 	}
 	if request.method == "session/prompt" && r.pendingSteerCommand() {
-		// A steer command is still running. Hermes runs the guidance inside its
-		// `/steer` request when the turn ended just before the command arrived
-		// ("No active turn"), so the turn stays open until the command answers:
-		// its output belongs to this turn, and the agent is not idle yet.
 		r.heldResult = &acpHeldResult{id: id, request: request, envelope: envelope, frame: frame}
 		return nil, false, nil
 	}
@@ -510,9 +454,6 @@ func (r *acpRelay) providerFrame(
 	return rewriteResponseID(envelope, request.clientID, frame), false, nil
 }
 
-// settleTurn ends the running turn with the answer to one of its own prompts:
-// that answer becomes the turn's result and carries the host's receipt. The
-// caller has removed the prompt from pending.
 func (r *acpRelay) settleTurn(
 	id json.RawMessage,
 	request acpClientRequest,
@@ -522,10 +463,6 @@ func (r *acpRelay) settleTurn(
 	attached bool,
 ) ([]byte, bool, error) {
 	if !r.stallCancelledAt.IsZero() {
-		// The adapter has answered the last prompt of the turn the watchdog
-		// cancelled. Whatever it says, the turn ended because the adapter went
-		// silent. An earlier prompt's answer passed through providerFrame
-		// unchanged: the marker says the adapter is quiet, which holds only now.
 		r.stallCancelledAt = time.Time{}
 		failure := map[string]json.RawMessage{}
 		_ = json.Unmarshal(stalledPromptFailure(id), &failure)
@@ -548,8 +485,6 @@ func (r *acpRelay) settleTurn(
 	return rewritten, true, nil
 }
 
-// pendingSteerCommand reports whether a steer command (keepsTurn) is still
-// waiting for its answer.
 func (r *acpRelay) pendingSteerCommand() bool {
 	for _, request := range r.pending {
 		if request.method == "session/prompt" && keepsTurn(request.params) {
@@ -559,27 +494,6 @@ func (r *acpRelay) pendingSteerCommand() bool {
 	return false
 }
 
-// failStalledPrompt fails an in-flight session/prompt that has heard nothing
-// from the adapter for promptStallTimeout. It gives the turn a terminal state
-// instead of leaving the session's Working indicator hanging until the next
-// controller restart. A turn waiting on the client (a permission prompt or an
-// elicitation) is not silent; the daemon owns that wait.
-//
-// It works in two steps. The first sends the adapter a session/cancel and keeps
-// the prompt active: the adapter still owns the turn, and anything it emits
-// until it answers belongs to that turn, not to the prompt the controller sends
-// next. When the adapter answers the turn's last prompt, providerFrame turns
-// that answer into the stall failure, which marks the adapter quiet and lets
-// the controller release its queue. If it has not answered every prompt after
-// promptStallCancelGrace it is wedged, and the second step settles each prompt
-// still waiting without it and without the marker, so the queue stays held: the
-// adapter may still emit from the old turn. Its late answers are dropped.
-//
-// The prompt may belong to an earlier controller generation: providerFrame then
-// turns the failure into the private prompt result, which the reattached
-// controller finishes against the turn it adopted. The returned client frame is
-// nil while detached; replay delivers it on attach. Callers must hold the host
-// mutex.
 func (r *acpRelay) failStalledPrompt(
 	ctx context.Context,
 	generation uint64,
@@ -607,17 +521,8 @@ func (r *acpRelay) failStalledPrompt(
 		}, nil)
 		return acpClientFrames{provider: cancel}, nil
 	}
-	// The adapter ignored the cancel. Settle without the stall marker: the
-	// adapter may still emit from the old turn, so the controller must hold its
-	// queue like any other failure rather than start a prompt on it. A steered
-	// turn has several prompts in flight; every one still waiting fails, oldest
-	// first, so the newest failure is the turn's result and no prompt the
-	// controller is waiting on is left unanswered.
 	r.stallCancelledAt = time.Time{}
 	if held := r.heldResult; held != nil {
-		// The turn's own prompt answered, but a steer command ignored the
-		// cancel. A held success would release the queue into a wedged adapter,
-		// so the turn fails like the prompts that are still waiting.
 		failure := map[string]json.RawMessage{}
 		_ = json.Unmarshal(rpcErrorFrame(held.id, -32603, fmt.Sprintf(
 			"provider stopped responding: no ACP output for %s and no answer to the cancel; failing the stalled prompt",
@@ -639,9 +544,6 @@ func (r *acpRelay) failStalledPrompt(
 	return acpClientFrames{client: client}, nil
 }
 
-// pendingPrompts returns the provider ids of the session/prompt requests still
-// waiting for an answer, oldest first, and the session params a session/cancel
-// for them takes.
 func (r *acpRelay) pendingPrompts() ([]string, json.RawMessage) {
 	var ids []int64
 	var sessionParams json.RawMessage
@@ -668,9 +570,6 @@ func (r *acpRelay) pendingPrompts() ([]string, json.RawMessage) {
 	return stalled, sessionParams
 }
 
-// stalledPromptFailure is the error a prompt ends with when the watchdog
-// cancelled it for silence. The data marker lets the daemon tell it from a
-// provider that answered with an error.
 func stalledPromptFailure(id json.RawMessage) []byte {
 	return rpcErrorFrame(id, -32603, fmt.Sprintf(
 		"provider stopped responding: no ACP output for %s; failing the stalled prompt", promptStallTimeout),
@@ -793,8 +692,6 @@ func (r *acpRelay) captureResponse(request acpClientRequest, envelope map[string
 	}
 }
 
-// newestPendingPrompt returns the provider id of the newest session/prompt
-// still waiting for an answer whose answer can be the turn's result, or "".
 func (r *acpRelay) newestPendingPrompt() string {
 	newest, newestID := "", int64(-1)
 	for providerID, request := range r.pending {
@@ -808,8 +705,6 @@ func (r *acpRelay) newestPendingPrompt() string {
 	return newest
 }
 
-// keepsTurn reports whether session/prompt params mark a steer command whose
-// answer is never the turn's result (ACPSteerKeepsTurnMetaKey).
 func keepsTurn(params json.RawMessage) bool {
 	var prompt struct {
 		Meta map[string]any `json:"_meta"`
@@ -821,7 +716,6 @@ func keepsTurn(params json.RawMessage) bool {
 	return keeps
 }
 
-// isSteerPrompt reports whether session/prompt params carry ACPSteerPromptMetaKey.
 func isSteerPrompt(params json.RawMessage) bool {
 	var prompt struct {
 		Meta map[string]any `json:"_meta"`
@@ -847,9 +741,6 @@ func promptResultNotification(response map[string]json.RawMessage, eventID strin
 	return promptAnswerNotification(ACPPromptResultMethod, response, eventID)
 }
 
-// promptAnswerNotification carries a session/prompt answer to a controller
-// that has no request of its own to match it to. eventID is "" for an answer
-// that is not the turn's result.
 func promptAnswerNotification(method string, response map[string]json.RawMessage, eventID string) []byte {
 	params := map[string]json.RawMessage{}
 	if result := response["result"]; len(result) > 0 {
@@ -868,7 +759,6 @@ func promptAnswerNotification(method string, response map[string]json.RawMessage
 	}, nil)
 }
 
-// steerTurnEndedFrame refuses a steer prompt that arrived after its turn ended.
 func steerTurnEndedFrame(id json.RawMessage) []byte {
 	encoded, _ := json.Marshal(map[string]any{
 		"code": -32602, "message": "the turn ended before the steer prompt arrived",
@@ -882,7 +772,6 @@ func steerTurnEndedFrame(id json.RawMessage) []byte {
 func injectResultMeta(envelope map[string]json.RawMessage, key, value string) {
 	var rpcErr map[string]json.RawMessage
 	if json.Unmarshal(envelope["error"], &rpcErr) == nil && rpcErr != nil {
-		// Error data can be any JSON value. Wrap it rather than overwrite it.
 		data := map[string]json.RawMessage{"providerData": rpcErr["data"]}
 		data[key], _ = json.Marshal(value)
 		if len(data["providerData"]) == 0 {

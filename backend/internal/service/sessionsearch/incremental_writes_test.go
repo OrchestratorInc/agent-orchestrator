@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// longConversation seeds a session with many messages and a queued prompt at
-// the end that the tests can edit.
 func longConversation(t *testing.T, store *sqlite.Store, svc *sessionsearch.Service) domain.SessionRecord {
 	t.Helper()
 	ctx := context.Background()
@@ -37,10 +35,6 @@ func longConversation(t *testing.T, store *sqlite.Store, svc *sessionsearch.Serv
 	return session
 }
 
-// Found in the database review: every pass over a conversation rewrote all of
-// its documents, so one edited message in a 7,500-document conversation was
-// 7,500 index writes. A pass now writes only the documents whose content
-// changed.
 func TestAnEditWritesOnlyTheEditedDocument(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -71,7 +65,6 @@ func TestAnEditWritesOnlyTheEditedDocument(t *testing.T) {
 	}
 }
 
-// A rolled-back turn's documents are deleted, and nothing else is written.
 func TestARollbackDeletesOnlyTheDiscardedDocuments(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -117,10 +110,6 @@ func TestARollbackDeletesOnlyTheDiscardedDocuments(t *testing.T) {
 	}
 }
 
-// Found in the database review: when a conversation's stamp moved but nothing
-// searchable changed (a revision or status bump), the pass did not record the
-// new stamp, so every later sweep re-read the whole conversation (27 MB for
-// the largest on a real archive).
 func TestAChangeTheIndexCannotSeeRecordsTheNewStamp(t *testing.T) {
 	dir := t.TempDir()
 	store := sqlitetest.MustOpenAt(t, dir)

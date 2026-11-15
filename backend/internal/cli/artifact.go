@@ -12,8 +12,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// maxListedRootFiles bounds how many unregistered root files one
-// ao artifact add names; the rest are counted.
 const maxListedRootFiles = 5
 
 type artifactRegisterRequest struct {
@@ -71,8 +69,6 @@ func (c *commandContext) artifactAdd(ctx context.Context, out io.Writer, paths [
 	return err
 }
 
-// artifactAddSummary tells the agent what the user will and won't see. Files
-// left unregistered do not appear as artifacts, and nothing else says so.
 func artifactAddSummary(r artifactRegisterResponse) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Registered %s.\n", strings.Join(r.Registered, ", "))

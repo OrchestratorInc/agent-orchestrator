@@ -9,14 +9,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 )
 
-// managedBinDir is the directory of AO's managed harness launchers, set once
-// at daemon start. Each launcher there points at the harness's current
-// versioned install, so a path resolved once keeps starting whatever version
-// is current, and an update never touches files a running session uses.
 var managedBinDir atomic.Pointer[string]
 
-// SetManagedBinDir points every resolver at AO's managed launchers. An empty
-// dir turns the lookup off.
 func SetManagedBinDir(dir string) {
 	if strings.TrimSpace(dir) == "" {
 		managedBinDir.Store(nil)
@@ -25,9 +19,6 @@ func SetManagedBinDir(dir string) {
 	managedBinDir.Store(&dir)
 }
 
-// ManagedBinary returns AO's managed launcher for the first of names that has
-// one. Resolvers check it before PATH: once AO manages a harness, its sessions
-// run AO's copy, not whichever copy PATH finds.
 func ManagedBinary(names ...string) (string, bool) {
 	dir := managedBinDir.Load()
 	if dir == nil {
@@ -43,9 +34,6 @@ func ManagedBinary(names ...string) (string, bool) {
 	return "", false
 }
 
-// ManagedCurrentDir returns the current release directory of target when
-// launcher is one of AO's managed launchers. A resolver that needs a file
-// inside the install, not the launcher, looks there.
 func ManagedCurrentDir(launcher, target string) (string, bool) {
 	dir := managedBinDir.Load()
 	if dir == nil || launcher == "" || target == "" {
@@ -66,8 +54,6 @@ func managedCandidates(dir, name string) []string {
 	if runtime.GOOS != "windows" {
 		return []string{filepath.Join(dir, name)}
 	}
-	// Windows launchers are .cmd shims; accept a bare name or one with any
-	// executable extension.
 	base := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(name, ".exe"), ".cmd"), ".bat")
 	return []string{filepath.Join(dir, base+".cmd")}
 }

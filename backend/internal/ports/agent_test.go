@@ -9,9 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestMetadataKeyAgentSessionIDMatchesDomainJSONTag pins the hand-maintained
-// invariant documented on ports.MetadataKeyAgentSessionID: a silent rename on
-// either side would break session restore.
 func TestMetadataKeyAgentSessionIDMatchesDomainJSONTag(t *testing.T) {
 	field, ok := reflect.TypeOf(domain.SessionMetadata{}).FieldByName("AgentSessionID")
 	if !ok {

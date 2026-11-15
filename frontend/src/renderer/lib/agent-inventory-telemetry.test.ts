@@ -6,10 +6,6 @@ import { agentReadiness } from "../test/agent-readiness-fixtures";
 const catalog = (agents: AgentReadiness["agents"] = []): AgentReadiness => ({ agents });
 
 describe("agent inventory", () => {
-	// The open question is whether people ever configure more than one agent.
-	// ao.session.spawned only shows which harness ran, so an install with six
-	// authorized agents that always picks one looked identical to one that has
-	// only that one.
 	it("counts installed, authorized, and supported separately", () => {
 		const inventory = buildAgentInventory(
 			catalog(
@@ -26,8 +22,6 @@ describe("agent inventory", () => {
 		expect(inventory.supported_count).toBe(23);
 	});
 
-	// Sorted so the same set of agents always produces the same value and can be
-	// grouped in analysis rather than fragmenting by ordering.
 	it("reports authorized agent ids sorted and stable", () => {
 		const a = buildAgentInventory(catalog([agentReadiness("codex"), agentReadiness("claude-code"), agentReadiness("cursor")]));
 		const b = buildAgentInventory(catalog([agentReadiness("cursor"), agentReadiness("codex"), agentReadiness("claude-code")]));
@@ -42,7 +36,6 @@ describe("agent inventory", () => {
 		});
 	});
 
-	// Bounded so a registry that grows cannot turn one property into a long string.
 	it("bounds the joined id list", () => {
 		const many = Array.from({ length: 80 }, (_, i) => agentReadiness(`agent-name-${i}`));
 		const inventory = buildAgentInventory(catalog(many));

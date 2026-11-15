@@ -2,7 +2,6 @@ package modelcatalog
 
 import "strings"
 
-// envFileHasKey checks the final parsed assignment, including empty overrides.
 func envFileHasKey(path, name string) bool {
 	raw, err := readModelConfig(path)
 	if err != nil {
@@ -11,9 +10,6 @@ func envFileHasKey(path, name string) bool {
 	return credentialPresence(parseDotenv(raw)[name]) != ""
 }
 
-// parseDotenv reads plain dotenv assignments without evaluating shell commands
-// or interpolating variables. Quoted hashes are values; unquoted comments and
-// surrounding whitespace are not. The last assignment to a name wins.
 func parseDotenv(raw []byte) map[string]string {
 	values := map[string]string{}
 	for _, line := range strings.Split(string(raw), "\n") {
@@ -42,7 +38,7 @@ func parseDotenv(raw []byte) map[string]string {
 				end++
 			}
 			if end == len(value) {
-				continue // Ignore malformed, unterminated quotes.
+				continue
 			}
 			value = value[1:end]
 		} else {

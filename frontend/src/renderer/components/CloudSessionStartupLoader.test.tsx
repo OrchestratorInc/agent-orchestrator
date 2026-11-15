@@ -60,9 +60,7 @@ describe("CloudSessionStartupLoader", () => {
 		const view = mount({ activeIndex: 0, queuedMessage: "Fix the flaky login test\nand add a regression test" });
 		const message = screen.getByRole("figure", { name: "Your message, sent when the workspace is ready" });
 		expect(message).toHaveTextContent("Fix the flaky login test and add a regression test");
-		// It reads as the chat's queued message: the agent has not seen it yet.
 		expect(within(message).getByText(/Fix the flaky login test/)).toHaveAttribute("data-queued");
-		// The steps still show, after it.
 		const steps = screen.getByRole("status", { name: "Session setup activity" });
 		expect(message.compareDocumentPosition(steps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		view.rerender(<TooltipProvider><CloudSessionStartupLoader activeIndex={3} completed queuedMessage="Fix it" /></TooltipProvider>);

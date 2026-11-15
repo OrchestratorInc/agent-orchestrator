@@ -57,7 +57,6 @@ func fixture(t *testing.T, root, cwd string) string {
 	turn := put(field(1, turnBody))
 	rootBody := append(field(9, []byte("file:///source/workspace")), field(8, turn)...)
 	rootID := put(rootBody)
-	// An abandoned message is present in the store but unreachable from the root.
 	put(field(1, []byte("abandoned prompt")))
 	metadata, err := json.Marshal(map[string]any{"agentId": testID, "latestRootBlobId": hex.EncodeToString(rootID), "name": "Synthetic chat", "createdAt": 1793600000000, "lastUsedModel": "synthetic-model"})
 	if err != nil {
@@ -115,7 +114,6 @@ func TestCopyKeepsSourceAndExistingNativeCopy(t *testing.T) {
 	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("copy permissions = %v, %v", info, err)
 	}
-	// A later open must keep AO's already modified copy.
 	db, err := sql.Open("sqlite", target)
 	if err != nil {
 		t.Fatal(err)
@@ -174,8 +172,6 @@ func TestCopyRetriesAfterInterruptedPublication(t *testing.T) {
 	source := fixture(t, root, cwd)
 	failure := errors.New("synthetic publication failure")
 	_, err := copyIn(context.Background(), LayoutTerminal, root, source, launch, "", func(stage, target string) error {
-		// At this boundary the complete native directory is ready, but no
-		// target exists yet. An interruption cannot leave a partial target.
 		if _, err := Read(context.Background(), root, filepath.Join(stage, "store.db")); err == nil {
 			t.Fatal("staging directory must not masquerade as a native UUID")
 		}

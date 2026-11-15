@@ -71,7 +71,6 @@ describe("updateFailurePhase", () => {
 		const stalled: UpdateStatus = { state: "error", message: "Download stopped responding. Try again." };
 		expect(updateFailurePhase(stalled, "download")).toBe("download");
 		expect(updateFailurePhase(stalled, "install")).toBe("install");
-		// With nothing in flight it is a failed check, which stays out of the sidebar.
 		expect(updateFailurePhase(stalled, null)).toBeNull();
 	});
 
@@ -104,8 +103,6 @@ describe("SidebarUpdateRow retry", () => {
 			{ state: "preparing", version: "9.9.9", staged: { version: "9.9.9", stagedAt: 1, escalated: false, ready: false } },
 			onRequestInstall,
 		);
-		// handleMacStagingFailure() discards the staged build and sends an
-		// unlabelled error with neither `version` nor `staged`.
 		view.rerender({ state: "error", message: "Couldn't prepare the update." });
 
 		await userEvent.click(screen.getByRole("button", { name: "Retry update" }));

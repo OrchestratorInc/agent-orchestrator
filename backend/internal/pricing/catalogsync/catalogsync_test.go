@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// Break caught: emitting raw upstream names, floating-point spellings, or a
-// provider blob whose address is not its exact canonical JSON bytes.
 func TestBuildEmitsCanonicalContentAddressedCatalog(t *testing.T) {
 	upstream := []byte(`{
   "OpenAI/GPT-4o": {
@@ -61,8 +59,6 @@ func TestBuildEmitsCanonicalContentAddressedCatalog(t *testing.T) {
 	}
 }
 
-// Break caught: treating conflicting provider/model records as independent
-// models would silently select an arbitrary price.
 func TestBuildDropsConflictingDuplicatesAndUnreadableEntries(t *testing.T) {
 	upstream := `{
 "openai/gpt-test":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":2},
@@ -82,8 +78,6 @@ func TestBuildDropsConflictingDuplicatesAndUnreadableEntries(t *testing.T) {
 	}
 }
 
-// Break caught: accepting unsupported LiteLLM variants as base prices, or
-// allowing a reviewed provider to disappear without failing the catalog build.
 func TestBuildFiltersUnsupportedRecordsAndRequiresEveryProvider(t *testing.T) {
 	upstream := `{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
@@ -97,8 +91,6 @@ func TestBuildFiltersUnsupportedRecordsAndRequiresEveryProvider(t *testing.T) {
 	}
 }
 
-// Break caught: a metadata-only LiteLLM entry preventing the catalog from
-// including another, fully priced model from the same reviewed provider.
 func TestBuildIgnoresSupportedModeRecordsWithoutBaseRates(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
@@ -111,8 +103,6 @@ func TestBuildIgnoresSupportedModeRecordsWithoutBaseRates(t *testing.T) {
 	}
 }
 
-// Break caught: decimal and scientific whole-number rates emitting a trailing
-// decimal point, then making the generated catalog fail its own validator.
 func TestBuildCanonicalizesWholeDecimalAndScientificRates(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
@@ -128,8 +118,6 @@ func TestBuildCanonicalizesWholeDecimalAndScientificRates(t *testing.T) {
 	}
 }
 
-// Break caught: LiteLLM names Anthropic's one-hour cache-creation price with
-// the above_1hr suffix. Reading a made-up key silently drops the rate.
 func TestBuildMapsLiteLLMAnthropicOneHourCacheCreationRate(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1,"cache_creation_input_token_cost_above_1hr":0.000006},
@@ -142,8 +130,6 @@ func TestBuildMapsLiteLLMAnthropicOneHourCacheCreationRate(t *testing.T) {
 	}
 }
 
-// Break caught: sub-one-dollar decimal spellings kept insignificant trailing
-// zeroes, producing blobs rejected by the stricter runtime decoder.
 func TestNormalizeDecimalRemovesFractionalTrailingZeroes(t *testing.T) {
 	for input, want := range map[string]string{
 		"0.0010":     "0.001",
@@ -160,8 +146,6 @@ func TestNormalizeDecimalRemovesFractionalTrailingZeroes(t *testing.T) {
 	}
 }
 
-// Break caught: identical optional cache prices used distinct string pointers,
-// so canonical duplicate records were incorrectly reported as conflicting.
 func TestBuildDeduplicatesIdenticalOptionalRates(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
@@ -175,8 +159,6 @@ func TestBuildDeduplicatesIdenticalOptionalRates(t *testing.T) {
 	}
 }
 
-// Break caught: trusting an in-range int64 exponent could make normalization
-// panic or attempt an enormous allocation while expanding scientific notation.
 func TestNormalizeDecimalRejectsUnboundedScientificExponent(t *testing.T) {
 	const helperEnv = "AO_CATALOGSYNC_HUGE_EXPONENT_HELPER"
 	if os.Getenv(helperEnv) == "1" {
@@ -219,11 +201,6 @@ func buildBlobs(t *testing.T, upstream []byte) map[string]providerBlob {
 	return blobs
 }
 
-// Break caught: the feed carried an Anthropic 1-hour cache-write rate belonging
-// to a different model — 5x too low for claude-3-opus-20240229, 12x too high
-// for claude-3-haiku-20240307. Canonical-decimal validation accepted both, so
-// the daily sync shipped them and every 1-hour cache write on those models was
-// billed against a number Anthropic never charged.
 func TestBuildDropsImplausibleAnthropicCacheTiers(t *testing.T) {
 	upstream := []byte(`{
   "anthropic/one-hour-below-five-minute": {"litellm_provider":"anthropic","mode":"chat",
@@ -253,8 +230,6 @@ func TestBuildDropsImplausibleAnthropicCacheTiers(t *testing.T) {
 		wantWrite1H  string
 		wantSurvival string
 	}{
-		// The 5-minute tier is sound in both, so only the hour is dropped: an
-		// absent rate prices that bucket as unknown, which is the honest answer.
 		{modelID: "one-hour-below-five-minute", wantWrite: "0.00001875", wantSurvival: "5m survives"},
 		{modelID: "one-hour-far-above-input", wantWrite: "0.0000003", wantSurvival: "5m survives"},
 		{modelID: "plausible", wantWrite: "0.00000625", wantWrite1H: "0.00001", wantSurvival: "both survive"},
@@ -268,9 +243,6 @@ func TestBuildDropsImplausibleAnthropicCacheTiers(t *testing.T) {
 		}
 	}
 
-	// The relation is Anthropic's, not a universal law. z.ai writes to cache for
-	// free and an OpenAI fine-tune writes at half its input rate; deleting those
-	// would be the same class of error in the other direction.
 	zai := blobRates(t, blobs["zai"], "free-cache-write")
 	if got := optionalRateString(zai.CacheWriteUSDPerToken); got != "0" {
 		t.Errorf("zai free cache write = %q, want it kept", got)

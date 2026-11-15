@@ -49,8 +49,6 @@ beforeEach(() => {
 	workspace.append(composer);
 	document.body.append(workspace);
 	inertChanges = [];
-	// Record each toggle as it happens: the held commit is followed by the
-	// destination commit inside the same act().
 	observer = new MutationObserver((records) => {
 		inertChanges.push(...records.map(inertChange));
 	});
@@ -71,10 +69,8 @@ describe("useHeldSession", () => {
 
 		const renders = host.go({ sessionId: "b", projectId: "p2" });
 
-		// The held render keeps the old session and its project together.
 		expect(renders).toContainEqual({ sessionId: "a", projectId: "p1", switching: true });
 		expect(renders.at(-1)).toEqual({ sessionId: "b", projectId: "p2", switching: false });
-		// A keyboard switch leaves focus in the old composer; it must not keep it.
 		expect(document.activeElement).not.toBe(composer);
 		expect(recordedInert()).toEqual(["set", "removed"]);
 		expect(workspace).not.toHaveAttribute("inert");

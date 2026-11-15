@@ -94,10 +94,6 @@ async function addPerson(email: string) {
 	return input.closest("[data-people-field]") as HTMLElement;
 }
 
-/**
- * What the project's sharing offers: who the link can let in, and the
- * access someone added gets (picked from the menu beside the people field).
- */
 async function projectOptions(): Promise<{ audience: string[]; access: string[] }> {
 	await userEvent.click(await within(await general()).findByRole("button", { name: /Only people with access|Anyone with the link/ }));
 	const audience = (await screen.findAllByRole("menuitemradio")).map((item) => item.textContent ?? "");
@@ -111,7 +107,6 @@ async function projectOptions(): Promise<{ audience: string[]; access: string[] 
 }
 
 describe("Project settings › Sharing", () => {
-	// Radix's focus scope moves focus from a 0 ms timer when a dialog unmounts.
 	afterEach(async () => {
 		cleanup();
 		await new Promise((resolve) => setTimeout(resolve, 0));
@@ -135,7 +130,6 @@ describe("Project settings › Sharing", () => {
 		expect(within(list).getByText("Everyone in your workspace")).toBeInTheDocument();
 		expect(within(list).getByText("Northwind · 2 members")).toBeInTheDocument();
 		expect(within(list).getByText("Data infra")).toBeInTheDocument();
-		// General access, with Link settings and Copy link beside its heading.
 		const section = generalSection();
 		expect(within(section).getByRole("region", { name: "General access" })).toBeInTheDocument();
 		expect(within(section).getByRole("button", { name: "Copy link" })).toBeInTheDocument();
@@ -143,7 +137,6 @@ describe("Project settings › Sharing", () => {
 		expect(screen.queryByRole("button", { name: "Done" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
 		expect(screen.queryByRole("dialog")).toBeNull();
-		// Who has access to the whole project, never to one session.
 		expect(mocks.calls).toContainEqual(["getShareAccess", "org", "proj", undefined]);
 		expect(mocks.calls.filter((call) => call[0] === "getShareAccess" && call[3] !== undefined)).toEqual([]);
 	});
@@ -152,7 +145,6 @@ describe("Project settings › Sharing", () => {
 		wrap(<CloudProjectSharingSettings projectId="proj" cloudOrgId="org" />);
 		await accessList();
 		const field = await addPerson("dana@northwind.dev");
-		// The confirm step takes the lists' place, with Cancel and Share under it.
 		expect(await screen.findByText("They'll find it under Shared with you.")).toBeInTheDocument();
 		expect(screen.queryByRole("region", { name: "General access" })).toBeNull();
 		await userEvent.click(within(field).getByRole("button", { name: /Change access: Can watch/ }));
@@ -177,7 +169,6 @@ describe("Project settings › Sharing", () => {
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Remove access" }));
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "revokeShareGrant")).toEqual(["revokeShareGrant", "org", "proj", "g-data"]));
 		await waitFor(() => expect(within(list).queryByText("Data infra")).toBeNull());
-		// The last share gone, the workspace's people still have access: the list stays, with them on it.
 		expect(screen.getByRole("heading", { name: "People with access" })).toBeInTheDocument();
 		expect(within(list).getByText("Everyone in your workspace")).toBeInTheDocument();
 		const notice = await within(pane()!).findByRole("status");
@@ -201,7 +192,6 @@ describe("Project settings › Sharing", () => {
 		await waitFor(() => expect(copy).toHaveAttribute("data-share-copy-link", "ready"));
 		await userEvent.click(copy);
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith(SHORT));
-		// Turning it off still asks first.
 		await userEvent.click(within(await general()).getByRole("button", { name: "Anyone with the link" }));
 		await userEvent.click(await screen.findByRole("menuitemradio", { name: /Only people with access/ }));
 		expect(await screen.findByRole("dialog", { name: "Turn off link access?" })).toBeInTheDocument();
@@ -213,7 +203,6 @@ describe("Project settings › Sharing", () => {
 		expect(pane()).not.toHaveAttribute("data-settings-inline-edit");
 		await addPerson("dana@northwind.dev");
 		await screen.findByText("They'll find it under Shared with you.");
-		// Project settings closes on Esc unless the press came from here.
 		expect(pane()).toHaveAttribute("data-settings-inline-edit");
 		fireEvent.keyDown(pane()!, { key: "Escape" });
 		await waitFor(() => expect(screen.queryByText("They'll find it under Shared with you.")).toBeNull());
@@ -234,7 +223,6 @@ describe("Project settings › Sharing", () => {
 		const fromSession = await projectOptions();
 
 		expect(fromSettings).toEqual(fromSession);
-		// Today's project options, unchanged: label then description.
 		expect(fromSettings).toEqual({
 			audience: [
 				"Only people with accessOnly people with access can open it",

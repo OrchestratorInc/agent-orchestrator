@@ -8,11 +8,6 @@ import { ResponseSpinner, STEP_MARK_SLOT_CLASS } from "./ChatTimelineItems";
 
 type StepStatus = SessionProvisionStep["status"] | "failed";
 
-/**
- * The checklist a starting Chat session shows under its opening brief. The
- * shared LiveResponseStatus header stays mounted while this checklist collapses
- * on handoff. A failed start keeps its failed step and Retry.
- */
 export function SessionStartup({
 	failed,
 	steps,
@@ -33,18 +28,13 @@ export function SessionStartup({
 	retryError?: string;
 }) {
 	const { t } = useTranslation();
-	// A start that has just begun reveals its steps one by one; reopening a session
-	// part-way through setup shows them at once.
 	const [stagger] = useState(() => !failed && !steps.some((step) => step.status === "done") &&
 		steps.every((step) => !step.startedAt || Date.now() - Date.parse(step.startedAt) < 3000));
 	return (
 		<section aria-label={t("chat.startup.label")} data-testid="session-startup" data-failed={failed || undefined}>
 			<ol aria-label={t("chat.startup.steps")} className="mt-1 flex flex-col">
 				{steps.map((step, index) => {
-					// The daemon leaves the stage it stopped in "running"; the failed
-					// session is what makes that stage the one that failed.
 					const status: StepStatus = failed && step.status === "running" ? "failed" : step.status;
-					// One plain-language label per step; the workspace step reports when it is done.
 					const label = step.id === "agent"
 						? t("chat.startup.step.agent", { agent: agentName })
 						: step.id === "worktree" && status === "done"
@@ -58,9 +48,6 @@ export function SessionStartup({
 							className={cn("flex min-h-7 items-center gap-2 text-xs", stagger && "session-startup-step-in")}
 							style={stagger ? { animationDelay: `${index * 90}ms` } : undefined}
 						>
-							{/* The same slot and gap as the live row's mark above and the step
-							    rows' icons, so every mark starts on one left edge and the
-							    labels start together. */}
 							<span className={STEP_MARK_SLOT_CLASS}>
 								<StepIcon status={status} />
 							</span>
@@ -106,7 +93,6 @@ function StepIcon({ status }: { status: StepStatus }) {
 		case "failed":
 			return <X aria-hidden="true" className={cn(className, "text-destructive")} />;
 		case "pending":
-			// Not started: a dashed ring, the same mark the plan uses for a step still to come.
 			return (
 				<svg aria-hidden="true" viewBox="0 0 16 16" className={cn(className, "text-passive")}>
 					<circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeDasharray="2.6 2.7" strokeLinecap="round" />

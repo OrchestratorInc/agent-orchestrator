@@ -13,8 +13,6 @@ import (
 
 const rollbackCrash = "daemon stopped during the rollback"
 
-// rollbackCrashStore lets the switch publish the target, then stops the daemon
-// at the rollback's write, before it commits.
 type rollbackCrashStore struct {
 	*sqlite.Store
 	publishes int
@@ -65,8 +63,6 @@ func TestFailedTerminalSwitchRollbackMovesOwnerAndOptionsTogether(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Nothing of the rollback landed, so the target still owns the session with
-	// its own note: a Resume hands over again instead of replaying the task.
 	if got.Harness != domain.HarnessCodex || options.HandoffNote != "TARGET HANDOFF" {
 		t.Fatalf("after the stop: owner %q with options %+v, want the target with its handoff", got.Harness, options)
 	}

@@ -14,7 +14,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -22,8 +21,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	// Autohand's own config decides first; a key in the environment is the
-	// fallback. A config read error only surfaces when no key is set either.
 	configPath := autohandConfigPath()
 	status, configErr := autohandConfigAuthStatus(configPath)
 	if configErr == nil && status != ports.AgentAuthStatusUnknown {
@@ -48,8 +45,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if configErr != nil {
 		return ports.AgentAuthStatusUnknown, configErr
 	}
-	// The documented CLI flow prompts for browser sign-in on first use; it does
-	// not expose a stable non-interactive `auth status` command.
 	return ports.AgentAuthStatusUnknown, nil
 }
 
@@ -92,10 +87,6 @@ func autohandCloudAuthReady(config map[string]json.RawMessage) (ready, known boo
 	if err := json.Unmarshal(authRaw, &auth); err != nil {
 		return false, false
 	}
-	// apiKeyHelper is a documented command which Autohand invokes to obtain an
-	// API key. Its presence alone does not prove the command still exists or
-	// yields a usable key, and AO must not execute arbitrary user commands for
-	// an advisory probe.
 	return usableSecret(auth.Token), true
 }
 

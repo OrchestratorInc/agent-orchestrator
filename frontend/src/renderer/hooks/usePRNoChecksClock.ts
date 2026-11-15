@@ -2,11 +2,6 @@ import { useEffect, useReducer } from "react";
 import type { SessionPRSummary } from "./useSessionScmSummary";
 import { noChecksSettlesAt } from "../lib/pr-display";
 
-/**
- * Renders again when the first of these PRs' empty rollups settles into "no
- * checks" (see prHasNoChecks), so a view showing "Waiting for checks" turns
- * ready without anything else changing.
- */
 export function usePRNoChecksClock(prs: readonly (SessionPRSummary | undefined)[]): void {
 	const [, tick] = useReducer((n: number) => n + 1, 0);
 	const now = Date.now();

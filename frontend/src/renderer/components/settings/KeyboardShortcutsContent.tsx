@@ -75,8 +75,6 @@ export function eventBinding(event: KeyboardEvent): ShortcutBinding | null {
 	if (ignoredRecordingKeys.has(event.key) || event.getModifierState?.("AltGraph")) return null;
 	return {
 		key: event.key.length === 1 ? event.key.toLowerCase() : event.key,
-		// Keys whose `key` shifts with modifiers or layout are matched by physical code too.
-		// Option also rewrites letters on macOS (⌥B types "∫"), so those keep their code.
 		...(codeMatchedKeys.has(event.code) || (event.altKey && /^(Key[A-Z]|Digit\d)$/.test(event.code))
 			? { code: event.code }
 			: {}),
@@ -209,8 +207,6 @@ export function KeyboardShortcutsContent({
 		}
 	};
 
-	// Like Harness, the shortcut list owns scrolling. Keep any offset inherited
-	// from another settings page out of the fixed outer viewport.
 	useLayoutEffect(() => {
 		if (!bounded) return;
 		const body = layoutRef.current?.closest<HTMLElement>(".settings-thin-scrollbar");
@@ -226,7 +222,6 @@ export function KeyboardShortcutsContent({
 	const filteredShortcuts = useMemo(() => {
 		const needles = searchText(query).split(/\s+/).filter(Boolean);
 		return APP_SHORTCUTS.filter((shortcut) => {
-			// Dictation is in preview behind Developer mode.
 			if (shortcut.id === "dictate" && !developerMode) return false;
 			if (isSplitPaneShortcut(shortcut.id) && !splitPanes) return false;
 			if (modifiedOnly && !Object.hasOwn(overrides, shortcut.id)) return false;
@@ -298,8 +293,6 @@ export function KeyboardShortcutsContent({
 				endRecording(false);
 				return;
 			}
-			// Own Escape before Radix's document listener, so it cancels capture
-			// without dismissing the surrounding settings dialog.
 			event.preventDefault();
 			event.stopImmediatePropagation();
 			if (event.key === "Escape") {

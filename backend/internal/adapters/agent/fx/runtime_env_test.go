@@ -23,7 +23,6 @@ func TestRuntimeLaunchEnvFencesHerdrIdentity(t *testing.T) {
 	if env["HERDR_SOCKET_PATH"] != filepath.Join(dataDir, "run", "fx-herdr.sock") {
 		t.Fatalf("socket path = %q", env["HERDR_SOCKET_PATH"])
 	}
-	// Versioned, separately encoded components cannot collide on delimiters.
 	if env["HERDR_PANE_ID"] != "ao:1:bWVyLTE:bGF1bmNoLTE" {
 		t.Fatalf("pane identity = %q", env["HERDR_PANE_ID"])
 	}

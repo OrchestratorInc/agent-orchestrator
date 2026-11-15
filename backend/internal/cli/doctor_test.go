@@ -109,8 +109,6 @@ func TestDoctorPrefersAndReportsConfiguredTmux(t *testing.T) {
 	}
 }
 
-// TestDoctorChecksTmuxVersionFailsOnError covers the case where tmux is found
-// but the version command fails.
 func TestDoctorChecksTmuxVersionFailsOnError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("ao doctor emits a conpty check on Windows, not tmux")
@@ -147,8 +145,6 @@ func TestDoctorWarnsWhenTmuxMissing(t *testing.T) {
 	}
 }
 
-// A headless daemon's PATH can lack Homebrew's bin directory; doctor must find
-// the same Homebrew tmux the spawn gate accepts instead of reporting it missing.
 func TestDoctorFindsHomebrewTmuxMissingFromPATH(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("only macOS probes package-manager tmux outside PATH")
@@ -192,7 +188,6 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 				}
 				return []byte(strings.TrimPrefix(name, "/bin/") + " 1.2.3\n"), nil
 			}
-			// The codex launch-flag canary probes the same binary.
 			if name == "/bin/codex" && len(args) > 0 && (args[0] == "--dangerously-bypass-hook-trust" || args[0] == "features") {
 				return []byte("ok\n"), nil
 			}
@@ -481,7 +476,6 @@ func TestDoctorTextOutputIsGrouped(t *testing.T) {
 	for _, want := range []string{
 		"Core:\nPASS config:",
 		"Tools:\nPASS git:",
-		// Agent harnesses section — spot-check original three plus new additions.
 		"Agent harnesses:\nWARN claude-code:",
 		"WARN codex:",
 		"WARN opencode:",
@@ -501,8 +495,6 @@ func TestDoctorTextOutputIsGrouped(t *testing.T) {
 	}
 }
 
-// TestDoctorAllHarnessesPresent asserts that every agent harness in
-// registry.Harnessed() surfaces a check in the runDoctor report.
 func TestDoctorAllHarnessesPresent(t *testing.T) {
 	setConfigEnv(t)
 
@@ -511,7 +503,6 @@ func TestDoctorAllHarnessesPresent(t *testing.T) {
 		t.Fatal("registry.Harnessed() returned empty list")
 	}
 
-	// No harness binaries available — all land as WARN "not found in PATH".
 	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("git version 2.43.0\n"), nil
 	})
@@ -526,10 +517,6 @@ func TestDoctorAllHarnessesPresent(t *testing.T) {
 	}
 }
 
-// TestDoctorPathOnlyHarnessPassesOnFind covers the PATH-existence-only code
-// path (VersionArg == "") used by adapters such as cursor-agent that have no
-// stable --version flag. When the binary is found on PATH the check must pass
-// without invoking CommandOutput.
 func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	setConfigEnv(t)
 	c := doctorContext(t,
@@ -538,7 +525,6 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 			"cursor-agent": "/usr/local/bin/cursor-agent",
 		},
 		func(_ context.Context, name string, _ ...string) ([]byte, error) {
-			// Only git version calls are expected; cursor-agent has no VersionArg.
 			if name == "/bin/git" {
 				return []byte("git version 2.43.0\n"), nil
 			}
@@ -553,8 +539,6 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	}
 }
 
-// TestDoctorNewVersionedHarnessPassesWithVersion verifies that a Tier-B
-// harness with a --version flag (e.g. opencode) resolves and reports correctly.
 func TestDoctorNewVersionedHarnessPassesWithVersion(t *testing.T) {
 	setConfigEnv(t)
 	c := doctorContext(t,
@@ -594,10 +578,6 @@ func clearDoctorGitLabEnv(t *testing.T) {
 	t.Setenv("GITLAB_TOKEN", "")
 }
 
-// TestDoctorChecksAOBinaryIdentity covers the `ao-binary` check: workspace
-// hooks invoke a bare `ao hooks <agent> <event>`, so doctor must surface when
-// the `ao` on PATH is not the running binary (e.g. a legacy CLI without the
-// hooks command shadowing the Go one).
 func TestDoctorChecksAOBinaryIdentity(t *testing.T) {
 	dir := t.TempDir()
 	self := filepath.Join(dir, "ao")
@@ -626,9 +606,6 @@ func TestDoctorChecksAOBinaryIdentity(t *testing.T) {
 		{"ao in PATH is a different binary", selfExe, "", map[string]string{"ao": other}, doctorWarn, "not this binary"},
 		{"ao missing from PATH", selfExe, "", map[string]string{}, doctorWarn, "not found in PATH"},
 		{"running executable unresolvable", func() (string, error) { return "", errors.New("no exe") }, "", map[string]string{"ao": self}, doctorWarn, "could not resolve"},
-		// The running daemon is the authority: doctor may itself BE the
-		// shadowing copy, so comparing against its own executable would call
-		// the shadow a match. Both paths must be named in the warning.
 		{"ao in PATH shadows the running daemon", selfExe, daemon, map[string]string{"ao": self}, doctorWarn, "shadows the running daemon's binary " + daemon},
 		{"ao in PATH is the running daemon's binary", selfExe, daemon, map[string]string{"ao": daemon}, doctorPass, "the running daemon's binary"},
 		{"daemon binary resolves even when doctor's own does not", func() (string, error) { return "", errors.New("no exe") }, daemon, map[string]string{"ao": daemon}, doctorPass, "the running daemon's binary"},
@@ -655,15 +632,12 @@ func TestDoctorChecksAOBinaryIdentity(t *testing.T) {
 	}
 }
 
-// TestDoctorIncludesAOBinaryCheck asserts runDoctor actually surfaces the
-// ao-binary check, so the identity probe cannot silently fall out of the report.
 func TestDoctorIncludesAOBinaryCheck(t *testing.T) {
 	setConfigEnv(t)
 	c := doctorContext(t, map[string]string{"git": "/bin/git"}, func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("git version 2.43.0\n"), nil
 	})
 
-	// doctorContext's LookPath has no "ao", so the check lands as a WARN.
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "ao-binary")
 	if check.Level != doctorWarn || !strings.Contains(check.Message, "not found in PATH") {
 		t.Fatalf("ao-binary check = %+v, want WARN for missing ao", check)

@@ -6,7 +6,6 @@ import (
 	"testing"
 )
 
-// TestEncodeMessage verifies the 5-byte header and payload are written correctly.
 func TestEncodeMessage(t *testing.T) {
 	payload := []byte("hello")
 	frame, err := EncodeMessage(MsgTerminalData, payload)
@@ -29,7 +28,6 @@ func TestEncodeMessage(t *testing.T) {
 	}
 }
 
-// TestEncodeMessageZeroPayload verifies a zero-length payload encodes correctly.
 func TestEncodeMessageZeroPayload(t *testing.T) {
 	frame, err := EncodeMessage(MsgStatusReq, nil)
 	if err != nil {
@@ -46,7 +44,6 @@ func TestEncodeMessageZeroPayload(t *testing.T) {
 	}
 }
 
-// collected accumulates (type, payload) pairs received by a MessageParser.
 type collected struct {
 	typ     byte
 	payload []byte
@@ -58,7 +55,6 @@ func collect(frames *[]collected) func(byte, []byte) {
 	}
 }
 
-// TestParserSingleFrame feeds one complete frame and expects one callback.
 func TestParserSingleFrame(t *testing.T) {
 	var got []collected
 	p := NewMessageParser(collect(&got))
@@ -77,7 +73,6 @@ func TestParserSingleFrame(t *testing.T) {
 	}
 }
 
-// TestParserTwoFramesOneChunk feeds two frames concatenated and expects two callbacks.
 func TestParserTwoFramesOneChunk(t *testing.T) {
 	var got []collected
 	p := NewMessageParser(collect(&got))
@@ -98,8 +93,6 @@ func TestParserTwoFramesOneChunk(t *testing.T) {
 	}
 }
 
-// TestParserByteAtATime feeds one frame one byte at a time and expects exactly
-// one callback with the correct type and payload.
 func TestParserByteAtATime(t *testing.T) {
 	var got []collected
 	p := NewMessageParser(collect(&got))
@@ -121,7 +114,6 @@ func TestParserByteAtATime(t *testing.T) {
 	}
 }
 
-// TestParserInterleavedTypes feeds frames of different types and verifies order.
 func TestParserInterleavedTypes(t *testing.T) {
 	types := []byte{MsgStatusReq, MsgKillReq, MsgGetOutputReq, MsgStatusRes, MsgGetStyledOutputReq, MsgGetStyledOutputRes}
 	payloads := [][]byte{
@@ -156,17 +148,10 @@ func TestParserInterleavedTypes(t *testing.T) {
 	}
 }
 
-// TestParserPayloadIsCopy verifies that the payload delivered to onMessage is a
-// true copy, not a subslice of the parser's internal buffer. It exercises the
-// aliasing path that matters in practice: feed frame1, capture its payload, then
-// feed frame2 of the SAME length so the parser reuses the same buffer region;
-// frame1's captured bytes must be unchanged. This catches a regression where
-// payload was a raw subslice of p.buf instead of a make+copy.
 func TestParserPayloadIsCopy(t *testing.T) {
 	var got []collected
 	p := NewMessageParser(collect(&got))
 
-	// Feed frame1 and capture the delivered payload pointer.
 	frame1, _ := EncodeMessage(MsgTerminalData, []byte("original"))
 	p.Feed(frame1)
 	if len(got) != 1 {
@@ -174,21 +159,17 @@ func TestParserPayloadIsCopy(t *testing.T) {
 	}
 	captured := got[0].payload
 
-	// Feed frame2 with the same payload length so the parser's internal buffer
-	// overwrites the exact byte range that frame1 occupied.
-	frame2, _ := EncodeMessage(MsgTerminalInput, []byte("XXXXXXXX")) // same len as "original"
+	frame2, _ := EncodeMessage(MsgTerminalInput, []byte("XXXXXXXX"))
 	p.Feed(frame2)
 	if len(got) != 2 {
 		t.Fatalf("after frame2: got %d messages, want 2", len(got))
 	}
 
-	// frame1's captured payload must be unaffected by the subsequent Feed.
 	if !bytes.Equal(captured, []byte("original")) {
 		t.Errorf("frame1 payload aliased internal buffer: got %q after frame2", captured)
 	}
 }
 
-// TestParserZeroLengthFrame verifies a zero-payload frame (e.g. MsgStatusReq) parses.
 func TestParserZeroLengthFrame(t *testing.T) {
 	var got []collected
 	p := NewMessageParser(collect(&got))

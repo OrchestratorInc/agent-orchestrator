@@ -14,29 +14,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// WorkspaceTreeEntryType distinguishes files from directories in a
-// WorkspaceTree listing.
 type WorkspaceTreeEntryType string
 
-// Workspace tree entry type values.
 const (
 	WorkspaceTreeFile WorkspaceTreeEntryType = "file"
 	WorkspaceTreeDir  WorkspaceTreeEntryType = "dir"
 )
 
-// WorkspaceTreeEntry is one immediate child of a listed directory.
 type WorkspaceTreeEntry struct {
 	Name       string
 	Path       string
 	Type       WorkspaceTreeEntryType
-	Status     WorkspaceFileStatus // files only; zero value for directories
-	HasChanges bool                // directories only: a descendant file is non-unmodified
-	Size       int64               // files only
-	Binary     bool                // files only
+	Status     WorkspaceFileStatus
+	HasChanges bool
+	Size       int64
+	Binary     bool
 }
 
-// WorkspaceTree is the read model for one directory level of a session
-// workspace's file explorer.
 type WorkspaceTree struct {
 	Snapshot  bool
 	SessionID domain.SessionID
@@ -45,17 +39,6 @@ type WorkspaceTree struct {
 	Truncated bool
 }
 
-// ListWorkspaceTree returns the immediate children of one directory in a
-// session worktree, decorated with git status. Unlike ListWorkspaceFiles
-// (which lists every changed file across the whole worktree), this lists
-// every visible file and directory one level at a time — tracked and
-// untracked-but-not-ignored — so callers can lazily expand a tree instead of
-// paying for a full-worktree walk on every request.
-//
-// A directory that is empty, entirely gitignored, or does not exist simply
-// returns no entries; ListWorkspaceTree does not distinguish those cases
-// with a dedicated error, since the caller only needs to know that browsing
-// deeper found nothing.
 func (s *Service) ListWorkspaceTree(ctx context.Context, id domain.SessionID, rawDir string) (WorkspaceTree, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
@@ -100,11 +83,6 @@ func (s *Service) ListWorkspaceTree(ctx context.Context, id domain.SessionID, ra
 	return WorkspaceTree{SessionID: id, Path: dir, Entries: entries, Truncated: truncated}, nil
 }
 
-// workspaceTreeChildrenCached resolves one directory level of a worktree,
-// reusing the same compare/status cache (see resolveWorkspaceChanges) that
-// ListWorkspaceFiles/GetWorkspaceFile already share, and running the
-// independent git-ls-files listing concurrently with it — mirroring
-// workspaceFileSummariesCached's shape for the tree read model.
 func (s *Service) workspaceTreeChildrenCached(
 	ctx context.Context, id domain.SessionID, root, prefix string, excludePrefixes []string, dir string,
 	resolve func(ctx context.Context) workspaceCompareTarget,
@@ -128,16 +106,11 @@ func (s *Service) workspaceTreeChildrenCached(
 	return entries, truncated, nil
 }
 
-// buildWorkspaceTreeEntries slices the flat, git-aware visible-file list
-// (the same list buildWorkspaceFileSummaries uses for the full changed-files
-// view) down to one directory level, aggregating an hasChanges flag onto any
-// synthesized directory entries along the way.
 func buildWorkspaceTreeEntries(root, prefix string, excludePrefixes []string, dir string, paths []string, changes workspaceChangeSet) []WorkspaceTreeEntry {
 	dirPrefix := ""
 	if dir != "" {
 		dirPrefix = dir + "/"
 	}
-	// One directory usually has far fewer children than the repository.
 	entries := make([]WorkspaceTreeEntry, 0, min(len(paths), 64))
 	dirIndex := map[string]int{}
 	for _, rel := range paths {
@@ -229,8 +202,6 @@ func (s *Service) listWorkspaceProjectTree(ctx context.Context, rec domain.Sessi
 	}
 	baseRef := row.BaseRef
 	if strings.TrimSpace(baseRef) == "" {
-		// Compatibility for sessions created before per-repository base refs
-		// were persisted, mirroring listWorkspaceProjectFiles.
 		baseRef = defaultBranch
 	}
 	resolve := func(rctx context.Context) workspaceCompareTarget {
@@ -242,9 +213,6 @@ func (s *Service) listWorkspaceProjectTree(ctx context.Context, rec domain.Sessi
 	}
 
 	if dir == "" {
-		// Root listing: the primary repo's own top-level entries (computed
-		// above, with child-repo prefixes excluded) sit alongside one
-		// synthesized directory entry per child repo.
 		for _, childPrefix := range childPrefixes {
 			name := childPrefix
 			if idx := strings.LastIndex(childPrefix, "/"); idx >= 0 {
@@ -263,10 +231,6 @@ func (s *Service) listWorkspaceProjectTree(ctx context.Context, rec domain.Sessi
 	return WorkspaceTree{SessionID: rec.ID, Path: dir, Entries: entries, Truncated: truncated}, nil
 }
 
-// workspaceProjectDirTarget resolves which worktree row owns a requested
-// directory path and the path remaining once that row's prefix is stripped.
-// It mirrors workspaceProjectFileTarget but matches a directory boundary
-// (`dir == prefix` counts as owned) rather than requiring a file beneath it.
 func workspaceProjectDirTarget(root string, rows []domain.SessionWorktreeRecord, dir string) (domain.SessionWorktreeRecord, string, string, bool) {
 	var best domain.SessionWorktreeRecord
 	bestPrefix := ""
@@ -326,13 +290,6 @@ func (s *Service) workspaceProjectPrefixHasChanges(ctx context.Context, id domai
 	return false
 }
 
-// scratchWorkspaceTreeChildren lists one directory level of a scratch
-// (non-git) workspace directly from the filesystem. It mirrors
-// scratchWorkspaceFiles' confinement and symlink handling: symlinked
-// directories are excluded (scratchWorkspaceFiles never recurses into them
-// either, since filepath.WalkDir does not follow directory symlinks), and
-// every file is reported as WorkspaceFileAdded since scratch workspaces have
-// no git baseline to compare against.
 func scratchWorkspaceTreeChildren(root, dir string) ([]WorkspaceTreeEntry, bool, error) {
 	rootResolved, err := resolvedWorkspaceRoot(root)
 	if err != nil {
@@ -344,10 +301,6 @@ func scratchWorkspaceTreeChildren(root, dir string) ([]WorkspaceTreeEntry, bool,
 	}
 	targetResolved, resolveErr := resolvedFilesystemPath(target)
 	if resolveErr != nil || (targetResolved != rootResolved && !pathWithin(rootResolved, targetResolved)) {
-		// An unresolvable or out-of-bounds path is treated the same as an
-		// empty directory (see the doc comment above) rather than surfaced as
-		// an error, matching workspaceTreeChildren's no-stat-check behavior
-		// for the git-backed path.
 		return nil, false, nil //nolint:nilerr // unresolvable path treated as an empty directory, not an error
 	}
 	dirEntries, err := os.ReadDir(targetResolved)
@@ -380,7 +333,7 @@ func scratchWorkspaceTreeChildren(root, dir string) ([]WorkspaceTreeEntry, bool,
 		if entry.Type()&os.ModeSymlink != 0 {
 			targetInfo, ok := statScratchFileTarget(fullPath)
 			if !ok {
-				continue // symlink to a directory or broken symlink: excluded, matching scratchWorkspaceFiles
+				continue
 			}
 			resolved, ok := resolvedScratchPath(fullPath)
 			if !ok || !pathWithin(rootResolved, resolved) {
@@ -423,9 +376,6 @@ func scratchWorkspaceTreeChildren(root, dir string) ([]WorkspaceTreeEntry, bool,
 	return entries, truncated, nil
 }
 
-// cleanWorkspaceRelativeDir is cleanWorkspaceRelativePath's counterpart for
-// directories: "" and "." both mean the workspace root, which
-// cleanWorkspaceRelativePath (built for single-file lookups) rejects.
 func cleanWorkspaceRelativeDir(raw string) (string, error) {
 	trimmed := strings.TrimSpace(strings.ReplaceAll(raw, "\\", "/"))
 	if trimmed == "" || trimmed == "." {

@@ -45,7 +45,6 @@ func TestDeferredPTYStartsAtFirstGridAndReplaysEarlyInput(t *testing.T) {
 	if pid := d.PID(); pid != 0 {
 		t.Fatalf("PID before start = %d, want 0", pid)
 	}
-	// Keystrokes typed while the terminal is still sizing itself are kept.
 	if _, err := d.Write([]byte("echo hi\r")); err != nil {
 		t.Fatalf("early Write: %v", err)
 	}
@@ -74,7 +73,6 @@ func TestDeferredPTYStartsAtFirstGridAndReplaysEarlyInput(t *testing.T) {
 		t.Fatal("early input was not replayed after the start")
 	}
 
-	// Later resizes resize the running process; they never start another.
 	if err := d.Resize(120, 40); err != nil {
 		t.Fatalf("second Resize: %v", err)
 	}
@@ -90,7 +88,6 @@ func TestDeferredPTYStartsAtFirstGridAndReplaysEarlyInput(t *testing.T) {
 	_ = d.Close()
 }
 
-// Input beyond the pre-start buffer is reported, not silently accepted.
 func TestDeferredPTYReportsInputBeyondItsBuffer(t *testing.T) {
 	d := newDeferredPTY((&startRecorder{conn: newFakePTY(42)}).start)
 	if _, err := d.Write(make([]byte, maxDeferredInput-10)); err != nil {
@@ -156,8 +153,6 @@ func TestDeferredPTYFailedStartReportsExit(t *testing.T) {
 	}
 }
 
-// The host starts a deferred process at the grid of the first client that
-// reports one, so a shell's first output is laid out for its viewer.
 func TestServeStartsDeferredProcessAtFirstClientGrid(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -224,8 +219,6 @@ func TestPtyHostArgsCarryHostOptions(t *testing.T) {
 		t.Fatalf("split shell = %+v, %q", got, rest)
 	}
 
-	// Agents and hosts spawned by older daemons keep the legacy positional
-	// argv: they start immediately and keep their rendered surface current.
 	agent := ptyHostArgs("session-1", "/tmp/ws", argv, HostOptions{})
 	if want := []string{"pty-host", "session-1", "/tmp/ws", "/bin/zsh", "-l"}; !slices.Equal(agent, want) {
 		t.Fatalf("agent args = %q, want %q", agent, want)
@@ -269,13 +262,11 @@ func TestPtyHostArgsCarryInitialGrid(t *testing.T) {
 		t.Fatalf("split shell = %+v, %q", got, rest)
 	}
 
-	// A one-sided grid is no grid: the host keeps start-on-attach.
 	half := ptyHostArgs("shellterm-2", "/tmp/ws", argv, HostOptions{StartOnAttach: true, Cols: 146})
 	if want := []string{"pty-host", "--start=attach", "shellterm-2", "/tmp/ws", "/bin/zsh"}; !slices.Equal(half, want) {
 		t.Fatalf("one-sided grid args = %q, want %q", half, want)
 	}
 
-	// A malformed size is ignored rather than taken as the session id.
 	got, rest = splitHostOptionArgs([]string{"--size=wide", "shellterm-3", "/tmp/ws", "/bin/zsh"})
 	if got != (HostOptions{}) || !slices.Equal(rest, []string{"shellterm-3", "/tmp/ws", "/bin/zsh"}) {
 		t.Fatalf("split malformed size = %+v, %q", got, rest)

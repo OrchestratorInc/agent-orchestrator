@@ -19,7 +19,6 @@ it("returns true once for a genuine post-update relaunch of the same version", a
 	await markUpdateRelaunch({ stateDir: root, version: "1.2.3", pid: 100, now: 1_000 });
 	const first = await consumeUpdateRelaunchFlag({ stateDir: root, version: "1.2.3", pid: 200, now: 2_000 });
 	expect(first).toBe(true);
-	// Consumed: a subsequent normal launch reads false.
 	const second = await consumeUpdateRelaunchFlag({ stateDir: root, version: "1.2.3", pid: 200, now: 2_000 });
 	expect(second).toBe(false);
 });

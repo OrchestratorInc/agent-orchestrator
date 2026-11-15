@@ -12,9 +12,6 @@ import (
 	"time"
 )
 
-// These are real daemon -> detached host -> ACP provider -> model boundaries.
-// They are separately gated because they use the developer's installed binaries,
-// provider configuration, credentials, and model quota.
 func TestOpenCodeACPTurnSurvivesDaemonSIGKILL(t *testing.T) {
 	if os.Getenv("AO_LIVE_OPENCODE_ACP") != "1" {
 		t.Skip("set AO_LIVE_OPENCODE_ACP=1 to run the real OpenCode restart E2E")
@@ -111,7 +108,6 @@ func runACPTurnSurvivesDaemonRestart(t *testing.T, harness, binary, token string
 		!turnHasAnswer(finished, turnID, token) {
 		t.Fatalf("%s ACP turn did not survive daemon replacement:\n%s", harness, describe(finished))
 	}
-	// Prove this is a usable connection, not just a replayed terminal snapshot.
 	followup, _ := send(t, restarted, session, "Reply with exactly: "+token+"-FOLLOWUP", harness+"-followup")
 	continued := restarted.awaitConversation(session, 4*time.Minute, "a fresh post-restart turn", func(s snapshot) bool {
 		return len(s.Turns) == 3 && terminal(s.Turns[2].State)

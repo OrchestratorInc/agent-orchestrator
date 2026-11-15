@@ -17,62 +17,46 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 )
 
-// UsageSummaryService is the controller-facing compact usage read contract.
 type UsageSummaryService interface {
 	ListCompact(context.Context, domain.ProjectID) ([]domain.CompactSessionUsage, error)
 }
 
-// UsageReportService builds the usage page's report.
 type UsageReportService interface {
 	Report(ctx context.Context, days, offset int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error)
 }
 
-// UsageLimitHistoryService reads the windows AO's own limit readings show.
 type UsageLimitHistoryService interface {
 	History(ctx context.Context, days int) (domain.UsageLimitHistory, error)
 }
 
-// UsageLimitHistorySetting turns keeping limit readings on and off.
 type UsageLimitHistorySetting interface {
 	SetLimitHistory(ctx context.Context, enabled bool, now time.Time) error
 }
 
-// UsagePriceService keeps the user's model prices.
 type UsagePriceService interface {
 	List(ctx context.Context) ([]domain.UsagePriceOverride, []string, error)
 	Replace(ctx context.Context, overrides []domain.UsagePriceOverride) error
 }
 
-// SessionMemoryService samples resident memory per live session.
 type SessionMemoryService interface {
 	ListMemory(context.Context, domain.ProjectID) ([]domain.SessionMemory, error)
-	// SystemMemory reports host RAM for the panel's total bar. Returns
-	// procmem.ErrUnsupported where the platform can't be read; callers omit
-	// the bar rather than fail the whole request.
 	SystemMemory(context.Context) (domain.SystemMemory, error)
-	// AppMemory is everything AO runs, for the topbar pressure indicator.
 	AppMemory(context.Context) (domain.AppMemory, error)
 }
 
-// MemoryPressureReader reads the machine's memory-pressure verdict alone:
-// cheap enough to poll while no other memory figure is on screen.
 type MemoryPressureReader interface {
 	Pressure(context.Context) (procmem.Pressure, error)
 }
 
-// SessionStepsReader lists a session's recent tool calls, oldest first.
 type SessionStepsReader interface {
 	Steps(id domain.SessionID) []domain.SessionStep
 }
 
-// UsageController owns compact dashboard usage routes.
 type UsageController struct {
-	Svc    UsageSummaryService
-	Log    *slog.Logger
-	Memory SessionMemoryService
-	// Steps is optional: without it rows carry no activity.
-	Steps SessionStepsReader
-	// Pressure is optional: without it the pressure route is 501.
+	Svc                 UsageSummaryService
+	Log                 *slog.Logger
+	Memory              SessionMemoryService
+	Steps               SessionStepsReader
 	Pressure            MemoryPressureReader
 	Report              UsageReportService
 	LimitHistory        UsageLimitHistoryService
@@ -80,7 +64,6 @@ type UsageController struct {
 	Prices              UsagePriceService
 }
 
-// Register mounts usage routes on the supplied router.
 func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/report", c.getReport)
 	r.Get("/usage/limit-windows", c.getLimitWindows)
@@ -326,12 +309,8 @@ func (c *UsageController) getPressure(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, MemoryPressureResponse{PressureRaw: p.Raw, PressureSource: p.Source})
 }
 
-// recentStepsShown is how many finished steps a row lists; the window is a
-// glance, not a log.
 const recentStepsShown = 5
 
-// sessionActivityResponse splits the ring into the step still running and the
-// last few finished ones, newest first. Nil when the harness reported none.
 func sessionActivityResponse(steps []domain.SessionStep) *SessionActivityResponse {
 	if len(steps) == 0 {
 		return nil

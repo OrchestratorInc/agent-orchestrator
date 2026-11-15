@@ -1,5 +1,3 @@
-// Fine-grained imports keep unrelated grammars, bundled themes and WASM out of
-// the renderer/worker chunks. This module itself is loaded only for known code.
 import { createHighlighterCore, type ThemedToken, type ThemeRegistration } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { ShikiStreamTokenizer } from "@shikijs/stream";
@@ -24,8 +22,6 @@ import type { ElementContent, Root } from "hast";
 import type { GrammarName } from "./code-highlight";
 import type { CodeLine } from "./code-highlight-protocol";
 
-// Retain the existing syntax-class contract consumed by chat and word diffs.
-// These CSS variables resolve in both AO themes, without re-tokenization.
 const colorClasses = new Map([
 	["var(--color-term-magenta)", "hljs-keyword"],
 	["var(--color-term-green)", "hljs-string"],
@@ -62,7 +58,6 @@ function tokenNode(token: ThemedToken): ElementContent {
 	return classes.length ? { type: "element", tagName: "span", properties: { className: classes }, children: [text] } : text;
 }
 
-/** Restore the source's exact line endings after Shiki splits them for parsing. */
 function codeLines(tokens: ThemedToken[][], source: string): CodeLine[] {
 	const endings = source.match(/\r\n|\r|\n/g) ?? [];
 	return tokens.map((line, index) => {
@@ -86,16 +81,12 @@ export async function createEngine() {
 		createStream(language: GrammarName) {
 			const tokenizer = new ShikiStreamTokenizer({ highlighter, lang: language, theme: "ao" });
 			return async (chunk: string): Promise<CodeLine[]> => {
-				// Callers supply complete lines. Only the appended chunk is parsed;
-				// Shiki keeps the grammar state of the preceding stable line.
 				const { stable } = await tokenizer.enqueue(chunk.replace(/\r\n|\r/g, "\n"));
 				const lines: ThemedToken[][] = [[]];
 				for (const token of stable) {
 					if (token.content === "\n") lines.push([]);
 					else lines[lines.length - 1].push(token);
 				}
-				// The stream tokenizer also retains stable tokens for its stock
-				// renderers. AO owns those lines after delivery; retain grammar only.
 				tokenizer.tokensStable = [];
 				lines.pop();
 				return codeLines(lines, chunk);

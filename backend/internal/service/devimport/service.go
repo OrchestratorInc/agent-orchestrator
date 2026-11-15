@@ -1,5 +1,3 @@
-// Package devimport exposes developer project-registry import operations
-// through the daemon service boundary.
 package devimport
 
 import (
@@ -14,40 +12,32 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// Store is the live target store used by the daemon.
 type Store interface {
 	engine.Store
 }
 
-// SourceStore is an imported AO store opened read-only for the duration of one
-// import run.
 type SourceStore interface {
 	engine.Store
 	Close() error
 }
 
-// SourceOpener opens an AO data directory as a source store.
 type SourceOpener func(ctx context.Context, dataDir string) (SourceStore, error)
 
-// RunInput configures one project-registry import.
 type RunInput struct {
 	SourceDataDir string
 	DryRun        bool
 }
 
-// Service is the controller-facing dev import contract.
 type Service interface {
 	RunProjects(ctx context.Context, in RunInput) (engine.Report, error)
 }
 
-// Deps bundles the service dependencies.
 type Deps struct {
 	Store         Store
 	TargetDataDir string
 	OpenSource    SourceOpener
 }
 
-// Manager implements Service over the daemon's live store.
 type Manager struct {
 	store         Store
 	targetDataDir string
@@ -56,13 +46,10 @@ type Manager struct {
 
 var _ Service = (*Manager)(nil)
 
-// New constructs the dev import service.
 func New(deps Deps) *Manager {
 	return &Manager{store: deps.Store, targetDataDir: deps.TargetDataDir, openSource: deps.OpenSource}
 }
 
-// RunProjects reads the source AO database read-only and plans or writes into
-// the daemon's live store.
 func (m *Manager) RunProjects(ctx context.Context, in RunInput) (engine.Report, error) {
 	sourceDataDir, err := resolveDataDir(in.SourceDataDir)
 	if err != nil {

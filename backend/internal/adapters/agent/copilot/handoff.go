@@ -20,10 +20,6 @@ var (
 	_ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
 )
 
-// NativeConversationID bridges Copilot's terminal and ACP session ids. Both
-// surfaces keep sessions in the same session-state store keyed by UUID: an ACP
-// session/load opens a terminal session, and `copilot --resume` continues an
-// ACP one (verified against Copilot CLI 1.0.93).
 func (p *Plugin) NativeConversationID(
 	ctx context.Context,
 	session ports.SessionRef,
@@ -41,10 +37,6 @@ func (p *Plugin) NativeConversationID(
 	return id, id != "", nil
 }
 
-// NativeConversationExists reports whether Copilot persisted a user message for
-// the session. Copilot creates the session directory before the first turn, but
-// session/load answers "not found" until events.jsonl exists, so a session with
-// no recorded message has no context to carry and can start fresh.
 func (p *Plugin) NativeConversationExists(
 	ctx context.Context,
 	_ ports.SessionRef,

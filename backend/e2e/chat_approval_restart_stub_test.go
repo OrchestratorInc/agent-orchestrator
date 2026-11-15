@@ -15,8 +15,6 @@ import (
 	"time"
 )
 
-// TestFakeApprovalACP is launched by the disposable opencode shim below. It
-// deliberately leaves the prompt blocked until AO answers the approval.
 func TestFakeApprovalACP(t *testing.T) {
 	if os.Getenv("AO_E2E_FAKE_APPROVAL_ACP") != "1" {
 		return
@@ -60,8 +58,6 @@ func TestFakeApprovalACP(t *testing.T) {
 			continue
 		}
 		if frame.Method == "session/new" {
-			// Cosmetic naming uses a disposable background workspace. The restart
-			// assertions below count only the durable worker's provider calls.
 			classified = true
 			background = strings.Contains(filepath.ToSlash(frame.Params.Cwd), "/background-tasks/")
 			for _, method := range pending {
@@ -190,8 +186,6 @@ func providerActivities(s snapshot) []activity {
 	return out
 }
 
-// An unacknowledged first task can be retried with the same clientRequestId
-// after a daemon crash during workspace setup, without duplicate workers.
 func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 	binDir := t.TempDir()
 	testBinary, err := os.Executable()
@@ -259,10 +253,6 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 		Code    string          `json:"code"`
 		Message string          `json:"message"`
 	}
-	// Workspace cleanup runs after the listener binds. An incomplete-key 409
-	// may briefly precede cleanup. A 500 or 503 in that same window is the
-	// retry hitting the killed workspace before cleanup finishes. Retrying the
-	// same key must eventually succeed.
 	deadline = time.Now().Add(30 * time.Second)
 	for {
 		status, err := restarted.call("POST", "/sessions", req, &retry)

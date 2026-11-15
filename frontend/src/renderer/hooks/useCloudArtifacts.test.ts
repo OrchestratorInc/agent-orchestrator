@@ -57,7 +57,6 @@ describe("toCloudWorkspaceSession artifacts", () => {
 		expect(session.requestedOutput).toBe("artifact");
 		expect(session.outputType).toBe("artifact");
 		expect(session.artifactFiles).toEqual([
-			// Its SHA-256 lets the Publish button tell it changed since publishing without reading it.
 			{ kind: "html", name: "report.html", path: "report.html", size: 12, updatedAt: "2026-10-16T01:00:00Z", sha256: "a".repeat(64) },
 		]);
 	});
@@ -86,7 +85,6 @@ describe("usePinnedArtifactUrl", () => {
 		const { result, rerender } = renderHook(({ root }) => usePinnedArtifactUrl(root, "a.png", "v1"), { initialProps: { root: first } });
 		expect(result.current.url).toBe(`${first}a.png?v=v1`);
 		act(() => result.current.repin());
-		// A refresh in the same second gives the same root: the file keeps its URL.
 		rerender({ root: first });
 		expect(result.current.url).toBe(`${first}a.png?v=v1`);
 		rerender({ root: second });
@@ -99,8 +97,6 @@ describe("usePinnedArtifactUrl", () => {
 		expect(result.current.url).toBe(`${first}a.png?v=v1`);
 	});
 
-	// The open file's viewer starts over when its onAccessRefused changes,
-	// which would drop an edit begun from the file's menu.
 	it("keeps repin and refresh the same across renders", () => {
 		const { result, rerender } = renderHook(({ root }) => usePinnedArtifactUrl(root, "a.md", "v1"), { initialProps: { root: first } });
 		const { repin, refresh } = result.current;

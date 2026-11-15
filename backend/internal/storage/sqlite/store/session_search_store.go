@@ -17,14 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/searchtext"
 )
 
-// This file is the persistence half of session search. It writes only the three
-// session_search_* tables, which this feature owns; the session data it reads
-// (sessions, conversations, activities) is never written here. Reads go through
-// the reader pool, writes through the single writer connection.
-
-// sessionSearchFilterSQL is the WHERE tail shared by the ranked search and its
-// count, so the two can never disagree about what matched. It expects the
-// documents table aliased as d; sessionSearchFilterArgs supplies its arguments.
 const sessionSearchFilterSQL = `
   -- A deleted session's documents are removed after it, in batches; until
   -- then they are not results.
@@ -53,7 +45,6 @@ const sessionSearchFilterSQL = `
   AND (? = 0 OR d.created_at >= ?)
   AND (? = 0 OR d.created_at <= ?)`
 
-// sessionSearchFilterArgs binds sessionSearchFilterSQL.
 func sessionSearchFilterArgs(params domain.SessionSearchParams) []any {
 	from, to := int64(0), int64(0)
 	if params.From != nil && !params.From.IsZero() {
@@ -75,10 +66,6 @@ func sessionSearchFilterArgs(params domain.SessionSearchParams) []any {
 	}
 }
 
-// browseSessionFilterSQL is the WHERE clause of a browse (filters, no words)
-// and of its count. It applies every filter the ranked search applies, against
-// the sessions table aliased as s: a browse that dropped one (a pasted PR's
-// session, path:, !term) listed every session instead.
 const browseSessionFilterSQL = `
 WHERE (? = '' OR s.project_id = ?)
   AND (? = '' OR s.harness = ?)
@@ -99,7 +86,6 @@ WHERE (? = '' OR s.project_id = ?)
       OR ? = 'live' AND s.is_terminated = 0 AND s.hibernated_at IS NULL
   ))`
 
-// browseSessionFilterArgs binds browseSessionFilterSQL.
 func browseSessionFilterArgs(params domain.SessionSearchParams) []any {
 	from, to := int64(0), int64(0)
 	if params.From != nil && !params.From.IsZero() {
@@ -121,31 +107,6 @@ func browseSessionFilterArgs(params domain.SessionSearchParams) []any {
 	}
 }
 
-// searchSessionSearchDocsSQL ranks candidates and returns one page.
-//
-// Scoring is bm25 throughout. FTS5's bm25 weights the title column above paths
-// above body, and the document's kind multiplies the score
-// (domain.SessionSearchKindWeights). FTS5 scores are negative, better is more
-// negative, so a weight above 1 promotes and ascending order is best-first.
-//
-// Order, most significant first:
-//
-//  1. name: grouped by session, sessions whose name holds every typed word
-//     come first (sessionsNamedFor). bm25 cannot see a name match: a session
-//     with nothing indexed but its name, or one mentioned hundreds of times
-//     elsewhere, would otherwise lose to volume.
-//  2. exact: candidates that hold every ranked word as typed come before
-//     those that match only a widened form (the stem's prefix, or a longer
-//     word), which bm25 cannot tell apart. For a grouped session, any one
-//     exact document lifts the session and is the row it is shown as.
-//  3. rank: the weighted bm25 score (for a grouped session, its best document
-//     plus a quarter of the rest; domain.SessionSearchTailWeight).
-//  4. recency, then id, so equal scores keep a stable order while typing.
-//
-// When grouped, each session contributes its single best document, so one
-// long session cannot fill a page. Snippets are cut from the page's rows by
-// domain.SessionSearchSnippet, and the total is COUNT(*) OVER () on the
-// collapsed rows before LIMIT, so neither needs a second full-text pass.
 const searchSessionSearchDocsSQL = `
 WITH candidates AS (
     -- Stage one: FTS5 alone ranks the matches by raw bm25 and keeps the best
@@ -270,12 +231,6 @@ LEFT JOIN session_search_text t ON t.id = p.id
 LEFT JOIN review rv ON d.source_key = 'review:' || rv.id AND rv.is_archived = 0 AND rv.interface_mode = 'chat'
 ORDER BY p.recency DESC, p.name_tier ASC, p.order_exact_tier ASC, p.score ASC, p.created_at DESC, p.id;`
 
-// browseSessionSearchDocsSQL lists one row per session for the recency view.
-//
-// It reads the session table rather than the index: a session with no provider
-// title (or one whose transcript AO cannot parse) still has a name, and the
-// browse view is about finding sessions, not documents. Documents that exist
-// for the session supply a preview snippet when there is one.
 const browseSessionSearchDocsSQL = `
 SELECT s.id, COALESCE(s.project_id, ''), s.harness,
        'title', '', 0,
@@ -290,49 +245,18 @@ FROM sessions s` + browseSessionFilterSQL + `
 ORDER BY s.created_at DESC, s.id
 LIMIT ? OFFSET ?;`
 
-// sessionSearchCandidateCap is how many raw-bm25 candidates the ranking stage
-// considers. Below it, results are exact. Above it, the page is built from the
-// best 2,000 matches by bm25, which the kind weights (0.8x to 1.25x) cannot
-// reorder past: a document outside the top 2,000 would need a raw score within
-// a factor of 1.56 of the page's, and the page is 25 rows. With the cap, a
-// word that matches thousands of documents costs the full-text pass alone
-// instead of a row lookup per match.
 const sessionSearchCandidateCap = 2000
 
-// sessionCreatedMillisSQL is a session's creation time in Unix milliseconds.
-//
-// The store writes times in Go's default text form ("2026-10-20 18:53:47.757699
-// +0000 UTC"), which strftime cannot parse whole: it returns NULL, so every
-// date filter and recency value built on it silently read as zero. The first
-// 19 characters are the UTC date and time strftime understands.
 const sessionCreatedMillisSQL = "CAST(COALESCE(strftime('%s', substr(s.created_at, 1, 19)), '0') AS INTEGER) * 1000"
 
-// latestChangeMillisSQL is the same conversion for a conversation stamp's
-// newest message or activity update.
 const latestChangeMillisSQL = "CAST(COALESCE(strftime('%s', substr(MAX(t.at), 1, 19)), '0') AS INTEGER) * 1000"
 
-// sessionSearchFiltered reports whether a query filters documents after the
-// full-text match, which is when the candidate cap must not apply.
 func sessionSearchFiltered(params domain.SessionSearchParams) bool {
 	return params.ProjectID != "" || params.Harness != "" || params.SessionID != "" ||
 		params.Path != "" || params.ExcludeQuery != "" || params.Status != domain.SessionSearchStatusAny ||
 		(params.From != nil && !params.From.IsZero()) || (params.To != nil && !params.To.IsZero())
 }
 
-// SearchSessionSearchDocs ranks candidates and returns one page.
-//
-// Stage one keeps the best sessionSearchCandidateCap documents by raw bm25,
-// which keeps a broad query fast. The cap is only safe when nothing after it
-// can discard a candidate, so a filtered query and a recency sort run
-// uncapped, and a deleted session's documents are left out inside stage one.
-//
-// The total counts every match, so every page it advertises must be fetchable
-// and each result must appear exactly once. Every page therefore comes from
-// one ranked list: the capped candidates in their final order, then everything
-// the cap left out in the same order, excluding what the capped part returned.
-// Re-ranking a late page without the cap would not do: the cap selects by raw
-// bm25 and the final order also applies kind weights and tiers, so the two
-// orders disagree. Pages inside the cap, nearly all of them, cost one pass.
 func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams) ([]domain.SessionSearchHit, error) {
 	capped := sessionSearchCandidateCap
 	if params.Sort == domain.SessionSearchSortRecent || sessionSearchFiltered(params) {
@@ -346,8 +270,6 @@ func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	if len(hits) == limit || (len(hits) > 0 && !capReached) || (len(hits) == 0 && params.Offset <= 0) {
 		return hits, nil
 	}
-	// The page runs past the end of the capped part, or past the end of
-	// everything. Listing the capped part tells which, and what to exclude.
 	listing := params
 	listing.Offset, listing.SkipSnippets = 0, true
 	capPart, truncated, err := s.searchSessionSearchDocs(ctx, listing, sessionSearchPass{capped: capped, limit: capped})
@@ -377,15 +299,11 @@ func (s *Store) SearchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	}
 	hits = append(hits, more...)
 	for index := range hits {
-		// The rows reach past the cap: the total must be counted exactly.
 		hits[index].MatchTotalCapped = true
 	}
 	return hits, nil
 }
 
-// sessionSearchPass shapes one ranked query: how many stage-one candidates to
-// keep (-1: all), a row limit overriding the request's (0: the request's), and
-// sessions or documents (JSON arrays) to leave out.
 type sessionSearchPass struct {
 	capped          int
 	limit           int
@@ -393,8 +311,6 @@ type sessionSearchPass struct {
 	excludeDocs     string
 }
 
-// searchSessionSearchDocs runs one ranked query against the index and reports
-// whether stage one's candidate cap was reached.
 func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams, pass sessionSearchPass) ([]domain.SessionSearchHit, bool, error) {
 	capped := pass.capped
 	limit := domain.NormalizeSessionSearchLimit(params.Limit)
@@ -409,14 +325,10 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	if params.Group != domain.SessionSearchGroupMessage {
 		grouped = 1
 	}
-	// A recency sort orders by time first, so the exact tier would cost a
-	// full-text pass that changes nothing.
 	exact := ""
 	if recent == 0 {
 		exact = params.ExactQuery
 	}
-	// The name tier orders sessions by relevance; a recency sort or a list of
-	// single messages has no use for it.
 	named := ""
 	if grouped == 1 && recent == 0 {
 		var err error
@@ -482,12 +394,6 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	return hits, capReached, nil
 }
 
-// CountSessionSearchDocsMatching returns how many results a query has, ignoring
-// limit and offset: matching sessions when grouped, matching documents when not.
-//
-// A page length is not a total: paging (ao search --offset) needs the real
-// count. It runs the same WHERE clause as the search with the LIMIT removed,
-// so the two can never disagree about what matched.
 func (s *Store) CountSessionSearchDocsMatching(ctx context.Context, params domain.SessionSearchParams) (int64, error) {
 	counted := "COUNT(DISTINCT d.session_id)"
 	if params.Group == domain.SessionSearchGroupMessage {
@@ -506,8 +412,6 @@ WHERE session_search_fts MATCH ?`+sessionSearchFilterSQL, args...).Scan(&count)
 	return count, nil
 }
 
-// CountSessionSearchSessionsBrowsing returns how many sessions a filter-only
-// browse would list.
 func (s *Store) CountSessionSearchSessionsBrowsing(ctx context.Context, params domain.SessionSearchParams) (int64, error) {
 	var count int64
 	err := s.searchReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions s`+browseSessionFilterSQL,
@@ -519,9 +423,6 @@ func (s *Store) CountSessionSearchSessionsBrowsing(ctx context.Context, params d
 	return count, nil
 }
 
-// BrowseSessionSearchDocs lists documents without a text query, for the
-// recency view: opening search with only filters should show recent sessions
-// rather than nothing.
 func (s *Store) BrowseSessionSearchDocs(ctx context.Context, params domain.SessionSearchParams) ([]domain.SessionSearchHit, error) {
 	limit := domain.NormalizeSessionSearchLimit(params.Limit)
 	offset := max(params.Offset, 0)
@@ -554,12 +455,6 @@ func (s *Store) BrowseSessionSearchDocs(ctx context.Context, params domain.Sessi
 	return hits, nil
 }
 
-// SessionSearchMatchCounts counts, for each session, the places find in chat
-// steps through for a query: matches in the session's own transcript (not its
-// reviewer chat, not its title), with a message and the tool output shown
-// with it counted once. It is the "· 7 matches" on a result row, so the two
-// cannot disagree; the ranking query cannot supply it because it only sees the
-// best 2,000 candidates and the query's filters.
 func (s *Store) SessionSearchMatchCounts(ctx context.Context, matchQuery string, sessionIDs []string) (map[string]int, error) {
 	counts := make(map[string]int, len(sessionIDs))
 	if matchQuery == "" || len(sessionIDs) == 0 {
@@ -598,7 +493,6 @@ GROUP BY d.session_id`, string(ids), matchQuery)
 	return counts, nil
 }
 
-// CountSessionSearchDocs reports how many documents the index holds.
 func (s *Store) CountSessionSearchDocs(ctx context.Context) (int64, error) {
 	var count int64
 	if err := s.searchReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM session_search_docs`).Scan(&count); err != nil {
@@ -623,22 +517,10 @@ ON CONFLICT (source_key, doc_key, kind) DO UPDATE SET
     fingerprint = excluded.fingerprint
 RETURNING id;`
 
-// UpsertSessionSearchDocs writes one batch in a single transaction, so the
-// index and the projection advance together and a batch costs one commit.
-//
-// The index is contentless, so a changed document's old index row is removed
-// with FTS5's 'delete' command and the text it was indexed with, read before
-// that text is overwritten. Text and index rows are then written one statement
-// each: FTS5 flushes its pending terms whenever another statement opens a
-// savepoint, which would make each document its own segment to merge.
-// Documents whose hash is unchanged keep their index rows.
 func (s *Store) UpsertSessionSearchDocs(ctx context.Context, docs []domain.SessionSearchDoc) error {
 	if len(docs) == 0 {
 		return nil
 	}
-	// Everything that is not SQL happens before the transaction: normalising,
-	// hashing, compressing and encoding a batch's text is CPU time the index's
-	// writer would otherwise hold its lock for.
 	prepared, err := prepareSessionSearchDocs(docs)
 	if err != nil {
 		return err
@@ -663,8 +545,6 @@ func (s *Store) UpsertSessionSearchDocs(ctx context.Context, docs []domain.Sessi
 		if err != nil {
 			return err
 		}
-		// The last write of a document in the batch wins, as it did when each
-		// was written in turn.
 		latest := make(map[int64]int, len(docs))
 		for index := range docs {
 			latest[ids[index]] = index
@@ -725,7 +605,6 @@ FROM json_each(?)`, indexRows.String()); err != nil {
 	})
 }
 
-// inSearchTx runs fn in one transaction on the search database's writer.
 func (s *Store) inSearchTx(ctx context.Context, what string, fn func(*sql.Tx) error) error {
 	tx, err := s.searchWriter().BeginTx(ctx, nil)
 	if err != nil {
@@ -741,13 +620,11 @@ func (s *Store) inSearchTx(ctx context.Context, what string, fn func(*sql.Tx) er
 	return nil
 }
 
-// preparedSessionSearchDoc is a document's text ready to write: hashed,
-// compressed and encoded as the tail of its JSON row, after the row id.
 type preparedSessionSearchDoc struct {
 	fingerprint int64
 	hash        int64
-	textRow     []byte // ,title,paths,hex(compressed body),hash]
-	indexRow    []byte // ,title,body,paths]
+	textRow     []byte
+	indexRow    []byte
 }
 
 func prepareSessionSearchDocs(docs []domain.SessionSearchDoc) ([]preparedSessionSearchDoc, error) {
@@ -773,14 +650,11 @@ func prepareSessionSearchDocs(docs []domain.SessionSearchDoc) ([]preparedSession
 	return prepared, nil
 }
 
-// jsonArrayTail turns an encoded array ["a",...] into ,"a",...] so a row id
-// can be put in front of it.
 func jsonArrayTail(encoded []byte) []byte {
 	encoded[0] = ','
 	return encoded
 }
 
-// jsonRows builds a JSON array of [id, ...] rows from pre-encoded row tails.
 type jsonRows struct{ b []byte }
 
 func (r *jsonRows) add(id int64, tail []byte) {
@@ -798,8 +672,6 @@ func (r *jsonRows) empty() bool { return r.b == nil }
 
 func (r *jsonRows) String() string { return string(r.b) + "]" }
 
-// sessionSearchStoredHashes returns the stored text hash of each document that
-// has text, keyed by document id.
 func sessionSearchStoredHashes(ctx context.Context, executor gen.DBTX, ids []int64) (map[int64]int64, error) {
 	encoded, err := json.Marshal(ids)
 	if err != nil {
@@ -822,15 +694,8 @@ func sessionSearchStoredHashes(ctx context.Context, executor gen.DBTX, ids []int
 	return hashes, rows.Err()
 }
 
-// sessionSearchDeleteBatch bounds one delete transaction on the search
-// database. Removing a document also removes its index row, which re-reads and
-// decompresses its text, so a large delete is many transactions rather than one
-// that keeps search readers' snapshots and the -wal file growing.
 const sessionSearchDeleteBatch = 256
 
-// SessionSearchSourceDocs lists a source's stored documents (id, key and
-// fingerprint), so a pass can write only what changed and delete only what
-// disappeared. It reads; it takes no write lock.
 func (s *Store) SessionSearchSourceDocs(ctx context.Context, sourceKey string) ([]domain.SessionSearchDocRef, error) {
 	rows, err := s.searchReader().QueryContext(ctx,
 		`SELECT id, doc_key, kind, fingerprint FROM session_search_docs WHERE source_key = ?`, sourceKey)
@@ -851,8 +716,6 @@ func (s *Store) SessionSearchSourceDocs(ctx context.Context, sourceKey string) (
 	return refs, rows.Err()
 }
 
-// SessionSearchUnsupportedHarnesses lists, sorted, the harnesses of sources the
-// index recorded as unsupported.
 func (s *Store) SessionSearchUnsupportedHarnesses(ctx context.Context) ([]string, error) {
 	rows, err := s.searchReader().QueryContext(ctx,
 		`SELECT DISTINCT harness FROM session_search_sources
@@ -875,8 +738,6 @@ ORDER BY harness`,
 	return harnesses, rows.Err()
 }
 
-// SessionSearchDocFingerprint reads one document's stored fingerprint by its
-// unique source, key and kind. indexed is false when there is no such document.
 func (s *Store) SessionSearchDocFingerprint(ctx context.Context, sourceKey, docKey string, kind domain.SessionSearchKind) (fingerprint int64, indexed bool, err error) {
 	err = s.searchReader().QueryRowContext(ctx,
 		`SELECT fingerprint FROM session_search_docs WHERE source_key = ? AND doc_key = ? AND kind = ?`,
@@ -890,8 +751,6 @@ func (s *Store) SessionSearchDocFingerprint(ctx context.Context, sourceKey, docK
 	return fingerprint, true, nil
 }
 
-// DeleteSessionSearchDocsByID removes documents by id, sessionSearchDeleteBatch
-// per transaction.
 func (s *Store) DeleteSessionSearchDocsByID(ctx context.Context, ids []int64) error {
 	for start := 0; start < len(ids); start += sessionSearchDeleteBatch {
 		encoded, err := json.Marshal(ids[start:min(start+sessionSearchDeleteBatch, len(ids))])
@@ -907,8 +766,6 @@ func (s *Store) DeleteSessionSearchDocsByID(ctx context.Context, ids []int64) er
 	return nil
 }
 
-// deleteSessionSearchDocsWhere removes the documents matching one column, a
-// batch per transaction, until none are left.
 func (s *Store) deleteSessionSearchDocsWhere(ctx context.Context, column, value string) error {
 	query := `DELETE FROM session_search_docs WHERE id IN (
     SELECT id FROM session_search_docs WHERE ` + column + ` = ? LIMIT ?)`
@@ -926,16 +783,10 @@ func (s *Store) deleteSessionSearchDocsWhere(ctx context.Context, column, value 
 	}
 }
 
-// DeleteSessionSearchDocsForSource clears one source before a full re-index,
-// in short transactions.
 func (s *Store) DeleteSessionSearchDocsForSource(ctx context.Context, sourceKey string) error {
 	return s.deleteSessionSearchDocsWhere(ctx, "source_key", sourceKey)
 }
 
-// SessionSearchOrphanSessions lists up to limit deleted sessions whose search
-// documents are not removed yet. Deleting a session only records its id (a
-// long session has thousands of documents, too many for that transaction);
-// the indexer removes them afterwards, and search ignores them meanwhile.
 func (s *Store) SessionSearchOrphanSessions(ctx context.Context, limit int) ([]string, error) {
 	rows, err := s.searchReader().QueryContext(ctx, `SELECT session_id FROM session_search_deleted LIMIT ?`, limit)
 	if err != nil {
@@ -953,19 +804,8 @@ func (s *Store) SessionSearchOrphanSessions(ctx context.Context, limit int) ([]s
 	return ids, rows.Err()
 }
 
-// sessionSearchMissingBatch is how many session ids one write records as
-// deleted. Each write is a few primary-key lookups, well inside the app
-// database's lock budget.
 const sessionSearchMissingBatch = 256
 
-// MarkSessionSearchSessionsMissing records as deleted every session the index
-// holds that the app database does not have, and returns how many it recorded.
-//
-// A session delete records itself (the sessions_search_ad trigger). This is
-// for an index that outlived its database's history: a restored backup of
-// ao.db keeps the owner token, so it passes the owner check (search_db.go)
-// while the index still holds sessions created after the backup. Recorded
-// here, search ignores them at once and the sweep removes their documents.
 func (s *Store) MarkSessionSearchSessionsMissing(ctx context.Context) (int, error) {
 	rows, err := s.searchReader().QueryContext(ctx, `
 SELECT held.session_id FROM (
@@ -994,8 +834,6 @@ WHERE held.session_id != ''
 	recorded := 0
 	for start := 0; start < len(ids); start += sessionSearchMissingBatch {
 		batch := ids[start:min(start+sessionSearchMissingBatch, len(ids))]
-		// Checked again where it is written: the read above and this write are
-		// two connections, and a session created in between is not missing.
 		result, err := s.writeDB.ExecContext(ctx, `
 INSERT OR IGNORE INTO session_search_deleted (session_id)
 SELECT value FROM json_each(?)
@@ -1010,8 +848,6 @@ WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = value)`, jsonArray(batch))
 	return recorded, nil
 }
 
-// DeleteSessionSearchSession removes a deleted session's documents, in short
-// transactions, then its sources.
 func (s *Store) DeleteSessionSearchSession(ctx context.Context, sessionID string) error {
 	if err := s.deleteSessionSearchDocsWhere(ctx, "session_id", sessionID); err != nil {
 		return err
@@ -1029,7 +865,6 @@ func (s *Store) DeleteSessionSearchSession(ctx context.Context, sessionID string
 	return nil
 }
 
-// CountSessionSearchDocsForSource reports how many documents a source holds.
 func (s *Store) CountSessionSearchDocsForSource(ctx context.Context, sourceKey string) (int64, error) {
 	var count int64
 	if err := s.searchReader().QueryRowContext(ctx,
@@ -1061,7 +896,6 @@ ON CONFLICT (source_key) DO UPDATE SET
     last_error_code = excluded.last_error_code,
     updated_at = excluded.updated_at;`
 
-// UpsertSessionSearchSource records a source's cursor and health.
 func (s *Store) UpsertSessionSearchSource(ctx context.Context, source domain.SessionSearchSource) error {
 	if _, err := s.searchWriter().ExecContext(ctx, upsertSessionSearchSourceSQL,
 		source.SourceKey, string(source.Kind), source.SessionID, source.ProjectID, source.Harness,
@@ -1073,8 +907,6 @@ func (s *Store) UpsertSessionSearchSource(ctx context.Context, source domain.Ses
 	return nil
 }
 
-// GetSessionSearchSource reads one source's cursor; ok is false before the
-// indexer has seen it.
 func (s *Store) GetSessionSearchSource(ctx context.Context, sourceKey string) (domain.SessionSearchSource, bool, error) {
 	var source domain.SessionSearchSource
 	var kind, state string
@@ -1100,8 +932,6 @@ FROM session_search_sources WHERE source_key = ?`, sourceKey,
 	return source, true, nil
 }
 
-// CountSessionSearchSourcesByState feeds the coverage note, so a search can say
-// which sources it cannot read instead of silently returning fewer results.
 func (s *Store) CountSessionSearchSourcesByState(ctx context.Context) (map[domain.SessionSearchSourceState]int64, error) {
 	rows, err := s.searchReader().QueryContext(ctx,
 		`SELECT state, COUNT(*) FROM session_search_sources
@@ -1125,11 +955,6 @@ WHERE session_id NOT IN (SELECT session_id FROM session_search_deleted) GROUP BY
 	return counts, nil
 }
 
-// ListSessionSearchTargets returns every session the indexer covers. It reads
-// only durable session facts and includes terminated sessions on purpose: they
-// are the most valuable search targets. A standalone session has no project
-// (project_id is NULL), and one NULL scanned into a string fails the whole
-// query, so every project read here and in the search queries is coalesced.
 func (s *Store) ListSessionSearchTargets(ctx context.Context) ([]domain.SessionSearchTarget, error) {
 	rows, err := s.searchReader().QueryContext(ctx, `
 SELECT id, COALESCE(project_id, ''), harness, kind, display_name, prompt, latest_user_prompt,
@@ -1165,7 +990,6 @@ ORDER BY created_at, id`)
 	return targets, nil
 }
 
-// ListSessionSearchConversations returns the Chat conversations to index.
 func (s *Store) ListSessionSearchConversations(ctx context.Context) ([]domain.SessionSearchConversation, error) {
 	rows, err := s.searchReader().QueryContext(ctx, `
 SELECT c.id, COALESCE(c.current_session_id, r.session_id), COALESCE(s.project_id, c.project_id, ''),
@@ -1198,8 +1022,6 @@ ORDER BY c.created_at, c.id`)
 	for rows.Next() {
 		var conversation domain.SessionSearchConversation
 		var harness string
-		// Two columns, not COALESCE: the driver only scans a column declared
-		// as a timestamp into time.Time, and COALESCE loses the declaration.
 		var sessionCreated, conversationCreated sql.NullTime
 		if err := rows.Scan(
 			&conversation.ID, &conversation.SessionID, &conversation.ProjectID,
@@ -1222,10 +1044,6 @@ ORDER BY c.created_at, c.id`)
 	return conversations, nil
 }
 
-// SessionSearchVisibleMessages returns the messages a reader can actually see:
-// the active branch path, minus discarded turns. It reuses
-// SelectConversationMessages rather than reading conversation_messages raw, so a
-// rolled-back or cancelled turn can never become searchable.
 func (s *Store) SessionSearchVisibleMessages(ctx context.Context, conversationID string) ([]domain.SessionSearchMessage, error) {
 	messages, err := s.ConversationMessages(ctx, conversationID)
 	if err != nil {
@@ -1244,17 +1062,11 @@ func (s *Store) SessionSearchVisibleMessages(ctx context.Context, conversationID
 	return visible, nil
 }
 
-// SessionSearchActivities returns the searchable slice of a conversation's
-// non-prose timeline: commands with their output, tool calls, file changes,
-// plans, and reasoning summaries. This is the text every competitor skips.
 func (s *Store) SessionSearchActivities(ctx context.Context, conversationID string) ([]domain.SessionSearchActivity, error) {
 	activities, messages, err := s.sessionSearchVisibleTimeline(ctx, conversationID)
 	if err != nil {
 		return nil, err
 	}
-	// Each activity opens at its turn's message: the last one at or before it,
-	// else the turn's first. Only visible messages count, so a result never
-	// points at a message the transcript cannot display.
 	byTurn := map[string][]domain.ConversationMessage{}
 	for _, message := range messages {
 		if message.TurnID != "" {
@@ -1281,11 +1093,6 @@ func (s *Store) SessionSearchActivities(ctx context.Context, conversationID stri
 	return out, nil
 }
 
-// sessionSearchVisibleTimeline reads a conversation's activities and messages
-// through the conversation's own readers, so search indexes exactly what the
-// transcript shows: the active branch's path, without rolled-back or cancelled
-// turns. Reading the raw tables instead kept discarded command output, undone
-// file changes and other branches searchable after a full reindex.
 func (s *Store) sessionSearchVisibleTimeline(ctx context.Context, conversationID string) ([]domain.ConversationActivity, []domain.ConversationMessage, error) {
 	activityRows, err := s.qr.SelectConversationActivities(ctx, conversationID)
 	if err != nil {
@@ -1303,9 +1110,6 @@ func (s *Store) sessionSearchVisibleTimeline(ctx context.Context, conversationID
 	return activities, messages, nil
 }
 
-// SessionSearchTouchedPaths returns the file paths a conversation's visible
-// turns touched: an undone edit is not a path the session changed. detail_json
-// holds {"files":[{"path":…}]} for a file_change activity.
 func (s *Store) SessionSearchTouchedPaths(ctx context.Context, conversationID string) ([]string, error) {
 	activityRows, err := s.qr.SelectConversationActivities(ctx, conversationID)
 	if err != nil {
@@ -1329,8 +1133,6 @@ func (s *Store) SessionSearchTouchedPaths(ctx context.Context, conversationID st
 	return paths, nil
 }
 
-// pathsFromFileChangeDetail extracts paths without decoding unrelated provider
-// payload: the detail is provider-shaped and only the path list is contractual.
 func pathsFromFileChangeDetail(detail string) []string {
 	const key = `"path"`
 	var paths []string
@@ -1387,14 +1189,6 @@ func pathsFromFileChangeDetail(detail string) []string {
 	}
 }
 
-// SessionSearchConversationStamps returns one cheap aggregate per conversation:
-// row counts, the highest sequence in each timeline table, and the newest row
-// time.
-//
-// The sweep uses this to decide whether a conversation needs reading at all. It
-// is a single grouped query over two indexed tables rather than a per-conversation
-// read of every message and activity, which is what keeps an idle sweep cheap as
-// the archive grows.
 func (s *Store) SessionSearchConversationStamps(ctx context.Context) (map[string]domain.SessionSearchConversationStamp, error) {
 	stamps := map[string]domain.SessionSearchConversationStamp{}
 	rows, err := s.searchReader().QueryContext(ctx, `

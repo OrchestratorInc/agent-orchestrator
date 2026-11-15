@@ -6,7 +6,6 @@ import CloneRepositoryDialog, { joinCloneDestination, repositoryNameFromGitUrl, 
 import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { sessionImportPreviewQuery } from "../lib/session-import";
 
-// The first run prompt reads the GitHub CLI state from the daemon; drive it directly.
 const gitHub = vi.hoisted(() => ({
 	requirements: [{ id: "gh", label: "gh", required: false, satisfied: true }] as Array<{ id: string; label: string; required: boolean; satisfied: boolean }>,
 	auth: { isSuccess: true, isError: false, data: { satisfied: true }, refetch: vi.fn() } as { isSuccess: boolean; isError: boolean; data?: { satisfied: boolean }; refetch: () => unknown },
@@ -105,7 +104,6 @@ describe("clone repository input", () => {
 			expect(screen.getByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
 			return;
 		}
-		// The step opens as a summary; the folder list only expands on request.
 		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
 		expect(screen.queryByText("app")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Choose folders" }));
@@ -130,7 +128,6 @@ describe("clone repository input", () => {
 		expect(screen.getByRole("dialog", { name: "Import earlier chats" })).toBeInTheDocument();
 		act(() => client.setQueryData(sessionImportPreviewQuery.queryKey, { candidates: [] }));
 		expect(await screen.findByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
-		// The step it skipped is not on the way back.
 		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
 		expect(screen.getByRole("dialog", { name: "Welcome to Agent Orchestrator" })).toBeInTheDocument();
 	});
@@ -417,7 +414,6 @@ describe("clone repository input", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 0s");
 		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 45 } }));
 		expect(screen.getByRole("status")).toHaveTextContent("Receiving objects · 45% · 0s");
-		// The percent ticks in place: no second line slides in for it.
 		const lines = screen.getByRole("status").querySelectorAll(".chat-working-shimmer").length;
 		view.rerender(React.createElement(CloneRepositoryDialog, { ...props, progress: { phase: "receiving_objects", attempt: 1, percent: 46 } }));
 		expect(screen.getByRole("status").querySelectorAll(".chat-working-shimmer")).toHaveLength(lines);

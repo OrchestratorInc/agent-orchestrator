@@ -15,8 +15,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus checks Prime Agent's documented credential sources without
-// starting a session or making a provider request.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if _, err := p.ResolveBinary(ctx); err != nil {
 		if errors.Is(err, ports.ErrAgentBinaryNotFound) {
@@ -64,9 +62,6 @@ var primeAPIKeyEnvVars = []string{
 	"AWS_BEARER_TOKEN_BEDROCK",
 }
 
-// primeLocalAuthStatus checks Prime Agent's own auth.json and models.json
-// first; keys and cloud credentials in the environment are the fallback when
-// those hold no usable credential.
 func primeLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -117,9 +112,6 @@ func primeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, er
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// primeFileEvidence names a credential file and the providers it holds.
-// auth.json is keyed by provider; models.json nests them under "providers"
-// and holds API keys.
 func primeFileEvidence(path string, data []byte, models bool) domain.AgentAccountIdentity {
 	if models {
 		var config struct {
@@ -135,7 +127,6 @@ func primeFileEvidence(path string, data []byte, models bool) domain.AgentAccoun
 	return evidence
 }
 
-// primeFirstSetEnv names the first of names that is set, for display.
 func primeFirstSetEnv(names ...string) string {
 	for _, name := range names {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
@@ -204,8 +195,6 @@ func primeNonEmptyRegularFile(path string) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
 
-// primeCredentialJSONStatus also returns the file's contents, so callers
-// parse it without reading it again.
 func primeCredentialJSONStatus(path string, allowPlainKey bool) (ports.AgentAuthStatus, bool, []byte, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // Prime Agent's own credential file
 	if os.IsNotExist(err) {

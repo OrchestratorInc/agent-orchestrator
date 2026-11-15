@@ -7,11 +7,6 @@ import (
 	"testing"
 )
 
-// TestMigrateAppliesMissingMigrationsBeforeCurrentVersion covers databases
-// created by builds whose migration history advanced past migrations that were
-// later added or renumbered. Goose rejects that history by default, which
-// prevents the daemon from starting even though the missing migrations can be
-// applied normally.
 func TestMigrateAppliesMissingMigrationsBeforeCurrentVersion(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 27)
 	if _, err := db.Exec(`
@@ -67,10 +62,6 @@ WHERE is_applied = 1 AND version_id IN (28, 29, 30, 31)
 	}
 }
 
-// TestMigrateAppliesBrowserVerifierAfterUpstreamVersion41 guards the migration
-// number collision with upstream's 0041_notification_resolution migration.
-// A database that already recorded version 41 must still receive the browser
-// capability column from the append-only 0081 migration.
 func TestMigrateAppliesBrowserVerifierAfterUpstreamVersion41(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 40)
 	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (41, 1)`); err != nil {
@@ -272,9 +263,6 @@ func TestMigrateRepairsConversationOpenCodeModeWhenVersionAlreadyClaimed(t *test
 	}
 }
 
-// TestMigrateAppliesAgentModelCatalogAfterUpstreamMigration covers a database
-// that has already applied main's version 41. The catalog must use the next
-// migration version so goose applies it independently.
 func TestMigrateAppliesAgentModelCatalogAfterUpstreamMigration(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 41)
 

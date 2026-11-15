@@ -12,12 +12,6 @@ import (
 	"testing"
 )
 
-// TestPaginationNextURLDifferentHostRejected verifies that a Link: rel="next"
-// URL pointing at a different host is rejected before it is followed — the
-// GitLab token is never attached to the different-host URL (review Item 6).
-// This is also the cross-item integration test for ticket 01: a host not in
-// the allowlist (the different host in the Link header) must be rejected
-// before the URL is followed.
 func TestPaginationNextURLDifferentHostRejected(t *testing.T) {
 	var attackerHits int32
 	attackerSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +23,6 @@ func TestPaginationNextURLDifferentHostRejected(t *testing.T) {
 	var mainHits int32
 	mainSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&mainHits, 1)
-		// Serve one page with a Link header pointing at the attacker server.
 		attackerURL := attackerSrv.URL + "/api/v4/projects/1/merge_requests?page=2"
 		w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, attackerURL))
 		fmt.Fprint(w, `[]`)
@@ -56,15 +49,10 @@ func TestPaginationNextURLDifferentHostRejected(t *testing.T) {
 	}
 }
 
-// TestPaginationHTTPSDowngradeRejected verifies that a Link: rel="next" URL
-// that downgrades from HTTPS (the configured REST base) to HTTP is rejected
-// (review Item 6).
 func TestPaginationHTTPSDowngradeRejected(t *testing.T) {
 	mainSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Serve a next link that swaps https:// for http:// on the same host.
 		downgraded := strings.Replace(r.Host, "https://", "http://", 1)
 		_ = downgraded
-		// Build the downgraded URL from the request's own host.
 		host := r.Host
 		nextURL := "http://" + host + r.URL.Path + "?page=2"
 		w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, nextURL))
@@ -72,10 +60,6 @@ func TestPaginationHTTPSDowngradeRejected(t *testing.T) {
 	}))
 	t.Cleanup(mainSrv.Close)
 
-	// Construct an https REST base using the test server's host. The test
-	// server itself is http, but we never actually follow the next URL — the
-	// validation rejects it before any request is made. We point the client's
-	// HTTPClient at the test server via a rewrite so the first page succeeds.
 	restBase := strings.Replace(mainSrv.URL, "http://", "https://", 1) + "/api/v4"
 
 	c := NewClient(ClientOptions{
@@ -92,15 +76,11 @@ func TestPaginationHTTPSDowngradeRejected(t *testing.T) {
 	}
 }
 
-// TestPaginationPortMismatchRejected verifies that a Link: rel="next" URL on
-// the same host but a different port is rejected (review Item 6).
 func TestPaginationPortMismatchRejected(t *testing.T) {
 	var mainHits int32
 	mainSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&mainHits, 1)
-		// Point the next link at the same host but a different port.
 		host := r.Host
-		// Strip the existing port (if any) and append a bogus one.
 		if idx := strings.LastIndex(host, ":"); idx >= 0 {
 			host = host[:idx]
 		}
@@ -126,21 +106,17 @@ func TestPaginationPortMismatchRejected(t *testing.T) {
 	}
 }
 
-// TestPaginationSameHostHappyPath verifies that a Link: rel="next" URL on the
-// same scheme, host, port, and API base is followed correctly (review Item 6).
 func TestPaginationSameHostHappyPath(t *testing.T) {
 	var pages []string
 	var mainSrv *httptest.Server
 	mainSrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		pages = append(pages, r.URL.Query().Get("page"))
 		if r.URL.Query().Get("page") == "" || r.URL.Query().Get("page") == "1" {
-			// First page — serve a next link pointing at the same host.
 			nextURL := mainSrv.URL + "/api/v4/projects/1/merge_requests?page=2"
 			w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, nextURL))
 			fmt.Fprint(w, `[{"iid":1}]`)
 			return
 		}
-		// Second page — no more next links.
 		fmt.Fprint(w, `[{"iid":2}]`)
 	}))
 	t.Cleanup(mainSrv.Close)
@@ -172,12 +148,9 @@ func TestPaginationSameHostHappyPath(t *testing.T) {
 	}
 }
 
-// TestPaginationDifferentAPIBaseRejected verifies that a Link: rel="next" URL
-// on the same host but a different API base path is rejected (review Item 6).
 func TestPaginationDifferentAPIBaseRejected(t *testing.T) {
 	var mainSrv *httptest.Server
 	mainSrv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Next link points at the same host but a different API base path.
 		nextURL := mainSrv.URL + "/api/v5/projects/1/merge_requests?page=2"
 		w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, nextURL))
 		fmt.Fprint(w, `[]`)
@@ -195,11 +168,8 @@ func TestPaginationDifferentAPIBaseRejected(t *testing.T) {
 	}
 }
 
-// schemeRewriteTransport rewrites the scheme of every request to match a target
-// server URL. This lets a test present an https REST base to the client while
-// routing the actual HTTP traffic to an httptest.NewServer (which is http).
 type schemeRewriteTransport struct {
-	target string // e.g. http://127.0.0.1:12345
+	target string
 }
 
 func (t *schemeRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -208,7 +178,6 @@ func (t *schemeRewriteTransport) RoundTrip(req *http.Request) (*http.Response, e
 		return nil, err
 	}
 	req2 := req.Clone(req.Context())
-	// Replace scheme+host with the test server's, keep the path/query.
 	req2.URL.Scheme = target.Scheme
 	req2.URL.Host = target.Host
 	req2.Host = target.Host

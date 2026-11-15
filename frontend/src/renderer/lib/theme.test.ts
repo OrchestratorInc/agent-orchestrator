@@ -122,8 +122,6 @@ describe("applyDocumentThemeStyle", () => {
 });
 
 describe("themes stored before the palette catalog", () => {
-	// Ids and storage key shipped before the 20-theme catalog; renaming any of
-	// them would silently reset existing users to Orchestrate.
 	const legacyIds = [
 		"orchestrate",
 		"github",

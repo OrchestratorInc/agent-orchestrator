@@ -33,7 +33,6 @@ func TestPRMovedAwayNotifiesSource(t *testing.T) {
 		t.Fatalf("notified = %+v", got)
 	}
 
-	// A terminated previous owner has nobody to tell.
 	got = nil
 	svc = NewWithDeps(Deps{Store: st, PRClaimer: &fakePRClaimer{out: errorFreeClaimOutcome{ports.ClaimOutcome{PreviousOwner: "mer-2", OwnerTerminated: true}}}, SCM: fakeSCM{obs: obs}})
 	svc.SetPRMovedNotifier(notify)
@@ -51,8 +50,6 @@ func (failingPRListStore) ListPRsBySession(context.Context, domain.SessionID) ([
 	return nil, errors.New("read failed")
 }
 
-// The PR has changed hands once the claim succeeds, so the previous owner is
-// told even if reading the result back afterwards fails.
 func TestPRMovedNoticeIsSentEvenIfTheResultCantBeRead(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{WorkspacePath: "/ws"}}

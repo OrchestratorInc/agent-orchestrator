@@ -23,7 +23,6 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 		...(await importOriginal<typeof import("../hooks/useSessionMemory")>()),
 		useSessionMemory: memoryQueryMock,
 		useAppMemory: appMemoryMock,
-		// The light's own poll, fed from the same mocked reading.
 		usePressureState: () => {
 			const system = appMemoryMock()?.data?.system;
 			return system ? pressureState(system) : undefined;
@@ -77,8 +76,6 @@ function reading(
 	return { sessionId, rssBytes, processCount, cpuPercent, sampledAt: "2026-09-18T00:00:00Z", processes };
 }
 
-/** A 32 GB host with the given amount free and PSI stall percentage. `load1`
- * is -1 on a platform with no load average (Windows), never otherwise negative. */
 function host(availableGiB: number, pressureRaw = 0, cpuPercent = 0, load1 = 0.5) {
 	return {
 		cpuPercent,
@@ -95,7 +92,6 @@ function host(availableGiB: number, pressureRaw = 0, cpuPercent = 0, load1 = 0.5
 	};
 }
 
-/** AO holding `aoGiB` on a host with `availableGiB` free at the given pressure. */
 function appReading(availableGiB: number, pressureRaw = 0, aoGiB = 2, hostCPUPercent = 0, aoCPUPercent = 12, load1 = 0.5) {
 	return {
 		isError: false,
@@ -167,14 +163,12 @@ describe("AppMemoryIndicator", () => {
 		expect(button).toHaveAttribute("data-memory-state", "fine");
 		expect(button).toHaveAttribute("aria-label", "Fine · 20.0 GB free of 32.0 GB · Orchestrator holds 2.0 GB · pressure 0.0");
 
-		// Stalling on memory: the light colours, the phrase stays AO's own size.
 		appMemoryMock.mockReturnValue(appReading(3, 12, 20));
 		rerender();
 		expect(screen.getByTestId("app-memory-indicator")).toHaveAttribute("data-memory-state", "tight_soon");
 		expect(screen.getByTestId("app-memory-indicator")).toHaveTextContent("20.0 GB");
 		expect(screen.getByTestId("app-memory-indicator")).not.toHaveTextContent("·");
 
-		// Tight while AO is a sliver of what is in use: still only AO's own size, never a verdict on other apps.
 		appMemoryMock.mockReturnValue(appReading(1, 40, 2));
 		rerender();
 		const tight = screen.getByTestId("app-memory-indicator");
@@ -197,45 +191,34 @@ describe("AppMemoryIndicator", () => {
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "CPU", "Memory", "Share"]);
-		// A session is not a process: no PID, and the line under its title says what is under it.
 		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes");
-		// The memory card is the bar and its key, nothing else.
 		const machine = screen.getByTestId("session-memory-stacked");
 		expect(machine).toHaveTextContent("Orchestrator 2.0 GB");
 		expect(machine).toHaveTextContent("Available 20.0 GB");
 		expect(machine).not.toHaveTextContent("In use");
 		expect(machine).not.toHaveTextContent("Other");
 		expect(machine).not.toHaveTextContent(/cores|load/i);
-		// CPU graphs: host 40% busy on 8 cores, AO's 160% of one core is 20% of the machine.
-		// The core count and load sit on the CPU heading line, above the two graphs.
 		const cpu = screen.getByTestId("session-cpu-graph");
 		expect(cpu).toHaveTextContent("CPU · 8 cores");
 		expect(cpu).toHaveTextContent("load 0.50");
 		expect(within(cpu).getByTestId("session-cpu-machine")).toHaveTextContent(/Machine CPU\s*40%/);
 		expect(within(cpu).getByTestId("session-cpu-ao")).toHaveTextContent(/Orchestrator CPU\s*20%/);
-		// Each graph tops out at the first of 10/25/50/100% that clears its peak.
 		expect(within(within(cpu).getByTestId("session-cpu-machine")).getByTestId("session-cpu-ceiling")).toHaveTextContent("50%");
 		expect(within(within(cpu).getByTestId("session-cpu-ao")).getByTestId("session-cpu-ceiling")).toHaveTextContent("25%");
-		// One line per graph, no bars: the machine and AO's share of it.
 		expect(cpu.querySelectorAll("path")).toHaveLength(2);
 		expect(within(cpu).queryByTestId("session-cpu-cores")).not.toBeInTheDocument();
-		// Fine: no suggestion, every row grey.
-		// No line blaming a session: the light and the bar say enough.
 		expect(screen.queryByTestId("session-memory-suggestion")).not.toBeInTheDocument();
 		const rows = within(table).getAllByTestId("session-memory-row");
 		expect(rows.map((row) => row.textContent)).toEqual([expect.stringContaining("big worker"), expect.stringContaining("small worker")]);
 		expect(rows.every((row) => row.getAttribute("data-chip-tone") === "neutral")).toBe(true);
 		expect(within(rows[0]).getByText("2.1 GB")).toBeInTheDocument();
-		// An unsampled session is not a row: never "0 MB".
 		expect(within(table).queryByText("unsampled worker")).not.toBeInTheDocument();
 		const own = within(table).getByTestId("session-memory-own-row");
 		expect(own).toHaveTextContent("Daemon and app");
 		expect(own).toHaveTextContent("300 MB");
 		expect(within(own).queryByRole("button")).not.toBeInTheDocument();
 
-		// The window only measures: its rows copy, they never end a session.
 		expect(within(table).queryByRole("button", { name: /terminate|kill|pause/i })).not.toBeInTheDocument();
-		// The only buttons are the two sort headers.
 		expect(within(table).queryAllByRole("button").filter((button) => button.dataset.testid !== "session-memory-sort")).toHaveLength(0);
 		expect(postMock).not.toHaveBeenCalled();
 	});
@@ -244,9 +227,6 @@ describe("AppMemoryIndicator", () => {
 		workspaceQueryMock.mockReturnValue({ data: undefined, isError: false, isSuccess: false });
 		const { rerender } = renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
-		// Nothing to show yet, but it must render (and stay rendered) without
-		// the onRows effect and the loading fallback array fighting each other
-		// into a re-render loop.
 		expect(screen.queryByTestId("session-memory-row")).not.toBeInTheDocument();
 		const workspace: WorkspaceSummary = {
 			id: "p1",
@@ -264,9 +244,7 @@ describe("AppMemoryIndicator", () => {
 		withReviewers.data.app = {
 			...withReviewers.data.app,
 			reviewers: [
-				// Reviews a session still on the board, so it is named by that title.
 				{ reviewId: "r-small", sessionId: "s-small", harness: "codex", memory: reading("", 120 * 1024 ** 2, 2, [{ pid: 51, ppid: 1, rssBytes: 120 * 1024 ** 2, cpuPercent: 3, command: "codex" }], 3) },
-				// Its worker is gone; the id stands in for the title.
 				{ reviewId: "r-gone", sessionId: "s-gone", harness: "claude-code", memory: reading("", 400 * 1024 ** 2, 1, [], 0) },
 			],
 		} as typeof withReviewers.data.app;
@@ -275,7 +253,6 @@ describe("AppMemoryIndicator", () => {
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		const reviewerRows = within(table).getAllByTestId("session-memory-reviewer-row");
-		// Largest first, like the sessions above them.
 		expect(reviewerRows.map((row) => row.textContent)).toEqual([
 			expect.stringContaining("Review of s-gone"),
 			expect.stringContaining("Review of small worker"),
@@ -283,12 +260,10 @@ describe("AppMemoryIndicator", () => {
 		expect(reviewerRows[0]).toHaveTextContent("claude-code");
 		expect(reviewerRows[0]).toHaveTextContent("400 MB");
 		expect(within(reviewerRows[1]).getByTestId("session-memory-type")).toHaveTextContent("Reviewer");
-		// Grouped under their own heading, and AO's own row stays last.
 		expect(within(table).getByText("Reviewers")).toBeInTheDocument();
 		const allRows = within(table).getAllByRole("row");
 		expect(allRows.indexOf(reviewerRows[1])).toBeLessThan(allRows.indexOf(within(table).getByTestId("session-memory-own-row")));
 		expect(allRows.at(-1)).toHaveAttribute("data-testid", "session-memory-own-row");
-		// A reviewer opens into its process tree like any row.
 		await userEvent.click(reviewerRows[1]);
 		expect(await screen.findAllByTestId("session-memory-process-row")).toHaveLength(1);
 
@@ -322,38 +297,28 @@ describe("AppMemoryIndicator", () => {
 		expect(screen.queryByTestId("session-memory-process-row")).not.toBeInTheDocument();
 		await userEvent.click(bigRow);
 		const children = await screen.findAllByTestId("session-memory-process-row");
-		// One flat line per program, largest first, each with only its own memory,
-		// so the lines add up to the session.
 		expect(children[0]).toHaveTextContent("claude");
 		expect(children[0]).toHaveTextContent("1.7 GB");
 		expect(children[0]).not.toHaveAttribute("aria-expanded");
-		// The PID sits in its own column, and a click copies it without toggling the row.
 		const pid = within(children[0]).getByTestId("session-memory-pid");
 		expect(pid).toHaveTextContent("111");
 		await userEvent.click(pid);
 		expect(clipboardMock).toHaveBeenCalledWith("111");
 		expect(await within(children[0]).findByRole("button", { name: "Copied PID 111" })).toBeInTheDocument();
 		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(2);
-		// A session row is not a process: it has no PID of its own.
 		expect(within(bigRow).queryByTestId("session-memory-pid")).not.toBeInTheDocument();
 		expect(children[1]).toHaveTextContent("go");
 		expect(children[1]).toHaveTextContent("222");
 		expect(children[1]).toHaveTextContent("434 MB");
-		// Where each line comes from: the agent itself, and a command it ran.
 		expect(within(children[0]).getByTestId("session-memory-process-type")).toHaveTextContent("Agent");
 		expect(within(children[1]).getByTestId("session-memory-process-type")).toHaveTextContent("Command");
-		// Collapsed rows say which agent runs the session, and that the last row is AO.
-		// The agent is named under the session's title, not in the Type column.
 		expect(within(bigRow).getByTestId("session-memory-agent")).toHaveTextContent("claude-code");
-		// A session's type is its role.
 		expect(within(bigRow).getByTestId("session-memory-type")).toHaveTextContent("Worker");
 		expect(within(own).getByTestId("session-memory-type")).toHaveTextContent("Orchestrator");
 		expect(children[1]).not.toHaveTextContent("go test");
-		// Clicking a process line copies nothing and opens nothing.
 		await userEvent.click(children[0]);
 		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(2);
 
-		// A second row opens alongside, not instead.
 		await userEvent.click(own);
 		expect(screen.getAllByTestId("session-memory-process-row")).toHaveLength(3);
 
@@ -391,7 +356,6 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
-		// Sorting only moves session rows: with one, an arrow would do nothing.
 		expect(within(table).getAllByTestId("session-memory-row")).toHaveLength(1);
 		expect(within(table).queryAllByTestId("session-memory-sort")).toHaveLength(0);
 		expect(within(table).getAllByRole("columnheader").map((th) => th.textContent)).toEqual(["Name", "Type", "PID", "CPU", "Memory", "Share"]);
@@ -423,7 +387,6 @@ describe("AppMemoryIndicator", () => {
 		expect(order()).toEqual(["small", "big"]);
 		await userEvent.click(cpu);
 		expect(order()).toEqual(["big", "small"]);
-		// AO's own row is not a session: it stays last whatever the order.
 		expect(within(table).getAllByRole("row").at(-1)).toHaveAttribute("data-testid", "session-memory-own-row");
 	});
 
@@ -433,9 +396,7 @@ describe("AppMemoryIndicator", () => {
 		const table = await screen.findByTestId("session-memory-table");
 		const headers = within(table).getAllByRole("columnheader");
 		const cells = within(within(table).getAllByTestId("session-memory-row")[0]).getAllByRole("cell");
-		// A row has exactly as many cells as the header has columns.
 		expect(cells).toHaveLength(headers.length);
-		// Header and body share each column's alignment and padding.
 		headers.slice(1).forEach((th, i) => {
 			for (const c of ["text-left", "text-right", "px-3", "pl-3", "pr-4"]) {
 				expect(cells[i + 1].classList.contains(c)).toBe(th.classList.contains(c));
@@ -457,7 +418,6 @@ describe("AppMemoryIndicator", () => {
 		const order = () => within(table).getAllByTestId("session-memory-row").map((row) => (row.textContent?.includes("big worker") ? "big" : "small"));
 		expect(order()).toEqual(["big", "small"]);
 		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[0]);
-		// Both read 0% on screen, but 0.4% is busier than 0.1%: the smaller session leads.
 		expect(order()).toEqual(["small", "big"]);
 	});
 
@@ -473,10 +433,8 @@ describe("AppMemoryIndicator", () => {
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const table = await screen.findByTestId("session-memory-table");
 		const order = () => within(table).getAllByTestId("session-memory-row").map((row) => (row.textContent?.includes("big worker") ? "big" : "small"));
-		// Memory order puts the small session last; reversed, first.
 		await userEvent.click(within(table).getAllByTestId("session-memory-sort")[1]);
 		expect(order()).toEqual(["small", "big"]);
-		// Both idle at 0% CPU: name order, A to Z, both ways round.
 		const cpu = within(table).getAllByTestId("session-memory-sort")[0];
 		await userEvent.click(cpu);
 		expect(order()).toEqual(["big", "small"]);
@@ -521,7 +479,6 @@ describe("AppMemoryIndicator", () => {
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		const rows = within(await screen.findByTestId("session-memory-table")).getAllByTestId("session-memory-row");
 		expect(rows[0]).toHaveTextContent("82%");
-		// s-small is idle, not "working" — its measured CPU still shows, not hidden.
 		expect(rows[1]).toHaveTextContent("7%");
 	});
 
@@ -582,7 +539,6 @@ describe("AppMemoryIndicator", () => {
 		const table = await screen.findByTestId("session-memory-table");
 		const rows = within(table).getAllByTestId("session-memory-row");
 		expect(within(rows[0]).getByTestId("session-memory-status")).toHaveTextContent("Bash · 38s");
-		// Idle for two hours reads as such; a session with no steps expands to nothing.
 		expect(within(rows[1]).getByTestId("session-memory-status")).toHaveTextContent("idle · 2h");
 		expect(rows[1]).not.toHaveAttribute("aria-expanded");
 
@@ -634,13 +590,11 @@ describe("AppMemoryIndicator", () => {
 		renderButton();
 		await userEvent.click(screen.getByTestId("app-memory-indicator"));
 		await screen.findByTestId("session-memory-table");
-		// An icon right after the Machine heading, named by its label and tooltip rather than visible text.
 		const copy = screen.getByRole("button", { name: "Copy report" });
 		expect(screen.getByRole("heading", { name: "Machine" }).nextElementSibling).toBe(copy);
 		expect(copy.textContent).toBe("");
 		await userEvent.click(copy);
 		const report = clipboardMock.mock.calls[0][0] as string;
-		// The machine first, then every session on screen — not just one.
 		expect(report).toContain("Memory   Orchestrator 2.0 GB · 20.0 GB free of 32.0 GB");
 		expect(report).toContain("Sessions 2");
 		expect(report).toContain("big worker");
@@ -653,9 +607,7 @@ describe("AppMemoryIndicator", () => {
 		expect(report).toContain("Usage    $5.46 · 412K tok");
 		expect(report).toContain("Memory   2.1 GB · CPU 82%");
 		expect(report).toMatch(/claude\s+1.7 GB\s+80%\s+Agent/);
-		// The child keeps its indent, and the tree is not truncated the way the screen truncates it.
 		expect(report).toMatch(/ {2}sh\s+434 MB\s+2%/);
-		// A process id means nothing to whoever reads the report; a tool's arguments may carry a path.
 		expect(report).not.toContain("111");
 		expect(report).not.toContain("go test");
 		expect(report).toContain("Edit");

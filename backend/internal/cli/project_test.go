@@ -62,7 +62,6 @@ func TestProjectSetConfig_TrackerIntakeFlags(t *testing.T) {
 	if err := json.Unmarshal(capture.body, &got); err != nil {
 		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
 	}
-	// Provider is omitted: the daemon infers it from the project's git origin.
 	if !got.Config.TrackerIntake.Enabled || got.Config.TrackerIntake.Provider != "" || got.Config.TrackerIntake.Repo != "acme/demo" || got.Config.TrackerIntake.Assignee != "alice" {
 		t.Fatalf("tracker intake request = %#v", got.Config.TrackerIntake)
 	}
@@ -130,7 +129,6 @@ func TestProjectSetConfig_PreRemoveConfigJSON(t *testing.T) {
 	if err := json.Unmarshal(capture.body, &got); err != nil {
 		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
 	}
-	// #7514: preRemove must survive --config-json instead of being dropped.
 	if len(got.Config.PreRemove) != 1 || got.Config.PreRemove[0] != "docker compose down -v" {
 		t.Fatalf("preRemove request = %#v, want preserved from --config-json", got.Config.PreRemove)
 	}
@@ -152,15 +150,11 @@ func TestBuildProjectConfigTrackerIntakeFlags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Provider is omitted: the daemon infers it from the project's git origin.
 	if !got.TrackerIntake.Enabled || got.TrackerIntake.Provider != "" || got.TrackerIntake.Repo != "acme/demo" || got.TrackerIntake.Assignee != "alice" {
 		t.Fatalf("tracker intake config = %#v", got.TrackerIntake)
 	}
 }
 
-// TestProjectConfigMirrorsDomainJSONKeys fails when the CLI's hand-written
-// projectConfig drifts from domain.ProjectConfig. A key the CLI does not model
-// is silently dropped by every set-config round trip.
 func TestProjectConfigMirrorsDomainJSONKeys(t *testing.T) {
 	want := map[string]bool{}
 	jsonKeyPaths(reflect.TypeOf(domain.ProjectConfig{}), "", want)
@@ -178,10 +172,6 @@ func TestProjectConfigMirrorsDomainJSONKeys(t *testing.T) {
 	}
 }
 
-// jsonKeyPaths records every JSON key path typ encodes, descending through
-// pointers, slices, and nested structs so keys like worker.agentConfig.effort
-// are compared too. It does not support embedded structs, which encoding/json
-// promotes inline, and it compares key names only, not types.
 func jsonKeyPaths(typ reflect.Type, prefix string, out map[string]bool) {
 	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice {
 		typ = typ.Elem()
@@ -203,9 +193,6 @@ func jsonKeyPaths(typ reflect.Type, prefix string, out map[string]bool) {
 	}
 }
 
-// TestProjectConfigFlagsListsEveryFieldFlag fails when a set-config field flag
-// is registered but missing from projectConfigFlags, which would make a call
-// with only that flag a "provide at least one config flag" usage error.
 func TestProjectConfigFlagsListsEveryFieldFlag(t *testing.T) {
 	notFieldFlags := map[string]bool{"config-json": true, "clear": true, "json": true}
 	cmd := newProjectSetConfigCommand(&commandContext{})
@@ -221,8 +208,6 @@ func TestProjectConfigFlagsListsEveryFieldFlag(t *testing.T) {
 	}
 }
 
-// storedProjectConfig carries fields set in the desktop app that no
-// set-config flag manages (effort, preRemove, workersRequestReview).
 const storedProjectConfig = `{"sessionPrefix":"old","env":{"KEEP":"1"},"preRemove":["make clean"],` +
 	`"agentConfig":{"model":"m1","effort":"high"},"worker":{"agent":"codex","agentConfig":{"effort":"medium"}},` +
 	`"reviewers":[{"harness":"claude-code","agentConfig":{"effort":"max"}}],"workersRequestReview":true}`
@@ -232,8 +217,6 @@ type projectConfigCapture struct {
 	putBody  []byte
 }
 
-// projectConfigServer serves getBody for GET /api/v1/projects/demo and records
-// the API requests it sees plus the PUT /api/v1/projects/demo/config body.
 func projectConfigServer(t *testing.T, getBody string) (*httptest.Server, *projectConfigCapture) {
 	t.Helper()
 	capture := &projectConfigCapture{}
@@ -260,8 +243,6 @@ func projectConfigServer(t *testing.T, getBody string) (*httptest.Server, *proje
 	return srv, capture
 }
 
-// putConfig decodes the captured PUT body as the daemon does, into
-// domain.ProjectConfig, so the assertion sees what the daemon would store.
 func putConfig(t *testing.T, capture *projectConfigCapture) domain.ProjectConfig {
 	t.Helper()
 	var body struct {
@@ -339,7 +320,6 @@ func TestProjectSetConfig_ConfigJSONKeepsEffortAndPreRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
 	}
-	// --config-json is a full replacement, so it never reads the current config.
 	if want := []string{"PUT /api/v1/projects/demo/config"}; !reflect.DeepEqual(capture.requests, want) {
 		t.Fatalf("requests = %q, want %q", capture.requests, want)
 	}

@@ -43,7 +43,6 @@ func TestSessionForkListAndNumbering(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A fork of a fork counts against the same root.
 	if err := s.RecordSessionFork(ctx, domain.SessionFork{ForkSessionID: "p-4", SourceSessionID: "p-2", RootSessionID: "p-1", ForkNumber: 3, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// skillfulConversation is a provider double that can enumerate skills.
 type skillfulConversation struct {
 	*fakeConversation
 	skills []ports.ChatSkill
@@ -45,8 +44,6 @@ func TestSkillsComeFromTheLiveConversation(t *testing.T) {
 	}
 }
 
-// A driver that cannot enumerate skills has to be distinguishable from one that
-// reported none, because only the first is permanent.
 func TestSkillsReportsUnsupportedForADriverThatCannotList(t *testing.T) {
 	h := newHarness(t)
 
@@ -56,8 +53,6 @@ func TestSkillsReportsUnsupportedForADriverThatCannotList(t *testing.T) {
 	}
 }
 
-// Without a controller there is no provider to ask. Reporting that plainly is what
-// lets a client explain the state instead of showing an empty menu.
 func TestSkillsRequiresALiveController(t *testing.T) {
 	h := newHarness(t)
 	if err := h.svc.Stop(context.Background(), testSession); err != nil {

@@ -3,7 +3,6 @@ import { markApiError } from "./reported-errors";
 
 export interface GitHubStatusResponse {
 	connected: boolean;
-	/** GitHub username AO is signed in as; absent when it could not be resolved. */
 	login?: string;
 }
 
@@ -38,7 +37,6 @@ export function isGitHubAuthInvalidError(error: unknown): boolean {
 async function daemonFetch<T>(path: string, init?: RequestInit): Promise<T> {
 	const baseUrl = getApiBaseUrl();
 	if (!baseUrl) throw new Error("Daemon is not running.");
-	// Shares the API client's failure reporting; these calls used to bypass it.
 	const res = await reportingFetch(new Request(`${baseUrl}${path}`, init));
 	if (!res.ok) {
 		const body = await res.json().catch(() => ({}));
@@ -63,9 +61,6 @@ export interface GitHubOAuthRefresh {
 	refreshTokenExpiresIn?: number;
 }
 
-// saveGitHubPAT stores a token on the daemon. For an expiring GitHub App OAuth
-// token, pass the refresh material so the daemon can renew it transparently
-// instead of forcing a reconnect; a plain PAT passes only the token.
 export async function saveGitHubPAT(pat: string, oauth?: GitHubOAuthRefresh): Promise<void> {
 	await daemonFetch<{ status: string }>("/api/v1/github/pat", {
 		method: "PUT",

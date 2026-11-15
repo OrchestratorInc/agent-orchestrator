@@ -13,17 +13,10 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------------------------------
-// fakePTY implements ptyConn using in-memory pipes. Used only in tests;
-// the real ConPTY impl is Windows-only.
-// ---------------------------------------------------------------------------
-
 type fakePTY struct {
-	// output is what the fake "terminal" writes to the host (PTY -> host reader)
 	outR *io.PipeReader
 	outW *io.PipeWriter
 
-	// input is what the host writes to the fake terminal (keystrokes)
 	inR *io.PipeReader
 	inW *io.PipeWriter
 
@@ -52,19 +45,15 @@ func newFakePTY(pid int) *fakePTY {
 	}
 }
 
-// WriteOutput simulates the PTY producing output (e.g. shell printing text).
 func (f *fakePTY) WriteOutput(data []byte) (int, error) { return f.outW.Write(data) }
 
-// CloseOutput simulates the PTY process exiting (closes the read side).
 func (f *fakePTY) CloseOutput(code int) {
 	f.exitCode = code
 	f.outW.Close()
 }
 
-// ReadInput lets tests inspect what the host forwarded to the PTY.
 func (f *fakePTY) ReadInput(buf []byte) (int, error) { return f.inR.Read(buf) }
 
-// ptyConn interface implementation.
 func (f *fakePTY) Read(b []byte) (int, error)  { return f.outR.Read(b) }
 func (f *fakePTY) Write(b []byte) (int, error) { return f.inW.Write(b) }
 
@@ -79,7 +68,6 @@ func (f *fakePTY) Close() error {
 	f.closeMu.Lock()
 	defer f.closeMu.Unlock()
 	f.closed = true
-	// Close both pipes so pumpPTY and any Read calls unblock.
 	_ = f.outW.Close()
 	_ = f.inW.Close()
 	f.doneOnce.Do(func() { close(f.doneC) })
@@ -99,17 +87,11 @@ func (f *fakePTY) ExitCode() (int, bool) {
 
 func (f *fakePTY) PID() int { return f.pid }
 
-// signalExit simulates the child process exiting, triggering the Done channel
-// and ExitCode returning true.
 func (f *fakePTY) signalExit(code int) {
 	f.exitCode = code
 	f.doneOnce.Do(func() { close(f.doneC) })
-	_ = f.outW.Close() // unblocks pumpPTY's Read
+	_ = f.outW.Close()
 }
-
-// ---------------------------------------------------------------------------
-// testClient wraps a net.Conn and a MessageParser for easy frame reading.
-// ---------------------------------------------------------------------------
 
 type testClient struct {
 	conn   net.Conn
@@ -155,7 +137,6 @@ func newTestClient(t *testing.T, addr string) *testClient {
 	return tc
 }
 
-// readFrame blocks until a frame arrives or 2s times out.
 func (tc *testClient) readFrame(t *testing.T) (typ byte, payload []byte) {
 	t.Helper()
 	select {
@@ -170,7 +151,6 @@ func (tc *testClient) readFrame(t *testing.T) (typ byte, payload []byte) {
 	}
 }
 
-// send writes a framed message to the server.
 func (tc *testClient) send(msgType byte, payload []byte) error {
 	frame, err := EncodeMessage(msgType, payload)
 	if err != nil {
@@ -181,10 +161,6 @@ func (tc *testClient) send(msgType byte, payload []byte) error {
 }
 
 func (tc *testClient) close() { _ = tc.conn.Close() }
-
-// ---------------------------------------------------------------------------
-// Helper: start a Serve with a freshly created listener + fakePTY.
-// ---------------------------------------------------------------------------
 
 type serveFixture struct {
 	host   *host
@@ -224,7 +200,6 @@ func startServe(t *testing.T, pid int) *serveFixture {
 	}
 }
 
-// waitDone waits for Serve to return (up to 2s).
 func (f *serveFixture) waitDone(t *testing.T) {
 	t.Helper()
 	select {
@@ -234,17 +209,10 @@ func (f *serveFixture) waitDone(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-// TestScrollbackReplay: seed the ring, connect a client; first frame must be
-// MsgTerminalData containing the ring snapshot.
 func TestScrollbackReplay(t *testing.T) {
 	f := startServe(t, 100)
 	defer f.cancel()
 
-	// Seed ring directly before the client connects.
 	f.ring.Append([]byte("line1\nline2\n"))
 	snap := f.ring.Snapshot()
 
@@ -260,35 +228,13 @@ func TestScrollbackReplay(t *testing.T) {
 	}
 }
 
-// TestScrollbackLiveOrdering_NoDrop is a regression test for the bug where the
-// new-client handler took the ring Snapshot and registered the client in two
-// separate h.mu acquisitions. A PTY chunk arriving in that gap landed in
-// neither the snapshot nor that client's broadcast and was silently dropped,
-// producing a hole in the middle of the client's stream.
-//
-// The PTY emits a long stream of numbered chunks continuously while a client
-// connects. The fakePTY's WriteOutput blocks until pumpPTY consumes each chunk,
-// so output is interleaved with the connect, exercising the race window. The
-// guaranteed invariant is: the client's received byte stream must be a
-// CONTIGUOUS suffix of the full PTY sequence, i.e. it may legitimately start
-// late (the snapshot only captures whatever was written before the connect),
-// but once it starts there must be NO internal gap. The old two-step code
-// dropped a chunk between snapshot and registration, leaving an internal hole;
-// this test detects that hole. Reliable under -race -count=20: the
-// continuous-emit setup reliably lands a chunk in the race window, and it
-// reliably fails against the old code.
 func TestScrollbackLiveOrdering_NoDrop(t *testing.T) {
 	f := startServe(t, 200)
 	defer f.cancel()
 
-	// Build the full byte sequence the PTY will ever have produced. Each chunk
-	// is a complete line ("[NNNN]\n") so it lands in the ring's snapshot (the
-	// ring only stores completed lines), exercising the snapshot-write path as
-	// well as the live-broadcast boundary where the drop bug lived.
 	const nChunks = 300
 	chunk := func(i int) []byte { return []byte(fmt.Sprintf("[%04d]\n", i)) }
 
-	// Emit continuously; each WriteOutput blocks until pumpPTY reads it.
 	emitDone := make(chan struct{})
 	go func() {
 		defer close(emitDone)
@@ -299,13 +245,9 @@ func TestScrollbackLiveOrdering_NoDrop(t *testing.T) {
 		}
 	}()
 
-	// Connect mid-stream so the snapshot is taken while chunks are in flight.
 	c := newTestClient(t, f.addr)
 	defer c.close()
 
-	// Collect frames until the client's stream contains the final chunk (the
-	// last line the PTY emits), or until the overall deadline. The sentinel is
-	// the last line's bytes; once we have seen it, the whole tail has arrived.
 	sentinel := string(chunk(nChunks - 1))
 	var got []byte
 	deadline := time.After(5 * time.Second)
@@ -324,7 +266,6 @@ collect:
 			break collect
 		}
 	}
-	// Emitter must have finished (it produces the sentinel last).
 	select {
 	case <-emitDone:
 	case <-time.After(time.Second):
@@ -334,16 +275,7 @@ collect:
 		t.Fatalf("client never received the final chunk %q; got %d bytes", sentinel, len(got))
 	}
 
-	// Parse the received bytes back into the ordered list of line indices.
-	// Each line is "[NNNN]\n". The client may legitimately start late (the
-	// snapshot only captures lines written before the connect). The DROP bug
-	// produced a MISSING index in the middle. A line may not appear twice
-	// either: record appends a chunk to the ring and queues it in one h.mu
-	// hold, so a chunk is in the snapshot or broadcast after it, never both.
-	// So the invariant is: the indices, in order, advance by exactly 1 each
-	// step and reach the final index nChunks-1.
 	lines := strings.Split(string(got), "\n")
-	// Trailing "" after the final \n.
 	if lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
@@ -370,7 +302,6 @@ collect:
 	}
 }
 
-// TestFanOut: two clients receive the same PTY output.
 func TestFanOut(t *testing.T) {
 	f := startServe(t, 101)
 	defer f.cancel()
@@ -380,13 +311,8 @@ func TestFanOut(t *testing.T) {
 	c2 := newTestClient(t, f.addr)
 	defer c2.close()
 
-	// Write PTY output after both clients have connected.
-	// We need to give the server a moment to register both clients; use a
-	// brief sync by sending a status req from each and waiting for responses.
-	// ponytail: channel-based sync via status round-trip avoids sleeps.
 	_ = c1.send(MsgStatusReq, nil)
 	_ = c2.send(MsgStatusReq, nil)
-	// Drain status responses.
 	c1.readFrame(t)
 	c2.readFrame(t)
 
@@ -395,7 +321,6 @@ func TestFanOut(t *testing.T) {
 		t.Fatalf("WriteOutput: %v", err)
 	}
 
-	// Both clients should receive a MsgTerminalData with msg.
 	for _, c := range []*testClient{c1, c2} {
 		typ, payload := c.readFrame(t)
 		if typ != MsgTerminalData {
@@ -407,12 +332,6 @@ func TestFanOut(t *testing.T) {
 	}
 }
 
-// TestSlowClientDoesNotBlockFanOut reproduces the macOS preview failure where
-// one terminal connection stopped reading. The old host wrote to every socket
-// while holding h.mu, so that one blocked Write froze status probes, attaches,
-// and output for all clients; the UI stayed at a blinking empty terminal and
-// timed-out probes accumulated in CLOSE_WAIT. Per-client writers must isolate
-// that back-pressure and keep every fast viewer moving.
 func TestSlowClientDoesNotBlockFanOut(t *testing.T) {
 	slowHost, slowPeer := net.Pipe()
 	fastHost, fastPeer := net.Pipe()
@@ -459,9 +378,6 @@ func TestSlowClientDoesNotBlockFanOut(t *testing.T) {
 	}
 }
 
-// A viewer that reads slowly must still see every byte: output waits for its
-// queue to drain (pausing the program) instead of dropping it and replaying a
-// truncated ring on re-attach.
 func TestBroadcastWaitsForASlowClientInsteadOfDroppingIt(t *testing.T) {
 	hostEnd, peer := net.Pipe()
 	h := &host{clients: make(map[net.Conn]*clientState), shutdownC: make(chan struct{})}
@@ -488,7 +404,7 @@ func TestBroadcastWaitsForASlowClientInsteadOfDroppingIt(t *testing.T) {
 			t.Fatalf("slow client lost its connection after %d of %d frames: %v", len(got), frames, err)
 		}
 		parser.Feed(buf[:n])
-		time.Sleep(time.Millisecond) // a viewer slower than the producer
+		time.Sleep(time.Millisecond)
 	}
 	for i, payload := range got {
 		if want := fmt.Sprintf("%06d", i); payload != want {
@@ -503,8 +419,6 @@ func TestBroadcastWaitsForASlowClientInsteadOfDroppingIt(t *testing.T) {
 	}
 }
 
-// A viewer that stops reading must not hold the PTY: after slowClientGrace it is
-// dropped and output keeps flowing to the others.
 func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	defer func(grace time.Duration) { slowClientGrace = grace }(slowClientGrace)
 	slowClientGrace = 100 * time.Millisecond
@@ -524,13 +438,8 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	})
 	go func() { _, _ = io.Copy(io.Discard, fastPeer) }()
 
-	// The stalled writer can hold a full batch in flight plus a full queue
-	// (2x the buffer), so send more than that to guarantee the queue fills.
 	done := make(chan struct{})
 	go func() {
-		// writeClient batches up to one queue's worth of frames before it
-		// blocks on the stalled socket. Send one additional queue length so the
-		// broadcast path must observe a full queue and apply slowClientGrace.
 		for i := 0; i < hostClientWriteBuffer*3; i++ {
 			frame, _ := EncodeMessage(MsgTerminalData, []byte("x"))
 			h.broadcast(frame)
@@ -551,7 +460,6 @@ func TestBroadcastDropsAClientThatStopsReading(t *testing.T) {
 	}
 }
 
-// TestTerminalInput: MsgTerminalInput from a client reaches the fakePTY's input.
 func TestTerminalInput(t *testing.T) {
 	f := startServe(t, 102)
 	defer f.cancel()
@@ -573,7 +481,6 @@ func TestTerminalInput(t *testing.T) {
 	}
 }
 
-// TestResize: MsgResize calls fakePTY.Resize with the right cols/rows.
 func TestResize(t *testing.T) {
 	f := startServe(t, 103)
 	defer f.cancel()
@@ -586,11 +493,8 @@ func TestResize(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// Poll for the resize to arrive (it's async). Channel-based: send a
-	// status req and wait for its reply, which guarantees the resize was
-	// processed (single goroutine handles all messages per connection).
 	_ = c.send(MsgStatusReq, nil)
-	c.readFrame(t) // discard status response
+	c.readFrame(t)
 
 	f.pty.resizeMu.Lock()
 	resizes := f.pty.resizes
@@ -604,14 +508,12 @@ func TestResize(t *testing.T) {
 	}
 }
 
-// resizeSnapshot returns a copy of the fakePTY's recorded resizes.
 func (f *fakePTY) resizeSnapshot() []ResizePayload {
 	f.resizeMu.Lock()
 	defer f.resizeMu.Unlock()
 	return append([]ResizePayload(nil), f.resizes...)
 }
 
-// waitResizes polls until the fakePTY has recorded at least n resizes (or 2s).
 func (f *fakePTY) waitResizes(t *testing.T, n int) []ResizePayload {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
@@ -627,9 +529,6 @@ func (f *fakePTY) waitResizes(t *testing.T, n int) []ResizePayload {
 	}
 }
 
-// syncResize sends a resize then a status round-trip on the same conn. Because a
-// connection's messages are handled by one goroutine in order, draining the
-// status response guarantees the resize has already been processed.
 func syncResize(t *testing.T, c *testClient, cols, rows int) {
 	t.Helper()
 	payload, _ := json.Marshal(ResizePayload{Cols: cols, Rows: rows})
@@ -639,14 +538,9 @@ func syncResize(t *testing.T, c *testClient, cols, rows int) {
 	if err := c.send(MsgStatusReq, nil); err != nil {
 		t.Fatalf("send status: %v", err)
 	}
-	c.readFrame(t) // status response — proves the resize was processed
+	c.readFrame(t)
 }
 
-// TestResizeLargestWins: with two clients on one PTY, the shared grid follows
-// the LARGEST client — a smaller client attaching or resizing must not shrink
-// the PTY — and when the large client leaves, the grid falls back to the
-// remaining largest client. This is the fix for the phone stripping down the
-// desktop's terminal (both attach to the same session's single PTY).
 func TestResizeLargestWins(t *testing.T) {
 	f := startServe(t, 110)
 	defer f.cancel()
@@ -656,21 +550,17 @@ func TestResizeLargestWins(t *testing.T) {
 	small := newTestClient(t, f.addr)
 	defer small.close()
 
-	// Big client sizes the PTY up.
 	syncResize(t, big, 200, 50)
 	got := f.pty.waitResizes(t, 1)
 	if got[0].Cols != 200 || got[0].Rows != 50 {
 		t.Fatalf("first resize = %+v, want {200 50}", got[0])
 	}
 
-	// Small client asks for a smaller grid: the shared PTY must NOT shrink, so no
-	// additional resize is issued (the max is unchanged).
 	syncResize(t, small, 45, 22)
 	if got := f.pty.resizeSnapshot(); len(got) != 1 {
 		t.Fatalf("small client changed the grid: resizes = %+v, want just [{200 50}]", got)
 	}
 
-	// The big client leaves: the grid falls back to the remaining (small) client.
 	big.close()
 	got = f.pty.waitResizes(t, 2)
 	last := got[len(got)-1]
@@ -679,25 +569,17 @@ func TestResizeLargestWins(t *testing.T) {
 	}
 }
 
-// TestResizeMatchesSingleLargestClient: with a wide-but-short client and a
-// narrow-but-tall one, the PTY must match ONE client's grid exactly (the larger
-// by area) — never an independent per-axis max. A synthesized wide-AND-tall grid
-// (120x48 here) has no client behind it and mis-renders for both: the desktop
-// grows phantom rows, the phone phantom columns. This is the regression that made
-// the desktop terminal "also get weird" while co-viewing.
 func TestResizeMatchesSingleLargestClient(t *testing.T) {
 	f := startServe(t, 111)
 	defer f.cancel()
 
-	wide := newTestClient(t, f.addr) // desktop-like: wide, short (area 3600)
+	wide := newTestClient(t, f.addr)
 	defer wide.close()
-	tall := newTestClient(t, f.addr) // phone-like: narrow, tall (area 2640)
+	tall := newTestClient(t, f.addr)
 	defer tall.close()
 
 	syncResize(t, wide, 120, 30)
 	f.pty.waitResizes(t, 1)
-	// The smaller-area client asks for MORE rows than the wide one; a per-axis max
-	// would bump the grid to 120x48. Area-based selection must keep it at 120x30.
 	syncResize(t, tall, 55, 48)
 
 	got := f.pty.resizeSnapshot()
@@ -712,7 +594,6 @@ func TestResizeMatchesSingleLargestClient(t *testing.T) {
 	}
 }
 
-// TestGetOutputReq: MsgGetOutputReq returns MsgGetOutputRes with ring.Tail(n).
 func TestGetOutputReq(t *testing.T) {
 	f := startServe(t, 104)
 	defer f.cancel()
@@ -722,7 +603,6 @@ func TestGetOutputReq(t *testing.T) {
 	c := newTestClient(t, f.addr)
 	defer c.close()
 
-	// Drain scrollback frame.
 	c.readFrame(t)
 
 	reqPayload, _ := json.Marshal(GetOutputReq{Lines: 2})
@@ -740,8 +620,6 @@ func TestGetOutputReq(t *testing.T) {
 	}
 }
 
-// TestStatusReq_AliveAndExited: MsgStatusReq returns alive:true while running;
-// after the PTY exits, returns alive:false with exitCode. Listener stays open.
 func TestStatusReq_AliveAndExited(t *testing.T) {
 	f := startServe(t, 105)
 	defer f.cancel()
@@ -749,7 +627,6 @@ func TestStatusReq_AliveAndExited(t *testing.T) {
 	c := newTestClient(t, f.addr)
 	defer c.close()
 
-	// While running: expect alive:true.
 	if err := c.send(MsgStatusReq, nil); err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -771,16 +648,13 @@ func TestStatusReq_AliveAndExited(t *testing.T) {
 		t.Fatalf("protocol version = %d, want %d", sp.ProtocolVersion, conPTYHostProtocolVersion)
 	}
 
-	// Simulate PTY exit.
 	f.pty.signalExit(42)
 
-	// Drain the broadcast status-res that pumpPTY sends on exit.
 	exitBcast, _ := c.readFrame(t)
 	if exitBcast != MsgStatusRes {
 		t.Fatalf("exit broadcast type = 0x%02x, want MsgStatusRes", exitBcast)
 	}
 
-	// Now a new status req should report alive:false.
 	if err := c.send(MsgStatusReq, nil); err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -799,17 +673,14 @@ func TestStatusReq_AliveAndExited(t *testing.T) {
 		t.Fatalf("expected exitCode=42, got %v", sp2.ExitCode)
 	}
 
-	// Keep-alive: the listener must still accept new connections.
 	c2 := newTestClient(t, f.addr)
 	defer c2.close()
 	if err := c2.send(MsgStatusReq, nil); err != nil {
 		t.Fatalf("keep-alive send: %v", err)
 	}
-	_, _ = c2.readFrame(t) // just verify it didn't crash
+	_, _ = c2.readFrame(t)
 }
 
-// TestKillReq: MsgKillReq disposes the fakePTY, drops clients, closes
-// listener, and Serve returns.
 func TestKillReq(t *testing.T) {
 	f := startServe(t, 106)
 
@@ -819,10 +690,8 @@ func TestKillReq(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// Serve should return within 2s (includes the 50ms grace sleep).
 	f.waitDone(t)
 
-	// PTY Close must have been called.
 	f.pty.closeMu.Lock()
 	closed := f.pty.closed
 	f.pty.closeMu.Unlock()
@@ -830,7 +699,6 @@ func TestKillReq(t *testing.T) {
 		t.Fatal("expected pty.Close() to be called on kill")
 	}
 
-	// Listener should be closed: new dial must fail.
 	conn, err := net.DialTimeout("tcp", f.addr, 200*time.Millisecond)
 	if err == nil {
 		_ = conn.Close()
@@ -840,19 +708,16 @@ func TestKillReq(t *testing.T) {
 	c.close()
 }
 
-// TestShutdownViaCtxCancel: cancelling the context triggers graceful shutdown.
 func TestShutdownViaCtxCancel(t *testing.T) {
 	f := startServe(t, 107)
 
 	c := newTestClient(t, f.addr)
 	defer c.close()
 
-	// Cancel the context.
 	f.cancel()
 
 	f.waitDone(t)
 
-	// PTY Close must have been called.
 	f.pty.closeMu.Lock()
 	closed := f.pty.closed
 	f.pty.closeMu.Unlock()
@@ -861,13 +726,6 @@ func TestShutdownViaCtxCancel(t *testing.T) {
 	}
 }
 
-// TestLateAttachReceivesNegotiatedModes is the #5039 regression: a full-screen
-// program prints its alternate-screen / mouse / bracketed-paste handshake once,
-// then produces more than MaxOutputLines lines, so the ring no longer holds the
-// handshake by the time a client attaches. The client (the phone, or a desktop
-// pane after a relaunch) must still be told the modes, ahead of the replay,
-// or it renders the replay in its normal buffer with mouse reporting off and
-// its scrolling never reaches the program.
 func TestLateAttachReceivesNegotiatedModes(t *testing.T) {
 	f := startServe(t, 300)
 	defer f.cancel()
@@ -876,8 +734,6 @@ func TestLateAttachReceivesNegotiatedModes(t *testing.T) {
 	if _, err := f.pty.WriteOutput([]byte(handshake + "welcome\n")); err != nil {
 		t.Fatalf("write handshake: %v", err)
 	}
-	// Overflow the ring by a wide margin, in PTY-sized chunks, the way a TUI
-	// repainting on every keystroke does.
 	var frame bytes.Buffer
 	for i := 0; i < 50; i++ {
 		fmt.Fprintf(&frame, "\x1b[2K\x1b[1Aframe line %d\n", i)
@@ -887,8 +743,6 @@ func TestLateAttachReceivesNegotiatedModes(t *testing.T) {
 			t.Fatalf("write frame %d: %v", i, err)
 		}
 	}
-	// Wait until pumpPTY has consumed everything: the ring is full and the
-	// handshake has scrolled out of it.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		snap := f.ring.Replay()
@@ -909,9 +763,6 @@ func TestLateAttachReceivesNegotiatedModes(t *testing.T) {
 	if typ != MsgTerminalData {
 		t.Fatalf("got type 0x%02x, want MsgTerminalData", typ)
 	}
-	// Alternate buffer first, then by mode number: hidden cursor, mouse
-	// protocol and encoding, bracketed paste; then the replay exactly as the
-	// ring holds it.
 	wantPrefix := "\x1b[?1049h\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?2004h"
 	if !bytes.HasPrefix(payload, []byte(wantPrefix)) {
 		t.Fatalf("first frame does not start with the negotiated modes:\n got %q\nwant prefix %q", payload[:min(len(payload), 60)], wantPrefix)
@@ -921,10 +772,6 @@ func TestLateAttachReceivesNegotiatedModes(t *testing.T) {
 	}
 }
 
-// TestAttachAfterProgramLeftAltScreen: once the program has restored the
-// normal buffer and turned reporting off, a late attacher gets the replay
-// alone, so a finished TUI does not pull a new client into an empty alternate
-// screen.
 func TestAttachAfterProgramLeftAltScreen(t *testing.T) {
 	f := startServe(t, 301)
 	defer f.cancel()
@@ -952,9 +799,6 @@ func TestAttachAfterProgramLeftAltScreen(t *testing.T) {
 	}
 }
 
-// TestEarlyAttachGetsTheBareReplay: while the ring still holds the program's
-// own handshake, the attacher receives the ring alone, so what scrolled by
-// before the program switched buffers stays in the client's normal buffer.
 func TestEarlyAttachGetsTheBareReplay(t *testing.T) {
 	f := startServe(t, 302)
 	defer f.cancel()
@@ -982,10 +826,6 @@ func TestEarlyAttachGetsTheBareReplay(t *testing.T) {
 	}
 }
 
-// waitRecorded returns once the ring ends with out, checked under h.mu. record
-// holds h.mu from the ring append until the chunk is queued, so by then the
-// mode tracker has seen out too, and the pump takes h.mu again only for new
-// output.
 func waitRecorded(t *testing.T, f *serveFixture, out []byte) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -1003,19 +843,6 @@ func waitRecorded(t *testing.T, f *serveFixture, out []byte) {
 	}
 }
 
-// TestOutputWaitsForAnAttachInProgress replays the interleaving from the #5445
-// review: an attach takes its ring snapshot, the program then switches to the
-// alternate screen, and only after that does the attach restore modes. The
-// output has to wait until the attach lets go of h.mu. Recorded straight away,
-// the switch reaches the mode tracker but not the snapshot, so Restore prefixes
-// ?1049h and the shell lines in the snapshot are painted into the alternate
-// buffer.
-//
-// The test holds h.mu itself, standing in for handleConn between its snapshot
-// and its Restore, so the pump's write lands inside that window on every run.
-// A real attach parked there (on the tracker's lock) would make an unlocked
-// pump wait on that same lock, leaving the order to the scheduler.
-// TestOutputDuringAttachIsDeliveredOnce drives a real attach.
 func TestOutputWaitsForAnAttachInProgress(t *testing.T) {
 	f := startServe(t, 303)
 	defer f.cancel()
@@ -1031,16 +858,13 @@ func TestOutputWaitsForAnAttachInProgress(t *testing.T) {
 	f.host.mu.Lock()
 	snap := f.ring.Replay()
 	go func() {
-		_, _ = f.pty.WriteOutput(tui) // returns once the pump has read the chunk
+		_, _ = f.pty.WriteOutput(tui)
 		close(read)
 	}()
 	pumpRead := false
 	select {
 	case <-read:
 		pumpRead = true
-		// Long enough for a pump that records without h.mu to get the chunk
-		// into the ring and the tracker. A pump that waits for h.mu cannot,
-		// however long this is, so the wait cannot make the test flaky.
 		time.Sleep(100 * time.Millisecond)
 	case <-time.After(2 * time.Second):
 	}
@@ -1058,19 +882,12 @@ func TestOutputWaitsForAnAttachInProgress(t *testing.T) {
 		t.Fatal("the ring took PTY output while an attach held h.mu")
 	}
 
-	// Once the attach lets go, the chunk is recorded, and its modes with it.
 	waitRecorded(t, f, tui)
 	if got, want := f.host.modes.Restore(shell), "\x1b[?1049h\x1b[?1003h\x1b[?1006h"; string(got) != want {
 		t.Fatalf("modes after the chunk = %q, want %q", got, want)
 	}
 }
 
-// TestOutputDuringAttachIsDeliveredOnce: a real attach and PTY output both wait
-// for h.mu (held here, as a status probe or another attach would), the attach
-// first. Whichever gets the lock first, the new client must receive every
-// byte exactly once: in its snapshot or live after it. Appended to the ring
-// before the snapshot but queued after registration, the output would arrive
-// twice.
 func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 	f := startServe(t, 304)
 	defer f.cancel()
@@ -1090,12 +907,12 @@ func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 	}()
 	c := newTestClient(t, f.addr)
 	defer c.close()
-	time.Sleep(50 * time.Millisecond) // let the attach queue on h.mu first
+	time.Sleep(50 * time.Millisecond)
 
 	more := []byte("$ make\nok\n")
 	read := make(chan struct{})
 	go func() {
-		_, _ = f.pty.WriteOutput(more) // returns once the pump has read the chunk
+		_, _ = f.pty.WriteOutput(more)
 		close(read)
 	}()
 	select {
@@ -1103,7 +920,7 @@ func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("pump did not read the output")
 	}
-	time.Sleep(50 * time.Millisecond) // time for a pump that appends without h.mu
+	time.Sleep(50 * time.Millisecond)
 	f.host.mu.Unlock()
 	locked = false
 
@@ -1116,7 +933,6 @@ func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 		}
 		got = append(got, payload...)
 	}
-	// A duplicate would follow straight after; give it the chance to show.
 	select {
 	case fr, ok := <-c.frameC:
 		if ok {
@@ -1129,18 +945,10 @@ func TestOutputDuringAttachIsDeliveredOnce(t *testing.T) {
 	}
 }
 
-// TestOutputHeldForASlowViewerReachesANewAttachOnce: output waits for a viewer
-// whose queue is full (see broadcast). A client that attaches during that wait
-// must get the waiting chunk exactly once, live, and a snapshot whose restored
-// modes do not include it. Recorded into the ring and the tracker before the
-// wait, the chunk would reach the new client twice: in its snapshot, and again
-// once the wait ends.
 func TestOutputHeldForASlowViewerReachesANewAttachOnce(t *testing.T) {
 	f := startServe(t, 305)
 	defer f.cancel()
 
-	// A viewer that never reads: its writer blocks on the pipe and its queue
-	// fills as output is recorded.
 	stalledHost, stalledPeer := net.Pipe()
 	stalled := newClientState()
 	f.host.mu.Lock()
@@ -1166,7 +974,7 @@ func TestOutputHeldForASlowViewerReachesANewAttachOnce(t *testing.T) {
 	}
 
 	held := []byte("\x1b[?1049h\x1b[?1006hheld\n")
-	if _, err := f.pty.WriteOutput(held); err != nil { // returns once the pump has read it
+	if _, err := f.pty.WriteOutput(held); err != nil {
 		t.Fatalf("write held chunk: %v", err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -1187,7 +995,7 @@ func TestOutputHeldForASlowViewerReachesANewAttachOnce(t *testing.T) {
 		t.Fatalf("snapshot taken during the wait carries the held chunk or its modes: %q", snap[:min(len(snap), 80)])
 	}
 
-	_ = stalledPeer.Close() // the stalled viewer goes away; output resumes
+	_ = stalledPeer.Close()
 
 	var live []byte
 	for len(live) < len(held) {

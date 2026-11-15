@@ -1417,8 +1417,6 @@ func TestEnsureCodexAccountsReconcilesRecentlyRemovedGlobalCredentialBeforeAccou
 	manager.deviceAccountID = record.Snapshot.ID
 	manager.deviceCredentialPresent = true
 
-	// Reproduce an external `codex logout` while AO still holds a fresh device
-	// association. The old five-minute cache skipped reconciliation here.
 	if err := os.Remove(manager.globalCredentialPath()); err != nil {
 		t.Fatal(err)
 	}
@@ -1844,9 +1842,7 @@ func TestProbeRecognizesFirstCodexLoginWithoutDaemonRestart(t *testing.T) {
 	})
 	svc.agents = []agentregistry.HarnessAgent{readinessHarness("codex", "Codex", &readinessTestAgent{
 		resolve: func(context.Context) (string, error) { return "codex", nil },
-		// Native Codex sees the new auth.json immediately; the managed account
-		// projection must not override that with its stale signed-out snapshot.
-		auth: func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
+		auth:    func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
 	})}
 	svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
 		Agents: svc.agents, AuthenticationCheck: svc.structuredCodexAuthentication,
@@ -2237,9 +2233,6 @@ func TestAuthenticationRequestCancellationDoesNotCancelSharedRead(t *testing.T) 
 		t.Fatalf("wait error = %v", err)
 	}
 	close(release)
-	// Wait on the shared call itself, not on the snapshot. The snapshot flips to
-	// authorized before the verified descriptor is persisted under the account
-	// home, so polling the snapshot lets TempDir cleanup race that write.
 	select {
 	case <-shared.done:
 	case <-time.After(5 * time.Second):
@@ -2406,10 +2399,6 @@ func TestSwitchAdmissionIgnoresCachedUnauthorizedState(t *testing.T) {
 	}
 }
 
-// A login in the Harness settings terminal runs plain `codex login`, replacing
-// ~/.codex/auth.json outside AO's account login flow. The follow-up recheck
-// (agent Probe) must reconcile that credential so an earlier "sign in again"
-// result does not keep reporting Codex as signed out until the app restarts.
 func TestRecheckAfterExternalLoginClearsStaleReauthentication(t *testing.T) {
 	for _, test := range []struct {
 		name       string
@@ -2440,7 +2429,6 @@ func TestRecheckAfterExternalLoginClearsStaleReauthentication(t *testing.T) {
 			manager.factory = &fakeCodexAccountFactory{capabilities: supportedCodexAccountCapabilities(), open: func(ports.CodexAccountContext) (ports.CodexAccountClient, error) {
 				return &fakeCodexAccountClient{
 					read: ports.CodexAccountObservation{Authentication: domain.AgentAuthenticationAuthorized, Method: domain.CodexAuthMethodChatGPT, Email: &email},
-					// The provider accepts the new login's tokens.
 					capacityFn: func(context.Context) (ports.CodexCapacityObservation, error) {
 						return ports.CodexCapacityObservation{}, nil
 					},
@@ -2450,7 +2438,6 @@ func TestRecheckAfterExternalLoginClearsStaleReauthentication(t *testing.T) {
 			if err := manager.reconcileGlobal(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			// Codex rejected the stored credential earlier.
 			manager.requireReauthentication(record.Snapshot.ID)
 
 			if test.loginAgain {
@@ -2471,10 +2458,6 @@ func TestRecheckAfterExternalLoginClearsStaleReauthentication(t *testing.T) {
 	}
 }
 
-// Signing out removes ~/.codex/auth.json, and the device reconciliation records
-// that no credential is present. A later Harness terminal login writes a new
-// auth.json; the follow-up recheck must see it instead of repeating "Sign in to
-// Codex" from the stale reconciliation.
 func TestRecheckAfterExternalLoginFindsTheNewDeviceCredential(t *testing.T) {
 	root := t.TempDir()
 	globalHome := filepath.Join(root, "global-codex")
@@ -2493,7 +2476,6 @@ func TestRecheckAfterExternalLoginFindsTheNewDeviceCredential(t *testing.T) {
 		return &fakeCodexAccountClient{read: ports.CodexAccountObservation{Authentication: domain.AgentAuthenticationAuthorized, Method: domain.CodexAuthMethodChatGPT, Email: &email}}, nil
 	}}
 	service := &Service{codexAccounts: manager, readiness: newReadinessCoordinator(readinessCoordinatorConfig{})}
-	// Signed out: no device credential.
 	if err := manager.reconcileGlobal(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -2501,7 +2483,6 @@ func TestRecheckAfterExternalLoginFindsTheNewDeviceCredential(t *testing.T) {
 		t.Fatalf("signed-out authentication = %#v (structured=%t)", authentication, ok)
 	}
 
-	// The Harness terminal login writes the credential, then the UI rechecks.
 	if err := writePrivateFileAtomic(filepath.Join(globalHome, codexCredentialFilename), credential); err != nil {
 		t.Fatal(err)
 	}

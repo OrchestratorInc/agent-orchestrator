@@ -73,9 +73,6 @@ func auggieHooksManager(workspacePath string) hooksjson.Manager {
 	}
 }
 
-// GetAgentHooks installs executable callbacks and reconciles them into
-// .augment/settings.local.json. Auggie requires command hooks to reference a
-// supported script file rather than an arbitrary shell command.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

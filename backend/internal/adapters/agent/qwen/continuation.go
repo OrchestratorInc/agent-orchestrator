@@ -27,9 +27,6 @@ var (
 	_ ports.AgentImportedSessionRelocator    = (*Plugin)(nil)
 )
 
-// sanitizeQwenCwdForPlatform mirrors Qwen Code 0.26.4 sanitizeCwd: lowercase
-// on win32, then replace /[^a-zA-Z0-9]/g. The JS regexp operates on UTF-16
-// code units. U+0130 has a multi-character lowercase mapping in JavaScript.
 func sanitizeQwenCwdForPlatform(cwd string, windows bool) string {
 	if windows {
 		cwd = strings.ToLower(strings.ReplaceAll(cwd, "İ", "i\u0307"))
@@ -45,14 +42,10 @@ func sanitizeQwenCwdForPlatform(cwd string, windows bool) string {
 	return encoded.String()
 }
 
-// ACP session/load uses its raw cwd parameter, unlike CLI getcwd. Resolving
-// symlinks here makes /tmp imports fail on macOS (Resource not found).
 func qwenChatPath(configDir, cwd, sessionID string) string {
 	return filepath.Join(configDir, "projects", sanitizeQwenCwdForPlatform(cwd, runtime.GOOS == "windows"), "chats", sessionID+".jsonl")
 }
 
-// NativeSessionConfigDir returns the Qwen Code state root used by a launch:
-// QWEN_HOME when set, otherwise ~/.qwen.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -64,15 +57,10 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return dir, nil
 }
 
-// ProbeNativeSession reports whether the imported conversation still has its
-// local transcript, the authoritative backing state for a resume.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
-// LocateTranscript finds a Qwen chat's JSONL without depending on the lossy
-// project-folder name: the <id>.jsonl file name is a globally unique UUID, so
-// scanning each project's chats directory is deterministic.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -114,9 +102,6 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 	return "", false, nil
 }
 
-// RelocateImportedSession prepares Qwen's cwd-keyed lookup on first open.
-// Every record gets the raw launch cwd. CopyOnce keeps the original untouched
-// and preserves any existing copy, which may already contain AO's later turns.
 func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) error {
 	if err := ctx.Err(); err != nil {
 		return err

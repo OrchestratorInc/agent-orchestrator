@@ -17,35 +17,12 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// OpenCode binds a session to the directory it was created in. An ACP
-// session/load from another cwd replays the history by id, but tools still run
-// in the stored directory, so resuming an imported chat in place would edit the
-// user's original checkout. An import therefore gets a private copy bound to
-// AO's workspace, made with OpenCode's own `export` and `import` commands: AO
-// never writes to opencode.db itself, and the source session is left untouched.
-//
-// `opencode import` binds the copy to the directory it runs in, so it runs from
-// the launch directory. The copy gets fresh ids derived from the source id and
-// launch directory, so a retry finds and reuses the copy an earlier attempt
-// published instead of creating a second one.
-//
-// When discovery pinned the selected history (SourceFingerprint), the source
-// must still match it before export, and any copy, new or reused, must match it
-// too, so the copy always holds exactly the history AO archived. A mismatched
-// copy is rejected and left in place, since AO never deletes OpenCode data.
-
 var _ ports.AgentImportedSessionPreparer = (*Plugin)(nil)
 
-// maxOpenCodeExportBytes bounds one exported session, matching the importer's
-// transcript budget.
 const maxOpenCodeExportBytes = 1 << 30
 
-// openCodeIDTimeLen is the length of an OpenCode id's prefix and time
-// component ("ses_" plus 12 characters). Ids sort by it, so copies keep it.
 const openCodeIDTimeLen = 16
 
-// PrepareImportedSession copies the imported session into a new OpenCode
-// session bound to LaunchCWD and returns that copy's id.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
 	source := strings.TrimSpace(r.NativeSessionID)
 	if !openCodeSessionID.MatchString(source) || len(source) <= openCodeIDTimeLen {
@@ -54,8 +31,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if !filepath.IsAbs(r.LaunchCWD) {
 		return ports.NativeSessionRef{}, errors.New("opencode: launch directory must be absolute")
 	}
-	// OpenCode records the resolved working directory (for example /private/tmp
-	// on macOS), so compare and bind against the resolved path.
 	launch, err := filepath.EvalSymlinks(r.LaunchCWD)
 	if err != nil {
 		return ports.NativeSessionRef{}, fmt.Errorf("opencode: resolve launch directory: %w", err)
@@ -69,7 +44,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	target := derivedOpenCodeID(source, launch)
 	ref := ports.NativeSessionRef{NativeSessionID: target, ConfigDir: configDir}
 
-	// Reuse a copy an earlier attempt already published.
 	if existing, found, err := readOpenCodeCopy(ctx, configDir, target); err != nil {
 		return ports.NativeSessionRef{}, err
 	} else if found {
@@ -91,8 +65,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, fmt.Errorf("opencode: the session changed since it was selected; scan again before importing: %w", err)
 	}
 
-	// The copy must be written by the same major version that resumes it, and
-	// OpenCode 2 must never touch OpenCode 1's store.
 	binary := p.importBinary
 	if binary == "" {
 		binary, err = ResolveBinaryForMajor(ctx, 1)
@@ -115,8 +87,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if messages == 0 {
 		return ports.NativeSessionRef{}, errors.New("opencode: the imported session has no messages")
 	}
-	// The export holds the whole conversation, so it is staged privately under
-	// AO's own data directory, never the OS temporary directory.
 	staging := filepath.Join(r.DataDir, "import-staging")
 	if err := os.MkdirAll(staging, 0o700); err != nil {
 		return ports.NativeSessionRef{}, err
@@ -134,8 +104,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return ports.NativeSessionRef{}, fmt.Errorf("opencode: import session copy: %w", err)
 	}
 
-	// Trust only what OpenCode stored: the copy must exist, be bound to the
-	// launch directory, and hold every exported message.
 	copied, found, err := readOpenCodeCopy(ctx, configDir, target)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
@@ -149,15 +117,12 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if copied.messages != messages {
 		return ports.NativeSessionRef{}, fmt.Errorf("opencode: the session copy holds %d of %d messages", copied.messages, messages)
 	}
-	// The source can gain a turn between the check above and the export.
 	if err := matchOpenCodeFingerprint(ctx, configDir, target, r.SourceFingerprint); err != nil {
 		return ports.NativeSessionRef{}, fmt.Errorf("opencode: the session changed while it was copied; scan again before importing: %w", err)
 	}
 	return ref, nil
 }
 
-// matchOpenCodeFingerprint checks a session against the selection evidence.
-// Imports without a fingerprint have nothing to check.
 func matchOpenCodeFingerprint(ctx context.Context, configDir, id, want string) error {
 	if want == "" {
 		return nil
@@ -172,8 +137,6 @@ func matchOpenCodeFingerprint(ctx context.Context, configDir, id, want string) e
 	return nil
 }
 
-// derivedOpenCodeID returns a new id with old's prefix and time component and
-// a tail derived from salt, so the same inputs always produce the same id.
 func derivedOpenCodeID(old, salt string) string {
 	sum := sha256.Sum256([]byte(salt + "\x00" + old))
 	tail := new(big.Int).SetBytes(sum[:]).Text(62)
@@ -183,8 +146,6 @@ func derivedOpenCodeID(old, salt string) string {
 	return old[:openCodeIDTimeLen] + tail[:len(old)-openCodeIDTimeLen]
 }
 
-// rewriteOpenCodeExport rebinds an exported session to target and launch. It
-// returns the document and its message count. Unknown fields pass through.
 func rewriteOpenCodeExport(data []byte, source, target, launch string) ([]byte, int, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
@@ -271,7 +232,6 @@ type openCodeCopy struct {
 	messages  int
 }
 
-// readOpenCodeCopy reads a session's directory and message count read-only.
 func readOpenCodeCopy(ctx context.Context, configDir, id string) (openCodeCopy, bool, error) {
 	db, err := openOpenCodeStore(configDir)
 	if err != nil || db == nil {
@@ -291,8 +251,6 @@ func readOpenCodeCopy(ctx context.Context, configDir, id string) (openCodeCopy, 
 	return copied, true, nil
 }
 
-// openOpenCodeStore opens configDir's opencode.db read-only. A missing store
-// returns nil.
 func openOpenCodeStore(configDir string) (*sql.DB, error) {
 	dbPath := filepath.Join(configDir, "opencode.db")
 	if _, err := os.Stat(dbPath); err != nil {
@@ -313,9 +271,6 @@ func sameOpenCodeDir(stored, launch string) bool {
 	return errA == nil && errB == nil && os.SameFile(a, b)
 }
 
-// openCodeCommandEnv inherits the daemon environment, applies the launch
-// overrides (an empty value clears a variable), and pins OPENCODE_DATA_DIR
-// when the import's store is not the one OpenCode would otherwise use.
 func (p *Plugin) openCodeCommandEnv(ctx context.Context, overrides map[string]string, configDir string) ([]string, error) {
 	env := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -344,7 +299,6 @@ func (p *Plugin) openCodeCommandEnv(ctx context.Context, overrides map[string]st
 	return out, nil
 }
 
-// boundedBuffer fails a write past its limit instead of growing without bound.
 type boundedBuffer struct {
 	bytes.Buffer
 	limit int
@@ -368,7 +322,6 @@ func runOpenCode(ctx context.Context, binary, dir string, env []string, args ...
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		// stderr can name local paths but not credentials; keep it short.
 		msg := strings.TrimSpace(stderr.String())
 		if len(msg) > 400 {
 			msg = msg[:400]

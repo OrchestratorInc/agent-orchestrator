@@ -1,6 +1,3 @@
-// Package trackerintake implements the opt-in issue-intake observer. It polls a
-// project's configured tracker for eligible issues and starts one worker session
-// per issue, leaving PR/lifecycle handling to the existing observers.
 package trackerintake
 
 import (
@@ -19,47 +16,32 @@ import (
 )
 
 const (
-	// DefaultTickInterval is intentionally slower than runtime liveness checks:
-	// intake is a backlog sweep, not an interactive status surface.
-	DefaultTickInterval = time.Minute
-	// DefaultFailureBackoff suppresses repeated polls for a project after an
-	// intake failure. The observer retries automatically after this window.
+	DefaultTickInterval   = time.Minute
 	DefaultFailureBackoff = 5 * time.Minute
-	// maxIntakePromptLen mirrors the session HTTP prompt limit. Intake uses the
-	// session service directly, so it must enforce the same boundary itself.
-	maxIntakePromptLen = 16 << 10
+	maxIntakePromptLen    = 16 << 10
 
 	intakePromptTruncationNotice = "\n\n[Issue content truncated to fit the session prompt limit. Open the linked issue for the full details.]\n"
 	intakePromptFooter           = "\nImplement the requested change in this repository, run the relevant checks, and open or update a pull request when ready."
 )
 
-// Store is the durable read surface the observer needs.
 type Store interface {
 	ListProjects(ctx context.Context) ([]domain.ProjectRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
-// Spawner is the session creation surface used by intake.
 type Spawner interface {
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
 }
 
-// TrackerResolver picks the tracker adapter for a project's configured
-// provider.
 type TrackerResolver interface {
 	Resolve(provider domain.TrackerProvider) (ports.Tracker, error)
 }
 
-// SingleTrackerResolver returns the same tracker for one specific provider and
-// refuses every other provider. It exists so single-provider deployments don't
-// need to construct a map.
 type SingleTrackerResolver struct {
 	Provider domain.TrackerProvider
 	Adapter  ports.Tracker
 }
 
-// Resolve returns the wrapped adapter when the requested provider matches, or
-// when the resolver was constructed without a provider pin.
 func (s SingleTrackerResolver) Resolve(provider domain.TrackerProvider) (ports.Tracker, error) {
 	if s.Adapter == nil {
 		return nil, fmt.Errorf("tracker intake: no adapter for provider %q", provider)
@@ -70,7 +52,6 @@ func (s SingleTrackerResolver) Resolve(provider domain.TrackerProvider) (ports.T
 	return nil, fmt.Errorf("tracker intake: no adapter for provider %q", provider)
 }
 
-// Config holds optional observer knobs. Zero values use production defaults.
 type Config struct {
 	Tick           time.Duration
 	FailureBackoff time.Duration
@@ -78,7 +59,6 @@ type Config struct {
 	Logger         *slog.Logger
 }
 
-// Observer polls configured projects and starts sessions for eligible issues.
 type Observer struct {
 	resolver       TrackerResolver
 	store          Store
@@ -90,7 +70,6 @@ type Observer struct {
 	backoffUntil   map[string]time.Time
 }
 
-// New constructs an Observer with safe defaults.
 func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Observer {
 	o := &Observer{resolver: resolver, store: store, spawner: spawner, tick: cfg.Tick, failureBackoff: cfg.FailureBackoff, clock: cfg.Clock, logger: cfg.Logger, backoffUntil: map[string]time.Time{}}
 	if o.tick <= 0 {
@@ -108,16 +87,10 @@ func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Ob
 	return o
 }
 
-// Start launches the observer loop. The first poll runs immediately inside the
-// goroutine, keeping daemon startup non-blocking.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
 	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "tracker intake")
 }
 
-// Poll runs one synchronous intake pass. Store discovery failures are returned
-// because they prevent the pass from knowing the current world; provider and
-// spawn failures are logged and skipped so one bad issue/project does not block
-// the rest of the daemon.
 func (o *Observer) Poll(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -161,8 +134,6 @@ func (o *Observer) Poll(ctx context.Context) error {
 	return nil
 }
 
-// pollProject returns failed=true for conditions that should be retried after a
-// backoff window rather than logged on every poll.
 func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool) (failed bool) {
 	cfg := project.Config.TrackerIntake.WithDefaults()
 	if !cfg.Enabled {
@@ -213,8 +184,6 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 			CreatedBy: domain.SessionCreatedByAutomation,
 		}); err != nil {
 			o.logger.Error("tracker intake: spawn issue session failed", "project", project.ID, "issue", issueID, "err", err)
-			// An automated spawn has no HTTP request, so the request logger never
-			// sees it. Bad input (an invalid issue or project) stays out.
 			if kind, code := telemetrymeta.ErrorKindAndCode(err); kind == "internal" || sentryobs.IsFaultCode(code) {
 				sentryobs.CaptureBackground(ctx, err, "trackerintake", "tracker_spawn", nil)
 			}
@@ -259,12 +228,6 @@ func seenIssueIDs(sessions []domain.SessionRecord) map[domain.IssueID]bool {
 	return seen
 }
 
-// CanonicalIssueID stores tracker issue ids in sessions.issue_id with the
-// provider included, so future providers cannot collide on native ids. For
-// GitLab self-managed instances the host is appended after '@' so issues
-// from different hosts with the same project path and iid are distinct
-// (e.g. gitlab.com/group/repo#7 vs gitlab.internal/group/repo#7). GitHub
-// and gitlab.com (zero-value host) produce the same format as before.
 func CanonicalIssueID(id domain.TrackerID) domain.IssueID {
 	provider := id.Provider
 	if provider == "" {
@@ -281,7 +244,6 @@ func CanonicalIssueID(id domain.TrackerID) domain.IssueID {
 	return domain.IssueID(string(provider) + ":" + native)
 }
 
-// BuildIssuePrompt turns normalized issue facts into the worker's initial task.
 func BuildIssuePrompt(issue domain.Issue) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Work on tracker issue %s.\n\n", CanonicalIssueID(issue.ID))
@@ -347,10 +309,6 @@ func trackerRepo(project domain.ProjectRecord, cfg domain.TrackerIntakeConfig) (
 	return domain.TrackerRepo{Provider: provider, Native: native, Host: host}, true
 }
 
-// parseRepoNative extracts the provider-native repo identifier ("owner/repo"
-// or "group/subgroup/repo") from a remote URL. For GitHub it accepts
-// github.com, *.github.com, and *.ghe.io hosts. For GitLab it accepts any
-// host (self-managed hosts are validated by the SCM provider at fetch time).
 func parseRepoNative(remote string, provider domain.TrackerProvider) (string, bool) {
 	remote = strings.TrimSpace(remote)
 	if remote == "" {
@@ -370,16 +328,11 @@ func parseRepoNative(remote string, provider domain.TrackerProvider) (string, bo
 			}
 			return "", false
 		}
-		// GitLab: accept any host.
 		return cleanRepoPath(u.Path, provider), true
 	}
 	return cleanRepoPath(remote, provider), true
 }
 
-// repoHostFromOrigin extracts the host from the SCM origin URL for the given
-// provider. For GitHub the host is always "" (GitHub tracker IDs don't use
-// Host). For GitLab, "gitlab.com" and "www.gitlab.com" normalize to ""
-// (zero value = gitlab.com); self-managed hosts pass through unchanged.
 func repoHostFromOrigin(remote string, provider domain.TrackerProvider) string {
 	if provider != domain.TrackerProviderGitLab {
 		return ""
@@ -392,8 +345,6 @@ func repoHostFromOrigin(remote string, provider domain.TrackerProvider) string {
 	return host
 }
 
-// hostFromRemote extracts the hostname (with port) from a git remote URL,
-// supporting both HTTPS and SSH scp-like forms.
 func hostFromRemote(remote string) string {
 	remote = strings.TrimSpace(remote)
 	if remote == "" {
@@ -407,7 +358,7 @@ func hostFromRemote(remote string) string {
 		return ""
 	}
 	if u, err := url.Parse(remote); err == nil && u.Host != "" {
-		return u.Host // includes port if present
+		return u.Host
 	}
 	return ""
 }
@@ -419,8 +370,6 @@ func cleanRepoPath(path string, provider domain.TrackerProvider) string {
 	if len(parts) < 2 {
 		return ""
 	}
-	// GitLab supports nested groups (group/subgroup/repo). The full namespace
-	// path is required for GraphQL's fullPath parameter and REST project lookups.
 	if provider == domain.TrackerProviderGitLab {
 		for _, p := range parts {
 			if strings.TrimSpace(p) == "" {
@@ -429,8 +378,6 @@ func cleanRepoPath(path string, provider domain.TrackerProvider) string {
 		}
 		return strings.Join(parts, "/")
 	}
-	// GitHub: take the last two segments (owner/repo). Sub-path segments
-	// beyond owner/repo (e.g. blob/main) are ignored.
 	owner := strings.TrimSpace(parts[len(parts)-2])
 	repo := strings.TrimSpace(parts[len(parts)-1])
 	if owner == "" || repo == "" {

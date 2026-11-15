@@ -4,10 +4,6 @@ export type TaskComposerAgentPreference = {
 	model: string;
 	mode: string;
 	effort?: string;
-	/**
-	 * The user chose `effort`. An effort saved without it predates the marker,
-	 * when a launch saved the level shown whether or not anyone chose it.
-	 */
 	effortChosen?: true;
 };
 
@@ -82,6 +78,5 @@ export function rememberTaskComposerPreference(
 	try {
 		storage()?.setItem(TASK_COMPOSER_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
 	} catch {
-		// Remembering composer choices is optional; spawning must still succeed.
 	}
 }

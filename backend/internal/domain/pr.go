@@ -7,12 +7,32 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
-// ---- PR read model ----
-
-// PRFacts is the per-session PR snapshot the status derivation reads from the
-// pr table.
 type PRFacts struct {
+	URL                      string
+	Number                   int
+	Draft                    bool
+	Merged                   bool
+	Closed                   bool
+	CI                       CIState
+	Review                   ReviewDecision
+	Mergeability             Mergeability
+	ReviewComments           bool
+	SourceBranch             string
+	TargetBranch             string
+	HeadSHA                  string
+	UpdatedAt                time.Time
+	StateChangedAt           time.Time
+	CIChangedAt              time.Time
+	LastReviewAt             time.Time
+	ExternalApproved         bool
+	ExternalChangesRequested bool
+	ExternalComments         bool
+}
+
+type PullRequest struct {
 	URL            string
+	URLAlias       string
+	SessionID      SessionID
 	Number         int
 	Draft          bool
 	Merged         bool
@@ -20,53 +40,12 @@ type PRFacts struct {
 	CI             CIState
 	Review         ReviewDecision
 	Mergeability   Mergeability
-	ReviewComments bool // has unresolved review comments (any author) to address
-	SourceBranch   string
-	TargetBranch   string
-	HeadSHA        string
 	UpdatedAt      time.Time
-	// StateChangedAt, CIChangedAt and LastReviewAt are when the lifecycle
-	// state, the CI result and the newest review last changed. Unlike
-	// UpdatedAt, none of them advance on an unchanged poll; zero is unknown.
-	StateChangedAt time.Time
-	CIChangedAt    time.Time
-	LastReviewAt   time.Time
-	// ExternalApproved and ExternalChangesRequested are the human review
-	// verdicts AO did not author. Review above aggregates AO's own provider
-	// reviews with everyone else's, so it cannot say whose turn the
-	// review-feedback loop is on.
-	ExternalApproved         bool
-	ExternalChangesRequested bool
-	ExternalComments         bool
-}
-
-// PullRequest is the app-level representation of one tracked pull request as
-// persisted by the PR store. It is intentionally separate from the sqlc
-// generated sqlite row type so storage details do not leak outside sqlite.
-type PullRequest struct {
-	URL string
-	// URLAlias is a transient provider-resolved URL that should point at URL.
-	// It is persisted in the alias table, not in the pr row itself.
-	URLAlias     string
-	SessionID    SessionID
-	Number       int
-	Draft        bool
-	Merged       bool
-	Closed       bool
-	CI           CIState
-	Review       ReviewDecision
-	Mergeability Mergeability
-	UpdatedAt    time.Time
-	// StateChangedAt is when the current normalized PR lifecycle state became
-	// active. It is seeded from provider timestamps and updated when AO observes
-	// a draft/open/merged/closed transition.
 	StateChangedAt time.Time
 
-	Provider string
-	Host     string
-	Repo     string
-	// ProviderID is immutable within a provider and host and survives repository
-	// renames or transfers.
+	Provider   string
+	Host       string
+	Repo       string
 	ProviderID string
 
 	SourceBranch    string
@@ -98,38 +77,25 @@ type PullRequest struct {
 	ObservedAt       time.Time
 	CIObservedAt     time.Time
 	ReviewObservedAt time.Time
-	// ReviewPartial records that the latest review-thread observation hit the
-	// provider's thread-window cap, so stored thread rows are a partial view.
-	ReviewPartial bool
-	AutoInjectCI  bool
+	ReviewPartial    bool
+	AutoInjectCI     bool
 
-	// Details is the PR's description, labels, requested reviewers and commits
-	// from the latest observation. It is a write carrier: nil means the
-	// observation did not carry details, and the stored ones are left as they
-	// are. Reads load stored details separately.
 	Details *PullRequestDetails
 }
 
-// MaxPullRequestDescriptionBytes caps a stored PR description. Providers allow
-// far larger bodies; the view only renders a description.
 const MaxPullRequestDescriptionBytes = 64 * 1024
 
-// PullRequestLabel is one label on a pull request. Color is a provider hex
-// string without the leading "#", or empty.
 type PullRequestLabel struct {
 	Name  string `json:"name"`
 	Color string `json:"color,omitempty"`
 }
 
-// PullRequestRequestedReviewer is a user or team whose review is requested and
-// not yet given.
 type PullRequestRequestedReviewer struct {
 	Login     string `json:"login"`
 	AvatarURL string `json:"avatarUrl,omitempty"`
 	IsTeam    bool   `json:"isTeam,omitempty"`
 }
 
-// PullRequestCommit is one commit on the pull request's branch.
 type PullRequestCommit struct {
 	SHA         string    `json:"sha"`
 	Headline    string    `json:"headline"`
@@ -137,15 +103,10 @@ type PullRequestCommit struct {
 	CommittedAt time.Time `json:"committedAt,omitempty"`
 }
 
-// MaxPullRequestConversationComments caps the stored top-level conversation
-// comments: the view shows the newest ones, not the PR's full history.
 const MaxPullRequestConversationComments = 50
 
-// MaxPullRequestCommentBodyBytes caps one stored conversation comment body.
 const MaxPullRequestCommentBodyBytes = 8 * 1024
 
-// PullRequestConversationComment is one top-level (non-review) comment on a
-// pull request's conversation.
 type PullRequestConversationComment struct {
 	ID        string    `json:"id"`
 	Author    string    `json:"author"`
@@ -155,24 +116,17 @@ type PullRequestConversationComment struct {
 	CreatedAt time.Time `json:"createdAt,omitempty"`
 }
 
-// PullRequestDetails is the slow-changing, view-only part of a pull request.
 type PullRequestDetails struct {
-	// Description is the PR body as markdown, cut to MaxPullRequestDescriptionBytes.
 	Description          string
 	DescriptionTruncated bool
 	Labels               []PullRequestLabel
 	RequestedReviewers   []PullRequestRequestedReviewer
-	// Commits is the newest commits on the branch, oldest first. CommitCount is
-	// the branch's total, which exceeds len(Commits) when the list was capped.
-	Commits     []PullRequestCommit
-	CommitCount int
-	// Conversation is the newest top-level conversation comments, oldest
-	// first, capped at MaxPullRequestConversationComments.
-	Conversation []PullRequestConversationComment
-	ObservedAt   time.Time
+	Commits              []PullRequestCommit
+	CommitCount          int
+	Conversation         []PullRequestConversationComment
+	ObservedAt           time.Time
 }
 
-// PullRequestCheck is one normalized CI check run for a pull request.
 type PullRequestCheck struct {
 	Name       string
 	CommitHash string
@@ -184,7 +138,6 @@ type PullRequestCheck struct {
 	CreatedAt  time.Time
 }
 
-// PullRequestComment is one normalized review comment for a pull request.
 type PullRequestComment struct {
 	ThreadID         string
 	ReviewID         string
@@ -200,10 +153,6 @@ type PullRequestComment struct {
 	AutoInjectReview bool
 }
 
-// IsActionableReviewComment reports whether a review comment should block
-// ready-to-merge state and be surfaced to the agent. Human comments are always
-// actionable; bot comments need a concrete file and line anchor so status
-// chatter does not become a merge blocker.
 func IsActionableReviewComment(resolved, isBot bool, file string, line int) bool {
 	if resolved {
 		return false
@@ -211,7 +160,6 @@ func IsActionableReviewComment(resolved, isBot bool, file string, line int) bool
 	return !isBot || (strings.TrimSpace(file) != "" && line > 0)
 }
 
-// PullRequestReviewThread is one normalized review thread for a pull request.
 type PullRequestReviewThread struct {
 	ThreadID     string
 	Path         string
@@ -222,7 +170,6 @@ type PullRequestReviewThread struct {
 	UpdatedAt    time.Time
 }
 
-// PullRequestReview is one submitted provider review for a pull request.
 type PullRequestReview struct {
 	ID               string
 	Author           string
@@ -235,10 +182,8 @@ type PullRequestReview struct {
 	AutoInjectReview bool
 }
 
-// CIState is the aggregate CI status of a PR.
 type CIState = contract.CIState
 
-// CI states.
 const (
 	CIUnknown = contract.CIUnknown
 	CIPending = contract.CIPending
@@ -246,10 +191,8 @@ const (
 	CIFailing = contract.CIFailing
 )
 
-// ReviewDecision is the aggregate human-review verdict on a PR.
 type ReviewDecision = contract.ReviewDecision
 
-// Review decisions.
 const (
 	ReviewNone           = contract.ReviewNone
 	ReviewApproved       = contract.ReviewApproved
@@ -257,10 +200,8 @@ const (
 	ReviewRequired       = contract.ReviewRequired
 )
 
-// Mergeability is whether a PR can currently be merged.
 type Mergeability = contract.Mergeability
 
-// Mergeability states.
 const (
 	MergeUnknown     = contract.MergeUnknown
 	MergeMergeable   = contract.MergeMergeable
@@ -269,11 +210,8 @@ const (
 	MergeUnstable    = contract.MergeUnstable
 )
 
-// PRState is the normalized lifecycle of one tracked pull request as stored in
-// the pr table.
 type PRState = contract.PRState
 
-// PR states.
 const (
 	PRStateDraft  = contract.PRStateDraft
 	PRStateOpen   = contract.PRStateOpen
@@ -281,10 +219,8 @@ const (
 	PRStateClosed = contract.PRStateClosed
 )
 
-// PRCheckStatus is one CI check run's normalized status.
 type PRCheckStatus = contract.PRCheckStatus
 
-// PR check statuses.
 const (
 	PRCheckUnknown    = contract.PRCheckUnknown
 	PRCheckQueued     = contract.PRCheckQueued
@@ -295,11 +231,6 @@ const (
 	PRCheckCancelled  = contract.PRCheckCancelled
 )
 
-// MergeReadiness is the set of durable PR facts that decide whether a PR is
-// waiting on nothing but the user's merge click. It is deliberately the stored
-// shape rather than a provider observation, so the live SCM path and the
-// startup reconciliation path can share one rule instead of writing it twice
-// and drifting apart.
 type MergeReadiness struct {
 	Draft              bool
 	Merged             bool
@@ -310,9 +241,6 @@ type MergeReadiness struct {
 	UnresolvedComments bool
 }
 
-// ReadyToMerge reports whether the PR has no known blocker left. An unknown or
-// still-running CI result is treated as a blocker: AO only claims readiness it
-// can actually prove.
 func (r MergeReadiness) ReadyToMerge() bool {
 	if r.Merged || r.Closed || r.Draft {
 		return false
@@ -331,9 +259,6 @@ func (r MergeReadiness) ReadyToMerge() bool {
 	return r.Mergeability == MergeMergeable
 }
 
-// MergeReadinessOf projects stored PR facts into the shared readiness rule.
-// hasUnresolvedComments comes from the pr_comment rows AO keeps for the PR,
-// filtered to actionable unresolved comments.
 func MergeReadinessOf(pr PullRequest, hasUnresolvedComments bool) MergeReadiness {
 	return MergeReadiness{
 		Draft:              pr.Draft,

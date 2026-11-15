@@ -10,13 +10,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// cloudflaredVersion is the connector release AO downloads itself, the same
-// one the macOS app bundles (frontend/scripts/prepare-cloudflared.mjs): the
-// runner reads its log format, so one release runs everywhere. Bumping it
-// means re-pinning every digest here and there; a test holds the two together.
 const cloudflaredVersion = "2026.10.2"
 
-// PinnedCloudflared is cloudflaredVersion parsed, for checking a managed copy.
 var PinnedCloudflared, _ = mobilebridge.ParseCloudflaredVersion(cloudflaredVersion)
 
 const (
@@ -24,12 +19,6 @@ const (
 	cloudflaredDownloadMethod = "download"
 )
 
-// cloudflaredDownloads pins one asset per platform, keyed by GOOS/GOARCH. Each
-// digest is the SHA-256 of the asset as served, GitHub's asset digest. The
-// Linux and Windows values equal the checksums in Cloudflare's release notes;
-// for the darwin .tgz assets the notes list the extracted binary instead
-// (4be2a4c0… amd64, 823f993e… arm64), and the archive digests equal the macOS
-// bundle's.
 var cloudflaredDownloads = map[string]ports.ManagedBinaryDownload{
 	"darwin/amd64": {
 		URL:           cloudflaredReleaseURL + "cloudflared-darwin-amd64.tgz",
@@ -55,17 +44,8 @@ var cloudflaredDownloads = map[string]ports.ManagedBinaryDownload{
 	},
 }
 
-// cloudflaredDownloadWaits spaces the tries of a failing download. A laptop
-// that turns remote access back on at boot can ask before its network is up.
 var cloudflaredDownloadWaits = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Minute}
 
-// DownloadCloudflaredInBackground starts AO's pinned cloudflared download when
-// remote access finds no usable connector, and calls onInstalled once the
-// binary has landed. Later calls do nothing while that download runs or once
-// it landed, so a connector that keeps resolving as missing cannot become a
-// download loop. A download that failed every try is started again by the
-// next call, which only a user action or a daemon start makes, unless it got
-// the wrong bytes.
 func (s *Service) DownloadCloudflaredInBackground(onInstalled func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,18 +54,14 @@ func (s *Service) DownloadCloudflaredInBackground(onInstalled func()) {
 		return
 	}
 	if job, ok := s.jobs[TargetCloudflared]; ok && job.Status == StatusRunning {
-		return // An install the user started reports to onInstalled too.
+		return
 	}
-	// Only the download runs unasked. A package manager can prompt, update
-	// itself first or need root, so that stays behind the desktop's button.
 	if plan, ok := s.cloudflaredDownloadPlan(); ok {
 		s.cloudflaredAutoStarted = true
 		s.startPlanLocked(TargetCloudflared, plan)
 	}
 }
 
-// CloudflaredInstalling reports whether an install of cloudflared is running,
-// started by remote access or by the user; the connector starts when it lands.
 func (s *Service) CloudflaredInstalling() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,8 +69,6 @@ func (s *Service) CloudflaredInstalling() bool {
 	return ok && job.Status == StatusRunning
 }
 
-// cloudflaredDownloadPlan is the pinned download for this platform, when AO
-// has one and a downloader.
 func (s *Service) cloudflaredDownloadPlan() (Plan, bool) {
 	download, ok := cloudflaredDownloads[s.goos+"/"+s.goarch]
 	if !ok || s.managedBinaries == nil {
@@ -107,21 +81,13 @@ func (s *Service) cloudflaredDownloadPlan() (Plan, bool) {
 	return Plan{Target: TargetCloudflared, Method: cloudflaredDownloadMethod, download: &download}, true
 }
 
-// runCloudflaredDownload installs the pinned connector and records the
-// outcome onto job, like run, trying again after each of downloadWaits. A
-// download that failed every try switches planCloudflared to the
-// package-manager fallback, so the user's next Start offers that instead of
-// the same download.
 func (s *Service) runCloudflaredDownload(parent context.Context, download ports.ManagedBinaryDownload, job *Job) {
 	var path string
 	var err error
-	// Every try fits in one install timeout, so a slow link cannot keep the
-	// job running for an hour.
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 	for try := 0; ; try++ {
 		path, err = s.managedBinaries.InstallManagedBinary(ctx, download)
-		// A rejected download, the wrong bytes, would be the same again.
 		if err == nil || ctx.Err() != nil || errors.Is(err, ports.ErrDownloadRejected) || try >= len(s.downloadWaits) {
 			break
 		}
@@ -131,8 +97,6 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 		}
 	}
 	if err == nil && parent.Err() == nil {
-		// The connector starts before the job reads as done, so a client that
-		// sees the download finish already sees the connector.
 		s.mu.Lock()
 		onInstalled := s.onCloudflaredInstalled
 		s.mu.Unlock()
@@ -152,8 +116,6 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 	}
 	if err != nil {
 		s.cloudflaredDownloadFailed.Store(true)
-		// Wrong bytes would be the same again, so remote access does not
-		// download them again; the user's Install offers the package manager.
 		s.cloudflaredAutoStarted = errors.Is(err, ports.ErrDownloadRejected)
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("Could not download cloudflared %s: %v", cloudflaredVersion, err)
@@ -161,7 +123,6 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 		return
 	}
 	job.Status = StatusSucceeded
-	// The download works again, so it is what the user's next Start offers.
 	s.cloudflaredDownloadFailed.Store(false)
 	job.ExpectedDestination = path
 	job.Output = fmt.Sprintf("cloudflared %s installed at %s (sha256 %s verified)", cloudflaredVersion, path, download.SHA256)

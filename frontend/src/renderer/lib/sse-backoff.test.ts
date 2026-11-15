@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SSE_BACKOFF_INIT_MS, SSE_BACKOFF_MAX_MS, computeSseRetryDelayMs } from "./sse-backoff";
 
-/** Jitter at its top of range, so the delay equals the un-jittered step. */
 const noJitter = () => 0.999_999;
-/** Jitter at its floor: half the step. */
 const fullJitter = () => 0;
 
 describe("computeSseRetryDelayMs", () => {
@@ -43,7 +41,6 @@ describe("computeSseRetryDelayMs", () => {
 			expect(delay).toBeLessThanOrEqual(step);
 			delays.add(delay);
 		}
-		// Real randomness, not a constant: concurrent streams must desynchronise.
 		expect(delays.size).toBeGreaterThan(1);
 	});
 

@@ -11,11 +11,6 @@ function nameList(names: string[]): string {
 	return names.length > NAMES_SHOWN ? `${shown} +${names.length - NAMES_SHOWN}` : shown;
 }
 
-/**
- * The strip above a shared cloud session's chat box: who else is here, who is
- * writing to the agent, and the person's own place in line, with the actions
- * that change it. Nothing shows while nobody else has the session open.
- */
 export function SharedComposerNotice({ live, lease, userId }: {
 	live: CloudCpSessionLive;
 	lease: ComposerLeaseState;
@@ -73,10 +68,6 @@ export function SharedComposerNotice({ live, lease, userId }: {
 	);
 }
 
-/**
- * The lease holder's draft as they type it, read-only, with their caret and
- * name where they are typing, the way a document editor shows a collaborator.
- */
 export function RemoteDraft({ text, cursor, name }: { text: string; cursor: number; name: string }) {
 	const { t } = useTranslation();
 	const at = Math.min(Math.max(cursor, 0), text.length);

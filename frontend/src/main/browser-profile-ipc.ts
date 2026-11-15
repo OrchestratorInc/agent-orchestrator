@@ -193,7 +193,6 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 			if (!Array.isArray(confirmed) || !confirmed.every((id) => typeof id === "string")) {
 				return { error: "Review the affected sessions before deleting this profile." };
 			}
-			// Reserve against new selections before switching existing browsers.
 			await options.store.runProfileOperation(profileId, () => false, async () => {
 				const usage = options.host.getProfileUsage(profileId);
 				if (usage.some((session) => !confirmed.includes(session.viewId))) {
@@ -208,8 +207,6 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 			});
 			return {};
 		} catch (error) {
-			// Only intentional domain messages cross IPC; storage/runtime errors may
-			// include paths or Electron details and get a safe, actionable fallback.
 			const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
 			const readable = ["INVALID_ARGUMENT", "BROWSER_PROFILE_ACTIVE", "BROWSER_PROFILE_SWITCH_FAILED", "BROWSER_PROFILE_NOT_FOUND"].includes(String(code));
 			return { error: readable && error instanceof Error ? error.message :

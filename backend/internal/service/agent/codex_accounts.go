@@ -28,8 +28,6 @@ const (
 	codexAccountProcessLimit     = 2
 )
 
-// CodexAccounts is the display-safe account-management view. Credentials and
-// filesystem locations remain daemon-private.
 type CodexAccounts struct {
 	ActiveAccountID      string                           `json:"activeAccountId,omitempty"`
 	AccountRevision      int64                            `json:"accountRevision"`
@@ -40,8 +38,6 @@ type CodexAccounts struct {
 	CurrentSwitch        *domain.CodexAccountSwitch       `json:"currentSwitch,omitempty"`
 }
 
-// CodexActiveLogin is the safe in-memory login state needed to reattach the
-// Settings terminal after a renderer remount.
 type CodexActiveLogin struct {
 	OperationID   string                         `json:"operationId"`
 	AccountID     string                         `json:"accountId,omitempty"`
@@ -52,15 +48,12 @@ type CodexActiveLogin struct {
 	ShellTerminal CodexLoginTerminalDisplay      `json:"shellTerminal"`
 }
 
-// CodexLoginTerminalDisplay excludes the terminal command and filesystem
-// context while retaining the mux identity and display metadata.
 type CodexLoginTerminalDisplay struct {
 	HandleID  string    `json:"handleId"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// CodexAccountLoginTerminalStart combines safe login state with its trusted terminal.
 type CodexAccountLoginTerminalStart struct {
 	Operation     domain.CodexAccountLoginOperation `json:"operation"`
 	ShellTerminal shellterm.ShellTerminal           `json:"shellTerminal"`
@@ -78,9 +71,7 @@ type accountAuthCall struct {
 	retry    bool
 }
 type accountAuthState struct {
-	invalidated bool
-	// launchVerified reports that a protected Codex account call succeeded.
-	// account/read only discovers local account metadata and never sets it.
+	invalidated              bool
 	launchVerified           bool
 	reauthenticationRequired bool
 	failures                 int
@@ -297,8 +288,6 @@ func (m *codexAccountManager) accountContext(record codexAccountRecord) ports.Co
 	m.mu.Lock()
 	active, associated := m.deviceAccountID, m.reconciliation.ActiveAccountVerified
 	m.mu.Unlock()
-	// The global home is safe for a saved slot only after the current device
-	// credential has been positively associated with that exact slot.
 	if associated && record.Snapshot.ID == active {
 		return ports.CodexAccountContext{Home: m.globalHome, Managed: false}
 	}
@@ -322,9 +311,6 @@ func (m *codexAccountManager) ensure(ctx context.Context, ids []string, includeU
 	}
 	eligible := make([]codexAccountRecord, 0, len(records))
 	for _, record := range records {
-		// A targeted metadata refresh belongs to the saved account, not the
-		// device-global credential. Keeping it isolated avoids turning a row
-		// expansion into a device-account state transition.
 		record.useSavedHome = len(ids) > 0
 		if !m.deferAccountRead(record.Snapshot.ID) {
 			eligible = append(eligible, record)
@@ -357,9 +343,6 @@ func (m *codexAccountManager) ensure(ctx context.Context, ids []string, includeU
 	if err != nil {
 		return CodexAccounts{}, mapUnknownCodexAccount(err)
 	}
-	// Authentication checks above update the catalog snapshots. Capacity must
-	// consume those refreshed observations, while still excluding the one stale
-	// pointer whose device ownership has not been established.
 	eligible = eligible[:0]
 	for _, record := range records {
 		record.useSavedHome = len(ids) > 0
@@ -534,8 +517,6 @@ func (m *codexAccountManager) runAuthentication(record codexAccountRecord, call 
 		}
 	}
 	defer closeClientOnce()
-	// account/read is metadata discovery only. Remote authentication is proved
-	// separately by a protected account call.
 	observation, err := client.Read(ctx, false)
 	if m.globalCredentialMissingFor(account) {
 		closeClientOnce()
@@ -606,10 +587,6 @@ func (m *codexAccountManager) finishAuthentication(ctx context.Context, id strin
 				state.nextRetryAt = m.now().Add(defaultReadinessRetryDelays[state.failures-1])
 			}
 		} else {
-			// An unauthorized read reports no account, so it carries no identity. The
-			// saved slot still belongs to the same account, and discarding its label
-			// would both hide who must sign in again and break global reconciliation's
-			// identity match.
 			identified := observation.State == domain.AgentAuthenticationAuthorized || observation.State == domain.AgentAuthenticationNotApplicable
 			m.catalog.updateSnapshot(id, func(s *domain.CodexAccountSnapshot) {
 				s.Authentication = observation
@@ -620,10 +597,6 @@ func (m *codexAccountManager) finishAuthentication(ctx context.Context, id strin
 				}
 			})
 			if identified {
-				// Reconciliation may create the account from local auth.json before
-				// Codex supplies display metadata. Persist the first successful
-				// account/read result so a later catalog refresh or daemon restart
-				// cannot regress the label to the internal account-id fallback.
 				if err := m.catalog.updateVerifiedDescriptor(ctx, id, ports.CodexAccountObservation{Method: method, Email: email}); err != nil {
 					m.logger.Warn("Codex account display metadata could not be persisted", "accountID", id)
 				}
@@ -644,9 +617,6 @@ type codexAuthenticationEvidence uint8
 
 const codexAuthenticationCredentialRejected codexAuthenticationEvidence = 1
 
-// recordProtectedAuthenticationEvidence is the single owner for authentication
-// conclusions learned by other protected Codex calls. Capacity only reports the
-// typed rejection; it never refreshes credentials or mutates authentication.
 func (m *codexAccountManager) recordProtectedAuthenticationEvidence(id string, evidence codexAuthenticationEvidence) {
 	if evidence == codexAuthenticationCredentialRejected {
 		m.requireReauthentication(id)
@@ -685,10 +655,6 @@ func (m *codexAccountManager) invalidate(id string) {
 	m.publish()
 }
 
-// invalidateCredentialEvidence clears conclusions made about credentials that
-// reconciliation has just replaced. In particular, an expired-token result for
-// the previous auth.json must not suppress verification of a newly rotated or
-// externally refreshed credential for the same account.
 func (m *codexAccountManager) invalidateCredentialEvidence(id string) {
 	m.mu.Lock()
 	state := m.auth[id]

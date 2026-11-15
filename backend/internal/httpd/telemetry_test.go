@@ -58,16 +58,11 @@ func TestCLIInvokedRouteEmitsTelemetryForUserCommands(t *testing.T) {
 		t.Fatalf("channel = %#v, want cli", got)
 	}
 
-	// Repeat invocations of the same command the same day are polling noise:
-	// both the per-command invocation event and the daily activity heartbeat
-	// stay silent.
 	postInvoked("spawn", "ao spawn")
 	if len(sink.events) != 2 {
 		t.Fatalf("events after repeat invocation = %d, want 2", len(sink.events))
 	}
 
-	// A different command the same day still reports its first invocation, but
-	// no additional heartbeat.
 	postInvoked("send", "ao send")
 	if len(sink.events) != 3 {
 		t.Fatalf("events after new command = %d, want 3", len(sink.events))
@@ -145,15 +140,11 @@ func TestCLIInvokedRouteSeparatesAgentAndSystemInvocationsFromActiveUsers(t *tes
 		}
 	}
 
-	// Older CLIs do not send actorType, so the daemon infers ao hooks as a
-	// routine internal agent path and drops successful invocation telemetry.
 	postInvoked(`{"command":"hooks","commandPath":"ao hooks"}`)
 	if len(sink.events) != 0 {
 		t.Fatalf("events after hooks = %d, want 0", len(sink.events))
 	}
 
-	// Newer CLIs mark any command run inside an AO-managed agent session as
-	// agent-context, even if it is not the hooks subcommand.
 	postInvoked(`{"command":"send","commandPath":"ao send","actorType":"agent"}`)
 	if len(sink.events) != 1 {
 		t.Fatalf("events after agent send = %d, want 1", len(sink.events))
@@ -162,8 +153,6 @@ func TestCLIInvokedRouteSeparatesAgentAndSystemInvocationsFromActiveUsers(t *tes
 		t.Fatalf("agent send actor_type = %#v, want agent", sink.events[0].Payload["actor_type"])
 	}
 
-	// Internal runtime hosts are system background processes and should not
-	// emit CLI usage or active-user telemetry at all.
 	postInvoked(`{"command":"pty-host","commandPath":"ao pty-host"}`)
 	if len(sink.events) != 1 {
 		t.Fatalf("events after pty-host = %d, want 1", len(sink.events))

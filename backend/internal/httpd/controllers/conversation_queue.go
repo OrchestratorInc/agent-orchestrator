@@ -17,7 +17,6 @@ const cancelQueuedTurnPath = "/api/v1/sessions/{sessionId}/conversation/turns/{t
 const editQueuedTurnPath = "/api/v1/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit"
 const reorderQueuedTurnsPath = "/api/v1/sessions/{sessionId}/conversation/queue/reorder"
 
-// ReorderQueuedConversationTurnsRequest rewrites the durable queue order.
 type ReorderQueuedConversationTurnsRequest struct {
 	TurnIDs []string `json:"turnIds"`
 }

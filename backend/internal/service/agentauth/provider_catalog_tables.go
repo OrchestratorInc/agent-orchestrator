@@ -1,10 +1,5 @@
-// Code generated from the Pi and OMP sources named below; DO NOT EDIT by hand.
-// Regenerate when AO moves to a newer Pi or OMP release.
-
 package agentauth
 
-// piCatalog lists Pi's key-only built-in providers (@earendil-works/pi-ai 1.4.0,
-// dist/env-api-keys.js and dist/providers/*.js).
 var piCatalog = []CatalogProvider{
 	{ID: "ant-ling", Name: "Ant Ling", Env: "ANT_LING_API_KEY"},
 	{ID: "anthropic", Name: "Anthropic", Env: "ANTHROPIC_API_KEY"},
@@ -42,8 +37,6 @@ var piCatalog = []CatalogProvider{
 	{ID: "zai-coding-cn", Name: "Z.AI Coding CN", Env: "ZAI_CODING_CN_API_KEY"},
 }
 
-// ompCatalog lists OMP's key-only providers (oh-my-pi v18.13.3,
-// packages/catalog/src/compat/rules.json).
 var ompCatalog = []CatalogProvider{
 	{ID: "abliteration", Name: "Abliteration", Env: "ABLITERATION_API_KEY"},
 	{ID: "aiand", Name: "ai&", Env: "AIAND_API_KEY"},

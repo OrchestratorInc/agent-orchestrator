@@ -1,5 +1,3 @@
-// Package hookprocess keeps activity hooks from Claude Code processes other
-// than a terminal session's own from changing that session.
 package hookprocess
 
 import (
@@ -13,43 +11,19 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 )
 
-// Applier applies an activity signal: the lifecycle manager.
 type Applier interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
 
-// SessionReader reads the session a hook names.
 type SessionReader interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
-// maxRejected bounds the remembered foreign processes, and rejectedFor how
-// long one is remembered before its next hook is placed again (the terminal's
-// process may have exited since).
 const (
 	maxRejected = 1024
 	rejectedFor = 30 * time.Second
 )
 
-// Gate passes a terminal Claude Code session's activity hooks to the
-// lifecycle only when they come from the session's own Claude process.
-//
-// Every Claude process started in the session's worktree or under its
-// terminal inherits AO_SESSION_ID and the runtime launch id, and runs AO's
-// workspace hooks: an interactive claude the agent starts from a tool, or one
-// started from another pane of the session. Their hooks would replace the
-// session's activity, conversation and transcript path with their own. (A
-// headless `claude -p` is already told apart by its entrypoint; see
-// lifecycle's nonInteractiveNativeEntrypoint.) Claude puts the pid of the
-// process running a hook in CLAUDE_PID, and the hook client forwards it.
-//
-// The terminal's process is the first Claude process under the session's
-// runtime whose hook arrives, re-pinned to an ancestor Claude process when
-// one reports (a daemon restart can first hear from a nested one), and to a
-// new process once the pinned one has exited. While it runs, hooks from any
-// other process are dropped. A hook the gate cannot place (no process table,
-// no runtime roots, a process outside them with nothing pinned) passes, as
-// before the gate.
 type Gate struct {
 	next     Applier
 	sessions SessionReader
@@ -74,7 +48,6 @@ type processKey struct {
 	pid      int
 }
 
-// New wraps next. A nil snapshot reads the process table with ps.
 func New(next Applier, sessions SessionReader, runtime ports.RuntimeProcessRootInspector,
 	snapshot func(context.Context) (*procmem.Table, error), log *slog.Logger,
 ) *Gate {
@@ -92,8 +65,6 @@ func New(next Applier, sessions SessionReader, runtime ports.RuntimeProcessRootI
 	}
 }
 
-// ApplyActivitySignal drops a Claude hook from a process other than the
-// session's terminal process and applies everything else.
 func (g *Gate) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error {
 	if s.ProcessID <= 1 || s.ControllerGeneration != "" || g.sessions == nil || g.runtime == nil {
 		return g.next.ApplyActivitySignal(ctx, id, s)
@@ -102,7 +73,6 @@ func (g *Gate) ApplyActivitySignal(ctx context.Context, id domain.SessionID, s p
 	if err != nil || !ok || rec.Harness != domain.HarnessClaudeCode ||
 		domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI ||
 		rec.Metadata.RuntimeHandleID == "" || s.LaunchID != rec.Metadata.RuntimeLaunchID {
-		// The lifecycle reports a missing session and fences other launches.
 		return g.next.ApplyActivitySignal(ctx, id, s)
 	}
 	if !g.fromTerminal(ctx, rec, s.ProcessID) {
@@ -141,7 +111,6 @@ func (g *Gate) fromTerminal(ctx context.Context, rec domain.SessionRecord, pid i
 		parents[process.PID] = process.PPID
 	}
 	if _, running := parents[pid]; !running {
-		// Gone before the hook arrived: nothing to compare.
 		return !pinned
 	}
 	terminalRunning := pinned
@@ -154,19 +123,14 @@ func (g *Gate) fromTerminal(ctx context.Context, rec domain.SessionRecord, pid i
 	defer g.mu.Unlock()
 	switch {
 	case terminalRunning && descends(parents, pid, terminal.pid):
-		// A Claude process the terminal's agent started.
 	case terminalRunning && underRoots && descends(parents, terminal.pid, pid):
-		// The pinned process was one this process started: this is the
-		// terminal's.
 		g.pin(rec.ID, launchID, pid)
 		return true
 	case terminalRunning:
-		// Another Claude process in the session's panes or worktree.
 	case underRoots:
 		g.pin(rec.ID, launchID, pid)
 		return true
 	default:
-		// Nothing to place it against: apply, as before the gate.
 		return true
 	}
 	if len(g.rejected) >= maxRejected {
@@ -176,7 +140,6 @@ func (g *Gate) fromTerminal(ctx context.Context, rec domain.SessionRecord, pid i
 	return false
 }
 
-// pin makes pid the session's terminal process. Callers hold g.mu.
 func (g *Gate) pin(id domain.SessionID, launchID string, pid int) {
 	g.terminals[id] = terminalProcess{launchID: launchID, pid: pid}
 	for key := range g.rejected {
@@ -186,7 +149,6 @@ func (g *Gate) pin(id domain.SessionID, launchID string, pid int) {
 	}
 }
 
-// descends reports whether pid is one of ancestors or runs under one.
 func descends(parents map[int]int, pid int, ancestors ...int) bool {
 	for steps := 0; pid > 1 && steps < 256; steps++ {
 		for _, ancestor := range ancestors {

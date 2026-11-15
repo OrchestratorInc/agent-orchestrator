@@ -5,33 +5,20 @@ import { isMacPlatform } from "../lib/platform";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { useUiStore } from "../stores/ui-store";
 
-/** Focuses the first element matching `selector` once the next render has painted. */
 export function focusAfterPaint(selector: string): void {
 	window.requestAnimationFrame(() => {
 		window.requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus());
 	});
 }
 
-// Keydown events this hook already claimed. Several components can subscribe to
-// the same shortcut (the shell and Settings both take Cmd+1-9), and the first one
-// calls preventDefault, which must not stop the rest from running.
 const claimedEvents = new WeakSet<Event>();
 
-// In-renderer listeners, so the command palette can run a shortcut's action
-// exactly as its chord would.
 const localListeners = new Set<(event: AppShortcutEvent) => void>();
 
-/** Runs every handler registered for event.id, as if its chord had been pressed. */
 export function runAppShortcut(event: AppShortcutEvent): void {
 	for (const listener of Array.from(localListeners)) listener(event);
 }
 
-/**
- * For shortcuts main delivers on a channel of their own (⌘N, session and tab
- * cycling, New terminal, Close tab): subscribes `handler` there and to the
- * command palette running the shortcut, which only reaches in-renderer
- * listeners. Returns the unsubscribe.
- */
 export function onDedicatedShortcut(
 	id: AppShortcutId,
 	subscribe: (handler: () => void) => () => void,
@@ -50,20 +37,6 @@ export function onDedicatedShortcut(
 
 const TERMINAL_SELECTOR = ".xterm, .terminal-surface, [data-testid='session-terminal']";
 
-/**
- * Runs `handler` when shortcut `id` is pressed.
- *
- * In the desktop app the main process matches the chord before xterm or a
- * native browser view can swallow it, so this works wherever focus is. A window
- * keydown listener backs that up where no main process is attached (the web
- * preview, e2e). It never double-fires: main consumes the chords it handles, so
- * the page does not see them, and a handler that already ran has called
- * preventDefault. Windows/Linux chords that belong to a focused terminal
- * (Ctrl+K and friends) are left alone, matching main.
- *
- * Pass `enabled: false` to stop listening (e.g. while the owning surface is not
- * the active one).
- */
 export function useAppShortcut(
 	id: AppShortcutId,
 	handler: (event: AppShortcutEvent) => void,
@@ -80,8 +53,6 @@ export function useAppShortcut(
 			if (event.id === id && shouldHandleRef.current()) handlerRef.current(event);
 		};
 		localListeners.add(listener);
-		// Contextual find is deliberately renderer-owned: main leaves its key
-		// event untouched so focused terminals, editors and dialogs can claim it.
 		const unsubscribe = id === "find-in-chat" ? () => {} : aoBridge.app.onShortcut(listener);
 		return () => {
 			localListeners.delete(listener);
@@ -115,22 +86,14 @@ export function useAppShortcut(
 	}, [id, enabled]);
 }
 
-/** True while the global Settings page covers the routed (session) page. */
 export function isSettingsPageOpen(): boolean {
 	return useUiStore.getState().settingsModal?.scope === "global";
 }
 
-/** True while the archive modal covers the routed page. */
 function isArchiveModalOpen(): boolean {
 	return Boolean(useUiStore.getState().archiveModal);
 }
 
-/**
- * For commands that act on the session on screen (archive, open in editor,
- * copy path, panel toggles). The session page stays mounted but hidden under
- * Settings or the archive modal, so these stand down there instead of acting
- * on a session the user cannot see.
- */
 export function useSessionShortcut(
 	id: AppShortcutId,
 	handler: (event: AppShortcutEvent) => void,

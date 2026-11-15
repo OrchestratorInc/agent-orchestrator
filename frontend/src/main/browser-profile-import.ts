@@ -352,7 +352,6 @@ async function discoverChromiumProfiles(descriptor: BrowserDescriptor, root: str
 			}
 		}
 	} catch {
-		// A missing or malformed Local State does not hide otherwise valid profiles.
 	}
 	const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
 	const directories = new Set<string>([
@@ -519,7 +518,6 @@ async function readSafariProfileNames(root: string, relativeDatabase: string, st
 			}
 		});
 	} catch {
-		// TCC may block SafariTabs.db. UUID directory discovery still works.
 	} finally {
 		await rm(staging, { recursive: true, force: true }).catch(() => undefined);
 		await removeEmptyDirectory(stagingRoot);
@@ -544,7 +542,6 @@ async function hasImportableDatabase(
 			if (metadata.isFile() && !metadata.isSymbolicLink()) return true;
 		} catch (error) {
 			if (family === "safari" && isAccessDenied(error)) throw safariAccessError();
-			// Continue looking for another supported database.
 		}
 	}
 	return false;
@@ -803,7 +800,6 @@ export class BrowserProfileImportService {
 				});
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index + 1, total: groups.length });
 			}
-			// Only a committed import may become the default; see createProfile.
 			if (created[0]) await this.options.profileStore.claimDefaultIfFirst(created[0].id);
 			return { sourceName: source.public.name, entries: results };
 		} catch (error) {
@@ -1006,7 +1002,6 @@ async function findDatabase(profileRoot: string, relatives: string[], throwAcces
 			if (contained(profileRoot, canonical)) return canonical;
 		} catch (error) {
 			if (throwAccessDenied && isAccessDenied(error)) throw error;
-			// Try the next known location.
 		}
 	}
 	return null;
@@ -1290,9 +1285,6 @@ function readNullTerminatedUTF8(record: Buffer, offset: number): string {
 	return new TextDecoder("utf-8", { fatal: true }).decode(record.subarray(offset, end));
 }
 
-// Bot managers bind these to the browser that earned them. Replayed from
-// another browser they read as stolen, and sites keep challenging. They are
-// issued again on the next visit, so nothing is lost by leaving them behind.
 const ANTI_BOT_COOKIE = /^(cf_clearance|__cf_bm|_cfuvid|cf_chl_.*|datadome|_abck|ak_bmsc|bm_sz|bm_sv|bm_mi|reese84|incap_ses_.*|visid_incap_.*|nlbi_.*|_px\d?|_pxvid|_pxhd)$/;
 
 export function isAntiBotCookie(name: string): boolean {
@@ -1338,8 +1330,6 @@ function normalizeCookieRows(
 				url,
 				name,
 				value,
-				// Passing domain turns a host-only cookie into a domain cookie.
-				// Electron also rejects __Host- cookies when domain is set.
 				...(domain.startsWith(".") ? { domain } : {}),
 				path: cookiePath,
 				secure,
@@ -1533,9 +1523,6 @@ function booleanValue(value: unknown): boolean {
 function dedupeCookies(cookies: ImportedCookie[]): { cookies: ImportedCookie[]; truncated: number } {
 	const byKey = new Map<string, ImportedCookie>();
 	for (const cookie of cookies) {
-		// profileIds order is user-selected order. For an identity collision,
-		// retain the first selected profile's cookie rather than silently mixing
-		// account state based on expiration timestamps.
 		if (!byKey.has(cookie.dedupeKey)) byKey.set(cookie.dedupeKey, cookie);
 	}
 	const unique = [...byKey.values()].sort(
@@ -1631,8 +1618,6 @@ export async function readMacChromiumPassword(
 			throw new Error("Empty Safe Storage key");
 		} catch (error) {
 			throwIfImportAborted(signal);
-			// security maps errSecItemNotFound (-25300) to exit status 44.
-			// Denial, cancellation and timeout must not trigger another prompt.
 			if ((error as { code?: unknown }).code === 44) continue;
 			if ((error as { killed?: boolean }).killed) {
 				throw new Error("Timed out waiting for macOS Safe Storage access. Retry and respond to the macOS prompt, or turn off cookies to import history only.");
@@ -1676,9 +1661,6 @@ function decryptMacChromiumCookie(encrypted: Buffer, password: Buffer, host: str
 }
 
 function stripChromiumCookieHostDigest(plaintext: Buffer, host: string): Buffer {
-	// Chromium cookie DB v24 prefixes encrypted values with SHA-256(host_key)
-	// and verifies/removes it after platform decryption. Older databases do not,
-	// so only strip an exact digest match.
 	const hostDigest = createHash("sha256").update(host).digest();
 	return plaintext.subarray(0, hostDigest.length).equals(hostDigest)
 		? plaintext.subarray(hostDigest.length)

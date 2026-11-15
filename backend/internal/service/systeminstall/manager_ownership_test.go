@@ -41,7 +41,6 @@ func TestNodeShimTargetsPackage(t *testing.T) {
 	}
 }
 
-// npm's cmd-shim chains the launch after endLocal/goto/title on one line.
 func TestNodeShimTargetsPackageReadsNPMCmdShim(t *testing.T) {
 	root := t.TempDir()
 	packageRoot := filepath.Join(root, "node_modules", "@openai", "codex")
@@ -175,7 +174,6 @@ func TestManagerOwnsBinaryRecognizesSupportedManagerPackages(t *testing.T) {
 				if !reflect.DeepEqual(argv, tt.wantArgv) {
 					t.Fatalf("argv = %v, want %v", argv, tt.wantArgv)
 				}
-				// Managers print warnings to stderr; they must not corrupt parsed output.
 				if _, err := io.WriteString(stderr, "warning: something unrelated\n"); err != nil {
 					return err
 				}
@@ -243,8 +241,6 @@ func TestManagerOwnsBinaryRejectsWrongExactPackage(t *testing.T) {
 	}
 }
 
-// writeNPMPackage lays out <prefix>/<modules>/<pkg> with a manifest and an
-// entry point, and returns the entry point.
 func writeNPMPackage(t *testing.T, modulesRoot, pkg string) string {
 	t.Helper()
 	root := filepath.Join(modulesRoot, filepath.FromSlash(pkg))
@@ -364,7 +360,6 @@ func TestManagerOwnsBinaryAcceptsNPMPrefixOtherThanDaemons(t *testing.T) {
 	bin := filepath.Join(prefix, "bin", "pi")
 	linkBinary(t, bin, entry)
 	owner := managerOwnsBinary(commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
-		// The daemon's npm belongs to a different Node.
 		_, err := io.WriteString(stdout, filepath.Join(t.TempDir(), "other-node", "lib", "node_modules")+"\n")
 		return err
 	}))
@@ -406,8 +401,6 @@ func TestNPMUpdateRequiresWritableOwningPrefix(t *testing.T) {
 	}
 }
 
-// The daemon's npm prefix being unwritable says nothing about the prefix that
-// owns the installed binary; an update validates that one instead.
 func TestNPMUpdateValidatesOwningPrefixNotDaemonPrefix(t *testing.T) {
 	const pkg = "@openai/codex"
 	setup := func(t *testing.T, ownerWritable bool, nodeVersion string) (*Service, *[][]string) {
@@ -437,7 +430,6 @@ func TestNPMUpdateValidatesOwningPrefixNotDaemonPrefix(t *testing.T) {
 		s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, stderr io.Writer) error {
 			*ran = append(*ran, argv)
 			if argv[len(argv)-1] == "--version" {
-				// npm prints config warnings before the version; they are not the version.
 				if _, err := io.WriteString(stderr, "npm warn config deprecated-key is deprecated\n"); err != nil {
 					return err
 				}

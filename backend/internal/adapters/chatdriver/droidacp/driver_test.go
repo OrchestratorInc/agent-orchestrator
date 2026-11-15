@@ -18,7 +18,6 @@ func TestConfigureUsesUserDroidACPDaemonAndStandingInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	// The prompt goes in a file: with a handoff note it can pass Windows' command line limit.
 	file := filepath.Join(data, "prompts", "s1", "droid", "system-prompt.md")
 	if got, err := os.ReadFile(file); err != nil || string(got) != "Follow AO orchestrator rules." {
 		t.Fatalf("system prompt file = %q, %v", got, err)

@@ -14,10 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// CreateNotification inserts one unread notification. It returns created=false
-// when the open dedupe index already has a matching row — open meaning unseen
-// or still unresolved, so a notification the user has already looked at is not
-// re-raised while its underlying issue is unchanged.
 func (s *Store) CreateNotification(ctx context.Context, rec domain.NotificationRecord) (domain.NotificationRecord, bool, error) {
 	if err := rec.Validate(); err != nil {
 		return domain.NotificationRecord{}, false, err
@@ -68,7 +64,6 @@ func (s *Store) getNotificationByDedupe(ctx context.Context, rec domain.Notifica
 	return s.getOpenNotificationByDedupe(ctx, rec)
 }
 
-// ListNotifications returns one stable newest-first page of notifications.
 func (s *Store) ListNotifications(
 	ctx context.Context,
 	status domain.NotificationListStatus,
@@ -106,8 +101,6 @@ func (s *Store) ListNotifications(
 	return notificationsFromGen(rows), nil
 }
 
-// CountUnreadNotifications returns the exact unread badge count independently
-// from the bounded history page.
 func (s *Store) CountUnreadNotifications(ctx context.Context) (int64, error) {
 	count, err := s.qr.CountUnreadNotifications(ctx)
 	if err != nil {
@@ -116,8 +109,6 @@ func (s *Store) CountUnreadNotifications(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
-// CountUnresolvedNotifications returns how many notifications still have an
-// open underlying issue, independently from the bounded history page.
 func (s *Store) CountUnresolvedNotifications(ctx context.Context) (int64, error) {
 	count, err := s.qr.CountUnresolvedNotifications(ctx)
 	if err != nil {
@@ -126,8 +117,6 @@ func (s *Store) CountUnresolvedNotifications(ctx context.Context) (int64, error)
 	return count, nil
 }
 
-// ResolveSessionNotifications marks every open notification of one type on a
-// session resolved and returns the rows it changed.
 func (s *Store) ResolveSessionNotifications(
 	ctx context.Context,
 	id domain.SessionID,
@@ -159,8 +148,6 @@ func (s *Store) ResolveSessionNotifications(
 	return notificationsFromGen(rows), nil
 }
 
-// ResolvePRNotifications marks every open notification of one type on a PR
-// resolved and returns the rows it changed.
 func (s *Store) ResolvePRNotifications(
 	ctx context.Context,
 	prURL string,
@@ -192,15 +179,6 @@ func (s *Store) ResolvePRNotifications(
 	return notificationsFromGen(rows), nil
 }
 
-// ReconcileResolvedNotifications closes open notifications whose resolving
-// transition happened while the daemon was down, by re-reading the durable
-// session and PR facts. Without it a restart can strand a needs-input row in
-// the unresolved list forever.
-//
-// Ready-to-merge is judged in Go rather than SQL: readiness is more than
-// open/closed, and the SCM observer persists PR facts before it asks lifecycle
-// to resolve, so a crash in that window leaves an open PR whose CI already went
-// red. Both paths run domain.MergeReadiness so they cannot disagree.
 func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time) ([]domain.NotificationRecord, error) {
 	candidates, err := s.qr.ListOpenReadyToMergeNotifications(ctx)
 	if err != nil {
@@ -218,8 +196,6 @@ func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time
 			return nil, fmt.Errorf("reconcile read pr %s: %w", row.PRURL, err)
 		}
 		if !ok {
-			// No durable PR facts to judge against. Leave it for the next SCM
-			// observation rather than guessing.
 			continue
 		}
 		comments, err := s.ListPRComments(ctx, row.PRURL)
@@ -275,10 +251,6 @@ func (s *Store) ReconcileResolvedNotifications(ctx context.Context, at time.Time
 	return resolved, nil
 }
 
-// MarkNotificationsRead acknowledges exactly the notifications the panel
-// rendered. Clearing every unread row instead would strand anything past the
-// first page — the client never held a cursor for it, and terminal types are
-// not reachable through the unresolved list.
 func (s *Store) MarkNotificationsRead(ctx context.Context, ids []string) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -295,7 +267,6 @@ func (s *Store) MarkNotificationsRead(ctx context.Context, ids []string) (int64,
 	return updated, nil
 }
 
-// MarkNotificationRead marks one unread notification read.
 func (s *Store) MarkNotificationRead(ctx context.Context, id string) (domain.NotificationRecord, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -309,7 +280,6 @@ func (s *Store) MarkNotificationRead(ctx context.Context, id string) (domain.Not
 	return notificationFromGen(row), true, nil
 }
 
-// MarkAllNotificationsRead marks every unread notification read.
 func (s *Store) MarkAllNotificationsRead(ctx context.Context) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -320,8 +290,6 @@ func (s *Store) MarkAllNotificationsRead(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
-// ClearAllNotifications hides every visible notification while retaining open
-// rows for dedupe until their underlying condition resolves.
 func (s *Store) ClearAllNotifications(ctx context.Context) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -341,8 +309,6 @@ func (s *Store) ClearAllNotifications(ctx context.Context) (int64, error) {
 	return count, nil
 }
 
-// DeleteNotification hides one visible notification and returns its original
-// row while retaining open dedupe state until the underlying condition resolves.
 func (s *Store) DeleteNotification(ctx context.Context, id string) (domain.NotificationRecord, bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

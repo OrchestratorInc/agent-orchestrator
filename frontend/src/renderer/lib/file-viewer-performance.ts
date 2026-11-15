@@ -15,8 +15,6 @@ const MAX_ENTRIES = 128;
 let enabled = false;
 let entries: FileViewerPerformanceEntry[] = [];
 
-// Development diagnostics are opt-in and memory-only. Entries intentionally
-// contain no session IDs, repository names, or file paths.
 export function setFileViewerPerformanceEnabled(next: boolean): void {
 	enabled = next;
 	if (!next) entries = [];

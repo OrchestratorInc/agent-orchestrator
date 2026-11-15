@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// assertTurnStaysQueued fails if the named turn leaves queued within a short settle
-// window. A drain that should not have run would move it to running almost at once.
 func assertTurnStaysQueued(t *testing.T, h *harness, text string) {
 	t.Helper()
 	deadline := time.Now().Add(200 * time.Millisecond)
@@ -29,8 +27,6 @@ func assertTurnStaysQueued(t *testing.T, h *harness, text string) {
 	}
 }
 
-// A failed primary turn must not release queued work into the same outage; only a
-// completed turn may. Regression for issue #4861.
 func TestFailedPrimaryTurnHoldsQueuedWork(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -65,8 +61,6 @@ func TestFailedPrimaryTurnHoldsQueuedWork(t *testing.T) {
 	}
 }
 
-// A recovered turn is terminal but carries no portable outcome, so it is no proof
-// the next turn will succeed. It holds the queue like a failed turn.
 func TestRecoveredPrimaryTurnHoldsQueuedWork(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -101,9 +95,6 @@ func TestRecoveredPrimaryTurnHoldsQueuedWork(t *testing.T) {
 	}
 }
 
-// A prompt the host's watchdog failed for silence never reached an answer, so it
-// is no sign the provider is down. Queued work gets its own turn instead of
-// waiting for the user to type again. A provider error still holds the queue.
 func TestStalledPrimaryTurnReleasesQueuedWork(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

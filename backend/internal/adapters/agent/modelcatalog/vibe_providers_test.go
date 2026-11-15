@@ -18,8 +18,6 @@ func TestVibeConfiguredProvidersReadKeyVariables(t *testing.T) {
 	if err := os.MkdirAll(vibeHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// llamacpp needs no key, so nothing proves it is ready; openrouter's
-	// variable is unset.
 	if err := os.WriteFile(filepath.Join(vibeHome, "config.toml"), []byte(`
 [[providers]]
 name = "mistral"
@@ -47,7 +45,6 @@ api_key_env_var = "OPENROUTER_API_KEY"
 	if want := []string{"mistral", "zai"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("configured = %v, want %v", got, want)
 	}
-	// An empty value in the session environment hides the process one.
 	t.Setenv("MISTRAL_API_KEY", "mistral-process")
 	got = vibeConfiguredProviders("", map[string]string{"MISTRAL_API_KEY": ""})
 	if want := []string{"zai"}; !reflect.DeepEqual(got, want) {

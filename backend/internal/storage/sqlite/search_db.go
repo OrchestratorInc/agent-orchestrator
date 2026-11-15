@@ -15,44 +15,17 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-// The session search index lives in its own database file, search.db, beside
-// ao.db.
-//
-// SQLite allows one writer per database file. Indexing writes a lot, and FTS5
-// merges its segments inside whichever commit crosses a threshold, so in ao.db
-// those transactions would make the daemon's other writes (chat streaming,
-// session state) wait. In its own file the index holds only its own write
-// lock, which nothing else takes.
-//
-// Search queries run on their own reader pool, whose connections attach
-// search.db so a query can filter documents by the sessions they belong to.
-// The app's other readers never attach it: search is optional, and a
-// search.db that cannot be opened or attached turns search off (Open records
-// why) without touching anything else.
-//
-// The index is derived data. A schema change bumps searchSchemaVersion, which
-// clears the file and lets the indexer rebuild it; ao.db migrations never
-// touch it. search.db also records which ao.db it indexes
-// (session_search_owner's token): beside a restored or swapped ao.db it is
-// cleared the same way.
 const (
-	searchDatabaseFile = "search.db"
-	// searchSchemaName is the name search.db is attached under.
+	searchDatabaseFile  = "search.db"
 	searchSchemaName    = "searchidx"
 	searchSchemaVersion = 1
 )
 
-// searchPragmas mirror ao.db's: WAL so readers never wait for the indexer,
-// NORMAL sync, and a cap on the size the -wal file is cut back to.
 const searchPragmas = "?_pragma=journal_mode(WAL)" +
 	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=synchronous(NORMAL)" +
 	"&_pragma=journal_size_limit(33554432)"
 
-// sessionSearchSwitch is the environment variable that turns session search
-// off. With AO_SESSION_SEARCH=off the daemon never opens search.db and search
-// answers "unavailable"; it is a support lever for a machine where the index
-// misbehaves, not a user preference.
 const sessionSearchSwitch = "AO_SESSION_SEARCH"
 
 var errSessionSearchOff = errors.New("session search is turned off (" + sessionSearchSwitch + "=off)")
@@ -70,16 +43,6 @@ func searchDatabaseURI(dataDir string) string {
 	return "file:" + file.EscapedPath()
 }
 
-// openSearchWriter opens search.db's single writer connection and brings its
-// schema to searchSchemaVersion for the ao.db that appWriter writes.
-//
-// The index is derived data: a search.db SQLite reports as corrupt or not a
-// database is removed and rebuilt by the indexer. Any other failure (a locked
-// file, a full disk, a permission) is returned, and Open turns search off
-// rather than fail.
-//
-// It also returns reset, which empties the index in place (resetSearchSchema)
-// for `ao search --reindex`.
 func openSearchWriter(dataDir string, appWriter *sql.DB) (db *sql.DB, reset func(context.Context) error, err error) {
 	owner, err := searchIndexOwner(appWriter)
 	if err != nil {
@@ -112,7 +75,6 @@ func openSearchFile(dataDir, owner string) (*sql.DB, error) {
 	return db, nil
 }
 
-// searchFileDamaged reports whether err says search.db's contents are unusable.
 func searchFileDamaged(err error) bool {
 	var sqliteErr *moderncsqlite.Error
 	if !errors.As(err, &sqliteErr) {
@@ -125,7 +87,6 @@ func searchFileDamaged(err error) bool {
 	return false
 }
 
-// removeSearchFiles deletes search.db and its WAL files.
 func removeSearchFiles(dataDir string) error {
 	path := searchDatabasePath(dataDir)
 	for _, name := range []string{path, path + "-wal", path + "-shm"} {
@@ -136,7 +97,6 @@ func removeSearchFiles(dataDir string) error {
 	return nil
 }
 
-// searchIndexOwner returns ao.db's search index token, creating it once.
 func searchIndexOwner(appWriter *sql.DB) (string, error) {
 	ctx := context.Background()
 	if _, err := appWriter.ExecContext(ctx,
@@ -151,8 +111,6 @@ func searchIndexOwner(appWriter *sql.DB) (string, error) {
 	return token, nil
 }
 
-// ensureSearchSchema creates the index's tables, or clears and recreates them
-// when the file holds another version's or indexes another ao.db.
 func ensureSearchSchema(db *sql.DB, owner string) error {
 	ctx := context.Background()
 	var version int
@@ -172,10 +130,6 @@ func ensureSearchSchema(db *sql.DB, owner string) error {
 	return resetSearchSchema(ctx, db, owner)
 }
 
-// resetSearchSchema drops every index table and creates them empty, for the
-// ao.db that owner names. The indexer then rebuilds the index from scratch:
-// it is how a schema change, a swapped ao.db and `ao search --reindex` start
-// over.
 func resetSearchSchema(ctx context.Context, db *sql.DB, owner string) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -199,7 +153,6 @@ func resetSearchSchema(ctx context.Context, db *sql.DB, owner string) error {
 	return nil
 }
 
-// dropSearchSchema removes every object any version of the index created.
 var dropSearchSchema = []string{
 	`DROP TRIGGER IF EXISTS session_search_docs_ad`,
 	`DROP TABLE IF EXISTS session_search_vocab`,
@@ -211,13 +164,10 @@ var dropSearchSchema = []string{
 }
 
 var createSearchSchema = []string{
-	// owner: the session_search_owner token of the ao.db this file indexes.
 	`CREATE TABLE session_search_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 )`,
-	// One row per indexable unit: a message (or one chunk of a long one), an
-	// activity, a transcript record, a session title, a path list.
 	`CREATE TABLE session_search_docs (
     id          INTEGER PRIMARY KEY,
     -- source_key identifies the unit's origin: 'chat:<sessionId>' for AO Chat,
@@ -246,8 +196,6 @@ var createSearchSchema = []string{
     UNIQUE (source_key, doc_key, kind)
 )`,
 	`CREATE INDEX idx_session_search_docs_session ON session_search_docs (session_id)`,
-	// The text, compressed (searchtext.Encode), apart from the metadata that
-	// ranking scans; hash skips rewriting an unchanged document's index row.
 	`CREATE TABLE session_search_text (
     id     INTEGER PRIMARY KEY,
     title  TEXT NOT NULL DEFAULT '',
@@ -255,9 +203,6 @@ var createSearchSchema = []string{
     body   BLOB,
     hash   INTEGER NOT NULL DEFAULT 0
 )`,
-	// Contentless: postings only. A row is removed with FTS5's 'delete'
-	// command and the exact text it was indexed with (contentless_delete's
-	// tombstones would skew bm25 until segments merge).
 	`CREATE VIRTUAL TABLE session_search_fts USING fts5(
     title,
     body,
@@ -265,15 +210,12 @@ var createSearchSchema = []string{
     content='',
     tokenize='unicode61 remove_diacritics 2'
 )`,
-	// Deleting a document removes its index row and its text. ao_search_body()
-	// is registered for every connection (search_functions.go).
 	`CREATE TRIGGER session_search_docs_ad AFTER DELETE ON session_search_docs BEGIN
     INSERT INTO session_search_fts (session_search_fts, rowid, title, body, paths)
     SELECT 'delete', t.id, t.title, ao_search_body(t.body), t.paths
     FROM session_search_text t WHERE t.id = old.id;
     DELETE FROM session_search_text WHERE id = old.id;
 END`,
-	// One cursor row per source the indexer has seen.
 	`CREATE TABLE session_search_sources (
     source_key      TEXT PRIMARY KEY,
     kind            TEXT NOT NULL CHECK (kind IN ('chat', 'native')),
@@ -298,8 +240,6 @@ END`,
 	`CREATE INDEX idx_session_search_sources_state ON session_search_sources (state, updated_at)`,
 }
 
-// searchAttachingConnector opens reader connections to ao.db with search.db
-// attached, so queries can join the index to sessions.
 type searchAttachingConnector struct {
 	dsn        string
 	searchPath string
@@ -307,8 +247,6 @@ type searchAttachingConnector struct {
 }
 
 func newSearchAttachingConnector(dataDir, dsn string) (*searchAttachingConnector, error) {
-	// The registered "sqlite" driver, with ao_search_body and the other
-	// functions registered on it.
 	probe, err := sql.Open("sqlite", "")
 	if err != nil {
 		return nil, fmt.Errorf("resolve sqlite driver: %w", err)
@@ -338,15 +276,8 @@ func (c *searchAttachingConnector) Connect(ctx context.Context) (driver.Conn, er
 
 func (c *searchAttachingConnector) Driver() driver.Driver { return c.driver }
 
-// maxSearchReaders bounds the search reader pool. Searches are short and
-// interactive (the palette, ao search); the pool opens connections lazily, so
-// an idle daemon holds none beyond the first search.
 const maxSearchReaders = 4
 
-// openSearchReaders opens the search-only reader pool: connections to ao.db
-// with search.db attached, so index queries can join documents to sessions.
-// It is separate from the app's reader pool on purpose: if search.db cannot be
-// attached, only these connections fail.
 func openSearchReaders(dataDir, dsn string) (*sql.DB, error) {
 	connector, err := newSearchAttachingConnector(dataDir, dsn)
 	if err != nil {

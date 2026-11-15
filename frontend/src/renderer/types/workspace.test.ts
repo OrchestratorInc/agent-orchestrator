@@ -185,9 +185,6 @@ describe("findProjectOrchestrator", () => {
 	}
 
 	it("skips a terminated orchestrator that precedes the live one", () => {
-		// Regression: the daemon lists sessions by spawn number, so a dead
-		// orchestrator (zellij session deleted) sorts before its live successor.
-		// Picking it sent the Orchestrator button to an instant "[process exited]".
 		const dead = sessionWith({ id: "skills-4", kind: "orchestrator", status: "terminated" });
 		const live = sessionWith({ id: "skills-5", kind: "orchestrator", status: "needs_input" });
 		const worker = sessionWith({ id: "skills-6", kind: "worker", status: "working" });
@@ -451,7 +448,6 @@ describe("attentionZone", () => {
 	});
 
 	it("prioritizes merge as the highest-ROI zone", () => {
-		// merge is checked before action/pending so an approved PR always surfaces.
 		expect(attentionZone(sessionWith({ status: "approved" }))).toBe("merge");
 	});
 });
@@ -460,7 +456,6 @@ describe("sessionWorkspaceReady", () => {
 	it("follows the daemon's published workspace, not the start state", () => {
 		expect(sessionWorkspaceReady({ workspacePublished: false })).toBe(false);
 		expect(sessionWorkspaceReady({ workspacePublished: true })).toBe(true);
-		// An older daemon that does not report it.
 		expect(sessionWorkspaceReady({})).toBe(true);
 	});
 });

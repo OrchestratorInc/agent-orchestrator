@@ -54,13 +54,6 @@ export type RemoteHost = {
 
 type SavedHost = Pick<RemoteHost, "hostId" | "url">;
 
-/**
- * listed: hosts holds the saved list, not the empty one before the first read.
- * settled: the host-list attempt has concluded — disabled, signed out, or
- * listed. Consumers that must wait for remote workspace data (the session
- * deep-link gate) settle on this instead of restating the enable rule, so the
- * two can never drift apart.
- */
 export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settled: boolean; refresh: () => Promise<void>; retryNow: () => Promise<void> } {
 	const remoteHostsEnabled = useUiStore((state) => state.remoteHosts);
 	const { status, session } = useCloudSession();
@@ -103,8 +96,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settle
 			if (!current()) return;
 			if (isOfflineError(error)) scheduleRetry(retries.current, saved.hostId);
 			else retries.current.delete(saved.hostId);
-			// A failed reconnect must not leave the old proxy marked connected.
-			try { await disconnectHost(saved.hostId); } catch { /* Keep the offline state visible. */ }
+			try { await disconnectHost(saved.hostId); } catch { }
 			if (!current()) return;
 			const failureReason = failureReasonOf(error);
 			settle({ status: "offline", ...(failureReason ? { failureReason } : {}) });
@@ -126,7 +118,7 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settle
 			try {
 				await aoBridge.remotes.syncAccountHosts(accountId);
 				saved = await aoBridge.remotes.list();
-			} catch { /* Cloud outage must not hide locally paired machines. */ }
+			} catch { }
 		}
 		if (!current()) return;
 		await Promise.all(connectedHosts().filter((hostId) => !saved.some((host) => host.hostId === hostId)).map(disconnectHost));
@@ -211,8 +203,6 @@ export function useRemoteHosts(): { hosts: RemoteHost[]; listed: boolean; settle
 	return {
 		hosts: enabled ? hosts : NO_HOSTS,
 		listed: enabled && listed,
-		// Concluded, per the doc comment above. Deliberately mirrors the
-		// `enabled` computation's inputs so the two cannot drift.
 		settled: !remoteHostsEnabled || status === "unauthenticated" || listed,
 		refresh,
 		retryNow,

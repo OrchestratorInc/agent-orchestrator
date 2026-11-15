@@ -3,13 +3,10 @@ import { createLocalHostIdentity, IncompatibleRemoteVersionError, pairDevice, pr
 
 const entry = { label: "workbox", url: "http://192.0.2.1:3011", password: "pw" };
 
-// Typed as fetch so `mock.calls` carries fetch's argument tuple — an untyped
-// `vi.fn(async () => …)` records a zero-length tuple and indexing it is a type error.
 function fakeFetch(status: number, body: unknown = {}) {
 	return vi.fn<typeof fetch>(async () => new Response(JSON.stringify(body), { status }));
 }
 
-// A body that is not JSON at all, the way an SPA catch-all answers every path.
 function fakeTextFetch(status: number, text: string) {
 	return vi.fn<typeof fetch>(async () => new Response(text, { status }));
 }
@@ -110,10 +107,6 @@ describe("probeRemote", () => {
 		expect(sleeping.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
 	});
 
-	// The port typo that white-screened the app: :8081 was an Expo web server,
-	// whose SPA catch-all answers /healthz with 200 and an HTML page. A status
-	// code proves something replied, not that it speaks the daemon's protocol —
-	// and once such a host became the api base, every query returned that page.
 	it("rejects a 200 whose body is not a daemon probe", async () => {
 		const html = fakeTextFetch(200, "<!DOCTYPE html><html><title>AO</title></html>");
 		await expect(probeRemote(entry, html)).resolves.toBe("not-a-daemon");

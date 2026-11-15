@@ -7,8 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Native IDs stay on the wire; AO projection IDs belong to an ownership scope.
-// Length-prefixing the scope keeps opaque delimiters from creating collisions.
 func (c *conversation) scopePrefix() string {
 	if c.providerScopeID == "" {
 		return ""
@@ -37,9 +35,6 @@ func (c *conversation) scopedEvent(event ports.ChatEvent) ports.ChatEvent {
 	event.ProviderEventID = c.scopedID(event.ProviderEventID)
 	event.RequestID = c.scopedID(event.RequestID)
 	if event.ClientMessageID != "" {
-		// AO-issued IDs still identify already-persisted sends within this scope.
-		// The imported row itself needs a scoped key when a native thread is
-		// revisited under a different ownership boundary.
 		event.ProviderItemAliases = append(event.ProviderItemAliases, event.ClientMessageID)
 		event.ClientMessageID = c.scopedID(event.ClientMessageID)
 	}

@@ -13,17 +13,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// geminiConfigHome is the directory Gemini CLI treats as home, honouring
-// GEMINI_CLI_HOME as the adapter does; tests stub it.
 var geminiConfigHome = gemini.ConfigHome
 
-// geminiEnvLine matches GEMINI_API_KEY assignments with an optional `export `,
-// per dotenv syntax, while leaving every other variable untouched.
 const geminiEnvKey = "GEMINI_API_KEY"
 
-// saveGeminiAPIKey writes the documented user-wide Gemini CLI key store
-// (~/.gemini/.env). The file is line-based dotenv: an existing GEMINI_API_KEY
-// assignment is replaced in place and every other line is preserved verbatim.
 func saveGeminiAPIKey(ctx context.Context, method, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -31,8 +24,6 @@ func saveGeminiAPIKey(ctx context.Context, method, key string) error {
 	if method != "gemini_api_key" {
 		return apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This harness does not support that UI login method. Use terminal login instead.", nil)
 	}
-	// dotenv ends an unquoted value at a space or #, and treats quotes and
-	// backslashes as syntax.
 	if strings.ContainsAny(key, " \t#\"'\\") {
 		return apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "This key contains characters that Gemini's environment file cannot store safely.", nil)
 	}
@@ -86,8 +77,6 @@ func saveGeminiAPIKey(ctx context.Context, method, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Gemini also persists the chosen auth method in settings.json. A key in
-	// .env alone does not switch an existing Google sign-in to API-key mode.
 	settingsPath := filepath.Join(dir, "settings.json")
 	settings, err := geminiAPIKeySettings(settingsPath)
 	if err != nil {
@@ -99,8 +88,6 @@ func saveGeminiAPIKey(ctx context.Context, method, key string) error {
 	return atomicConfigWrite(ctx, dir, settingsPath, settings)
 }
 
-// geminiAPIKeySettings returns settings.json selecting API-key sign-in. The
-// file is edited in place, so comments, key order and layout survive.
 func geminiAPIKeySettings(path string) ([]byte, error) {
 	root := map[string]json.RawMessage{}
 	var data []byte
@@ -124,7 +111,6 @@ func geminiAPIKeySettings(path string) ([]byte, error) {
 		if readErr != nil || len(data) > 64*1024 {
 			return nil, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "Gemini's settings file could not be read.")
 		}
-		// Gemini CLI accepts comments in settings.json, as its probe does.
 		if plain, _ := jsoncPlain(data); len(bytes.TrimSpace(plain)) > 0 && (jsoncUnmarshal(data, &root) != nil || root == nil) {
 			return nil, apierr.Invalid("AGENT_AUTH_STORE_INVALID", "Gemini's settings file is invalid; repair it before saving a key here.", nil)
 		}

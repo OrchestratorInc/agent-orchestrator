@@ -1,6 +1,5 @@
 import type { Element, ElementContent, Root, Text } from "hast";
 
-/** Map decoded visible text back to its bounded AST source segment. */
 export function excerptSourceOffsets(raw: string, value: string, start: number, literal = false): number[] | undefined {
 	const offsets = [start];
 	let visible = "";
@@ -35,7 +34,6 @@ function textSpan(text: Text, base: number): ElementContent {
 	}, children: [text] };
 }
 
-/** Preserve source positions before React custom renderers/highlighters transform it. */
 export function rehypeExcerptSource({ offset }: { offset: number }) {
 	return (tree: Root) => {
 		function walk(parent: Root | Element) {
@@ -55,7 +53,6 @@ export function rehypeExcerptSource({ offset }: { offset: number }) {
 					child.properties["data-excerpt-start"] = offset + start;
 					child.properties["data-excerpt-end"] = offset + end;
 				}
-				// Code text is transformed by React; its renderer owns the final mapping.
 				if (child.tagName !== "pre" && child.tagName !== "code") walk(child);
 				return child;
 			}) as typeof parent.children;
@@ -71,7 +68,6 @@ export function excerptElementProps(node: Element | undefined) {
 	};
 }
 
-/** Map code by source line: fences/indentation are never mistaken for code text. */
 export function codeSourceOffsets(raw: string, code: string, start: number, fenced: boolean): number[] | undefined {
 	let from = 0;
 	if (fenced && /^\s*(?:`{3,}|~{3,})/.test(raw)) from = raw.indexOf("\n") + 1;

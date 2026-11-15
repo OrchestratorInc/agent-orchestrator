@@ -84,8 +84,6 @@ func TestAuthCacheDoesNotStoreAProbeItsCallerCanceled(t *testing.T) {
 	}
 }
 
-// A login changes what `claude auth status` says without changing anything the
-// report's cache key covers, so only an invalidation can reveal it.
 func TestPluginInvalidationDropsThePreLoginCLIReport(t *testing.T) {
 	InvalidateAuthCache()
 	t.Cleanup(InvalidateAuthCache)

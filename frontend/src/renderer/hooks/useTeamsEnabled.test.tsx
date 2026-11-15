@@ -28,7 +28,6 @@ describe("useTeamsEnabled", () => {
 		mocks.getVersion.mockResolvedValue("0.14.2-nightly.202611050300");
 		const useTeamsEnabled = await loadHook();
 		const { container } = render(<Probe useTeamsEnabled={useTeamsEnabled} />);
-		// Before the version is known: decided without one.
 		expect(mocks.decide).toHaveBeenCalledWith(undefined);
 		await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
 		expect(container.textContent).toBe("teams");

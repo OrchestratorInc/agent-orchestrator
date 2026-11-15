@@ -49,7 +49,6 @@ func TestForkClonesDependencies(t *testing.T) {
 	if len(cloned) != 3 {
 		t.Fatalf("cloned = %v", cloned)
 	}
-	// The clone is independent of the original.
 	writeTestFile(t, filepath.Join(dst, "node_modules", "left-pad", "index.js"), "changed")
 	if b, _ := os.ReadFile(filepath.Join(src, "node_modules", "left-pad", "index.js")); string(b) != "pad" {
 		t.Fatalf("source changed: %q", b)

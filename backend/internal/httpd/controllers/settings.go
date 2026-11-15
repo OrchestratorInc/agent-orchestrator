@@ -13,7 +13,6 @@ import (
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
 )
 
-// SettingsService is the controller-facing preferences contract.
 type SettingsService interface {
 	Get(ctx context.Context) (settingssvc.Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode) (settingssvc.Snapshot, error)
@@ -27,16 +26,10 @@ type SettingsService interface {
 	Offering() settingssvc.Offering
 }
 
-// SettingsController owns the daemon-owned preference routes.
-//
-// These are daemon-owned rather than renderer-owned on purpose: desktop, mobile,
-// and the CLI all resolve the same value, so a preference held in one client would
-// disagree with the others.
 type SettingsController struct {
 	Svc SettingsService
 }
 
-// Register mounts the settings routes.
 func (c *SettingsController) Register(r chi.Router) {
 	r.Get("/settings", c.get)
 	r.Patch("/settings/session-interface", c.setSessionInterface)
@@ -71,8 +64,6 @@ func (c *SettingsController) setSessionInterface(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Parsed strictly: an unrecognized value is rejected rather than collapsing to
-	// a default the caller did not ask for.
 	mode, err := domain.ParseSessionMode(req.DefaultSessionMode)
 	if err != nil || mode == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -199,8 +190,6 @@ func (c *SettingsController) setAccountHandoff(w http.ResponseWriter, r *http.Re
 }
 
 func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsResponse {
-	// Reported so the client can warn that choosing chat narrows which agents are
-	// available, instead of letting the user discover it at spawn time.
 	chatHarnesses := c.Svc.ChatHarnesses(domain.AllHarnesses)
 	names := make([]string, 0, len(chatHarnesses))
 	for _, harness := range chatHarnesses {

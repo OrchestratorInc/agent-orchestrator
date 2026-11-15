@@ -15,7 +15,6 @@ var _ ports.AgentLimitReadingStore = (*Store)(nil)
 
 const limitReadingRetention = 14 * 24 * time.Hour
 
-// RecordAgentLimitReadings saves one read of an account's limit windows and deletes readings older than the retention.
 func (s *Store) RecordAgentLimitReadings(ctx context.Context, readings []domain.AgentLimitReading) error {
 	if len(readings) == 0 {
 		return nil
@@ -39,7 +38,6 @@ func (s *Store) RecordAgentLimitReadings(ctx context.Context, readings []domain.
 	})
 }
 
-// ListAgentLimitReadings returns readings taken at or after since.
 func (s *Store) ListAgentLimitReadings(ctx context.Context, since time.Time) ([]domain.AgentLimitReading, error) {
 	rows, err := s.qr.ListAgentLimitReadingsSince(ctx, since.UnixMilli())
 	if err != nil {
@@ -60,13 +58,11 @@ func (s *Store) ListAgentLimitReadings(ctx context.Context, since time.Time) ([]
 	return out, nil
 }
 
-// LimitHistoryEnabled reports whether limit readings are kept; an unreadable setting counts as off.
 func (s *Store) LimitHistoryEnabled(ctx context.Context) bool {
 	enabled, err := s.qr.GetLimitHistory(ctx)
 	return err == nil && enabled
 }
 
-// SetLimitHistory turns keeping limit readings on or off.
 func (s *Store) SetLimitHistory(ctx context.Context, enabled bool, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

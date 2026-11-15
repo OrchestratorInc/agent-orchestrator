@@ -1,6 +1,5 @@
 import { formatCapturedFileReferences, type ChatFileReference } from "./chat-file-reference";
 
-/** Captured user context. Offsets are UTF-16 code units, end exclusive. */
 export interface ChatExcerptRange {
 	start: number;
 	end: number;
@@ -17,7 +16,6 @@ export interface ChatExcerptSnapshot {
 	sourceTurnId?: string;
 	sourceRange?: ChatExcerptRange;
 	renderedRange?: ChatExcerptRange;
-	/** First selected diagram block; navigation only, never readable quote text. */
 	diagramRange?: ChatExcerptRange;
 	prefix?: string;
 	suffix?: string;
@@ -68,7 +66,6 @@ export function isExcerptSnapshot(value: unknown): value is ChatExcerptSnapshot 
 			["user", "assistant"].every(role => s.turn!.messages.filter(m => m.role === role).reduce((n, m) => n + utf8Bytes(m.text), 0) <= EXCERPT_TURN_BYTES + 12)));
 }
 
-/** Empty readable text is valid only for a captured diagram with raw context. */
 export function isFlowchartOnlySnapshot(snapshot: ChatExcerptSnapshot | undefined): boolean {
 	return snapshot?.badgeOnly === true && snapshot.containsFlowchart === true && snapshot.captureMode === "block" && typeof snapshot.rawText === "string" && snapshot.rawText.trim().length > 0;
 }
@@ -112,7 +109,6 @@ export function formatNumberedAnnotations(refs: readonly { text: string; comment
 		: `\n\nAnnotation ${index + 1} — File: ${JSON.stringify(item.file.path)}` + formatCapturedFileReferences("", [item.file])).join("");
 }
 
-/** Budget newly prepared, numbered deliveries; recovered payloads bypass this. */
 export function fitExcerptContext<T extends { text: string; comment?: string; order?: number; conversationId?: string; snapshot?: ChatExcerptSnapshot }>(refs: readonly T[], question: string, limit: number, files: readonly ChatFileReference[] = []): T[] {
 	const result = [...refs];
 	const size = () => utf8Bytes(question + formatNumberedAnnotations(result, files));

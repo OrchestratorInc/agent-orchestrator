@@ -9,7 +9,6 @@ import {
   verifyMacV2Envelope, type MacV2Artifact, type MacV2File, type MacV2TrustedKey,
 } from "./mac-differential-v2-protocol";
 
-// Cleanup failure must never be converted into a replacement download.
 export class MacV2CleanupError extends AggregateError {
   constructor(errors: unknown[]) { super(errors, "V2 resource cleanup failed"); }
 }
@@ -106,8 +105,6 @@ async function fetchBytes(options: MacV2TransferOptions, url: string, limit: num
     if (range && size !== limit) throw new Error("Truncated v2 range");
     return Buffer.concat(parts, size);
   } finally {
-    // Settle the HTTP body before returning or throwing. No request can keep
-    // piping into a file after fallback starts: network bodies never own FDs.
     if (reader) {
       try { await reader.cancel(); } finally { reader.releaseLock(); }
     }
@@ -145,7 +142,6 @@ export async function verifyMacV2LocalFile(filePath: string, expected: MacV2File
   }
 }
 
-/** Reconstruct only. The caller owns the single full fallback after this settles. */
 export async function reconstructMacV2(options: MacV2TransferOptions): Promise<void> {
   if (resolve(options.baselinePath) === resolve(options.destination)) throw new Error("Ineligible v2 attempt");
   const artifact = await authorizeMacV2Target(options);
@@ -192,8 +188,6 @@ export async function reconstructMacV2(options: MacV2TransferOptions): Promise<v
     }
     completed = true;
   } finally {
-    // Exactly one owner per handle. No WriteStream, pipe, callback continuation
-    // or shared raw descriptor can race this close or the subsequent fallback.
     const cleanupErrors: unknown[] = [];
     for (const handle of [output, baseline]) {
       try { if (handle) await handle.close(); }

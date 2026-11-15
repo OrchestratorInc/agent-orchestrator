@@ -12,9 +12,6 @@ import (
 	"sync"
 )
 
-// Listen creates a private, short-lived Unix socket for the Electron media
-// host. A random name prevents address squatting; the token still authenticates
-// the peer.
 func Listen(_ string) (net.Listener, string, error) {
 	random := make([]byte, 8)
 	if _, err := rand.Read(random); err != nil {

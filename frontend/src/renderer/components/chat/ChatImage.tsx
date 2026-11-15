@@ -1,17 +1,3 @@
-/**
- * Images in agent prose.
- *
- * A bare `<img className="max-w-full">` rendered a screenshot as wide as the
- * conversation and as tall as the image itself, so one image could push the
- * reply off screen, and there was no way to see it larger. Images now read the
- * way attachments on a human message do: a height-capped preview that opens at
- * full size in a dialog.
- *
- * A paragraph made only of images (`![a](u1) ![b](u2)`, or one per line) is a
- * set, not prose, so it becomes a wrapping row of equal-height thumbnails.
- * Images mixed into a sentence stay in the sentence.
- */
-
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { ExtraProps } from "react-markdown";
@@ -26,17 +12,10 @@ import { copyChatImage, saveChatImage } from "./chat-image-actions";
 import { useChatImageSrc } from "./chat-image-source";
 import { ATTACHMENT_TILE_CLASS } from "./messageAttachments";
 
-/** Thumbnails in a gallery share one height so the row reads as a set. */
 const InGallery = createContext(false);
-/** An attachment on a message shares the tile height of every other attachment. */
 const InAttachmentRow = createContext(false);
-/** A linked image already has an action; a button inside a link is invalid. */
 const InLink = createContext(false);
 
-/**
- * True when a paragraph holds two or more images and nothing else but the
- * whitespace and line breaks between them.
- */
 export function isImageOnlyParagraph(node: ExtraProps["node"]): boolean {
 	if (!node) return false;
 	let images = 0;
@@ -57,7 +36,6 @@ export function ChatImageGallery({ children }: { children: ReactNode }) {
 	);
 }
 
-/** A message's attached images: each is a tile the same height as any other attachment. */
 export function ChatImageAttachmentRow({ children }: { children: ReactNode }) {
 	return <InAttachmentRow.Provider value={true}>{children}</InAttachmentRow.Provider>;
 }
@@ -66,7 +44,6 @@ export function ChatImageLinkScope({ children }: { children: ReactNode }) {
 	return <InLink.Provider value={true}>{children}</InLink.Provider>;
 }
 
-/** Right-click actions for an image: copy it to the clipboard or save it to disk. */
 function ChatImageMenu({ url, label, children }: { url: string; label: string; children: ReactNode }) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -95,18 +72,10 @@ function ChatImageMenu({ url, label, children }: { url: string; label: string; c
 	);
 }
 
-/**
- * react-markdown's `img` override for chat.
- *
- * A source that fails falls back to its alt text rather than a broken-image box,
- * matching `MarkdownImage` in the file viewer.
- */
 export function ChatImage({ src, alt, inline, onError: onLoadError }: {
 	src?: string | Blob;
 	alt?: string;
-	/** A chip sized for a line of prose. */
 	inline?: boolean;
-	/** Told when `src` fails, so the caller can offer another source in its place. */
 	onError?: () => void;
 }) {
 	const { t } = useTranslation();
@@ -114,7 +83,6 @@ export function ChatImage({ src, alt, inline, onError: onLoadError }: {
 	const inAttachmentRow = useContext(InAttachmentRow);
 	const inLink = useContext(InLink);
 	const [open, setOpen] = useState(false);
-	// The failed URL rather than a boolean: a new URL deserves its own attempt.
 	const [failedSrc, setFailedSrc] = useState<string | null>(null);
 	const rawUrl = typeof src === "string" ? src : undefined;
 	const url = useChatImageSrc(rawUrl);
@@ -133,8 +101,6 @@ export function ChatImage({ src, alt, inline, onError: onLoadError }: {
 			</span>
 		);
 
-	// Batched with the caller's own update: a replacement source draws without
-	// the alt text showing in between.
 	const onError = () => {
 		setFailedSrc(url);
 		onLoadError?.();
@@ -161,7 +127,6 @@ export function ChatImage({ src, alt, inline, onError: onLoadError }: {
 					aria-label={label ? t("chat.image.open", { name: label }) : t("chat.image.openUnnamed")}
 					className={cn(
 						"max-w-full cursor-zoom-in overflow-hidden rounded-md transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-						// A tile's edge is on the image, so its border counts inside the 64px.
 						!inAttachmentRow && "border border-border bg-background",
 						inline
 							? "mx-0.5 inline-flex items-center gap-1 py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none"
@@ -181,16 +146,7 @@ export function ChatImage({ src, alt, inline, onError: onLoadError }: {
 						loading="lazy"
 						onError={onError}
 						className={cn(
-							// Never `object-cover`: a wide screenshot in a narrow conversation
-							// column is clamped by `max-w-full` to less than its aspect-ratio
-							// width, and cropping there cuts the edges off the before/after pair
-							// this layout exists for.
 							"block max-w-full object-contain",
-							// One height makes the row read as a set. The width floor is for the
-							// decode: a lazy image has no width until it lands, so without it the
-							// row wraps against zero-width boxes and reflows image by image.
-							// A tile is the exception: it is a thumbnail that opens full size, so an
-							// image fills between one square and two rather than letterboxing.
 							inAttachmentRow
 								? "h-16 w-auto min-w-16 max-w-32 rounded-md border border-border bg-background object-cover"
 								: inGallery

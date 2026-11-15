@@ -15,9 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// Models the real Codex termination order: detaching the transport stops the
-// controller's event stream; a failed authenticated shutdown leaves the provider
-// process alive with its original, immutable environment.
 type shutdownRefusingHost struct {
 	*historyRecorder
 	browserToken string
@@ -64,8 +61,6 @@ func TestFailedBranchShutdownPreservesSurvivingHostCredentials(t *testing.T) {
 			if cfg.ProviderConversationID != "thread-1" {
 				return nil, fmt.Errorf("unexpected resume %s", cfg.ProviderConversationID)
 			}
-			// The real Codex Resume reconnected path reuses the host without
-			// applying cfg.Env or issuing thread/resume. Preserve its old token.
 			return reattached, nil
 		},
 	}
@@ -112,8 +107,6 @@ func TestFailedBranchShutdownPreservesSurvivingHostCredentials(t *testing.T) {
 		t.Fatalf("read after edit: %v", err)
 	}
 	current, controllerErr := svc.Controller(testSession)
-	// The watcher may already have removed the stopped source after handoff
-	// aborts. Neither timing may publish a replacement for the surviving host.
 	if controllerErr != nil && !errors.Is(controllerErr, chatsvc.ErrNoController) {
 		t.Fatal(controllerErr)
 	}

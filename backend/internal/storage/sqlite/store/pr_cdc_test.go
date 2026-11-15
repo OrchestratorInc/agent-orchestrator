@@ -13,9 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// A check can change status on the same commit (in_progress -> failed) via
-// UpsertPRCheck's ON CONFLICT DO UPDATE. CDC must emit on that transition, not
-// only on the first insert — otherwise live clients never see the status change.
 func TestPRChecksCDC_EmitsOnInsertAndStatusUpdate(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -31,9 +28,9 @@ func TestPRChecksCDC_EmitsOnInsertAndStatusUpdate(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mustCheck("in_progress") // insert  -> event
-	mustCheck("failed")      // status change on same commit (update) -> event
-	mustCheck("failed")      // no-op re-poll (status unchanged) -> NO event
+	mustCheck("in_progress")
+	mustCheck("failed")
+	mustCheck("failed")
 
 	rows, err := s.EventsAfter(ctx, 0, 100)
 	if err != nil {
@@ -116,15 +113,6 @@ func TestPRReviewThreadsCDC_EmitsOnInsertAndResolvedTransition(t *testing.T) {
 	}
 }
 
-// Regression for the bug where pr_review_thread_resolved never fired on the
-// common Replace path. Real-world polls take ReviewWriteReplace whenever the
-// upstream listing is not paginated (provider observer sets Partial=false).
-// The previous implementation did DELETE-all + UPSERT inside the tx, so every
-// upsert hit the INSERT trigger and the UPDATE trigger that emits
-// pr_review_thread_resolved never saw the resolved flip. The fix is a set-diff
-// delete: upsert observed threads first (so unchanged thread_ids hit ON
-// CONFLICT DO UPDATE and the UPDATE trigger fires), then prune the rows whose
-// thread_id is no longer in the observed set.
 func TestPRReviewThreadsCDC_EmitsResolvedOnReplacePoll(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -136,18 +124,12 @@ func TestPRReviewThreadsCDC_EmitsResolvedOnReplacePoll(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	pr := domain.PullRequest{URL: "https://example/pr/55", SessionID: rec.ID, Number: 55, UpdatedAt: now}
 
-	// First poll: seed via Replace (no Partial pagination). Same shape as the
-	// real GitHub provider path when the review-thread listing fits in one page.
 	if err := s.WriteSCMObservation(ctx, pr, nil, nil, []domain.PullRequestReviewThread{{
 		ThreadID: "t1", Path: "main.go", Line: 7, IsBot: true, SemanticHash: "v1", UpdatedAt: now,
 	}}, nil, ports.ReviewWriteReplace); err != nil {
 		t.Fatal(err)
 	}
 
-	// Second poll: same thread, resolved flipped to true, also via Replace.
-	// On the buggy code this fired the INSERT trigger again (because the
-	// DELETE-all removed the row first) and the UPDATE trigger never saw the
-	// resolved transition.
 	if err := s.WriteSCMObservation(ctx, pr, nil, nil, []domain.PullRequestReviewThread{{
 		ThreadID: "t1", Path: "main.go", Line: 7, Resolved: true, IsBot: true, SemanticHash: "v2", UpdatedAt: now.Add(time.Second),
 	}}, nil, ports.ReviewWriteReplace); err != nil {
@@ -272,10 +254,6 @@ func TestReviewRunCDC_EmitsOnInsertAndLifecycleUpdates(t *testing.T) {
 	}
 }
 
-// Pruning regression: Replace must still drop threads that are no longer in
-// the observed listing, otherwise stale rows accumulate. Seed two threads,
-// then re-poll with only one; the missing thread must be gone, while the
-// surviving thread still gets an UPDATE (not a fresh INSERT).
 func TestPRReviewThreadsReplace_PrunesOrphansWithoutReinserting(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -319,9 +297,6 @@ func TestPRReviewThreadsReplace_PrunesOrphansWithoutReinserting(t *testing.T) {
 			resolved++
 		}
 	}
-	// Two adds from poll 1 ("keep" and "drop"), no extra add on poll 2
-	// (the surviving row went through ON CONFLICT DO UPDATE, not a fresh
-	// INSERT), and one resolved transition from the kept row's flip.
 	if added != 2 {
 		t.Fatalf("want 2 added events across both polls, got %d", added)
 	}
@@ -330,8 +305,6 @@ func TestPRReviewThreadsReplace_PrunesOrphansWithoutReinserting(t *testing.T) {
 	}
 }
 
-// WritePR persists scalar facts, checks, and comments in one tx; all three
-// should be queryable afterward.
 func TestWritePR_PersistsScalarsChecksAndComments(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

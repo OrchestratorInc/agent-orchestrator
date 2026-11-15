@@ -9,10 +9,6 @@ import crypto from "node:crypto";
 
 const MAX_AUTH_DOCUMENT_BYTES = 64 << 10;
 
-// A Claude Code setup token. `claude setup-token` emits one of these for use in
-// headless/cloud contexts; matching on the token shape (rather than a specific
-// storage file) keeps extraction stable across claude versions, which have moved
-// the credential between settings.json, .credentials.json, and the OS keychain.
 const CLAUDE_OAUTH_TOKEN_PATTERN = /sk-ant-oat[0-9A-Za-z_-]{10,}/;
 
 export function extractClaudeOAuthToken(text: string): string | null {
@@ -20,9 +16,6 @@ export function extractClaudeOAuthToken(text: string): string | null {
 	return match ? match[0] : null;
 }
 
-// Fallback for claude builds that write the setup token to a file instead of (or
-// in addition to) stdout. Scans only the per-login isolated config dir, never the
-// user's real ~/.claude, for a token in any file it created.
 export async function readClaudeOAuthTokenFromDir(dir: string): Promise<string | null> {
 	let entries: string[];
 	try {
@@ -38,22 +31,17 @@ export async function readClaudeOAuthTokenFromDir(dir: string): Promise<string |
 			const token = extractClaudeOAuthToken(await readFile(full, "utf8"));
 			if (token) return token;
 		} catch {
-			// unreadable entry; keep scanning
 		}
 	}
 	return null;
 }
 
-// Codex writes auth.json to CODEX_HOME (forced via cli_auth_credentials_store).
-// Locate it defensively: the direct path first, then a shallow scan, so a codex
-// version that nests the store does not reintroduce a "no such file" failure.
 export async function findCodexAuthFile(codexHome: string): Promise<string | null> {
 	const direct = path.join(codexHome, "auth.json");
 	try {
 		await access(direct, fsConstants.R_OK);
 		return direct;
 	} catch {
-		// fall through to a shallow scan
 	}
 	let entries: string[];
 	try {
@@ -68,18 +56,11 @@ export async function findCodexAuthFile(codexHome: string): Promise<string | nul
 			await access(nested, fsConstants.R_OK);
 			return nested;
 		} catch {
-			// not here; keep scanning
 		}
 	}
 	return null;
 }
 
-// A macOS app launched from Finder/Dock inherits a minimal PATH
-// (/usr/bin:/bin:/usr/sbin:/sbin), not the user's shell PATH, so an agent CLI
-// installed by Homebrew, npm, or an install script is invisible to a bare
-// spawn("claude"). Search these common install locations in addition to the
-// inherited PATH before giving up. (A dev app started from a terminal already
-// inherits the full PATH, which is why the login flow works there.)
 function knownBinDirs(): string[] {
 	const home = os.homedir();
 	return [
@@ -107,17 +88,12 @@ export async function firstExecutable(name: string, dirs: readonly string[]): Pr
 				await access(candidate, fsConstants.X_OK);
 				return candidate;
 			} catch {
-				// keep looking
 			}
 		}
 	}
 	return null;
 }
 
-// Best-effort resolution through the user's login shell, covering PATHs set up
-// by version managers (nvm, asdf) that neither the inherited PATH nor the static
-// list above can know. Bounded by a hard timeout so a slow or prompting shell
-// can never hang the login flow; any failure just falls through to "not found".
 function resolveViaLoginShell(name: string): Promise<string | null> {
 	if (process.platform === "win32") return Promise.resolve(null);
 	const shell = process.env.SHELL || "/bin/zsh";
@@ -134,7 +110,6 @@ function resolveViaLoginShell(name: string): Promise<string | null> {
 			try {
 				child.kill();
 			} catch {
-				// already gone
 			}
 			resolve(value);
 		};
@@ -154,9 +129,6 @@ function resolveViaLoginShell(name: string): Promise<string | null> {
 	});
 }
 
-// Resolve an agent CLI to an absolute path and build a PATH the spawned CLI can
-// use to find its own helpers (node, git). Returns null when the binary cannot
-// be located anywhere, so the caller can surface an actionable error.
 async function resolveProviderBinary(name: string): Promise<{ path: string; pathEnv: string } | null> {
 	const inherited = (process.env.PATH ?? "").split(path.delimiter);
 	let resolved = await firstExecutable(name, [...inherited, ...knownBinDirs()]);
@@ -168,11 +140,6 @@ async function resolveProviderBinary(name: string): Promise<{ path: string; path
 	return { path: resolved, pathEnv };
 }
 
-// Spawn a resolved absolute agent-CLI path. Windows needs a shell to execute a
-// .cmd, but `shell:true` does not quote the program, so an absolute path with a
-// space (C:\Program Files\..., or a username with a space) would be split at the
-// space and fail to start. Quote it ourselves there. On POSIX the absolute path
-// is spawned directly with no shell, so no quoting is needed.
 function spawnAgentBinary(binaryPath: string, args: readonly string[], options: SpawnOptions): ChildProcess {
 	const useShell = process.platform === "win32";
 	return spawn(useShell ? `"${binaryPath}"` : binaryPath, [...args], { ...options, shell: useShell });
@@ -182,9 +149,6 @@ export interface ProviderAuthCredential {
 	provider: string;
 	credentialType: string;
 	secret: string;
-	// Populated for expiring GitHub App OAuth tokens: the refresh token and
-	// lifetimes (seconds) GitHub returns alongside the access token, so the
-	// daemon can renew the token without a manual reconnect.
 	refreshToken?: string;
 	expiresIn?: number;
 	refreshTokenExpiresIn?: number;
@@ -198,8 +162,6 @@ export interface ProviderAuthFlow {
 const codexAuthFlow: ProviderAuthFlow = {
 	provider: "codex",
 	async authenticate(dataDir: string, signal?: AbortSignal): Promise<ProviderAuthCredential> {
-		// mkdtemp does not create its parent. Keep this temporary, credential-bearing
-		// directory within AO's data root and private even on a fresh install.
 		await mkdir(dataDir, { recursive: true, mode: 0o700 });
 		await chmod(dataDir, 0o700);
 		const pending = await mkdtemp(path.join(dataDir, "codex-cloud-login-"));
@@ -213,8 +175,6 @@ const codexAuthFlow: ProviderAuthFlow = {
 					'Codex is not installed or could not be found. Install the Codex CLI, or connect with the "API key" credential type instead.',
 				);
 			}
-			// Read + validate codex's auth.json; returns the secret or null if it is
-			// not yet present/valid. Used both while polling and on process exit.
 			const readCodexCredential = async (): Promise<string | null> => {
 				const authPath = await findCodexAuthFile(codexHome).catch(() => null);
 				if (!authPath) return null;
@@ -235,10 +195,6 @@ const codexAuthFlow: ProviderAuthFlow = {
 				return secret;
 			};
 
-			// Resolve as soon as codex writes auth.json, not when the CLI exits: like
-			// `claude setup-token`, `codex login` can leave the process idling after
-			// the browser round-trip, which would otherwise time out at 5 minutes even
-			// though a valid credential is already on disk.
 			const secret = await new Promise<string>((resolve, reject) => {
 				const child = spawnAgentBinary(binary.path, ["-c", 'cli_auth_credentials_store="file"', "login"], {
 					env: { ...process.env, PATH: binary.pathEnv, CODEX_HOME: codexHome },
@@ -255,7 +211,6 @@ const codexAuthFlow: ProviderAuthFlow = {
 					try {
 						child.kill();
 					} catch {
-						// already gone
 					}
 				};
 				const succeed = (value: string) => {
@@ -306,30 +261,21 @@ const codexAuthFlow: ProviderAuthFlow = {
 	},
 };
 
-// Base64url (no padding) encoding for PKCE material.
 function base64Url(buf: Buffer): string {
 	return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-// Claude Code's public OAuth client id and endpoints, mirrored from the claude
-// binary (verified against 2.1.284: CLIENT_ID / CLAUDE_AI_AUTHORIZE_URL /
-// TOKEN_URL). `claude setup-token` performs exactly this PKCE authorization-code
-// flow over a localhost loopback redirect and, for the long-lived token, requests
-// a one-year lifetime.
 const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
 const CLAUDE_OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const CLAUDE_OAUTH_SCOPE = "user:inference";
-const CLAUDE_OAUTH_TOKEN_TTL_SECONDS = 31_536_000; // one year, matching `setup-token`
+const CLAUDE_OAUTH_TOKEN_TTL_SECONDS = 31_536_000;
 
 const CLAUDE_CALLBACK_HTML = (title: string, body: string): string =>
 	`<!doctype html><meta charset="utf-8"><title>${title}</title>` +
 	`<body style="font:15px -apple-system,system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 1.5rem;color:#111">` +
 	`<h1 style="font-size:1.25rem">${title}</h1><p style="color:#555">${body}</p></body>`;
 
-// Build the Claude OAuth authorize URL for a PKCE loopback login. Kept pure and
-// exported so the parameter set the CLI depends on (client id, loopback redirect,
-// user:inference scope, S256 challenge) is guarded by a unit test.
 export function buildClaudeAuthorizeUrl(redirectUri: string, codeChallenge: string, state: string): string {
 	const params = new URLSearchParams({
 		code: "true",
@@ -347,18 +293,6 @@ export function buildClaudeAuthorizeUrl(redirectUri: string, codeChallenge: stri
 const claudeAuthFlow: ProviderAuthFlow = {
 	provider: "claude-code",
 	async authenticate(_dataDir: string, signal?: AbortSignal): Promise<ProviderAuthCredential> {
-		// Run the OAuth loopback flow ourselves rather than shelling out to `claude
-		// setup-token`. When AO spawns that CLI non-interactively (stdio: pipe, no
-		// TTY) it *does* run this same loopback flow to completion, but it is a React
-		// Ink TUI that prints the resulting sk-ant-oat token only to a real terminal:
-		// on a non-TTY pipe it emits zero bytes and writes nothing to
-		// CLAUDE_CONFIG_DIR, so scraping stdout / polling the config dir never
-		// observes a token and the login spins until the 5-minute timeout. Attaching
-		// a PTY does not help either -- with a TTY the CLI switches to an out-of-band
-		// "paste this code" flow that AO's spinner-only UX cannot drive. Mirroring the
-		// CLI's loopback flow (like githubAuthFlow) lets us read the token straight
-		// from the token endpoint, independent of the CLI's output channel, and does
-		// not require Claude Code to be installed at all.
 		const codeVerifier = base64Url(crypto.randomBytes(32));
 		const codeChallenge = base64Url(crypto.createHash("sha256").update(codeVerifier).digest());
 		const state = crypto.randomBytes(32).toString("hex");
@@ -411,8 +345,6 @@ const claudeAuthFlow: ProviderAuthFlow = {
 					failCallback(res, new Error("Claude sign-in callback is invalid."));
 					return;
 				}
-				// The redirect_uri sent here must byte-for-byte match the one advertised
-				// in the authorize URL, or the PKCE token exchange is rejected.
 				const redirectUri = `http://localhost:${port}/callback`;
 				void (async () => {
 					try {
@@ -433,8 +365,6 @@ const claudeAuthFlow: ProviderAuthFlow = {
 						if (!tokenRes.ok) throw new Error(`Claude token exchange failed (HTTP ${tokenRes.status}).`);
 						const tokenBody = (await tokenRes.json()) as Record<string, unknown>;
 						const accessToken = tokenBody.access_token;
-						// The setup token is an sk-ant-oat...; validate the shape so a
-						// changed response schema fails loudly instead of storing garbage.
 						if (typeof accessToken !== "string" || !extractClaudeOAuthToken(accessToken)) {
 							throw new Error("Claude did not return a valid setup token.");
 						}
@@ -454,10 +384,6 @@ const claudeAuthFlow: ProviderAuthFlow = {
 				})();
 			});
 
-			// Bind 127.0.0.1 but advertise http://localhost:<port>/callback: this is
-			// exactly what the claude CLI does (it binds 127.0.0.1 and hands the
-			// browser a localhost URL), and both loopback forms are registered redirect
-			// URIs for this client.
 			server.listen(0, "127.0.0.1", () => {
 				const addr = server!.address();
 				if (typeof addr === "string" || addr === null) {
@@ -479,10 +405,6 @@ const claudeAuthFlow: ProviderAuthFlow = {
 	},
 };
 
-// GitHub OAuth scopes requested by Agent Orchestrator:
-//   repo        – full control of public and private repos (clone, push, pull, PRs, issues, hooks)
-//   read:org    – read org membership and team membership
-//   repo_hook   – full control of repo webhooks (needed for some cloud features)
 const GITHUB_OAUTH_SCOPES = "repo read:org repo_hook";
 
 const GITHUB_CALLBACK_HTML = (title: string, body: string): string =>
@@ -576,8 +498,6 @@ const githubAuthFlow: ProviderAuthFlow = {
 						if (typeof accessToken !== "string" || !accessToken) {
 							throw new Error("GitHub did not return an access token.");
 						}
-						// GitHub App user tokens expire (8h default) and arrive with a
-						// refresh token; keep it so the daemon can renew silently.
 						const refreshToken = typeof tokenBody.refresh_token === "string" ? tokenBody.refresh_token : undefined;
 						const expiresIn = typeof tokenBody.expires_in === "number" ? tokenBody.expires_in : undefined;
 						const refreshTokenExpiresIn =
@@ -637,9 +557,6 @@ const githubAuthFlow: ProviderAuthFlow = {
 	},
 };
 
-// opencode has no browser-capture flow: its interactive login writes to a local
-// sqlite db (not a portable file), so its cloud credential is a provider API key
-// entered via the credential dialog (like cursor) -- not a ProviderAuthFlow.
 const flows = new Map<string, ProviderAuthFlow>([
 	[codexAuthFlow.provider, codexAuthFlow],
 	[claudeAuthFlow.provider, claudeAuthFlow],

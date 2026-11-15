@@ -1,24 +1,3 @@
-// Package vibe implements the Mistral Vibe agent adapter: launching interactive
-// Vibe sessions and resuming sessions when a native Vibe session id is known.
-//
-// Mistral Vibe (binary "vibe", https://github.com/mistralai/mistral-vibe) is a
-// Python CLI installed via `uv tool install mistral-vibe`, pip, or its install
-// script. AO drives Vibe in interactive mode by passing the task as the
-// positional initial prompt. `--trust` skips the working-directory trust prompt
-// for AO-managed worktrees while preserving Vibe's normal TUI.
-//
-// Permission modes map onto Vibe's builtin agent profiles via `--agent`:
-// accept-edits ("auto-approves file edits only") and auto-approve
-// ("auto-approves all tool executions"). PermissionModeDefault emits no flag so
-// Vibe resolves its starting agent from the user's `default_agent` config.
-//
-// Vibe hooks receive the native session id on every callback. AO installs
-// workspace-local pre_tool, post_tool, and post_agent hooks to persist that id
-// for restore and to report conservative activity signals without mutating the
-// user's global Vibe configuration.
-//
-// Restore uses `--resume <session id>` (Vibe matches by partial/short id) when
-// a native session id is available in metadata.
 package vibe
 
 import (
@@ -40,15 +19,12 @@ import (
 
 const adapterID = "vibe"
 
-// Plugin is the Mistral Vibe agent adapter. It is safe for concurrent use; the
-// binary path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Mistral Vibe adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -56,7 +32,6 @@ func New() *Plugin {
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -69,19 +44,6 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetLaunchCommand builds the argv to start a new interactive Vibe session:
-//
-//	vibe --trust [--workdir <path>] [--agent <profile-or-ao-agent>] [--auto-approve] [-- <prompt>]
-//
-// When present, the prompt is delivered as Vibe's positional initial prompt, so
-// AO uses in-command delivery. Empty prompts intentionally launch an interactive
-// Vibe TUI with no positional prompt: the session manager uses promptless
-// launches for orchestrators and restore fallback. `--trust` skips the trust
-// prompt for automation and avoiding `-p` keeps Vibe in its Textual TUI instead
-// of programmatic output mode. `--workdir` is passed explicitly because Vibe
-// validates its own working directory in addition to the process cwd AO sets
-// through the runtime. Vibe exposes no CLI system-prompt flag (system prompts
-// are config-driven), so SystemPrompt is not forwarded.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -113,9 +75,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Vibe session
-// when a native session id is available in metadata. Without it, ok is false
-// and callers fall back to fresh launch behavior.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -148,7 +107,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// GetConfigSpec reports the per-project agent config keys Vibe understands.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ConfigSpec{}, err
@@ -164,7 +122,6 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	}, nil
 }
 
-// SessionInfo surfaces the native session id captured by AO's Vibe hooks.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -173,17 +130,12 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// appendWorkdirFlag adds Vibe's explicit `--workdir` flag. Vibe validates its
-// own working directory in addition to the process cwd AO sets.
 func appendWorkdirFlag(cmd *[]string, workspacePath string) {
 	if workspacePath != "" {
 		*cmd = append(*cmd, "--workdir", workspacePath)
 	}
 }
 
-// appendAgentFlags maps AO permission modes onto Vibe's builtin `--agent`
-// profiles. PermissionModeDefault (and the empty mode) emit no flag so Vibe
-// resolves its starting agent from the user's `default_agent` config.
 func appendAgentFlags(cmd *[]string, mode ports.PermissionMode) {
 	switch mode {
 	case ports.PermissionModeAcceptEdits:
@@ -258,9 +210,6 @@ func vibeAgentRoot(promptFile, dataDir, sessionID string) (string, error) {
 	return vibeManagerOwnedAgentRoot(dataDir, sessionID), nil
 }
 
-// vibeManagerOwnedAgentRoot is the load-bearing AO-managed custom-agent root:
-// prompt-backed sessions using dataDir/prompts/<sessionID>/system.md and
-// model-only sessions must both resolve to dataDir/prompts/<sessionID>/vibe.
 func vibeManagerOwnedAgentRoot(dataDir, sessionID string) string {
 	return filepath.Join(dataDir, "prompts", sessionID, "vibe")
 }
@@ -276,8 +225,6 @@ func vibeAgentTOML(mode ports.PermissionMode, model, promptText string, hasPromp
 		if err != nil {
 			return "", fmt.Errorf("vibe: encode standing instructions: %w", err)
 		}
-		// Vibe validates profiles before add-dir prompt discovery is available.
-		// Native profile instructions carry the same rules without a missing ID.
 		b.WriteString("instructions = ")
 		b.WriteString(instructions)
 		b.WriteString("\n")
@@ -298,9 +245,6 @@ func vibeAgentTOML(mode ports.PermissionMode, model, promptText string, hasPromp
 	return b.String(), nil
 }
 
-// vibeTOMLBasicString serializes a Go string as a TOML basic string. Go's
-// strconv.Quote is not suitable here because it may emit Go-only escapes such
-// as \a, \v, and \xNN, which TOML parsers reject.
 func vibeTOMLBasicString(s string) (string, error) {
 	if !utf8.ValidString(s) {
 		return "", errors.New("invalid UTF-8")
@@ -345,8 +289,6 @@ var vibeBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveVibeBinary finds the `vibe` binary, searching PATH then common install
-// locations. It returns a wrapped ports.ErrAgentBinaryNotFound when Vibe is absent.
 func ResolveVibeBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, vibeBinarySpec)
 }
@@ -367,8 +309,6 @@ func (p *Plugin) vibeBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

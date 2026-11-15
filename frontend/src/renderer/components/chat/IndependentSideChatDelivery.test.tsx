@@ -395,7 +395,6 @@ describe("side panel navigation and recovery", () => {
 								},
 							]
 						: [
-								// A newest page always carries its turn's messages.
 								{
 									id: `${id}-latest-message`,
 									turnId: `${id}-latest`,
@@ -433,9 +432,6 @@ describe("side panel navigation and recovery", () => {
 		expect(await screen.findByText("Old answer other")).toBeInTheDocument();
 	});
 	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
-		// The side transcript renders through the main chat's virtualized Timeline.
-		// A viewport taller than every row keeps the whole history mounted, so the
-		// assertions below can read it all.
 		const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
 		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
@@ -475,8 +471,6 @@ describe("side panel navigation and recovery", () => {
 		await screen.findByText("Answer 51");
 		if (loadBeforeRefresh) {
 			await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
-			// The virtualized Timeline keeps the newest rows mounted; the row just
-			// before the page boundary proves the older page joined it.
 			await screen.findByText("Answer 50");
 		}
 		latest = 101;

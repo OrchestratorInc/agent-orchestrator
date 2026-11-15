@@ -13,8 +13,6 @@ import { SearchablePicker } from "./SearchablePicker";
 
 const SIZES: CoderSize[] = ["small", "medium", "large"];
 
-// Project-level template and machine settings. Additional repositories render
-// beside the primary repository picker, so they live in a separate component.
 export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	const { t } = useTranslation();
 	const { templates } = useCoderTemplates(orgId, true);
@@ -28,15 +26,8 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	const reduceMotion = useReducedMotion();
 	const [advancedOpen, setAdvancedOpen] = useState(startupScript.trim().length > 0);
 
-	// Parameter controls appear only when the selected template declares them.
 	const supportsSize = supportedParams.includes("size");
 	const supportsStartup = supportedParams.includes("startup_script");
-	// Every project must choose a concrete template: there is no implicit
-	// "organization default" option, because a bring-your-own-Coder org may have
-	// no deployment-default template, in which case an empty choice fails only
-	// later at session start (HTTP 422 coder_template_required). The picker lists
-	// every template the deployment or org connection exposes, as-is; curation
-	// (e.g. hiding an internal template) is done by removing it in Coder, not here.
 	const templateOptions = templates.map((tpl) => ({
 		id: tpl.id,
 		name: tpl.displayName || tpl.name,
@@ -121,9 +112,6 @@ export function CoderTemplatePicker({ orgId }: { orgId: string | undefined }) {
 	);
 }
 
-// These cards are placed directly below the project's primary repository.
-// Not shown in the cloud project form for now; kept so it can
-// be re-enabled without rebuilding it.
 export function AdditionalRepositoriesPicker({ repos = [] }: { repos?: { label: string; url: string; private?: boolean }[] }) {
 	const { t } = useTranslation();
 	const extraRepos = useCoderSessionOptionsStore((s) => s.extraRepos);

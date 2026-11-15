@@ -36,7 +36,6 @@ type transcriptWatcher interface {
 	Rebuild(context.Context, []string) error
 }
 
-// CoordinatorConfig configures the event-driven usage pipeline.
 type CoordinatorConfig struct {
 	Workers       int
 	QueueSize     int
@@ -49,7 +48,6 @@ type CoordinatorConfig struct {
 	WatchRoots    func(context.Context) ([]string, error)
 }
 
-// Coordinator ingests unread usage sources when Flush asks, and finalizing sources at once.
 type Coordinator struct {
 	store         coordinatorStore
 	ingestor      sourceIngestor
@@ -69,7 +67,6 @@ type Coordinator struct {
 	stopped       chan struct{}
 }
 
-// NewCoordinator constructs an event-driven usage coordinator.
 func NewCoordinator(
 	store coordinatorStore,
 	ingestor sourceIngestor,
@@ -111,8 +108,6 @@ func NewCoordinator(
 	}
 }
 
-// NotifySourcesChanged requests source discovery and inventory rebuilding
-// without blocking an agent hook.
 func (c *Coordinator) NotifySourcesChanged() {
 	select {
 	case c.refresh <- struct{}{}:
@@ -120,8 +115,6 @@ func (c *Coordinator) NotifySourcesChanged() {
 	}
 }
 
-// NotifyInventoryChanged requests a source inventory rebuild without running
-// provider-specific discovery.
 func (c *Coordinator) NotifyInventoryChanged() {
 	select {
 	case c.inventory <- struct{}{}:
@@ -129,7 +122,6 @@ func (c *Coordinator) NotifyInventoryChanged() {
 	}
 }
 
-// Flush ingests every unread source and returns when none is queued or running, or ctx ends.
 func (c *Coordinator) Flush(ctx context.Context) {
 	done := make(chan struct{})
 	select {
@@ -158,8 +150,6 @@ type ingestionResult struct {
 	err      error
 }
 
-// Start runs until ctx is canceled and returns a channel closed after the
-// watcher and ingestion workers have stopped.
 func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -347,13 +337,9 @@ func (c *Coordinator) run(ctx context.Context) {
 		if err != nil {
 			c.logger.Warn("usage transcript watcher failed; rebuilding", "err", err)
 		}
-		// Inventory refresh performs one rebuild with the latest durable paths;
-		// discovery first recovers files created while fsnotify was unreliable.
 		refreshInventory(true)
 	}
 
-	// Watch roots are active before reconciliation, closing the startup gap
-	// between reading an offset and beginning to receive filesystem events.
 	refreshInventory(true)
 
 	events := c.watcher.Events()
@@ -494,9 +480,6 @@ func canonicalTranscriptPath(path string) string {
 	if resolved, err := filepath.EvalSymlinks(path); err == nil {
 		return resolved
 	}
-	// Rename/remove events arrive after the leaf stopped existing. Resolve the
-	// parent so aliases such as macOS /var and /private/var still identify the
-	// same durable source.
 	if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
 		return filepath.Join(parent, filepath.Base(path))
 	}

@@ -14,18 +14,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// `ao mcp` is the stdio MCP server AO passes to every chat session, so the
-// agent sees html_preview and html_render in its tool list, and the computer
-// use tools when the session has computer use (mcp_cua.go). The agent's
-// harness spawns it outside the shell sandbox, so it reaches the loopback
-// daemon even when the agent's own shell commands cannot. Hand-written, and
-// only what these tools need: newline-delimited JSON-RPC 2.0, one request at
-// a time, nothing on stdout but replies.
-
 const (
 	mcpDefaultProtocolVersion = "2025-06-18"
-	// maxMCPHTMLChars is T3's cap on a tool's html argument.
-	maxMCPHTMLChars = 512_000
+	maxMCPHTMLChars           = 512_000
 )
 
 var mcpProtocolVersions = []string{mcpDefaultProtocolVersion, "2025-03-26", "2024-11-05"}
@@ -82,14 +73,12 @@ func (c *commandContext) serveMCP(ctx context.Context, in io.Reader, out io.Writ
 	}
 }
 
-// handleMCP answers one message; a notification gets no reply.
 func (c *commandContext) handleMCP(ctx context.Context, state *mcpState, line []byte) *mcpResponse {
 	var req mcpRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		if !json.Valid(line) {
 			return &mcpResponse{JSONRPC: "2.0", ID: json.RawMessage("null"), Error: &mcpError{Code: -32700, Message: "parse error: " + err.Error()}}
 		}
-		// Valid JSON of the wrong shape. Unmarshal still fills a readable id.
 		id := req.ID
 		if id == nil {
 			id = json.RawMessage("null")
@@ -152,7 +141,6 @@ type mcpToolArgs struct {
 	Artifact bool   `json:"artifact"`
 }
 
-// readMCPToolArgs decodes a call's arguments and returns the session it acts in.
 func readMCPToolArgs(raw json.RawMessage) (mcpToolArgs, string, error) {
 	var args mcpToolArgs
 	if len(raw) > 0 {
@@ -167,8 +155,6 @@ func readMCPToolArgs(raw json.RawMessage) (mcpToolArgs, string, error) {
 	return args, sessionID, err
 }
 
-// Every failure is a tool result the agent can read and act on, never a
-// protocol error.
 func mcpToolError(err error) map[string]any {
 	return map[string]any{"content": []any{mcpText(err.Error())}, "isError": true}
 }
@@ -228,8 +214,6 @@ func (c *commandContext) callHTMLRender(ctx context.Context, raw json.RawMessage
 	return map[string]any{"content": []any{mcpText(text)}}
 }
 
-// The tool text follows T3's html tools, with AO's own rules from
-// skillassets/using-ao/commands/render.md.
 const (
 	mcpPageRules = `Write one self-contained HTML document with inline <style> and <script>. ` +
 		`Remote https:// resources, such as a CDN chart library, load as they are; relative URLs do not resolve. ` +
@@ -307,7 +291,6 @@ var mcpTools = []map[string]any{
 			"required": []string{"html", "title"},
 		},
 		"annotations": map[string]any{
-			// Not read-only: with artifact it writes a file to the artifact directory.
 			"title": "Render HTML", "readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true,
 		},
 	},

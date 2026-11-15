@@ -33,7 +33,6 @@ export type OpenTarget = {
 	id: OpenTargetId;
 	name: string;
 	kind: OpenTargetKind;
-	/** Native app icon, without exposing its installation path to the renderer. */
 	iconDataUrl?: string;
 };
 
@@ -44,11 +43,9 @@ export type EditorHandoffState = {
 	preferredEditorId: EditorId;
 	workspaceAvailable: boolean;
 	unavailableReason?: string;
-	/** The daemon's error code, when it answered; lets the renderer tell "gone" from "couldn't check". */
 	unavailableCode?: string;
 };
 
-/** The installed editors and the stored default, independent of any session. */
 export type EditorPreferenceState = {
 	editors: OpenTarget[];
 	preferredEditorId: EditorId;
@@ -61,28 +58,19 @@ export type OpenSessionTargetInput = {
 
 export type OpenSessionTargetResult = OpenTarget;
 
-/** Where a session's artifact directory can open: the system file manager or a terminal. */
 export type OpenArtifactsTargetId = Extract<OpenTargetId, "file-manager" | "terminal">;
 
 export type OpenSessionArtifactsInput = {
 	sessionId: string;
 	targetId: OpenArtifactsTargetId;
-	/** One artifact, relative to the artifact directory: the file manager reveals it and a terminal opens in its folder. */
 	path?: string;
 };
 
-/** One artifact to open in the system's default browser. */
 export type OpenArtifactInBrowserInput = {
 	sessionId: string;
-	/** Relative to the session's artifact directory. */
 	path: string;
 };
 
-/**
- * Files a browser renders itself: pages, SVG, and every image, video, audio
- * and PDF format the artifact viewer previews (renderer/lib/file-media.ts).
- * Anything else could hand an executable to its OS handler.
- */
 const BROWSER_ARTIFACT_EXTENSIONS: ReadonlySet<string> = new Set([
 	".html", ".htm", ".svg", ".pdf",
 	".apng", ".avif", ".bmp", ".gif", ".ico", ".jpg", ".jpeg", ".png", ".webp",
@@ -90,7 +78,6 @@ const BROWSER_ARTIFACT_EXTENSIONS: ReadonlySet<string> = new Set([
 	".aac", ".flac", ".m4a", ".mp3", ".oga", ".ogg", ".opus", ".wav",
 ]);
 
-/** Whether an artifact opens in the default browser: the one rule the Open in browser action and the main process share. */
 export function isBrowserArtifactPath(path: string): boolean {
 	const name = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
 	const dot = name.lastIndexOf(".");
@@ -107,7 +94,6 @@ export function isTerminalId(value: unknown): value is TerminalId {
 	return typeof value === "string" && ((TERMINAL_IDS as readonly string[]).includes(value) || /^terminal-app:[a-f0-9]{64}$/.test(value));
 }
 
-/** Explicit desktop action on a normalized chat path; relative paths use the session workspace. */
 export type ChatPathActionInput = {
 	sessionId: string;
 	path: string;

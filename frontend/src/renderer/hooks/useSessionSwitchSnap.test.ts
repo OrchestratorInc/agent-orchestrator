@@ -106,7 +106,6 @@ describe("useSessionSwitchSnap", () => {
 			navigate("/projects/p1/sessions/s2");
 			expect(document.activeElement).not.toBe(composer);
 
-			// Focus elsewhere, such as the command palette's input, is left alone.
 			outside.focus();
 			navigate("/projects/p1/sessions/s3");
 			expect(document.activeElement).toBe(outside);

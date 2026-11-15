@@ -4,7 +4,6 @@ import { isNetErrorMessage, normalizeReleaseNotes, updateFailureCategory, update
 test("detects Chromium network-stack errors", () => {
 	expect(isNetErrorMessage("net::ERR_FAILED")).toBe(true);
 	expect(isNetErrorMessage("net::ERR_CONNECTION_RESET")).toBe(true);
-	// Anchored at the start — a net:: substring elsewhere is not the wedge signature.
 	expect(isNetErrorMessage("Error: net::ERR_FAILED")).toBe(false);
 	expect(isNetErrorMessage("HttpError: 404")).toBe(false);
 	expect(isNetErrorMessage(undefined)).toBe(false);
@@ -21,8 +20,6 @@ test("buckets updater errors into safe categories", () => {
 	expect(updateFailureCategory(undefined)).toBe("unknown");
 });
 
-// The raw message carries the feed URL and local staging paths, so only the
-// bucketed category may leave the process.
 test("never forwards the raw updater message", () => {
 	const outcome = updateFailureOutcome(
 		"EACCES: permission denied, open '/Users/someone/Library/Caches/ao-updater/pending/AO.zip'",
@@ -40,8 +37,6 @@ test("never forwards the raw updater message", () => {
 	expect(JSON.stringify(outcome)).not.toContain("someone");
 });
 
-// phase and trigger come from the main process, which is the only place that
-// knows whether the hourly timer or the user started the operation.
 test("records the phase and trigger it was given", () => {
 	expect(updateFailureOutcome("boom", "check", "automatic", undefined)).toMatchObject({
 		phase: "check",
@@ -51,12 +46,9 @@ test("records the phase and trigger it was given", () => {
 		phase: "download",
 		trigger: "manual",
 	});
-	// An unknown target version is omitted rather than sent as undefined.
 	expect(updateFailureOutcome("boom", "check", "manual", undefined)).not.toHaveProperty("to_version");
 });
 
-// The GitHub provider reads releases.atom, which renders the release body as
-// HTML. Flattening it must keep the links the dialog renders from Markdown.
 test("keeps links, bullets and headings from GitHub's HTML release notes", () => {
 	const html = [
 		"<p><strong>Changes in this nightly</strong></p>",

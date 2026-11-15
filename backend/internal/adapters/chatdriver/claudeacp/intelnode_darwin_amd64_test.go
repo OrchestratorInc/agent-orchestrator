@@ -9,13 +9,6 @@ import (
 	"testing"
 )
 
-// TestJITCapableNodeRepairsRealIntelNode reproduces #6621 on real Intel
-// hardware: it signs a copy of Node the way the broken release did (hardened
-// runtime with allow-jit but without allow-unsigned-executable-memory),
-// checks that V8 really crashes, and checks that the repair yields a Node that
-// runs JIT-compiled code. AO_TEST_BROKEN_NODE runs it against a shipped
-// binary (such as a release's acp-runtime Node) instead. It needs an Intel Mac that enforces the entitlement
-// (the reports are on macOS 15) and node on PATH; elsewhere it skips.
 func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 	broken := os.Getenv("AO_TEST_BROKEN_NODE")
 	if broken == "" {
@@ -28,9 +21,6 @@ func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 		t.Fatalf("smoke test broken Node: %v", err)
 	}
 	if !crashed {
-		// Not every Intel Mac enforces it: macOS 26 runners run this Node
-		// fine, while the #6621 reports are on macOS 15. Without the crash
-		// there is nothing to repair, and jitCapableNode keeps the Node.
 		if os.Getenv("AO_REQUIRE_NODE_JIT_REPRO") == "1" {
 			t.Fatal("Node signed without allow-unsigned-executable-memory did not crash, but AO_REQUIRE_NODE_JIT_REPRO=1 requires the #6621 crash")
 		}
@@ -70,8 +60,6 @@ func TestJITCapableNodeRepairsRealIntelNode(t *testing.T) {
 	}
 }
 
-// signNodeLikeBrokenRelease copies the node on PATH and signs it the way the
-// broken release did: hardened runtime with allow-jit only.
 func signNodeLikeBrokenRelease(t *testing.T) string {
 	t.Helper()
 	source, err := exec.LookPath("node")

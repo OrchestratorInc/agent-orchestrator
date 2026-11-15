@@ -19,12 +19,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// The wire contract for the history operations.
-//
-// The point of every case below is that an ordinary refusal is a typed conflict a
-// client can act on, never a 500: "this agent cannot undo" and "stop the agent first"
-// are different instructions, and a generic internal error is neither.
-
 type fakeChatService struct {
 	discarded     int
 	title         string
@@ -184,8 +178,6 @@ func TestConversationUsageLimitWireProjection(t *testing.T) {
 	}
 }
 
-// Compaction belongs to a sibling slice; this fake only has to satisfy the
-// controller's interface so the history routes can be exercised.
 func (f *fakeChatService) Compact(context.Context, domain.SessionID) (ports.ChatCompactionResult, error) {
 	return ports.ChatCompactionResult{}, nil
 }
@@ -217,8 +209,6 @@ func (f *fakeChatService) SetTitle(_ context.Context, _ domain.SessionID, title 
 	return f.title, nil
 }
 
-// Skills is not what these tests exercise; present so the fake satisfies the
-// controller's interface.
 func (f *fakeChatService) Skills(context.Context, domain.SessionID) ([]ports.ChatSkill, error) {
 	return nil, nil
 }
@@ -245,7 +235,6 @@ func TestRollbackRouteReportsWhatWasDiscarded(t *testing.T) {
 	if svc.gotTurnID != "turn-7" {
 		t.Errorf("turn id = %q, want turn-7", svc.gotTurnID)
 	}
-	// Mobile and older desktops post no body and tell their users files stay put.
 	if svc.gotFilePlanID != "" {
 		t.Error("a rollback without a body restored files")
 	}
@@ -268,7 +257,6 @@ func TestRollbackRouteRestoresFilesOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("status = %d, plan = %q; want 200 restoring plan-1; body=%s", status, svc.gotFilePlanID, body)
 	}
 
-	// A plan id alone does not ask for files back.
 	svc.gotFilePlanID = ""
 	body, status, _ = doRequest(t, srv, "POST",
 		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", `{"planId":"plan-1"}`)
@@ -276,7 +264,6 @@ func TestRollbackRouteRestoresFilesOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("status = %d, plan = %q; want 200 without files; body=%s", status, svc.gotFilePlanID, body)
 	}
 
-	// Files are restored only against a list the user was shown.
 	body, status, _ = doRequest(t, srv, "POST",
 		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", `{"restoreFiles":true}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "CHAT_ROLLBACK_PLAN_REQUIRED")
@@ -507,9 +494,6 @@ func TestActivateConversationBranchRouteRejectsPreviousAgentProvider(t *testing.
 	assertErrorCode(t, body, status, http.StatusConflict, "CHAT_BRANCH_PROVIDER_MISMATCH")
 }
 
-// Every refusal maps to a stable code and a status the client can branch on. A 500
-// anywhere in this table would mean AO reported its own bug for someone else's
-// ordinary situation.
 func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -525,8 +509,6 @@ func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 		{"files not restorable", fmt.Errorf("%w: no snapshot", chatsvc.ErrFilesNotRestorable), http.StatusConflict, "CHAT_ROLLBACK_FILES_UNAVAILABLE"},
 		{"files changed since the preview", chatsvc.ErrFilesChanged, http.StatusConflict, "CHAT_ROLLBACK_FILES_CHANGED"},
 		{"provider refused", fmt.Errorf("%w: no", chatsvc.ErrProviderRefused), http.StatusConflict, "CHAT_PROVIDER_REFUSED"},
-		// A steer into a lost session is a refusal too, but the client needs the
-		// resume guidance rather than "the conversation is fine".
 		{"refusal for a lost provider session", fmt.Errorf("%w: %w", chatsvc.ErrProviderRefused,
 			fmt.Errorf("%w: Session not found", ports.ErrChatProviderSessionLost)), http.StatusConflict, "CHAT_PROVIDER_SESSION_LOST"},
 		{"no controller", chatsvc.ErrNoController, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
@@ -545,9 +527,6 @@ func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 	}
 }
 
-// 202, not 200: the provider confirms the name and then reports it back, and that
-// report is what moves the session label. Claiming 200 would promise a change that
-// has not happened.
 func TestSetTitleRouteAcceptsAndEchoesTheNormalizedTitle(t *testing.T) {
 	svc := &fakeChatService{title: "Fix OAuth Return URL Loss"}
 	srv := newChatTestServer(t, svc)
@@ -595,8 +574,6 @@ func TestSetTitleRouteRefusesTheProjectOrchestrator(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusBadRequest, "ORCHESTRATOR_RENAME_UNSUPPORTED")
 }
 
-// Without a chat driver wired the routes must say "not implemented" rather than
-// panicking on a nil service.
 func TestConversationHistoryRoutesStubWithoutAService(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(

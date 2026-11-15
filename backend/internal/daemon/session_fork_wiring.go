@@ -19,30 +19,21 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// forkSeedMaxAge is how long a fork's file snapshot may outlive its spawn
-// before the cleanup pass treats it as a crash leftover.
 const forkSeedMaxAge = time.Hour
 
-// prMovedNoticeBudget bounds telling a session that one of its PRs moved.
 const prMovedNoticeBudget = 2 * time.Minute
 
-// turnArtifactSnapshotBudget bounds keeping a session's artifacts as a turn
-// starts; a turn never waits longer for it.
 const turnArtifactSnapshotBudget = 3 * time.Second
 
 type terminalForkSources interface {
 	TerminalForkSource(ctx context.Context, rec domain.SessionRecord, turnID string) (sessionfork.Source, error)
-	// ForkTerminalOutput is the end of a terminal session's screen, or "".
 	ForkTerminalOutput(ctx context.Context, rec domain.SessionRecord) string
 }
 
-// forkHandoffNotes builds the text copy of a conversation a text-handoff
-// fork starts with.
 type forkHandoffNotes interface {
 	ForkHandoffNote(ctx context.Context, source domain.SessionRecord, target ports.ForkTarget, terminalOutput string, upTo time.Time) (string, error)
 }
 
-// forkSources routes a fork to the Chat service or the terminal manager.
 type forkSources struct {
 	chat     *chatsvc.Service
 	terminal terminalForkSources
@@ -62,10 +53,6 @@ func (f forkSources) ForkSource(ctx context.Context, rec domain.SessionRecord, t
 	}
 	switch source.Refusal {
 	case sessionfork.CodeAgentUnsupported, sessionfork.CodeNativeMissing:
-		// The agent can't copy its own conversation: a fresh agent gets AO's
-		// record of it and the end of the terminal screen, as text. Both are
-		// taken when the fork captures the files, so they match them even if
-		// the original moves on while the fork is set up.
 		original := rec
 		var (
 			frozen bool
@@ -79,7 +66,6 @@ func (f forkSources) ForkSource(ctx context.Context, rec domain.SessionRecord, t
 			},
 			Handoff: func(ctx context.Context, target ports.ForkTarget) (string, error) {
 				if !frozen {
-					// A retried fork that was planned without capturing.
 					screen, upTo = f.terminal.ForkTerminalOutput(ctx, original), time.Now()
 				}
 				return f.notes.ForkHandoffNote(ctx, original, target, screen, upTo)
@@ -111,8 +97,6 @@ func (forkSeeds) SnapshotHead(ctx context.Context, workspace, ref string) (strin
 	return head, err
 }
 
-// forkSpawner spawns through the session service, so a repeated client
-// request id returns the session the first click made.
 type forkSpawner struct{ svc *sessionsvc.Service }
 
 func (f forkSpawner) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
@@ -120,7 +104,6 @@ func (f forkSpawner) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.S
 	return sess.SessionRecord, promptBytes, systemBytes, err
 }
 
-// wireSessionFork builds the session fork service and its hooks.
 func wireSessionFork(store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr sessionLifecycle, chat *chatsvc.Service, drivers ports.ChatDriverRegistry, accounts sessionfork.Accounts, artifacts *artifactversions.Capturer, messenger ports.AgentMessenger, log *slog.Logger) *sessionfork.Service {
 	const enabled = true
 	terminal, _ := mgr.(terminalForkSources)
@@ -135,7 +118,6 @@ func wireSessionFork(store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr se
 	chatsvc.EnableForkSnapshots(true)
 	if artifacts != nil {
 		chatsvc.SetTurnArtifactSnapshot(func(ctx context.Context, id domain.SessionID, turnIDs []string) {
-			// Bounded: it runs as the turn starts.
 			ctx, cancel := context.WithTimeout(ctx, turnArtifactSnapshotBudget)
 			defer cancel()
 			rec, found, err := store.GetSession(ctx, id)
@@ -153,11 +135,7 @@ func wireSessionFork(store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr se
 		wired.SetForkRetrier(svc.RetrySpawnFork)
 	}
 	sessionSvc.SetPRMovedNotifier(func(ctx context.Context, from, to domain.SessionID, pr domain.PullRequest) {
-		// Told in the background: waking an agent can take a while, and the
-		// claim that moved the PR must not wait for it.
 		go func() {
-			// Bounded, so an agent that never answers can't hold its chat's
-			// send lock; long enough to start an agent that isn't running.
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), prMovedNoticeBudget)
 			defer cancel()
 			title := string(to)
@@ -181,9 +159,6 @@ func wireSessionFork(store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr se
 	return svc
 }
 
-// tellPRMoved tells a session that one of its PRs moved. A Chat session whose
-// agent isn't running gets the notice queued for when it wakes; only one
-// whose agent never started, which has no queue, is started to be told.
 func tellPRMoved(ctx context.Context, send, queue func(context.Context, domain.SessionID, string) error, resume func(context.Context, domain.SessionID) error, id domain.SessionID, message string) error {
 	err := send(ctx, id, message)
 	if !errors.Is(err, chatsvc.ErrNoController) {
@@ -224,7 +199,6 @@ func claudeWorkspaceForker(drivers ports.ChatDriverRegistry) (sessionmanager.Cla
 	return fork, cleanup
 }
 
-// reapForkSeeds removes fork file snapshots a crash left behind.
 func reapForkSeeds(ctx context.Context, store *sqlite.Store, log *slog.Logger) {
 	projects, err := store.ListProjects(ctx)
 	if err != nil {

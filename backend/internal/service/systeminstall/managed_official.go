@@ -13,35 +13,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// officialManagedRecipe runs a vendor's own installer into one AO release
-// directory, pinned to the release the update picked, so the update never
-// touches the files a running session uses. Each recipe is read from the
-// vendor's script: where it installs, how it takes a version, and what keeps
-// it from editing the user's shell files or their own copy.
 type officialManagedRecipe struct {
-	// binRel is where the installer puts the CLI inside the release directory.
-	binRel string
-	// env and args configure one install into dir; pin is a bare version
-	// ("1.2.3"), or "" for the installer's latest.
-	env  func(dir, pin string) []string
-	args func(dir, pin string) []string
-	// command, when set, replaces the vendor's script: AO downloads the
-	// release itself because the script cannot run beside live sessions.
+	binRel  string
+	env     func(dir, pin string) []string
+	args    func(dir, pin string) []string
 	command func(dir, pin, goos, goarch string) ([]string, error)
 }
 
-// managedInstallerPath is the PATH an official installer runs with: system
-// tools only. Several installers look for an existing copy on PATH (to skip
-// an install they think is current, or to migrate or replace it), which must
-// never be the user's own copy or AO's current release.
 const managedInstallerPath = "/usr/bin:/bin:/usr/sbin:/sbin"
 
-// officialInstallerEnv is the environment every recipe shares: a private HOME
-// inside the release, so any profile or config an installer writes lands
-// there instead of in the user's files, a PATH of system tools, and a plain
-// sh as SHELL. Installers pick the profile they append PATH to from SHELL;
-// fx, for one, writes $HOME/.config/fish/config.fish for fish users without
-// creating its folder, and fails under set -e.
 func officialInstallerEnv(dir string, extra ...string) []string {
 	return append([]string{"HOME=" + filepath.Join(dir, ".install-home"), "PATH=" + managedInstallerPath, "SHELL=/bin/sh"}, extra...)
 }
@@ -56,8 +36,6 @@ func withV(pin string) string {
 func noArgs(string, string) []string { return nil }
 
 var officialManagedRecipes = map[Target]officialManagedRecipe{
-	// opencode.ai/install installs to $HOME/.opencode/bin, takes VERSION, and
-	// skips the install when the opencode on PATH already reports it.
 	TargetOpencode: {
 		binRel: filepath.Join(".install-home", ".opencode", "bin", "opencode"),
 		env: func(dir, pin string) []string {
@@ -65,8 +43,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: func(string, string) []string { return []string{"--no-modify-path"} },
 	},
-	// Kimi installs to $KIMI_INSTALL_DIR/bin, migrates other kimi executables
-	// it finds on PATH, and writes a region marker to $KIMI_CODE_HOME.
 	TargetKimi: {
 		binRel: filepath.Join("bin", "kimi"),
 		env: func(dir, pin string) []string {
@@ -82,8 +58,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: noArgs,
 	},
-	// Memcode takes a release tag, and only uses sudo or a terminal when it
-	// has one, which the daemon does not.
 	TargetMemcode: {
 		binRel: filepath.Join("bin", "memcode"),
 		env: func(dir, pin string) []string {
@@ -95,7 +69,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: noArgs,
 	},
-	// fx takes its release tag as the first argument.
 	TargetFX: {
 		binRel: filepath.Join("bin", "fx"),
 		env: func(dir, _ string) []string {
@@ -108,7 +81,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 			return []string{withV(pin)}
 		},
 	},
-	// OMP builds from source with bun unless told to install its binary.
 	TargetOMP: {
 		binRel: filepath.Join("bin", "omp"),
 		env: func(dir, _ string) []string {
@@ -121,9 +93,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 			return []string{"--binary", "--ref", withV(pin)}
 		},
 	},
-	// Qwen's standalone install swaps and deletes its whole library folder
-	// in place, so a running session's later imports would load the new
-	// release; a release of its own keeps them on the old one.
 	TargetQwen: {
 		binRel: filepath.Join("bin", "qwen"),
 		env: func(dir, pin string) []string {
@@ -140,9 +109,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: noArgs,
 	},
-	// Codex keeps each release in its own folder under $CODEX_HOME; a
-	// private CODEX_HOME keeps the user's config, auth and their own
-	// installs out of it.
 	TargetCodex: {
 		binRel: filepath.Join("bin", "codex"),
 		env: func(dir, pin string) []string {
@@ -158,8 +124,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: noArgs,
 	},
-	// OpenCode 2 installs the same opencode binary (plus an opencode2 shim)
-	// to $HOME/.opencode/bin; its launcher stays distinct from version 1's.
 	TargetOpencodeV2: {
 		binRel: filepath.Join(".install-home", ".opencode", "bin", "opencode"),
 		env: func(dir, pin string) []string {
@@ -167,8 +131,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: func(string, string) []string { return []string{"--no-modify-path"} },
 	},
-	// Amp installs to $AMP_HOME/bin and always links itself into the HOME's
-	// ~/.local/bin, which the private HOME keeps away from the user's.
 	TargetAmp: {
 		binRel: filepath.Join("bin", "amp"),
 		env: func(dir, pin string) []string {
@@ -176,8 +138,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: noArgs,
 	},
-	// Autohand also installs zit, a computer-control component and a first
-	// run, and replaces any agent command it can write on PATH.
 	TargetAutohand: {
 		binRel: filepath.Join("bin", "autohand"),
 		env: func(dir, pin string) []string {
@@ -195,8 +155,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 		},
 		args: noArgs,
 	},
-	// Agy installs its latest release only; the installed version is still
-	// checked against the release the update picked.
 	TargetAgy: {
 		binRel: filepath.Join("bin", "agy"),
 		env:    func(dir, _ string) []string { return officialInstallerEnv(dir) },
@@ -204,8 +162,6 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 			return []string{"--dir", filepath.Join(dir, "bin")}
 		},
 	},
-	// Droid's script kills every running droid before it installs, so AO
-	// downloads the release and its checksum from the same place itself.
 	TargetDroid: {
 		binRel:  filepath.Join("bin", "droid"),
 		env:     func(dir, _ string) []string { return officialInstallerEnv(dir) },
@@ -214,33 +170,23 @@ var officialManagedRecipes = map[Target]officialManagedRecipe{
 	},
 }
 
-// officialManagedCask is a Homebrew cask whose upgrade deletes files a
-// running session can still load. AO updates it beside running sessions with
-// the vendor's installer instead, into a release of its own; the cask itself
-// is left as it is.
 type officialManagedCask struct {
 	cask, url, shell string
 }
 
-// codexInstallScriptURL is Codex's official macOS and Linux installer.
 const codexInstallScriptURL = "https://chatgpt.com/codex/install.sh"
 
 const ompInstallScriptURL = "https://omp.sh/install"
 
-// officialManagedCasks: Codex's cask also ships codex-resources, which an
-// upgrade removes while sessions may still read it.
 var officialManagedCasks = map[Target]officialManagedCask{
 	TargetCodex: {cask: "codex", url: codexInstallScriptURL, shell: "sh"},
 }
 
-// officialManagedCaskFor returns the cask entry when plan upgrades it.
 func officialManagedCaskFor(goos string, plan Plan) (officialManagedCask, bool) {
 	entry, ok := officialManagedCasks[plan.Target]
 	return entry, ok && goos == "darwin" && plan.Method == "homebrew" && plan.PackageCask && plan.Package == entry.cask
 }
 
-// officialManagedRecipeFor returns the recipe that installs plan's official
-// installer as a managed release, on the platforms it was read for.
 func (s *Service) officialManagedRecipeFor(plan Plan) (officialManagedRecipe, bool) {
 	_, cask := officialManagedCaskFor(s.goos, plan)
 	if plan.Method != "official-installer" && !cask || plan.Script == nil || (s.goos != "darwin" && s.goos != "linux") {
@@ -253,9 +199,6 @@ func (s *Service) officialManagedRecipeFor(plan Plan) (officialManagedRecipe, bo
 	return recipe, true
 }
 
-// officialManagedScript returns the vendor installer that installs plan as a
-// release of AO's own: installScript, plan's official installer, or for a
-// cask in officialManagedCasks the installer AO runs instead of the cask.
 func (s requestPlanner) officialManagedScript(plan Plan, installScript *ports.InstallScriptCommand) (*ports.InstallScriptCommand, bool) {
 	if s.managedRoot == "" {
 		return nil, false
@@ -274,10 +217,6 @@ func (s requestPlanner) officialManagedScript(plan Plan, installScript *ports.In
 	return script, true
 }
 
-// officialManagedUpdate reports whether one of plans, a target's install
-// plans, is an official installer AO runs into a release of its own. Such an
-// update maintains the copy sessions run wherever the vendor's installer put
-// the user's copy, since it never writes there.
 func (s *Service) officialManagedUpdate(plans []Plan) bool {
 	if s.managedRoot == "" {
 		return false
@@ -293,11 +232,7 @@ func (s *Service) officialManagedUpdate(plans []Plan) bool {
 	return false
 }
 
-// runOfficialManagedInstall installs one release into dir: the vendor's
-// installer script, or the recipe's own download.
 func (s *Service) runOfficialManagedInstall(ctx context.Context, plan Plan, recipe officialManagedRecipe, pin, dir string, env []string, out io.Writer) error {
-	// The private HOME must exist: installers such as Codex's and fx's append
-	// their PATH line to a profile in it under set -e, and fail without it.
 	if err := os.MkdirAll(filepath.Join(dir, ".install-home"), 0o700); err != nil {
 		return fmt.Errorf("create installer home: %w", err)
 	}
@@ -315,9 +250,6 @@ func (s *Service) runOfficialManagedInstall(ctx context.Context, plan Plan, reci
 	command := *plan.Script
 	command.Env = append(append(append([]string(nil), env...), command.Env...), recipeEnv...)
 	command.Args = recipe.args(dir, pin)
-	// Only the recipe's environment reaches the installer: a variable the
-	// user exported, such as KIMI_CODE_HOME or OPENCODE_INSTALL_DIR, would
-	// otherwise send the install into the user's own files.
 	command.Isolated = true
 	_, _ = fmt.Fprintf(out, "Installing %s with its official installer into %s\n", plan.Target, dir)
 	result, err := s.installScripts.RunInstallScript(ctx, command, out, out)
@@ -327,9 +259,6 @@ func (s *Service) runOfficialManagedInstall(ctx context.Context, plan Plan, reci
 	return err
 }
 
-// droidDownloadScript fetches one Droid release and its published checksum,
-// verifies it, and moves it into place: what Droid's installer does, without
-// killing the droids that are running.
 const droidDownloadScript = `set -eu
 url="$1"; sum_url="$2"; dest="$3"
 mkdir -p "$(dirname "$dest")"
@@ -350,9 +279,6 @@ chmod 755 "$tmp"
 mv "$tmp" "$dest"
 `
 
-// droidDownloadCommand downloads Droid's release from downloads.factory.ai,
-// where its installer gets it. Intel Macs and PCs get the baseline build,
-// which runs whether or not the CPU has AVX2.
 func droidDownloadCommand(dir, pin, goos, goarch string) ([]string, error) {
 	version := strings.TrimPrefix(pin, "v")
 	if version == "" {

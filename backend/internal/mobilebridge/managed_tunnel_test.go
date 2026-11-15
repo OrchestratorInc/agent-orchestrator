@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// recordingRun stands in for TunnelRunner.Run: it records the ports it was
-// launched for and blocks until its context is cancelled, exactly as the real
-// supervisor loop does.
 type recordingRun struct {
 	mu     sync.Mutex
 	ports  []int
@@ -46,9 +43,6 @@ func settleFor(t *testing.T, cond func() bool) {
 }
 
 func TestManagedTunnelStartIsIdempotent(t *testing.T) {
-	// Status polling and repeated enables both call Start. Relaunching the
-	// connector each time would rotate the hostname continuously and never let
-	// one settle long enough to be advertisable.
 	rec := &recordingRun{}
 	m := NewManagedTunnel(ManagedTunnelDeps{Run: rec.run})
 	defer m.Stop()
@@ -69,8 +63,6 @@ func TestManagedTunnelStartIsIdempotent(t *testing.T) {
 }
 
 func TestManagedTunnelRestartsWhenThePortChanges(t *testing.T) {
-	// The LAN listener can come back on a different (ephemeral) port. A
-	// connector still aimed at the old one tunnels nothing.
 	rec := &recordingRun{}
 	m := NewManagedTunnel(ManagedTunnelDeps{Run: rec.run})
 	defer m.Stop()
@@ -114,28 +106,17 @@ func TestManagedTunnelStopBeforeStartIsHarmless(t *testing.T) {
 	}
 }
 
-// Disable runs inside an HTTP handler with a deadline. A connector can take
-// seconds to wind down — killing the process, draining its stderr, reaping it —
-// and waiting for that blew the request budget: "context deadline exceeded
-// (MOBILE_DISABLE)" after exactly 5s, with the bridge left half-disabled.
-//
-// Stop must therefore return as soon as the connector is cancelled and the
-// endpoint withdrawn, and let the goroutine finish on its own. The process is
-// still killed (exec.CommandContext owns that), and the pid file plus the
-// startup reaper cover a daemon that dies before it finishes.
 func TestManagedTunnelStopDoesNotWaitForASlowConnector(t *testing.T) {
 	released := make(chan struct{})
 	m := NewManagedTunnel(ManagedTunnelDeps{
 		Run: func(ctx context.Context, _ int, _ *TunnelRuntime) {
 			<-ctx.Done()
-			<-released // still winding down long after cancellation
+			<-released
 		},
 	})
 	m.Start(3011)
 	settleFor(t, func() bool { return m.Status().Running || true })
 
-	// Released from another goroutine so a regression blocks the test rather
-	// than deadlocking it.
 	go func() {
 		time.Sleep(2 * time.Second)
 		close(released)
@@ -150,9 +131,6 @@ func TestManagedTunnelStopDoesNotWaitForASlowConnector(t *testing.T) {
 	}
 }
 
-// Returning promptly must not mean returning while still advertising: the
-// endpoint has to be withdrawn synchronously, or a status read immediately
-// after Disable would still hand out a dead address.
 func TestManagedTunnelStopWithdrawsTheEndpointBeforeReturning(t *testing.T) {
 	released := make(chan struct{})
 	defer close(released)
@@ -176,8 +154,6 @@ func TestManagedTunnelStopWithdrawsTheEndpointBeforeReturning(t *testing.T) {
 	}
 }
 
-// A nudge sent before a new run starts tells it nothing: the run asks AO
-// Cloud first anyway, and a stale nudge would make it ask twice.
 func TestManagedTunnelStartDropsAnEarlierNudge(t *testing.T) {
 	m := NewManagedTunnel(ManagedTunnelDeps{Run: func(ctx context.Context, _ int, _ *TunnelRuntime) { <-ctx.Done() }})
 	defer m.Stop()
@@ -186,8 +162,6 @@ func TestManagedTunnelStartDropsAnEarlierNudge(t *testing.T) {
 	if len(m.nudge) != 0 {
 		t.Fatal("a new run inherited an earlier nudge")
 	}
-	// A run replaced on a port change, still unwinding, takes no nudge meant
-	// for its replacement.
 	old := m.nudge
 	m.Start(4322)
 	m.Nudge()

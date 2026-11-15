@@ -9,25 +9,18 @@ import (
 	"strings"
 )
 
-// ClaudeSettings contains the effective inputs used for Claude discovery.
-// It can contain credentials: keep it in memory and never log or serialize it.
 type ClaudeSettings struct {
 	Env                      map[string]string `json:"-"`
 	Model                    string            `json:"-"`
 	WorkspaceProviderRouting bool              `json:"-"`
 }
 
-// Only these environment keys may be read from a Claude settings file. Other
-// configuration, including executable helpers, is deliberately not interpreted.
 var claudeSettingsEnvKeys = []string{
 	"ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
 	"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
 	"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
 }
 
-// These additional provider inputs are accepted only from the launch/process
-// environment, never from settings files. Keeping them here gives credentials,
-// model defaults, command context, and catalog fingerprints one set of inputs.
 var claudeProviderEnvKeys = []string{
 	"CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
 	"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE",
@@ -38,9 +31,6 @@ var claudeProviderEnvKeys = []string{
 	"GOOGLE_OAUTH_ACCESS_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG",
 }
 
-// ResolveClaudeSettings merges user < project < project-local settings, then
-// explicit project/session environment. Process environment is the fallback.
-// Missing, malformed, or oversized files are ignored without exposing contents.
 func ResolveClaudeSettings(ctx context.Context, workingDir string, explicitEnv map[string]string, opts ResolveOptions) ClaudeSettings {
 	resolved := ClaudeSettings{Env: make(map[string]string)}
 	for _, keys := range [][]string{claudeSettingsEnvKeys, claudeProviderEnvKeys} {
@@ -71,10 +61,6 @@ func ResolveClaudeSettings(ctx context.Context, workingDir string, explicitEnv m
 		settings := readClaudeSettings(ctx, path)
 		workspaceSettings := pathWithinClaudeWorkspace(path, workingDir)
 		if workspaceSettings && strings.TrimSpace(settings.Env["ANTHROPIC_BASE_URL"]) != "" {
-			// A repository may choose its own gateway, but it must not thereby
-			// redirect a credential inherited from the daemon or the user's global
-			// Claude configuration. Empty entries deliberately shadow those
-			// ambient values; explicit project/session env is applied below.
 			resolved.WorkspaceProviderRouting = true
 			for _, key := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
 				resolved.Env[key] = ""

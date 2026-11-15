@@ -14,13 +14,9 @@ import (
 
 const notificationReplayBurst = 4096
 
-// fakeAppServer stands in for the `codex app-server` process over in-memory
-// pipes, so the transport is tested without spawning anything.
 type fakeAppServer struct {
-	t *testing.T
-	// requests receives every client->server request the fake saw.
+	t        *testing.T
 	requests chan frame
-	// toClient is written by the test to push frames at the client.
 	toClient io.WriteCloser
 }
 
@@ -36,7 +32,6 @@ func newFakeAppServer(t *testing.T, onReq serverRequestHandler) (*conn, *fakeApp
 		toClient: serverWrites,
 	}
 
-	// Drain what the client sends so writes never block, recording each frame.
 	go func() {
 		br := bufio.NewReader(serverReads)
 		for {
@@ -65,7 +60,6 @@ func newFakeAppServer(t *testing.T, onReq serverRequestHandler) (*conn, *fakeApp
 	return c, fake
 }
 
-// push writes a raw frame to the client.
 func (f *fakeAppServer) push(raw string) {
 	f.t.Helper()
 	if _, err := io.WriteString(f.toClient, raw+"\n"); err != nil {
@@ -73,7 +67,6 @@ func (f *fakeAppServer) push(raw string) {
 	}
 }
 
-// nextRequest returns the next client->server request, failing on timeout.
 func (f *fakeAppServer) nextRequest() frame {
 	f.t.Helper()
 	select {
@@ -137,8 +130,6 @@ func TestRequestSurfacesServerError(t *testing.T) {
 	}
 }
 
-// A response that never arrives must not pin the caller forever, and the late
-// response must not corrupt anything.
 func TestRequestHonorsContextAndToleratesLateResponse(t *testing.T) {
 	c, fake := newFakeAppServer(t, rejectAllServerRequests)
 
@@ -150,11 +141,9 @@ func TestRequestHonorsContextAndToleratesLateResponse(t *testing.T) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 
-	// The request was still sent; answering it now must be discarded quietly.
 	req := fake.nextRequest()
 	fake.push(`{"id":` + string(*req.ID) + `,"result":{}}`)
 
-	// A subsequent request still works, proving the pending map is clean.
 	done := make(chan error, 1)
 	go func() { done <- c.request(context.Background(), "thread/read", nil, nil) }()
 	next := fake.nextRequest()
@@ -237,8 +226,6 @@ func TestNotificationRelayAppliesBackpressureAtByteLimit(t *testing.T) {
 	}
 }
 
-// A frame this build cannot parse must be skipped, not fatal: the provider is
-// free to add shapes we do not model yet.
 func TestUnparseableFrameDoesNotKillConnection(t *testing.T) {
 	c, fake := newFakeAppServer(t, rejectAllServerRequests)
 
@@ -255,8 +242,6 @@ func TestUnparseableFrameDoesNotKillConnection(t *testing.T) {
 	}
 }
 
-// Approvals arrive as server->client requests and the provider blocks on them, so
-// the handler's answer must get written back.
 func TestServerRequestIsAnswered(t *testing.T) {
 	handled := make(chan serverRequest, 1)
 	c, fake := newFakeAppServer(t, func(_ context.Context, req serverRequest) (any, error) {
@@ -291,8 +276,6 @@ func TestServerRequestIsAnswered(t *testing.T) {
 	_ = c
 }
 
-// A handler that refuses must send a JSON-RPC error rather than a fabricated
-// decision — the provider must never read a refusal as an approval.
 func TestServerRequestHandlerErrorBecomesRPCError(t *testing.T) {
 	c, fake := newFakeAppServer(t, func(context.Context, serverRequest) (any, error) {
 		return nil, errors.New("no controller for session")
@@ -310,7 +293,6 @@ func TestServerRequestHandlerErrorBecomesRPCError(t *testing.T) {
 	_ = c
 }
 
-// When the process dies, an in-flight request must fail fast instead of hanging.
 func TestProcessExitUnblocksPendingRequest(t *testing.T) {
 	c, fake := newFakeAppServer(t, rejectAllServerRequests)
 

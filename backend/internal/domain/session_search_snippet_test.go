@@ -86,8 +86,6 @@ func TestParseSessionSearchQueryCarriesHighlightTerms(t *testing.T) {
 		}
 		got = append(got, label)
 	}
-	// The phrase marks each of its tokens (its stopwords too: a phrase means
-	// them); plain words lose their stopwords; the last word is a prefix.
 	if strings.Join(got, ",") != "the,flaky,login,fix,tes*" {
 		t.Fatalf("highlight terms = %v", got)
 	}

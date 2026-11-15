@@ -1,14 +1,3 @@
-// Runs parseUnifiedDiff (parsing + the intra-line LCS highlighting) off the
-// render thread for large diffs. See useParsedDiff, which only routes here
-// above a size threshold — small diffs stay on the main thread since a
-// worker round-trip costs more than the parse itself for those.
-//
-// The project's tsconfig only loads the "DOM" lib (no "WebWorker"), since
-// this is the one file in the renderer that runs in a worker context rather
-// than a window — adding "WebWorker" globally would mix incompatible global
-// types (self/postMessage disagree between the two libs) across every other
-// file. Casting the worker's global scope through `Worker` sidesteps that
-// without touching the shared tsconfig.
 import { parseUnifiedDiff, type DiffRow } from "../lib/diff-parser";
 
 export type DiffParserRequest = {

@@ -166,9 +166,6 @@ func TestManagedV2PluginReportsLifecycleInOrderAndIgnoresHookFailures(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This test exercises lifecycle ordering through a Node-based fake ao, whose
-	// cold startup can exceed the production bound under loaded CI. The dedicated
-	// timeout test below runs the unmodified source.
 	source = []byte(strings.Replace(string(source), "const HOOK_TIMEOUT_MS = 1_250", "const HOOK_TIMEOUT_MS = 10_000", 1))
 	writeV2TestFile(t, modulePath, string(source), 0o600)
 	capture := filepath.Join(fixture, "calls.jsonl")
@@ -222,8 +219,6 @@ process.stdin.on("end", () => {
 }
 
 func TestManagedV2PluginFiltersChildSessionsByParentID(t *testing.T) {
-	// Subagents arrive on the same bus; the embedded plugin must track them from
-	// session.created(parentID) and never report a child id as the identity.
 	for _, marker := range []string{"parentID", "childSessions", "isChildSession", "resolveSessionID"} {
 		if !strings.Contains(v2PluginSource, marker) {
 			t.Fatalf("managed v2 plugin does not filter child sessions (%q missing)", marker)
@@ -275,9 +270,6 @@ process.stdin.on("end", () => {
 	}
 
 	calls := readV2HookCalls(t, capture)
-	// Child execution/tool activity folds onto the parent as plain active; child
-	// permission dialogs surface on the parent; child turn boundaries are
-	// dropped. The parent turn still emits its own start/activity/stop.
 	wantEvents := []string{"session-start", "active", "active", "permission-blocked", "permission-resolved", "active", "active", "stop"}
 	if len(calls) != len(wantEvents) {
 		t.Fatalf("calls = %#v, want %d", calls, len(wantEvents))
@@ -297,11 +289,9 @@ process.stdin.on("end", () => {
 			t.Fatalf("call %d session_id = %#v, want the parent id", i, payloads[i]["session_id"])
 		}
 	}
-	// A child tool must not donate its tool identity to the parent's flight.
 	if got, ok := payloads[2]["tool_name"]; ok && got != "" {
 		t.Fatalf("child tool active carried tool_name %#v, want none", got)
 	}
-	// Parent tools keep the identity the step timeline needs.
 	if payloads[6]["tool_name"] != "read" || payloads[6]["tool_use_id"] != "tool_parent" {
 		t.Fatalf("parent tool payload = %#v, want read/tool_parent", payloads[6])
 	}

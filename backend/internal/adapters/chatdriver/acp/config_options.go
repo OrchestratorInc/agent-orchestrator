@@ -13,9 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ListConfigOptions returns the live catalog the ACP agent last advertised.
-// A copy leaves the conversation as the only writer while HTTP reads race with
-// provider notifications and model-dependent catalog rebuilds.
 func (c *conversation) ListConfigOptions(ctx context.Context) ([]ports.ChatConfigOption, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -28,10 +25,6 @@ func (c *conversation) ListConfigOptions(ctx context.Context) ([]ports.ChatConfi
 	return cloneConfigOptions(c.configOptions), nil
 }
 
-// SetConfigOption applies exactly the type the provider advertised and replaces
-// the whole catalog from the response. A model switch can change the effort and
-// fast-mode options, so updating only the selected row would immediately make the
-// rest of the UI stale.
 func (c *conversation) SetConfigOption(
 	ctx context.Context,
 	id string,
@@ -43,8 +36,6 @@ func (c *conversation) SetConfigOption(
 	c.mu.Lock()
 	sessionID := c.sessionID
 	closed := c.closed
-	// session/set_model returns nothing, while a config option change returns the
-	// new model's settings, such as Cursor's thinking and fast mode.
 	legacyModel := c.legacyModel && !c.modelConfigOption
 	legacyMode := c.legacyMode
 	var option *ports.ChatConfigOption
@@ -125,16 +116,6 @@ func (c *conversation) SetConfigOption(
 	if err != nil {
 		return nil, fmt.Errorf("set ACP session config option %q: %w", id, err)
 	}
-	// ACP marks the response's configOptions required and defines it as the full
-	// rebuilt catalog, but some agents accept the change and answer without it.
-	// Replacing wholesale on that emptied the catalog and made the entire
-	// turn-settings picker vanish mid-session. Returning the pre-change catalog
-	// instead would be just as wrong in the other direction — the agent applied
-	// the value, so a UI that snaps back to the old one is lying about state the
-	// provider already changed. Record the accepted value against the catalog we
-	// hold and let a later ConfigOptionUpdate deliver any rebuild. Callers that
-	// specifically require an authoritative provider-reported post-change catalog
-	// (such as safety guards during handoff) receive nil so they can fail closed.
 	if len(resp.ConfigOptions) == 0 {
 		c.applyAcceptedConfigOption(id, value)
 		return nil, nil
@@ -143,10 +124,6 @@ func (c *conversation) SetConfigOption(
 	return c.ListConfigOptions(ctx)
 }
 
-// replaceConfigOptions installs an authoritative catalog. Callers reach this
-// with a replacement the agent stated outright — the session/update
-// notification and session setup — so an empty list means the session really
-// has no options and is applied as given.
 func (c *conversation) replaceConfigOptions(options []acpsdk.SessionConfigOption) {
 	if c.suppressSessionModes {
 		options = withoutModeOptions(options)
@@ -160,10 +137,6 @@ func (c *conversation) replaceConfigOptions(options []acpsdk.SessionConfigOption
 	}
 }
 
-// applyAcceptedConfigOption records a value the agent accepted but did not echo
-// a catalog for. Only the selected option moves; anything the change should have
-// rebuilt stays as it was until the agent says otherwise, which is the most this
-// can honestly claim from a response that carried no catalog.
 func (c *conversation) applyAcceptedConfigOption(id string, value ports.ChatConfigOptionValue) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -184,9 +157,6 @@ func (c *conversation) applyAcceptedConfigOption(id string, value ports.ChatConf
 	}
 }
 
-// configOptionOffers reports whether the live provider-owned catalog offers a
-// select value. known=false means the provider did not advertise that option,
-// so callers must preserve the existing compatibility path instead of guessing.
 func (c *conversation) configOptionOffers(id, value string) (offered, known bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -200,7 +170,6 @@ func (c *conversation) configOptionOffers(id, value string) (offered, known bool
 	return false, false
 }
 
-// configOptionValueNamed is the value of the choice shown under name, or "".
 func (c *conversation) configOptionValueNamed(id, name string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -217,15 +186,12 @@ func (c *conversation) configOptionValueNamed(id, name string) string {
 	return ""
 }
 
-// configOptionCurrent is a select option's current value, or "" when the
-// session does not list it.
 func (c *conversation) configOptionCurrent(id string) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.configOptionCurrentLocked(id)
 }
 
-// configOptionCurrentLocked is configOptionCurrent for a caller holding c.mu.
 func (c *conversation) configOptionCurrentLocked(id string) string {
 	for i := range c.configOptions {
 		if c.configOptions[i].ID == id && c.configOptions[i].Type == ports.ChatConfigOptionSelect {
@@ -292,8 +258,6 @@ func normalizeSessionOptions(
 			Current: ports.ChatConfigOptionValue{Select: models.CurrentModelID}, Choices: choices,
 		})
 	}
-	// pi-acp sends its thinking levels both as a config option and as legacy
-	// session modes. Shown as a mode, they would sit where permissions go.
 	if modes != nil && !seen["mode"] && !modesRepeatAnOption(out, modes) {
 		choices := make([]ports.ChatConfigOptionChoice, 0, len(modes.AvailableModes))
 		for _, mode := range modes.AvailableModes {
@@ -309,8 +273,6 @@ func normalizeSessionOptions(
 	return out
 }
 
-// modesRepeatAnOption reports legacy session modes whose ids are exactly the
-// choices of a config option the agent already sent.
 func modesRepeatAnOption(options []ports.ChatConfigOption, modes *acpsdk.SessionModeState) bool {
 	return len(modes.AvailableModes) > 0 && slices.ContainsFunc(options, func(option ports.ChatConfigOption) bool {
 		return len(option.Choices) == len(modes.AvailableModes) && !slices.ContainsFunc(modes.AvailableModes, func(mode acpsdk.SessionMode) bool {
@@ -376,12 +338,6 @@ func choiceOffered(choices []ports.ChatConfigOptionChoice, value string) bool {
 	return false
 }
 
-// resolveLegacyModelChoice translates a CLI-facing model alias into the exact
-// opaque value an ACP agent advertised. Cursor's CLI lists aliases such as
-// composer-2.5-fast and gpt-5.5-medium while its legacy ACP selector includes
-// those settings as parameters; session/set_model accepts only the latter.
-// Exact provider values always win, and an alias is accepted only when it
-// identifies one advertised choice unambiguously.
 func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
 	if choiceOffered(choices, requested) {
 		return requested, true
@@ -418,23 +374,12 @@ func resolveModelChoice(harness domain.AgentHarness, choices []ports.ChatConfigO
 	if harness != domain.HarnessHermes {
 		return "", false
 	}
-	// Hermes' session/new offers auto:<model>, the id a composer start stores,
-	// but a session/load replaces that row with the provider it resolved to. A
-	// stored auto: id that is no longer offered re-resolves through its model.
 	if model, auto := strings.CutPrefix(requested, "auto:"); auto && model != "" {
 		return resolveProviderPrefixedChoice(choices, model)
 	}
 	return resolveProviderPrefixedChoice(choices, requested)
 }
 
-// resolveProviderPrefixedChoice maps a bare model value onto an advertised
-// choice that carries a provider prefix. Hermes advertises ids such as
-// auto:anthropic/claude-opus-4.6 and openrouter:anthropic/claude-opus-4.6
-// while its CLI-facing configuration names the bare model, so the requested
-// value must equal everything after the advertised id's first ':'. Several
-// providers may list the same model: a single auto:-prefixed row wins because
-// it resolves to the session's current provider, and any other collision stays
-// ambiguous rather than guessed.
 func resolveProviderPrefixedChoice(choices []ports.ChatConfigOptionChoice, requested string) (string, bool) {
 	auto, matched, ambiguous := "", "", false
 	for _, choice := range choices {
@@ -526,14 +471,8 @@ func parameterizedModelAliases(value string) ([]string, bool) {
 			thinkingSet = true
 			parameterized = true
 		case "context":
-			// Cursor does not include the context window in its CLI alias. If
-			// multiple advertised values differ only by context, the caller's
-			// ambiguity check still rejects the alias.
 			parameterized = true
 		default:
-			// Never derive an alias while silently discarding a provider-owned
-			// semantic parameter. New Cursor parameters must be mapped here
-			// deliberately before their opaque values can be selected by alias.
 			return nil, false
 		}
 	}
@@ -553,9 +492,6 @@ func parameterizedModelAliases(value string) ([]string, bool) {
 	if effort == "" {
 		return []string{base + "-thinking" + fastSuffix}, true
 	}
-	// Cursor has shipped both thinking-effort and effort-thinking alias orders
-	// across Claude model families. Both retain the same advertised semantics;
-	// the caller still rejects any alias shared by multiple advertised choices.
 	return []string{
 		base + "-thinking-" + effort + fastSuffix,
 		base + "-" + effort + "-thinking" + fastSuffix,

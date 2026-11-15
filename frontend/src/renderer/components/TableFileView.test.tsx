@@ -20,7 +20,6 @@ describe("TableFileView", () => {
 		render(<TableFileView content={"name,ratio\na,\"1,5\"\nb,2\nc,\"1,25\"\n"} path="ratios.csv" />);
 		expect(screen.getByRole("columnheader", { name: "ratio" })).not.toHaveClass("text-right");
 		await userEvent.click(screen.getByRole("button", { name: "ratio" }));
-		// Sorted as text, so `1,5` is not treated as 15 and placed after `2`.
 		expect(column(1).indexOf("1,5")).toBeLessThan(column(1).indexOf("2"));
 	});
 

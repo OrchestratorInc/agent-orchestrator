@@ -59,16 +59,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 import { GridSpacer, useVirtualGridRows } from "../hooks/useVirtualGridRows";
 
-// Three previews a row; narrow panels drop to two, then one.
 const ARTIFACT_GRID_CLASS = "grid grid-cols-1 gap-4 @lg:grid-cols-2 @2xl:grid-cols-3";
 const MAX_LIVE_PREVIEWS = 4;
-/** How many selected names the bulk delete confirmation lists before "+N more". */
 const MAX_CONFIRM_NAMES = 5;
 
-/**
- * A project's icon as the sidebar draws it: its repository owner's avatar or
- * colour-coded letter tile, or a folder with avatars off.
- */
 function ArtifactProjectIcon({ workspace, avatarUrl }: { workspace: Pick<WorkspaceSummary, "id" | "name" | "path">; avatarUrl?: string }) {
 	return (
 		<span aria-hidden="true" className="inline-flex size-icon-md shrink-0 items-center justify-center">
@@ -77,10 +71,6 @@ function ArtifactProjectIcon({ workspace, avatarUrl }: { workspace: Pick<Workspa
 	);
 }
 
-/**
- * Every artifact agents have written, grouped by project: on this machine, and
- * in cloud sessions when the control plane keeps artifacts.
- */
 export function ArtifactsView() {
 	const edgeFadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
@@ -93,23 +83,18 @@ export function ArtifactsView() {
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
 	const orchestratorTitle = t("shell.orchestrator");
-	// Published marks and the Sharing filter read each file's shareUrl; bring
-	// the publish records behind it up to date first.
 	const shareAccess = useReconciledShareLinks();
 	const groups = useMemo(
 		() => withShareAccess(groupArtifactsByProject(workspaces ?? [], orchestratorTitle), shareAccess),
 		[workspaces, orchestratorTitle, shareAccess],
 	);
 	const [query, setQuery] = useState("");
-	// Each filter keeps several values at once; an empty list shows every artifact.
 	const [projectIds, setProjectIds] = useState<readonly string[]>([]);
 	const [location, setLocation] = useState<ArtifactLocation | undefined>();
 	const [types, setTypes] = useState<readonly ArtifactType[]>([]);
 	const [sharings, setSharings] = useState<readonly ArtifactSharing[]>([]);
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = useCallback((row: ArtifactRow, projectName: string) => setPreview({ row, projectName }), []);
-	// The open preview follows its row as the list refreshes, so a file an
-	// agent rewrites shows its new content.
 	const previewRow = useMemo(() => {
 		if (!preview) return null;
 		const key = artifactKey(preview.row);
@@ -124,8 +109,6 @@ export function ArtifactsView() {
 		[groups, query, projectIds, location, types, sharings, scratchpadName],
 	);
 	const hasArtifacts = artifactCount(groups) > 0;
-	// One list, newest change first, with pinned artifacts kept at the top. The
-	// filters narrow it; nothing splits it into sections.
 	const cards = useMemo(() => {
 		const pinned = new Set(pinnedArtifactIds);
 		return visibleGroups
@@ -137,9 +120,7 @@ export function ArtifactsView() {
 			.sort((left, right) => Number(right.pinned) - Number(left.pinned)
 				|| (Date.parse(right.row.updatedAt) || 0) - (Date.parse(left.row.updatedAt) || 0));
 	}, [visibleGroups, pinnedArtifactIds, t]);
-	// Only the cards on screen and near it are built; a long list would otherwise build every card at once.
 	const grid = useVirtualGridRows(cards.length, scrollElement);
-	// Only the first few pages and PDFs render live; the rest show their thumbnail.
 	const livePreviews = useMemo(() => {
 		const live = new Set<string>();
 		for (const { row } of cards) {
@@ -161,7 +142,6 @@ export function ArtifactsView() {
 	const locationOptions: { value: ArtifactLocation | undefined; label: string }[] = [
 		{ value: undefined, label: t("artifacts.locationAll") },
 		{ value: "local", label: t("artifacts.locationLocal") },
-		// Cloud artifacts show only where the control plane keeps them.
 		...(cloudArtifacts ? [{ value: "cloud" as const, label: t("artifacts.locationCloud") }] : []),
 	];
 	const projectName = (group: ArtifactGroup) => (group.isScratchpad ? scratchpadName : group.name);
@@ -170,19 +150,12 @@ export function ArtifactsView() {
 	const queryClient = useQueryClient();
 	const { client: cloudClient } = useCloudCp(cloudArtifacts);
 	const cloudUserId = useCloudMeUserId(cloudArtifacts);
-	// Another member's cloud session files are view only, so they cannot be selected.
-	// A bundle row stands for one of its files, so deleting it would leave the
-	// rest of the bundle behind; it has no Delete in its menu either.
 	const deleteBlockedReason = (row: ArtifactRow) => row.bundle
 		? t("artifacts.bundleNotDeletable")
 		: canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
 	const [selecting, setSelecting] = useState(false);
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
-	// A selected file deleted elsewhere leaves the selection as the list
-	// refreshes, so a later file at the same path starts unselected. The
-	// check runs against every artifact, not the filtered cards: the
-	// selection outlives the filters, so the confirmation names every file.
 	useEffect(() => {
 		const present = new Set(groups.flatMap((group) => group.rows.map(artifactKey)));
 		setSelectedIds((current) => {
@@ -213,8 +186,6 @@ export function ArtifactsView() {
 		setSelecting(false);
 		setSelectedIds(new Set());
 	};
-	// Each file is deleted on its own; the ones that fail stay selected so
-	// the person can retry them.
 	const bulkDelete = useMutation({
 		mutationFn: async (rows: readonly ArtifactRow[]) => {
 			const results = await Promise.allSettled(rows.map((row) => row.cloud
@@ -250,7 +221,6 @@ export function ArtifactsView() {
 	useEffect(() => {
 		if (!selecting || confirmingBulkDelete) return;
 		const onKeyDown = (event: KeyboardEvent) => {
-			// Escape inside search or an open menu closes that first.
 			if (event.key !== "Escape" || event.defaultPrevented) return;
 			setSelecting(false);
 			setSelectedIds(new Set());
@@ -406,9 +376,6 @@ export function ArtifactsView() {
 			</div>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
-					{/* Radix wraps the content in a display:table box that grows to its widest
-					    row, so long names never truncate and push each row's time out of
-					    view in a narrow panel; a block box keeps the rows to the panel's width. */}
 					<ScrollArea.Viewport ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] h-full w-full overscroll-contain focus-visible:outline-none [&>div]:block!">
 						<div className="@container pt-3 pr-4 pb-4 pl-(--space-4_5)">
 							{workspaceQuery.isLoading ? (
@@ -463,15 +430,10 @@ export function ArtifactsView() {
 	);
 }
 
-/** `values` with `value` added, or removed when it is already there. */
 function toggled<T>(values: readonly T[], value: T): readonly T[] {
 	return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
 }
 
-/**
- * One value of a filter. Choosing it keeps the menu open, so several values,
- * in one filter or several, are picked in one go.
- */
 function FilterOption({ checked, onToggle, children }: { checked: boolean; onToggle: () => void; children: ReactNode }) {
 	return (
 		<DropdownMenuCheckboxItem checked={checked} onCheckedChange={onToggle} onSelect={(event) => event.preventDefault()}>
@@ -480,12 +442,6 @@ function FilterOption({ checked, onToggle, children }: { checked: boolean; onTog
 	);
 }
 
-/**
- * One artifact in the list or the gallery: its name, project and session,
- * Published mark and last change, with Pin, Open in session and its menu.
- * Opening it previews the file on this page; while selecting it toggles.
- */
-// Memoized: a row scrolling into view re-renders the list, and only the new cards need to render.
 const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view, previewLive = true, onPreview, selection }: { row: ArtifactRow; projectName: string; pinned: boolean; view: ArtifactViewMode; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void; selection?: ArtifactCardSelection }) {
 	const { t } = useTranslation();
 	const id = artifactKey(row);
@@ -509,14 +465,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 		const toggle = selection && !selection.disabledReason ? selection.onToggle : undefined;
 		return (
 			<li>
-				{/* Name and context truncate; the Published mark, the time and the
-				    actions never shrink, so the time stays visible in a narrow
-				    panel. The actions keep their space while hidden, so hovering
-				    a row moves nothing. Below @3xl the context drops under the
-				    name; below @lg Pin and Open in session live in the ⋯ menu. */}
 				<div className={cn(
-					// The hovered row stacks the interactive layer on the hover surface:
-					// the hover surface alone is only a shade off the row's own.
 					"group/artifact relative flex min-h-12 items-center gap-3 rounded-md bg-card py-1.5 ps-4 pe-2 transition-none hover:bg-accent focus-within:bg-accent @max-3xl:min-h-14",
 					"before:pointer-events-none before:absolute before:inset-0 before:rounded-md hover:before:bg-interactive-active focus-within:before:bg-interactive-active",
 					selection?.selected && "ring-2 ring-primary",
@@ -556,12 +505,9 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 						</span>
 					</Pressable>
 					<div className="relative z-[2] flex shrink-0 items-center gap-3">
-						{/* Empty for an unshared artifact, so every row's time lines up. */}
 						<span className="inline-flex size-icon-sm items-center justify-center">
 							<ArtifactShareMark row={row} iconClassName="size-icon-sm" />
 						</span>
-						{/* "14h ago", and "Updated 14h ago" while the row is hovered or focused.
-						    A title, not a Tooltip: one per row costs too much to mount in a long list. */}
 						<time dateTime={row.updatedAt} title={new Date(row.updatedAt).toLocaleString()} className="min-w-14 whitespace-nowrap text-right text-xs tabular-nums text-passive group-hover/artifact:text-foreground group-focus-within/artifact:text-foreground">
 							<span className="@lg:group-hover/artifact:hidden @lg:group-focus-within/artifact:hidden">{formatTimeCompact(row.updatedAt)}</span>
 							<span className="hidden @lg:group-hover/artifact:inline @lg:group-focus-within/artifact:inline">{t("shell.updatedAt", { time: formatTimeCompact(row.updatedAt) })}</span>
@@ -613,7 +559,6 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 	const { agentReady, create, pending } = useCreateArtifactSession();
 	const hasCloudProject = workspaces.some((workspace) => workspace.kind === CLOUD_PROJECT_KIND && Boolean(workspace.cloudOrgId));
 
-	// Without a local agent a cloud project, which runs its own, can still start one.
 	if (!agentReady && !hasCloudProject) {
 		return (
 			<div className="flex flex-col items-center gap-1 py-24 text-center">
@@ -641,10 +586,6 @@ function EmptyArtifacts({ workspaces }: { workspaces: readonly WorkspaceSummary[
 	);
 }
 
-/**
- * The Create artifact trigger and its Scratchpad / project menu. The empty
- * state and the list header share it so both start the same session.
- */
 function CreateArtifactMenu({
 	workspaces,
 	create,
@@ -660,12 +601,10 @@ function CreateArtifactMenu({
 	label?: "create" | "new";
 	align: "center" | "end";
 	className?: string;
-	/** Why Scratchpad and local projects cannot start a session; cloud projects run their own agent. */
 	localDisabledReason?: string;
 }) {
 	const { t } = useTranslation();
 	const projectAvatars = useProjectAvatars(workspaces);
-	// Cloud workspaces are listed only when the control plane keeps artifacts.
 	const projects = workspaces.filter(
 		(workspace) =>
 			workspace.id !== STANDALONE_WORKSPACE_ID &&
@@ -723,7 +662,6 @@ function CreateArtifactMenu({
 				<DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
 			)}
 			<DropdownMenuContent align={align} className="min-w-56">
-				{/* Says why Scratchpad and local projects are disabled while cloud ones are not. */}
 				{localBlocked ? <DropdownMenuLabel className="max-w-64 text-xs font-normal text-muted-foreground">{localDisabledReason}</DropdownMenuLabel> : null}
 				<DropdownMenuItem disabled={localBlocked} onSelect={() => void create()}>
 					<File aria-hidden="true" className="size-icon-sm" />

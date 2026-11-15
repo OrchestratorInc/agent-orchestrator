@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
-// Registry evidence is best effort: old Grok releases may omit the registry,
-// and PID reuse is not authoritative proof of the original process identity.
 func grokImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	if source == nil || ctx.Err() != nil {

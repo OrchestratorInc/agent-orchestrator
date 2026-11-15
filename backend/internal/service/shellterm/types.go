@@ -1,17 +1,3 @@
-// Package shellterm owns standalone shell terminals: PTYs the user opens by
-// hand from the desktop app, deliberately NOT bound to any agent session.
-//
-// Why this is its own package rather than a mode of the session service: a
-// shell terminal has no agent, no worktree, no lifecycle state machine, and no
-// place on the board. It shares exactly one mechanism with sessions — the
-// runtime adapter that knows how to spawn and attach a PTY — and nothing else.
-// Keeping it separate is what stops "open a terminal" from having to satisfy
-// the session lifecycle's invariants.
-//
-// It needs no changes to internal/terminal: that package already treats the
-// terminal id it is handed as an opaque runtime handle and never resolves it
-// against a session, so a shell terminal's handle streams over the existing mux
-// unmodified.
 package shellterm
 
 import (
@@ -20,51 +6,26 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// ShellTerminal is one standalone shell pane. HandleID is the runtime handle
-// the terminal mux attaches to — the same opaque id an agent session's pane
-// uses, drawn from a separate namespace (see newShellTerminalHandleID).
 type ShellTerminal struct {
-	HandleID   string           `json:"handleId"`
-	ProjectID  domain.ProjectID `json:"projectId,omitempty"`
-	SessionID  domain.SessionID `json:"sessionId,omitempty"`
-	WorkingDir string           `json:"workingDir"`
-	Title      string           `json:"title"`
-	// TerminalTitle is present only when the program's title should label the tab.
-	TerminalTitle string    `json:"terminalTitle,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	HandleID      string           `json:"handleId"`
+	ProjectID     domain.ProjectID `json:"projectId,omitempty"`
+	SessionID     domain.SessionID `json:"sessionId,omitempty"`
+	WorkingDir    string           `json:"workingDir"`
+	Title         string           `json:"title"`
+	TerminalTitle string           `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time        `json:"createdAt"`
 }
 
-// OpenShellTerminalInput is the request to open a new shell pane. An empty
-// ProjectID opens the shell in the daemon's data dir instead of a project root,
-// which is what the topbar action does when no project is selected. SessionID
-// scopes the shell to an agent session so it appears only in that session's tab
-// strip; an empty SessionID makes it a standalone shell, which no client shows
-// (ReapShellTerminalsFromPreviousAppRuns destroys it on the next launch).
 type OpenShellTerminalInput struct {
-	ProjectID domain.ProjectID `json:"projectId,omitempty"`
-	SessionID domain.SessionID `json:"sessionId,omitempty"`
-	Shell     string           `json:"shell,omitempty"`
-	// StartOnAttach starts the shell when the requesting client attaches with
-	// its grid instead of immediately, so its first prompt is laid out for the
-	// width that client shows. Only a client that attaches as a sized viewer
-	// may ask for it: a viewer that never reports a grid would never start it.
-	StartOnAttach bool `json:"startOnAttach,omitempty"`
-	// Title names the tab. A client that already shows the tab passes the
-	// title it shows, so the tab keeps its name when the shell arrives; empty
-	// numbers it after the existing shells.
-	Title string `json:"title,omitempty"`
-	// Cols and Rows give the grid the requesting client will show. When both
-	// are set the shell starts immediately at that grid, in parallel with the
-	// client mounting its terminal, instead of waiting for the attach that
-	// StartOnAttach waits for (saving that round trip before the first prompt).
-	Cols int `json:"cols,omitempty"`
-	Rows int `json:"rows,omitempty"`
+	ProjectID     domain.ProjectID `json:"projectId,omitempty"`
+	SessionID     domain.SessionID `json:"sessionId,omitempty"`
+	Shell         string           `json:"shell,omitempty"`
+	StartOnAttach bool             `json:"startOnAttach,omitempty"`
+	Title         string           `json:"title,omitempty"`
+	Cols          int              `json:"cols,omitempty"`
+	Rows          int              `json:"rows,omitempty"`
 }
 
-// InitialInputReadyState describes a terminal state relevant to the command's
-// initial input. SkipInput marks a state where the requested action is already
-// open, so the command should not be sent. SubmitReadyText can require a
-// completion marker before submitting a RawPrefix.
 type InitialInputReadyState struct {
 	Text            string
 	RawPrefix       string
@@ -72,33 +33,18 @@ type InitialInputReadyState struct {
 	SkipInput       bool
 }
 
-// OpenCommandTerminalInput is a daemon-trusted command terminal request. It
-// is intentionally separate from OpenShellTerminalInput: public callers may
-// open only the user's login shell, while backend callers provide a reviewed
-// command. InitialInput and InitialInputReadyStates are private backend-only
-// values from the reviewed auth registry; the input is sent only after the
-// harness renders one of its known editor-ready states.
 type OpenCommandTerminalInput struct {
-	// Owner is a trusted workflow identity, independent of the editable title.
-	// It is persisted so the workflow can reconcile commands after a restart.
-	Owner string
-	Argv  []string
-	// HideFromList keeps a daemon-owned guided login PTY out of the user's
-	// terminal drawer. The auth service still owns and closes its handle.
-	HideFromList            bool
-	Env                     map[string]string
-	WorkingDir              string
-	Title                   string
-	InitialInput            string
-	InitialInputReadyStates []InitialInputReadyState
-	// SendInitialInputOnReadyTimeout sends InitialInput once the ready wait
-	// expires without a marker, provided the terminal is still alive. Only for
-	// harnesses whose input is harmless at any point after startup.
+	Owner                          string
+	Argv                           []string
+	HideFromList                   bool
+	Env                            map[string]string
+	WorkingDir                     string
+	Title                          string
+	InitialInput                   string
+	InitialInputReadyStates        []InitialInputReadyState
 	SendInitialInputOnReadyTimeout bool
 }
 
-// RunCueCommandInput is the trusted, project-scoped command request
-// used by the Cue service. Each invocation opens a new normal shell.
 type RunCueCommandInput struct {
 	ProjectID domain.ProjectID
 	SessionID domain.SessionID
@@ -106,8 +52,6 @@ type RunCueCommandInput struct {
 	Command   string
 }
 
-// CueCommandSessionTarget contains the session facts needed to prove that a
-// Cue command can safely use its exact worktree.
 type CueCommandSessionTarget struct {
 	ProjectID     domain.ProjectID
 	WorkspacePath string

@@ -102,8 +102,6 @@ func TestStartedHostKillFailureRetainsPartialCreateEvidence(t *testing.T) {
 		t.Fatalf("current-owned partial create force-kill calls = %d, want 1", currentKillCalls)
 	}
 
-	// The possible handle must remain fenceable even after a daemon restart.
-	// A live PID without a READY address is unknown, never exact absence.
 	recovered := New(Options{})
 	recovered.pidIsAlive = func(int) bool { return true }
 	ref := ports.FencedRuntimeRef{

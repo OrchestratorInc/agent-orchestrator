@@ -96,9 +96,6 @@ func TestDetectTerminalActivityApprovalNewestMarkerWins(t *testing.T) {
 }
 
 func TestDetectTerminalActivityIgnoresApprovalFooterAlone(t *testing.T) {
-	// The "Auto-approve all disabled" footer also shows during normal work in
-	// manual-approval mode; without the approve/deny dialog it must not read
-	// as waiting.
 	output := "❯ Ask anything...\nClaude Opus 5 (medium) $0.05  ○ Plan ● Act (Tab)\n⏵⏵ Auto-approve all disabled (Shift+Tab)\n"
 	got, ok := (&Plugin{}).DetectTerminalActivity(output)
 	if got != domain.ActivityIdle || !ok {
@@ -107,9 +104,6 @@ func TestDetectTerminalActivityIgnoresApprovalFooterAlone(t *testing.T) {
 }
 
 func TestDetectTerminalActivityIgnoresApprovalTextWithoutControls(t *testing.T) {
-	// Only the dialog's own structure counts. Assistant/tool output that quotes
-	// the question, or prose mentioning both answers, has no dialog controls and
-	// must not become authoritative waiting_input while a tool is running.
 	tests := []struct {
 		name   string
 		output string
@@ -141,9 +135,6 @@ func TestDetectTerminalActivityIgnoresApprovalTextWithoutControls(t *testing.T) 
 }
 
 func TestDeriveActivityStateTreatsPreToolUseAsActive(t *testing.T) {
-	// Regression test for #6414: PreToolUse fires after approval (upstream
-	// cline/cline#7446) or with no prompt under auto-approve, so it must
-	// derive active — never sticky waiting_input.
 	for _, event := range []string{"pre-tool-use", "permission-request", "post-tool-use", "permission-resolved"} {
 		got, ok := DeriveActivityState(event, []byte(`{}`))
 		if got != domain.ActivityActive || !ok {
@@ -153,11 +144,6 @@ func TestDeriveActivityStateTreatsPreToolUseAsActive(t *testing.T) {
 }
 
 func TestClinePreToolUseHookResolvesApproval(t *testing.T) {
-	// PreToolUse must resolve, not just report active: the terminal detector can
-	// already have written waiting_input from the dialog, and lifecycle
-	// precedence suppresses plain tool events against that sticky state. Only a
-	// turn-boundary event (permission-resolved) clears it; the full sequence is
-	// covered in lifecycle's TestToolPrecedence_ClinePreToolUseClearsObservedApproval.
 	for _, spec := range clineManagedHooks {
 		if spec.Event != "PreToolUse" {
 			continue

@@ -32,7 +32,6 @@ const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary =>
 
 const KEY = "sess-1";
 
-/** Which PR tab the session view would bring forward. */
 function ActiveTab() {
   const tabs = usePRTabs(KEY);
   return <output data-testid="active-tab">{tabs.active ?? ""}</output>;

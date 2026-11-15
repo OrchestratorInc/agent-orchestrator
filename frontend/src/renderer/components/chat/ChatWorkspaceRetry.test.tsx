@@ -1,12 +1,3 @@
-/**
- * The per-turn retry control for a failed turn.
- *
- * Retry is the inverse of rollback: it re-dispatches a failed turn's durable
- * prompt as a NEW turn instead of discarding the exchange. What is asserted is
- * behaviour a user would notice: the control appears only on an eligible failed
- * turn, and the turn id that reaches the daemon is the one that was clicked.
- */
-
 import { act, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +7,6 @@ import type { ConversationItem, ConversationSnapshot } from "../../types/convers
 import { renderChat as render } from "../../test/render-chat";
 import { useUiStore } from "../../stores/ui-store";
 
-/** A conversation with one failed turn and nothing in flight. */
 function failedSnapshot(): ConversationSnapshot {
 	return {
 		...chatFixture,
@@ -257,8 +247,6 @@ describe("ChatWorkspace retry", () => {
 
 		await userEvent.click(retry);
 
-		// The failed turn in the fixture is turn-1; the daemon must be given AO's
-		// own turn id, which is what the snapshot exposes.
 		expect(onRetryTurn).toHaveBeenCalledWith("turn-1");
 	});
 
@@ -304,7 +292,6 @@ describe("ChatWorkspace retry", () => {
 	});
 
 	it("draws no retry control for a turn that succeeded", () => {
-		// The idle fixture has only completed turns, so retry must be absent.
 		const completed = {
 			...chatFixture,
 			controller: { state: "ready" as const },

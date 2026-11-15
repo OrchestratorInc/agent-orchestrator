@@ -1,20 +1,7 @@
-// The AO Cloud control plane this app talks to. The daemon owns it (a baked
-// default, overridden only by AO_CLOUD_CONTROL_PLANE_URL in its environment)
-// and reports it in GET /api/v1/settings as cloudControlPlaneUrl, which is
-// where the renderer reads it too. The main process sends the AO Cloud token
-// only to this URL, never to a base URL the renderer names.
-
-/** The daemon the resolver asks: its loopback base URL and a key for this attachment. */
 export type ControlPlaneDaemon = { baseUrl: string; key: string };
 
 export type ControlPlaneUrlResolver = () => Promise<string | null>;
 
-/**
- * Resolve the configured control-plane URL from the attached daemon, once per
- * attachment (a new daemon, or the same port with a new pid, asks again). A
- * failed read is not kept, so the next request asks again; null means no
- * daemon is attached or it names no control plane.
- */
 export function createControlPlaneUrlResolver(
 	daemon: () => ControlPlaneDaemon | null,
 	fetchImpl: typeof fetch = (input, init) => fetch(input, init),
@@ -43,7 +30,6 @@ export function createControlPlaneUrlResolver(
 	};
 }
 
-/** Whether two control-plane base URLs name the same server and path. */
 export function sameControlPlaneUrl(a: string, b: string): boolean {
 	try {
 		const left = new URL(a);

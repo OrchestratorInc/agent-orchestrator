@@ -73,7 +73,6 @@ func TestMobileBrowserRemoteAccess(t *testing.T) {
 	}
 }
 
-// fakeLAN is a minimal LANController for exercising BridgeService directly.
 type fakeLAN struct {
 	running     bool
 	hash        string
@@ -99,7 +98,6 @@ func (f *fakeLAN) Stop(ctx context.Context) error {
 }
 func (f *fakeLAN) Running() bool { return f.running }
 func (f *fakeLAN) BoundPort() int {
-	// Mirrors the real listener: no bound port until it is actually running.
 	if !f.running {
 		return 0
 	}
@@ -127,7 +125,6 @@ func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
 	if issued.HostID != "h_test" || len(issued.Token) != 64 {
 		t.Fatalf("bad token: %+v", issued)
 	}
-	// The listing gets the machine's host key with the token.
 	if want, err := mobilebridge.HostPublicKey(path); err != nil || issued.HostKey != want || len(want) != 43 {
 		t.Fatalf("host key = %q, want %q (%v)", issued.HostKey, want, err)
 	}
@@ -199,12 +196,7 @@ func TestIssueAccountTokenReusesCredentialForSameAccount(t *testing.T) {
 	}
 }
 
-// When Save fails during a fresh enable, the listener that Start already opened
-// must be torn back down and the armed hash rolled back — otherwise a LAN
-// listener stays live on 0.0.0.0 while persisted state/UI say enable failed.
 func TestMobileEnableRollsBackListenerWhenSaveFails(t *testing.T) {
-	// A ConfigPath whose parent is a regular file makes mobilebridge.Save's
-	// MkdirAll (and thus Save) fail deterministically.
 	blocker := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -240,8 +232,6 @@ func TestMobileEnableReturnsPassword(t *testing.T) {
 	}
 }
 
-// Status must advertise both addresses so the renderer's LAN/Tailscale toggle
-// can re-encode the pairing QR without a second round trip.
 func TestMobileStatusSurfacesBothHosts(t *testing.T) {
 	lan := &fakeLAN{running: true}
 	b := &BridgeService{
@@ -264,8 +254,6 @@ func TestMobileStatusSurfacesBothHosts(t *testing.T) {
 	}
 }
 
-// An absent Tailscale install is an empty string, not an error: the renderer
-// uses "" to decide to show a hint instead of an unscannable QR.
 func TestMobileStatusTailscaleHostEmptyWhenAbsent(t *testing.T) {
 	b := &BridgeService{
 		LAN:                &fakeLAN{running: true},
@@ -282,11 +270,6 @@ func TestMobileStatusTailscaleHostEmptyWhenAbsent(t *testing.T) {
 	}
 }
 
-// Unset pickers must fall back to the real autopickers rather than panicking on
-// a nil func — production wiring in daemon.go leaves them unset. This also
-// proves the call actually completed (not just "didn't panic"): the real
-// AutopickLANIP/AutopickTailscaleIP paths run, and Port still comes through
-// from the LAN controller untouched by that fallback.
 func TestMobileStatusHostPickersDefaultWhenUnset(t *testing.T) {
 	b := &BridgeService{
 		LAN:         &fakeLAN{running: true},
@@ -299,13 +282,7 @@ func TestMobileStatusHostPickersDefaultWhenUnset(t *testing.T) {
 	}
 }
 
-// The bridge falls back to an ephemeral port when its default is taken, so the
-// proxy must be pointed at the port Start actually returned — not DefaultPort.
-// This is the stale-port regression this feature exists to avoid.
 func TestSecurePairingAppliesActualBoundPort(t *testing.T) {
-	// Start returns the actual ephemeral-fallback port (54014); BoundPort is
-	// deliberately stale (3011) so the test fails if the implementation
-	// re-reads BoundPort instead of using the port Start returned.
 	lan := &portOverrideLAN{startPort: 54014, boundPortStale: 3011}
 	var applied []int
 	b := &BridgeService{
@@ -375,8 +352,6 @@ func TestSecurePairingReasons(t *testing.T) {
 	}
 }
 
-// A serve failure must leave the bridge running in plaintext mode rather than
-// taking pairing down entirely.
 func TestSecurePairingServeFailureKeepsBridgeUp(t *testing.T) {
 	b := newSecureBridge(t, tsUp, func() int { return 0 })
 	b.ApplyServe = func(int) error { return errors.New("port 443 in use") }
@@ -395,8 +370,6 @@ func TestSecurePairingServeFailureKeepsBridgeUp(t *testing.T) {
 	}
 }
 
-// Turning the mode off must tear the proxy down, or it keeps pointing at a
-// bridge the user believes is private.
 func TestSecurePairingOffClearsProxy(t *testing.T) {
 	cleared := 0
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
@@ -415,10 +388,6 @@ func TestSecurePairingOffClearsProxy(t *testing.T) {
 	}
 }
 
-// If Clear fails when turning the mode off, the flag is already persisted
-// off (so the API call must still succeed), but the proxy may still be live
-// — Status must surface that as clear_failed rather than silently reporting
-// disabled.
 func TestSecurePairingOffClearFailureReported(t *testing.T) {
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
 	if _, err := b.SetSecurePairing(true); err != nil {
@@ -442,13 +411,6 @@ var tsUp = mobilebridge.TailscaleInfo{
 	CertsEnabled: true,
 }
 
-// portOverrideLAN is fakeLAN with a caller-chosen bound port, so tests can
-// exercise the ephemeral-fallback case. Start and BoundPort deliberately
-// return different values: Start returns the freshly bound ephemeral port,
-// while BoundPort returns a stale port a caller might have cached from
-// before the fallback. Do not "fix" this by making them agree — the gap is
-// what lets TestSecurePairingAppliesActualBoundPort catch a regression to
-// re-reading b.LAN.BoundPort() instead of using the port Start returned.
 type portOverrideLAN struct {
 	fakeLAN
 	startPort      int
@@ -471,11 +433,6 @@ func newSecureBridge(t *testing.T, info mobilebridge.TailscaleInfo, target func(
 	}
 }
 
-// `tailscale serve --https=443 off` is node-global: it removes whatever is on
-// :443, not merely what AO put there. Disabling a bridge that never enabled
-// secure pairing must therefore leave the tailnet proxy strictly alone, or AO
-// silently destroys a serve route its user configured for themselves — or one
-// belonging to another AO instance on the same node.
 func TestDisableLeavesServeAloneWhenSecurePairingNeverEnabled(t *testing.T) {
 	cleared := 0
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
@@ -491,7 +448,6 @@ func TestDisableLeavesServeAloneWhenSecurePairingNeverEnabled(t *testing.T) {
 	}
 }
 
-// When AO did install the proxy, disabling must still remove it.
 func TestDisableClearsServeWhenSecurePairingEnabled(t *testing.T) {
 	cleared := 0
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
@@ -510,10 +466,6 @@ func TestDisableClearsServeWhenSecurePairingEnabled(t *testing.T) {
 	}
 }
 
-// `tailscale serve --bg` outlives this process, so a graceful shutdown that
-// stops only the listener leaves the tailnet routing to a local port with
-// nothing authenticated behind it. Whatever binds that port next would be
-// published to the tailnet in AO's place.
 func TestShutdownServeClearsProxyWhenSecurePairingEnabled(t *testing.T) {
 	cleared := 0
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
@@ -530,8 +482,6 @@ func TestShutdownServeClearsProxyWhenSecurePairingEnabled(t *testing.T) {
 	}
 }
 
-// The preference must survive shutdown so boot restore re-applies the proxy
-// against the next bound port without the user re-toggling anything.
 func TestShutdownServeKeepsSecurePairingPreference(t *testing.T) {
 	b := newSecureBridge(t, tsUp, func() int { return 3011 })
 	if _, err := b.Enable(); err != nil {
@@ -550,8 +500,6 @@ func TestShutdownServeKeepsSecurePairingPreference(t *testing.T) {
 	}
 }
 
-// A shutdown with the bridge off, or with secure pairing never enabled, must
-// not issue the node-global clear either.
 func TestShutdownServeNoopWhenNotOwned(t *testing.T) {
 	for name, setup := range map[string]func(*BridgeService){
 		"bridge disabled":         func(b *BridgeService) {},
@@ -570,10 +518,6 @@ func TestShutdownServeNoopWhenNotOwned(t *testing.T) {
 	}
 }
 
-// The phone races every advertised endpoint, so Status must list all of them.
-// Host/TailscaleHost keep reporting the first of each for the existing
-// renderer, but they are now derived from the same lists rather than resolved
-// separately, so the two can never disagree.
 func TestMobileStatusAdvertisesEveryEndpoint(t *testing.T) {
 	b := &BridgeService{
 		LAN:                &fakeLAN{running: true},
@@ -602,7 +546,6 @@ func TestMobileStatusAdvertisesEveryEndpoint(t *testing.T) {
 		}
 	}
 
-	// The legacy singular fields stay in step with the lists.
 	if got.Host != "192.168.1.42" {
 		t.Errorf("Host = %q want the first LAN candidate", got.Host)
 	}
@@ -611,8 +554,6 @@ func TestMobileStatusAdvertisesEveryEndpoint(t *testing.T) {
 	}
 }
 
-// No network at all is a real state. An empty list must not become a list
-// containing an empty host, which the phone would try to dial.
 func TestMobileStatusEndpointsEmptyWithoutNetwork(t *testing.T) {
 	b := &BridgeService{
 		LAN:                &fakeLAN{running: true},
@@ -648,10 +589,6 @@ func (f *fakeTunnel) Endpoint() *mobilebridge.TunnelEndpoint {
 func (f *fakeTunnel) Status() mobilebridge.TunnelStatus { return f.status }
 
 func TestMobileEnableStartsTheTunnelOnTheBoundPort(t *testing.T) {
-	// The connector must target the port the listener actually bound, not the
-	// configured default: Start falls back to an ephemeral port when the
-	// default is taken, and a connector pointed at the wrong port tunnels
-	// nothing.
 	tun := &fakeTunnel{}
 	b := &BridgeService{
 		LAN:                &fakeLAN{},
@@ -759,8 +696,6 @@ func TestMobileDisablePreservesEnabledStateWhenStopErrorLeavesListenerRunning(t 
 }
 
 func TestMobileDisableStopsTheTunnel(t *testing.T) {
-	// Leaving a public tunnel up after the user turned Connect Mobile off would
-	// keep the machine reachable from the internet with the UI saying it is not.
 	tun := &fakeTunnel{}
 	b := &BridgeService{
 		LAN:                &fakeLAN{},
@@ -809,8 +744,6 @@ func TestMobileStatusIncludesAReadyTunnelEndpoint(t *testing.T) {
 }
 
 func TestMobileStatusOmitsATunnelThatIsNotReady(t *testing.T) {
-	// Still settling. The desktop should say "preparing", and the QR must not
-	// carry an address that answers 530.
 	tun := &fakeTunnel{status: mobilebridge.TunnelStatus{Running: true}}
 	b := &BridgeService{
 		LAN:                &fakeLAN{running: true},
@@ -832,8 +765,6 @@ func TestMobileStatusOmitsATunnelThatIsNotReady(t *testing.T) {
 }
 
 func TestMobileWorksWithNoTunnelConfigured(t *testing.T) {
-	// Remote access unavailable (no cloudflared, or the feature off) must leave
-	// the LAN bridge behaving exactly as it did before.
 	b := &BridgeService{
 		LAN:                &fakeLAN{running: true},
 		ConfigPath:         filepath.Join(t.TempDir(), "mobile", "config.json"),
@@ -852,10 +783,6 @@ func TestMobileWorksWithNoTunnelConfigured(t *testing.T) {
 	}
 }
 
-// The desktop builds the pairing code, and the code must carry the machine's
-// identity so the phone can verify every endpoint it later races. Without it
-// here the renderer would have to make a second call to /api/v1/identity just
-// to draw a QR.
 func TestMobileStatusCarriesTheHostIdentity(t *testing.T) {
 	b := &BridgeService{
 		LAN:                &fakeLAN{running: true},
@@ -874,10 +801,6 @@ func TestMobileStatusCarriesTheHostIdentity(t *testing.T) {
 	}
 }
 
-// Found by running the daemon: with Connect Mobile off there is no bound port,
-// so every endpoint was advertised as host:0. A phone would dutifully race
-// addresses that cannot work. Nothing is reachable until the bridge is up, so
-// the honest answer is an empty list.
 func TestMobileAdvertisesNothingWhileTheBridgeIsOff(t *testing.T) {
 	b := &BridgeService{
 		LAN:                &fakeLAN{running: false},
@@ -895,13 +818,6 @@ func TestMobileAdvertisesNothingWhileTheBridgeIsOff(t *testing.T) {
 	}
 }
 
-// Found by running the desktop app: enabling Connect Mobile started the
-// connector, but restarting the daemon restored only the LAN listener. Remote
-// access then stayed silently off — the UI showed the bridge enabled while the
-// tunnel never came back — until the user toggled it off and on.
-//
-// A restart does not go through enableWithPasswordLocked (there is no password to
-// rotate), so RestoreOnBoot has to mirror its post-Start work.
 func TestMobileRestoreOnBootStartsTheTunnel(t *testing.T) {
 	tun := &fakeTunnel{}
 	b := &BridgeService{
@@ -935,11 +851,6 @@ func TestMobileRestoreOnBootWithoutATunnelIsHarmless(t *testing.T) {
 	}
 }
 
-// A cloudflared process outlives the daemon that spawned it, so quitting
-// without stopping it leaves a public hostname pointing at a port that no
-// longer has the authenticated LAN listener behind it. Reaping on the next
-// boot cleans it up eventually, but "eventually" is whenever the user happens
-// to reopen the app — until then the process runs and the hostname resolves.
 func TestShutdownTunnelStopsTheConnector(t *testing.T) {
 	dir := t.TempDir()
 	tun := &fakeTunnel{}
@@ -952,8 +863,6 @@ func TestShutdownTunnelStopsTheConnector(t *testing.T) {
 	}
 }
 
-// Remote access is optional: without cloudflared installed there is no
-// connector, and shutdown must not panic on the way out.
 func TestShutdownTunnelWithoutAConnector(t *testing.T) {
 	dir := t.TempDir()
 	b := &BridgeService{ConfigPath: filepath.Join(dir, "mobile.json")}
@@ -961,10 +870,6 @@ func TestShutdownTunnelWithoutAConnector(t *testing.T) {
 	b.ShutdownTunnel()
 }
 
-// Remote access is optional: without cloudflared there is no connector at all.
-// A zero TunnelStatus made that indistinguishable from "not started yet", so
-// the desktop showed a normal QR and the user had no way to learn that
-// connecting from cellular was simply unavailable on this machine.
 func TestTunnelStatusReportsWhenRemoteAccessIsUnsupported(t *testing.T) {
 	dir := t.TempDir()
 	b := &BridgeService{ConfigPath: filepath.Join(dir, "mobile.json")}
@@ -985,10 +890,6 @@ func TestTunnelStatusReportsSupportedWhenAConnectorExists(t *testing.T) {
 	}
 }
 
-// Resolution happens once at daemon start, so a cloudflared installed from
-// Connect Mobile was invisible until AO restarted — the user pressed Install,
-// watched it succeed, and remote access stayed off with no explanation.
-// Enabling is the natural moment to look again.
 func TestEnableResolvesAConnectorInstalledSinceBoot(t *testing.T) {
 	dir := t.TempDir()
 	tun := &fakeTunnel{}
@@ -1015,8 +916,6 @@ func TestEnableResolvesAConnectorInstalledSinceBoot(t *testing.T) {
 	}
 }
 
-// A machine that still has no cloudflared must enable cleanly as a LAN-only
-// bridge rather than failing: remote access is optional.
 func TestEnableWithoutAConnectorStillWorks(t *testing.T) {
 	dir := t.TempDir()
 	b := &BridgeService{
@@ -1034,10 +933,6 @@ func TestEnableWithoutAConnectorStillWorks(t *testing.T) {
 	}
 }
 
-// Installing cloudflared used to re-enable the bridge so the daemon would look
-// for the new binary. Enable always mints a fresh password, so that silently
-// invalidated the phone already paired — the user installed remote access and
-// lost the connection they were setting it up for.
 func TestStartRemoteAccessKeepsThePairedPhoneWorking(t *testing.T) {
 	dir := t.TempDir()
 	lan := &fakeLAN{}
@@ -1050,7 +945,6 @@ func TestStartRemoteAccessKeepsThePairedPhoneWorking(t *testing.T) {
 		t.Fatalf("enable: %v", err)
 	}
 
-	// cloudflared appears only now, as an install would leave it.
 	b.ResolveTunnel = func() TunnelController { return tun }
 	after, err := b.StartRemoteAccess()
 	if err != nil {
@@ -1065,8 +959,6 @@ func TestStartRemoteAccessKeepsThePairedPhoneWorking(t *testing.T) {
 	}
 }
 
-// Nothing to start, and nothing to break: the bridge is off, so this is a
-// no-op rather than an error the UI has to special-case.
 func TestStartRemoteAccessWhileDisabledDoesNothing(t *testing.T) {
 	dir := t.TempDir()
 	tun := &fakeTunnel{}
@@ -1083,9 +975,6 @@ func TestStartRemoteAccessWhileDisabledDoesNothing(t *testing.T) {
 	}
 }
 
-// The daemon downloads cloudflared itself when an enable finds none. Once it
-// lands, remote access must come up without another click, on the same
-// password, and only where the user asked for a public tunnel.
 func TestConnectorInstalledStartsTheTunnelTheBridgeWanted(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -1096,7 +985,7 @@ func TestConnectorInstalledStartsTheTunnelTheBridgeWanted(t *testing.T) {
 		{name: "lan only", enable: (*BridgeService).EnableLANOnly},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var tun TunnelController // no connector yet, as at the first enable
+			var tun TunnelController
 			b := &BridgeService{
 				ConfigPath: filepath.Join(t.TempDir(), "mobile.json"), LAN: &fakeLAN{}, DefaultPort: 3011,
 				ResolveTunnel: func() TunnelController { return tun },
@@ -1144,8 +1033,6 @@ func TestMobileRestoreOnBootRollsBackHashWhenStartFails(t *testing.T) {
 	}
 }
 
-// A bridge with no connector says when one is being installed, so a client
-// waits for it rather than offering to install one.
 func TestTunnelStatusSaysWhenAConnectorIsOnItsWay(t *testing.T) {
 	installing := true
 	b := &BridgeService{LAN: &fakeLAN{}, ConfigPath: filepath.Join(t.TempDir(), "mobile", "config.json"), ConnectorInstalling: func() bool { return installing }}
@@ -1158,8 +1045,6 @@ func TestTunnelStatusSaysWhenAConnectorIsOnItsWay(t *testing.T) {
 	}
 }
 
-// A held account token is not proof AO Cloud accepts the link: once AO Cloud
-// refuses the machine's address under it, status says so (#7976).
 func TestStatusReportsAnAccountLinkAOCloudRefuses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mobile.json")
 	if err := mobilebridge.Save(path, mobilebridge.State{Enabled: true, Password: "secret12", AccountTokenHash: "hash-a"}); err != nil {
@@ -1173,7 +1058,6 @@ func TestStatusReportsAnAccountLinkAOCloudRefuses(t *testing.T) {
 	if !bridge.Status().AccountLinkRefused {
 		t.Fatal("a refused publish under the current token was not reported")
 	}
-	// A refusal of an earlier token says nothing about the current one.
 	bridge.NoteAccountListing("hash-old", false)
 	if bridge.Status().AccountLinkRefused {
 		t.Fatal("a refusal of another token marked the current one refused")

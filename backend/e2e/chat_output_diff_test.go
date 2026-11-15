@@ -9,15 +9,6 @@ import (
 	"time"
 )
 
-// Scenarios for streamed command output and the turn's changed-file summary.
-//
-// Both exist because the provider's settled payloads are not enough on their own:
-// aggregatedOutput arrives only at completion and was measured dropping its first
-// chunk, and there is no per-file diff notification at all -- only one aggregated
-// unified diff string per turn, which AO parses. So what these look for is the gap
-// between "the agent did work on disk" and "AO can say what that work was".
-
-// commandDetail decodes an activity's typed payload.
 func commandDetail(t *testing.T, a activity) map[string]any {
 	t.Helper()
 	if len(a.DetailJSON) == 0 {
@@ -30,7 +21,6 @@ func commandDetail(t *testing.T, a activity) map[string]any {
 	return detail
 }
 
-// commandWithOutput finds a command activity that has output recorded.
 func commandWithOutput(t *testing.T, s snapshot) (activity, map[string]any, bool) {
 	t.Helper()
 	for _, a := range s.Activities {
@@ -45,9 +35,6 @@ func commandWithOutput(t *testing.T, s snapshot) (activity, map[string]any, bool
 	return activity{}, nil, false
 }
 
-// Output has to reach the timeline, and it has to say what it is. The provider drops
-// the beginning of a command's output from BOTH the delta stream and the aggregate,
-// so a card that presented either as the full record would be lying.
 func TestChatCommandOutputIsRecordedAndLabelled(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -71,23 +58,15 @@ func TestChatCommandOutputIsRecordedAndLabelled(t *testing.T) {
 		t.Errorf("recorded output is missing the end of the run:\n%q", trim(output, 400))
 	}
 
-	// Which channel the text came from is load-bearing: the two are partial for
-	// different reasons, and a client that cannot tell them apart cannot explain
-	// either.
 	source, _ := detail["outputSource"].(string)
 	if source != "stream" && source != "aggregate" {
 		t.Errorf("activity %s recorded output with no source label (%q)", found.ID, source)
 	}
-	// Never presented as complete, whichever channel it came from.
 	if partial, _ := detail["outputMayBePartial"].(bool); !partial {
 		t.Errorf("output from %q was presented as a complete record", source)
 	}
 }
 
-// Output while the command is STILL RUNNING is the whole reason to accumulate deltas
-// rather than wait for the aggregate. A command that prints slowly is the only case
-// where the provider streams at all: measured on codex-cli 0.146.0, a fast command
-// finishes before a single delta is flushed and produces only the aggregate.
 func TestChatSlowCommandOutputAppearsBeforeItFinishes(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -99,9 +78,6 @@ func TestChatSlowCommandOutputAppearsBeforeItFinishes(t *testing.T) {
 			"Command: for i in $(seq 1 20); do echo \"tick-$i\"; sleep 1; done",
 		"live-1")
 
-	// The assertion is the timing: output visible while the activity is still
-	// running. Waiting for completion first would pass on the aggregate alone and
-	// prove nothing about streaming.
 	snap := d.awaitConversation(session, 3*time.Minute, "output from a command still running",
 		func(s snapshot) bool {
 			for _, a := range s.Activities {
@@ -132,9 +108,6 @@ func TestChatSlowCommandOutputAppearsBeforeItFinishes(t *testing.T) {
 		func(s snapshot) bool { return terminal(s.Turns[len(s.Turns)-1].State) })
 }
 
-// The changed-file summary has to describe what the turn actually did on disk, with
-// the right kind per file. AO derives all of this by parsing one unified diff string,
-// so every field here is a chance for that parse to be wrong.
 func TestChatTurnDiffReportsChangedFiles(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -164,8 +137,6 @@ func TestChatTurnDiffReportsChangedFiles(t *testing.T) {
 	}
 
 	added, _ := diff.fileByPath("added.txt")
-	// A new file must not read as a modification: that is the difference between
-	// "the agent wrote this" and "the agent touched something that existed".
 	if added.Status != "added" {
 		t.Errorf("added.txt status = %q, want added", added.Status)
 	}
@@ -184,8 +155,6 @@ func TestChatTurnDiffReportsChangedFiles(t *testing.T) {
 		t.Errorf("an appended line produced %d additions", edited.Additions)
 	}
 
-	// The diff belongs to the turn that made the change. Attributing it to the wrong
-	// turn would show a user edits they did not ask for in that message.
 	for i, turn := range snap.Turns[:len(snap.Turns)-1] {
 		if turn.Diff != nil && len(turn.Diff.Files) > 0 {
 			t.Errorf("turn %d (%q) also claims %d changed files", i, turn.State, len(turn.Diff.Files))
@@ -193,10 +162,6 @@ func TestChatTurnDiffReportsChangedFiles(t *testing.T) {
 	}
 }
 
-// The provider re-sends the whole diff repeatedly (three byte-identical payloads in
-// one captured turn). That must overwrite per-turn state, never accumulate: a
-// timeline entry per update would show the same edits over and over, and a file
-// listed twice would double its counts.
 func TestChatRepeatedTurnDiffDoesNotDuplicate(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -225,8 +190,6 @@ func TestChatRepeatedTurnDiffDoesNotDuplicate(t *testing.T) {
 		seen[file.Path] = true
 	}
 
-	// No timeline row per diff update. The provider sent several; the conversation
-	// should carry the agent's work, not one entry per notification.
 	for _, a := range snap.Activities[activitiesBefore:] {
 		if a.Summary == "diff file list truncated" {
 			t.Errorf("a diff update leaked into the timeline as activity %s", a.ID)
@@ -234,8 +197,6 @@ func TestChatRepeatedTurnDiffDoesNotDuplicate(t *testing.T) {
 	}
 }
 
-// A turn that changed nothing must not carry another turn's file list, and must not
-// be confused with a turn the provider never reported on.
 func TestChatTurnThatChangesNothingReportsNoFiles(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())

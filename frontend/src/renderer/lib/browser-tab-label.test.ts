@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { browserTabLabel } from "./browser-tab-label";
 
-// The test setup (src/renderer/test/setup.ts) boots i18n in English, so:
-//   appI18n.t("browser.newTab")   === "New tab"
-//   appI18n.t("browser.blankPage") === "Blank page"
-
 describe("browserTabLabel", () => {
-	// ─── empty / blank URL ───────────────────────────────────────────────────
 	describe("blank URL", () => {
 		it("returns i18n new-tab fallbacks when both title and URL are empty", () => {
 			const result = browserTabLabel("", "");
@@ -39,7 +34,6 @@ describe("browserTabLabel", () => {
 		});
 	});
 
-	// ─── standard HTTP(S) URLs ───────────────────────────────────────────────
 	describe("http / https URLs", () => {
 		it("extracts host as subtitle for an http URL with a path", () => {
 			const result = browserTabLabel("", "http://localhost:3000/dashboard");
@@ -71,7 +65,6 @@ describe("browserTabLabel", () => {
 		});
 	});
 
-	// ─── file: URIs ──────────────────────────────────────────────────────────
 	describe("file: URIs", () => {
 		it("extracts the last path segment as subtitle for a file URI", () => {
 			const result = browserTabLabel("", "file:///Users/dev/project/index.html");
@@ -86,19 +79,16 @@ describe("browserTabLabel", () => {
 		});
 
 		it("extracts the deepest folder name when path ends with a slash", () => {
-			// pathname.split("/").filter(Boolean).at(-1) returns "html"
 			const result = browserTabLabel("", "file:///var/www/html/");
 			expect(result.subtitle).toBe("html");
 		});
 
 		it("falls back to the raw URL when file path has no non-empty segments", () => {
-			// "file:///" -> pathname "/", split("/").filter(Boolean) = [] -> .at(-1) = undefined -> url
 			const result = browserTabLabel("", "file:///");
 			expect(result.subtitle).toBe("file:///");
 		});
 	});
 
-	// ─── other protocols ─────────────────────────────────────────────────────
 	describe("other protocols", () => {
 		it("uses host as subtitle for ftp URLs", () => {
 			const result = browserTabLabel("", "ftp://files.example.com/pub");
@@ -106,7 +96,6 @@ describe("browserTabLabel", () => {
 		});
 	});
 
-	// ─── malformed / invalid URLs ────────────────────────────────────────────
 	describe("malformed or invalid URLs", () => {
 		it("uses the raw URL as both title and subtitle when URL is unparseable", () => {
 			const result = browserTabLabel("", "invalid-url-string");
@@ -127,8 +116,6 @@ describe("browserTabLabel", () => {
 		});
 
 		it("documents current behavior for javascript: URLs (host is empty string)", () => {
-			// new URL("javascript:alert(1)") is valid; parsed.host === "" (non-file protocol)
-			// subtitle = parsed.host = "" — title falls back to "" too since cleanTitle is ""
 			const result = browserTabLabel("", "javascript:alert(1)");
 			expect(result.subtitle).toBe("");
 		});

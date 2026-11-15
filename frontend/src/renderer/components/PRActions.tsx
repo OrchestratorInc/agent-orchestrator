@@ -33,7 +33,6 @@ type PRStateAction = "close" | "reopen" | "ready" | "draft";
 
 const MERGE_METHODS: PRMergeMethod[] = ["squash", "merge", "rebase"];
 
-/** The merge method picked per repository; outlives the card like GitHub's own choice. */
 const chosenMethod = new Map<string, PRMergeMethod>();
 
 export function resetPRMergeMethods() {
@@ -50,11 +49,6 @@ const gitIcon: Record<SessionGitActionKind, LucideIcon> = {
 	createDraftPR: GitPullRequestDraft,
 };
 
-/**
- * A Cloud PR card's git step: the control plane merges from the card itself,
- * so the step stands alone rather than sharing PRActionButton, whose merge,
- * close and stack actions go to the local daemon.
- */
 export function CloudPRGitStepButton({ git }: { git: BranchGitStep }) {
 	const primary = git.primary;
 	if (!git.pending && !primary) return null;
@@ -79,7 +73,6 @@ export function CloudPRGitStepButton({ git }: { git: BranchGitStep }) {
 	);
 }
 
-/** Refreshes what the inspector shows of the PR after a write to the provider. */
 function useRefreshPR(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();
 	return () => Promise.all([
@@ -88,11 +81,6 @@ function useRefreshPR(sessionId: string, hostId?: string) {
 	]);
 }
 
-/**
- * Changes a PR's state on the provider. The UI shows the confirmed state at once;
- * the refetch reconciles the rest (the workspace refetch alone can take several
- * seconds) without holding the control.
- */
 function usePRStateChange(pr: SessionPRSummary, sessionId: string, hostId?: string, onChanged?: () => void) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -125,20 +113,8 @@ function usePRStateChange(pr: SessionPRSummary, sessionId: string, hostId?: stri
 	return { change, refresh, showState };
 }
 
-/**
- * A PR's one action button, as in other agent apps: it does the next step,
- * the branch's work first (commit and push, update from main), then what the
- * PR is waiting for (Ready for review on a draft; Reopen when closed; merge
- * with the chosen method; or, on a stacked PR, the layers up to it together,
- * since merging one alone would land it on its parent's branch), and its menu
- * holds everything else: the other
- * branch steps, the merge method and Close. Merge stays visible while the PR
- * isn't ready, greyed out with the reason.
- */
 export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
-	/** Readiness allows merging, fenced to the head commit the card shows. */
 	canMerge: boolean;
-	/** The branch's git step, when this is the PR the branch updates. */
 	git?: BranchGitStep;
 	hostId?: string;
 	pr: SessionPRSummary;
@@ -160,14 +136,12 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 			if (usePreviewData) return undefined;
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
-				// The PR view merges a PR nothing checks; the daemon confirms it first.
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha, method, allowNoChecks: true },
 			});
 			if (error) throw apiErrorException(error, t("pr.merge.failed", { number: pr.number }));
 			return data;
 		},
 		onSuccess: async (result) => {
-			// The card turns merged at once; the next sync confirms it.
 			if (result?.state === "merged") {
 				showState(result.state, result.stateChangedAt);
 				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
@@ -200,8 +174,6 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	const blocker = lowerBlock
 		? t("pr.stack.blocked", { number: lowerBlock.number, reason: t(blockReasonLabel[lowerBlock.reason]) })
 		: canMerge ? undefined : t(blockedSentence[prSummaryBlockReason(pr) ?? "provider"]);
-	// Until the stack is known, a merge can't say what it would land. A failed read
-	// doesn't hold it up: the daemon re-checks before merging.
 	const mergeAllowed = canMerge && !lowerBlock && !stackQuery.isLoading;
 	const severalLayers = landing && landing.length > 1 ? landing : undefined;
 	const mergeNow = severalLayers ? () => setConfirmStack(true) : landing ? () => mergeStack.mutate() : () => merge.mutate();
@@ -215,7 +187,6 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 		setMethod(value);
 	};
 
-	// The next step: the branch's work first, then what the PR is waiting for.
 	const gitPrimary = git?.pending
 		? { label: git.pending, aria: git.pending, icon: Loader2, run: () => {}, disabled: true, tone: "secondary" as const, spinning: true }
 		: git?.primary
@@ -228,7 +199,6 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 			: { label: merging ? t("pr.merge.merging") : mergeLabel, aria: severalLayers ? mergeLabel : t("pr.merge.methodFor", { method: methodLabel, number: pr.number }), icon: GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
 	const primary = gitPrimary ?? { ...prPrimary, spinning: false };
 	const gitMenu = (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
-	// Ready for review, when branch work holds the button on a draft.
 	const stateSteps = pr.state === "draft" && gitPrimary ? [{ key: "ready" as const, label: t("pr.state.action.ready"), icon: GitPullRequest }] : [];
 	const errorText = [merge.error, change.error, confirmStack ? null : mergeStack.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
 
@@ -240,8 +210,6 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 					className={cn(
 						"gap-1 rounded-r-none px-2 text-xs",
 						"min-w-0 flex-1",
-						// The raised button draws its face, edge, hover and press from
-						// --button-color, so the merge green sets that, not just the fill.
 						primary.tone === "go" ? "[--button-color:var(--color-success)] text-on-foreground" : "",
 					)}
 					disabled={primary.disabled}
@@ -290,7 +258,6 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 										<DropdownMenuRadioItem key={value} value={value}>{t(`pr.merge.method.${value}`)}</DropdownMenuRadioItem>
 									))}
 								</DropdownMenuRadioGroup>
-								{/* With branch work on the button, merging is still one pick away. */}
 								{gitPrimary && pr.state === "open" ? (
 									<DropdownMenuItem disabled={!mergeAllowed || busy} onSelect={mergeNow} title={blocker}>
 										<GitMerge aria-hidden="true" />
@@ -351,7 +318,6 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	);
 }
 
-/** The tint behind each state's pill; its text takes the state's own colour. */
 const stateTint: Record<SessionPRSummary["state"], string> = {
 	draft: "bg-muted",
 	open: "bg-success/15",
@@ -366,12 +332,6 @@ const stateLabel = {
 	closed: "pr.tab.state.closed",
 } as const;
 
-/**
- * The state pill at the top of a PR's tab, and the place to change it, in
- * GitHub's words: an open PR can convert to a draft or close, a draft can be
- * marked ready for review or close, and a closed one can reopen. Closing asks
- * first, as it does on the card. A merged PR is done, so its pill is only a label.
- */
 export function PRStateMenu({ hostId, pr, sessionId }: { hostId?: string; pr: SessionPRSummary; sessionId: string }) {
 	const { t } = useTranslation();
 	const [confirmClose, setConfirmClose] = useState(false);
@@ -436,7 +396,6 @@ export function PRStateMenu({ hostId, pr, sessionId }: { hostId?: string; pr: Se
 	);
 }
 
-/** Why Merge is greyed out, as one plain line. */
 const blockedSentence = {
 	draft: "pr.actions.blockedDraft",
 	conflict: "pr.actions.blockedConflict",
@@ -449,7 +408,6 @@ const blockedSentence = {
 	provider: "pr.actions.blockedProvider",
 } as const;
 
-/** The same reasons as a label, short enough for a row. */
 export const blockReasonLabel: Record<PRBlockReason, "pr.blocker.draft" | "pr.blocker.conflict" | "pr.blocker.checks" | "pr.card.checksCancelled" | "pr.blocker.checking" | "pr.blocker.changes" | "pr.blocker.review" | "pr.blocker.threads"> = {
 	draft: "pr.blocker.draft",
 	conflict: "pr.blocker.conflict",

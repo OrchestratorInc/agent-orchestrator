@@ -8,10 +8,8 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, typ
 import { ArtifactsView } from "./ArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
-// The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
 vi.mock("../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => "me-1" }));
 
-// Share is offered only where the control plane serves share links.
 vi.mock("../hooks/useSettings", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../hooks/useSettings")>();
 	return {
@@ -46,9 +44,7 @@ const mocks = vi.hoisted(() => ({
 	refreshCloudAccess: vi.fn(),
 	artifactFileChanges: vi.fn(),
 	hideShellTopbar: true,
-	/** Overrides whether the control plane keeps artifacts; undefined keeps the real hook's answer. */
 	cloudArtifacts: undefined as boolean | undefined,
-	/** Who each published link opens for, as the link list says. */
 	shareAccess: new Map<string, "restricted" | "anyone">(),
 }));
 
@@ -57,7 +53,6 @@ vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
 	useReconciledShareLinks: () => mocks.shareAccess,
 }));
 
-// These tests are about the live preview a card falls back to; the cached image path has its own tests.
 vi.mock("./ArtifactSnapshotThumbnail", async () => {
 	const { ArtifactThumbnail } = await import("./ArtifactThumbnail");
 	return { ArtifactSnapshotThumbnail: ArtifactThumbnail };
@@ -165,12 +160,10 @@ const withoutArtifacts: WorkspaceSummary[] = [
 	{ id: STANDALONE_WORKSPACE_ID, name: "Standalone", path: "", sessions: [] },
 ];
 
-/** The one list every artifact is in, newest first, pinned ones on top. */
 function artifactList() {
 	return screen.getByRole("list", { name: "Artifacts" });
 }
 
-/** Search sits behind its icon until opened. */
 async function openSearch(user: ReturnType<typeof userEvent.setup>) {
 	await user.click(screen.getByRole("button", { name: "Search artifacts" }));
 	return screen.getByRole("searchbox", { name: "Search artifacts" });
@@ -186,13 +179,11 @@ function renderView() {
 		</QueryClientProvider>
 	);
 	const view = render(tree());
-	/** Renders again, as a workspace refresh does. */
 	const refresh = () => view.rerender(tree());
 	return { ...view, refresh };
 }
 
 
-/** The open menu's items by accessible name; a project's letter tile is decoration, not part of it. */
 function expectMenuItems(names: string[]) {
 	const items = screen.getAllByRole("menuitem");
 	expect(items).toHaveLength(names.length);
@@ -285,7 +276,6 @@ describe("ArtifactsView", () => {
 			"All projects", "agent-orchestrator", "All types", "All images", "All videos", "All documents", "Public", "Shared privately", "Not shared", "All",
 		]);
 		const names = () => within(artifactList()).getAllByRole("listitem").map((row) => row.textContent ?? "");
-		// The menu stays open, so several types are picked in one go.
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "All videos" }));
 		expect(screen.getByRole("menuitemcheckbox", { name: "All videos" })).toHaveAttribute("aria-checked", "true");
 		expect(screen.getByRole("menuitemcheckbox", { name: "All types" })).toHaveAttribute("aria-checked", "false");
@@ -298,7 +288,6 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("button", { name: "Remove filter Type: All documents" }));
 		expect(names()).toHaveLength(3);
 
-		// All clears its filter.
 		await user.click(screen.getByRole("button", { name: "Filter" }));
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "All images" }));
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "All types" }));
@@ -325,7 +314,6 @@ describe("ArtifactsView", () => {
 		expect(withCloud.getByRole("button", { name: "Cloud" })).toHaveAttribute("aria-pressed", "true");
 		expect(screen.getAllByRole("listitem")).toHaveLength(1);
 		expect(screen.getByText("cloud-notes.md")).toBeInTheDocument();
-		// The project menu lists only projects with artifacts in that location.
 		await user.click(screen.getByRole("button", { name: "Filter" }));
 		expect(screen.getAllByRole("menuitemcheckbox").slice(0, 2).map((item) => item.textContent)).toEqual(["All projects", "Cloud project"]);
 		await user.keyboard("{Escape}");
@@ -384,7 +372,6 @@ describe("ArtifactsView", () => {
 	it("names a single project's artifacts by project and session, with no heading, in either view", async () => {
 		const user = userEvent.setup();
 		mocks.workspaces = [withArtifacts[0]];
-		// A section collapsed before sections were removed hides nothing.
 		useArtifactsViewStore.setState({ collapsedSections: ["project:ao"] });
 		renderView();
 		expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
@@ -403,11 +390,9 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("button", { name: "Select" }));
 		expect(screen.getByText("0 selected")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
-		// Selecting hides each card's own actions and stops the card from opening a preview.
 		expect(screen.queryByRole("button", { name: /^More actions/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "New artifact" })).not.toBeInTheDocument();
 
-		// The same file shows in Pinned, Recent and its project; one checkbox is checked in all of them.
 		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
 		for (const box of screen.getAllByRole("checkbox", { name: "Select pricing.md" })) expect(box).toBeChecked();
 		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
@@ -456,7 +441,6 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("button", { name: "Select" }));
 		await user.click(screen.getAllByRole("checkbox", { name: "Select pricing.md" })[0]!);
 		await user.click(screen.getAllByRole("checkbox", { name: "Select caching-options.md" })[0]!);
-		// The selection outlives the filters.
 		const search = await openSearch(user);
 		await user.type(search, "caching");
 		await user.clear(search);
@@ -571,7 +555,6 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		expect(screen.getByText("2 selected")).toBeInTheDocument();
 
-		// Focus returns to the Search icon on the next frame; its tooltip takes the next Escape.
 		await waitFor(() => expect(screen.getByRole("button", { name: "Search artifacts" })).toHaveFocus());
 		await user.keyboard("{Escape}");
 		expect(screen.getByText("2 selected")).toBeInTheDocument();
@@ -604,7 +587,6 @@ describe("ArtifactsView", () => {
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
 		const dialog = screen.getByRole("dialog", { name });
-		// A cloud session's file is shared as a local one is.
 		expect(within(dialog).getByRole("button", { name: `Publish: ${name}` })).toBeInTheDocument();
 		if (kind === "html") {
 			expect(within(dialog).getByTestId("cloud-artifact-preview")).toHaveAttribute("src", `https://cp.test/artifact-files/token/${name}?v=2026-10-11T10%3A00%3A00Z`);
@@ -738,7 +720,6 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "Public" }));
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "Not shared" }));
 		expect(rows()).toEqual([expect.stringContaining("artifacts-user-flow.html"), expect.stringContaining("caching-options.md")]);
-		// Filters narrow together: unshared artifacts of the Scratchpad.
 		await user.click(screen.getByRole("menuitemcheckbox", { name: "Sessions" }));
 		expect(rows()).toEqual([expect.stringContaining("caching-options.md")]);
 		await user.keyboard("{Escape}");
@@ -754,7 +735,6 @@ describe("ArtifactsView", () => {
 		const user = userEvent.setup();
 		renderView();
 		const project = within(artifactList());
-		// The card draws stand-in buttons until focus or the pointer reaches it; focus moves to the menu's own.
 		act(() => project.getByRole("button", { name: "More actions: pricing.md" }).focus());
 		expect(project.getByRole("button", { name: "More actions: pricing.md" })).toHaveFocus();
 		await user.keyboard(key);
@@ -767,7 +747,6 @@ describe("ArtifactsView", () => {
 	it("starts a pin tooltip from the one pointer move that reached the card", async () => {
 		renderView();
 		const project = within(artifactList());
-		// The pointer comes to rest on Pin: that move lands on the stand-in, before the tooltip trigger exists.
 		fireEvent.pointerMove(project.getByRole("button", { name: "Pin artifact: pricing.md" }), { pointerType: "mouse" });
 		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Pin artifact");
@@ -777,7 +756,6 @@ describe("ArtifactsView", () => {
 		renderView();
 		const project = within(artifactList());
 		const pin = project.getByRole("button", { name: "Pin artifact: pricing.md" });
-		// A browser sends the click only to the button pressed, and only while it is still in the page.
 		fireEvent.pointerDown(pin, { button: 0, pointerType: "touch", isPrimary: true });
 		act(() => pin.focus());
 		await act(async () => {});
@@ -785,7 +763,6 @@ describe("ArtifactsView", () => {
 		expect(pin).toBeInTheDocument();
 		fireEvent.click(pin);
 		expect(within(artifactList()).getByText("pricing.md")).toBeInTheDocument();
-		// A pressed tooltip trigger stays quiet when focus lands on it, as it does without the stand-in.
 		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 	});
 
@@ -854,7 +831,6 @@ describe("ArtifactsView", () => {
 			.mockResolvedValueOnce(new Response(null, { status: 503 }))
 			.mockResolvedValue(new Response("<h1>Design review</h1>"));
 		vi.stubGlobal("fetch", fetch);
-		// One query cache across mounts, as the app keeps while a card scrolls away and back.
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const tree = (mount: string) => (
 			<QueryClientProvider client={client}>
@@ -866,11 +842,9 @@ describe("ArtifactsView", () => {
 		const view = render(tree("first"));
 		await waitFor(() => expect(within(artifactList()).getByTitle("No preview available")).toBeInTheDocument());
 		expect(view.container.querySelector("iframe")).toBeNull();
-		// The daemon was briefly unavailable: the next mount asks again and frames the page.
 		view.rerender(tree("second"));
 		await waitFor(() => expect(view.container.querySelector("iframe")).not.toBeNull());
 		expect(fetch).toHaveBeenCalledTimes(2);
-		// A good answer is kept for this version of the file.
 		view.rerender(tree("third"));
 		await waitFor(() => expect(view.container.querySelector("iframe")).not.toBeNull());
 		expect(fetch).toHaveBeenCalledTimes(2);
@@ -989,7 +963,6 @@ describe("ArtifactsView", () => {
 		const image = session("ao-image", "Cover image", [{ name: "cover.png", kind: "file", updatedAt: "2026-10-11T10:00:00Z" }]);
 		image.artifactFiles![0].rawUrl = "http://127.0.0.1:3002/cover.png";
 		mocks.workspaces = [{ id: "ao", name: "AO", path: "/code/ao", sessions: [image] }];
-		// No small copy can be made here, so the card shows the original.
 		vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
 		renderView();
 		const project = within(artifactList());
@@ -1031,7 +1004,6 @@ describe("ArtifactsView", () => {
 			expect.stringContaining("artifacts-user-flow.html"),
 			expect.stringContaining("caching-options.md"),
 		]);
-		// Named like every other artifact: its project, then its session.
 		expect(project.getByText("agent-orchestrator · Orchestrator")).toBeInTheDocument();
 		await user.click(project.getByRole("button", { name: /^weekly-status\.html/ }));
 		await user.click(within(screen.getByRole("dialog", { name: "weekly-status.html" })).getByRole("button", { name: "Open in session" }));
@@ -1229,11 +1201,9 @@ describe("ArtifactsView", () => {
 	it("gives each project the sidebar's icon in the New artifact menu", async () => {
 		const user = userEvent.setup();
 		renderView();
-		// The letter tile is decoration beside the project's name, as in the sidebar.
 		await user.click(screen.getByRole("button", { name: "New artifact" }));
 		const item = screen.getByRole("menuitem", { name: "agent-orchestrator" });
 		expect(item.querySelector('[aria-hidden="true"]')?.textContent).toBe("A");
-		// Scratchpad keeps its file icon: it is not a project.
 		expect(screen.getByRole("menuitem", { name: "Sessions" }).textContent).toBe("Sessions");
 	});
 

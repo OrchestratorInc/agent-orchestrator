@@ -7,8 +7,6 @@ describe("scramble payloads for the pairing placeholder", () => {
 		expect(scramblePairingCodes(5)).toHaveLength(5);
 	});
 
-	// Deterministic: React re-renders must not reshuffle the stack, or the
-	// crossfade turns into flicker.
 	it("is stable across calls", () => {
 		expect(scramblePairingCodes(4)).toEqual(scramblePairingCodes(4));
 	});
@@ -17,12 +15,6 @@ describe("scramble payloads for the pairing placeholder", () => {
 		expect(new Set(scramblePairingCodes(6)).size).toBe(6);
 	});
 
-	// The whole point: the placeholder has to encode a payload of the same
-	// shape and length as a real offer, so the encoder picks the same QR
-	// version. A different version means a different module count, and the
-	// resolve would visibly jump from a coarse grid to a fine one. Lengths
-	// are compared at the real offer's field sizes, so one byte of base64
-	// drift is the most the decoy can be off by.
 	it("matches the length of a real pairing code, field for field", () => {
 		const host = "192.168.1.12";
 		const real = pairingCodeUrl(

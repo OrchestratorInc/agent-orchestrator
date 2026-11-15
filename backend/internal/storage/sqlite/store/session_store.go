@@ -13,11 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// ---- sessions ----
-
-// CreateSession assigns a per-project identity or a global standalone identity
-// and inserts the record. The next-num read and insert share writeMu, so two
-// concurrent creates cannot collide.
 func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -25,8 +20,6 @@ func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (do
 	return created, err
 }
 
-// CreateClientRequestSession atomically decides which session owns a request
-// key. The caller launches only when fresh is true.
 func (s *Store) CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
 	if rec.ClientRequestID == "" || rec.ClientRequestHash == "" {
 		return domain.SessionRecord{}, false, fmt.Errorf("client request id and hash are required")
@@ -36,7 +29,6 @@ func (s *Store) CreateClientRequestSession(ctx context.Context, rec domain.Sessi
 	return s.createSessionLocked(ctx, s.qw, rec)
 }
 
-// GetSessionByClientRequestID finds the session created for a retryable request.
 func (s *Store) GetSessionByClientRequestID(ctx context.Context, key string) (domain.SessionRecord, bool, error) {
 	return s.getSessionByClientRequestID(ctx, s.qr, key)
 }
@@ -60,7 +52,6 @@ func (s *Store) getSessionByClientRequestID(ctx context.Context, q *gen.Queries,
 	return rec, true, nil
 }
 
-// CommitClientRequestSession marks a successfully launched session replayable.
 func (s *Store) CommitClientRequestSession(ctx context.Context, id domain.SessionID) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -74,9 +65,6 @@ func (s *Store) CommitClientRequestSession(ctx context.Context, id domain.Sessio
 	return nil
 }
 
-// CreateAutomationSession reports whether it inserted the seed. Callers must
-// not continue launching when fresh=false unless the returned row carries the
-// durable launch-complete marker.
 func (s *Store) CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
 	if rec.AutomationRunID == nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("automation run id is required")
@@ -115,7 +103,6 @@ func (s *Store) createSessionLocked(ctx context.Context, q *gen.Queries, rec dom
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
 	}
-	// A deleted session's number is never handed out again.
 	floor, err := q.GetSessionNumFloor(ctx, prefix)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return domain.SessionRecord{}, false, fmt.Errorf("session num floor for %s: %w", rec.ProjectID, err)
@@ -152,8 +139,6 @@ func (s *Store) createSessionLocked(ctx context.Context, q *gen.Queries, rec dom
 	return rec, true, nil
 }
 
-// SetSessionProvisionedWorkspace records the worktree as soon as it exists,
-// ahead of the controller commit that writes the rest of the row.
 func (s *Store) SetSessionProvisionedWorkspace(
 	ctx context.Context,
 	id domain.SessionID,
@@ -175,9 +160,6 @@ func (s *Store) SetSessionProvisionedWorkspace(
 	return rows > 0, nil
 }
 
-// SetSessionTaskBranch records a background task branch rename on the session
-// and its repository rows together. repoBranches maps each repository row to
-// the branch its checkout holds, which after a failed undo can differ.
 func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -198,8 +180,6 @@ func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, e
 	return err == nil && rows > 0, err
 }
 
-// SetSessionBranchNaming marks whether a task's generated branch name is still
-// on the way.
 func (s *Store) SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -209,7 +189,6 @@ func (s *Store) SetSessionBranchNaming(ctx context.Context, id domain.SessionID,
 	return nil
 }
 
-// ClearSessionBranchNaming ends every branch naming a restart interrupted.
 func (s *Store) ClearSessionBranchNaming(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -219,7 +198,6 @@ func (s *Store) ClearSessionBranchNaming(ctx context.Context) error {
 	return nil
 }
 
-// SetTaskPreparationBase records the immutable base only while the row is hidden.
 func (s *Store) SetTaskPreparationBase(ctx context.Context, id domain.SessionID, baseSHA, baseRef string) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -234,9 +212,6 @@ func (s *Store) SetTaskPreparationBase(ctx context.Context, id domain.SessionID,
 	return rows > 0, nil
 }
 
-// SetSessionProvisionState publishes an asynchronous Chat spawn's progress. It
-// writes only these two fields: the background start races the controller
-// commit, which owns the rest of the row.
 func (s *Store) SetSessionProvisionState(
 	ctx context.Context,
 	id domain.SessionID,
@@ -258,8 +233,6 @@ func (s *Store) SetSessionProvisionState(
 	return rows > 0, nil
 }
 
-// SetSessionProvisionSteps publishes start progress and the pre-launch setup
-// checkpoint. Like SetSessionProvisionState it writes only its own column.
 func (s *Store) SetSessionProvisionSteps(
 	ctx context.Context,
 	id domain.SessionID,
@@ -282,8 +255,6 @@ func (s *Store) SetSessionProvisionSteps(
 	return nil
 }
 
-// SetSessionBranchState records the branch-state reconcile's latest facts. It writes
-// only its own column, so a stale session read cannot replay other fields.
 func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, state domain.SessionBranchState) (bool, error) {
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -301,8 +272,6 @@ func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, 
 	return rows > 0, nil
 }
 
-// PromoteTaskPreparation makes a hidden speculative row visible without
-// touching workspace facts that may be published by the preparation goroutine.
 func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -336,7 +305,6 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 	return rows > 0, nil
 }
 
-// DeleteTaskPreparation removes only a row that has not been claimed.
 func (s *Store) DeleteTaskPreparation(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -365,9 +333,6 @@ WHERE session_id = ?
 	return rows > 0, nil
 }
 
-// UpdateSession writes the general mutable state of an existing session. The
-// provisioning state is owned by SetSessionProvisionState so stale lifecycle
-// snapshots cannot overwrite asynchronous start progress.
 func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -377,8 +342,6 @@ func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) err
 	return s.inTx(ctx, "update session", func(q *gen.Queries) error { return updateSessionRow(ctx, q, rec) })
 }
 
-// updateSessionRow writes the general session state plus, once, an import's
-// adoption. Other import facts change only through SetSessionImportWorkspace.
 func updateSessionRow(ctx context.Context, q *gen.Queries, rec domain.SessionRecord) error {
 	if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
 		return err
@@ -389,8 +352,6 @@ func updateSessionRow(ctx context.Context, q *gen.Queries, rec domain.SessionRec
 	return nil
 }
 
-// SetSessionHibernated changes only the durable sleep marker if the caller's
-// session snapshot is still current. Passing nil clears the marker on wake.
 func (s *Store) SetSessionHibernated(ctx context.Context, id domain.SessionID, expectedRevision int64, at *time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -405,8 +366,6 @@ func (s *Store) SetSessionHibernated(ctx context.Context, id domain.SessionID, e
 	return rows > 0, nil
 }
 
-// MarkHarnessSessionsStale marks the live launches of harness as running a
-// release that version replaced, and returns how many it marked.
 func (s *Store) MarkHarnessSessionsStale(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) (int64, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -419,8 +378,6 @@ func (s *Store) MarkHarnessSessionsStale(ctx context.Context, harness domain.Age
 	return rows, nil
 }
 
-// SetSessionVersionSwitchFailed records that moving the session's current
-// launch to version failed.
 func (s *Store) SetSessionVersionSwitchFailed(ctx context.Context, id domain.SessionID, version string, at time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -432,8 +389,6 @@ func (s *Store) SetSessionVersionSwitchFailed(ctx context.Context, id domain.Ses
 	return nil
 }
 
-// ListVersionRefreshChatCandidates lists idle Chat sessions, quiet since
-// idleBefore, whose current launch runs a replaced harness release.
 func (s *Store) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
 	ids, err := s.qr.ListVersionRefreshChatCandidates(ctx, idleBefore)
 	if err != nil {
@@ -442,8 +397,6 @@ func (s *Store) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore
 	return ids, nil
 }
 
-// ListVersionRefreshTerminalCandidates lists idle, natively resumable terminal
-// sessions, quiet since idleBefore, whose current launch runs a replaced release.
 func (s *Store) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
 	ids, err := s.qr.ListVersionRefreshTerminalCandidates(ctx, idleBefore)
 	if err != nil {
@@ -452,7 +405,6 @@ func (s *Store) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBe
 	return ids, nil
 }
 
-// CountStaleBinarySessions counts live launches still on a replaced release, per harness.
 func (s *Store) CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error) {
 	rows, err := s.qr.CountStaleBinarySessions(ctx)
 	if err != nil {
@@ -465,9 +417,6 @@ func (s *Store) CountStaleBinarySessions(ctx context.Context) (map[domain.AgentH
 	return out, nil
 }
 
-// SetSessionRuntimeReleased records that AO destroys launchID's terminal on
-// purpose, keeping the session. It writes nothing unless launchID is still the
-// session's current launch.
 func (s *Store) SetSessionRuntimeReleased(ctx context.Context, id domain.SessionID, launchID string) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -478,8 +427,6 @@ func (s *Store) SetSessionRuntimeReleased(ctx context.Context, id domain.Session
 	return rows > 0, nil
 }
 
-// UpdateSessionModel changes only the selected model, leaving concurrent
-// lifecycle and controller ownership updates intact.
 func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -493,13 +440,6 @@ func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, mod
 	return rows > 0, nil
 }
 
-// UpdateSessionArtifactOutput changes only artifact_dir and
-// session_output_type, leaving concurrent lifecycle/controller/activity
-// writes intact. lifecycle.Manager.ReconcileSessionOutputType uses this
-// instead of a read-modify-write UpdateSession so a stale in-memory
-// SessionRecord read before a concurrent termination (or other update) can
-// never replay is_terminated, activity, runtime identity, or preview state
-// backwards over that newer write.
 func (s *Store) UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -514,9 +454,6 @@ func (s *Store) UpdateSessionArtifactOutput(ctx context.Context, id domain.Sessi
 	return rows > 0, nil
 }
 
-// UpdateBrowserCapabilityVerifier rotates only the verifier when the caller's
-// controller-owner snapshot is still current. It deliberately leaves every
-// other mutable session field, including user-visible recency, untouched.
 func (s *Store) UpdateBrowserCapabilityVerifier(
 	ctx context.Context,
 	id domain.SessionID,
@@ -543,8 +480,6 @@ func (s *Store) UpdateBrowserCapabilityVerifier(
 	return rows > 0, nil
 }
 
-// UpdateSessionFromActivitySignal projects activity-derived session metadata
-// only when the signal still belongs to the session's active harness launch.
 func (s *Store) UpdateSessionFromActivitySignal(
 	ctx context.Context,
 	rec domain.SessionRecord,
@@ -553,10 +488,6 @@ func (s *Store) UpdateSessionFromActivitySignal(
 	return s.updateSessionFromActivitySignal(ctx, rec.ID, activitySignalProjectionParams(rec, expectedRevision))
 }
 
-// UpdateSessionFromActivitySignalAndAcceptSemanticDelivery is
-// UpdateSessionFromActivitySignal that also records deliveryID as accepted by
-// the session's runtime launch. It is one fenced write, so acceptance lands
-// only with a projection that still owns that launch.
 func (s *Store) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
 	ctx context.Context,
 	rec domain.SessionRecord,
@@ -581,9 +512,6 @@ func (s *Store) updateSessionFromActivitySignal(ctx context.Context, id domain.S
 	return rows > 0, nil
 }
 
-// SemanticDeliveryAccepted reports whether runtimeLaunchID of session id
-// accepted deliveryID, even if later prompts replaced the conversation
-// checkpoint.
 func (s *Store) SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error) {
 	if runtimeLaunchID == "" || deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
 		return false, nil
@@ -629,11 +557,6 @@ func activitySignalProjectionParams(rec domain.SessionRecord, expectedRevision i
 	}
 }
 
-// RecordSessionLatestUserPrompt persists pane-delivered user direction without
-// rewriting lifecycle ownership. Because the provider hook may be lost, the
-// same atomic write clears any prior assistant pairing and trusted checkpoint
-// provenance. An unresolved Stop boundary remains until a canonical main-turn
-// hook supplies the missing boundary evidence.
 func (s *Store) RecordSessionLatestUserPrompt(ctx context.Context, id domain.SessionID, prompt string, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -648,9 +571,6 @@ func (s *Store) RecordSessionLatestUserPrompt(ctx context.Context, id domain.Ses
 	return rows > 0, nil
 }
 
-// ClaimChatControllerGeneration makes generation the only Chat controller that
-// may project provider events for this session. The narrow update avoids writing
-// a stale full SessionRecord over lifecycle facts changed by another goroutine.
 func (s *Store) ClaimChatControllerGeneration(
 	ctx context.Context,
 	id domain.SessionID,
@@ -671,10 +591,6 @@ func (s *Store) ClaimChatControllerGeneration(
 	return nil
 }
 
-// RenameSession updates only the user-facing display name for an existing
-// session. It returns ok=false when the session id does not exist. The
-// sessions_cdc_update trigger fans out a session_updated CDC event when the
-// display name actually changes.
 func (s *Store) RenameSession(ctx context.Context, id domain.SessionID, displayName string, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -689,8 +605,6 @@ func (s *Store) RenameSession(ctx context.Context, id domain.SessionID, displayN
 	return rows > 0, nil
 }
 
-// RenameSessionIfDisplayName applies a generated title only while the session
-// still carries AO's provisional name, so a concurrent human rename wins.
 func (s *Store) RenameSessionIfDisplayName(
 	ctx context.Context,
 	id domain.SessionID,
@@ -711,7 +625,6 @@ func (s *Store) RenameSessionIfDisplayName(
 	return rows > 0, nil
 }
 
-// SetSessionPinned updates the pinned status of a session.
 func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPinned bool, pinnedAt *time.Time, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -727,10 +640,6 @@ func (s *Store) SetSessionPinned(ctx context.Context, id domain.SessionID, isPin
 	return rows > 0, nil
 }
 
-// SetSessionPreviewURL updates only the browser preview URL for an existing
-// session. It returns ok=false when the session id does not exist. The
-// sessions_cdc_update trigger fans out a session_updated CDC event when the
-// preview URL actually changes.
 func (s *Store) SetSessionPreviewURL(ctx context.Context, id domain.SessionID, previewURL string, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -745,8 +654,6 @@ func (s *Store) SetSessionPreviewURL(ctx context.Context, id domain.SessionID, p
 	return rows > 0, nil
 }
 
-// SetSessionTerminateOnPRMerge updates the user's merge-completion lifecycle
-// policy. It returns ok=false when the session id does not exist.
 func (s *Store) SetSessionTerminateOnPRMerge(ctx context.Context, id domain.SessionID, terminate bool, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -761,7 +668,6 @@ func (s *Store) SetSessionTerminateOnPRMerge(ctx context.Context, id domain.Sess
 	return rows > 0, nil
 }
 
-// SetSessionAutoInjectReview persists a session's automatic review-injection policy.
 func (s *Store) SetSessionAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -776,9 +682,6 @@ func (s *Store) SetSessionAutoInjectReview(ctx context.Context, id domain.Sessio
 	return rows > 0, nil
 }
 
-// SetSessionAutoInjectCI persists the CI-failure injection policy for the
-// session and every PR currently owned by it. Future PRs still inherit this
-// value from the session row when first observed.
 func (s *Store) SetSessionAutoInjectCI(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -810,7 +713,6 @@ func (s *Store) SetSessionAutoInjectCI(ctx context.Context, id domain.SessionID,
 	return updated, nil
 }
 
-// SetSessionReviewerConfig persists the reviewer preference for one session.
 func (s *Store) SetSessionReviewerConfig(
 	ctx context.Context,
 	id domain.SessionID,
@@ -836,7 +738,6 @@ func (s *Store) SetSessionReviewerConfig(
 	return rows > 0, nil
 }
 
-// SetSessionAutoReview persists the daemon-side review automation toggle.
 func (s *Store) SetSessionAutoReview(ctx context.Context, id domain.SessionID, enabled bool, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -851,25 +752,6 @@ func (s *Store) SetSessionAutoReview(ctx context.Context, id domain.SessionID, e
 	return rows > 0, nil
 }
 
-// DeleteSession removes a session row, but only if it is still in seed state
-// (no workspace, no runtime handle, no agent session id, no prompt, no handoff
-// metadata, and not already terminated). Rows that have observable spawn output are immutable
-// to preserve the no-resurrection guarantee — for those, callers fall back to
-// MarkTerminated (lifecycle.Manager) instead.
-//
-// The deletion runs in a transaction. It first probes seed state with
-// SessionIsSeed; only if that returns true does it clear the session's
-// change_log rows (required because change_log FKs sessions(id) without
-// ON DELETE CASCADE) and then delete the session row. For live or absent
-// sessions the transaction commits with no rows touched — critically, the
-// session_created / session_updated CDC events for live sessions are NOT
-// destroyed when callers (e.g. RollbackSpawn's delete-then-kill fallback)
-// invoke DeleteSession on a fully-spawned row.
-//
-// Returns deleted=true when a seed row was removed; deleted=false when the
-// session id did not match a seed row (either it never existed, or it had
-// already progressed past seed state). The latter case is benign — the caller
-// should fall back to MarkTerminated.
 func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -885,22 +767,12 @@ func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) (bool, e
 		return false, fmt.Errorf("delete seed session: probe seed state for %s: %w", id, err)
 	}
 	if !isSeed {
-		// Commit the empty tx so we don't leak a transaction. Critically, do
-		// NOT touch change_log here — for a live session that contains real
-		// session_created / session_updated CDC events.
 		if err := tx.Commit(); err != nil {
 			return false, fmt.Errorf("delete seed session: commit no-op: %w", err)
 		}
 		return false, nil
 	}
 
-	// Drop change_log rows for this session id first so the FK doesn't reject
-	// the session DELETE. We do not touch project-level events (session_id IS
-	// NULL) — those belong to the project, not this session. Both this DELETE
-	// and the session DELETE below run via raw ExecContext to sidestep sqlc
-	// 1.31's SQLite-parser bug, which strips trailing `?` placeholders and
-	// string literals from DELETE statements (see queries/changelog.sql and
-	// queries/sessions.sql for the documented workaround context).
 	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
 		return false, fmt.Errorf("delete seed session: clear change log for %s: %w", id, err)
 	}
@@ -929,7 +801,6 @@ WHERE id = ?
 	return n > 0, nil
 }
 
-// standaloneSessionIDPrefix is the id prefix of sessions with no project.
 const standaloneSessionIDPrefix = "standalone"
 
 const sessionDeleteBatch = 1000
@@ -945,24 +816,6 @@ var sessionDeleteDrains = []string{
 ) AND EXISTS (SELECT 1 FROM sessions WHERE id = ?1 AND is_terminated = 1)`,
 }
 
-// DeleteTerminatedSession removes a terminated session's row; its own
-// conversations, cleanup facts, PR facts and the other per-session rows go with
-// it through ON DELETE CASCADE. Callers decide whether the session's workspace
-// is released first; this only refuses live sessions and, with
-// domain.ErrSessionHistoryShared, shared conversation history. The final
-// transaction checks both again, so a concurrent restore cannot slip between
-// the checks and the delete.
-//
-// The session's number is recorded in session_num_floors so the next spawn
-// never reuses its id (or its branch name). Its usage events cascade away with
-// their usage_bindings, so their spend is first folded into
-// deleted_session_account_usage, which keeps it in the agent account usage
-// view. Its change_log rows are dropped
-// because change_log references sessions without ON DELETE CASCADE; the
-// sessions_cdc_delete trigger adds one project-level session_updated event in
-// their place so every client refetches the list the session left.
-//
-// Returns deleted=false when id does not name a terminated session.
 func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID) (bool, error) {
 	if _, _, ok, err := deletableTerminatedSession(ctx, s.readDB, id); err != nil || !ok {
 		return false, err
@@ -1010,7 +863,6 @@ WHERE conversation_id IN (SELECT id FROM conversations WHERE session_id = ?1)
   AND retry_of_turn_id IS NOT NULL`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: unlink retries: %w", id, err)
 	}
-	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: clear change log: %w", id, err)
 	}
@@ -1080,7 +932,6 @@ func (s *Store) drainSessionRows(ctx context.Context, query string, id domain.Se
 	}
 }
 
-// GetSession returns the full record for a session, or ok=false if absent.
 func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	row, err := s.qr.GetSession(ctx, id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1092,8 +943,6 @@ func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.Ses
 	return getSessionRowToRecord(row), true, nil
 }
 
-// GetSessionByAutomationRunID returns the unique session spawned for a durable
-// automation occurrence, if one exists.
 func (s *Store) GetSessionByAutomationRunID(ctx context.Context, id domain.AutomationRunID) (domain.SessionRecord, bool, error) {
 	row, err := s.qr.GetSessionByAutomationRunID(ctx, &id)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1105,7 +954,6 @@ func (s *Store) GetSessionByAutomationRunID(ctx context.Context, id domain.Autom
 	return rowToRecord(gen.GetSessionRow(row)), true, nil
 }
 
-// ListSessions returns every session in a project, ordered by num.
 func (s *Store) ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
 	rows, err := s.qr.ListSessionsByProject(ctx, optionalProjectID(project))
 	if err != nil {
@@ -1114,7 +962,6 @@ func (s *Store) ListSessions(ctx context.Context, project domain.ProjectID) ([]d
 	return mapListSessionsByProjectRows(rows), nil
 }
 
-// ListAllSessions returns every session across all projects.
 func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error) {
 	rows, err := s.qr.ListAllSessions(ctx)
 	if err != nil {
@@ -1123,7 +970,6 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 	return mapListAllSessionsRows(rows), nil
 }
 
-// ListChatHibernationCandidates avoids decoding inactive sessions and activity JSON.
 func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
 	ids, err := s.qr.ListChatHibernationCandidates(ctx)
 	if err != nil {
@@ -1132,8 +978,6 @@ func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.Ses
 	return ids, nil
 }
 
-// ListReleasedArchivedSessions returns the archived sessions retention may
-// delete, each with when it was archived.
 func (s *Store) ListReleasedArchivedSessions(ctx context.Context) ([]domain.ArchivedSession, error) {
 	rows, err := s.qr.ListReleasedArchivedSessions(ctx)
 	if err != nil {
@@ -1150,9 +994,6 @@ func (s *Store) ListReleasedArchivedSessions(ctx context.Context) ([]domain.Arch
 	return out, nil
 }
 
-// ListTurnFailureCandidates returns the harness's live terminal sessions that
-// are in a turn and have a native transcript path, reading only the columns
-// the failed-turn observer needs.
 func (s *Store) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
 	rows, err := s.qr.ListTurnFailureCandidates(ctx, harness)
 	if err != nil {
@@ -1274,8 +1115,6 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	}
 }
 
-// staleBinaryFromRow reports a stale-binary mark only for the launch it was
-// taken on: the Chat controller generation or the terminal launch id.
 func staleBinaryFromRow(row gen.GetSessionRow) *domain.SessionStaleBinary {
 	if !row.StaleBinarySince.Valid {
 		return nil
@@ -1294,9 +1133,6 @@ func staleBinaryFromRow(row gen.GetSessionRow) *domain.SessionStaleBinary {
 	}
 }
 
-// decodeProvisionSteps reads the start-up checklist. A malformed value reads as
-// no checklist. Missing setup evidence never authorizes interrupted-request
-// cleanup, and ProvisionState stays the start's authoritative outcome.
 func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
 	if raw == "" {
 		return nil
@@ -1308,8 +1144,6 @@ func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
 	return steps
 }
 
-// decodeBranchState reads the observed branch facts. A missing or malformed
-// value reads as not yet observed, never as a branch with no commits.
 func decodeBranchState(raw string) *domain.SessionBranchState {
 	if raw == "" {
 		return nil
@@ -1404,8 +1238,6 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 	}
 }
 
-// Permissions are immutable after insertion (or the focused legacy pin), so
-// generic session updates cannot overwrite them with a stale record.
 func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	return gen.UpdateSessionParams{
@@ -1508,8 +1340,6 @@ func normalizeSessionOutputType(v domain.SessionOutputType) domain.SessionOutput
 	return v
 }
 
-// nullTimeToTime / timeToNullTime bridge the nullable first_signal_at column
-// to the domain's zero-time convention (zero = no signal received yet).
 func nullTimeToTime(t sql.NullTime) time.Time {
 	if !t.Valid {
 		return time.Time{}
@@ -1548,13 +1378,6 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	if a.LastActivityAt.IsZero() {
 		a.LastActivityAt = time.Now().UTC()
 	}
-	// The driver stores a time.Time by its String() form, so the zone and any
-	// monotonic reading survive into the column. Rows written from a local-zone
-	// clock ("… +0700 +07 m=+995.1") then stop comparing as timestamps against
-	// UTC rows, and activity_last_at is compared directly in SQL — the
-	// activity predicates are one such comparison, and a mismatched row silently
-	// matches zero rows there. Normalize every writer's value here
-	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a
 }

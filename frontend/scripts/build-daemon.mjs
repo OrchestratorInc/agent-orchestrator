@@ -38,10 +38,6 @@ if (versionResult.status !== 0 || !actualGoVersion || !meetsMinimumVersion(actua
 if (isWindowsDev) {
 	mkdirSync(windowsDevOutDir, { recursive: true });
 } else if (process.platform === "win32") {
-	// A running dev daemon may still hold an older dev-* binary open. Keep the
-	// output directory in place and remove only the files that the packaged
-	// build owns; locked dev folders can remain without affecting the bundled
-	// daemon path.
 	mkdirSync(outDir, { recursive: true });
 	rmSync(outPath, { force: true });
 	rmSync(windowsDevManifestPath, { force: true });
@@ -51,7 +47,6 @@ if (isWindowsDev) {
 	mkdirSync(outDir, { recursive: true });
 }
 
-// Stamp `ao version` so a packaged CLI names its build instead of "dev".
 const cliPackage = "github.com/aoagents/agent-orchestrator/backend/internal/cli";
 const appVersion = JSON.parse(readFileSync(join(frontendRoot, "package.json"), "utf8")).version;
 const ldflags = [
@@ -66,8 +61,6 @@ const commit = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], {
 if (commit.status === 0 && commit.stdout.trim()) {
 	ldflags.push(`-X ${cliPackage}.Commit=${commit.stdout.trim()}`);
 }
-// `ao remote-host link` must sign in with the same WorkOS client as this
-// desktop build, or the machine lands in a different AO account.
 const workOSClientID = process.env.VITE_WORKOS_CLIENT_ID?.trim();
 if (workOSClientID) {
 	ldflags.push(`-X ${cliPackage}.defaultWorkOSClientID=${workOSClientID}`);
@@ -112,8 +105,6 @@ function cleanupOldWindowsDevDaemons(activePath) {
 		try {
 			rmSync(entry.dir, { recursive: true, force: true });
 		} catch {
-			// Old session processes can keep their exe locked. They will be cleaned
-			// up by a later dev build after the process exits.
 		}
 	}
 }

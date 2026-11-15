@@ -1,5 +1,3 @@
-// Package terminalui contains conservative helpers for interpreting an
-// interactive-agent composer from bounded terminal output.
 package terminalui
 
 import (
@@ -17,9 +15,6 @@ type styledRune struct {
 	bold  bool
 }
 
-// PlainTerminalText removes terminal control sequences while preserving the
-// visible text and line structure of a rendered capture. Provider adapters use
-// this when matching UI chrome; composer parsing below still retains SGR state.
 func PlainTerminalText(output string) string {
 	lines := styledTerminalLines(output)
 	plain := make([]string, len(lines))
@@ -29,37 +24,22 @@ func PlainTerminalText(output string) string {
 	return strings.Join(plain, "\n")
 }
 
-// PlainTerminalLines is PlainTerminalText split into visible rows.
 func PlainTerminalLines(output string) []string {
 	return strings.Split(PlainTerminalText(output), "\n")
 }
 
-// ComposerState is a conservative interpretation of one current composer.
-// Unknown means the expected structure was incomplete or absent; it must not
-// be treated as empty by a caller making a destructive decision.
 type ComposerState uint8
 
-// Composer states. Unknown is the fail-closed zero value.
 const (
 	ComposerUnknown ComposerState = iota
 	ComposerEmpty
 	ComposerDraft
 )
 
-// LastPromptIsEmptyOrDimPlaceholder returns true only when a prompt marker is
-// present near the bottom of the terminal and every visible rune after it is
-// either whitespace or rendered with SGR dim styling. Interactive agents use
-// dim text for placeholder suggestions; normal text is a human-authored draft.
-// Plain captures that lose styling therefore fail closed for non-empty text.
-// Provider-owned chrome labels are ignored when given.
 func LastPromptIsEmptyOrDimPlaceholder(output, marker string, chromeLabels ...string) bool {
 	return LastPromptComposerState(output, marker, chromeLabels...) == ComposerEmpty
 }
 
-// isPromptChromeLabel reports whether the visible prompt-line text is
-// provider-owned chrome. Some providers paint product labels (their own name,
-// a mode indicator) into the current composer row with default styling, which
-// otherwise is indistinguishable from a human draft.
 func isPromptChromeLabel(text string, chromeLabels []string) bool {
 	if len(chromeLabels) == 0 || text == "" {
 		return false
@@ -72,11 +52,6 @@ func isPromptChromeLabel(text string, chromeLabels []string) bool {
 	return false
 }
 
-// LastPromptComposerState classifies a footer-free prompt composer. Normal
-// visible text after the prompt is a draft; whitespace and dim provider
-// placeholder text are empty. Missing or incomplete prompt evidence is
-// unknown. chromeLabels names provider-owned text that may be painted into
-// the current prompt row and must never read as a human draft.
 func LastPromptComposerState(output, marker string, chromeLabels ...string) ComposerState {
 	marker = strings.TrimSpace(marker)
 	if marker == "" {
@@ -103,19 +78,8 @@ func LastPromptComposerState(output, marker string, chromeLabels ...string) Comp
 				}
 			}
 		}
-		// Wrapped composer content is rendered on following rows without
-		// repeating the prompt marker, and a draft may itself begin with blank
-		// rows. Inspect every remaining captured row: whitespace and styled-dim
-		// provider chrome are safe, while any ordinary visible rune fails closed.
-		// This deliberately rejects a plain/un-styled footer because treating a
-		// leading-newline human draft as chrome would be destructive.
 		for j := i + 1; j < len(lines); j++ {
 			continuation := lines[j]
-			// A full-width horizontal rule below the prompt ends the composer's
-			// content region: provider status chrome lives below that rule, and
-			// any real draft row above it already returned ComposerDraft. Labeled
-			// or width-drifted rules are why this footer-free fallback runs at
-			// all, so they close the region instead of reading as input.
 			if horizontalRuleWidth(continuation) > 0 {
 				return ComposerEmpty
 			}
@@ -136,10 +100,6 @@ func LastPromptComposerState(output, marker string, chromeLabels ...string) Comp
 	return ComposerUnknown
 }
 
-// LastPromptHasBoldMarker recognizes a provider-owned current prompt marker
-// without accepting the same visible text from plain scrollback. This is useful
-// when a constrained TUI viewport omits its normal footer but retains the SGR
-// styling that distinguishes current chrome from transcript content.
 func LastPromptHasBoldMarker(output, marker string) bool {
 	marker = strings.TrimSpace(marker)
 	if marker == "" {
@@ -166,21 +126,10 @@ func LastPromptHasBoldMarker(output, marker string) bool {
 	return false
 }
 
-// LastBorderedPromptIsEmptyOrDimPlaceholder recognizes providers that render
-// the composer between matching full-width horizontal rules and place normal,
-// non-dim status chrome below the lower rule. Only rows inside the bordered
-// composer are considered input. Requiring both matching rules keeps the check
-// fail-closed when a capture is partial or the provider changes its layout.
-// Provider-owned chrome labels are ignored when given.
 func LastBorderedPromptIsEmptyOrDimPlaceholder(output, marker string, chromeLabels ...string) bool {
 	return LastBorderedPromptComposerState(output, marker, chromeLabels...) == ComposerEmpty
 }
 
-// LastBorderedPromptComposerState classifies only the content between a pair
-// of matching composer rules. Provider status chrome below the lower rule is
-// excluded. An incomplete border is unknown rather than empty. chromeLabels
-// names provider-owned text that may be painted into the current prompt row
-// and must never read as a human draft.
 func LastBorderedPromptComposerState(output, marker string, chromeLabels ...string) ComposerState {
 	marker = strings.TrimSpace(marker)
 	if marker == "" {
@@ -324,11 +273,6 @@ func applySGR(dim, bold bool, params string) (bool, bool) {
 		if err != nil {
 			continue
 		}
-		// Extended foreground, background, and underline colors use either
-		// 38:2:... / 38:5:... or semicolon-separated payloads. Their color values
-		// are data, not independent SGR attributes (the 2 in 38;2;R;G;B is not
-		// dim, a palette index of 1 is not bold). Skip the whole payload before
-		// examining later attributes.
 		if code == 38 || code == 48 || code == 58 {
 			if strings.Contains(fields[i], ":") || i+1 >= len(fields) {
 				continue

@@ -6,11 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Where the built helper's executable lives, inside its app bundle. */
 export const DICTATION_HELPER_EXECUTABLE = path.join("dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator");
 
-// An app bundle, not a bare binary, so macOS names it Orchestrator and shows
-// the app icon when it asks for microphone and speech recognition access.
 export function buildDictationHelper({ arch = process.arch } = {}) {
   if (process.platform !== "darwin") throw new Error("The dictation helper must be built on macOS");
   const cpu = arch === "arm64" ? "arm64" : arch === "x64" ? "x86_64" : undefined;
@@ -31,8 +28,6 @@ export function buildDictationHelper({ arch = process.arch } = {}) {
   ], { stdio: "inherit" });
   if (compile.error) throw compile.error;
   if (compile.status !== 0) throw new Error(`macOS dictation helper compilation failed (${compile.status})`);
-  // Ad-hoc seal the bundle so its Info.plist and icon are part of its identity;
-  // release signing re-signs it with the app.
   const seal = spawnSync("codesign", ["--force", "--sign", "-", bundle], { stdio: "inherit" });
   if (seal.error) throw seal.error;
   if (seal.status !== 0) throw new Error(`macOS dictation helper signing failed (${seal.status})`);

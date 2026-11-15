@@ -16,21 +16,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// Four statements keep a turn only when the active lineage holds one of its
-// messages or activities at or before the fork point. That EXISTS is
-// correlated on turn_id, which no index covers. Without a conversation_id
-// bound it scans the whole message and activity tables, and once
-// sqlite_stat1 exists the planner skip-scans (branch_id, sequence) across
-// every branch in the database instead. Bound by conversation_id, it
-// range-seeks the (conversation_id, sequence) index.
 const (
 	lineageMessageBound  = "lineage_message.conversation_id = conversation_turns.conversation_id"
 	lineageActivityBound = "lineage_activity.conversation_id = conversation_turns.conversation_id"
 )
 
-// lineageProbe is a gen.DBTX that runs on its own read-only connection to the
-// store's file and remembers the last statement the generated code issued, so
-// the test can explain and re-run exactly that text.
 type lineageProbe struct {
 	db    *sql.DB
 	query string
@@ -110,9 +100,6 @@ func (p *lineageProbe) rows(t *testing.T, query string) [][]string {
 	return out
 }
 
-// seedForkedConversation builds root -> child -> nested branches with enough
-// prompts per branch that ANALYZE makes the branch index skip-scan eligible,
-// and returns the ids of the turns the active (nested) lineage keeps.
 func seedForkedConversation(t *testing.T, s *sqlite.Store) (conversationID string, visibleTurns []string) {
 	t.Helper()
 	ctx := context.Background()
@@ -210,7 +197,6 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 		return &lineageProbe{db: db}
 	}
 
-	// The same four statements, before and after the database has statistics.
 	for _, stage := range []string{"no statistics", "after ANALYZE"} {
 		if stage == "after ANALYZE" {
 			writer, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
@@ -250,7 +236,6 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 					t.Fatalf("%s: %v", name, err)
 				}
 
-				// Plan: the lineage lookups seek the conversation's own range or one turn.
 				plan := probe.plan(t)
 				for _, table := range []string{"lineage_message", "lineage_activity"} {
 					found := false
@@ -269,8 +254,6 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 					}
 				}
 
-				// Results: dropping the bound gives the statement as it was, and
-				// both return the same rows on a forked conversation.
 				if strings.Count(probe.query, lineageMessageBound) != 1 || strings.Count(probe.query, lineageActivityBound) != 1 {
 					t.Fatalf("%s does not carry the conversation_id bound on both lineage lookups", name)
 				}
@@ -289,8 +272,6 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 		}
 	}
 
-	// And the visible lineage itself is the nested branch's: root up to the
-	// first fork, child up to the second, then the nested turns.
 	snapshot, err := s.LoadConversationSnapshot(ctx, conversationID)
 	if err != nil {
 		t.Fatalf("LoadConversationSnapshot: %v", err)
@@ -304,14 +285,6 @@ func TestLineageTurnQueriesAreBoundByConversation(t *testing.T) {
 	}
 }
 
-// The repair pass lists the sources that still own an open (unattributed or
-// merely inferred) event. The partial index (usage_source_id, id) holds exactly
-// those events. Written as a join against usage_sources, the planner left that
-// index for a scan of the sources plus the full usage_source index once
-// sqlite_stat1 existed, reading every event of every source (+23 ms on a
-// 32k-event database). This data set is too small to make the planner flip, so
-// the test passes on the join form too: it pins the result (the 20 of 60 seeded
-// sources that own an open event) and the plan shape, not the flip.
 func TestLegacyUsageSourceListingReadsOnlyTheOpenAttributionIndex(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

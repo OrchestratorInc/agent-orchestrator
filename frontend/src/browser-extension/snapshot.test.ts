@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import { matchInstruction } from "../main/browser-act-matcher";
 import { accessibleName, buildSnapshot, RefRegistry, roleOf } from "./snapshot";
 
-// The live jsdom window document, so computed styles (display/visibility)
-// behave as they do in the content script.
 function page(html: string): Document {
 	window.document.body.innerHTML = html;
 	return window.document;

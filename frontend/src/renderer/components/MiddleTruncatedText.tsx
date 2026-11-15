@@ -1,12 +1,6 @@
 import type { ReactNode } from "react";
 import { truncateMiddle } from "../lib/utils";
 
-/**
- * Shows `text` shortened in the middle (see truncateMiddle). The hidden middle
- * is often what tells two values apart, such as two Amp builds, so the full
- * value stays in the hover title and is what screen readers announce.
- * `format` wraps the value, e.g. into a translated sentence.
- */
 export function MiddleTruncatedText({ text, format = (value) => value, className }: {
 	text: string;
 	format?: (value: string) => ReactNode;

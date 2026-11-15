@@ -14,14 +14,9 @@ import (
 
 var verifyConnection = authprobe.VerifyConnection
 
-// verifySelectedConnection follows MiMo's configured-model / recent-model
-// selection. Unknown defaults, plugins and unsupported wire protocols remain
-// configured: verifying an arbitrary stored provider would be misleading.
 func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAuthStatus {
 	step := domain.NewAgentAuthDiagnostic("provider_validation", "provider_inconclusive")
 	defer func() {
-		// AuthStatus records the timeout/cancellation diagnostic if this whole
-		// verification budget expires. Otherwise every exit carries its outcome.
 		if ctx.Err() == nil {
 			ports.RecordAuthDiagnostic(ctx, step)
 		}
@@ -114,8 +109,6 @@ func verifySelectedConnection(ctx context.Context, binary string) ports.AgentAut
 		return ports.AgentAuthStatusConfigured
 	}
 	options := cfg.Provider[provider]
-	// Custom model definitions can change the model id, URL or SDK. Do not
-	// approximate their effective route or custom authentication headers.
 	if len(options.Models) > 0 || len(options.Options.Headers) > 0 || len(options.Env) > 0 || (options.NPM != "" && options.NPM != "@ai-sdk/openai-compatible") {
 		step = domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported")
 		return ports.AgentAuthStatusConfigured

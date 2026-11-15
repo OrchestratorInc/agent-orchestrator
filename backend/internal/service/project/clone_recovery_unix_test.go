@@ -55,8 +55,6 @@ func TestCloneRetriesTemporaryFailureWithoutChangingDestination(t *testing.T) {
 	}
 }
 
-// The stream reports git's steps, and a retry, as phases only: none of git's
-// text (which can hold a credentialed URL) reaches the caller.
 func TestCloneWithProgressReportsGitPhasesAndRetries(t *testing.T) {
 	m := newManager(t)
 	source := gitRepo(t)

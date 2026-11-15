@@ -7,7 +7,6 @@ import type { WorkspaceSession } from "../types/workspace";
 import { BoardSessionCardAdapter, withSharedWorkStatus } from "./SessionsBoardAdapters";
 import { TooltipProvider } from "./ui/tooltip";
 
-// The card reads its PRs from the daemon; these cards have none.
 vi.mock("../hooks/useSessionScmSummary", () => ({ useSessionScmSummary: () => ({ data: undefined }) }));
 
 const card: BoardSessionPresentation = { id: "s1", provider: "codex", status: "review_pending", title: "Login flow", updatedAt: "2026-10-24T00:00:00Z" };
@@ -58,7 +57,6 @@ describe("sharing from a board card", () => {
 	it("opens the share dialog from a Share button, without opening the session", () => {
 		const { onOpen, onShare } = renderCard();
 		const share = screen.getByRole("button", { name: "Share “Login flow”" });
-		// Revealed on hover or focus, as the card's Archive is.
 		expect(share.className).toContain("group-hover:opacity-100");
 		expect(share.className).toContain("group-focus-within:opacity-100");
 		fireEvent.click(share);

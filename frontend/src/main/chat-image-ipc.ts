@@ -1,16 +1,3 @@
-/**
- * Copy and save for images shown in chat.
- *
- * The renderer cannot read an image's bytes back out of an `<img>`: daemon,
- * remote-host, and agent-linked images are cross-origin, so a canvas would be
- * tainted and `fetch` is subject to CORS and missing cookies. The main process
- * fetches through the sender's own session instead, the same cookies and cache
- * that loaded the `<img>`, and owns the native clipboard and save dialog.
- *
- * A saved file came from an agent or AO Cloud, so on macOS it is marked as a
- * download (com.apple.quarantine), as a browser marks one.
- */
-
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import type { Dialog, IpcMain, NativeImage, SaveDialogOptions, Session } from "electron";
@@ -23,19 +10,15 @@ export type ChatImageBytes = { bytes: Uint8Array; mimeType: string };
 
 export type ChatImageIpcDeps = {
 	ipcMain: Pick<IpcMain, "handle">;
-	/** Electron 44 removed clipboard.writeImage; main.ts adapts ClipboardItem to it. */
 	clipboard: { writeImage(image: NativeImage): void | Promise<void> };
 	createImage: (bytes: Buffer) => NativeImage;
 	dialog: Pick<Dialog, "showSaveDialog">;
 	downloadsDirectory: () => string;
 	write?: (filePath: string, bytes: Uint8Array) => Promise<void>;
-	/** The app name a saved file's quarantine names as its downloader. */
 	appName: string;
-	/** Marks a saved file as downloaded; markDownloaded unless a test replaces it. */
 	markDownloaded?: (filePath: string, appName: string) => Promise<void>;
 };
 
-/** Fetch an http(s) image through `session`, refusing anything that is not an image. */
 export async function fetchChatImage(session: Pick<Session, "fetch">, url: string): Promise<ChatImageBytes> {
 	let parsed: URL;
 	try {
@@ -44,7 +27,6 @@ export async function fetchChatImage(session: Pick<Session, "fetch">, url: strin
 		throw new Error("Invalid image URL");
 	}
 	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Unsupported image URL");
-	// The `<img>` was loaded with this session's cookies (daemon auth, remote hosts).
 	const response = await session.fetch(parsed.toString(), { credentials: "include" });
 	if (!response.ok) throw new Error(`Image request failed (${response.status})`);
 	const mimeType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
@@ -56,7 +38,6 @@ export async function fetchChatImage(session: Pick<Session, "fetch">, url: strin
 	return { bytes, mimeType };
 }
 
-/** A file name safe to offer in a save dialog; path separators never survive. */
 export function chatImageFileName(name: string): string {
 	const base = path.basename(name.replace(/[\\/]/g, "/")).replace(/[\u0000-\u001f<>:"|?*]/g, "").trim();
 	return base && base !== "." && base !== ".." ? base : "image.png";
@@ -81,7 +62,6 @@ export function registerChatImageIpc(deps: ChatImageIpcDeps): void {
 		const result = await deps.dialog.showSaveDialog(options);
 		if (result.canceled || !result.filePath) return false;
 		await write(result.filePath, input.bytes);
-		// Saved either way: a browser keeps a download it could not mark, too.
 		await mark(result.filePath, deps.appName).catch((error: unknown) => {
 			console.warn("AO: could not mark a saved file as downloaded", error);
 		});

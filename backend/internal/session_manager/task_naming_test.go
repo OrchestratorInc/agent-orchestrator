@@ -22,7 +22,7 @@ type taskNamingLauncher struct {
 	result   string
 	err      error
 	wait     bool
-	gate     chan struct{} // holds the naming answer until a test releases it
+	gate     chan struct{}
 	onNaming func()
 	onDrain  func()
 }
@@ -44,7 +44,6 @@ func TestTaskNamingAllShippedAgents(t *testing.T) {
 				launcher.err = ports.ErrChatUnsupported
 				want = "fix-login-redirect"
 			} else if agent.Harness == domain.HarnessGrok {
-				// Grok cannot enforce tool-disabled background launches yet.
 				launcher.err = ports.ErrChatCapabilityUnavailable
 				want = "fix-login-redirect"
 			}
@@ -90,8 +89,6 @@ func (l *taskNamingLauncher) RunBackgroundTask(ctx context.Context, harness doma
 	return l.result, l.err
 }
 
-// The agent starts in the checkout it was created in, before naming answers.
-// Naming then renames only the branch; the folder never moves.
 func TestTaskNamingAfterAgentLaunch(t *testing.T) {
 	for _, prepared := range []bool{false, true} {
 		for _, spawn := range []struct {
@@ -158,8 +155,6 @@ func TestTaskNamingAfterAgentLaunch(t *testing.T) {
 	}
 }
 
-// Regression: a speculative worktree that publishes its path after the visible
-// row was read used to fail the start ("no longer accepts this workspace").
 func TestTaskNamingAfterLatePreparedWorkspace(t *testing.T) {
 	m, st, _, _ := newGitTaskPreparationManager(t)
 	m.dataDir = t.TempDir()
@@ -180,7 +175,7 @@ func TestTaskNamingAfterLatePreparedWorkspace(t *testing.T) {
 		t.Fatalf("background work = %d", len(work))
 	}
 	m.runBackground = func(fn func()) { fn() }
-	for _, fn := range work { // the preparation publishes its path after the row was read
+	for _, fn := range work {
 		fn()
 	}
 	actual := st.sessions[rec.ID]
@@ -269,7 +264,6 @@ func TestParseTaskName(t *testing.T) {
 	}
 }
 
-// launchedTaskSession publishes a session as running in a fresh checkout.
 func launchedTaskSession(t *testing.T, m *Manager, st *fakeStore, ws ports.Workspace) (domain.SessionRecord, ports.WorkspaceInfo) {
 	t.Helper()
 	rec, err := st.CreateSession(context.Background(), domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, DisplayName: "Provisional"})
@@ -289,8 +283,6 @@ func nameNow(name generatedTaskName) func() generatedTaskName {
 	return func() generatedTaskName { return name }
 }
 
-// A send while the prepared worktree is still being created reads the session
-// before preparation publishes its workspace; naming must still name it.
 func TestTaskNamingAcceptsWorkspacePublishedAfterRead(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
@@ -314,10 +306,6 @@ func TestTaskNamingPreservesManualRename(t *testing.T) {
 	}
 }
 
-// AO attributes PRs by the session branch namespace, so once the agent has made
-// a sibling branch under the temporary name, naming keeps that name.
-// A sibling the agent made under the temporary name stays attributed through
-// that namespace, so the rename still gives the task its semantic branch.
 func TestTaskNamingRenamesBesideAgentBranches(t *testing.T) {
 	m, st, ws, repo := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
@@ -342,8 +330,6 @@ func (s *namingWritesStore) SetSessionBranchNaming(ctx context.Context, id domai
 	return s.fakeStore.SetSessionBranchNaming(ctx, id, naming)
 }
 
-// A project gate held past the rename deadline by another start's setup must
-// not drop the rename or the generated title, nor hide the branch meanwhile.
 func TestTaskNamingWaitsForGateBeforeDeadline(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
@@ -368,8 +354,6 @@ func TestTaskNamingWaitsForGateBeforeDeadline(t *testing.T) {
 	}
 }
 
-// Clients keep the temporary branch private from the start of naming until
-// the rename lands, and a start that fails shows it again.
 func TestTaskNamingBranchNamingFlag(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	m.chat = &taskNamingLauncher{result: `{"title":"Fix login","slug":"fix-login"}`}
@@ -391,8 +375,6 @@ func TestTaskNamingBranchNamingFlag(t *testing.T) {
 	}
 }
 
-// A start that fails after launch keeps its temporary branch, and the project
-// gate is free once the agent is launched.
 func TestAsyncStartNamesOnlyAfterSuccess(t *testing.T) {
 	m, st, _, _ := newGitTaskPreparationManager(t)
 	m.dataDir = t.TempDir()
@@ -418,7 +400,6 @@ func TestAsyncStartNamesOnlyAfterSuccess(t *testing.T) {
 	}
 }
 
-// A generated name equal to the temporary one is not a collision.
 func TestTaskNamingKeepsMatchingTemporaryName(t *testing.T) {
 	m, st, ws, _ := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
@@ -434,15 +415,11 @@ type taskBranchMovedStore struct {
 	t    *testing.T
 }
 
-// SetSessionTaskBranch rejects the rename after the agent made a ref under the
-// temporary namespace.
 func (s taskBranchMovedStore) SetSessionTaskBranch(_ context.Context, _ domain.SessionID, expected, _ string, _ map[string]string, _ time.Time) (bool, error) {
 	runManagerGit(s.t, s.repo, "branch", strings.TrimSuffix(expected, "/root")+"/fix")
 	return false, nil
 }
 
-// Git and the row must agree: when the row no longer carries the temporary
-// branch, the Git rename is put back exactly, past the agent's new ref.
 func TestTaskNamingUndoesRenameTheRowRejects(t *testing.T) {
 	m, st, ws, repo := newGitTaskPreparationManager(t)
 	rec, root := launchedTaskSession(t, m, st, ws)
@@ -479,14 +456,12 @@ func (n scriptedTaskNamer) RevertTaskBranch(context.Context, ports.WorkspaceProj
 	return n.reverted, n.revertErr
 }
 
-// When a rename or its undo fails, each repository row records the branch its
-// checkout holds, and the session row the root's.
 func TestTaskNamingRecordsSplitBranches(t *testing.T) {
 	locked := errors.New("ref locked")
 	for _, tc := range []struct {
 		name                    string
 		failedWrites            int
-		renamed, reverted, held [2]bool // whether the root and the child carry the generated name
+		renamed, reverted, held [2]bool
 		renameErr, revertErr    error
 	}{
 		{"undo failed", 1, [2]bool{true, true}, [2]bool{true, true}, [2]bool{true, true}, nil, locked},
@@ -606,8 +581,6 @@ func TestTaskNamingRetryPlanRetainsCheckpointOnce(t *testing.T) {
 	}
 }
 
-// A failed start whose saved worktree no longer exists (removed by hand, or
-// left mid-move by an older build) starts again in a fresh one on retry.
 func TestRetryRecreatesMissingWorktree(t *testing.T) {
 	m, st, _, _ := newGitTaskPreparationManager(t)
 	m.dataDir = t.TempDir()
@@ -633,7 +606,6 @@ func TestRetryRecreatesMissingWorktree(t *testing.T) {
 	if _, err := os.Stat(actual.Metadata.WorkspacePath); actual.ProvisionState != domain.SessionProvisionReady || err != nil {
 		t.Fatalf("retry = state %s error %q path %s, worktree: %v", actual.ProvisionState, actual.ProvisionError, actual.Metadata.WorkspacePath, err)
 	}
-	// The checklist shows the worktree it created again.
 	if !slices.ContainsFunc(actual.ProvisionSteps, func(step domain.SessionProvisionStep) bool {
 		return step.ID == domain.SessionProvisionStepWorktree && step.Status == domain.SessionProvisionStepDone
 	}) {

@@ -1,7 +1,3 @@
-// Element operations the content script performs in the extension's isolated
-// world. Trusted pointer and keyboard input happens in the service worker
-// (debugger tier); everything here is DOM-level (the T0 tier) or read-only.
-
 import { BridgeError } from "./protocol";
 import { buildSnapshot, INTERACTIVE_ROLES, type RefRegistry, roleOf, accessibleName } from "./snapshot";
 
@@ -19,7 +15,6 @@ function assertEnabled(element: Element): void {
 	}
 }
 
-/** Scroll the element to the viewport centre when needed and return its centre. */
 export function geometry(element: Element): Geometry {
 	const view = element.ownerDocument.defaultView!;
 	let rect = element.getBoundingClientRect();
@@ -57,14 +52,11 @@ function isContentEditable(element: Element): boolean {
 	return value === "" || value === "true" || (element as HTMLElement).isContentEditable === true;
 }
 
-/** Replace a field's value, as `ao browser fill` does. */
 export function fill(element: Element, text: string): void {
 	assertEnabled(element);
 	htmlElement(element).focus?.();
 	if (isTextControl(element)) {
 		if (element.readOnly) throw new BridgeError("ELEMENT_NOT_EDITABLE", "The field is read-only");
-		// The prototype setter bypasses framework value trackers (React), so the
-		// input event is seen as a real change.
 		(nativeValueSetter(element) ?? ((value: string) => (element.value = value)))(text);
 		dispatchInput(element, text);
 		element.dispatchEvent(new (element.ownerDocument.defaultView!.Event)("change", { bubbles: true }));
@@ -78,7 +70,6 @@ export function fill(element: Element, text: string): void {
 	throw new BridgeError("ELEMENT_NOT_EDITABLE", "The element does not accept text");
 }
 
-/** Insert text at the cursor without trusted input (synthetic tier). */
 export function typeText(element: Element, text: string): void {
 	assertEnabled(element);
 	htmlElement(element).focus?.();
@@ -99,7 +90,6 @@ export function typeText(element: Element, text: string): void {
 	throw new BridgeError("ELEMENT_NOT_EDITABLE", "The element does not accept text");
 }
 
-/** Choose an option by value or visible label. */
 export function selectOption(element: Element, value: string): string {
 	assertEnabled(element);
 	if (!(element instanceof element.ownerDocument.defaultView!.HTMLSelectElement)) {
@@ -124,7 +114,6 @@ function checkedState(element: Element): boolean {
 	return element.getAttribute("aria-checked") === "true";
 }
 
-/** Set a checkbox, radio, or switch to the requested state. */
 export function setChecked(element: Element, checked: boolean): boolean {
 	assertEnabled(element);
 	const role = roleOf(element);
@@ -135,7 +124,6 @@ export function setChecked(element: Element, checked: boolean): boolean {
 	return checkedState(element);
 }
 
-/** Synthetic click (T0): pointer and mouse events, then click. */
 export function clickSynthetic(element: Element, clicks = 1): void {
 	assertEnabled(element);
 	const view = element.ownerDocument.defaultView!;
@@ -195,11 +183,6 @@ export function elementChecked(element: Element): boolean {
 
 export type WaitKind = "text" | "text-gone" | "selector" | "selector-gone" | "dom-stable";
 
-/**
- * Playwright's visibility rule, which the panel's agent-browser runtime uses:
- * a non-empty bounding box (so display:none and detached elements fail) and
- * not visibility:hidden/collapse.
- */
 export function isVisible(element: Element): boolean {
 	if (!element.isConnected) return false;
 	const rect = element.getBoundingClientRect();
@@ -208,7 +191,6 @@ export function isVisible(element: Element): boolean {
 	return style?.visibility !== "hidden" && style?.visibility !== "collapse";
 }
 
-/** Whether a wait condition holds right now (dom-stable is handled by waitFor). */
 export function conditionHolds(document: Document, kind: WaitKind, value: string): boolean {
 	switch (kind) {
 		case "text":
@@ -223,8 +205,6 @@ export function conditionHolds(document: Document, kind: WaitKind, value: string
 			} catch {
 				throw new BridgeError("INVALID_ARGUMENT", `Invalid selector: ${value}`);
 			}
-			// Same rule as the panel's runtime: a selector wait means usable on
-			// screen, and "gone" means detached from the document.
 			const visible = found !== null && isVisible(found);
 			return kind === "selector" ? visible : !found;
 		}
@@ -233,7 +213,6 @@ export function conditionHolds(document: Document, kind: WaitKind, value: string
 	}
 }
 
-/** Wait for a condition, polling and watching DOM mutations. */
 export function waitFor(document: Document, kind: WaitKind, value: string, timeoutMs: number): Promise<boolean> {
 	return new Promise((resolve, reject) => {
 		const view = document.defaultView!;
@@ -273,7 +252,6 @@ export function waitFor(document: Document, kind: WaitKind, value: string, timeo
 
 let highlightHost: HTMLElement | undefined;
 
-/** Draw a non-interactive outline around an element until cleared. */
 export function highlight(element: Element): void {
 	unhighlight(element.ownerDocument);
 	const document = element.ownerDocument;
@@ -299,7 +277,6 @@ export function unhighlight(_document?: Document): void {
 
 export type Annotation = { ref: string; role: string; name: string; rect: { x: number; y: number; width: number; height: number } };
 
-/** Interactive elements visible in the viewport, for annotated screenshots. */
 export function annotations(document: Document, registry: RefRegistry): Annotation[] {
 	const view = document.defaultView!;
 	const { refs } = buildSnapshot(document, registry, { interactive: true });
@@ -320,7 +297,6 @@ export function annotations(document: Document, registry: RefRegistry): Annotati
 	return out;
 }
 
-/** An iframe element's content-box offset within this frame's viewport. */
 export function frameOffset(element: Element): { x: number; y: number; src: string; name: string } {
 	if (element.tagName !== "IFRAME" && element.tagName !== "FRAME") {
 		throw new BridgeError("INVALID_ARGUMENT", "The element is not a frame");
@@ -335,7 +311,6 @@ export function frameOffset(element: Element): { x: number; y: number; src: stri
 	};
 }
 
-/** Synthetic key press (T0) on the focused element. */
 export function pressSynthetic(document: Document, chord: string): void {
 	const parts = chord.split("+").map((part) => part.trim()).filter(Boolean);
 	const key = parts.pop();

@@ -1,4 +1,3 @@
-// Real Chromium credential/control requests against the Go router and real proxy.
 const { app, BrowserWindow, protocol } = require("electron");
 const path = require("node:path");
 const assert = require("node:assert/strict");

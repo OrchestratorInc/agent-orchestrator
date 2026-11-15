@@ -50,7 +50,6 @@ func TestUpdateSessionWithLaunchOptionsWritesBothOrNeither(t *testing.T) {
 	if options, _ := s.SessionLaunchOptions(ctx, session.ID); got.Harness != domain.HarnessCodex || options != want {
 		t.Fatalf("harness %q, options %+v; want codex with %+v", got.Harness, options, want)
 	}
-	// A cancelled write moves neither.
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	session.Harness = domain.HarnessClaudeCode

@@ -15,9 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// Receiving an event only proves SendEvent published it. The capture goroutine
-// may still own a shared admission slot or the old Sentry client. Drain before
-// the next test reinitializes globals, especially the four-slot saturation test.
 func finishBackgroundCaptureTest(t *testing.T) {
 	t.Helper()
 	SetPolicyCheck(nil)
@@ -72,7 +69,6 @@ func TestCaptureBackgroundSkipsCanceledAndUnregistered(t *testing.T) {
 		t.Fatalf("unexpected capture: %+v", event)
 	default:
 	}
-	// An unknown component falls back to the generic daemon component.
 	CaptureBackground(context.Background(), errors.New("boom"), "made_up", "reaper_tick", map[string]string{"agent": "Bad Agent!", "reason": "free text"})
 	event := <-transport.events
 	if event.Tags["component"] != "daemon" || event.Tags["agent"] != "" || event.Tags["reason"] != "" {
@@ -147,7 +143,6 @@ func TestCaptureBackgroundDoesNotBlockAndOptOutDrainsAdmittedSends(t *testing.T)
 			t.Fatal("admitted send did not reach transport")
 		}
 	}
-	// Saturation drops the diagnostic without waiting or retaining a queue.
 	CaptureBackground(context.Background(), errors.New("overflow"), "chat", "chat_wake", nil)
 	SetPolicyCheck(nil)
 	CaptureBackground(context.Background(), errors.New("opted out"), "chat", "chat_wake", nil)
@@ -197,7 +192,6 @@ func TestErrorBudgetOverflowIsPerOperation(t *testing.T) {
 		errorBudget.day, errorBudget.groups = previousDay, previousGroups
 		errorBudget.Unlock()
 	})
-	// Exhaust one operation's overflow bucket; a different operation still gets through.
 	for i := range maxErrorsPerFingerprintMinute {
 		if !allowErrorFingerprintFor(fmt.Sprintf("%016x", maxErrorFingerprintsPerDay+i), "reaper_tick", when) {
 			t.Fatalf("overflow event %d was dropped", i)
@@ -243,7 +237,6 @@ func TestModelDiscoveryFailuresAreNotReported(t *testing.T) {
 	}
 	t.Cleanup(func() { finishBackgroundCaptureTest(t) })
 	SetPolicyCheck(func(context.Context) bool { return true })
-	// A missing or misconfigured agent CLI is user setup state, exec_exit included.
 	CaptureBackground(context.Background(), &exec.ExitError{}, "session_manager", "model_discovery", map[string]string{"agent": "codex"})
 	select {
 	case event := <-transport.events:

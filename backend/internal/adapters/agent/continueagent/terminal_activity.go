@@ -9,13 +9,8 @@ import (
 
 var continueTerminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
 
-// ContinuouslyDetectTerminalActivity opts Continue into terminal reconciliation
-// because its structured question picker can appear without an activity hook.
 func (p *Plugin) ContinuouslyDetectTerminalActivity() bool { return true }
 
-// ComposerIsEmpty proves that Continue's current composer is visible without
-// draft text. Message delivery uses this narrower terminal fact before writing
-// unsolicited coordination into the TUI.
 func (p *Plugin) ComposerIsEmpty(output string) bool {
 	lines := continueTerminalLines(output)
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -29,9 +24,6 @@ func (p *Plugin) ComposerIsEmpty(output string) bool {
 	return false
 }
 
-// DetectTerminalActivity recognizes authoritative markers in Continue's TUI.
-// The newest marker wins so an old picker retained in scrollback cannot keep a
-// session waiting once Continue returns to active work.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := continueTerminalLines(output)
 	if len(lines) == 0 {
@@ -46,8 +38,6 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	for i := len(recent) - 1; i >= 0; i-- {
 		line := strings.ToLower(recent[i])
 		if continueIdleComposerAt(recent[i]) {
-			// Continue 1.5 keeps its empty composer on screen while it works,
-			// with the "esc to interrupt" status just above the box.
 			for _, above := range recent[max(0, i-3):i] {
 				if continuePlaceholderComposer(recent[i]) && strings.Contains(strings.ToLower(above), "esc to interrupt") {
 					return domain.ActivityActive, true
@@ -69,8 +59,6 @@ func continueQuestionPickerAt(lines []string, idx int) bool {
 	if !strings.Contains(strings.ToLower(lines[idx]), "enter select") {
 		return false
 	}
-	// A completed picker remains in Continue's transcript. An empty composer
-	// after this action row proves that the picker is historical, not visible.
 	for i := idx + 1; i < len(lines); i++ {
 		if continueIdleComposerAt(lines[i]) {
 			return false
@@ -93,7 +81,6 @@ func continueIdleComposerAt(line string) bool {
 	return strings.Trim(line, "│ ") == "❯" || continuePlaceholderComposer(line)
 }
 
-// continuePlaceholderComposer is Continue 1.5's empty composer, "● ▋Ask anything, …".
 func continuePlaceholderComposer(line string) bool {
 	return strings.HasPrefix(strings.Trim(line, "│ "), "● ▋Ask anything")
 }

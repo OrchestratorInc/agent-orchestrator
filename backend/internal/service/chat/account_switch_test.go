@@ -23,7 +23,6 @@ func switchNotices(snapshot store.ConversationSnapshot) map[string]int {
 	return notices
 }
 
-// startRunningTurn sends text and has the provider start it as providerTurnID.
 func startRunningTurn(t *testing.T, h *harness, text, providerTurnID string) domain.ConversationTurn {
 	t.Helper()
 	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{Text: text, ClientMessageID: "c-" + providerTurnID}); err != nil {
@@ -42,9 +41,6 @@ func startRunningTurn(t *testing.T, h *harness, text, providerTurnID string) dom
 	return domain.ConversationTurn{}
 }
 
-// A move that stops the turn races the old agent's reply to the cancel, so the
-// turn can settle as failed. Marking the switch makes the turn the handoff
-// stopped an interrupted one, with a notice of the account it continues on.
 func TestMarkAccountSwitchTurnsTheStoppedTurnIntoASwitch(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
@@ -52,7 +48,6 @@ func TestMarkAccountSwitchTurnsTheStoppedTurnIntoASwitch(t *testing.T) {
 	if err := h.svc.PrepareChatHandoff(ctx, testSession, domain.SessionInterfaceTransitionInterrupt); err != nil {
 		t.Fatalf("prepare handoff: %v", err)
 	}
-	// The reply the old agent sent as it was stopped, with no usable state.
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1"})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return turnStateByText(t, s)["long work"] == domain.TurnStateFailed
@@ -72,7 +67,6 @@ func TestMarkAccountSwitchTurnsTheStoppedTurnIntoASwitch(t *testing.T) {
 	if got := switchNotices(snapshot); got[stopped.ID] != 1 || len(got) != 1 {
 		t.Fatalf("notices = %v, want one on the stopped turn", got)
 	}
-	// The record is used once: marking again adds nothing.
 	if err := h.svc.MarkAccountSwitch(ctx, testSession, "acct-b"); err != nil {
 		t.Fatal(err)
 	}
@@ -81,15 +75,10 @@ func TestMarkAccountSwitchTurnsTheStoppedTurnIntoASwitch(t *testing.T) {
 	}
 }
 
-// Later rows are not the stopped turn: messages queued behind it that the stop
-// swept away never ran, and a Codex subagent runs its own turn on a child
-// thread. The notice still goes on the turn the handoff stopped, so it stays
-// the one Continue resumes.
 func TestMarkAccountSwitchMarksTheTurnTheHandoffStopped(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	stopped := startRunningTurn(t, h, "long work", "provider-turn-1")
-	// A subagent's turn on a child thread, adopted as its own row, finished.
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "child-turn", ProviderConversationID: "child-thread"})
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "child-turn", ProviderConversationID: "child-thread", TurnState: domain.TurnStateCompleted})
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "queued", ClientMessageID: "c-queued"}); err != nil {
@@ -115,7 +104,6 @@ func TestMarkAccountSwitchMarksTheTurnTheHandoffStopped(t *testing.T) {
 	}
 }
 
-// A move that stopped no turn has nothing to explain.
 func TestMarkAccountSwitchWithoutAStoppedTurnAddsNothing(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()

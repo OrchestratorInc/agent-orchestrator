@@ -18,10 +18,6 @@ import (
 	"github.com/creack/pty"
 )
 
-// linuxPTYConn is a native Linux pseudoterminal owned by the detached host.
-// The child starts in its own session/process group (creack/pty's StartWithSize
-// sets Setsid: true), so teardown can reap the whole launched process tree
-// and session rather than leaving background jobs or altered process groups behind.
 type linuxPTYConn struct {
 	pty *os.File
 	cmd *exec.Cmd
@@ -39,8 +35,6 @@ type linuxPTYConn struct {
 const linuxPTYCloseGrace = 250 * time.Millisecond
 
 func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (ptyConn, error) {
-	// shellCmd and shellArgs are the runtime launch argv assembled by AO's
-	// trusted agent adapter, not input interpreted by a shell.
 	//nolint:forbidigo // Interactive ConPTY children require direct process control.
 	cmd := exec.Command(shellCmd, shellArgs...) // #nosec G702 -- intentional direct argv execution
 	cmd.Dir = cwd
@@ -103,9 +97,6 @@ func (c *linuxPTYConn) Close() error {
 	var closeErr error
 	c.closeOnce.Do(func() {
 		if c.leaderPID > 0 && c.leaderStartTime > 0 {
-			// Phase 1: Discover session members and ask them to exit. SIGHUP
-			// first, as a closing terminal would: an interactive shell ignores
-			// SIGTERM, so without it every close waited out the grace.
 			procs := linuxFindSessionProcesses(c.leaderPID, c.leaderStartTime)
 			if len(procs) > 0 {
 				signalValidatedSessionProcs(procs, syscall.SIGHUP)
@@ -113,11 +104,6 @@ func (c *linuxPTYConn) Close() error {
 				_ = waitForProcIdentitiesExit(procs, linuxPTYCloseGrace)
 			}
 
-			// Phase 2: Unconditionally rediscover validated session members.
-			// This catches:
-			// (a) Processes that ignored or were slow to handle SIGTERM.
-			// (b) Late children spawned by a SIGTERM trap/exit handler before the parent exited.
-			// A bounded loop ensures repeated sweeps with SIGKILL until the session is empty.
 			for attempt := 0; attempt < 3; attempt++ {
 				remaining := linuxFindSessionProcesses(c.leaderPID, c.leaderStartTime)
 				if len(remaining) == 0 {
@@ -151,8 +137,6 @@ func readLinuxProcInfo(pid int) (linuxProcInfo, error) {
 	if err != nil {
 		return linuxProcInfo{}, err
 	}
-	// /proc/[pid]/stat format: pid (comm) state ppid pgrp session ...
-	// The comm field is enclosed in parentheses and may contain spaces or ')'.
 	closeIdx := bytes.LastIndexByte(data, ')')
 	if closeIdx == -1 || closeIdx+2 >= len(data) {
 		return linuxProcInfo{}, errors.New("malformed /proc stat")
@@ -206,10 +190,7 @@ func linuxFindSessionProcesses(sid int, leaderStartTime uint64) []linuxProcInfo 
 		allProcs = append(allProcs, info)
 	}
 
-	// Validate the session leader identity if a process with PID sid is currently in /proc.
 	if leaderProc, ok := procMap[sid]; ok {
-		// If PID sid is occupied by a process with a different start time than our recorded
-		// leader start time, the PID has been recycled for an unrelated process or session.
 		if leaderProc.startTime != leaderStartTime {
 			return nil
 		}
@@ -248,8 +229,6 @@ func linuxFindSessionProcesses(sid int, leaderStartTime uint64) []linuxProcInfo 
 	return sessionProcs
 }
 
-// processAliveWithIdentity verifies that the process at pid is currently alive,
-// is not a zombie, and has the exact expected startTime.
 func processAliveWithIdentity(pid int, expectedStartTime uint64) bool {
 	if pid <= 0 || expectedStartTime == 0 {
 		return false
@@ -261,8 +240,6 @@ func processAliveWithIdentity(pid int, expectedStartTime uint64) bool {
 	return info.startTime == expectedStartTime
 }
 
-// signalProcessIfIdentityMatches verifies the process's current startTime immediately
-// before dispatching the signal to prevent killing a recycled PID (TOCTOU guard).
 func signalProcessIfIdentityMatches(pid int, expectedStartTime uint64, sig syscall.Signal) bool {
 	if !processAliveWithIdentity(pid, expectedStartTime) {
 		return false
@@ -271,8 +248,6 @@ func signalProcessIfIdentityMatches(pid int, expectedStartTime uint64, sig sysca
 	return true
 }
 
-// signalProcessGroupIfIdentityMatches verifies the group leader's current startTime
-// immediately before dispatching the signal to the process group.
 func signalProcessGroupIfIdentityMatches(pgid int, expectedStartTime uint64, sig syscall.Signal) bool {
 	if !processAliveWithIdentity(pgid, expectedStartTime) {
 		return false
@@ -287,12 +262,10 @@ func signalValidatedSessionProcs(procs []linuxProcInfo, sig syscall.Signal) {
 		validPIDs[p.pid] = p.startTime
 	}
 
-	// 1. Signal each individual process directly with pre-signal start-time validation
 	for _, p := range procs {
 		signalProcessIfIdentityMatches(p.pid, p.startTime, sig)
 	}
 
-	// 2. Only signal process groups whose group leader identity is verified right now
 	signaledPGRPs := make(map[int]bool)
 	for _, p := range procs {
 		if p.pgrp > 1 && !signaledPGRPs[p.pgrp] {

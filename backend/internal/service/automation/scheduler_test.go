@@ -164,8 +164,6 @@ func (s *recordingSpawner) Kill(_ context.Context, id domain.SessionID) (bool, e
 	return s.killFreed, nil
 }
 
-// Catch-up is capped at three durable rows but advances past the whole missed
-// window, and only the oldest occurrence is dispatched for the definition.
 func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	base := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	now := base.Add(5 * time.Hour)
@@ -192,8 +190,6 @@ func TestTickMaterializesBoundedCatchupAndDispatchesOldest(t *testing.T) {
 	}
 }
 
-// Durable session termination, not a runtime probe, releases the non-overlap
-// gate and allows the next queued occurrence to start.
 func TestTickCompletesTerminatedSessionBeforeNextDispatch(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	store := newSchedulerStore()
@@ -213,8 +209,6 @@ func TestTickCompletesTerminatedSessionBeforeNextDispatch(t *testing.T) {
 	}
 }
 
-// Boot reconciliation adopts a crash-surviving idempotent session instead of
-// releasing the occurrence and spawning a duplicate.
 func TestReconcileAdoptsSessionForExpiredClaim(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	store := newSchedulerStore()
@@ -252,8 +246,6 @@ func TestReconcileCompletesTerminatedSessionForExpiredClaim(t *testing.T) {
 	}
 }
 
-// A seed row is not a completed launch. Reconciliation must tear it down and
-// fail the occurrence instead of adopting it or starting a duplicate runtime.
 func TestReconcileRollsBackIncompleteAutomationSession(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 9, 0, 0, 0, time.UTC)
 	store := newSchedulerStore()
@@ -275,9 +267,6 @@ func TestReconcileRollsBackIncompleteAutomationSession(t *testing.T) {
 	}
 }
 
-// A restart before the lease expires skips startup reconciliation, so regular
-// ticks must release an expired claim that never produced a session instead of
-// leaving the run stuck in spawning and blocking every later occurrence.
 func TestTickReleasesExpiredSpawningClaimWithoutSession(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	store := newSchedulerStore()
@@ -299,10 +288,6 @@ func TestTickReleasesExpiredSpawningClaimWithoutSession(t *testing.T) {
 	}
 }
 
-// If workspace provisioning dirties the worktree and rollback preserves the
-// automation seed row, requeueing only creates an infinite
-// "incomplete prior launch" loop. The scheduler must make that retained-row
-// failure terminal for the occurrence.
 func TestTickFailsRunWhenSpawnErrorLeavesIncompleteAutomationSession(t *testing.T) {
 	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
 	store := newSchedulerStore()

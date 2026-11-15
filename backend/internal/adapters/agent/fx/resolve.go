@@ -15,7 +15,6 @@ var fxBinarySpec = binaryutil.BinarySpec{
 	UnixHomePaths: [][]string{{".local", "bin", "fx"}},
 }
 
-// ResolveFXBinary finds fx on PATH or at ~/.local/bin/fx.
 func ResolveFXBinary(ctx context.Context) (string, error) {
 	return resolveFXBinary(ctx, runtime.GOOS)
 }
@@ -30,7 +29,6 @@ func resolveFXBinary(ctx context.Context, goos string) (string, error) {
 	return binaryutil.ResolveBinary(ctx, fxBinarySpec)
 }
 
-// ResolveBinary resolves the executable path for readiness checks.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return p.fxBinary(ctx)
 }
@@ -55,8 +53,6 @@ func (p *Plugin) fxBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

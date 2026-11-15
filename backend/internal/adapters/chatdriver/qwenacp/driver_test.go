@@ -132,8 +132,6 @@ func TestDriverAdmitsAskModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Probe: %v", err)
 	}
-	// Qwen enforces approval modes over session/request_permission, so every
-	// permission mode clears the production floor.
 	if missing := ports.MissingProductionCapabilities(caps); len(missing) != 0 {
 		t.Fatalf("production floor gap = %v, want none", missing)
 	}

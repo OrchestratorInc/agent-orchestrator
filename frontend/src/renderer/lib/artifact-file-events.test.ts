@@ -115,7 +115,6 @@ describe("subscribeArtifactFileChanges", () => {
 		expect(eventStreamBaseUrlMock).toHaveBeenCalledWith("http://127.0.0.1:3001");
 		expect(EventSourceStub.instances[0].url).toBe("http://ao-events.localhost:3001/api/v1/sessions/ao-1/artifact-events");
 
-		// The same daemon address does not rebuild the stream.
 		baseUrlListener?.();
 		expect(EventSourceStub.instances).toHaveLength(1);
 	});
@@ -149,10 +148,7 @@ describe("subscribeArtifactFileChanges", () => {
 			vi.advanceTimersByTime(100);
 			stream.dispatch("artifacts_changed");
 		}
-		// The file is reread 150ms after the first event of each window: at
-		// 150, 350, 550 and 750ms by 900ms, and the last write at 950ms.
 		expect(fileRefreshes()).toHaveLength(4);
-		// The list reads once on ready, then once more when its second ends.
 		expect(listRefreshes()).toBe(1);
 		vi.advanceTimersByTime(100);
 		expect(listRefreshes()).toBe(2);

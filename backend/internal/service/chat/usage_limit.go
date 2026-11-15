@@ -11,15 +11,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ErrUsageLimitAutoResumeInvalid rejects a source that cannot safely resume.
 var ErrUsageLimitAutoResumeInvalid = errors.New("usage-limit auto-resume is unavailable")
 
-// ErrUsageLimitResetUnknown refuses scheduling without a known reset deadline.
 var ErrUsageLimitResetUnknown = errors.New("the provider did not report a known usage-limit reset time")
 
 const usageLimitAutoResumeBackoff = 30 * time.Second
 
-// Bound provider processes and wakes without making one session block another.
 const usageLimitAutoResumeWorkers = 4
 
 type usageLimitStore interface {
@@ -34,15 +31,12 @@ type usageLimitAccountReader interface {
 	SessionLimits(context.Context, domain.SessionID, domain.AgentHarness, bool) (string, domain.AgentAccountLimits, error)
 }
 
-// SetUsageLimitAccounts shares the account service's provider readings with recovery.
 func (s *Service) SetUsageLimitAccounts(accounts usageLimitAccountReader) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.usageLimitAccounts = accounts
 }
 
-// SetTurnAutoResume arms one failed human prompt, rather than a session-wide
-// policy. Cancellation needs no live controller and remains available while busy.
 func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, turnID string, enabled bool) error {
 	store, ok := s.store.(usageLimitStore)
 	if !ok {
@@ -105,7 +99,6 @@ func validateUsageLimitSession(record domain.SessionRecord) error {
 	return nil
 }
 
-// Account readings can extend a known deadline, never shorten it or create consent.
 func (s *Service) postponeUsageLimit(ctx context.Context, store usageLimitStore, source domain.ConversationTurn, harness domain.AgentHarness) (bool, error) {
 	s.mu.RLock()
 	accounts := s.usageLimitAccounts
@@ -113,7 +106,6 @@ func (s *Service) postponeUsageLimit(ctx context.Context, store usageLimitStore,
 	if accounts == nil {
 		return false, nil
 	}
-	// An optional quota probe must not hold up the already-authorized retry.
 	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	_, limits, err := accounts.SessionLimits(readCtx, source.HandledBySessionID, harness, true)
 	cancel()
@@ -128,8 +120,6 @@ func (s *Service) postponeUsageLimit(ctx context.Context, store usageLimitStore,
 		!limits.AutoResumeResetsAt.After(*source.UsageLimit.ResetsAt) {
 		return false, nil
 	}
-	// A retry or account move may consume consent during the probe. A zero-row
-	// update leaves it consumed and ends this attempt without dispatching.
 	_, err = store.PostponeTurnAutoResume(ctx, source.ConversationID, source.ID, *limits.AutoResumeResetsAt)
 	return err == nil, err
 }
@@ -173,8 +163,6 @@ func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitS
 	return nil
 }
 
-// retryUsageLimitTurn uses RetryTurn's durable idempotency and provider dispatch,
-// and rechecks intent and lineage under the same lock as sends and queue drains.
 func (c *Controller) retryUsageLimitTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	if !c.sendMu.TryLock() {
 		return domain.ConversationTurn{}, ErrTurnRunning
@@ -217,8 +205,6 @@ func permanentUsageLimitResumeError(err error) bool {
 		errors.Is(err, ports.ErrChatAuthRequired)
 }
 
-// ResumeUsageLimitedTurns preserves consent through temporary failures. Only a
-// permanent refusal or the transaction recording a retry consumes it.
 func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -258,7 +244,6 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		if s.autoResumeInFlight[candidate.ID] || s.autoResumeRetryAt[candidate.ID].After(s.now()) {
 			continue
 		}
-		// Eligibility reads are needed only once the durable deadline arrives.
 		if candidate.UsageLimit != nil && candidate.UsageLimit.ResetsAt != nil && candidate.UsageLimit.ResetsAt.After(s.now()) {
 			continue
 		}
@@ -297,7 +282,6 @@ func (s *Service) resumeUsageLimitedTurn(ctx context.Context, store usageLimitSt
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// A cancellation or manual retry can consume intent after the scan.
 	source, err := s.store.TurnByID(ctx, candidate.ID)
 	var record domain.SessionRecord
 	if err == nil {
@@ -323,7 +307,6 @@ func (s *Service) resumeUsageLimitedTurn(ctx context.Context, store usageLimitSt
 		}
 	}
 	if err == nil {
-		// Hibernation recovery already permits a 60-second native wake.
 		attemptCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		_, err = s.retryTurn(attemptCtx, source.HandledBySessionID, source.ID, true)
 		cancel()

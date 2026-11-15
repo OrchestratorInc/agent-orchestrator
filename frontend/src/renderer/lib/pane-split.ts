@@ -1,23 +1,13 @@
-/**
- * Split tabs. Two or more center tabs can be shown together on one screen.
- * They then form a group: one tab in the strip that names every member, and
- * a layout that is a tree of splits with exactly one tab in each leaf. Any
- * leaf can be split again, and every split has its own resizable ratio.
- */
 export type SplitSide = "left" | "right" | "top" | "bottom";
 
 export type SplitNode =
 	| { type: "leaf"; key: string }
-	/** `row` puts `a` left of `b`; `column` puts `a` above `b`. */
 	| { type: "split"; dir: "row" | "column"; ratio: number; a: SplitNode; b: SplitNode };
 
-/** `focus` is the member last focused, named in the group's tab. */
 export type TabGroup = { id: string; root: SplitNode; focus?: string };
 
-/** Drag key for the session's own tab (chat or agent terminal). */
 export const SESSION_TAB_KEY = "session";
 export const GROUP_KEY_PREFIX = "group:";
-/** Smallest pane, in pixels, a divider drag leaves on either side. */
 export const MIN_PANE_PX = 160;
 
 export function groupTabKey(group: TabGroup): string {
@@ -28,7 +18,6 @@ export function leafKeys(node: SplitNode): string[] {
 	return node.type === "leaf" ? [node.key] : [...leafKeys(node.a), ...leafKeys(node.b)];
 }
 
-/** Store a group's members at its strip position so reordering survives regrouping. */
 export function expandGroupTabOrder(order: readonly string[], groups: readonly TabGroup[]): string[] {
 	const members = new Map(groups.map((group) => [groupTabKey(group), leafKeys(group.root)]));
 	return order.flatMap((key) => members.get(key) ?? [key]).filter((key) => key !== SESSION_TAB_KEY);
@@ -38,7 +27,6 @@ export function groupContaining(groups: readonly TabGroup[], key: string): TabGr
 	return groups.find((group) => leafKeys(group.root).includes(key));
 }
 
-/** The node without the leaf; a split left with one child becomes that child. */
 export function removeLeaf(node: SplitNode, key: string): SplitNode | null {
 	if (node.type === "leaf") return node.key === key ? null : node;
 	const a = removeLeaf(node.a, key);
@@ -48,7 +36,6 @@ export function removeLeaf(node: SplitNode, key: string): SplitNode | null {
 	return a === node.a && b === node.b ? node : { ...node, a, b };
 }
 
-/** Splits the target leaf in half and puts the new tab on `side` of it. */
 export function insertBeside(node: SplitNode, target: string, key: string, side: SplitSide): SplitNode {
 	if (node.type === "leaf") {
 		if (node.key !== target) return node;
@@ -86,11 +73,6 @@ function renameLeaf(node: SplitNode, rename: (key: string) => string | undefined
 	return a === node.a && b === node.b ? node : { ...node, a, b };
 }
 
-/**
- * Drops members that no longer exist (a closed shell or file). A group left
- * with one tab dissolves back into a plain tab. `rename` follows a tab whose
- * key changed (a new shell's placeholder becoming the real shell).
- */
 export function reconcileGroups(
 	groups: TabGroup[],
 	available: ReadonlySet<string>,
@@ -123,7 +105,6 @@ export function newGroupId(): string {
 	return `${Date.now().toString(36)}-${groupSequence}`;
 }
 
-/** The groups with one tab taken out; a group left with one tab dissolves. */
 export function withoutTab(groups: TabGroup[], key: string): TabGroup[] {
 	let changed = false;
 	const next = groups.flatMap((group) => {
@@ -135,7 +116,6 @@ export function withoutTab(groups: TabGroup[], key: string): TabGroup[] {
 	return changed ? next : groups;
 }
 
-/** Rebuilds one group's layout, taking the tab out of wherever it was before. */
 export function placeInGroup(
 	groups: TabGroup[],
 	group: TabGroup,
@@ -148,12 +128,6 @@ export function placeInGroup(
 	return [...others, { ...latest, root: build(base) }];
 }
 
-/**
- * Shows `key` on `side` of `anchor`, focused. If the anchor is already in a
- * group the tab joins that group beside it; otherwise the two form a new
- * group. The tab leaves any group it was in before. This is the one way a
- * split is made, whether from a drop, a shortcut or an agent request.
- */
 export function splitBeside(groups: TabGroup[], anchor: string, key: string, side: SplitSide): TabGroup[] {
 	if (anchor === key) return groups;
 	const group = groupContaining(groups, anchor);
@@ -165,7 +139,6 @@ export function splitBeside(groups: TabGroup[], anchor: string, key: string, sid
 	return [...withoutTab(groups, key), { id: newGroupId(), root: insertBeside({ type: "leaf", key: anchor }, anchor, key, side), focus: key }];
 }
 
-/** Every tab of the group becomes a tab of its own again. */
 export function ungroupById(groups: TabGroup[], groupId: string): TabGroup[] {
 	const next = groups.filter((group) => group.id !== groupId);
 	return next.length === groups.length ? groups : next;
@@ -174,7 +147,6 @@ export function ungroupById(groups: TabGroup[], groupId: string): TabGroup[] {
 export type Box = { x: number; y: number; w: number; h: number };
 export type ClientRect = { left: number; top: number; width: number; height: number };
 
-/** Every leaf's box and every split's box, as fractions of the screen. */
 export function layoutBoxes(root: SplitNode): { leaves: Map<string, Box>; splits: Map<string, { node: Extract<SplitNode, { type: "split" }>; box: Box }> } {
 	const leaves = new Map<string, Box>();
 	const splits = new Map<string, { node: Extract<SplitNode, { type: "split" }>; box: Box }>();
@@ -207,7 +179,6 @@ export function toClientRect(screen: ClientRect, box: Box): ClientRect {
 	};
 }
 
-/** CSS variable holding a split's ratio, so a divider drag re-renders nothing. */
 export function ratioVar(path: string): string {
 	return `--split-${path}`;
 }
@@ -215,10 +186,6 @@ export function ratioVar(path: string): string {
 export type CssBox = { left: string; top: string; width: string; height: string };
 export type CssDivider = { path: string; dir: "row" | "column"; ratio: number; style: CssBox; box: Box };
 
-/**
- * The same layout as CSS that reads each split's ratio variable. Moving a
- * divider rewrites one variable on the screen element and every pane follows.
- */
 export function layoutCss(root: SplitNode): { leaves: Map<string, CssBox>; dividers: CssDivider[]; vars: Record<string, number> } {
 	const leaves = new Map<string, CssBox>();
 	const dividers: CssDivider[] = [];
@@ -251,11 +218,6 @@ export function layoutCss(root: SplitNode): { leaves: Map<string, CssBox>; divid
 	return { leaves, dividers, vars };
 }
 
-/**
- * Which edge of a box the pointer points at. Left and right halves cover most
- * of it; top and bottom take a band near those edges when the pointer is
- * closer to them than to a side.
- */
 export function edgeAt(rect: ClientRect, x: number, y: number): SplitSide | null {
 	if (rect.width <= 0 || rect.height <= 0) return null;
 	const nx = (x - rect.left) / rect.width;
@@ -267,7 +229,6 @@ export function edgeAt(rect: ClientRect, x: number, y: number): SplitSide | null
 	return nx < 0.5 ? "left" : "right";
 }
 
-/** The half of a box on one side: where a tab dropped there would go. */
 export function halfOf(rect: ClientRect, side: SplitSide): ClientRect {
 	if (side === "left") return { ...rect, width: rect.width / 2 };
 	if (side === "right") return { ...rect, left: rect.left + rect.width / 2, width: rect.width / 2 };
@@ -279,7 +240,6 @@ export function containsPoint(rect: ClientRect, x: number, y: number): boolean {
 	return x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height;
 }
 
-/** Split layouts are remembered for this many sessions, the most recently changed. */
 export const MAX_STORED_SPLIT_SESSIONS = 50;
 
 function parseNode(value: unknown, dropKey: (key: string) => boolean): SplitNode | null {
@@ -297,10 +257,6 @@ function parseNode(value: unknown, dropKey: (key: string) => boolean): SplitNode
 	return { type: "split", dir: node.dir, ratio, a, b };
 }
 
-/**
- * Reads remembered split layouts, keeping only well-formed groups of two or
- * more distinct tabs. `dropKey` leaves out tabs that cannot outlive a reload.
- */
 export function parseStoredGroups(raw: string | null | undefined, dropKey: (key: string) => boolean = () => false): Record<string, TabGroup[]> {
 	if (!raw) return {};
 	let parsed: unknown;
@@ -320,7 +276,6 @@ export function parseStoredGroups(raw: string | null | undefined, dropKey: (key:
 			const group = candidate as Record<string, unknown>;
 			if (typeof group.id !== "string" || !group.id) continue;
 			let root = parseNode(group.root, dropKey);
-			// A tab belongs to one group at most.
 			for (const key of root ? leafKeys(root) : []) {
 				if (seen.has(key) && root) root = removeLeaf(root, key);
 			}
@@ -336,7 +291,6 @@ export function parseStoredGroups(raw: string | null | undefined, dropKey: (key:
 	return result;
 }
 
-/** The layouts to remember: the most recently changed sessions come last. */
 export function trimStoredGroups(groupsBySession: Record<string, TabGroup[]>): Record<string, TabGroup[]> {
 	const entries = Object.entries(groupsBySession).filter(([, groups]) => groups.length > 0);
 	return Object.fromEntries(entries.slice(-MAX_STORED_SPLIT_SESSIONS));

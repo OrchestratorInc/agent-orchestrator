@@ -47,8 +47,6 @@ func TestDetectTerminalActivityRejectsTrustFlagText(t *testing.T) {
 }
 
 func TestDetectTerminalActivityRejectsNonPrompts(t *testing.T) {
-	// Neither line carries approval controls: the first is a status line,
-	// the second a trust-state note. Neither may read as waiting.
 	for _, output := range []string{
 		"No approval is required.\n",
 		"shell not trusted\n",
@@ -60,8 +58,6 @@ func TestDetectTerminalActivityRejectsNonPrompts(t *testing.T) {
 }
 
 func TestDetectTerminalActivitySkipsAnsweredPrompt(t *testing.T) {
-	// The echoed answer proves the decision was already made: an answered
-	// prompt alone must not re-arm waiting_input.
 	output := "Allow this action? Use 't' to trust (always allow) this tool for the session. [y/n/t]: y\n"
 	if got, ok := (&Plugin{}).DetectTerminalActivity(output); ok {
 		t.Fatalf("DetectTerminalActivity(answered) = (%q, true), want no signal", got)
@@ -69,9 +65,6 @@ func TestDetectTerminalActivitySkipsAnsweredPrompt(t *testing.T) {
 }
 
 func TestDetectTerminalActivitySkipsSeparateLineAnswer(t *testing.T) {
-	// The classic prompt prints newlines before reading the answer, so the
-	// choice lands on its own later line. An answered prompt must not
-	// re-arm waiting_input even though the marker line itself is bare.
 	output := "Allow this action? Use 't' to trust (always allow) this tool for the session. [y/n/t]:\n\n[ao] > y\n"
 	if got, ok := (&Plugin{}).DetectTerminalActivity(output); ok {
 		t.Fatalf("DetectTerminalActivity(separate-line answer) = (%q, true), want no signal", got)
@@ -79,8 +72,6 @@ func TestDetectTerminalActivitySkipsSeparateLineAnswer(t *testing.T) {
 }
 
 func TestDetectTerminalActivitySeparateLineAnswerStaysIdle(t *testing.T) {
-	// Finished turn with the separate-line answer layout: idle wins and the
-	// answered prompt below it never flips the session back to waiting.
 	output := "Allow this action? Use 't' to trust (always allow) this tool for the session. [y/n/t]:\n\n[ao] > y\n" +
 		"✓ Tool ran successfully\n" +
 		"ask a question or describe a task\n"
@@ -91,8 +82,6 @@ func TestDetectTerminalActivitySeparateLineAnswerStaysIdle(t *testing.T) {
 }
 
 func TestDetectTerminalActivityHandlesNoTabToEdit(t *testing.T) {
-	// Captured Kiro 2.4.1 dialog shape: the deny control carries a key hint.
-	// Replaying the pending dialog must still report waiting_input.
 	output := "shell requires approval\n  Yes, single permission\n  Trust, always allow in this session\n  No (Tab to edit)\n"
 	got, ok := (&Plugin{}).DetectTerminalActivity(output)
 	if got != domain.ActivityWaitingInput || !ok {
@@ -101,9 +90,6 @@ func TestDetectTerminalActivityHandlesNoTabToEdit(t *testing.T) {
 }
 
 func TestDetectTerminalActivityFinishedTurnStaysIdle(t *testing.T) {
-	// A finished turn keeps its idle composer even though scrollback retains
-	// the answered prompt and an older approval bar: nothing below the
-	// answered decision may flip the session back to waiting_input.
 	output := "shell requires approval\n❯ Yes, single permission\n  Trust, always allow in this session\n  No\n" +
 		"Allow this action? Use 't' to trust (always allow) this tool for the session. [y/n/t]: y\n" +
 		"✓ Tool ran successfully\n" +
@@ -115,8 +101,6 @@ func TestDetectTerminalActivityFinishedTurnStaysIdle(t *testing.T) {
 }
 
 func TestDetectTerminalActivityAnsweredPromptShadowsOlderBar(t *testing.T) {
-	// Without an idle marker, an answered prompt still proves the older bar
-	// is history: the scan stops instead of matching stale UI.
 	output := "shell requires approval\n❯ Yes, single permission\n  Trust, always allow in this session\n  No\n" +
 		"Allow this action? Use 't' to trust (always allow) this tool for the session. [y/n/t]: n\n"
 	if got, ok := (&Plugin{}).DetectTerminalActivity(output); ok {

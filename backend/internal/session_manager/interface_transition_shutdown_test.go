@@ -106,7 +106,6 @@ func TestStartupDefersInterfaceRecoveryBehindExistingSessionOperation(t *testing
 		release()
 		t.Fatal("deferred transition admitted input")
 	}
-	// This handoff started after startup. A deferred recovery must not sweep it.
 	other := st.sessions["session-1"]
 	other.ID = "live-session"
 	st.sessions[other.ID] = other
@@ -118,8 +117,6 @@ func TestStartupDefersInterfaceRecoveryBehindExistingSessionOperation(t *testing
 		t.Fatal(err)
 	}
 	m.endAgentOperation("session-1", agentOperationKill)
-	// Even immediately after releasing the existing operation, the durable handoff
-	// must either be recovered or still protected from input/reaper/restore.
 	if !m.SessionMutationInProgress("session-1") {
 		if _, active, err := st.GetActiveSessionInterfaceTransition(ctx, "session-1"); err != nil || active {
 			t.Fatalf("operation release exposed unrecovered handoff: %v %v", active, err)
@@ -316,9 +313,6 @@ func TestInterfaceTransitionRollsBackInconclusiveHistoryCleanupWithoutRetry(t *t
 	}
 }
 
-// Fail the final restore read after MarkSpawned has committed the real target
-// runtime handle. This models a transient store failure after a successful TUI
-// launch, rather than inventing an otherwise unreachable retained transition.
 type postTargetLaunchReadFailureStore struct {
 	*transitionStore
 	failRead bool

@@ -3,8 +3,6 @@ import { source } from "@/lib/source";
 import { visibleProductName } from "@/lib/branding";
 import { DEFAULT_LOCALE } from "@/i18n/locales";
 
-// The index is English only. Without `_i18n` it builds one index instead of
-// one per language.
 const search = createFromSource({
   ...source,
   _i18n: undefined,

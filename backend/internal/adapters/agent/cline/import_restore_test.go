@@ -93,7 +93,7 @@ func TestImportedClineRefusesWrongIdentityRootAndMissingNativeHistory(t *testing
 				t.Fatalf("invalid import accepted = %v, %v", found, err)
 			}
 			if mode == "wrong-launch-root" {
-				return // Command construction has no launch-env argument.
+				return
 			}
 			cmd, id, ok, err := p.GetRestoreCommandWithSessionID(context.Background(), ports.RestoreConfig{Session: ref})
 			if err == nil || ok || cmd != nil || id != "" {
@@ -103,8 +103,6 @@ func TestImportedClineRefusesWrongIdentityRootAndMissingNativeHistory(t *testing
 	}
 }
 
-// The importer accepts message documents up to its 1 GiB transcript budget,
-// so restore validation must accept a large one instead of capping at 16 MiB.
 func TestImportedClineRestoresMessageDocumentOverSixteenMiB(t *testing.T) {
 	root := t.TempDir()
 	ref := importedClineFixture(t, root)
@@ -135,8 +133,6 @@ func TestImportedClineDoesNotRecoverAnotherID(t *testing.T) {
 	ref := importedClineFixture(t, root)
 	ref.Metadata[ports.MetadataKeyImportResumeNativeID] = "missing-prepared-session"
 	ref.Metadata[ports.MetadataKeyAgentSessionID] = "missing-prepared-session"
-	// A valid original conversation exists, but the explicit prepared identity
-	// is missing. The adapter must not select the original or scan recent chats.
 	p := &Plugin{resolvedBinary: "cline"}
 	cmd, id, ok, err := p.GetRestoreCommandWithSessionID(context.Background(), ports.RestoreConfig{Session: ref})
 	if !errors.Is(err, ports.ErrNativeHistoryUnavailable) || ok || cmd != nil || id != "" {

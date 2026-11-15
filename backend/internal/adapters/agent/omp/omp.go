@@ -1,6 +1,3 @@
-// Package omp implements AO's OMP agent adapter. OMP is a terminal-first
-// coding harness, so AO launches it interactively inside the session terminal
-// pane and keeps protocol-level RPC/ACP integration out of this adapter.
 package omp
 
 import (
@@ -19,21 +16,16 @@ import (
 
 const adapterID = "omp"
 
-// Plugin is the OMP agent adapter. It is safe for concurrent use; binary
-// resolution is cached after the first successful lookup.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register OMP adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
 
-// EmitsSemanticMessageAcceptance reports that AO's OMP plugin includes the
-// accepted prompt text in its user-prompt-submit callback.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -43,7 +35,6 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -56,14 +47,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports the per-project agent config keys OMP understands.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `omp --model`.")
 }
 
-// GetLaunchCommand builds the argv to start a fresh interactive OMP session:
-//
-//	omp [--append-system-prompt <system prompt>] [--model <model>] [<prompt>]
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	binary, err := p.ompBinary(ctx)
 	if err != nil {
@@ -86,9 +73,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand continues an OMP session when AO has captured its native
-// session id. ok=false means the session manager should fall back to a fresh
-// launch.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -116,7 +100,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo surfaces metadata captured by AO's generic session machinery.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -125,7 +108,6 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// NativeConversationExists reports whether OMP has a persisted session file for id.
 func (p *Plugin) NativeConversationExists(ctx context.Context, _ ports.SessionRef, nativeConversationID string, env map[string]string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -205,9 +187,6 @@ var ompBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveOMPBinary finds the `omp` binary, searching PATH then common install
-// locations. It returns a wrapped ports.ErrAgentBinaryNotFound when OMP is
-// absent.
 func ResolveOMPBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, ompBinarySpec)
 }
@@ -227,8 +206,6 @@ func (p *Plugin) ompBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

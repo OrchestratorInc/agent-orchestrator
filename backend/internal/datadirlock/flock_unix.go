@@ -10,15 +10,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// tryLock takes a non-blocking exclusive advisory lock (flock LOCK_EX|LOCK_NB).
-// The lock is bound to the open file descriptor, so the kernel drops it when the
-// process exits, giving automatic recovery after a crash.
 func tryLock(file *os.File) error {
 	return lockError(unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB))
 }
 
-// lockError maps flock's result: EWOULDBLOCK/EAGAIN means another process holds
-// the lock, and ENOTSUP, EOPNOTSUPP or ENOLCK means the filesystem cannot lock.
 func lockError(err error) error {
 	switch {
 	case err == nil:

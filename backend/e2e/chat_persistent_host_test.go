@@ -70,8 +70,6 @@ func TestChatSessionRecoversAfterMachineStyleHostLoss(t *testing.T) {
 		return s.Turns[len(s.Turns)-1].State == "running"
 	})
 	hostBefore := persistentHostPID(t, dataDir, session)
-	// The detached host is a session leader; killing its process group removes
-	// both host and provider, matching the process loss caused by a machine reboot.
 	if err := syscall.Kill(-hostBefore, syscall.SIGKILL); err != nil {
 		t.Fatalf("kill detached host process group %d: %v", hostBefore, err)
 	}

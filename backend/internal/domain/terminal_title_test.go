@@ -45,7 +45,6 @@ func TestMeaningfulTerminalTitle(t *testing.T) {
 		{"path", "~/dev/agent-orchestrator", ""},
 		{"user at host", "me@laptop:~/dev", ""},
 		{"no letters", "...", ""},
-		// fish_title: up to 20 characters of the command line, then prompt_pwd.
 		{"fish prompt", "~/d/agent-orchestrator", ""},
 		{"fish one-word command", "ls ~/d/agent-orchestrator", ""},
 		{"fish multi-word command", "git status ~/d/agent-orchestrator", ""},

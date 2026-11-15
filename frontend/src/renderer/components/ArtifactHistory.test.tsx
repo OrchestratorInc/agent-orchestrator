@@ -61,9 +61,7 @@ describe("ArtifactHistoryMenu", () => {
 		const items = within(menu).getAllByRole("menuitem");
 		expect(items).toHaveLength(4);
 		expect(within(items[0]!).getByText("Current")).toBeTruthy();
-		// The agent shows as its logo (named by the harness), a user save as a lettered avatar.
 		expect(within(items[0]!).getByAltText(/claude/i)).toBeTruthy();
-		// A version saved in the app wears the GitHub account's avatar, named by its username.
 		expect(await within(items[3]!).findByTitle("octocat")).toBeTruthy();
 
 		await userEvent.click(items[2]!);
@@ -123,7 +121,6 @@ describe("formatVersionTime", () => {
 		const now = new Date(2026, 9, 15, 20, 0);
 		expect(formatVersionTime(new Date(2026, 9, 15, 8, 31).toISOString(), now)).toMatch(/^Today, /);
 		expect(formatVersionTime(new Date(2026, 9, 14, 8, 31).toISOString(), now)).toMatch(/^Yesterday, /);
-		// Day and month order follow the system locale.
 		expect(formatVersionTime(new Date(2026, 9, 11, 8, 31).toISOString(), now)).toMatch(/^(Oct 11|11 Oct), /);
 		expect(formatVersionTime("not a date", now)).toBe("");
 	});

@@ -2,10 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeQr } from "../../lib/qr-matrix";
 import { paintQr, QR_INK, QR_PAPER, quietZonePx } from "./qr-paint";
 
-// jsdom has no canvas, so record what the painter asks of one: the shapes it
-// adds to each path and the order of its fills. What matters is that the right
-// modules are drawn in the right places, since a shifted or transposed grid
-// would still look like a QR code and simply never scan.
 interface Rect {
 	x: number;
 	y: number;
@@ -67,7 +63,6 @@ function paint(options: { showLogo: boolean; logo?: HTMLImageElement | null }, p
 }
 
 describe("paintQr", () => {
-	// Android's scanner cannot read an inverted code: ink on an opaque light card.
 	it("draws dark modules on an opaque light card", () => {
 		const { events } = paint({ showLogo: false });
 		expect(events[0]).toMatchObject({ type: "fillRect", style: QR_PAPER, args: [0, 0, SIZE, SIZE] });
@@ -105,14 +100,11 @@ describe("paintQr", () => {
 		const origins = rings.map((ring) => [Math.round((ring.path!.rects[0].y - margin) / cell), Math.round((ring.path!.rects[0].x - margin) / cell)]);
 		expect(origins).toEqual(expect.arrayContaining([[0, 0], [0, far], [far, 0]]));
 		for (const ring of rings) {
-			// An outer square of 7 modules with a 5-module hole.
 			expect(ring.path!.rects[0].w).toBeCloseTo(7 * cell);
 			expect(ring.path!.rects[1].w).toBeCloseTo(5 * cell);
 		}
 	});
 
-	// Hidden modules are errors the scanner must repair, so the logo's cut-out
-	// is a budget: 45% of what error correction M can recover.
 	it("keeps the logo cut-out within the error-correction budget and centred", () => {
 		const { matrix, margin, cell, events } = paint({ showLogo: true });
 		const withLogo = events.find((event) => event.type === "fill" && event.rule === undefined)!.path!;
@@ -121,7 +113,6 @@ describe("paintQr", () => {
 		expect(hiddenModules).toBeGreaterThan(0);
 		expect(hiddenModules).toBeLessThanOrEqual(Math.floor(0.45 * 0.15 * matrix.modules * matrix.modules));
 
-		// Centred: the dots missing from the full code form a square around the middle.
 		const kept = new Set(withLogo.rects.map((rect) => `${Math.round((rect.y - margin) / cell)},${Math.round((rect.x - margin) / cell)}`));
 		const missing = without.rects
 			.map((rect) => [Math.round((rect.y - margin) / cell), Math.round((rect.x - margin) / cell)] as const)
@@ -142,7 +133,6 @@ describe("paintQr", () => {
 		expect(x + w / 2).toBeCloseTo(centre);
 		expect(y + h / 2).toBeCloseTo(centre);
 		expect(w).toBeGreaterThan(0);
-		// Well inside the code, never reaching a finder square.
 		expect(w).toBeLessThan((matrix.modules - 14) * cell);
 	});
 

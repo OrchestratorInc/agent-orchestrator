@@ -5,18 +5,6 @@ import { invalidateAgentModelCatalogs, type ModelCatalogAuthIssue } from "./useA
 
 const FOCUS_RECHECK_INTERVAL_MS = 5_000;
 
-/**
- * Clears a model-catalog login error on its own once the login is fixed,
- * wherever that happened:
- *
- * - readiness reports the agent signed in again (AO's login terminal, the
- *   Harness settings page, or any other readiness check);
- * - the window regains focus while the error is showing, which is how a
- *   login (or Claude Code renewing its token) done in a terminal shows up.
- *
- * Both re-read the daemon's catalog, which rediscovers models once the
- * agent's credential changed.
- */
 export function useModelCatalogAuthRecovery(agentId: string, hostId: string | undefined, issue: ModelCatalogAuthIssue | undefined) {
 	const queryClient = useQueryClient();
 	const readiness = useAgentReadinessQuery(agentId !== "", hostId);

@@ -142,7 +142,6 @@ func TestHarnessUpdateWatchRechecksEveryIntervalWithFreshLookups(t *testing.T) {
 	if second := next(); second.target != systeminstall.TargetCodex || !second.refresh {
 		t.Fatalf("periodic pass = %+v, want a fresh codex check", second)
 	}
-	// A harness installed after startup joins the next pass.
 	mu.Lock()
 	installed = append(installed, domain.AgentReadinessSnapshot{ID: "claude-code", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}})
 	mu.Unlock()

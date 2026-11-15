@@ -7,8 +7,6 @@ import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { CloudSessionChatSurface } from "./CloudSessionChatSurface";
 import type { WorkspaceSession } from "../../types/workspace";
 
-// The Cloud chat with its real ChatWorkspace and queue dock: what the person
-// sees and clicks, against a mocked control plane.
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(), sendSessionMessage: vi.fn(), cancelTurn: vi.fn(), steerTurn: vi.fn(),
 	editQueuedMessage: vi.fn(), deleteQueuedMessage: vi.fn(), steerQueuedMessage: vi.fn(), decideChatApproval: vi.fn(),
@@ -25,7 +23,6 @@ const session = {
 
 const at = (sequence: number, type: string, payload: Record<string, unknown>) =>
 	({ sessionId: session.id, sequence, type, payload, createdAt: `2026-11-13T09:0${sequence}:00Z` });
-// A working session with an orchestrator's message and then the person's own queued behind its turn.
 const queued = [
 	at(1, "chat.user_message", { text: "long job", turnId: "turn-run", authorUserId: "user-1" }),
 	at(2, "chat.turn_started", { turnId: "turn-run", attempt: 1 }),
@@ -49,9 +46,6 @@ describe("Delete on a Cloud chat's queue", () => {
 		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [] });
 	});
 
-	// Delete reaches the control plane, holds the row (disabled) while it is in
-	// flight, and the message is gone once the control plane recorded it, after
-	// a remount too, since the chat reads the delete from its events.
 	it("deletes the queued message on the control plane, and it stays gone after a remount", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue(page(queued));
 		let answer: (value: unknown) => void = () => undefined;
@@ -75,8 +69,6 @@ describe("Delete on a Cloud chat's queue", () => {
 		expect(screen.queryByText("mine, later")).not.toBeInTheDocument();
 	});
 
-	// A delete the control plane refuses, or cannot be asked, leaves the
-	// message in the queue with why on its row.
 	it.each([
 		["the network", new TypeError("Failed to fetch"), "Failed to fetch"],
 		["a steer in flight", new CloudCpError("This message is being steered into the running turn. Wait for the agent to take it or not.", { status: 409, code: "STEER_IN_PROGRESS" }),
@@ -94,11 +86,8 @@ describe("Delete on a Cloud chat's queue", () => {
 		expect(deleteButton()).toBeEnabled();
 	});
 
-	// Delete while a steer is in flight. The message being steered stays in its
-	// place in the queue, marked steering, with its Delete offered.
 	describe("while a steer is in flight", () => {
 		const requested = at(5, "chat.turn_steer_requested", { turnId: "turn-run", text: "mine, later", clientMessageId: "k", queuedTurnId: "turn-mine" });
-		// Asked just now: a steer older than QUEUED_STEER_STALE_MS reads as failed.
 		const steering = [...queued, at(5, "chat.user_message", { text: "also mine", turnId: "turn-also", authorUserId: "user-1" }),
 			{ ...requested, sequence: 6, createdAt: new Date().toISOString() }];
 		const statusOf = (turnId: string) => screen.queryByTestId(`queued-message-status-${turnId}`)?.textContent;
@@ -114,8 +103,6 @@ describe("Delete on a Cloud chat's queue", () => {
 			expect(statusOf("turn-also")).toBeUndefined();
 		});
 
-		// (a) The agent had not taken it: the delete withdraws the steer and the
-		// message is gone, after a remount too.
 		it("deletes the message being steered, and it stays gone after a remount", async () => {
 			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
 			let answer: (value: unknown) => void = () => undefined;
@@ -138,8 +125,6 @@ describe("Delete on a Cloud chat's queue", () => {
 			expect(screen.queryByText(/Couldn't steer/)).not.toBeInTheDocument();
 		});
 
-		// (a) The agent was taking it: the delete waits for its answer, and when
-		// the agent took it the chat says it was delivered, after a remount too.
 		it("says the message was delivered when the agent took it before the delete could stop it", async () => {
 			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
 			const delivered = [...steering,
@@ -162,9 +147,6 @@ describe("Delete on a Cloud chat's queue", () => {
 			expect(row()).not.toBeInTheDocument();
 		});
 
-		// The delete waits for the steer's answer by reading the events after the
-		// ones the chat already holds, not the session's whole history from its
-		// first event, a hundred at a time, as it did.
 		it("waits for the steer's answer from the newest event the chat holds", async () => {
 			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
 			const delivered = [
@@ -194,7 +176,6 @@ describe("Delete on a Cloud chat's queue", () => {
 			await waitFor(() => expect(screen.getAllByText(notice).length).toBeGreaterThan(0));
 		});
 
-		// (b) Deleting another message leaves the steer and the order alone.
 		it("deletes another queued message at once, leaving the one being steered as it was", async () => {
 			cloudMocks.listChatEvents.mockResolvedValue(page(steering));
 			cloudMocks.deleteQueuedMessage.mockImplementation(async () => {

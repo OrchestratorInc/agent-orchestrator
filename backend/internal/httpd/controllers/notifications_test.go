@@ -230,8 +230,6 @@ func TestNotificationsAPI_MarkAllRead(t *testing.T) {
 	}
 }
 
-// A paginating client acknowledges exactly what it rendered, so notifications
-// past its last loaded page stay unread and remain reachable.
 func TestNotificationsAPI_MarkAllReadAcknowledgesOnlyGivenIDs(t *testing.T) {
 	svc := &fakeNotificationService{markAllCount: 2}
 	srv := newNotificationTestServer(t, svc)
@@ -333,15 +331,14 @@ func TestNotificationsAPI_StreamCreatedNotifications(t *testing.T) {
 	if eventLine, _ := readSSE(); eventLine != "event: ready" {
 		t.Fatalf("first event = %q, want ready", eventLine)
 	}
-	if _, err := reader.ReadString('\n'); err != nil { // blank separator line
+	if _, err := reader.ReadString('\n'); err != nil {
 		t.Fatal(err)
 	}
 	if eventLine, dataLine := readSSE(); eventLine != "event: notification_created" || !strings.Contains(dataLine, `"id":"ntf_1"`) {
 		t.Fatalf("eventLine=%q dataLine=%q", eventLine, dataLine)
 	}
 
-	// A resolved event lets an open panel drop the row without a refetch.
-	if _, err := reader.ReadString('\n'); err != nil { // blank separator line
+	if _, err := reader.ReadString('\n'); err != nil {
 		t.Fatal(err)
 	}
 	resolved := rec

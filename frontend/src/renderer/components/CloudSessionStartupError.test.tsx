@@ -91,7 +91,6 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
 		expect(screen.queryByTestId("cloud-session-startup-detail")).not.toBeInTheDocument();
 
-		// The same step failed again: the new failure and its output show, and Retry is back.
 		rerender({ ...failure, detail: "still missing", at: "2026-10-14T10:05:00Z" });
 		expect(screen.getByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
 		expect(screen.getByText("Setup step 1 failed: exit status 3.")).toBeInTheDocument();
@@ -123,19 +122,16 @@ describe("CloudSessionStartupError", () => {
 		expect(await screen.findByRole("heading", { name: "Preparing the workspace" })).toBeInTheDocument();
 		await waitFor(() => expect(subscribeSessionEvents).toHaveBeenCalled());
 		const { onEvent } = subscribeSessionEvents.mock.calls.at(-1)![0] as { onEvent: (event: unknown) => void };
-		// The old failed run is not the retry's: still preparing.
 		act(() => onEvent(step(2, { runId: "run-1", status: "failed", exitCode: 3 })));
 		expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
 		act(() => onEvent(step(5, { runId: "run-2", status: "running" })));
 		expect(await screen.findByText("Running step 1 of 1")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Retrying…" })).toBeDisabled();
 		act(() => onEvent(step(6, { runId: "run-2", status: "failed", exitCode: 3 })));
-		// The same failure, re-sent with the same `at`.
 		rerender({ ...failure });
 		expect(await screen.findByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
 		expect(screen.getByText("Failed at step 1")).toBeInTheDocument();
-		// Another Retry waits for a run after this one.
 		await userEvent.click(screen.getByRole("button", { name: "Retry" }));
 		expect(await screen.findByRole("button", { name: "Retrying…" })).toBeDisabled();
 	});
@@ -157,8 +153,6 @@ describe("CloudSessionStartupError", () => {
 	it("keeps retrying, not failing, while an idle-paused workspace wakes for the Retry", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {
-			// The control plane wakes the paused workspace on the first request
-			// and refuses it until the worker reconnects.
 			const waking = new CloudCpError("The session worker is not connected.", { status: 409, code: "WORKER_UNAVAILABLE" });
 			requestWorkspaceCheckout.mockRejectedValueOnce(waking).mockRejectedValueOnce(waking).mockResolvedValue({ requested: true });
 			mount({ phase: "failed", code: "project_setup_failed", message: "Setup step 1 failed: exit status 3.", at: "2026-10-14T10:00:00Z" });
@@ -193,7 +187,6 @@ describe("CloudSessionStartupError", () => {
 		expect(screen.getByRole("heading", { name: "The project's Setup script failed" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
 		expect(screen.getByText("This session was deleted. Restore it to retry.")).toBeInTheDocument();
-		// The failure's output stays readable.
 		expect(screen.getByTestId("cloud-session-startup-detail")).toHaveTextContent("missing secret");
 		expect(requestWorkspaceCheckout).not.toHaveBeenCalled();
 		expect(retrySessionStartup).not.toHaveBeenCalled();

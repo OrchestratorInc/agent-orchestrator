@@ -34,8 +34,6 @@ func TestSearchWorkspaceContentRanksBestLinePerFile(t *testing.T) {
 	writeWorkspaceFile(t, repo, "src/image.bin", "closePalette\x00\x01")
 	svc := workspaceReviewService(t, repo)
 
-	// Filler words drop out; the declaration ranks first; ignored, binary and
-	// test files rank last or not at all.
 	paths, hits := searchContentPaths(t, svc, "where do we close the PALETTE")
 	if want := []string{"src/palette.ts", "notes/untracked.md", "src/caller.ts", "src/palette.test.ts"}; !slices.Equal(paths, want) {
 		t.Fatalf("paths = %v, want %v", paths, want)
@@ -47,8 +45,6 @@ func TestSearchWorkspaceContentRanksBestLinePerFile(t *testing.T) {
 
 func TestSearchWorkspaceContentCommonTermReachesLaterFiles(t *testing.T) {
 	repo := newWorkspaceRepo(t)
-	// Without the per-file limit, this first file exhausts the output budget
-	// before git grep reaches the better declaration in frontend/.
 	writeWorkspaceFile(t, repo, "backend/gen/repeated.go", strings.Repeat("// error "+strings.Repeat("x", 64)+"\n", 10_000))
 	writeWorkspaceFile(t, repo, "frontend/error.ts", "// error handling\n// another error\nexport function handleError() {}\n")
 	svc := workspaceReviewService(t, repo)
@@ -73,7 +69,6 @@ func TestSearchWorkspaceContentFallsBackToMostWords(t *testing.T) {
 	if paths, _ := searchContentPaths(t, svc, "resolve datadir mispeled"); !slices.Equal(paths, []string{"a.go", "b.go"}) {
 		t.Fatalf("fallback = %v", paths)
 	}
-	// A word start beats the middle of a word.
 	if paths, _ := searchContentPaths(t, svc, "form"); !slices.Equal(paths, []string{"d.ts", "c.ts"}) {
 		t.Fatalf("word start = %v", paths)
 	}

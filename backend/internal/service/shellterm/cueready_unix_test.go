@@ -150,8 +150,6 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 				}
 			}
 			if name == "bash" || name == "zsh" {
-				// The shell must not signal before a user startup hook finishes
-				// reading from its terminal.
 				if err := os.WriteFile(filepath.Join(home, "."+name+"rc"), []byte("printf 'startup-blocked\\n'; read -r _\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -214,8 +212,6 @@ func TestCueReadinessFromInteractiveUnixShell(t *testing.T) {
 			for time.Now().Before(deadline) {
 				if data, err := os.ReadFile(ready.file); err == nil && strings.TrimSpace(string(data)) == "ready" {
 					if name == "fish" {
-						// The normal config and prompt survive, and the hook is gone
-						// before a cue command executes in this interactive shell.
 						check := filepath.Join(home, "checked")
 						command := "if test \"$ao_test_config\" = loaded; and not functions -q _ao_cue_ready; printf preserved > checked; end\n"
 						if _, err := io.WriteString(terminal, command); err != nil {

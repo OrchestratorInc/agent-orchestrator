@@ -16,68 +16,33 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./ui/contex
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Pressable } from "./ui/pressable";
 
-/**
- * Split actions for one tab; an absent action shows disabled. Another tab
- * splits beside the one on screen; the tab on screen splits off a new
- * terminal (`newTerminal`), as ⌘D and ⌘⇧D do.
- */
 export type TabSplitActions = { right?: () => void; down?: () => void; newTerminal?: boolean };
 
-/**
- * Provided only while split panes are on (a Developer Mode preview); tab menus
- * then offer Split right and Split down for their tab key.
- */
 export const TabSplitMenuContext = createContext<((tabKey: string) => TabSplitActions) | undefined>(undefined);
 
-/**
- * The agent and interface rows of a session's tab, provided by the session
- * view while they apply: a local terminal's agent picker and the switch to
- * the other interface. Absent while a switch runs.
- */
 export type SessionTabAgentMenu = {
 	session: WorkspaceSession;
 	hostId?: string;
-	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
-	/** A terminal picks its agent here (a Cloud one where its control plane can switch it); a chat does so from its composer. */
 	picksAgent: boolean;
-	/** The interface a switch goes to. */
 	switchTarget: SessionInterfaceMode;
 	switchAction?: { disabled: boolean; reason?: string; run: () => void };
 };
 
 export const SessionTabAgentMenuContext = createContext<SessionTabAgentMenu | undefined>(undefined);
 
-/**
- * What one tab of a session tab strip is, for its menu. Every menu of a tab,
- * the ⋮ button and the right-click alike, is built from this by
- * `useTabMenuItems`, so they always list the same rows.
- */
 export type TabMenuSpec = {
-	/** The tab's key in the strip, for split actions. */
 	tabKey?: string;
-	/**
-	 * The tab's close action. Absent, Close tab shows disabled, except on the
-	 * session's own tab, which never closes and so lists no Close tab at all.
-	 */
 	onClose?: () => void;
-	/** The active tab's close chord applies to this tab. */
 	closeShortcut?: boolean;
 } & (
 	| { kind: "session"; session: WorkspaceSession; onRename?: () => void; canArchive: boolean }
-	/** A tab with no actions of its own: a reviewer, or a shell inside a split group. */
 	| { kind: "plain" }
 	| { kind: "shell"; title: string; onRename?: () => void }
 	| { kind: "file"; file: FileTabMenuTarget }
-	/** A split group's tab: Ungroup, then its focused member's own rows. */
 	| { kind: "group"; onUngroup: () => void; member?: TabMenuSpec }
 );
 
-/**
- * The rows of a tab's menu, in order: the tab's own actions, Split (while
- * split panes are on), Close tab (not on the session's own tab), then Archive for a
- * session behind one separator. A split group's tab leads with Ungroup.
- */
 export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 	const { t } = useTranslation();
 	const split = useContext(TabSplitMenuContext);
@@ -159,9 +124,6 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 			{ kind: "separator", id: "split-sep" },
 		);
 	}
-	// The session's own tab never closes, so it gets no dead Close tab row
-	// (MenuEntries folds the separators around the gap into one). As a split
-	// group member it does close, so it keeps the row there.
 	if (own.kind !== "session" || own.onClose) {
 		entries.push({
 			kind: "item",
@@ -172,7 +134,6 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 			shortcutId: own.closeShortcut ? "close-shell-terminal" : undefined,
 		});
 	}
-	// Only where the ⇧⌘A confirmation is mounted (SessionTopbarActions).
 	if (session?.canArchive) {
 		entries.push(
 			{ kind: "separator", id: "archive-sep" },
@@ -182,8 +143,6 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 				destructive: true,
 				icon: <Archive aria-hidden="true" />,
 				label: t("shell.archiveSession"),
-				// After the menu closes, like the command palette, so the
-				// confirmation dialog takes focus from the session.
 				onSelect: () => window.setTimeout(() => runAppShortcut({ id: "archive-session" }), 0),
 				shortcutId: "archive-session",
 			},
@@ -192,7 +151,6 @@ export function useTabMenuItems(spec: TabMenuSpec): MenuEntry[] {
 	return entries;
 }
 
-/** A tab's rows in the surrounding menu. */
 function TabMenuItems({ spec }: { spec: TabMenuSpec }) {
 	return <MenuEntries entries={useTabMenuItems(spec)} />;
 }
@@ -201,14 +159,7 @@ function isMenuKey(event: KeyboardEvent) {
 	return event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
 }
 
-/**
- * Right-click menu for one tab of a session tab strip, listing the tab's
- * `useTabMenuItems` rows. Shift+F10 and the context menu key open it from a
- * focused tab.
- */
 export function TabContextMenu({ children, spec, disabled = false }: { children: ReactNode; spec: TabMenuSpec; disabled?: boolean }) {
-	// Radix gives a context menu no open prop; remounting closes it, for a row
-	// that finishes its own work (the agent picker's Switch).
 	const [generation, setGeneration] = useState(0);
 	if (disabled) return children;
 	return (
@@ -218,7 +169,6 @@ export function TabContextMenu({ children, spec, disabled = false }: { children:
 					className="contents"
 					onKeyDown={(event) => {
 						if (!isMenuKey(event)) return;
-						// Radix opens on the contextmenu event; anchor it under the tab.
 						event.preventDefault();
 						const target = event.target as HTMLElement;
 						const rect = target.getBoundingClientRect();
@@ -241,13 +191,11 @@ export function TabContextMenu({ children, spec, disabled = false }: { children:
 	);
 }
 
-/** The ⋮ button's menu for one tab: the same `useTabMenuItems` rows as its right-click menu. */
 export function TabDropdownMenu({ spec, label }: { spec: TabMenuSpec; label: string }) {
 	const [open, setOpen] = useState(false);
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
 			<DropdownMenuTrigger asChild>
-				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
 				<Pressable
 					aria-label={label}
 					className={cn(terminalTabActionClassName, "data-[state=open]:text-foreground")}
@@ -269,10 +217,8 @@ export function TabDropdownMenu({ spec, label }: { spec: TabMenuSpec; label: str
 	);
 }
 
-/** The spec of the tab a control sits in, so its ⋮ button opens that tab's menu. */
 export const TabMenuSpecContext = createContext<TabMenuSpec | undefined>(undefined);
 
-/** The session tab's ⋮ button, placed by the session view in the tab's action slot. */
 export function SessionTabMenuButton() {
 	const { t } = useTranslation();
 	const spec = useContext(TabMenuSpecContext);

@@ -85,13 +85,10 @@ func TestProjectConfigValidate(t *testing.T) {
 func TestDefaultProjectConfig(t *testing.T) {
 	def := DefaultProjectConfig()
 
-	// The one documented non-empty default.
 	if def.DefaultBranch != DefaultBranchAuto {
 		t.Fatalf("default DefaultBranch = %q, want %q", def.DefaultBranch, DefaultBranchAuto)
 	}
 
-	// Every other field defaults to its zero value: clearing the documented
-	// default must leave the config completely empty.
 	def.DefaultBranch = ""
 	if !def.IsZero() {
 		t.Fatalf("default config has unexpected non-zero fields: %#v", def)
@@ -99,13 +96,11 @@ func TestDefaultProjectConfig(t *testing.T) {
 }
 
 func TestProjectConfigWithDefaults(t *testing.T) {
-	// An unset config gets the documented defaults.
 	got := (ProjectConfig{}).WithDefaults()
 	if got.DefaultBranch != DefaultBranchAuto {
 		t.Fatalf("WithDefaults = %#v, want branch=%s", got, DefaultBranchAuto)
 	}
 
-	// Set fields are preserved, not overwritten.
 	got = (ProjectConfig{
 		DefaultBranch: "develop",
 		AgentConfig:   AgentConfig{Model: "m"},
@@ -167,14 +162,11 @@ func TestInferTrackerProvider(t *testing.T) {
 }
 
 func TestResolveReviewerHarness(t *testing.T) {
-	// A configured reviewer always wins, regardless of the worker harness.
 	cfg := ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerClaudeCode}}}
 	if got := cfg.ResolveReviewerHarness(HarnessAider); got != ReviewerClaudeCode {
 		t.Fatalf("configured reviewer = %q, want claude-code", got)
 	}
 
-	// No reviewer configured: preserve automatic inheritance only for the
-	// original unattended-safe reviewer set.
 	if got := (ProjectConfig{}).ResolveReviewerHarness(HarnessClaudeCode); got != ReviewerClaudeCode {
 		t.Fatalf("claude-code worker = %q, want reviewer claude-code", got)
 	}
@@ -191,8 +183,6 @@ func TestResolveReviewerHarness(t *testing.T) {
 		t.Fatalf("kimchi worker = %q, want reviewer kimchi", got)
 	}
 
-	// A worker harness that is not itself a reviewer (e.g. crush, aider) falls
-	// back to claude-code.
 	if got := (ProjectConfig{}).ResolveReviewerHarness(HarnessCrush); got != FallbackReviewerHarness {
 		t.Fatalf("crush worker = %q, want %q", got, FallbackReviewerHarness)
 	}

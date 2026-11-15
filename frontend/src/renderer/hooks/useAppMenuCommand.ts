@@ -8,8 +8,6 @@ import {
 import { aoBridge } from "../lib/bridge";
 import { useUiStore } from "../stores/ui-store";
 
-// A command can have several owners (the session top bar and the board both
-// offer Orchestrator), so it applies while any of them says so.
 const owners = new Map<AppMenuCommandId, number>();
 let reportQueued = false;
 let lastReport = "";
@@ -21,19 +19,15 @@ function report(): void {
 	const serialized = JSON.stringify(availability);
 	if (serialized === lastReport) return;
 	lastReport = serialized;
-	// Optional: the web preview and a stale preload have no native menu to update.
 	aoBridge.app.setMenuAvailability?.(availability);
 }
 
-// One commit can drop an old owner and add a new one (a session switch); the
-// microtask reports the result once.
 function queueReport(): void {
 	if (reportQueued) return;
 	reportQueued = true;
 	queueMicrotask(report);
 }
 
-/** Enables native menu item `id` while this component is mounted and `available`. */
 export function useAppMenuAvailable(id: AppMenuCommandId, available: boolean): void {
 	useEffect(() => {
 		if (!available) return;
@@ -46,22 +40,17 @@ export function useAppMenuAvailable(id: AppMenuCommandId, available: boolean): v
 	}, [id, available]);
 }
 
-/** For session commands, which stand down under Settings like useSessionShortcut. */
 export function useSessionMenuAvailable(id: AppMenuCommandId, available: boolean): void {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	useAppMenuAvailable(id, available && !settingsOpen);
 }
 
-// In-renderer listeners, so the command palette can run a menu action the
-// native menu delivers on its own channel.
 const localMenuActionListeners = new Set<(action: AppMenuActionId) => void>();
 
-/** Runs every handler registered for a menu action, as if its menu item were chosen. */
 export function runAppMenuAction(action: AppMenuActionId): void {
 	for (const listener of Array.from(localMenuActionListeners)) listener(action);
 }
 
-/** Runs `handler` when a native menu item with no keyboard shortcut is chosen. */
 export function useAppMenuAction(id: AppMenuActionId, handler: () => void): void {
 	const handlerRef = useRef(handler);
 	handlerRef.current = handler;

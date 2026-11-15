@@ -11,16 +11,9 @@ import (
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
-// Kimchi steers a running turn with its own vendor method rather than ACP's
-// _session/steering. It queues the text into pi's AgentSession.steer(), which
-// delivers it after the running tool calls and before the next model call, and
-// it never starts a turn. Shipped in Kimchi v1.0.8 (getkimchi/kimchi#1029).
 const (
-	kimchiMetaKey        = "kimchi.dev"
-	kimchiSteeringMethod = "_kimchi.dev/steering"
-	// minimumSteerImagesVersion is the first Kimchi whose steering reads
-	// `attachments`. Earlier ones queue the text and drop the images, and the
-	// handshake does not say which a build does.
+	kimchiMetaKey             = "kimchi.dev"
+	kimchiSteeringMethod      = "_kimchi.dev/steering"
 	minimumSteerImagesVersion = "1.2.0"
 )
 
@@ -32,9 +25,6 @@ var steerRequest = &acpdriver.SteerRequest{
 	Outcome:     steeringOutcome,
 }
 
-// steeringTakesImages reads Kimchi's version from the handshake. A version it
-// cannot read is treated as too old: refusing an image is recoverable, a
-// silently dropped one is not.
 func steeringTakesImages(init acpsdk.InitializeResponse) bool {
 	if init.AgentInfo == nil {
 		return false
@@ -47,7 +37,6 @@ func steeringTakesImages(init acpsdk.InitializeResponse) bool {
 	return !installed.less(minimum)
 }
 
-// steeringAdvertised reads `agentCapabilities._meta["kimchi.dev"].steering`.
 func steeringAdvertised(init acpsdk.InitializeResponse) bool {
 	vendor, ok := init.AgentCapabilities.Meta[kimchiMetaKey].(map[string]any)
 	if !ok {
@@ -57,9 +46,6 @@ func steeringAdvertised(init acpsdk.InitializeResponse) bool {
 	return supported
 }
 
-// steeringParams splits the ACP prompt into Kimchi's shape: one text string
-// plus image attachments. Kimchi has no field for anything else, so other
-// blocks are refused rather than dropped.
 func steeringParams(sessionID string, prompt []acpsdk.ContentBlock) (any, error) {
 	texts := make([]string, 0, len(prompt))
 	attachments := make([]acpsdk.ContentBlock, 0)

@@ -186,7 +186,6 @@ func TestManagedVersionCheckerReadsLatestDistTagForPrereleaseInstall(t *testing.
 		}
 		return managerHTTPResponse(http.StatusOK, `{"latest":"1.3.0","beta":"2.0.0-beta.3"}`), nil
 	})}
-	// Updates install @latest, so the beta tag is never the update target.
 	got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"})
 	if err != nil {
 		t.Fatal(err)
@@ -200,7 +199,6 @@ func TestManagedVersionCheckerRejectsUnparseableLatestDistTag(t *testing.T) {
 	client := &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return managerHTTPResponse(http.StatusOK, `{"next":"2.0.0-next.2"}`), nil
 	})}
-	// A definitive registry answer is final; the package manager is not asked again.
 	_, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), Plan{Method: "npm", Package: "@openai/codex"})
 	if !errors.Is(err, errLatestUnparseable) {
 		t.Fatalf("err = %v, want errLatestUnparseable", err)
@@ -279,8 +277,6 @@ func TestHomebrewVersionMatchesCaskTokenNotDisplayName(t *testing.T) {
 	}
 }
 
-// offlineManagerClient fails every request, so tests exercise the package
-// manager's local commands without reaching a live registry.
 func offlineManagerClient() *http.Client {
 	return &http.Client{Transport: managerRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("offline")
@@ -303,7 +299,6 @@ func TestHomebrewCoreVersionReadsLiveAPIBeforeLocalMetadata(t *testing.T) {
 				}
 				return managerHTTPResponse(http.StatusOK, tt.body), nil
 			})}
-			// Local brew metadata would still report the stale release; it must not be consulted.
 			got, err := newManagedVersionChecker(managerCommandRunner(t), client)(context.Background(), tt.plan)
 			if err != nil || got != "2.1.285" {
 				t.Fatalf("result=%+v err=%v", got, err)
@@ -332,8 +327,6 @@ func TestHomebrewCurrentTapFormulaMatchesInfoFullName(t *testing.T) {
 		t.Fatalf("tap package queried the Homebrew API: %s", request.URL)
 		return nil, nil
 	})}
-	// An already-current tap formula is absent from brew outdated; brew info
-	// names it "opencode" with the qualified name only in full_name.
 	commands := managerCommandRunner(t,
 		managerCommandResponse{
 			argv:   []string{"brew", "outdated", "--json=v2", "--formula", "anomalyco/tap/opencode"},
@@ -348,8 +341,6 @@ func TestHomebrewCurrentTapFormulaMatchesInfoFullName(t *testing.T) {
 	if err != nil || got != "1.18.35" {
 		t.Fatalf("result=%+v err=%v", got, err)
 	}
-	// An unqualified package still matches the short name, and a qualified
-	// package never matches another tap's formula of the same short name.
 	if got := parseHomebrewVersion(`{"formulae":[{"name":"opencode","full_name":"opencode","versions":{"stable":"2.0.0"}}]}`, "opencode", false, false); got != "2.0.0" {
 		t.Fatalf("short name = %q", got)
 	}

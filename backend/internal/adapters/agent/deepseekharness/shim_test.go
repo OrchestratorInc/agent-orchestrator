@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// writeShim writes a dsh-shaped npm cmd-shim into dir and returns its path.
 func writeShim(t *testing.T, dir, content string) string {
 	t.Helper()
 	shim := filepath.Join(dir, "dsh.cmd")

@@ -133,7 +133,7 @@ func TestDestinationSinkCloseDrainsQueueAndFullBufferDoesNotBlock(t *testing.T) 
 				return nil
 			})
 			unblock := func() { releaseOnce.Do(func() { close(release) }) }
-			t.Cleanup(unblock) // Release the worker before the sink's cleanup, even after a failure.
+			t.Cleanup(unblock)
 			sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.test.first"})
 			waitShutdownSignal(t, started)
 			filled := make(chan struct{})
@@ -212,7 +212,6 @@ func TestPostHogSinkCancelledCloseCancelsInFlightRequest(t *testing.T) {
 		close(finished)
 		return ctx.Err()
 	})
-	// Cleanup must also release the fake if request cancellation regresses.
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
 	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.test.blocked"})
 	waitShutdownSignal(t, started)

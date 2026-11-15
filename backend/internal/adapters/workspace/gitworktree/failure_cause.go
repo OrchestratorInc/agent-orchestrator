@@ -6,10 +6,6 @@ import (
 	"strings"
 )
 
-// FailureCause classifies a failed git command into the fixed vocabulary spawn
-// telemetry reports (branch_exists, path_exists, locked, permission,
-// path_too_long, not_a_repo, killed, other). It reads only git's stderr and
-// exit state; nothing from the output leaves the daemon.
 func (e commandError) FailureCause() string {
 	return classifyGitFailure(e.output, e.err)
 }

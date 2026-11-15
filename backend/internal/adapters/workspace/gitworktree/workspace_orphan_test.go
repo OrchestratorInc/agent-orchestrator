@@ -12,9 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// orchestratorTestConfig mirrors the config the session manager hands Create
-// for a project's orchestrator: its worktree path is fixed per project, which
-// is what lets one leftover folder block every later orchestrator (#7358).
 func orchestratorTestConfig() ports.WorkspaceConfig {
 	return ports.WorkspaceConfig{
 		ProjectID:     "todo-app",
@@ -38,10 +35,6 @@ func newOrphanTestWorkspace(t *testing.T) (ws *Workspace, git, repo, tmp string)
 	return ws, git, repo, tmp
 }
 
-// orphanWorktree drops git's registration of the worktree at path the way an
-// earlier cleanup can: the admin dir under <common-dir>/worktrees is gone, so
-// `git worktree list` no longer shows path while the folder, and its `.git`
-// file pointing at the vanished admin dir, stay on disk.
 func orphanWorktree(t *testing.T, git, repo, path string) {
 	t.Helper()
 	gitFile, err := os.ReadFile(filepath.Join(path, ".git"))
@@ -104,9 +97,6 @@ func TestWorkspaceIntegrationCreateOrchestratorMovesOrphanedWorktreeAside(t *tes
 	}
 }
 
-// TestWorkspaceIntegrationCreateMovesOrphanWithRelativeGitdirAside covers a
-// worktree whose `.git` file holds a relative gitdir (what git writes with
-// worktree.useRelativePaths): it must resolve against the worktree, as git does.
 func TestWorkspaceIntegrationCreateMovesOrphanWithRelativeGitdirAside(t *testing.T) {
 	ws, git, repo, _ := newOrphanTestWorkspace(t)
 	ctx := context.Background()
@@ -141,10 +131,8 @@ func TestWorkspaceIntegrationCreateMovesOrphanWithRelativeGitdirAside(t *testing
 
 func TestWorkspaceIntegrationCreateRefusesOccupiedPathAndLeavesItUntouched(t *testing.T) {
 	cases := []struct {
-		name  string
-		fresh bool
-		// occupy fills path with something that is not an orphaned worktree of
-		// the project repo and returns a file inside it to check afterwards.
+		name   string
+		fresh  bool
 		occupy func(t *testing.T, git, tmp, path string) string
 	}{
 		{

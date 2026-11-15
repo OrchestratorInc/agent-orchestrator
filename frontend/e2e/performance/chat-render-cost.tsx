@@ -4,8 +4,6 @@ import { chatFixtureLongHistory } from "../../src/renderer/lib/chat-fixture";
 import { useUiStore } from "../../src/renderer/stores/ui-store";
 import type { ConversationSnapshot } from "../../src/renderer/types/conversation";
 
-// Deliberately include misses, basenames, and absolute paths, rather than only
-// exact hits at the front of the catalog. Every refresh is new JSON, as on wire.
 const paths = Array.from({ length: 6000 }, (_, i) => `src/feature${i}/file${i}.ts`);
 const references = (i: number) => [
 	paths[i * 7], `file${i * 7 + 1}.ts:12`,

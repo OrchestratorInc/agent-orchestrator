@@ -14,14 +14,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// authState keeps previously valid hashes so a client retrying an old password
-// after rotation cannot lock out a newly paired client behind the same address.
 type authState struct {
-	hashes atomic.Pointer[authHashes]
-	// Set once before the listener starts. Nil accepts only the shared credentials.
-	devices *mobilebridge.AccessDevices
-	codes   *mobilebridge.PairingCodes
-	// passwordOff makes the listener refuse the pairing password.
+	hashes      atomic.Pointer[authHashes]
+	devices     *mobilebridge.AccessDevices
+	codes       *mobilebridge.PairingCodes
 	passwordOff atomic.Bool
 }
 type authHashes struct {
@@ -30,7 +26,6 @@ type authHashes struct {
 	retired []string
 }
 
-// maxRetiredHashes bounds how many rotated passwords stay exempt from lockout.
 const maxRetiredHashes = 8
 
 func (a *authState) setHash(h string) {
@@ -81,8 +76,6 @@ func (a *authState) currentHash() string {
 	return ""
 }
 
-// authenticate returns the credential tok matches. A pairing code counts only on
-// the pairing route. passwordRefused means tok is the password while it is off.
 func (a *authState) authenticate(tok string, pairing bool) (credential requestscope.Credential, ok, passwordRefused bool) {
 	if mobilebridge.PasswordMatches(a.currentHash(), tok) {
 		if a.passwordOff.Load() {
@@ -130,7 +123,6 @@ func (a *authState) retiredPasswordMatches(token string) bool {
 	return false
 }
 
-// lockout throttles password guessing per source address.
 type lockout struct {
 	mu        sync.Mutex
 	now       func() time.Time
@@ -201,10 +193,6 @@ func sourceKey(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// clientSource is the address of a request's client, which lockouts count
-// failures against. Cloudflared connects from loopback, so its visitor IP
-// stands in for it. A LAN client must not be able to spoof its source with this
-// header.
 func clientSource(r *http.Request) string {
 	src := sourceKey(r)
 	if ip := net.ParseIP(src); ip != nil && ip.IsLoopback() {
@@ -217,8 +205,6 @@ func clientSource(r *http.Request) string {
 	return src
 }
 
-// lockoutKey groups IPv6 sources by /64, since one client usually holds a
-// whole /64 and could otherwise rotate addresses past the lockout.
 func lockoutKey(src string) string {
 	ip := net.ParseIP(src)
 	if ip == nil || ip.To4() != nil {
@@ -235,19 +221,10 @@ func bearerToken(r *http.Request) string {
 	return ""
 }
 
-// authCookieName carries the connection token for a preview page's in-page
-// subresource requests. See connectionToken / maybeSetPreviewAuthCookie.
 const authCookieName = "ao_conn"
 
-// previewFilesMarker is the path segment that identifies a preview-file request
-// (GET /api/v1/sessions/{id}/preview/files/*). The auth cookie is both scoped to
-// and honored only on this path, so it can never authenticate any other endpoint.
 const previewFilesMarker = "/preview/files/"
 
-// previewFilesCookiePath returns the cookie Path to scope the auth cookie to the
-// requesting session's preview files (".../preview/files/"), or "" if the request
-// is not a preview-file request. Scoping this tightly is what keeps the cookie
-// from ever reaching /kill, /send, another session, or any non-preview route.
 func previewFilesCookiePath(urlPath string) string {
 	i := strings.Index(urlPath, previewFilesMarker)
 	if i < 0 {
@@ -256,12 +233,6 @@ func previewFilesCookiePath(urlPath string) string {
 	return urlPath[:i+len(previewFilesMarker)]
 }
 
-// connectionToken returns the caller's connection token. It comes from the
-// Authorization: Bearer header (the mobile API client and a preview page's
-// top-level navigation) or, ONLY on the preview-files route, the auth cookie (a
-// preview page's subresource requests — images/CSS/JS — which the WebView issues
-// without our header). Restricting the cookie to the preview-files path means it
-// can never authenticate any other mobile endpoint even if a client sends it.
 func connectionToken(r *http.Request) string {
 	if t := bearerToken(r); t != "" {
 		return t
@@ -274,58 +245,26 @@ func connectionToken(r *http.Request) string {
 	return ""
 }
 
-// maybeSetPreviewAuthCookie drops the auth cookie when a preview FILE is fetched
-// with a valid token, so the WebView's follow-up subresource requests on the same
-// password-protected preview route authenticate too (they never carry our
-// Authorization header). The cookie is Path-scoped to this session's preview
-// files only, HttpOnly, and re-sent only when it doesn't already match the token
-// that just authenticated — so a normal subresource costs no Set-Cookie, but a
-// cookie left over from a regenerated password is overwritten instead of being
-// kept until it 401s every image/CSS/JS on the page. This runs on the LAN
-// listener only; the loopback/desktop preview path never reaches authMiddleware,
-// so desktop preview behavior is unchanged.
 func maybeSetPreviewAuthCookie(w http.ResponseWriter, r *http.Request, tok string) {
 	path := previewFilesCookiePath(r.URL.Path)
 	if path == "" {
 		return
 	}
 	if c, err := r.Cookie(authCookieName); err == nil && c.Value == tok {
-		return // already current; don't re-send Set-Cookie on every subresource
+		return
 	}
 	//nolint:gosec // Secure is intentionally omitted: the LAN bridge is plaintext
-	// http by design (ADR 0001, home-network-only), and a Secure cookie would never
-	// be sent over it. The token already travels the same plain link via Bearer.
 	http.SetCookie(w, &http.Cookie{
 		Name:     authCookieName,
 		Value:    tok,
 		Path:     path,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		// No Secure: the LAN link is plain http (a TLS tunnel still sends it),
-		// matching how the Bearer token already travels.
 	})
 }
 
-// authMiddleware authenticates LAN requests against the current connection
-// password. connected, which may be nil, is notified of the source address of
-// every request that authenticates; it exists so telemetry can observe that a
-// phone actually reached this desktop, and it must not block the request, since
-// it runs inline on every authenticated call.
-// identityProbePath is the one route the LAN listener serves without the
-// connection password. The phone races several endpoints, and a private
-// address is not an identity: 192.168.1.42 exists on most networks. Verifying
-// which machine answered has to happen BEFORE a credential is presented, or
-// the phone leaks its token to whatever device holds that address on a foreign
-// network. The response carries an opaque host id and nothing else.
-//
-// Exact path, GET only, and checked ahead of the lockout so a phone racing
-// endpoints cannot lock itself out probing. See
-// docs/adr/0003-unauthenticated-identity-probe.md.
 const identityProbePath = "/api/v1/identity"
 
-// isIdentityProbe reports whether r is the exempt probe. Deliberately an exact
-// match rather than a prefix, so nothing nested below the path inherits the
-// exemption.
 func isIdentityProbe(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.URL.Path == identityProbePath
 }
@@ -336,8 +275,6 @@ func isDevicePairing(r *http.Request) bool {
 	return r.Method == http.MethodPost && r.URL.Path == devicePairPath
 }
 
-// lanBearerContextKey is set only by the authenticated listener after a
-// successful bearer check. Preview-scoped cookies never confer API authority.
 type lanBearerContextKey struct{}
 
 type lanPreviewCookieContextKey struct{}
@@ -366,7 +303,6 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 			if conn != nil {
 				conn.owner.mu.Lock()
 			}
-			// Record auth atomically with rotation's connection close.
 			credential, authenticated, passwordRefused := state.authenticate(tok, isDevicePairing(r))
 			if conn != nil {
 				if authenticated {
@@ -389,21 +325,15 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				return
 			}
 			if passwordRefused {
-				// Not a guess, so it does not count toward the lockout.
 				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_CREDENTIAL_REQUIRED",
 					"this host no longer accepts the pairing password; pair this device again", nil)
 				return
 			}
 			if strings.HasPrefix(tok, mobilebridge.DeviceTokenPrefix) {
-				// A removed device. The distinct code stops it falling back to the password,
-				// and a 256-bit token is not a guess, so it does not count toward the lockout.
 				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_REVOKED",
 					"this device was removed from the host; pair it again", nil)
 				return
 			}
-			// Only a presented password is a guess. A request with none (a
-			// browser opening the tunnel URL, its favicon) reveals nothing, and
-			// counting it locks out every device behind the visitor's IP.
 			if tok != "" && !state.retiredPasswordMatches(tok) {
 				lock.fail(src)
 			}

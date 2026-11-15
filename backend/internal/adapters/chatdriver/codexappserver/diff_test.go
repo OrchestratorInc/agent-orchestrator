@@ -10,20 +10,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Fixtures here are verbatim captures from `codex app-server` (codex-cli 0.146.0),
-// not hand-written approximations. That habit has already earned its keep once in
-// this package: a real frame revealed a numeric JSON-RPC id being decoded as a
-// string, which every invented fixture had spelled as a string and so never caught.
-
-// realTurnDiffFrame is the exact params of a turn/diff/updated notification, from a
-// turn that created one file and appended one line to another. Note what it is: one
-// aggregated unified diff STRING, not a structured file list. Everything the turn
-// view shows has to be read out of this text.
 const realTurnDiffFrame = `{"threadId":"019fc22f-d197-7470-b88d-6f24d10e4c4e","turnId":"019fc22f-d320-7682-b553-ede7a2353a9a","diff":"diff --git a/newfile.txt b/newfile.txt\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..ce013625030ba8dba906f756967f9e9ca394464a\n--- /dev/null\n+++ b/newfile.txt\n@@ -0,0 +1 @@\n+hello\ndiff --git a/seed.txt b/seed.txt\nindex 8b05eaec0a58845cf3ade46832033cb5bf618b99..bfdfbcdb37668fc8dd05070f5becf2e4fe311070\n--- a/seed.txt\n+++ b/seed.txt\n@@ -1,3 +1,4 @@\n alpha\n bravo\n charlie\n+delta\n"}`
 
-// realOutputDeltaFrame is the exact params of an item/commandExecution/outputDelta.
-// The itemId prefix (`exec-`) and the uuid thread/turn ids are the provider's, kept
-// so a shape change in any of the three correlation keys fails here.
 const realOutputDeltaFrame = `{"threadId":"019fc233-13cc-7393-a188-b670c47914b3","turnId":"019fc233-1553-76d0-865a-0abd212a1d99","itemId":"exec-7631c23c-79e6-4d69-9a6a-4b70ef5c10eb","delta":"tick-2\n"}`
 
 func TestNormalizeCommandOutputDeltaFromRealFrame(t *testing.T) {
@@ -35,8 +23,6 @@ func TestNormalizeCommandOutputDeltaFromRealFrame(t *testing.T) {
 	if event.Delta != "tick-2\n" {
 		t.Errorf("delta = %q", event.Delta)
 	}
-	// The item id is what the projection appends against. Losing it would silently
-	// send output to no activity at all.
 	if event.ProviderItemID != "exec-7631c23c-79e6-4d69-9a6a-4b70ef5c10eb" {
 		t.Errorf("item id = %q", event.ProviderItemID)
 	}
@@ -70,7 +56,6 @@ func TestNormalizeTurnDiffFromRealFrame(t *testing.T) {
 	if added.Path != "newfile.txt" || added.Status != diffStatusAdded {
 		t.Errorf("new file = %+v", added)
 	}
-	// `+++ b/newfile.txt` and `--- /dev/null` must not be counted as a change line.
 	if added.Additions != 1 || added.Deletions != 0 {
 		t.Errorf("new file counts = +%d -%d, want +1 -0", added.Additions, added.Deletions)
 	}
@@ -84,9 +69,6 @@ func TestNormalizeTurnDiffFromRealFrame(t *testing.T) {
 	}
 }
 
-// The provider re-sends an identical diff several times per turn (three times in
-// the captured session). Normalization has to be a pure function of the payload,
-// or a projector cannot safely treat repeats as idempotent.
 func TestNormalizeRepeatedTurnDiffIsIdentical(t *testing.T) {
 	first := normalizeOne(t, "turn/diff/updated", realTurnDiffFrame)
 	second := normalizeOne(t, "turn/diff/updated", realTurnDiffFrame)
@@ -98,8 +80,6 @@ func TestNormalizeRepeatedTurnDiffIsIdentical(t *testing.T) {
 	}
 }
 
-// An empty diff is a state, not an absence: a turn that reverted its own edits has
-// nothing changed, and a stale file list must not survive that.
 func TestNormalizeEmptyTurnDiffStillReports(t *testing.T) {
 	event := normalizeOne(t, "turn/diff/updated", `{"threadId":"t","turnId":"u","diff":""}`)
 	if event.Diff == nil {
@@ -142,7 +122,6 @@ func TestParseTurnDiffStatuses(t *testing.T) {
 		t.Fatalf("files = %+v", files)
 	}
 
-	// A deletion's path lives on the `---` side; `+++ /dev/null` is not a path.
 	deleted := files[0]
 	if deleted.Path != "gone.txt" || deleted.Status != diffStatusDeleted {
 		t.Errorf("deleted = %+v", deleted)
@@ -155,7 +134,6 @@ func TestParseTurnDiffStatuses(t *testing.T) {
 	if renamed.Status != diffStatusRenamed {
 		t.Errorf("status = %q, want renamed", renamed.Status)
 	}
-	// Both ends are kept: a rename shown only as its new path reads as an addition.
 	if renamed.Path != "new.txt" || renamed.OldPath != "old.txt" {
 		t.Errorf("rename = %+v", renamed)
 	}
@@ -164,8 +142,6 @@ func TestParseTurnDiffStatuses(t *testing.T) {
 	}
 }
 
-// A context line beginning with a space, and the hunk header itself, are not
-// changes. Getting this wrong inflates every count by the size of the context.
 func TestParseTurnDiffIgnoresContextAndHeaders(t *testing.T) {
 	diff := strings.Join([]string{
 		"diff --git a/a.txt b/a.txt",
@@ -207,8 +183,6 @@ func TestParseTurnDiffTruncatesAtCap(t *testing.T) {
 	}
 }
 
-// Truncation has to reach the projection, and Summary is the only channel
-// ports.ChatTurnDiff leaves for it.
 func TestNormalizeTruncatedTurnDiffCarriesTheMarker(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < maxDiffFiles+5; i++ {
@@ -227,13 +201,6 @@ func TestNormalizeTruncatedTurnDiffCarriesTheMarker(t *testing.T) {
 	}
 }
 
-// The item-scoped file-change notifications are read, and they do NOT compete with
-// the turn diff: they land on the ITEM they belong to, while turn/diff/updated lands
-// on the turn. Two accounts of the same edits would be a problem only if both wrote
-// the same row, and neither does. See normalize_ingest_test.go for their payloads.
-//
-// The client-driven exec API stays unhandled: AO never asks the server to run
-// anything, so an agent tool call never arrives on those methods.
 func TestNormalizeItemFileChangeStreamsLandOnTheItem(t *testing.T) {
 	patch := normalizeOne(t, "item/fileChange/patchUpdated",
 		`{"threadId":"t","turnId":"u","itemId":"i","changes":[{"path":"a.txt","kind":{"type":"add"},"diff":"x\n"}]}`)

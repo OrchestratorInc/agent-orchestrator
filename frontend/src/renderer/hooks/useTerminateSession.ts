@@ -21,22 +21,14 @@ import { recordDirectWorkerInteraction } from "../lib/session-management-telemet
 import { useUiStore } from "../stores/ui-store";
 
 type TerminateSessionOptions = {
-	/** Fires synchronously as the kill starts — before the cache drops the row. */
 	onOptimistic?: (session: WorkspaceSession) => void;
-	/** Fires after a successful kill and its workspace refresh have settled. */
 	onSuccess?: (session: WorkspaceSession) => void;
 };
 
 export const terminateSessionMutationKey = ["terminate-session"] as const;
 
-/**
- * The session to archive. `deleteArtifacts` asks the daemon, or the control
- * plane for a cloud session, to also delete the session's artifact files; only
- * the archive dialog sets it.
- */
 export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
 
-/** Resolves to whether the daemon or control plane confirmed it deleted the artifacts. */
 async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
@@ -62,10 +54,6 @@ async function terminateSession(queryClient: QueryClient, session: TerminateSess
 	return data?.artifactsDeleted === true;
 }
 
-// The merged board recomputes cloud cards from cloudSessionsQueryKey, NOT from
-// workspaceQueryKey, so a cloud kill must flip the raw CloudCpSession too or the
-// card sits still until the round trip refetches (the "nothing happened, click
-// again" symptom). Snapshot every matching cache entry so onError can roll back.
 type WorkspaceSnapshot = [readonly unknown[], WorkspaceSummary[] | undefined];
 type CloudSnapshot = [readonly unknown[], CloudCpSession[] | undefined];
 
@@ -131,16 +119,8 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 
 			return terminateSession(queryClient, session);
 		},
-		// Navigate and archive the card on the click, not on the round trip: the
-		// delete is slow (daemon kill or CP delete + sandbox teardown), and a row
-		// that does not move reads as "the click did nothing" — the reason a
-		// delete needed two or three taps. Roll every optimistic write back in
-		// onError and re-apply it across CDC/refetches while the kill is in flight.
 			onMutate: async (session): Promise<TerminateMutationContext> => {
-			// Navigate first while the row is still on screen / in closed-over lists.
 			options.onOptimistic?.(session);
-			// Drop in-flight workspace fetches so they cannot overwrite the optimistic
-			// remove with a pre-kill snapshot (CDC + refetchInterval race).
 			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			await queryClient.cancelQueries({ queryKey });
 			const workspace: WorkspaceSnapshot = [
@@ -167,27 +147,20 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 		onSuccess: async (artifactsDeleted, session) => {
 			useUiStore.getState().resetFilesSelection(sessionUiKey(session.id, session.hostId));
 			void captureRendererEvent("ao.sessions.killed", { project_id: session.workspaceId });
-			// The archive stands either way. A failed delete, or a host whose daemon
-			// predates the option, leaves the files on disk, so say so.
 			if (session.deleteArtifacts && !artifactsDeleted) {
 				useUiStore.getState().showGlobalToast(t("archive.artifactsNotDeleted"), t("archive.artifactsNotDeletedBody"), "error");
 			}
-			// Reinforce before refresh; keep the optimistic id until this refetch finishes.
 			const queryKey = workspaceQueryKeyForHost(session.hostId);
 			queryClient.setQueryData<WorkspaceSummary[]>(queryKey, (workspaces) =>
 				applyTerminatedSession(workspaces, session.id, session.hostId),
 			);
 			await queryClient.invalidateQueries({ queryKey });
-			// A cloud kill also lives in the cloud sessions query, which the board
-			// merges in separately, so refresh it too.
 			if (session.cloud) await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 			else reportArchiveCleanup(queryClient, session, t);
 			options.onSuccess?.(session);
 		},
 		onError: (_error, session, context) => {
 			void captureRendererEvent("ao.sessions.kill_failed", { project_id: session.workspaceId });
-			// Restore the pre-mutation snapshots so a failed kill un-archives the card
-			// rather than leaving it wrongly terminated.
 			clearOptimisticSessionKill(session.id, session.hostId);
 			const ctx = context as TerminateMutationContext | undefined;
 			if (ctx?.workspace) queryClient.setQueryData(ctx.workspace[0], ctx.workspace[1]);
@@ -201,9 +174,6 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 
 type CleanupFacts = Pick<WorkspaceSession, "id" | "isTerminated" | "workspaceCleanup" | "workspaceCleanupReportOnly">;
 
-// `ao session cleanup` and the daemon's background pass record what they find
-// on sessions nobody archived; only a cleanup an archive started is the app's
-// to report.
 function archiveCleanup(session: CleanupFacts | undefined): WorkspaceSession["workspaceCleanup"] {
 	return session?.workspaceCleanupReportOnly ? undefined : session?.workspaceCleanup;
 }
@@ -217,18 +187,15 @@ function workspaceCleanupErrorKey(session: CleanupFacts | undefined): WorkspaceC
 	return null;
 }
 
-// Cleanup scripts are untimed and the daemon's retry sweep runs every 10 minutes.
 const CLEANUP_REPORT_WINDOW_MS = 30 * 60_000;
 const CLEANUP_NOTICE_MS = 10_000;
 
 function showWorkspaceCleanupNotice(session: WorkspaceSession, errorKey: WorkspaceCleanupErrorKey, t: TFunction) {
 	useUiStore.getState().showGlobalToast(t(errorKey), session.title, {
-		// A kept worktree protects the user's work; only a failed teardown is a failure.
 		tone: errorKey === "shell.workspaceCleanupFailed" ? "error" : "info",
 		dismissible: true,
 		durationMs: CLEANUP_NOTICE_MS,
 		dedupeKey: `workspace-cleanup:${sessionUiKey(session.id, session.hostId)}`,
-		// Cleanup sweeps by project, and the standalone workspace id is not one the daemon knows.
 		...(session.workspaceId !== STANDALONE_WORKSPACE_ID && {
 			action: { label: t("settings.project.retryCleanup"), run: () => void retryWorkspaceCleanup(session, t) },
 		}),
@@ -256,13 +223,7 @@ async function retryWorkspaceCleanup(session: WorkspaceSession, t: TFunction) {
 	}
 }
 
-// preserved_dirty and failed are terminal: the daemon keeps them until someone
-// retries, so as page chrome they would sit on the project forever. Report the
-// outcome once, to the person whose archive produced it. Cleanup outlives the
-// kill request, so follow the session in the cache until it settles.
 function reportArchiveCleanup(queryClient: QueryClient, session: WorkspaceSession, t: TFunction) {
-	// The shell always polls a host's session list; the host-wide key only has
-	// data while one of that host's pages is open.
 	const queryKey = session.hostId ? remoteSessionsQueryKey(session.hostId) : workspaceQueryKey;
 	const rows = (): CleanupFacts[] | undefined => session.hostId
 		? queryClient.getQueryData<CleanupFacts[]>(queryKey)
@@ -299,13 +260,7 @@ function useCachedWorkspaces(hostId?: string, enabled = true) {
 	);
 }
 
-/**
- * `enabled` false skips watching the board data (every card watching the whole
- * query cache re-renders on every fetch anywhere); only this session's own
- * archive mutations are then followed.
- */
 export function useTerminateSessionState(sessionId: string, hostId?: string, enabled = true) {
-	// Observe existing board data; this does not start another network request.
 	const data = useCachedWorkspaces(hostId, enabled);
 	const session = data?.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId);
 	const summary = summarizeBySession(useTerminateSessionMutations()).find(({ session }) =>

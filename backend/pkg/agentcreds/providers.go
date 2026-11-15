@@ -8,28 +8,16 @@ import (
 	"strings"
 )
 
-// Provider is the API surface a credential belongs to. Claude Code selects one
-// via apiProvider, and they are not interchangeable: the endpoint, the auth
-// header, and even the model ID format differ between them.
 type Provider string
 
 const (
-	// ProviderFirstParty is api.anthropic.com.
 	ProviderFirstParty Provider = "firstParty"
-	// ProviderGateway is an ANTHROPIC_BASE_URL-fronted proxy.
-	ProviderGateway Provider = "gateway"
-	// ProviderFoundry is Azure AI Foundry.
-	ProviderFoundry Provider = "foundry"
-	// ProviderBedrock is AWS Bedrock.
-	ProviderBedrock Provider = "bedrock"
-	// ProviderVertex is Google Vertex AI.
-	ProviderVertex Provider = "vertex"
+	ProviderGateway    Provider = "gateway"
+	ProviderFoundry    Provider = "foundry"
+	ProviderBedrock    Provider = "bedrock"
+	ProviderVertex     Provider = "vertex"
 )
 
-// ParseProvider normalizes the apiProvider string Claude Code reports.
-// An unrecognized value yields ok=false, which callers must treat as "not our
-// business" rather than guessing a default — probing the wrong provider sends
-// a credential to a host that should never have seen it.
 func ParseProvider(value string) (Provider, bool) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "firstparty":
@@ -47,7 +35,6 @@ func ParseProvider(value string) (Provider, bool) {
 	}
 }
 
-// requestFor builds the authenticated request for one provider.
 func (v *Validator) requestFor(ctx context.Context, provider Provider, cred Credential) (requestSpec, error) {
 	switch provider {
 	case ProviderFirstParty, ProviderGateway:
@@ -57,9 +44,6 @@ func (v *Validator) requestFor(ctx context.Context, provider Provider, cred Cred
 	}
 }
 
-// anthropicRequest builds GET {base}/v1/models for the first-party API or a
-// gateway fronting it. All five first-party credential sources share this one
-// request and differ only in which header carries the secret.
 func (v *Validator) anthropicRequest(ctx context.Context, provider Provider, cred Credential) (requestSpec, error) {
 	base := firstNonEmpty(cred.BaseURL, "https://api.anthropic.com")
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/v1/models", http.NoBody)
@@ -80,23 +64,17 @@ func (v *Validator) anthropicRequest(ctx context.Context, provider Provider, cre
 		parseModels = parseGatewayModels
 	}
 	return requestSpec{
-		request:     request,
-		parseModels: parseModels,
-		// A gateway need not implement model listing, and the first-party API
-		// always does, so neither case treats an empty list as a rejection.
+		request:                       request,
+		parseModels:                   parseModels,
 		rateLimitProvesAuthentication: provider == ProviderFirstParty,
 		paginateAnthropic:             true,
 		label:                         label,
 	}, nil
 }
 
-// setAnthropicAuth attaches the secret under the header its Kind requires.
 func setAnthropicAuth(request *http.Request, cred Credential) error {
 	secret := strings.TrimSpace(cred.Secret)
 	if secret == "" {
-		// Sending an empty header would come back as "x-api-key header is
-		// required", which reads exactly like a rejected credential. Refuse
-		// here so the caller reports unknown rather than unauthorized.
 		return fmt.Errorf("agentcreds: no secret for %s credential from %s", cred.Kind, cred.Source)
 	}
 	switch cred.Kind {
@@ -115,19 +93,10 @@ func setAnthropicAuth(request *http.Request, cred Credential) error {
 	return nil
 }
 
-// parseAnthropicModels reads the first-party model list and compatible gateway
-// responses.
-//
-// It also reads capabilities.effort, which is the only authoritative source for
-// which reasoning levels a given model accepts. Those differ across the catalog
-// and change as models ship, so they are carried through rather than assumed.
 func parseAnthropicModels(body []byte) ([]Model, error) {
 	return parseAnthropicCompatibleModels(body, true)
 }
 
-// parseGatewayModels reads an Anthropic-compatible gateway model list without
-// assuming the gateway uses Anthropic model names. The IDs are provider-owned
-// and may name any family the gateway makes available.
 func parseGatewayModels(body []byte) ([]Model, error) {
 	return parseAnthropicCompatibleModels(body, false)
 }
@@ -170,16 +139,8 @@ func anthropicPageCursor(body []byte) (bool, string, error) {
 	return payload.HasMore, strings.TrimSpace(payload.LastID), nil
 }
 
-// effortOrder is the provider's own ascending order. The API reports effort as
-// an object rather than a list, so the order has to be imposed here; presenting
-// reasoning levels in map order would shuffle them on every request.
 var effortOrder = []string{"low", "medium", "high", "xhigh", "max"}
 
-// supportedEfforts extracts the levels a model actually accepts.
-//
-// The shape is {"supported": true, "low": {"supported": true}, ...}. A model
-// with "supported": false takes no effort setting, and callers must render no
-// control at all rather than a disabled or empty one.
 func supportedEfforts(raw map[string]json.RawMessage) []string {
 	if len(raw) == 0 {
 		return nil
@@ -206,20 +167,10 @@ func supportedEfforts(raw map[string]json.RawMessage) []string {
 	return efforts
 }
 
-// isClaudeModelID reports whether a provider's model ID names a Claude model.
-//
-// Each provider spells the same model differently — claude-opus-4-5-20251101
-// first-party, anthropic.claude-…-v1:0 with a region prefix on Bedrock,
-// claude-opus-4-5@20251101 on Vertex — so this matches the one substring they
-// all share rather than trying to translate between the formats. Nothing maps
-// between them by string rule, which is exactly why the call that validates
-// must also be the call that supplies the catalog.
 func isClaudeModelID(id string) bool {
 	return strings.Contains(strings.ToLower(id), "claude")
 }
 
-// providerErrorMessage digs the human-readable reason out of a rejection body,
-// across the several shapes the providers use.
 func providerErrorMessage(body []byte) string {
 	var payload struct {
 		Error struct {

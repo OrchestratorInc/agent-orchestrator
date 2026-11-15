@@ -16,17 +16,10 @@ import (
 
 const aoInternalReplayMetaKey = "ao.internalReplay"
 
-// refreshableConversation is returned only when the agent advertised
-// session/load. Calling session/load again on the already resumed ACP connection
-// asks the provider to replay its durable transcript again; it does not start a
-// new provider conversation or merely reread historyEvents.
 type refreshableConversation struct {
 	*conversation
-	loadMu      sync.Mutex
-	loadRequest acpsdk.LoadSessionRequest
-	// closeBeforeReload closes the session before every session/load after the
-	// first, for agents that refuse to load a session this connection already
-	// holds. See Config.CloseSessionBeforeReload.
+	loadMu            sync.Mutex
+	loadRequest       acpsdk.LoadSessionRequest
 	closeBeforeReload bool
 	loaded            bool
 }
@@ -61,8 +54,6 @@ func (c *refreshableConversation) loadHistory(ctx context.Context) (acpsdk.LoadS
 		c.abortHistoryReplay()
 		return acpsdk.LoadSessionResponse{}, err
 	}
-	// The SDK waits for all notifications preceding this response to finish
-	// delivery. They are now captured, but not yet normalized.
 	if err := c.drainAndFinishReplay(ctx); err != nil {
 		c.abortHistoryReplay()
 		return acpsdk.LoadSessionResponse{}, err
@@ -71,9 +62,6 @@ func (c *refreshableConversation) loadHistory(ctx context.Context) (acpsdk.LoadS
 	return response, nil
 }
 
-// captureReplayUpdate also accepts arrivals during normalization. A response
-// watermark is a lower bound on delivery, not an exact replay/live boundary.
-// As before, history capture stays active until finishHistoryReplay.
 func (c *conversation) captureReplayUpdate(params acpsdk.SessionNotification) bool {
 	c.replayMu.Lock()
 	defer c.replayMu.Unlock()
@@ -93,8 +81,6 @@ func (c *conversation) drainAndFinishReplay(ctx context.Context) error {
 		raw := c.replayUpdates
 		c.replayUpdates = nil
 		if len(raw) == 0 {
-			// Serialize final turn settlement and capture closure with delivery.
-			// Only this finalization holds the inbox lock, never a replay batch.
 			c.finishHistoryReplay()
 			c.replaying = false
 			c.replayMu.Unlock()
@@ -105,7 +91,6 @@ func (c *conversation) drainAndFinishReplay(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			// SDK handler errors are log-only; preserve that behavior.
 			if err := c.processUpdate(raw[i]); err != nil {
 				c.log.Warn("failed to handle replayed notification", "err", err)
 			}
@@ -114,15 +99,8 @@ func (c *conversation) drainAndFinishReplay(ctx context.Context) error {
 	}
 }
 
-// RefreshHistory implements ports.ChatHistoryRefresher with a new ACP
-// session/load request. Replaying identical provider data is safe because the
-// capture regenerates the same stable ProviderEventID values, and the Chat
-// projector deduplicates those identities when importing a settled snapshot.
 func (c *refreshableConversation) RefreshHistory(ctx context.Context) ([]ports.ChatEvent, error) {
 	if _, err := c.loadHistory(ctx); err != nil {
-		// When AO's own context ended, the SDK reports that as a synthetic
-		// -32603 carrying the context error text. That is AO's deadline, not a
-		// provider verdict, so it must not be classified as a provider failure.
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, fmt.Errorf("refresh ACP session history: %w: %w", contextErr, err)
 		}
@@ -131,13 +109,6 @@ func (c *refreshableConversation) RefreshHistory(ctx context.Context) ([]ports.C
 	return c.ReadHistory(ctx)
 }
 
-// historyCapture receives the session/update replay produced by ACP session/load.
-// ACP deliberately replays a flat stream rather than provider turns, so user
-// message ids are the durable boundaries from which AO reconstructs settled turns.
-//
-// Replay notifications are buffered separately from the normalized history to
-// reduce work on the SDK's sequential delivery path. This is an in-memory
-// backlog, not transcript pruning or a guarantee against SDK queue overflow.
 type historyCapture struct {
 	sessionID           string
 	events              []ports.ChatEvent
@@ -151,9 +122,6 @@ type historyCapture struct {
 	fallbackID          int
 }
 
-// beginHistoryReplay diverts provider events away from the live Events channel.
-// The controller has not started consuming yet, and a long transcript can be much
-// larger than that channel's bounded live-stream buffer.
 func (c *conversation) beginHistoryReplay(sessionID string) {
 	c.replayMu.Lock()
 	defer c.replayMu.Unlock()
@@ -199,11 +167,6 @@ func (c *conversation) abortHistoryReplay() {
 	c.mu.Unlock()
 }
 
-// finishHistoryReplay closes the capture without inventing an outcome for its
-// final turn. ACP session/load guarantees only that all stored entries were
-// replayed; it does not report their terminal outcomes. Recovered is the shared
-// terminal state for that evidence gap; service reconciliation replaces it with
-// AO's known completed/interrupted/failed result when a durable turn matches.
 func (c *conversation) finishHistoryReplay() {
 	c.historyMu.Lock()
 	hasTail := c.history != nil && c.history.turnID != ""
@@ -231,9 +194,6 @@ func (c *conversation) finishHistoryReplay() {
 	c.mu.Unlock()
 }
 
-// ReadHistory implements ports.ChatHistoryReader. session/load already performed
-// the provider I/O during Resume; this method only hands its normalized replay to
-// the controller before live event consumption begins.
 func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -250,10 +210,6 @@ func (c *conversation) ReadHistory(ctx context.Context) ([]ports.ChatEvent, erro
 	return append([]ports.ChatEvent(nil), c.historyEvents...), nil
 }
 
-// prepareHistoryUpdate handles the one replay notification that the ordinary live
-// path intentionally ignores: user_message_chunk. For all other replay updates it
-// establishes the reconstructed turn, then lets SessionUpdate's existing ACP -> AO
-// normalization run unchanged.
 func (c *conversation) prepareHistoryUpdate(update acpsdk.SessionUpdate) bool {
 	if !c.historyReplayActive() {
 		return false
@@ -304,11 +260,6 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 		} else if c.history.pendingUserID != "" {
 			messageID = c.history.pendingUserID
 		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" && !c.history.turnHasProvider {
-			// An absent message id cannot describe a reliable boundary. Keep
-			// contiguous chunks together; conforming agents (including Claude) send
-			// stable UUIDs, so this is only a compatibility fallback. Once the agent
-			// has answered, the next user chunk is a new prompt: merging id-less
-			// turns broke every checkpoint match on a Terminal to Chat switch.
 			messageID = c.history.turnUserID
 		} else {
 			c.history.fallbackID++
@@ -451,9 +402,6 @@ func (c *conversation) resetHistoryItems(turnID string) {
 	c.mu.Unlock()
 }
 
-// captureHistoryEvent gives replayed updates stable identities and keeps them out
-// of the live stream. The occurrence count distinguishes streamed chunks belonging
-// to the same provider item while remaining stable across an identical replay.
 func (c *conversation) captureHistoryEvent(event ports.ChatEvent) bool {
 	c.historyMu.Lock()
 	defer c.historyMu.Unlock()
@@ -470,10 +418,6 @@ func (c *conversation) captureHistoryEvent(event ports.ChatEvent) bool {
 		}
 		var base string
 		if c.providerScopeID == "" {
-			// Deployed ACP histories used this delimiter encoding before durable
-			// provider scopes existed. Keep it only for migrated unscoped roots so
-			// their replay event identities remain stable across the upgrade. Every
-			// newly created root and provider boundary uses the injective form below.
 			base = strings.Join([]string{
 				namespace,
 				string(event.Kind),
@@ -534,8 +478,6 @@ const (
 	standingClose = "</ao-standing-instructions>"
 )
 
-// StandingInstructionsBlock carries AO's standing instructions as prompt text;
-// history drops it again from a replayed first message.
 func StandingInstructionsBlock(text string) acpsdk.ContentBlock {
 	return acpsdk.TextBlock(standingOpen + "\n" + strings.ReplaceAll(text, standingClose, "") + "\n" + standingClose)
 }

@@ -45,7 +45,6 @@ func wantTexts(t *testing.T, got []Message, want ...string) {
 	}
 }
 
-// Shapes below are trimmed from real Codex Desktop rollouts.
 func TestCodexDesktopRolloutShowsOnlyTypedPrompts(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, filepath.Join(root, "sessions", "2026", "10", "08", "rollout-2026-10-08T04-09-28-"+codexThread+".jsonl"), `{"timestamp":"2026-10-07T22:39:28Z","type":"session_meta","payload":{"id":"`+codexThread+`","cwd":"/work/repo","source":"vscode"}}
@@ -127,7 +126,6 @@ func zstdFile(t *testing.T, path, body string) string {
 	return writeFile(t, path, string(enc.EncodeAll([]byte(body), nil)))
 }
 
-// Codex compresses inactive rollouts and continues them in a `_<segment>` file.
 func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 	root := t.TempDir()
 	day := filepath.Join(root, "sessions", "2026", "10")
@@ -153,7 +151,6 @@ func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 	if !strings.HasSuffix(got.path, filepath.Base(segment)) {
 		t.Fatalf("live path = %q", got.path)
 	}
-	// While Codex compresses a segment both copies exist; the plain file is current.
 	zstdFile(t, segment+".zst", "corrupt")
 	files, err = discoverFor(context.Background(), domain.HarnessCodex, canonical(root), nil)
 	if err != nil || len(files) != 1 || len(files[0].paths) != 2 || strings.HasSuffix(files[0].paths[1], ".zst") {
@@ -167,7 +164,7 @@ func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 
 func TestClaudeTranscriptShapes(t *testing.T) {
 	id := "6d842f77-b1fe-49f3-8585-8946df267bae"
-	big := strings.Repeat("x", 4<<20) // parsed, never retained
+	big := strings.Repeat("x", 4<<20)
 	body := `{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"` + id + `","cwd":"/work/repo","message":{"role":"user","content":"start the refactor"}}
 {"type":"assistant","uuid":"a1","parentUuid":"u1","cwd":"/work/repo","message":{"id":"m1","role":"assistant","content":[{"type":"thinking","thinking":"hidden"}]}}
 {"type":"assistant","uuid":"a1b","parentUuid":"a1","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Working on it."}]}}
@@ -208,7 +205,6 @@ func TestOversizedClaudeRecordKeepsHistoryAndReportsLostText(t *testing.T) {
 	maxRecordBytes, maxSkimString = 1<<10, 256
 	t.Cleanup(func() { maxRecordBytes, maxSkimString = limits[0], limits[1] })
 	id := "6d842f77-b1fe-49f3-8585-8946df267bae"
-	// Claude writes uuid after the tool output; quotes and braces inside it are not structure.
 	big := strings.Repeat(`x\"}{[`, 200)
 	parts := strings.TrimSuffix(strings.Repeat(`{"type":"text","text":"`+strings.Repeat("m", 200)+`"},`, 8), ",")
 	for _, tc := range []struct {
@@ -293,9 +289,6 @@ func TestVisibleBudgetKeepsOpeningPromptAndNewestMessages(t *testing.T) {
 	}
 }
 
-// Codex writes each message twice (event and response item) and injects
-// context as a first user item. A long read trims as it goes; that trim must
-// count each message once and keep the typed opening prompt.
 func TestCodexBudgetCountsEachMessageOnce(t *testing.T) {
 	limit := maxVisibleBytes
 	chunk := strings.Repeat("z", limit/4)
@@ -321,7 +314,6 @@ func TestCodexBudgetCountsEachMessageOnce(t *testing.T) {
 	for _, m := range got.messages {
 		kept = append(kept, string(m.Role)+": "+m.Text[:1])
 	}
-	// Three answers fit beside the prompt; a budget spent on duplicates keeps one.
 	if want := []string{"user: o", "assistant: f", "assistant: g", "assistant: h"}; strings.Join(kept, "|") != strings.Join(want, "|") || !got.shortened {
 		t.Fatalf("kept %q (shortened %v), want %q", kept, got.shortened, want)
 	}
@@ -363,7 +355,6 @@ func TestReadIgnoresRecordsAppendedDuringRead(t *testing.T) {
 	}
 }
 
-// A relative path remote resolves from the worktree, as Git resolves it.
 func TestSameRepositoryResolvesLocalRemotes(t *testing.T) {
 	root := t.TempDir()
 	repo := func(name, origin string) string {
@@ -413,7 +404,6 @@ func TestScanDestinations(t *testing.T) {
 	bare := filepath.Join(home, "bare.git")
 	runGit(t, home, "init", "-q", "--bare", bare)
 	plain := filepath.Join(home, "plain")
-	// Inside the project folder: an agent worktree of it, and an unrelated clone.
 	agentWorktree := filepath.Join(repo, ".claude", "worktrees", "agent")
 	runGit(t, repo, "worktree", "add", "-q", "-b", "agent", agentWorktree)
 	vendored := filepath.Join(repo, "third_party", "foo")
@@ -432,7 +422,6 @@ func TestScanDestinations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A repository no project holds names its main checkout, so it can be added.
 	for cwd, want := range map[string]destination{
 		"":                            {"", true, ""},
 		repo:                          {"widgets", true, ""},
@@ -507,8 +496,6 @@ func TestClaudePromptOnlyStripsCommandRecords(t *testing.T) {
 	}
 }
 
-// A long Claude history is not held whole while its branches are read: the
-// oldest text goes first, the opening prompt stays, and the row says so.
 func TestClaudeReadHoldsBoundedText(t *testing.T) {
 	held := maxHeldText
 	maxHeldText = 100

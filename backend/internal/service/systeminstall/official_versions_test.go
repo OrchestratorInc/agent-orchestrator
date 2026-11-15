@@ -65,9 +65,6 @@ func TestOfficialSourceForSelectsAntigravityPlatformManifest(t *testing.T) {
 	}
 }
 
-// Every harness AO updates with its official installer into a release of its
-// own needs the release that installer would pick, or the notice never
-// offers the update.
 func TestOfficialManagedRecipesHaveAReleaseSource(t *testing.T) {
 	for target := range officialManagedRecipes {
 		for _, goarch := range []string{"amd64", "arm64"} {
@@ -246,8 +243,6 @@ func TestOfficialGitHubVersionFallsBackToAPIWithoutReleaseRedirect(t *testing.T)
 	}
 }
 
-// opencode.ai/install refuses OpenCode 2, so OpenCode 1 never pins it, from
-// GitHub's Latest release or from npm.
 func TestOpencodeOneNeverPinsAnOpencodeTwoRelease(t *testing.T) {
 	client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.Host != "registry.npmjs.org" {
@@ -260,9 +255,6 @@ func TestOpencodeOneNeverPinsAnOpencodeTwoRelease(t *testing.T) {
 	}
 }
 
-// Qwen's repository also publishes SDK and desktop releases, and GitHub's
-// Latest can be one of them: sdk-typescript-v0.1.23 while the CLI is at
-// v0.26.1. Read as the CLI's release, it hid the update as ahead of latest.
 func TestQwenAdvisoryReadsTheCLIRelease(t *testing.T) {
 	for _, tt := range []struct {
 		name, npmLatest string

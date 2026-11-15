@@ -10,13 +10,6 @@ function readZoomRequest(data: unknown): ZoomRequest | undefined {
 	return typeof message.params === "object" && message.params !== null ? message.params as ZoomRequest : undefined;
 }
 
-/**
- * An HTML artifact on its isolated inline origin. The page is cross-origin, so
- * its pinch and zoom keys reach the viewer through the render bootstrap
- * (render_bootstrap.js), and the viewer's zoom goes back to it to apply as
- * browser zoom, around the pinch point. The page also reports the pointer
- * nearing its bottom edge, where the zoom controls float, to bring them back.
- */
 export function ArtifactPageFrame({ src, title }: { src: string; title: string }) {
 	const frameRef = useRef<HTMLIFrameElement>(null);
 	const { controller } = useArtifactZoomTarget();

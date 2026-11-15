@@ -17,12 +17,10 @@ export interface MacV2UpdaterOptions {
   timeoutMs?: number;
 }
 
-/** Uses the dependency's declared protected extension, never its stock range worker. */
 export class MacDifferentialV2Updater extends MacUpdater {
   private activeV2Cancellation?: DownloadUpdateOptions["cancellationToken"];
   private cancelledBeforeNativeHandoff = false;
   private cancelledCandidatePath?: string;
-  // Compiled implementation capability, never supplied by metadata or settings.
   get differentialCapability(): "mac-differential-v2" { return "mac-differential-v2"; }
 
   constructor(readonly v2: MacV2UpdaterOptions) {
@@ -148,7 +146,6 @@ export class MacDifferentialV2Updater extends MacUpdater {
       const transfer = this.transferOptions(options, fileInfo, destination, controller.signal);
       transfer.baselinePath = path.join(this.downloadedUpdateHelper.cacheDir, oldInstallerFileName);
       await reconstructMacV2(transfer);
-      // Cancellation can arrive during the last digest read or handle close.
       controller.signal.throwIfAborted();
       const marker = { version: options.updateInfoAndProvider.info.version, url: fileInfo.url.href,
         size: fileInfo.info.size ?? 0, sha512: fileInfo.info.sha512 };
@@ -166,7 +163,6 @@ export class MacDifferentialV2Updater extends MacUpdater {
       if (options.cancellationToken.cancelled) throw new CancellationError();
       await rm(this.v2MarkerPath(), { force: true });
       this._logger.warn("V2 differential transfer failed, fallback to full download");
-      // MacUpdater owns the one verified full download after all v2 work settles.
       return true;
     } finally {
       clearTimeout(timeout);

@@ -10,8 +10,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// tryLockFile takes Crush's exclusive whole-file LockFileEx lock on f
-// without blocking. busy reports that another process holds it.
 func tryLockFile(f *os.File) (release func(), busy bool, err error) {
 	h := windows.Handle(f.Fd())
 	flags := uint32(windows.LOCKFILE_EXCLUSIVE_LOCK | windows.LOCKFILE_FAIL_IMMEDIATELY)

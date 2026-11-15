@@ -6,18 +6,9 @@ import { cloudArtifactSessionFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 
-/** The control plane's event for a commit or delete of a session's artifacts. */
 export const CLOUD_ARTIFACT_CHANGED_EVENT = "artifact.changed";
-/** How long a burst of cloud artifact changes (a replayed history, several commits) is folded into one reread. */
 const CLOUD_ARTIFACT_REFRESH_MS = 250;
 
-/**
- * While enabled, rereads a session's open artifact as soon as its file
- * changes, so an agent's edits show without reopening it. A local session's
- * files are followed through the daemon's artifact stream. A cloud session's
- * ride its shared event stream: an artifact.changed event rereads the
- * session's file list, whose new updatedAt changes the open file's URL.
- */
 export function useArtifactFileChanges(session: Pick<WorkspaceSession, "id" | "cloud">, enabled: boolean) {
 	const queryClient = useQueryClient();
 	const cloud = Boolean(session.cloud);

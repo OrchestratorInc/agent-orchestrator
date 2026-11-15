@@ -11,11 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// A terminal orchestrator whose host died while AO was down (a reboot, a
-// crash, an app quit that stopped its agents) must come back stopped and
-// resumable. The daemon runs a reaper tick right after the startup check; that
-// tick must not read the startup-found death as a crash and archive the
-// orchestrator, which removes it from the project.
 func TestStartupHealthKeepsDeadTerminalOrchestratorThroughTheReaper(t *testing.T) {
 	ctx := context.Background()
 	st, err := sqlite.Open(t.TempDir())
@@ -45,7 +40,7 @@ func TestStartupHealthKeepsDeadTerminalOrchestratorThroughTheReaper(t *testing.T
 	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
-	runtime := &fakeRuntime{} // every handle reads dead, as after a reboot
+	runtime := &fakeRuntime{}
 	lcm := lifecycle.New(st, nil)
 	m := New(Deps{
 		Runtime:   runtime,
@@ -60,7 +55,6 @@ func TestStartupHealthKeepsDeadTerminalOrchestratorThroughTheReaper(t *testing.T
 	if err := m.Reconcile(ctx); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	// The daemon's post-reconcile runtime pass.
 	if err := reaper.New(lcm, st, runtime, reaper.Config{}).Tick(ctx); err != nil {
 		t.Fatalf("reaper tick: %v", err)
 	}

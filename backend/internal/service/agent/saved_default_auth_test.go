@@ -7,10 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// When new Claude Code or Codex sessions start on a saved account, the harness
-// is ready exactly when that account is signed in, whatever the computer's own
-// login says, and readiness names that account. When they start on the
-// computer's login, the existing check decides.
 func TestReadinessFollowsTheSavedDefaultAccount(t *testing.T) {
 	svc := newService(nil, nil, nil)
 	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex} {

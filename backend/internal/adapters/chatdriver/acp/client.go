@@ -18,10 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// AO deliberately advertises neither client-side filesystem nor terminal
-// capabilities. Claude's ACP adapter uses Claude Code's native tools inside the
-// worktree; routing those operations through Electron or the daemon would create
-// a second execution/security model beside AO's existing one.
 func (c *conversation) ReadTextFile(context.Context, acpsdk.ReadTextFileRequest) (acpsdk.ReadTextFileResponse, error) {
 	return acpsdk.ReadTextFileResponse{}, errClientCapability
 }
@@ -104,7 +100,6 @@ func (c *conversation) RequestPermission(
 	}, nil
 }
 
-// RequestApproval parks a provider extension on AO's durable approval flow.
 func (c *conversation) RequestApproval(
 	ctx context.Context,
 	params ClientApprovalRequest,
@@ -196,10 +191,6 @@ func approvalToolDetail(tool acpsdk.ToolCallUpdate, activityKind domain.Activity
 	return encoded
 }
 
-// UnstableCreateElicitation bridges ACP's structured input request into AO's
-// ordinary durable conversation/event path. The JSON-RPC call remains parked
-// until a client answers, exactly like a permission request, but it has a
-// separate response contract so form data can never be mistaken for consent.
 func (c *conversation) UnstableCreateElicitation(
 	ctx context.Context,
 	params acpsdk.UnstableCreateElicitationRequest,
@@ -236,7 +227,6 @@ func (c *conversation) UnstableCreateElicitation(
 	return acpInputResponse(response), nil
 }
 
-// RequestInput parks a provider extension on AO's durable structured-input flow.
 func (c *conversation) RequestInput(
 	ctx context.Context,
 	request ports.ChatInputRequest,
@@ -314,7 +304,6 @@ func stableACPRequestID(meta map[string]any) string {
 	return strings.TrimSpace(requestID)
 }
 
-// UpdatePlan publishes a provider extension plan on the active AO turn.
 func (c *conversation) UpdatePlan(plan *domain.ConversationPlan) {
 	c.mu.Lock()
 	turnID := c.activeTurn
@@ -365,8 +354,6 @@ func (c *conversation) UnstableCompleteElicitation(
 	context.Context,
 	acpsdk.UnstableCompleteElicitationNotification,
 ) error {
-	// URL completion describes provider-side progress after the user has already
-	// consented. The actionable AO request was resolved when that consent was sent.
 	return nil
 }
 
@@ -439,8 +426,6 @@ func validateFormContent(schema, content map[string]any) error {
 		if _, present := content[name]; present {
 			continue
 		}
-		// A typed "Other" answer stands in for the choice it replaces; the adapter
-		// records it as the question's answer.
 		if custom, ok := customAnswers[name]; ok {
 			if text, _ := content[custom].(string); strings.TrimSpace(text) != "" {
 				continue
@@ -505,13 +490,8 @@ func validateFormValue(value any, property map[string]any) error {
 	return nil
 }
 
-// askUserQuestionCustomAnswerMetaKey marks the free-text "Other" field an
-// AskUserQuestion bridge (claude-agent-acp) adds after each question, naming the
-// question it answers. Only this marker makes a field an alternative answer, so a
-// generic form's required fields stay strictly required.
 const askUserQuestionCustomAnswerMetaKey = "_askUserQuestionCustomAnswer"
 
-// formCustomAnswers maps each marked question to the field that answers it in free text.
 func formCustomAnswers(properties map[string]any) map[string]string {
 	var out map[string]string
 	for name, raw := range properties {
@@ -582,8 +562,6 @@ func (c *conversation) discardInput(requestID string) {
 	c.mu.Unlock()
 }
 
-// timeAfter is a variable so permission timeout behavior can be tested without
-// sleeping for the production interval.
 var timeAfter = time.After
 
 func (c *conversation) discardPermission(requestID string) {
@@ -593,16 +571,12 @@ func (c *conversation) discardPermission(requestID string) {
 }
 
 func (c *conversation) SessionUpdate(_ context.Context, params acpsdk.SessionNotification) error {
-	// Keep replay normalization off the SDK's bounded notification queue.
 	if c.captureReplayUpdate(params) {
 		return nil
 	}
 	return c.processUpdate(params)
 }
 
-// handleNotification runs updates and host receipts in wire order, before the
-// next frame is read. Permission requests retain the SDK's asynchronous
-// dispatch, and responses cannot overtake the updates they follow.
 func (c *conversation) handleNotification(method string, params json.RawMessage) bool {
 	var err error
 	switch method {
@@ -628,13 +602,8 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	return true
 }
 
-// claudeSDKMessageMethod carries the raw Claude Agent SDK messages a session
-// asked for with _meta.claudeCode.emitRawSDKMessages.
 const claudeSDKMessageMethod = "_claude/sdkMessage"
 
-// handleClaudeSDKMessage reports the SDK's running and idle states. Claude Code
-// starts cycles on its own after an AO turn, for example to answer a finished
-// background task, and those cycles have no ACP prompt, so no turn events.
 func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
 	var payload struct {
 		SessionID string `json:"sessionId"`
@@ -658,7 +627,6 @@ func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
 	case "idle":
 		status = domain.ThreadStatusIdle
 	default:
-		// requires_action: the approval or input request already reports it.
 		return nil
 	}
 	c.mu.Lock()
@@ -667,7 +635,6 @@ func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
 	if sessionID == "" || payload.SessionID != sessionID {
 		return nil
 	}
-	// Only the live state means anything; history replay must not carry one.
 	c.historyMu.Lock()
 	loadingHistory := c.history != nil
 	c.historyMu.Unlock()
@@ -682,8 +649,6 @@ func (c *conversation) handleClaudeSDKMessage(params json.RawMessage) error {
 	return nil
 }
 
-// processUpdate runs the full ACP -> AO normalization for one update: live
-// notifications and replayed updates during the post-load drain.
 func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	if c.prepareHistoryUpdate(params.Update) {
 		return nil
@@ -716,8 +681,6 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	switch {
 	case update.AgentMessageChunk != nil:
 		if c.steerAcknowledgement(turnID, contentText(update.AgentMessageChunk.Content)) {
-			// The agent's note that it took a steer prompt; the "↳ Steered" mark
-			// already says so.
 			break
 		}
 		c.mu.Lock()
@@ -734,7 +697,6 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		}
 		parentID := c.providerItemID(parentToolUseID(update.AgentMessageChunk.Meta))
 		if parentID != "" {
-			// A steer goes to the parent turn, so a subagent's reply stays one message.
 			segment = 0
 		}
 		id := c.providerItemID(segmentedMessageID(update.AgentMessageChunk.MessageId, "assistant", turnID, segment))
@@ -818,13 +780,8 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 			c.trackCompactionStatus(turnID, update.SessionInfoUpdate.Meta)
 		}
 	case update.ConfigOptionUpdate != nil:
-		// The update is a complete replacement, not a delta. Model changes can
-		// rebuild effort and fast-mode choices, including removing an option.
 		c.replaceConfigOptions(update.ConfigOptionUpdate.ConfigOptions)
 	case update.AvailableCommandsUpdate != nil:
-		// Like config options, ACP command updates replace the entire catalog. The
-		// provider may discover project commands after session setup or remove one
-		// when its configuration changes, so retaining absent entries is wrong.
 		c.replaceAvailableCommands(update.AvailableCommandsUpdate.AvailableCommands)
 	case update.UsageUpdate != nil:
 		c.trackContext(int64(update.UsageUpdate.Used), int64(update.UsageUpdate.Size))
@@ -858,10 +815,6 @@ func contentText(content acpsdk.ContentBlock) string {
 	return content.Text.Text
 }
 
-// segmentedMessageID names a streamed message. An agent that sends no message
-// id streams the whole turn as one message, so each steer the turn takes starts
-// a new one: otherwise the reply written after the steer would grow the message
-// that sits above it in the timeline.
 func segmentedMessageID(id *string, prefix, turnID string, segment int) string {
 	if id != nil && *id != "" {
 		return *id
@@ -916,17 +869,9 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 		output = tool.terminalOutput
 	}
 	activityKind := activityKindFromTool(tool.kind)
-	// The detail is rewritten on every tool update and carried by every snapshot,
-	// so a page an agent hands html_render and the screenshot html_preview hands
-	// back are not stored whole, and neither is output or a diff that a provider
-	// re-sends in full on every update.
 	output, outputCut := commanddetail.TailChars(output, commanddetail.MaxOutputChars)
 	var content any = contentWithoutImageData(tool.content)
 	if activityKind != domain.ActivityKindMCPTool {
-		// Only an MCP-style row renders its content, and for a read or a fetch that
-		// is all the timeline shows of the result. Other rows render other fields (a
-		// command its output, a file change its files), so their content is held to
-		// the tool payload cap.
 		content = cappedPayload(content)
 	}
 	detailMap := map[string]any{
@@ -937,9 +882,6 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 		detailMap["outputTruncated"] = true
 	}
 	if c.harness == domain.HarnessHermes {
-		// Hermes omits tool payloads on delegation updates. Keep those fields
-		// absent, and use the timeline's arguments key without changing other
-		// ACP providers' persisted input contract.
 		delete(detailMap, "input")
 		if input, err := json.Marshal(tool.rawInput); err == nil && string(input) != "null" {
 			detailMap["arguments"] = cappedPayload(tool.rawInput)
@@ -965,8 +907,6 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 				"patch": patch, "oldText": item.Diff.OldText, "newText": item.Diff.NewText,
 			}
 			if len(patch) > commanddetail.MaxPatchChars {
-				// A client reads the full texts only for a file with no patch, so
-				// past the cap they are not stored.
 				capped, cut := cappedACPPatch(item.Diff.Path, item.Diff.OldText, item.Diff.NewText)
 				file["patch"] = capped
 				if cut {
@@ -1001,9 +941,6 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 		copyDetail(detailMap, terminal, "signal", "signal")
 	}
 	if activityKind == domain.ActivityKindCommand {
-		// OpenCode includes the shell result in rawOutput.metadata.exit, even
-		// when ACP marks the tool call completed. Preserve it separately from
-		// output text; an explicit terminal_exit remains authoritative.
 		if _, exists := detailMap["exitCode"]; !exists {
 			if raw, ok := tool.rawOutput.(map[string]any); ok {
 				if exit, ok := number(nestedMap(raw, "metadata")["exit"]); ok &&
@@ -1013,15 +950,7 @@ func (c *conversation) toolEvent(turnID string, tool *toolState, completed bool)
 			}
 		}
 		if rawCommand := rawCommandFromInput(tool.rawInput); rawCommand != "" {
-			// The neutral command-detail contract (`detail.command`) is what the
-			// chat timeline renders as the row's subject. rawInput is a
-			// provider-shaped object (claude-code Bash: {"command": "..."}); the
-			// codex driver sets this key directly, and ACP-backed harnesses must
-			// too or the UI can only ever say "Ran command".
 			detailMap["command"] = commanddetail.UnwrapShell(rawCommand)
-			// Keep the exact provider value beside the display form. The timeline is
-			// an audit surface, so callers must be able to recover what actually ran
-			// even when a provider wraps it in a shell invocation.
 			detailMap["rawCommand"] = rawCommand
 		}
 	}
@@ -1060,12 +989,6 @@ func acpPatchLines(oldText *string, newText string) (oldLines, newLines []string
 	return oldLines, strings.Split(strings.ReplaceAll(newText, "\r\n", "\n"), "\n")
 }
 
-// cappedACPPatch is the patch for a file past the per-file cap. The full form lists
-// every old line before any new one, so cutting it would keep only removals and read
-// as though the file had been emptied. Lines both sides share at the start and the
-// end are dropped first; if the rest still does not fit, the removed and the added
-// lines share the budget, each side keeping its first lines. Reports whether any of
-// the change itself was cut.
 func cappedACPPatch(path string, oldText *string, newText string) (string, bool) {
 	oldLines, newLines := acpPatchLines(oldText, newText)
 	for len(oldLines) > 0 && len(newLines) > 0 && oldLines[0] == newLines[0] {
@@ -1074,7 +997,6 @@ func cappedACPPatch(path string, oldText *string, newText string) (string, bool)
 	for len(oldLines) > 0 && len(newLines) > 0 && oldLines[len(oldLines)-1] == newLines[len(newLines)-1] {
 		oldLines, newLines = oldLines[:len(oldLines)-1], newLines[:len(newLines)-1]
 	}
-	// The full path is stored separately; reserve room for both sides of the change.
 	if len(path) > commanddetail.MaxPatchChars/4 {
 		path = commanddetail.Head(path, commanddetail.MaxPatchChars/4-3) + "..."
 	}
@@ -1082,12 +1004,10 @@ func cappedACPPatch(path string, oldText *string, newText string) (string, bool)
 		return patch, false
 	}
 	budget := commanddetail.MaxPatchChars - len(acpPatch(path, nil, nil))
-	// Half each, and whatever one side does not need goes to the other.
 	oldBudget := max(min(patchLinesSize(oldLines), budget/2), budget-patchLinesSize(newLines))
 	return acpPatch(path, keepPatchLines(oldLines, oldBudget), keepPatchLines(newLines, budget-oldBudget)), true
 }
 
-// patchLinesSize is what lines add to a patch: each line, its marker and a newline.
 func patchLinesSize(lines []string) int {
 	size := 0
 	for _, line := range lines {
@@ -1096,8 +1016,6 @@ func patchLinesSize(lines []string) int {
 	return size
 }
 
-// keepPatchLines keeps the first lines that fit in budget bytes of patch. A first
-// line that alone does not fit is cut on a character boundary.
 func keepPatchLines(lines []string, budget int) []string {
 	kept := 0
 	for _, line := range lines {
@@ -1125,9 +1043,6 @@ func acpPatch(path string, oldLines, newLines []string) string {
 	return strings.Join(lines, "\n")
 }
 
-// cappedPayload keeps a tool payload (its input, or content its row does not
-// render) only while it fits the tool payload cap, as the Codex driver does for
-// MCP arguments and results.
 func cappedPayload(raw any) any {
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -1136,14 +1051,10 @@ func cappedPayload(raw any) any {
 	return commanddetail.TruncatedJSON(encoded)
 }
 
-// imageStub stands in for an image block. Its base64 data would be stored as
-// text and printed as text when the row is expanded; bytes is its length.
 func imageStub(mimeType any, data string) map[string]any {
 	return map[string]any{"type": "image", "mimeType": mimeType, "bytes": len(data)}
 }
 
-// contentWithoutImageData keeps a tool's content blocks, text included, and
-// replaces each image block with imageStub.
 func contentWithoutImageData(content []acpsdk.ToolCallContent) []any {
 	if content == nil {
 		return nil
@@ -1160,10 +1071,6 @@ func contentWithoutImageData(content []acpsdk.ToolCallContent) []any {
 	return out
 }
 
-// withoutImageData replaces every image block in a decoded JSON value with
-// imageStub: MCP's {type:"image", data, mimeType} and the Anthropic
-// {type:"image", source:{type:"base64", media_type, data}} that
-// claude-agent-acp passes through as rawOutput.
 func withoutImageData(value any) any {
 	switch v := value.(type) {
 	case []any:
@@ -1192,12 +1099,6 @@ func withoutImageData(value any) any {
 	return value
 }
 
-// toolOutputText translates ACP's provider-defined rawOutput into AO's neutral
-// command-detail contract, where output is always text. ACP deliberately permits
-// any JSON value here; OpenCode, for example, wraps the text as
-// {"output":"...","metadata":{...}}. Persisting that object unchanged makes the
-// typed frontend contract untrue and crashes text-only renderers such as ANSI
-// cleanup.
 func toolOutputText(raw any) string {
 	switch value := raw.(type) {
 	case nil:
@@ -1222,12 +1123,6 @@ func toolOutputText(raw any) string {
 	return string(encoded)
 }
 
-// rawCommandFromInput extracts the verbatim shell command from a tool's
-// provider-defined rawInput so execute activities can carry AO's neutral command
-// detail without making the provider object itself part of that contract.
-// Providers wrap the command differently (claude-code Bash uses
-// {"command": "..."}); anything unrecognizable stays empty rather than putting
-// a provider DTO on the wire as if it were the command.
 func rawCommandFromInput(raw any) string {
 	value, ok := raw.(map[string]any)
 	if !ok {
@@ -1267,11 +1162,6 @@ func nestedMap(meta map[string]any, key string) map[string]any {
 	return value
 }
 
-// sessionFailureEvent translates the retry/failure extension advertised by
-// claude-agent-acp into an ordinary durable activity. The extension is parsed at
-// the ACP boundary so neither the service nor the renderer depends on its vendor
-// namespace. A stable provider item id makes successive retry attempts update one
-// row; settling the enclosing turn then settles this running status with it.
 func (c *conversation) sessionFailureEvent(
 	turnID, sourceID string,
 	meta map[string]any,
@@ -1308,8 +1198,6 @@ func (c *conversation) sessionFailureEvent(
 	if c.providerFailure != nil && c.providerFailure.ProviderTurnID == turnID {
 		event.ProviderItemID = c.providerFailure.ProviderItemID
 	} else {
-		// One row per uninterrupted retry episode. Host identity survives replay;
-		// direct connections have no replay ID and need a fresh local identity.
 		if sourceID == "" {
 			sourceID = uuid.NewString()
 		}
@@ -1320,9 +1208,6 @@ func (c *conversation) sessionFailureEvent(
 	return event, true
 }
 
-// trackCompactionStatus records the outcome OpenCode reports for a /compact turn.
-// OpenCode ends a failed compaction with a normal end_turn, so this update is the
-// only sign that the history was left as it was.
 func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any) {
 	compaction := nestedMap(meta, "opencode/compaction")
 	if compaction == nil {
@@ -1337,8 +1222,6 @@ func (c *conversation) trackCompactionStatus(turnID string, meta map[string]any)
 			failure = "Compaction failed"
 		}
 	default:
-		// OpenCode only sends the three statuses above. Leave the recorded
-		// outcome alone rather than guess what a new one means.
 		return
 	}
 	c.mu.Lock()
@@ -1360,7 +1243,6 @@ func sessionFailure(meta map[string]any) map[string]any {
 	return failure
 }
 
-// AIR sends no recovery update, so output completes the active retry episode.
 func (c *conversation) completeProviderFailure(turnID string, emit func(ports.ChatEvent)) {
 	c.mu.Lock()
 	if c.providerFailure == nil || c.providerFailure.ProviderTurnID != turnID {
@@ -1413,7 +1295,6 @@ func claudeRateLimits(meta map[string]any) *ports.ChatRateLimits {
 	}
 	limits := &ports.ChatRateLimits{PrimaryUsedPercent: -1, SecondaryUsedPercent: -1}
 	if utilization, ok := number(value["utilization"]); ok {
-		// The Claude SDK reports utilization as 0..1.
 		limits.PrimaryUsedPercent = utilization * 100
 	}
 	if resetsAt, ok := number(value["resetsAt"]); ok {
@@ -1534,9 +1415,6 @@ func (c *conversation) emitDiffs(
 	content []acpsdk.ToolCallContent,
 	emit func(ports.ChatEvent),
 ) {
-	// One tool call contributes at most one entry per path. If the provider
-	// lists the same path more than once in a single content payload, the last
-	// snapshot wins — summing those would reintroduce inflated counts.
 	byPath := make(map[string]ports.ChatDiffFile)
 	var pathOrder []string
 	for _, item := range content {

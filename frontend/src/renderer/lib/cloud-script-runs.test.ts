@@ -232,7 +232,6 @@ describe("mergeScriptStepEvents", () => {
 		let cache: CloudCpClientEvent[] = [];
 		for (const event of [...snapshots, other]) cache = mergeScriptStepEvents(cache, [event]);
 		expect(cache.map((event) => event.sequence)).toEqual([snapshots[2].sequence, other.sequence]);
-		// A late, older snapshot never replaces the newer one.
 		expect(mergeScriptStepEvents(cache, [snapshots[0]])).toBe(cache);
 		const final = step({ step: 1, status: "succeeded", output: "done" });
 		cache = mergeScriptStepEvents(cache, [final]);

@@ -351,8 +351,6 @@ describe("Chat draft storage", () => {
 			).ok,
 		).toBe(true);
 
-		// These model late FileReader/staging, send, edit, and stale-render callbacks
-		// from the deleted incarnation after the replacement already owns storage.
 		expect(writeChatComposerText(first, "late old text", storage).ok).toBe(false);
 		expect(
 			writeChatAttachments(
@@ -1080,16 +1078,11 @@ describe("Chat draft storage", () => {
 		const unsubscribeFirstMount = subscribeChatDraftRuntime(sessionId, () => undefined);
 		const token = beginChatComposerMutation(sessionId)!;
 
-		// React has rendered the replacement from this in-flight snapshot, but its
-		// passive subscription is not installed yet. The request settles while the
-		// old subscription still owns the runtime.
 		expect(getChatComposerMutation(sessionId)).toEqual({ pending: true });
 		const result = clearAcceptedChatComposer(sessionId, revision, storage);
 		finishChatComposerMutation(sessionId, token, revision, result);
 		expect(getChatComposerMutation(sessionId).accepted?.result).toBe(result);
 
-		// Passive unmount cleanup precedes passive mount subscription. It must not
-		// discard the receipt that reconciles the replacement's stale render.
 		unsubscribeFirstMount();
 		const unsubscribeRemount = subscribeChatDraftRuntime(sessionId, () => undefined);
 		expect(getChatComposerMutation(sessionId).accepted?.result).toBe(result);
@@ -1112,8 +1105,6 @@ describe("Chat draft storage", () => {
 			const result = clearAcceptedChatComposer(sessionId, revision, storage);
 			finishChatComposerMutation(sessionId, token, revision, result);
 
-			// useSyncExternalStore reads during render, then React may yield to other
-			// tasks for an arbitrary duration before installing the subscription.
 			expect(getChatComposerMutation(sessionId).accepted?.result).toBe(result);
 			vi.runOnlyPendingTimers();
 			const unsubscribeRemount = subscribeChatDraftRuntime(sessionId, () => undefined);
@@ -1179,8 +1170,6 @@ describe("Chat draft storage", () => {
 			const unsubscribeOldSurface = subscribeChatDraftRuntime(sessionId, () => undefined);
 			const composerToken = beginChatComposerMutation(sessionId)!;
 			const inlineToken = beginChatInlineEditMutation(sessionId)!;
-			// The replacement has rendered from the in-flight snapshot, but its passive
-			// subscription is deliberately delayed until every request below settles.
 			expect(getChatComposerMutation(sessionId)).toEqual({ pending: true });
 			expect(getChatInlineEditMutation(sessionId)).toEqual({ pending: true });
 			finishChatComposerMutation(
@@ -1413,7 +1402,6 @@ describe("unsent composer sends", () => {
 		expect(draft.composer.delivery).toBeUndefined();
 		expect(draft.unsent).toMatchObject({ clientMessageId: "unsent-1", requestText: input.requestText, draft: { text: "old long paste", attachments: [sent] } });
 
-		// A new message can now be prepared while the old one waits.
 		const nextSend = prepareChatComposerDelivery("park", { ...input, composerText: "yo", attachments: [], requestText: "yo", clientMessageId: "next-1" }, storage);
 		expect(nextSend).toMatchObject({ ok: true, recovered: false, mutation: { clientMessageId: "next-1" } });
 		expect(readChatSessionDraft("park", storage).unsent?.clientMessageId).toBe("unsent-1");

@@ -77,8 +77,6 @@ func (r *styledScreenRuntime) GetStyledOutput(context.Context, ports.RuntimeHand
 	return r.screen, nil
 }
 
-// A viewer leaving sends a focus change into the terminal after the idle
-// report, and no new idle report follows. The rendered screen decides then.
 func TestTerminalRestartAfterInputThatChangedNothing(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	mgr, _, rt := newChatManager(&recordingLauncher{})
@@ -134,7 +132,6 @@ func TestTerminalRefreshCapabilities(t *testing.T) {
 			if !mgr.terminalRestartEligible(rec, time.Minute) {
 				t.Fatal("native-resumable harness excluded")
 			}
-			// Capabilities belong to adapters, never to a recognized name alone.
 			mgr.agents = singleAgent{agent: fakeAgent{}}
 			if mgr.terminalRestartEligible(rec, time.Minute) {
 				t.Fatal("adapter without a refresh capability was accepted")
@@ -348,8 +345,6 @@ func TestFailedTerminalChildStartupCanRetryWithoutOldExitCallback(t *testing.T) 
 	if failed.Metadata.RuntimeLaunchID != "launch-old" || failed.Metadata.AgentSessionID != "agent-x" || failed.StaleBinary == nil {
 		t.Fatalf("recoverable native state lost: %+v", failed)
 	}
-	// No old-generation exit hook is delivered. The proven-dead replacement
-	// must still leave a resumable stopped state and an actionable retry.
 	alive := true
 	rt.supervisedAliveOverride = &alive
 	if err := mgr.RetryVersionMoves(context.Background()); err != nil {

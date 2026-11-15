@@ -52,28 +52,13 @@ const (
 	maxDisplayNameLen = 100
 	maxIdempotencyKey = 128
 
-	// Attachment limits guard the daemon against oversized spawn bodies. Files
-	// are pasted/dropped into the task brief and inlined as base64 in the JSON
-	// body, so the caps are deliberately conservative.
 	maxAttachments      = 8
-	maxAttachmentBytes  = attachmentstore.MaxFileBytes // 50 MiB per file, decoded
-	maxAttachmentsBytes = 100 << 20                    // 100 MiB total, decoded
-	// maxSpawnBodyBytes bounds the raw request body before it is decoded. The
-	// per-attachment and total caps above only apply after the whole body is
-	// materialized, so without this an oversized body (base64 inflates the
-	// decoded total by ~4/3) would allocate in full first. Derived from the
-	// decoded total plus headroom for the prompt and JSON envelope.
-	maxSpawnBodyBytes = maxAttachmentsBytes*4/3 + (2 << 20)
-	// maxSendBodyBytes is the /send equivalent of maxSpawnBodyBytes, sized off
-	// maxAttachmentBytes (one attachment) rather than maxAttachmentsBytes
-	// (spawn's up-to-eight): unlike spawn, a send carries at most one inline
-	// attachment.
-	maxSendBodyBytes = maxAttachmentBytes*4/3 + (2 << 20)
+	maxAttachmentBytes  = attachmentstore.MaxFileBytes
+	maxAttachmentsBytes = 100 << 20
+	maxSpawnBodyBytes   = maxAttachmentsBytes*4/3 + (2 << 20)
+	maxSendBodyBytes    = maxAttachmentBytes*4/3 + (2 << 20)
 )
 
-// blockedAttachmentMimes contains MIME types that are explicitly rejected for
-// security reasons. SVG is excluded because it is XML that can carry active
-// content (scripts/external entities).
 var blockedAttachmentMimes = map[string]bool{
 	"image/svg+xml": true,
 }
@@ -83,7 +68,6 @@ var (
 	errPreviewFileOutsideWorkspace = errors.New("preview file is outside the session workspace")
 )
 
-// SessionService is the controller-facing session service contract.
 type SessionService interface {
 	List(ctx context.Context, filter sessionsvc.ListFilter) ([]domain.Session, error)
 	ListPage(ctx context.Context, filter sessionsvc.ListFilter) (sessionsvc.ListPage, error)
@@ -150,49 +134,32 @@ type sessionMessageOptionsSender interface {
 	SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error
 }
 
-// ActivityRecorder applies an agent activity-state signal to a session. It is
-// satisfied directly by *lifecycle.Manager: an activity signal is a pure
-// lifecycle reduction (no runtime/workspace teardown), so it bypasses
-// SessionService rather than threading a no-op passthrough through the session
-// manager.
 type ActivityRecorder interface {
 	ApplyActivitySignal(ctx context.Context, id domain.SessionID, s ports.ActivitySignal) error
 }
 
-// PRRefresher re-reads a session's pull requests early, when a local signal
-// says they probably just changed on the provider.
 type PRRefresher interface {
 	RequestSessionRefresh(id domain.SessionID)
 }
 
-// ManagedPreviewServer is the deterministic server lifecycle attached to a
-// worker. It is separate from static file rendering and browser automation.
 type ManagedPreviewServer interface {
 	Start(ctx context.Context, sessionID domain.SessionID, workspacePath, configurationName string, projectEnv map[string]string) (previewserver.Status, error)
 	Stop(ctx context.Context, sessionID domain.SessionID) (previewserver.Status, error)
 	Status(sessionID domain.SessionID) previewserver.Status
 }
 
-// SessionCapabilityValidator verifies the daemon-issued token injected only
-// into the owning worker session.
 type SessionCapabilityValidator interface {
 	Valid(sessionID domain.SessionID, token, verifier string) bool
 }
 
-// ShellPreviewCapabilityValidator checks the separate, preview-only bearer
-// held by a live session-scoped user shell.
 type ShellPreviewCapabilityValidator interface {
 	ValidPreviewCapability(ctx context.Context, sessionID domain.SessionID, token string) (bool, error)
 }
 
-// UsageHookRecorder consumes transcript metadata from the same native hook
-// callback without changing activity-state semantics.
 type UsageHookRecorder interface {
 	RecordHook(ctx context.Context, id domain.SessionID, signal usagesvc.HookSignal) error
 }
 
-// SessionsController owns the session routes. Nil keeps routes registered but
-// returns OpenAPI-backed 501s.
 type SessionsController struct {
 	Svc      SessionService
 	Projects interface {
@@ -207,15 +174,11 @@ type SessionsController struct {
 	PreviewServer            ManagedPreviewServer
 	Capabilities             SessionCapabilityValidator
 	ShellPreviewCapabilities ShellPreviewCapabilityValidator
-	// AgentBrowser is the host's agent browser and its credential
-	// (config.AgentBrowserURL); nil when the host has none.
-	AgentBrowser      *url.URL
-	AgentBrowserToken string
-	// ArtifactVersions serves artifact version history; nil leaves those routes unimplemented.
-	ArtifactVersions ArtifactVersionService
+	AgentBrowser             *url.URL
+	AgentBrowserToken        string
+	ArtifactVersions         ArtifactVersionService
 }
 
-// Register mounts the session routes on the supplied router.
 func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions", c.list)
 	r.Post("/sessions", c.spawn)
@@ -293,9 +256,6 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/orchestrators/{id}", c.getOrchestrator)
 }
 
-// RegisterStreams mounts long-lived session streams outside the REST timeout
-// middleware. Worktree and artifact notifications remain active only while a
-// client is actually viewing that session's files or artifacts.
 func (c *SessionsController) RegisterStreams(r chi.Router) {
 	r.Get("/sessions/{sessionId}/workspace/events", c.streamWorkspaceChanges)
 	r.Get("/sessions/{sessionId}/artifact-events", c.streamArtifactChanges)
@@ -339,10 +299,6 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions")
 		return
 	}
-	// Bound the body before decoding: this route is served on the LAN listener
-	// (AO Mobile), not just loopback, and the attachment caps only run after the
-	// whole body is decoded. MaxBytesReader stops the read past the limit so an
-	// oversized base64 payload can't allocate in full first.
 	r.Body = http.MaxBytesReader(w, r.Body, maxSpawnBodyBytes)
 	var in SpawnSessionRequest
 	if err := decodeJSON(r, &in); err != nil {
@@ -371,10 +327,6 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "PROMPT_TOO_LONG", "Prompt must be 100 KiB or fewer", nil)
 		return
 	}
-	// displayName is optional at the API (the desktop new-task dialog omits it
-	// and the read model falls back to the session id). `ao spawn` makes it
-	// required CLI-side. When present, it is held to the same length cap here so
-	// a direct API call cannot exceed it.
 	displayName := strings.TrimSpace(in.DisplayName)
 	if utf8.RuneCountInString(displayName) > maxDisplayNameLen {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "DISPLAY_NAME_TOO_LONG", fmt.Sprintf("displayName must be %d characters or fewer", maxDisplayNameLen), nil)
@@ -395,7 +347,6 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		keyless.Attachments = nil
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
-	// A standalone worker has no project to start in the background.
 	async := in.Async && in.ProjectID != ""
 	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, BaseBranch: strings.TrimSpace(in.BaseBranch), RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, DisplayName: displayName, DisplayNameExplicit: in.DisplayNameExplicit && displayName != "", Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", AgentAccountID: strings.TrimSpace(in.AccountID), ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash, Async: async})
 	if err != nil {
@@ -405,20 +356,14 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusCreated, SpawnSessionResponse{Session: sessionView(r, sess), PromptBytes: promptBytes, SystemPromptBytes: systemPromptBytes})
 }
 
-// attachmentError carries a client-facing API error code + message for a
-// rejected attachment payload.
 type attachmentError struct {
 	code    string
 	message string
 }
 
-// extensionForMimeType returns a file extension for a MIME type. For known
-// MIME types, it returns a standard extension. For unknown types, it attempts
-// to extract a reasonable extension from the MIME type, or falls back to ".bin".
 func extensionForMimeType(mimeType string) string {
 	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
 
-	// Preferred extensions for MIME types with multiple options
 	preferredExts := map[string]string{
 		"image/jpeg":      ".jpg",
 		"image/jpg":       ".jpg",
@@ -426,44 +371,33 @@ func extensionForMimeType(mimeType string) string {
 		"video/quicktime": ".mov",
 	}
 
-	// Check if we have a preferred extension for this MIME type
 	if pref, ok := preferredExts[mimeType]; ok {
 		return pref
 	}
 
-	// Try the standard mime package
 	exts, err := mime.ExtensionsByType(mimeType)
 	if err == nil && len(exts) > 0 {
-		// Prefer common extensions when available
 		for _, ext := range exts {
 			switch ext {
 			case ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".txt", ".json", ".xml", ".html", ".css", ".js", ".md", ".zip", ".tar", ".gz":
 				return ext
 			}
 		}
-		return exts[0] // Return the primary extension if no preferred match
+		return exts[0]
 	}
 
-	// Fallback: extract from the MIME type itself
-	// e.g., "application/pdf" -> ".pdf", "text/plain" -> ".plain"
 	parts := strings.SplitN(mimeType, "/", 2)
 	if len(parts) == 2 {
 		subtype := parts[1]
-		// Handle common suffixes like "+xml", "+json"
 		if idx := strings.Index(subtype, "+"); idx >= 0 {
 			subtype = subtype[:idx]
 		}
 		return "." + subtype
 	}
 
-	// Ultimate fallback for unknown MIME types
 	return ".bin"
 }
 
-// decodeAttachment validates and base64-decodes a single inline file
-// attachment shared by spawn, delegate, stage, send, and chat requests, enforcing
-// the blocked-MIME-type rule and the caller's per-file cap. Callers handling multiple
-// attachments are responsible for the count and total-size caps.
 func decodeAttachment(a AttachmentInput, maxBytes int) (ports.SpawnAttachment, *attachmentError) {
 	mimeType := strings.ToLower(strings.TrimSpace(a.MimeType))
 	if blockedAttachmentMimes[mimeType] {
@@ -487,8 +421,6 @@ func decodeSpawnAttachments(in []AttachmentInput) ([]ports.SpawnAttachment, *att
 	return decodeAttachments(in, maxAttachmentBytes, maxAttachmentsBytes)
 }
 
-// decodeAttachments enforces the caller's count and size caps, accepting any
-// MIME type except explicitly blocked ones (e.g., SVG).
 func decodeAttachments(in []AttachmentInput, maxFileBytes, maxTotalBytes int) ([]ports.SpawnAttachment, *attachmentError) {
 	if len(in) == 0 {
 		return nil, nil
@@ -535,8 +467,6 @@ func (c *SessionsController) preview(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	// Selection is session-owned. Discovering a repository index here can
-	// replace a running app (or an empty selection) with unrelated source HTML.
 	res := SessionPreviewResponse{SessionID: sessionID(r)}
 	if selected, ok := previewutil.StoredEntryFromPreview(sess.Metadata.PreviewURL, sess.ID); ok {
 		root := sess.Metadata.WorkspacePath
@@ -564,8 +494,6 @@ func (c *SessionsController) preview(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, res)
 }
 
-// previewArtifactFile keeps artifact scope in the route so relative CSS,
-// scripts, and images cannot fall back to same-named workspace files.
 func (c *SessionsController) previewArtifactFile(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/preview/artifacts/*")
@@ -617,11 +545,6 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 			return
 		}
 	}
-	// __ao_artifacts__/ is a reserved marker AO itself prepends when it builds
-	// an artifact preview link (see ArtifactEntryPath), but it was a valid
-	// workspace-relative path before artifact previews existed. A real
-	// workspace file at that exact path must keep winning, so only route to
-	// the artifact directory when no such workspace file actually exists.
 	if rel, ok := previewutil.ArtifactEntryRelative(assetPath); ok {
 		if _, existsInWorkspace := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, assetPath); !existsInWorkspace {
 			c.serveRootedPreviewFile(w, r, sess.Metadata.ArtifactDir, rel)
@@ -631,34 +554,17 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 	c.serveRootedPreviewFile(w, r, sess.Metadata.WorkspacePath, assetPath)
 }
 
-// previewGzipWriters reuses compressors: each holds about 800 KB of state, and
-// a preview's first load compresses hundreds of modules at once.
 var previewGzipWriters = sync.Pool{New: func() any {
 	gz, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed)
 	return gz
 }}
 
-// previewGzipMaxBytes bounds the bodies compressPreviewResponse compresses: it
-// holds each whole while compressing it, and its gzip until the client has it.
-// At 4 MiB that gzip is about 1 MB, one compressor's worth, and the bound still
-// takes in a Vite dev server's pre-bundled dependencies (react-dom and
-// lucide-react are about 1 MB). A larger body passes as sent.
 const previewGzipMaxBytes = 4 << 20
 
-// compressPreviewResponse gzips a dev server's uncompressed code and text
-// before it crosses the network to the desktop. Dev servers rarely compress,
-// and their unminified modules shrink several times. Only a body whose length
-// the dev server announced, 1 KiB to 4 MiB, is compressed, and it is
-// compressed whole before any of it is sent: a compressor is busy only while
-// it runs, never while a slow link drains its output. A streamed body (SSR,
-// RSC payloads, event and token streams) announces no length and must reach
-// the client as written. A range is left as sent: its offsets count the
-// uncompressed bytes.
 func compressPreviewResponse(res *http.Response) {
 	contentType := strings.ToLower(res.Header.Get("Content-Type"))
 	compressible := strings.HasPrefix(contentType, "text/") || strings.Contains(contentType, "javascript") ||
 		strings.Contains(contentType, "json") || strings.Contains(contentType, "svg") || strings.Contains(contentType, "wasm")
-	// A 204 or 304 has ContentLength 0; a HEAD carries the GET's length.
 	if !compressible || strings.Contains(contentType, "event-stream") || res.ContentLength < 1024 || res.ContentLength > previewGzipMaxBytes ||
 		res.StatusCode == http.StatusPartialContent || res.Header.Get("Content-Encoding") != "" || res.Request == nil ||
 		res.Request.Method == http.MethodHead || res.Request.Header.Get("Range") != "" || !acceptsGzip(res.Request.Header.Get("Accept-Encoding")) {
@@ -668,24 +574,20 @@ func compressPreviewResponse(res *http.Response) {
 	_, err := io.ReadFull(res.Body, body)
 	_ = res.Body.Close()
 	if err != nil {
-		// The dev server cut the body short, and nothing is sent yet: abort,
-		// so the browser cannot take a shorter module for the whole one.
 		panic(http.ErrAbortHandler)
 	}
 	var compressed bytes.Buffer
-	gz, _ := previewGzipWriters.Get().(*gzip.Writer) // New makes nothing else
+	gz, _ := previewGzipWriters.Get().(*gzip.Writer)
 	gz.Reset(&compressed)
-	_, _ = gz.Write(body) // into memory: cannot fail
+	_, _ = gz.Write(body)
 	_ = gz.Close()
-	gz.Reset(nil) // the pool keeps the compressor, not the response it wrote
+	gz.Reset(nil)
 	previewGzipWriters.Put(gz)
-	// With a length, ReverseProxy copies in 32 KiB writes and never flushes.
 	res.Body = io.NopCloser(&compressed)
 	res.ContentLength = int64(compressed.Len())
 	res.Header.Set("Content-Length", strconv.Itoa(compressed.Len()))
 	res.Header.Set("Content-Encoding", "gzip")
 	res.Header.Add("Vary", "Accept-Encoding")
-	// The bytes differ now, so a strong validator would be a lie.
 	if etag := res.Header.Get("ETag"); strings.HasPrefix(etag, `"`) {
 		res.Header.Set("ETag", "W/"+etag)
 	}
@@ -697,7 +599,6 @@ func acceptsGzip(acceptEncoding string) bool {
 		if !strings.EqualFold(strings.TrimSpace(coding), "gzip") {
 			continue
 		}
-		// A weight of 0 refuses gzip, however it is written: q=0, Q=0.000.
 		for _, param := range strings.Split(params, ";") {
 			if name, weight, _ := strings.Cut(param, "="); strings.EqualFold(strings.TrimSpace(name), "q") {
 				q, err := strconv.ParseFloat(strings.TrimSpace(weight), 64)
@@ -709,10 +610,6 @@ func acceptsGzip(acceptEncoding string) bool {
 	return false
 }
 
-// previewTransport carries the desktop's previews and agent browser to this
-// host's loopback servers. A desktop's HTTP/2 fan-in sends a preview's
-// requests up to 100 at once, and DefaultTransport keeps only 2 idle
-// connections per host: it would dial the rest again every burst.
 var previewTransport = func() *http.Transport {
 	transport := &http.Transport{}
 	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
@@ -722,15 +619,11 @@ var previewTransport = func() *http.Transport {
 	return transport
 }()
 
-// previewApp reaches only the running, session-owned managed preview process.
-// The selected URL comes from the manager, never from a caller-supplied port.
 func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil || c.PreviewServer == nil {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return
 	}
-	// Every module a dev server serves passes through here: read the stored
-	// row only, not the full session read model.
 	sess, err := c.Svc.GetRecord(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -758,14 +651,12 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			hadPreviewOrigin := req.Out.Header.Get("X-AO-Preview-App-Origin") != ""
 			req.SetURL(target)
 			req.Out.Host = target.Host
-			// Forward the client's escapes once: "%40" stays "%40", not "%2540".
 			req.Out.URL.Path = "/" + strings.TrimPrefix(tail, "/")
 			req.Out.URL.RawPath = ""
 			if escaped != "" {
 				req.Out.URL.RawPath = "/" + strings.TrimPrefix(escaped, "/")
 			}
 			req.Out.URL.RawQuery = req.In.URL.RawQuery
-			// AO credentials authenticate the tunnel, not the agent-run web app.
 			req.Out.Header.Del("Authorization")
 			req.Out.Header.Del("Proxy-Authorization")
 			req.Out.Header.Del("X-AO-Preview-App-Authorization")
@@ -787,8 +678,6 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 			}
 		},
 		ModifyResponse: func(res *http.Response) error {
-			// Remote proxies publish this app on a separate origin, where the
-			// sandbox is removed in favor of their existing preview policy.
 			res.Header.Add("Content-Security-Policy", "sandbox allow-scripts allow-forms")
 			res.Header.Set("X-AO-Preview-API-Sandbox", "1")
 			if location := res.Header.Get("Location"); location != "" {
@@ -809,9 +698,6 @@ func (c *SessionsController) previewApp(w http.ResponseWriter, r *http.Request) 
 	proxy.ServeHTTP(w, r)
 }
 
-// inlineArtifactOrigin serves the session's artifact directory on its inline
-// origin, the one the chat thread frames an HTML artifact from: the request
-// path is the artifact path, files only, read-only, in the inline sandbox.
 func (c *SessionsController) inlineArtifactOrigin(w http.ResponseWriter, r *http.Request, id domain.SessionID) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -823,8 +709,6 @@ func (c *SessionsController) inlineArtifactOrigin(w http.ResponseWriter, r *http
 		writeArtifactFileNotFound(w, r)
 		return
 	}
-	// The session read fills in the default artifact directory for a row
-	// stored without one.
 	sess, err := c.Svc.Get(r.Context(), id)
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -842,14 +726,6 @@ func isPreviewLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// PreviewOrigin serves a workspace preview from its isolated *.localhost
-// origin. It returns false when the request host is not a preview origin so the
-// daemon router can continue handling its normal API and control surfaces.
-//
-// The selected entry's directory is mounted at the origin root. For example,
-// dist/index.html is reachable at both /dist/ (the persisted URL) and /, while
-// /assets/app.css maps to dist/assets/app.css. This mirrors a production static
-// server and fixes root-relative URLs without rewriting user-generated files.
 func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if id, ok := previewutil.SessionIDFromInlineArtifactHost(r.Host); ok {
 		c.inlineArtifactOrigin(w, r, id)
@@ -879,9 +755,6 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		return true
 	}
 	if artifactOrigin {
-		// The host alone declares scope on this origin, so the request path
-		// is served verbatim from ArtifactDir: there is no marker to strip
-		// and nothing a real workspace path could collide with.
 		asset := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
 			c.serveArtifactVersionFile(w, r, sess, asset, version)
@@ -909,13 +782,6 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 func previewOriginEntry(sess domain.Session, requestPath string) (previewutil.StoredEntry, bool) {
 	requested := strings.TrimPrefix(path.Clean("/"+requestPath), "/")
 	if rel, ok := previewutil.ArtifactEntryRelative(requested); ok {
-		// __ao_artifacts__/ is a reserved marker AO itself prepends when it
-		// builds an artifact preview link (see ArtifactEntryPath), but it was
-		// a valid workspace-relative path before artifact previews existed.
-		// A real workspace file at that exact literal request path must keep
-		// winning over the artifact directory, mirroring the same collision
-		// guard below for the stored-PreviewURL path and previewFile's guard
-		// for the legacy /preview/files route.
 		if _, existsInWorkspace := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, requested); existsInWorkspace {
 			return previewutil.StoredEntry{Scope: previewutil.StoredEntryScopeWorkspace, Path: requested}, true
 		}
@@ -926,12 +792,6 @@ func previewOriginEntry(sess domain.Session, requestPath string) (previewutil.St
 	if entry, ok := previewutil.StoredEntryFromPreview(sess.Metadata.PreviewURL, sess.ID); ok {
 		switch entry.Scope {
 		case previewutil.StoredEntryScopeArtifact:
-			// __ao_artifacts__/ is a reserved marker AO itself prepends when
-			// it builds an artifact preview link, but it was a valid
-			// workspace-relative path before artifact previews existed. A
-			// real workspace file at that exact literal path must keep
-			// winning over the artifact directory, mirroring previewFile's
-			// same collision guard for the legacy /preview/files route.
 			if literal, ok := previewutil.ArtifactEntryPath(entry.Path); ok {
 				if _, existsInWorkspace := previewutil.EntryAtPath(sess.Metadata.WorkspacePath, literal); existsInWorkspace {
 					return previewutil.StoredEntry{Scope: previewutil.StoredEntryScopeWorkspace, Path: literal}, true
@@ -976,9 +836,6 @@ func previewOriginArtifactAssetPath(entry, requestPath string) string {
 	return previewOriginAssetPath(entry, requestPath)
 }
 
-// serveWorkspacePreviewFile is the single serving path for both the legacy API
-// route and isolated preview origins. OpenRoot keeps symlink traversal and the
-// subsequent read on the same workspace-confined file handle.
 func (c *SessionsController) serveRootedPreviewFile(w http.ResponseWriter, r *http.Request, rootPath, assetPath string) {
 	file, info, clean, err := previewutil.OpenWorkspaceFile(rootPath, assetPath)
 	if err != nil {
@@ -993,7 +850,6 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 	sandboxLegacyPreview(w, r)
 
 	if !previewutil.IsMarkdownPath(clean) || previewRawRequested(r) {
-		// Last-Modified alone cannot distinguish replacements within one second.
 		w.Header().Set("ETag", fmt.Sprintf(`"%d-%d"`, info.Size(), info.ModTime().UnixNano()))
 		w.Header().Set("Access-Control-Expose-Headers", "ETag")
 		w.Header().Set("Cache-Control", "private, no-cache")
@@ -1017,9 +873,6 @@ func serveOpenedPreviewFile(w http.ResponseWriter, r *http.Request, file *os.Fil
 	}
 }
 
-// Legacy API URLs must not give workspace HTML, Markdown or SVG the API's
-// origin. The sandbox permits scripts/forms but deliberately omits same-origin.
-// Normal isolated preview origins retain their own module/asset behavior.
 func sandboxLegacyPreview(w http.ResponseWriter, r *http.Request) {
 	if _, ok := previewutil.SessionIDFromHost(r.Host); ok {
 		return
@@ -1120,7 +973,6 @@ func (c *SessionsController) listWorkspaceBranches(w http.ResponseWriter, r *htt
 	envelope.WriteJSON(w, http.StatusOK, workspaceBranchesResponse(branches))
 }
 
-// workspaceView builds the view a JSON body selects. The service validates it.
 func workspaceView(branch string, prNumber int, sourceURL, expectedTipSHA, expectedBaseSHA string) sessionsvc.WorkspaceView {
 	return sessionsvc.WorkspaceView{
 		Branch:          strings.TrimSpace(branch),
@@ -1131,8 +983,6 @@ func workspaceView(branch string, prNumber int, sourceURL, expectedTipSHA, expec
 	}
 }
 
-// workspaceViewQuery parses the branch or pull request a workspace read
-// selects. It only parses; the service validates the selection.
 func workspaceViewQuery(query url.Values) (sessionsvc.WorkspaceView, error) {
 	view := workspaceView(query.Get("branch"), 0, query.Get("sourceUrl"), query.Get("expectedTipSha"), query.Get("expectedBaseSha"))
 	if query.Has("branch") && view.Branch == "" {
@@ -1352,8 +1202,6 @@ func (c *SessionsController) getWorkspaceFileRevision(w http.ResponseWriter, r *
 	workspaceVersion := strings.TrimSpace(query.Get("workspaceVersion"))
 	expectedRevision := strings.TrimSpace(query.Get("expectedRevision"))
 	var revision sessionsvc.WorkspaceFileRevision
-	// A branch or pull request view, or ticked commits, read a commit
-	// selection; anything else reads the checked-out comparison as before.
 	if query.Get("snapshot") == "true" || view.Branch != "" || view.PRNumber != 0 || view.SourceURL != "" || commitSHA != "" || len(commitSHAs) > 0 {
 		revision, err = c.Svc.GetWorkspaceSelectionFileRevision(r.Context(), sessionID(r), sessionsvc.WorkspaceSelectionRevisionInput{
 			Snapshot: query.Get("snapshot") == "true", Path: relPath, Side: side, Scope: scope, View: view, CommitSHA: commitSHA, CommitSHAs: commitSHAs, WorkspaceVersion: workspaceVersion, ExpectedRevision: expectedRevision,
@@ -1410,9 +1258,6 @@ func (c *SessionsController) searchWorkspaceContent(w http.ResponseWriter, r *ht
 	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
-// resolveWorkspacePath classifies a path from chat as a workspace file, a
-// session artifact, or neither, so the renderer can open it without knowing
-// where the session's worktree lives.
 func (c *SessionsController) resolveWorkspacePath(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/resolve")
@@ -1430,10 +1275,6 @@ func (c *SessionsController) resolveWorkspacePath(w http.ResponseWriter, r *http
 	})
 }
 
-// listWorkspaceTree returns one directory level of the session workspace's
-// full file tree, git-status decorated. Unlike listWorkspaceFiles (changed
-// files only), path is optional: an empty or missing path lists the
-// workspace root.
 func (c *SessionsController) listWorkspaceTree(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/tree")
@@ -1459,9 +1300,6 @@ func (c *SessionsController) listWorkspaceTree(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusOK, workspaceTreeResponse(tree))
 }
 
-// getWorkspaceFileBlob streams one side of an image file's diff. The renderer
-// points an <img> straight at this route, so the response is the raw bytes with
-// their media type rather than a JSON envelope.
 func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/workspace/file/blob")
@@ -1496,15 +1334,12 @@ func (c *SessionsController) getWorkspaceFileBlob(w http.ResponseWriter, r *http
 	h := w.Header()
 	h.Set("Content-Type", blob.MediaType)
 	h.Set("Content-Length", strconv.Itoa(len(blob.Data)))
-	// The worktree changes under the viewer, and the URL carries no content
-	// hash, so a cached response would show a stale image after every edit.
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(blob.Data)
 }
 
-// branchStateReconciler refreshes a session's persisted branch facts.
 type branchStateReconciler interface {
 	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
 }
@@ -1529,9 +1364,6 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 		envelope.WriteError(w, r, err)
 		return
 	}
-	// The watcher cannot report edits made before it existed. Reconcile both
-	// workspace caches after the watch is installed and before telling the client
-	// it can stop fallback polling.
 	if _, err := c.Svc.ReconcileWorkspaceManifest(r.Context(), sessionID(r)); err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -1580,9 +1412,6 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 				}
 				flusher.Flush()
 			}
-			// The same watch sees commits and pushes. Branch facts refresh after
-			// the file list so a commit never delays it, and their change
-			// streams to every client as session_updated.
 			if reconciler, ok := c.Svc.(branchStateReconciler); ok {
 				_ = reconciler.ReconcileSessionBranchState(r.Context(), sessionID(r))
 			}
@@ -1595,23 +1424,6 @@ func (c *SessionsController) streamWorkspaceChanges(w http.ResponseWriter, r *ht
 	}
 }
 
-// setPreview persists the browser preview URL the desktop app opens for a
-// session and fans out a session_updated CDC event so the dashboard's browser
-// panel reacts live. The target is resolved as follows:
-//
-//   - An empty url opens the workspace's static entry point (index.html and
-//     friends), falling back to the session's existing preview target only
-//     when no entry point exists.
-//   - An explicit workspace-local path (e.g. `index.html`, `./dist/index.html`)
-//     is served through the preview/files route so local files load.
-//   - Absolute paths and file: URLs are accepted only when their fully resolved
-//     target remains inside the fully resolved session workspace or artifact
-//     directory. They use that root's confined preview origin rather than an
-//     automatable file: URL.
-//   - External http(s) URLs and host:port dev servers are kept verbatim.
-//
-// Every call bumps the session's preview revision, so re-running `ao preview`
-// with the same target still refreshes the panel.
 func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/preview")
@@ -1622,18 +1434,11 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	// Get first so a missing session is rejected with the normal 404 before any
-	// write, and so autodetect/local resolution has the workspace path to probe.
 	sess, err := c.Svc.Get(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	// Passive preview intentionally accepts an explicit external URL or an
-	// existing workspace-local file. Arbitrary local files are rejected by every
-	// browser surface because the target remains available to session automation.
-	// Managed process execution uses the separately capability-protected
-	// /preview/server route.
 	previewURL := strings.TrimSpace(in.URL)
 	if previewURL == "" {
 		if entry, ok := discoverPreviewEntry(sess.Metadata.WorkspacePath); ok {
@@ -1669,11 +1474,6 @@ func (c *SessionsController) setPreview(w http.ResponseWriter, r *http.Request) 
 	envelope.WriteJSON(w, http.StatusOK, SessionResponse{Session: sessionView(r, updated)})
 }
 
-// clearPreview resets a session's browser preview to empty (`ao preview
-// clear`). Unlike setPreview with an empty url it never autodetects: it persists
-// an empty target so the desktop browser panel returns to its blank state. The
-// write still bumps the preview revision, so the panel hears the change over
-// CDC even though the url field is now empty.
 func (c *SessionsController) clearPreview(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "DELETE", "/api/v1/sessions/{sessionId}/preview")
@@ -1995,10 +1795,6 @@ func (c *SessionsController) setAutoInjectCIPolicy(w http.ResponseWriter, r *htt
 		apispec.NotImplemented(w, r, "PATCH", "/api/v1/sessions/{sessionId}/auto-inject-ci")
 		return
 	}
-	// Decode through a pointer so an omitted required field remains distinct
-	// from the valid explicit value {"autoInjectCI":false}. The public request
-	// DTO stays non-pointer so the generated OpenAPI schema remains a required,
-	// non-nullable boolean.
 	var in struct {
 		AutoInjectCI *bool `json:"autoInjectCI"`
 	}
@@ -2153,9 +1949,6 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	// The session is already archived here, so a failed delete must not fail
-	// the request: the caller would roll back an archive that happened. The
-	// response reports it instead and the files stay on disk.
 	artifactsDeleted := false
 	if in.DeleteArtifacts {
 		if err := c.Svc.DeleteArtifacts(r.Context(), sessionID(r)); err != nil {
@@ -2167,12 +1960,6 @@ func (c *SessionsController) kill(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, KillSessionResponse{OK: true, SessionID: sessionID(r), Freed: result.Freed, CleanupPending: result.CleanupPending, ArtifactsDeleted: artifactsDeleted})
 }
 
-// rollback undoes a partially-completed spawn: if the session row is still in
-// seed state (no workspace, no runtime handle yet), the row is deleted
-// outright. If anything observable has landed it falls back to Kill so the
-// runtime/workspace are torn down. Used by `ao spawn --claim-pr` to undo a
-// session whose claim step failed, avoiding the orphan terminated row a
-// plain Kill would leave behind.
 func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/rollback")
@@ -2186,15 +1973,10 @@ func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, RollbackSessionResponse{OK: true, SessionID: sessionID(r), Deleted: out.Deleted, Killed: out.Killed})
 }
 
-// sessionDeleteService is optional so unrelated controller fakes keep
-// implementing the stable SessionService surface.
 type sessionDeleteService interface {
 	Delete(ctx context.Context, id domain.SessionID, cleanup bool) error
 }
 
-// deleteSession permanently removes a terminated session's record. The service
-// refuses a live session, and one whose worktree is not cleaned up yet unless
-// the caller asks it to clean it up first.
 func (c *SessionsController) deleteSession(w http.ResponseWriter, r *http.Request) {
 	svc, ok := c.Svc.(sessionDeleteService)
 	if !ok {
@@ -2403,10 +2185,6 @@ func sanitizedOptionalString(value *string) *string {
 	return &sanitized
 }
 
-// activity records an agent activity-state signal reported by an agent hook
-// (via `ao hooks <agent> <event>`). It funnels through the single
-// lifecycle.Manager so the reaper and hooks never race on the session's
-// activity/termination columns.
 func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 	if c.Activity == nil && c.Usage == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/activity")
@@ -2436,11 +2214,6 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ACTIVITY_OR_SESSION_ID_REQUIRED", "Activity state, agent session ID, or subagent ID is required", nil)
 		return
 	}
-	// The correlation fields ride the same lenient decode: absent on old CLIs.
-	// They are externally-supplied strings headed for logs and in-memory maps,
-	// so sanitize control chars and cap their length (a truncated id could
-	// never match its pre/post counterpart, so overlong values are dropped by
-	// the CLI; the cap here is defense against non-AO callers).
 	sig := ports.ActivitySignal{
 		Timestamp:                    in.ObservedAt,
 		Valid:                        state != "",
@@ -2518,8 +2291,6 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if activityErr != nil {
-		// The projection never committed, so the hook can retry the same payload.
-		// Usage observation is independent and must still run on contention.
 		w.Header().Set("Retry-After", "1")
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "ACTIVITY_PROJECTION_BUSY", "Concurrent session updates prevented this activity signal from committing; retry the hook", nil)
 		return
@@ -2530,9 +2301,6 @@ func (c *SessionsController) activity(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: in.State})
 }
 
-// codewhaleActivity translates Codewhale's v0.10 lifecycle outbox webhook into
-// AO's provider-neutral activity signal. The launch id lives in the callback
-// URL because Codewhale's event envelope has no supervisor-generation field.
 func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Request) {
 	if c.Activity == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/activity/codewhale")
@@ -2583,18 +2351,12 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 		signal.State = domain.ActivityExited
 		signal.Event = "session-end"
 	case "subagent.spawned", "subagent.completed":
-		// Provider-internal subagents remain opaque activity inside this AO
-		// session until AO has a provider-neutral nested-session model.
 		envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r)})
 		return
 	default:
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "UNKNOWN_CODEWHALE_LIFECYCLE_EVENT", "Unknown Codewhale lifecycle event", nil)
 		return
 	}
-	// Codewhale's thread_id is a per-process HookExecutor id (sess_*), not the
-	// durable UUID accepted by --resume. Terminal turn/session events run after
-	// Codewhale saves the conversation, so resolve that UUID from the launch's
-	// isolated Runtime store before lifecycle persists a native resume handle.
 	if c.NativeSessions != nil && (signal.Event == "stop" || signal.Event == "session-end") {
 		nativeID, ok, err := c.NativeSessions.ResolveNativeSessionID(r.Context(), ports.NativeSessionResolveConfig{
 			DataDir:   c.DataDir,
@@ -2625,8 +2387,6 @@ func (c *SessionsController) codewhaleActivity(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusOK, SetActivityResponse{OK: true, SessionID: sessionID(r), State: string(signal.State)})
 }
 
-// capActivityMeta bounds an optional activity correlation string; overlong
-// values are dropped, not truncated (see the comment at its call site).
 func capActivityMeta(v string) string {
 	const maxLen = 256
 	if len(v) > maxLen {
@@ -2798,25 +2558,10 @@ func writeSessionPRError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func discoverPreviewEntry(workspacePath string) (string, bool) {
-	// Use DiscoverWebEntrypoint (index.html variants only), not DiscoverEntry
-	// (which falls back to mostRecentPreviewable — the newest .md/.html in the
-	// workspace). Bare `ao preview` (no args) hits this path, and agent
-	// harnesses run that automatically on new sessions via the using-ao skill.
-	// With the .md fallback, every new session in a Markdown-rich repo opened
-	// its browser panel to an arbitrary repo doc (e.g. test/cli/README.md)
-	// instead of staying empty. Mirrors the poller fix from PR #2860.
-	// See issue #2859.
 	entry, ok := previewutil.DiscoverWebEntrypoint(workspacePath)
 	return entry.Path, ok
 }
 
-// resolveLocalPreview maps a workspace-local path (e.g. "index.html" or
-// "./dist/index.html") to its preview/files proxy URL when the path resolves to
-// a regular file inside the session workspace. It returns ok=false for anything
-// that already looks like a URL (an http(s)/file scheme, or a host:port dev
-// server) and for paths that do not point at a workspace file, so the caller
-// keeps those targets verbatim. Explicit parent traversal is rejected by
-// resolvePreviewTarget before this function is called.
 func resolveLocalPreview(r *http.Request, id domain.SessionID, workspacePath, raw string) (string, bool, error) {
 	if raw == "" || hasURLScheme(raw) {
 		return "", false, nil
@@ -2892,9 +2637,6 @@ func previewFileURLPath(raw string) (string, bool, error) {
 	return filePath, true, nil
 }
 
-// absolutePreviewURL opens an absolute file path only when its fully resolved
-// target is a file inside the fully resolved session workspace or session
-// artifact directory. Each root keeps its own isolated preview origin.
 func absolutePreviewURL(
 	r *http.Request,
 	id domain.SessionID,
@@ -2917,8 +2659,6 @@ func absolutePreviewURL(
 		}
 		return previewFileURL(r, id, entry.Path)
 	}
-	// Deliverables live in the artifact directory, outside the workspace, and
-	// agents open them by their absolute path.
 	if root, rel, ok := resolvedRootRelative(artifactDir, fileResolved); ok {
 		entry, found := previewutil.EntryAtPath(root, rel)
 		if !found {
@@ -2929,9 +2669,6 @@ func absolutePreviewURL(
 	return "", errPreviewFileOutsideWorkspace
 }
 
-// resolvedRootRelative returns root with its symlinks resolved and target's
-// slash path below it. It reports false for an empty or missing root and for a
-// target that is root itself or outside it.
 func resolvedRootRelative(root, target string) (string, string, bool) {
 	if root == "" {
 		return "", "", false
@@ -2967,10 +2704,6 @@ func writePreviewResolveError(w http.ResponseWriter, r *http.Request, err error)
 	envelope.WriteError(w, r, err)
 }
 
-// hasURLScheme reports whether raw begins with an RFC-3986 "scheme:" prefix
-// (http:, https:, file:, or a host:port like localhost:5173). It mirrors the
-// renderer's withDefaultScheme heuristic so the daemon and browser panel agree
-// on what counts as a URL versus a workspace-relative path.
 func hasURLScheme(raw string) bool {
 	for i := 0; i < len(raw); i++ {
 		c := raw[i]
@@ -3045,11 +2778,6 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 			Registered:    artifact.Registered,
 			PreviousPaths: artifact.PreviousPaths,
 		}
-		// A distinct host (not a shared path-prefix marker) gives every
-		// artifact link an unambiguous source identity: it can never collide
-		// with a real workspace file, unlike the legacy __ao_artifacts__/
-		// path-prefix form previewFile/previewOriginEntry still accept for
-		// backward compatibility.
 		if rawURL, ok := artifactRawURL(r, s.ID, artifact.Path); ok {
 			view.RawURL = rawURL
 		}
@@ -3062,10 +2790,6 @@ func sessionArtifactFiles(r *http.Request, s domain.Session) []SessionArtifactVi
 	return out
 }
 
-// artifactRawURL builds the raw-bytes fetch URL for one artifact file on the
-// artifact preview origin, with ?raw=true so a markdown artifact returns its
-// source text rather than server-rendered HTML (matching the ?raw=true
-// behavior serveOpenedPreviewFile already applies on every preview route).
 func artifactRawURL(r *http.Request, id domain.SessionID, filePath string) (string, bool) {
 	raw, err := previewutil.ArtifactFileURL("http://"+r.Host, id, filePath)
 	if err != nil {
@@ -3334,7 +3058,6 @@ func nonNilSessionIDs(ids []domain.SessionID) []domain.SessionID {
 	return ids
 }
 
-// workspaceSnapshotQuery shares the review's source and selection validation.
 func workspaceSnapshotQuery(query url.Values) (sessionsvc.WorkspaceSelectionRevisionInput, error) {
 	view, err := workspaceViewQuery(query)
 	if err != nil {
@@ -3343,7 +3066,6 @@ func workspaceSnapshotQuery(query url.Values) (sessionsvc.WorkspaceSelectionRevi
 	return sessionsvc.WorkspaceSelectionRevisionInput{Path: query.Get("path"), View: view, CommitSHA: query.Get("commitSha"), CommitSHAs: strings.FieldsFunc(query.Get("commitShas"), func(r rune) bool { return r == ',' })}, nil
 }
 
-// Source selectors must never be silently answered with mutable worktree data.
 func workspaceSnapshotRequested(query url.Values) bool {
 	return query.Get("snapshot") == "true" || query.Has("branch") || query.Has("prNumber") || query.Has("sourceUrl") || query.Has("expectedTipSha") || query.Has("expectedBaseSha") || query.Has("commitShas")
 }

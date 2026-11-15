@@ -122,41 +122,19 @@ export function FileContentPane({
 	onContentReady?: () => void;
 	path: string | null;
 	previousPath?: string;
-	/** Restore the display mode picked in the toolbar when this pane remounts (centre file tabs). */
 	rememberDisplayMode?: boolean;
 	sessionId: string;
 	hostId?: string;
 	split: boolean;
 	scope?: WorkspaceDiffScope;
 	source?: FilesSource;
-	/**
-	 * A header the host renders, with the file name, for the mode and action
-	 * buttons. When set, the pane renders those buttons into it and drops its own
-	 * path row; null renders none until the host mounts.
-	 */
 	toolbarHost?: HTMLElement | null;
-	/**
-	 * Takes the mode and action buttons into the host's file menu instead of
-	 * toolbarHost, which then shows only the edit's own Cancel and Save.
-	 */
 	menuActions?: ArtifactMenuActions;
-	/**
-	 * Where the feedback Send bar renders, outside the pane's scrolling content:
-	 * a host that scales that content (the artifact zoom) would otherwise move
-	 * a sticky bar along with it. Unset, the bar sticks to the pane's bottom.
-	 */
 	footerHost?: HTMLElement | null;
-	/** Told whenever the file enters or leaves edit mode. */
 	onEditingChange?: (editing: boolean) => void;
-	/**
-	 * @deprecated Ignored: centre file tabs and the Files panel now share the
-	 * compact toolbar (breadcrumb + status/counts, icon mode switches).
-	 */
 	toolbar?: "tabs" | "compact";
 }) {
 	const { t } = useTranslation();
-	// The menu actions this render offers; published once it commits, and
-	// withdrawn while loading, on an error, or when the pane goes away.
 	const menuPublish = useRef<ArtifactMenuAction[]>([]);
 	menuPublish.current = [];
 	useLayoutEffect(() => {
@@ -169,33 +147,23 @@ export function FileContentPane({
 	const setFileDisplayMode = useUiStore((state) => state.setFileDisplayMode);
 	const uiSessionId = sessionUiKey(sessionId,hostId);
  const displayModePath = source.kind === "snapshot" ? `${JSON.stringify(source)}:${path}` : path;
-	// A mode picked in the toolbar outlives the pane: switching sessions
-	// unmounts it, and coming back should not drop Rich preview.
 	const restoredMode = () =>
 		(rememberDisplayMode ? rememberedFileDisplayMode(useUiStore.getState(), uiSessionId, displayModePath, initialRequestKey) : undefined) ?? initialMode;
 	const [mode, setMode] = useState<FileViewMode>(restoredMode);
-	// An artifact has one view: its initial mode, which editing replaces until
-	// the edit is saved or cancelled. No display mode switch.
 	const singleView = source.kind === "artifact";
 	const [editing, setEditing] = useState(false);
 	useEffect(() => onEditingChange?.(editing), [editing, onEditingChange]);
 	const [draft, setDraft] = useState("");
 	const [saving, setSaving] = useState(false);
 	const [saveError, setSaveError] = useState("");
-	// Warm syntax highlighting without withholding readable file contents.
 	const sourceHighlightReady = usePierreFileHighlightReady(path);
 	useEffect(() => {
 		if (!path || source.kind !== "workspace" || commitSha) return;
 		return subscribeWorkspaceFileChanges(sessionId, queryClient, hostId);
 	}, [path, source.kind, commitSha, sessionId, queryClient, hostId]);
-	// A background refetch mid-selection would re-render the pane out from under
-	// an active native text selection.
 	const [selectionOrMenuActive, setSelectionOrMenuActive] = useState(false);
 	const selectionPane = useRef<HTMLDivElement>(null);
 	const selectionIdentity = JSON.stringify([sessionId, hostId, path, source, scope, commitSha, mode, editing, initialRequestKey, annotationRange?.requestKey]);
-	// The daemon serves workspace files by relative path only. An absolute path
-	// that reaches here was not inside the session, so say that rather than
-	// sending a request that can only fail.
 	const outsideWorkspace = source.kind === "workspace" && isAbsoluteFileReference(path ?? "");
 	const queryResult = useQuery({
 		...sessionSourceFileQueryOptions(sessionId, source, path ?? "", t(source.kind === "artifact" ? "files.error.loadArtifact" : "files.error.loadWorkspaceFile"), scope, commitSha, previousPath, hostId),
@@ -213,8 +181,6 @@ export function FileContentPane({
 
 	const liveText = { ...liveTextResult, data: useSelectionSnapshot(selectionPane, liveTextResult.data, selectionIdentity) };
 
- // Each annotation open must verify rows from this request's fresh source,
- // rather than a still-mounted pane's previous query cache.
 	const annotationRequest = annotationRange ? JSON.stringify([hostId, sessionId, path, source, scope, commitSha, annotationRange.requestKey]) : undefined;
 	const [annotationReadyRequest, setAnnotationReadyRequest] = useState<string>();
 	const refreshGeneration = useRef(0);
@@ -286,7 +252,6 @@ export function FileContentPane({
 					fileFingerprint: saved.fileFingerprint,
 					size: saved.size,
 				});
-				// The session's artifact list carries each file's modified time.
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
 				setEditing(false);
 				setDraft("");
@@ -348,8 +313,6 @@ export function FileContentPane({
 	if (annotationRange && canReadLiveText && liveText.error) {
 		return <PanelMessage action={retryAction}>{liveText.error.message || t("chat.fileAnnotationLoadFailed")}</PanelMessage>;
 	}
-	// File navigation can paint live text independently of repository status.
-	// Editing, annotations and comparison controls wait for their real metadata.
 	if (canReadLiveText && !query.data && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && mode === "file") {
 		const revision = liveText.data;
 		const preview: WorkspaceFileDetail = {
@@ -386,7 +349,6 @@ export function FileContentPane({
 	}
 
 	const detail = query.data;
-	// A historical/staged view must never show the current worktree's media.
 	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
@@ -478,10 +440,7 @@ export function FileContentPane({
 		</Tooltip>
 	);
 	const pathSegments = detail.path.split("/");
-	// HTML has no Rich preview here: its rendered view is the session's Browser,
-	// which serves the live workspace file, so not for a commit or deleted file.
 	const browserPage = openInBrowser && source.kind === "workspace" && !commitSha && !detail.deleted && /\.html?$/i.test(detail.path);
-	// Mode switches and file actions share one row and one gap.
 	const toolbarActions = (
 		<div className="flex shrink-0 items-center gap-0.5">
 			{hasDisplayModeChoice ? (
@@ -554,7 +513,6 @@ export function FileContentPane({
 	const sendBar = footerHost !== undefined
 		? (footerHost ? createPortal(<FileAnnotationSendBar annotation={annotation} surface="focused" />, footerHost) : null)
 		: <FileAnnotationSendBar annotation={annotation} className="sticky bottom-0 z-20" surface="focused" />;
-	// With a file menu, the header keeps only an edit's own Cancel and Save.
 	const headerActions = menuActions ? (editing ? (
 		<div className="flex shrink-0 items-center gap-1">
 			<Button aria-label={t("files.cancelEditing")} disabled={saving} onClick={cancelEditing} size="xs" type="button" variant="ghost"><X aria-hidden="true" className="size-icon-sm" />{t("files.cancelEditing")}</Button>
@@ -586,8 +544,6 @@ export function FileContentPane({
 			{toolbarActions}
 		</div>
 	);
-	// Both the Files panel and a centre file tab use the compact icon toolbar.
-	// Whole-file feedback opens in the page flow right under it, not over the code.
 	const toolbarNode = (
 		<>
 			{compactTabs}
@@ -630,8 +586,6 @@ export function FileContentPane({
 						commitSha={commitSha}
 						hostId={hostId}
 						source={source}
-						// Files panel preview: the compact toolbar already shows the name
-						// and counts, and its filler gutters sit on the canvas.
 						extraCSS={AO_PIERRE_FILES_REVIEW_CSS}
 						hideFileHeader
 					/>
@@ -709,8 +663,6 @@ function CompleteFileView({ annotationReady = true, annotationRange, annotation,
 	return <ReadOnlyFileView annotationRange={annotationRange} annotationReady={annotationReady} source={source} commitSha={commitSha} annotation={annotation} detail={detail} side={detail.deleted ? "before" : "after"} editing={editing} imageUrl={artifactImageUrl(source, version)} onContentReady={onContentReady} onEditChange={onEditChange} onRevealLineConsumed={onRevealLineConsumed} revealLine={revealLine} scope={scope} sessionId={sessionId} hostId={hostId} />;
 }
 
-// An artifact image loads from its raw URL. The load time joins the URL so a
-// rewritten image refetches instead of showing the cached bytes.
 function artifactImageUrl(source: FilesSource, version: number | string): string | undefined {
 	if (source.kind !== "artifact" || !source.rawUrl) return undefined;
 	try {

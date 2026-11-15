@@ -229,8 +229,6 @@ describe("resumeOrchestrator", () => {
 		});
 	});
 
-	// The caller asked for a working orchestrator; one that is already running
-	// satisfies that, so the 409 must not surface as a failure.
 	it("treats AGENT_NOT_EXITED as success", async () => {
 		postMock.mockResolvedValue({
 			data: undefined,

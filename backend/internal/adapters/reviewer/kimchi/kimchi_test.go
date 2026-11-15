@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// captureAgent is a stub ports.Agent that records the configs the reviewer
-// builds without needing the real kimchi binary on PATH.
 type captureAgent struct {
 	got        ports.LaunchConfig
 	gotRestore ports.RestoreConfig
@@ -56,8 +54,6 @@ func TestReviewCommandAppliesBestEffortPolicyOffBypass(t *testing.T) {
 		t.Fatalf("ReviewCommand: %v", err)
 	}
 
-	// The policy is only useful in an explicit non-bypass mode: --yolo ignores
-	// allow/deny rules, and an empty mode would defer to Kimchi's default.
 	if agent.got.Permissions != ports.PermissionModeAuto {
 		t.Fatalf("reviewer must launch in auto permission mode; got %q", agent.got.Permissions)
 	}
@@ -125,31 +121,24 @@ func TestAllowlistIncludesProtocolToolsAndDeniesDangerousGh(t *testing.T) {
 		t.Fatalf("ReviewCommand: %v", err)
 	}
 
-	// printf and gh must be in the allow list — the review protocol
-	// (prompt.go step 1) requires a piped printf | gh api command.
 	for _, tool := range []string{"bash(printf:*)", "bash(gh:*)"} {
 		if !contains(agent.got.AllowedTools, tool) {
 			t.Fatalf("allowlist missing protocol tool %q: %#v", tool, agent.got.AllowedTools)
 		}
 	}
 
-	// The reviewer can still submit verdicts via ao review submit.
 	if !contains(agent.got.AllowedTools, "bash(ao review submit:*)") {
 		t.Fatalf("allowlist missing ao review submit: %#v", agent.got.AllowedTools)
 	}
 
-	// git show must NOT be in the allow list — it can read arbitrary tracked
-	// content like .env.production.
 	if contains(agent.got.AllowedTools, "bash(git show:*)") {
 		t.Fatalf("allowlist unexpectedly contains bash(git show:*): %#v", agent.got.AllowedTools)
 	}
 
-	// git show must be in the deny list as defense in depth.
 	if !contains(agent.got.DisallowedTools, "bash(git show:*)") {
 		t.Fatalf("disallow list missing bash(git show:*): %#v", agent.got.DisallowedTools)
 	}
 
-	// Dangerous gh verbs must be denied as defense in depth.
 	for _, denied := range []string{
 		"bash(gh pr merge:*)",
 		"bash(gh api --method DELETE:*)",
@@ -162,8 +151,6 @@ func TestAllowlistIncludesProtocolToolsAndDeniesDangerousGh(t *testing.T) {
 		}
 	}
 
-	// The blanket bash(gh:*) deny must NOT be present — it blocks the
-	// protocol's gh api --method POST call.
 	if contains(agent.got.DisallowedTools, "bash(gh:*)") {
 		t.Fatalf("disallow list must not contain blanket bash(gh:*): %#v", agent.got.DisallowedTools)
 	}

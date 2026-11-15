@@ -47,7 +47,6 @@ describe("classifyError — severity + owner", () => {
 	});
 
 	it("a genuinely unreachable daemon (503 synthetic) still pages as P1", () => {
-		// Distinct from backpressure: the client couldn't reach the daemon at all.
 		const t = classifyError({ category: "daemon_unavailable", httpStatus: 503 });
 		expect(t.severity).toBe("P1");
 		expect(t.owner).toBe("environment");
@@ -91,7 +90,7 @@ describe("classifyError — code overrides", () => {
 
 	it("wrong pairing password is the user, not external", () => {
 		expect(classifyError({ category: "auth", code: "BAD_PASSWORD" })).toMatchObject({ owner: "user" });
-		expect(classifyError({ category: "auth" })).toMatchObject({ owner: "external" }); // default without code
+		expect(classifyError({ category: "auth" })).toMatchObject({ owner: "external" });
 	});
 
 	it("SCM/PR operation failures are external", () => {
@@ -117,11 +116,10 @@ describe("classifyError — escalation rules & fallbacks", () => {
 	it("falls back to apierr kind, then to a safe P2/ours default", () => {
 		expect(classifyError({ kind: "invalid" })).toMatchObject({ severity: "P3", owner: "user" });
 		expect(classifyError({ kind: "internal" })).toMatchObject({ severity: "P1", owner: "ours" });
-		expect(classifyError({})).toMatchObject({ severity: "P2", owner: "ours", report: true }); // nothing known -> visible, ours
+		expect(classifyError({})).toMatchObject({ severity: "P2", owner: "ours", report: true });
 	});
 
 	it("code override beats category", () => {
-		// category says P3/user, code says P1/ours
 		expect(classifyError({ category: "validation", code: "INTERNAL_ERROR" })).toMatchObject({
 			severity: "P1",
 			owner: "ours",

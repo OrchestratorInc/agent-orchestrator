@@ -20,11 +20,6 @@ type kimiProviderConfig struct {
 	} `json:"providers" toml:"providers"`
 }
 
-// kimiConfiguredProviders reports the [providers.<id>] entries of Kimi's
-// config.toml or config.json that hold a credential: an api_key, a key or
-// token in the provider's env table, or a managed OAuth login whose
-// credentials file has a token. Both the Kimi CLI home (KIMI_SHARE_DIR,
-// ~/.kimi) and the Kimi Code home (KIMI_CODE_HOME, ~/.kimi-code) are read.
 func kimiConfiguredProviders(_ string, env map[string]string) []string {
 	home := catalogHome(env)
 	found := map[string]bool{}
@@ -88,8 +83,6 @@ func kimiConfigProviders(root, name string) []string {
 	return providers
 }
 
-// kimiOAuthHasToken reads <home>/credentials/<key>.json, where Kimi stores a
-// managed login named by the provider's oauth.key ("oauth/<name>").
 func kimiOAuthHasToken(root, key string) bool {
 	name := filepath.Base(filepath.FromSlash(strings.TrimPrefix(strings.TrimSpace(key), "oauth/")))
 	if name == "" || name == "." || name == string(filepath.Separator) {

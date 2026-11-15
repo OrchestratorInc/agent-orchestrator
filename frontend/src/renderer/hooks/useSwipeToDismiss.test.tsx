@@ -20,7 +20,6 @@ describe("useSwipeToDismiss", () => {
 		render(<><Card label="First" onDismiss={first} /><Card label="Second" onDismiss={second} /></>);
 
 		for (const deltaX of [-10, -20, -30, -25, -20, -15, -10]) wheel(screen.getByText("First"), deltaX);
-		// The rest of the momentum lands on the card below.
 		for (const deltaX of [-8, -6, -5, -4, -3, -2, -1]) wheel(screen.getByText("Second"), deltaX);
 
 		await waitFor(() => expect(first).toHaveBeenCalledOnce());

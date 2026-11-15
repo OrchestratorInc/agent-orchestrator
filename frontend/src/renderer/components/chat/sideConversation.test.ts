@@ -57,9 +57,7 @@ describe("sideConversationSnapshot", () => {
 			activities: [{ id: "a2", sideId: side.id, turnId: "t2", kind: "command", status: "completed", summary: "ls", createdAt: at(2) }],
 		};
 		const conversation = sideConversationSnapshot(latest, [older]);
-		// Same timestamp: the tool call sorts before the answer it led to.
 		expect(conversation.items.map((item) => item.id)).toEqual(["m1", "a2", "m2"]);
-		// Sequences increase in merged order, and same-millisecond entries stay distinct.
 		const sequences = conversation.items.map((item) => item.sequence);
 		expect(sequences).toEqual([...sequences].sort((a, b) => a - b));
 		expect(new Set(sequences).size).toBe(3);
@@ -106,7 +104,6 @@ describe("sideConversationSnapshot", () => {
 	});
 
 	it("keeps a retried side turn retryable when its retry fails too", () => {
-		// The side store re-runs the same turn and records itself as the source.
 		const conversation = sideConversationSnapshot({
 			side,
 			hasMore: false,

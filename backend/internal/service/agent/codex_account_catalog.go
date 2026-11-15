@@ -326,8 +326,6 @@ func (c *codexAccountCatalog) updateCredentialIdentity(ctx context.Context, id s
 	}
 	identity, supported := inspectCodexCredentialIdentity(credential)
 	if !supported {
-		// Older opaque credentials can still be associated by exact byte match,
-		// but they do not contain safe local identity metadata to persist.
 		return nil
 	}
 	return c.mutateDescriptor(ctx, id, func(descriptor *codexAccountDescriptor) error {
@@ -431,10 +429,6 @@ func (c *codexAccountCatalog) deleteSignedOut(id string) error {
 	if current.Snapshot.Status != domain.CodexAccountStatusSignedOut {
 		return errors.New("codex account is not safely deletable")
 	}
-	// Native Codex account reads can create caches, SQLite files, skills, and
-	// temporary directories beside auth.json. The account root and credential
-	// home were both revalidated above; RemoveAll deletes this exact AO-owned
-	// slot and unlinks any nested symlink without following its target.
 	if err := os.RemoveAll(accountDir); err != nil {
 		return err
 	}
@@ -451,10 +445,6 @@ func (c *codexAccountCatalog) deleteSignedOut(id string) error {
 	return nil
 }
 
-// discardCommitted removes a just-created account when a compound login commit
-// cannot finish. It is intentionally narrower than user-facing deletion: the
-// caller must still be inside the account mutation gate and supply an exact
-// catalog ID.
 func (c *codexAccountCatalog) discardCommitted(id string) error {
 	if !isCanonicalUUIDv4(id) {
 		return errors.New("invalid Codex account id")
@@ -593,10 +583,6 @@ func cleanupPendingCredentialHomes(pendingRoot string) error {
 			continue
 		}
 		if !isCanonicalUUIDv4(entry.Name()) {
-			// This is a private transient root, not the durable account catalog.
-			// A crash may leave a non-UUID staging directory behind. Remove only
-			// an owned, non-symlinked directory rooted directly below this private
-			// parent; never follow an unsafe entry.
 			if validateCodexDirectory(path, true) != nil {
 				return errors.New("unsafe Codex staging directory owner")
 			}

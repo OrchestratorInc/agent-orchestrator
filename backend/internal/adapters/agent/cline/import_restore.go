@@ -54,14 +54,8 @@ func readImportedClineJSON(ctx context.Context, root *os.Root, path string, valu
 	return ctx.Err()
 }
 
-// maxImportedClineHistoryBytes matches the importer's transcript budget, so
-// every message document AO offers and imports can also be restored.
 const maxImportedClineHistoryBytes = 1 << 30
 
-// scanImportedClineHistory streams a message document and reports its
-// session id and whether it holds at least one message. It scans bytes
-// structurally and retains only the bounded session id, so message bodies and
-// oversized tool payloads, including single huge strings, are never buffered.
 func scanImportedClineHistory(ctx context.Context, root *os.Root, path string) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err
@@ -86,8 +80,6 @@ func scanImportedClineHistory(ctx context.Context, root *os.Root, path string) (
 	return id, nonEmpty, ctx.Err()
 }
 
-// Identity fields are short; longer keys are treated as unknown and a longer
-// session id is reported as a mismatch.
 const maxClineHistoryFieldBytes = 256
 
 var errClineHistoryStructure = errors.New("cline imported history has an unexpected structure")
@@ -185,8 +177,6 @@ func (s *clineHistoryScanner) document() (string, bool, error) {
 	return id, nonEmpty, nil
 }
 
-// array consumes an array whose '[' was read and reports whether it had an
-// element.
 func (s *clineHistoryScanner) array() (bool, error) {
 	c, err := s.next()
 	if err != nil {
@@ -214,7 +204,6 @@ func (s *clineHistoryScanner) array() (bool, error) {
 	}
 }
 
-// next returns the next non-whitespace byte; EOF is reported as io.EOF.
 func (s *clineHistoryScanner) next() (byte, error) {
 	for {
 		c, err := s.r.ReadByte()
@@ -229,8 +218,6 @@ func (s *clineHistoryScanner) next() (byte, error) {
 	}
 }
 
-// str consumes a string whose opening quote was read. It keeps at most limit
-// bytes and reports whether the whole raw value fit; limit 0 keeps nothing.
 func (s *clineHistoryScanner) str(limit int) (string, bool, error) {
 	var kept []byte
 	fits := true
@@ -245,7 +232,6 @@ func (s *clineHistoryScanner) str(limit int) (string, bool, error) {
 		case c < 0x20:
 			return "", false, errClineHistoryStructure
 		case c == '\\':
-			// The escaped byte (or the first of \uXXXX) cannot end the string.
 			if _, err := s.r.ReadByte(); err != nil {
 				return "", false, errors.Join(errClineHistoryStructure, err)
 			}
@@ -260,7 +246,6 @@ func (s *clineHistoryScanner) str(limit int) (string, bool, error) {
 	}
 }
 
-// skip consumes one complete value whose first byte is c, retaining nothing.
 func (s *clineHistoryScanner) skip(c byte) error {
 	switch c {
 	case '"':
@@ -288,7 +273,6 @@ func (s *clineHistoryScanner) skip(c byte) error {
 	case '}', ']', ',', ':':
 		return errClineHistoryStructure
 	}
-	// A scalar (number, true, false, null) ends at a delimiter or whitespace.
 	for {
 		b, err := s.r.ReadByte()
 		if errors.Is(err, io.EOF) {
@@ -314,8 +298,6 @@ func importedClineConversationExists(ctx context.Context, ref ports.SessionRef, 
 	if err != nil || nativeID != id {
 		return false, ports.ErrNativeHistoryUnavailable
 	}
-	// Metadata names the selected import root. An explicit launch override
-	// must agree, so validation cannot succeed for a different account/store.
 	_, dataSet := env["CLINE_DATA_DIR"]
 	_, configSet := env["CLINE_DIR"]
 	if dataSet || configSet {
@@ -356,8 +338,6 @@ func importedClineConversationExists(ctx context.Context, ref ports.SessionRef, 
 	if historyID != id || !nonEmpty {
 		return false, ports.ErrNativeHistoryUnavailable
 	}
-	// The saved cwd is provenance. Cline's interactive loader reads by id,
-	// then starts that same id with current config; argv pins --cwd below.
 	return true, nil
 }
 

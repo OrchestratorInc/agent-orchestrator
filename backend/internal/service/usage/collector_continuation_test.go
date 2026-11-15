@@ -14,9 +14,6 @@ import (
 
 const continuationNativeB = "6d19d8df-continuation"
 
-// seedContinuationSession seeds a live claude session whose workspace points at
-// worktree, with an active binding nativeA whose transcript lives in the
-// claude project dir encoded from worktree (mirroring ~/.claude/projects/<slug>).
 func seedContinuationSession(
 	t *testing.T,
 	store *sqlite.Store,
@@ -141,7 +138,6 @@ func TestCollectorContinuationDiscoveryIgnoresPathBoundToAnotherSession(t *testi
 		`{"type":"user","sessionId":"`+continuationNativeB+`","cwd":"`+worktree+`"}`+"\n")
 	identity, err := SourceIdentity(ctx, claimedPath)
 	mustNoError(t, err)
-	// Production always stores the resolved (symlink-followed) path; mirror that.
 	resolvedClaimed, err := filepath.EvalSymlinks(filepath.Clean(claimedPath))
 	mustNoError(t, err)
 	_, err = store.InsertUsageSource(ctx, domain.UsageSourceRecord{
@@ -210,8 +206,6 @@ func TestCollectorContinuationDiscoveryIgnoresSessionIdFilenameMismatch(t *testi
 	seedCollectorUsageBinding(t, store, session, nativeA, domain.UsageBindingActive, now, "")
 
 	collector := NewCollector(store, SourceRoots{ClaudeProjects: claudeRoot}, nil)
-	// Records carry continuationNativeB but the file name does not; binding it
-	// would strand a zero-source binding that fails every reconcile pass.
 	writeUsageFixture(t, filepath.Join(claudeRoot, "encoded-worktree", "mismatched.jsonl"),
 		`{"type":"last-prompt","sessionId":"`+continuationNativeB+`"}`+"\n"+
 			`{"type":"user","sessionId":"`+continuationNativeB+`","cwd":"`+worktree+`"}`+"\n")

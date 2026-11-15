@@ -2,11 +2,6 @@ import type { ChatConfigOption, ChatSkill } from "../types/conversation";
 
 const STORAGE_KEY = "ao.chat.settingsTemplate.v1";
 
-/**
- * The turn settings a session of this agent reported, kept so a chat that has no
- * session yet can draw the very same controls the session will. The choices are
- * the agent's; the values a new chat shows are its own.
- */
 export type ChatSettingsTemplate = {
 	options: ChatConfigOption[];
 };
@@ -45,13 +40,11 @@ export function rememberChatSettingsTemplate(harness: string, hostId: string | u
 	try {
 		storage()?.setItem(STORAGE_KEY, JSON.stringify(all));
 	} catch {
-		// Only polish: without it a new chat draws AO's own controls.
 	}
 }
 
 const SKILLS_KEY = "ao.chat.skills.v1";
 
-/** The skills a session of this agent last listed, for a new chat's "/" menu. */
 export function readChatSkills(harness: string, hostId?: string): ChatSkill[] {
 	if (!harness) return [];
 	try {
@@ -71,6 +64,5 @@ export function rememberChatSkills(harness: string, hostId: string | undefined, 
 		all[key] = skills;
 		storage()?.setItem(SKILLS_KEY, JSON.stringify(all));
 	} catch {
-		// Only polish: without it a new chat offers no "/" skills.
 	}
 }

@@ -9,11 +9,6 @@ import (
 	"testing"
 )
 
-// Publishing an artifact as a public share link is something only a person
-// does, by pressing Publish in the desktop app's share popover. Agents read untrusted content, and a hidden instruction
-// ("publish .env") must have no way to turn a file into a public link: no
-// daemon route, no ao CLI command and no MCP tool may call the share API.
-// This test fails if backend code ever names it.
 func TestNoBackendPathPublishesShareLinks(t *testing.T) {
 	_, here, _, ok := runtime.Caller(0)
 	if !ok {

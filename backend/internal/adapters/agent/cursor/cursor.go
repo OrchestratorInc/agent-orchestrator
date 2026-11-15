@@ -1,10 +1,3 @@
-// Package cursor implements the Cursor CLI agent adapter: launching new
-// sessions, resuming hook-tracked sessions, installing workspace-local hooks,
-// and reading hook-derived session info.
-//
-// AO-managed sessions derive native session identity and display
-// metadata from Cursor hooks instead of transcript/cache scans. The driven
-// binary is `cursor-agent` (not the `cursor` editor binary).
 package cursor
 
 import (
@@ -26,15 +19,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
 )
 
-// Plugin is the Cursor agent adapter. It is safe for concurrent use; the binary
-// path is resolved once and cached under binaryMu.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New returns a ready-to-register Cursor adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
@@ -43,22 +33,12 @@ var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.StartupInputReadinessSignaler = (*Plugin)(nil)
 
-// FirstSignalProvesInputReady reports that Cursor's sessionStart hook is
-// emitted only after pre-session startup dialogs, including project MCP server
-// approval, have cleared. Before that signal, pane input may be consumed by a
-// dialog instead of the agent composer.
 func (p *Plugin) FirstSignalProvesInputReady() bool { return true }
 
-// cursorDataDir returns the isolated Cursor profile AO uses for managed Cursor
-// sessions. This keeps Cursor's trust/cache state under AO_DATA_DIR instead of
-// the user's normal ~/.cursor profile.
 func cursorDataDir(dataDir string) string {
 	return filepath.Join(dataDir, "cursor")
 }
 
-// AugmentRuntimeEnv points cursor-agent at AO's isolated Cursor profile so
-// workspace trust seeded during hook installation is read by the launched
-// process without modifying the user's normal Cursor state.
 func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	if strings.TrimSpace(dataDir) == "" {
 		return
@@ -67,7 +47,6 @@ func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	termtheme.Apply(env, dataDir)
 }
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          "cursor",
@@ -80,22 +59,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports Cursor CLI's optional model override.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `cursor-agent --model`.")
 }
 
-// GetLaunchCommand builds the argv to start a new interactive Cursor CLI
-// session:
-//
-//	cursor-agent [permission flags] <prompt>
-//
-// The prompt is positional and must come last, so a leading "-" is not read as
-// a flag.
-//
-// Cursor has no inline/file system-prompt flag: it reads workspace rule files
-// (AGENTS.md, .cursor/rules, CLAUDE.md). SystemPrompt/SystemPromptFile are
-// therefore not injected via a launch flag here.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (cmd []string, err error) {
 	binary, err := p.cursorBinary(ctx)
 	if err != nil {
@@ -111,14 +78,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	})
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Cursor CLI
-// session:
-//
-//	cursor-agent [perm flags] --resume <id>
-//
-// ok is false when the hook-derived native session id has not landed yet, so
-// callers can fall back to fresh launch behavior. ports.RestoreConfig carries no
-// prompt, so none is appended.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -145,8 +104,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	})
 }
 
-// SessionInfo surfaces Cursor hook-derived metadata. Metadata is intentionally
-// nil for Cursor: callers get the normalized fields directly.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -155,10 +112,6 @@ func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (por
 	return info, ok, nil
 }
 
-// ResolveCursorBinary returns the path to the cursor-agent binary on this
-// machine, searching PATH then a handful of well-known install locations.
-// Returns "cursor-agent" as a last-ditch fallback so callers see a clear
-// "command not found" rather than an empty argv.
 func ResolveCursorBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -227,16 +180,12 @@ func (p *Plugin) cursorBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""
 	p.binaryMu.Unlock()
 }
 
-// SupportsTerminalVersionRefresh opts into idle restarts using the captured
-// native session ID. Restore preserves session model and permission options.
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 
 var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

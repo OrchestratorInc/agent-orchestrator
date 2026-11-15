@@ -7,9 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 
-// Real DndContext (Sidebar.test.tsx mocks it): proves session rows are wired to
-// dnd-kit's KeyboardSensor with Space only, leaving Enter and F2 to the row.
-
 const { getMock, navigateMock } = vi.hoisted(() => ({ getMock: vi.fn(), navigateMock: vi.fn() }));
 
 vi.mock("motion/react", async (importOriginal) => {

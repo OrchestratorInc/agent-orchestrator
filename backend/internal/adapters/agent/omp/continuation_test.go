@@ -74,17 +74,11 @@ func TestOMPLocatePreservesCancellation(t *testing.T) {
 	}
 }
 
-// TestOMPSessionDir pins the folder encoder empirically derived from omp
-// 18.14.0 (the binary ships no source). Paths below do not exist, so symlink
-// resolution falls back to the cleaned path and the result is deterministic.
 func TestOMPSessionDir(t *testing.T) {
 	const home = "/synthetic-home/user"
 	cases := []struct{ cwd, want string }{
-		// Under $HOME: strip the home prefix, "/"->"-", no wrapping dashes.
 		{home + "/.ao/data/worktrees/proj/sess-1", "-.ao-data-worktrees-proj-sess-1"},
-		// Dots, caps, underscores and dashes are preserved.
 		{home + "/.ao/dot.ted/Caps_And-Dash", "-.ao-dot.ted-Caps_And-Dash"},
-		// Not under $HOME: wrap "--" + path without leading "/" + "--".
 		{"/private/tmp/ao/wt/proj/sess-2", "--private-tmp-ao-wt-proj-sess-2--"},
 	}
 	for _, c := range cases {
@@ -94,9 +88,6 @@ func TestOMPSessionDir(t *testing.T) {
 	}
 }
 
-// TestOMPSessionDirResolvesSymlinks pins that the folder name is built from the
-// symlink-resolved path (OMP names the folder from the resolved cwd, while the
-// session record keeps the raw launch path, as the relocation test covers).
 func TestOMPSessionDirResolvesSymlinks(t *testing.T) {
 	base := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(base, "resolved-target", "sub"), 0o755); err != nil {
@@ -106,7 +97,6 @@ func TestOMPSessionDirResolvesSymlinks(t *testing.T) {
 	if err := os.Symlink(filepath.Join(base, "resolved-target"), link); err != nil {
 		t.Fatal(err)
 	}
-	// A cwd reached through the symlink must encode the real target, not the link.
 	got := ompSessionDir("/synthetic-home/user", filepath.Join(link, "sub"))
 	if !strings.Contains(got, "resolved-target") || strings.Contains(got, "symlink-name") {
 		t.Fatalf("ompSessionDir did not resolve symlinks: %q", got)
@@ -133,12 +123,10 @@ func TestOMPLocateAndProbe(t *testing.T) {
 	if err != nil || avail != ports.NativeSessionAvailabilityAvailable {
 		t.Fatalf("ProbeNativeSession = %v, %v; want available", avail, err)
 	}
-	// An unknown id is not available.
 	missing := ports.NativeSessionRef{NativeSessionID: "00000000-0000-7000-8000-000000000000", ConfigDir: root}
 	if avail, _ := p.ProbeNativeSession(context.Background(), missing); avail != ports.NativeSessionAvailabilityUnavailable {
 		t.Fatalf("ProbeNativeSession(missing) = %v, want unavailable", avail)
 	}
-	// A missing config dir is Unknown, never Unavailable.
 	if avail, _ := p.ProbeNativeSession(context.Background(), ports.NativeSessionRef{NativeSessionID: ompTestID}); avail != ports.NativeSessionAvailabilityUnknown {
 		t.Fatalf("ProbeNativeSession(no config dir) = %v, want unknown", avail)
 	}
@@ -146,13 +134,10 @@ func TestOMPLocateAndProbe(t *testing.T) {
 
 func TestOMPNativeSessionConfigDir(t *testing.T) {
 	p := New()
-	// Explicit override wins.
 	dir, err := p.NativeSessionConfigDir(context.Background(), map[string]string{ompConfigDirEnv: "/custom/omp"})
 	if err != nil || dir != "/custom/omp" {
 		t.Fatalf("override config dir = %q, %v", dir, err)
 	}
-	// Default is ~/.omp/agent, resolved from the env HOME. Neutralize any
-	// PI_CODING_AGENT_DIR exported on the runner so the default path is exercised.
 	t.Setenv(ompConfigDirEnv, "")
 	dir, err = p.NativeSessionConfigDir(context.Background(), map[string]string{"HOME": "/synthetic-home/user"})
 	if err != nil || dir != filepath.Join("/synthetic-home/user", ".omp", "agent") {

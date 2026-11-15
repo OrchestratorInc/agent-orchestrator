@@ -8,9 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestRegistryMatchesDomainVocabulary enforces that the shipped reviewer
-// adapters and domain.AllReviewerHarnesses stay in sync: every registered
-// adapter is a known reviewer harness, and every known harness has an adapter.
 func TestRegistryMatchesDomainVocabulary(t *testing.T) {
 	registered := map[domain.ReviewerHarness]bool{}
 	oneShotReviewers := map[domain.ReviewerHarness]bool{
@@ -107,8 +104,6 @@ type cachingReviewer struct {
 
 func (r *cachingReviewer) InvalidateBinaryResolution() { r.invalidated++ }
 
-// Reviewers launch through worker plugins of their own; an install must clear
-// their cached executable too, or new reviews keep running the old binary.
 func TestResolverInvalidatesOneReviewersBinary(t *testing.T) {
 	codex, claude := &cachingReviewer{}, &cachingReviewer{}
 	resolver := &Resolver{reviewers: map[domain.ReviewerHarness]ports.Reviewer{
@@ -123,7 +118,6 @@ func TestResolverInvalidatesOneReviewersBinary(t *testing.T) {
 	}
 }
 
-// Every reviewer built on a caching worker plugin forwards the invalidation.
 func TestCachingReviewersForwardBinaryInvalidation(t *testing.T) {
 	for _, harness := range []domain.ReviewerHarness{
 		domain.ReviewerClaudeCode, domain.ReviewerCodex, domain.ReviewerCopilot, domain.ReviewerCursor,

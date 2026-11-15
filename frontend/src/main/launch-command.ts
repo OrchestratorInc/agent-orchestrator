@@ -13,8 +13,6 @@ function spawnSpec(
 	platform: NodeJS.Platform,
 	env: NodeJS.ProcessEnv,
 ): { command: string; args: readonly string[]; windowsVerbatimArguments?: boolean } {
-	// Direct cmd.exe launches already contain cmd-quoted command strings.
-	// Node's default CRT escaping adds backslashes that cmd.exe treats literally.
 	if (platform === "win32" && path.win32.basename(command).toLowerCase() === "cmd.exe") {
 		return { command, args, windowsVerbatimArguments: true };
 	}
@@ -29,9 +27,6 @@ function spawnSpec(
 	};
 }
 
-// A successful spawn alone is not a successful handoff: a CLI shim can start
-// and immediately exit non-zero. Wait briefly for that deterministic failure;
-// a still-running GUI process is detached after the settling window.
 export function launchCommand(
 	command: string,
 	args: readonly string[],

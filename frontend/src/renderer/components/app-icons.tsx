@@ -1,12 +1,3 @@
-// App-wide icon set. Icons come from Myna UI (@mynaui/icons-react). The few
-// Myna doesn't draw yet fall back to lucide at Myna's 1.5 stroke so they sit
-// in the same visual family. Import icons from here, never from either
-// library directly, so the whole app switches sets in one place.
-//
-// Every icon carries an `icon icon-<name>` class (e.g. `icon-folder-open`)
-// that tests and styles can target without depending on the library.
-//
-// Generated from the lucide names the app used; add new icons by hand.
 import { forwardRef, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from "react";
 import {
 	Activity as MynaActivity,
@@ -227,18 +218,12 @@ import { cn } from "../lib/utils";
 export type AppIconProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
 	size?: number | string;
 	strokeWidth?: number | string;
-	/** Lucide-only; accepted for compatibility and ignored by Myna icons. */
 	absoluteStrokeWidth?: boolean;
 };
 export type AppIcon = ForwardRefExoticComponent<AppIconProps & RefAttributes<SVGSVGElement>>;
 
 const STROKE = 1.5;
 
-// Myna draws inside an 18-unit frame (3-21) while lucide uses 20 (2-22), so
-// at the same CSS size Myna glyphs read about 10% smaller than lucide ones.
-// Crop the viewBox to Myna's frame so both libraries render at one optical
-// size, and thin the stroke by the same ratio so line weight stays at 1.5px
-// per 24px. Glyphs that already fill the box (wide clouds, messages) opt out.
 const MYNA_CROP = 21.6 / 24;
 const MYNA_VIEWBOX = "1.2 1.2 21.6 21.6";
 
@@ -319,7 +304,6 @@ export const CircleX = fromMyna(MynaXCircle, "circle-x");
 export const ClipboardCheck = fromLucide(LucideClipboardCheck, "clipboard-check");
 export const Clock = fromMyna(MynaClockCircle, "clock");
 export const Clock3 = fromMyna(MynaClock3, "clock-3");
-// Myna's plain Cloud is an open arc that reads as clipped; Cloudy is closed.
 export const Cloud = fromMyna(MynaCloudy, "cloud", "full");
 // Filled single cloud for the small Cloud mark on rows; solid glyphs ignore stroke.
 export const CloudFilled = fromMyna(MynaCloudSolid, "cloud-filled", "full");
@@ -495,12 +479,10 @@ export const XCircle = fromMyna(MynaXCircle, "xcircle");
 export const XIcon = fromMyna(MynaX, "x", "full");
 export const Zap = fromMyna(MynaZap, "zap");
 
-// Added by hand (no lucide equivalent was in use): inspector tab icons.
 export const Chat = fromMyna(MynaChat, "chat");
 export const CheckWaves = fromMyna(MynaCheckWaves, "check-waves", "full");
 export const Package = fromMyna(MynaPackage, "package");
 
-// Added for screens that landed on main after the port.
 export const Building2 = fromMyna(MynaBuilding, "building-2", "full");
 export const Mail = fromMyna(MynaMail, "mail", "full");
 export const Rows2 = fromMyna(MynaRows, "rows-2");

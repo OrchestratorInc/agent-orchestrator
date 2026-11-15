@@ -20,10 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// SessionTurns returns every turn AO holds for a session, oldest first: the
-// completed Chat exchanges merged by time with the stored Terminal UI turns.
-// A turn is written to one of the two stores only, so merging never repeats it.
-// A session that has never been in Chat simply has no conversation.
 func (s *Service) SessionTurns(ctx context.Context, id domain.SessionID) ([]domain.HandoffTurn, error) {
 	var turns []domain.HandoffTurn
 	conversation, err := s.store.ConversationForSession(ctx, id)
@@ -47,14 +43,6 @@ func (s *Service) SessionTurns(ctx context.Context, id domain.SessionID) ([]doma
 	return turns, nil
 }
 
-// chatHandoffTurns reduces a conversation to one request and one final response
-// per completed turn. A request is what a person typed or what was sent to the
-// session through AO; the daemon's own messages are not requests.
-//
-// Each turn is credited to the provider that answered it: the one the newest
-// switch marker before it brought in. Turns before the first marker were the
-// first source's. Sequences are the conversation's, so an edit's new branch,
-// whose turns come after the marker of the agent it runs on, is credited too.
 func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.ConversationMessage, activities []domain.ConversationActivity) []domain.HandoffTurn {
 	type marker struct {
 		sequence int64
@@ -123,9 +111,6 @@ func chatHandoffTurns(turns []domain.ConversationTurn, messages []domain.Convers
 	return out
 }
 
-// HandoffNote builds the note a provider receives when it takes over record's
-// session. It reads AO's own stores and the workspace only: no provider is
-// asked to summarise, and nothing is written.
 func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (string, error) {
 	input, err := s.handoffNoteInput(ctx, record, target, switchID)
 	if err != nil {
@@ -135,11 +120,6 @@ func (s *Service) HandoffNote(ctx context.Context, record domain.SessionRecord, 
 	return domain.BuildHandoffNote(input), nil
 }
 
-// ForkHandoffNote builds the note a text-handoff fork's fresh agent starts
-// with: source's conversation as AO recorded it, pointed at the fork's own
-// worktree and artifact folder. terminalOutput is the end of source's
-// terminal screen, for a terminal session. A non-zero upTo leaves out turns
-// asked after it, so the note stops at the turn the fork copies.
 func (s *Service) ForkHandoffNote(ctx context.Context, source domain.SessionRecord, target ports.ForkTarget, terminalOutput string, upTo time.Time) (string, error) {
 	input, err := s.handoffNoteInput(ctx, source, source.Harness, "")
 	if err != nil {
@@ -155,17 +135,12 @@ func (s *Service) ForkHandoffNote(ctx context.Context, source domain.SessionReco
 		input.Turns = kept
 	}
 	input.Fork = &domain.HandoffFork{SourceSessionID: source.ID, SourceTitle: sessionfork.Title(source)}
-	// The fork's own name, worktree, and branch are in its standing
-	// instructions; the original's would send it to the wrong place.
 	input.SessionTitle, input.Branch = "", ""
 	input.WorkspacePath = target.WorkspacePath
 	if target.SessionID != "" {
 		input.ArtifactDir = filepath.ToSlash(sessionartifacts.Dir(s.dataDir, target.SessionID))
 	}
 	input.TerminalOutput = terminalOutput
-	// A source that was itself a text-copy fork keeps its conversation from
-	// before it in its saved note, not in its own turns. A terminal source
-	// may have no conversation at all.
 	conversation, err := s.store.ConversationForSession(ctx, source.ID)
 	switch {
 	case errors.Is(err, domain.ErrNoConversation):
@@ -178,13 +153,10 @@ func (s *Service) ForkHandoffNote(ctx context.Context, source domain.SessionReco
 		}
 		input.Inherited = branch.HandoffNote
 	}
-	// The fork starts with the same uncommitted changes.
 	input.ChangedFiles = handoffChangedFiles(ctx, source.Metadata.WorkspacePath, source.Metadata.DiffBaseSHA)
 	return domain.BuildHandoffNote(input), nil
 }
 
-// handoffNoteInput is the note's input without the changed files, which need
-// git and can run while the outgoing provider stops.
 func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRecord, target domain.AgentHarness, switchID string) (domain.HandoffNoteInput, error) {
 	turns, err := s.SessionTurns(ctx, record.ID)
 	if err != nil {
@@ -209,8 +181,6 @@ func (s *Service) handoffNoteInput(ctx context.Context, record domain.SessionRec
 	}, nil
 }
 
-// handoffArtifacts returns the session's artifact directory and its files,
-// most recently updated first. A directory that cannot be read lists none.
 func (s *Service) handoffArtifacts(ctx context.Context, record domain.SessionRecord) (string, []domain.SessionArtifactFile) {
 	dir := cmp.Or(record.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, record.ID))
 	files, err := sessionartifacts.List(ctx, dir)
@@ -222,9 +192,6 @@ func (s *Service) handoffArtifacts(ctx context.Context, record domain.SessionRec
 	return filepath.ToSlash(dir), files
 }
 
-// SessionHistory returns one page of a session's turns, newest first, with the
-// total number AO holds. It backs `ao session history`, which lets the agent
-// that took over read what the handoff note left out.
 func (s *Service) SessionHistory(ctx context.Context, id domain.SessionID, offset, limit int) ([]domain.HandoffTurn, int, error) {
 	if _, found, err := s.sessions.GetSession(ctx, id); err != nil {
 		return nil, 0, err
@@ -243,10 +210,6 @@ func (s *Service) SessionHistory(ctx context.Context, id domain.SessionID, offse
 	return page, total, nil
 }
 
-// handoffChangedFiles lists what the session changed in its workspace: tracked
-// files that differ from the diff base, then untracked ones. It is the note's
-// view of what is on disk, since tool calls are not carried. A workspace git
-// cannot read yields no list; that must never block a switch.
 func handoffChangedFiles(ctx context.Context, workspace, base string) []string {
 	if strings.TrimSpace(workspace) == "" {
 		return nil
@@ -262,7 +225,6 @@ func handoffChangedFiles(ctx context.Context, workspace, base string) []string {
 		globalArgs := []string{"--no-pager", "--no-optional-locks", "-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false", "-C", workspace}
 		cmd := aoprocess.CommandContext(ctx, "git", append(globalArgs, args...)...)
 		cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
-		// A child git leaves holding the pipe open must not stretch the timeout.
 		cmd.WaitDelay = time.Second
 		out, err := cmd.Output()
 		if err != nil {

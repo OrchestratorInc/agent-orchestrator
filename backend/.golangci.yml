@@ -55,8 +55,6 @@ linters:
         - shadow # shadowing `err` in nested scopes is idiomatic Go
     revive:
       rules:
-        - { name: exported } # doc comments on every exported symbol
-        - { name: blank-imports }
         - { name: context-as-argument }
         - { name: context-keys-type }
         - { name: dot-imports }

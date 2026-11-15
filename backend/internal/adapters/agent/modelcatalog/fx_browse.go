@@ -22,9 +22,6 @@ func fxSettingsPath(env map[string]string) string {
 	return filepath.Join(catalogHome(env), ".fx", "settings.json")
 }
 
-// FX's subscription catalogs are account-specific. The shared catalog includes
-// every connection and keeps each connection in its selectable model IDs.
-// FX_PROVIDER is process-local and never changes the user's saved selection.
 func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryRequest, run fxCatalogRunner) (ports.AgentModelCatalog, error) {
 	result := Base("fx")
 	result.Source = "cli"
@@ -79,10 +76,6 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 	var status struct {
 		ConnectedProviders []string `json:"connected_providers"`
 	}
-	// A built-in connection is set up when FX reports it connected, it is an
-	// explicitly selected provider, or it has a saved model. Gateway is FX's
-	// default. Listing fails for connections the user never set up (Grok without
-	// a selected model, for example); that is not worth a warning.
 	workingDir := request.WorkingDir
 	if workingDir == "" {
 		workingDir = "."
@@ -93,12 +86,9 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 			workspace = settings.Workspaces[canonical]
 		}
 	}
-	// FX_MODEL uses the selected provider (or gateway); only FX_PROVIDER can
-	// select another connection. Read the same merged environment as the CLI.
 	setUp := map[string]bool{"gateway": true, envValue(request.Env, "FX_PROVIDER"): true}
 	for _, selection := range []modelSelection{settings.modelSelection, workspace} {
 		setUp[selection.Provider] = true
-		// FX still reads the legacy keys; entries in models take precedence.
 		savedModels := map[string]string{"codex": selection.CodexModel, "grok": selection.GrokModel}
 		for provider, model := range selection.Models {
 			savedModels[provider] = model
@@ -122,8 +112,6 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 		}
 	}
 
-	// Only the three built-ins need live discovery. Custom connections declare
-	// their model catalog in profile settings. Run at most three bounded commands.
 	type providerResult struct {
 		models []ports.AgentModelInfo
 		failed bool
@@ -173,8 +161,6 @@ func discoverFXCatalog(ctx context.Context, request ports.AgentModelDiscoveryReq
 		result.Metadata = map[string]string{"unavailableProviders": strings.Join(unavailable, ",")}
 		result.Warning = "FX could not list models for: " + strings.Join(unavailable, ", ") + ". Previously cached models may be shown; check that provider's login or connection."
 	}
-	// Preserve native model strings exactly, including whitespace. Only order
-	// the connection-qualified choices; generic normalization trims IDs.
 	sort.SliceStable(result.Models, func(i, j int) bool {
 		left, right := strings.ToLower(result.Models[i].Label), strings.ToLower(result.Models[j].Label)
 		if left != right {

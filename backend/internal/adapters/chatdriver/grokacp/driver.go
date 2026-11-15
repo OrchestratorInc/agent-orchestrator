@@ -1,4 +1,3 @@
-// Package grokacp binds the user's Grok Build installation to AO's ACP Chat transport.
 package grokacp
 
 import (
@@ -13,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches the executable resolved by the Grok agent plugin. Grok keeps
-// ownership of its cached login, model catalog, and native session history.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness: domain.HarnessGrok,
@@ -30,9 +27,6 @@ func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	if cfg.DisableTools {
-		// Grok ACP has no verified way to remove every native tool. In
-		// particular, an empty agent-profile tool list still enables defaults.
-		// Refuse text-only background calls before starting a native process.
 		return nil, nil, fmt.Errorf("%w: Grok ACP cannot disable native tools", ports.ErrChatCapabilityUnavailable)
 	}
 	if err := validateTurnSettings(cfg.Permissions, ports.ChatTurnSettings{Approval: cfg.Permissions}); err != nil {
@@ -40,8 +34,6 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	}
 	args := []string{"agent"}
 	if ports.NormalizePermissionMode(cfg.Permissions) == ports.PermissionModeBypassPermissions {
-		// Only explicit bypass disables Grok's command review. Auto uses the
-		// native reviewer via session metadata, matching the TUI's auto mode.
 		args = append(args, "--always-approve")
 	}
 	return append(args, "stdio"), nil, nil
@@ -65,8 +57,6 @@ func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnS
 	return nil
 }
 
-// Grok advertises these config options alongside its legacy models block.
-// Use session/set_config_option so a model switch returns the rebuilt catalog.
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	var options []acpdriver.SessionOption
 	if model := strings.TrimSpace(settings.Model); model != "" {
@@ -78,8 +68,6 @@ func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
 	return options
 }
 
-// Grok reads these ACP extensions for native command review and system rules.
-// The transport also sends them when loading or resuming a native session.
 func sessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	var meta map[string]any
 	if ports.NormalizePermissionMode(cfg.Permissions) == ports.PermissionModeAuto {

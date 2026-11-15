@@ -45,8 +45,6 @@ func testResponse(status int, etag, body string) *http.Response {
 	}
 }
 
-// Even syntactically complete JSON is unusable when the transport reports
-// that its response body was not read successfully.
 func TestResponseReadFailure(t *testing.T) {
 	for _, operation := range []string{"external_etag", "merge", "get", "pagination"} {
 		for _, status := range []int{200, 304, 401, 403, 404, 409, 429, 500} {

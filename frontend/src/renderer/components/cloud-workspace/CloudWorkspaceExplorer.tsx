@@ -41,13 +41,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const { client, ready, baseUrl } = useCloudCp();
 	const orgId = session.cloud?.orgId;
 	const enabled = ready && orgId !== undefined;
-	// Only a connected worker answers for its files: a waking session's worker
-	// refuses every request, so the summary is not polled until it is back.
-	// What was read before stays on screen meanwhile.
 	const workerConnected = session.runtimeConnected === true;
-	// A worker that will not come back (the session was deleted, or AO gave up
-	// starting it) never answers. With nothing read before, the panel says so,
-	// with Retry to start the session again, instead of loading forever.
 	const startupProblem = cloudStartupProblem(session);
 	const workerGone = !workerConnected &&
 		(session.isTerminated === true || startupProblem?.phase === "failed" || startupProblem?.phase === "unavailable");
@@ -98,7 +92,6 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 		}
 		return result;
 	}, [summaryQuery.data]);
-	// A sibling's file opens as ../<repository>/<path>, so its tab and calls stay with that repository.
 	const open = (path: string, options?: CloudFileOpenOptions) => {
 		const fullPath = joinWorkspaceRepositoryPath(activeRepository || undefined, path);
 		setReviewUi(session.id, activeRepository, { selectedPath: fullPath });
@@ -123,7 +116,6 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 			{switchable ? <div aria-label={t("files.repositories", { defaultValue: "Repositories" })} className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1" role="tablist">
 				{[...repositories].sort((a, b) => Number(Boolean(b.main)) - Number(Boolean(a.main))).map((entry) => {
 					const value = entry.main ? "" : entry.name;
-					// The main checkout's folder is the provider's fixed name; label it with the repository's own.
 					const label = entry.label || entry.name;
 					const selected = value === activeRepository;
 					return <Button aria-selected={selected} data-active={selected} role="tab" className="font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(session.id, value); setReviewUi(session.id, value, { filter: "" }); }} size="xs" title={entry.present ? entry.repository ?? label : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: label })} variant="ghost">{label}</Button>;

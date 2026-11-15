@@ -32,8 +32,6 @@ func aiderPreparationFor(ctx context.Context, r ports.ImportedSessionRelocation)
 	return aiderPreparation{Source: filepath.Clean(r.TranscriptPath), ID: r.NativeSessionID, CWD: cwd, Fingerprint: r.SourceFingerprint}, nil
 }
 
-// A proven copy can outlive its original even when checkpoint persistence failed.
-// Only the private workspace is read; source identity comes from the selection.
 func recoverAiderPreparation(ctx context.Context, root *os.Root, r ports.ImportedSessionRelocation) (bool, error) {
 	if r.SourceFingerprint == "" {
 		return false, nil

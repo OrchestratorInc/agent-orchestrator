@@ -55,9 +55,6 @@ func TestGetLaunchCommandBuildsArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Kilo has no system-prompt flag, so AO injects a generated agent through
-	// KILO_CONFIG_CONTENT and selects it with --agent. bypass-permissions shares
-	// that env payload because the TUI has no permission flag.
 	want := []string{
 		"env", `KILO_CONFIG_CONTENT={"permission":{"*":"allow"},"agent":{"ao-sess-1":{"prompt":"follow AO rules"}}}`,
 		"kilocode",
@@ -99,9 +96,7 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 	tests := []struct {
 		name       string
 		permission ports.PermissionMode
-		// wantEnv is the expected KILO_CONFIG_CONTENT value, or "" when the mode
-		// emits no env prefix at all (defers entirely to Kilo's own config).
-		wantEnv string
+		wantEnv    string
 	}{
 		{name: "default", permission: ports.PermissionModeDefault, wantEnv: ""},
 		{name: "accept-edits", permission: ports.PermissionModeAcceptEdits, wantEnv: `{"permission":{"edit":"allow"}}`},
@@ -117,8 +112,6 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// A permission FLAG must never leak onto the interactive TUI launch;
-			// those exist only on `kilo run` (--auto).
 			if contains(cmd, "--auto") {
 				t.Fatalf("command %#v contains run-only --auto", cmd)
 			}
@@ -128,7 +121,6 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 				}
 				return
 			}
-			// Non-default modes prepend `env KILO_CONFIG_CONTENT=<json>`.
 			want := "KILO_CONFIG_CONTENT=" + tt.wantEnv
 			if len(cmd) < 3 || cmd[0] != "env" || cmd[1] != want || cmd[2] != "kilocode" {
 				t.Fatalf("command %#v must be prefixed with `env %s`", cmd, want)
@@ -144,15 +136,12 @@ func TestGetLaunchCommandAppendsConfiguredModel(t *testing.T) {
 		Permissions:  ports.PermissionModeBypassPermissions,
 		SystemPrompt: "follow AO rules",
 		SessionID:    "sess-1",
-		// Surrounding whitespace must be trimmed before it reaches the config.
-		Config: ports.AgentConfig{Model: "  anthropic/claude-haiku-4-20250514  "},
+		Config:       ports.AgentConfig{Model: "  anthropic/claude-haiku-4-20250514  "},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The role model rides on the AO-generated agent (agent.<name>.model),
-	// alongside the injected system prompt, selected with --agent.
 	want := []string{
 		"env", `KILO_CONFIG_CONTENT={"permission":{"*":"allow"},"agent":{"ao-sess-1":{"prompt":"follow AO rules","model":"anthropic/claude-haiku-4-20250514"}}}`,
 		"kilocode",
@@ -166,9 +155,6 @@ func TestGetLaunchCommandAppendsConfiguredModel(t *testing.T) {
 	}
 }
 
-// TestGetLaunchCommandAppendsModelWithoutSystemPrompt is the issue's repro: a
-// role config with a model but no system prompt. The model must still create and
-// select an AO agent, otherwise --agent is never passed and the model is dropped.
 func TestGetLaunchCommandAppendsModelWithoutSystemPrompt(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "kilocode"}
 
@@ -201,7 +187,6 @@ func TestGetLaunchCommandOmitsBlankConfiguredModel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A blank model must not fabricate an agent, an --agent flag, or an env prefix.
 	want := []string{"kilocode"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
@@ -243,7 +228,6 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "kilocode"}
 	workspace := t.TempDir()
 
-	// A user's own plugin in the same dir must survive AO's install untouched.
 	pluginDir := filepath.Dir(kilocodePluginPath(workspace))
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -259,7 +243,6 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must be idempotent (overwrite with identical content).
 	if err := plugin.GetAgentHooks(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -276,25 +259,17 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if !strings.Contains(body, kilocodePluginSentinel) {
 		t.Fatalf("installed plugin missing AO sentinel:\n%s", body)
 	}
-	// Every normalized activity event must be wired via `ao hooks kilocode <event>`.
 	for _, event := range kilocodeManagedEvents {
 		want := kilocodeHookCommandPrefix + event
 		if !strings.Contains(body, want) {
 			t.Fatalf("installed plugin missing hook command %q:\n%s", want, body)
 		}
 	}
-	// The Kilo-native lifecycle surfaces the plugin subscribes to. Stop maps to
-	// session.status(idle) — NOT the deprecated session.idle — the user prompt is
-	// detected from message.updated/message.part.updated, and permission requests
-	// from the permission.ask hook.
 	for _, marker := range []string{"session.created", "message.updated", "message.part.updated", "session.status", "permission.ask"} {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("installed plugin missing Kilo event %q:\n%s", marker, body)
 		}
 	}
-	// Guard against regressing back to subscribing to the deprecated/unreliable
-	// session.idle event (the quoted event string is how a `case` would name it;
-	// the explanatory comment mentions it unquoted, which is fine).
 	if strings.Contains(body, `"session.idle"`) {
 		t.Fatalf("plugin subscribes to deprecated session.idle; use session.status(idle):\n%s", body)
 	}
@@ -306,13 +281,10 @@ func TestGetAgentHooksInstallsPlugin(t *testing.T) {
 	if strings.Contains(body, "value?.session_id ?? value?.id") {
 		t.Fatalf("readSessionID must not fall back to generic object id:\n%s", body)
 	}
-	// A hung `ao hooks` call must not block Kilo forever, so each spawn is
-	// time-boxed (parity with the claude/codex 30s hook timeout).
 	if !strings.Contains(body, "timeout:") {
 		t.Fatalf("plugin spawn has no timeout; a hung hook would block Kilo:\n%s", body)
 	}
 
-	// The user's plugin is untouched.
 	got, err := os.ReadFile(userPlugin)
 	if err != nil {
 		t.Fatalf("user plugin removed by install: %v", err)
@@ -327,7 +299,6 @@ func TestGetAgentHooksRefusesToClobberForeignFile(t *testing.T) {
 	workspace := t.TempDir()
 	ctx := context.Background()
 
-	// A non-AO file occupying AO's exact path must NOT be silently overwritten.
 	pluginPath := kilocodePluginPath(workspace)
 	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -356,7 +327,6 @@ func TestUninstallHooksRemovesPlugin(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own plugin; it must survive uninstall.
 	pluginDir := filepath.Dir(kilocodePluginPath(workspace))
 	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -392,7 +362,6 @@ func TestUninstallHooksLeavesForeignFile(t *testing.T) {
 	workspace := t.TempDir()
 	ctx := context.Background()
 
-	// A non-AO file occupying AO's filename must NOT be deleted by uninstall.
 	pluginPath := kilocodePluginPath(workspace)
 	if err := os.MkdirAll(filepath.Dir(pluginPath), 0o755); err != nil {
 		t.Fatal(err)
@@ -485,7 +454,6 @@ func TestGetRestoreCommandAppendsConfiguredModel(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	// Resume re-injects the role model on the AO agent, mirroring launch.
 	want := []string{
 		"env", `KILO_CONFIG_CONTENT={"agent":{"ao-sess-1":{"model":"anthropic/claude-haiku-4-20250514"}}}`,
 		"kilocode",
@@ -605,10 +573,6 @@ func TestContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// These methods check ctx.Err() before doing any work, so a cancelled
-	// context surfaces as an error. (GetLaunchCommand resolves the binary first,
-	// whose own ctx check is short-circuited by the cached resolvedBinary, so it
-	// is intentionally not asserted here — matching the codex/opencode exemplars.)
 	plugin := &Plugin{resolvedBinary: "kilocode"}
 	if _, err := plugin.GetPromptDeliveryStrategy(ctx, ports.LaunchConfig{}); err == nil {
 		t.Fatal("GetPromptDeliveryStrategy: want ctx error, got nil")

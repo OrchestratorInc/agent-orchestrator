@@ -26,9 +26,6 @@ func TestUseStableExecutableKeepsDurableInstallsOnTheirOwnPath(t *testing.T) {
 	}
 }
 
-// TestUseStableExecutableFollowsTheAppImageMount covers an AppImage restart:
-// the link a session pinned last launch points at the old, gone mount, and the
-// new daemon moves it to its own, so that session reaches the running app.
 func TestUseStableExecutableFollowsTheAppImageMount(t *testing.T) {
 	t.Cleanup(func() { stableExecutable.Store(nil) })
 	dataDir := t.TempDir()
@@ -53,7 +50,6 @@ func TestUseStableExecutableFollowsTheAppImageMount(t *testing.T) {
 	if got, err := Executable(); err != nil || got != link {
 		t.Fatalf("Executable() = %q, %v; want the stable link %q", got, err, link)
 	}
-	// Sessions pin the link's directory, which holds nothing but ao.
 	if got := PinnedDir(Executable, dataDir); got != filepath.Dir(link) {
 		t.Fatalf("PinnedDir = %q, want %q", got, filepath.Dir(link))
 	}

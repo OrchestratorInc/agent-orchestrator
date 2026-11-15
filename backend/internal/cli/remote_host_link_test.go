@@ -19,20 +19,15 @@ const (
 	linkQuickHost   = "quick.trycloudflare.com"
 )
 
-// linkFixture fakes the three parties of `ao remote-host link`: the local
-// daemon, WorkOS's device sign-in, and AO Cloud's account machine list.
 type linkFixture struct {
-	mu sync.Mutex
-	// Daemon.
+	mu                                   sync.Mutex
 	enabled, loopbackOnly, tunnel, fixed bool
-	// AO Cloud.
-	listed           string // JSON for the account's hosts
-	fixedAddresses   bool
-	refuseWithoutURL string // "<status> <code>" AO Cloud answers a registration without url
-	connectorStuck   bool   // never gets its fixed address
-	registrations    []map[string]string
-	// WorkOS answers to each poll; the last one repeats.
-	polls []string
+	listed                               string
+	fixedAddresses                       bool
+	refuseWithoutURL                     string
+	connectorStuck                       bool
+	registrations                        []map[string]string
+	polls                                []string
 }
 
 func (f *linkFixture) run(t *testing.T, deps Deps, args ...string) (string, error) {
@@ -125,7 +120,6 @@ func (f *linkFixture) cloud(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.WriteString(w, `{"code":"`+code+`"}`)
 			return
 		}
-		// Listed without an address, the machine's connector gets its fixed one.
 		f.fixed = registration["url"] == "" && !f.connectorStuck
 		w.WriteHeader(http.StatusNoContent)
 	default:
@@ -160,8 +154,6 @@ func (f *linkFixture) workos(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// fakeClock advances only when the command sleeps, so waits and expiry
-// run instantly.
 type fakeClock struct{ now time.Time }
 
 func (c *fakeClock) deps() Deps {
@@ -196,8 +188,6 @@ func TestRemoteHostLinkSignsInAndListsTheMachineInTheAccount(t *testing.T) {
 		"Address: https://"+linkFixedHost, "Cloudflare terminates TLS")
 }
 
-// AO Cloud answers 409, 429 or 502 when it cannot make the fixed address; a
-// registration with url still lists the machine (#7294, #7976).
 func TestRemoteHostLinkUsesTheQuickTunnelWhenAOCloudCannotMakeTheFixedAddress(t *testing.T) {
 	for _, refusal := range []string{"409 fixed_address_limit_reached", "429 tunnel_rate_limited", "502 tunnel_unavailable"} {
 		t.Run(refusal, func(t *testing.T) {
@@ -209,7 +199,6 @@ func TestRemoteHostLinkUsesTheQuickTunnelWhenAOCloudCannotMakeTheFixedAddress(t 
 			if len(f.registrations) != 2 || f.registrations[1]["url"] != "https://"+linkQuickHost {
 				t.Fatalf("registrations = %v, want a retry at the quick tunnel", f.registrations)
 			}
-			// The address the machine is listed at, not a wait for a fixed one that never comes.
 			wantOutput(t, out, `Linked "build-vm"`, "Address: https://"+linkQuickHost)
 			if strings.Contains(out, "not ready") {
 				t.Fatalf("output %q waited for a fixed address", out)
@@ -219,8 +208,6 @@ func TestRemoteHostLinkUsesTheQuickTunnelWhenAOCloudCannotMakeTheFixedAddress(t 
 }
 
 func TestRemoteHostLinkStartsTheTunnelOnALanOnlyMachine(t *testing.T) {
-	// LAN-only, on an AO Cloud without fixed addresses: the registration needs
-	// the tunnel's address, so link must start the tunnel first.
 	f := &linkFixture{enabled: true}
 	out, err := f.run(t, Deps{}, "--label", "build-vm")
 	if err != nil {
@@ -289,7 +276,6 @@ func TestRemoteHostLinkSaysWhenTheFixedAddressIsNotReadyYet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Listed in the account, so not a failure; the quick address is not the one to show.
 	wantOutput(t, out, `Linked "build-vm"`, "not ready yet")
 	if strings.Contains(out, linkQuickHost) {
 		t.Fatalf("output %q shows the quick tunnel as the address", out)

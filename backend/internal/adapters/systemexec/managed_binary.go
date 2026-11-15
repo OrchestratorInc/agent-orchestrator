@@ -19,16 +19,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// managedBinaryMaxBytes bounds a release download and an extracted binary.
-// cloudflared's largest asset is ~55 MB; the cap only stops a misbehaving
-// server from filling the disk.
 const managedBinaryMaxBytes = 256 << 20
 
-// InstallManagedBinary downloads a pinned release into AO's bin directory.
-// The bytes land in a private temp file beside the destination and are hashed
-// as they arrive. Only a file whose SHA-256 matches the pin is extracted, made
-// executable and renamed over the destination, so a partial or tampered
-// download never becomes runnable there.
 func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.ManagedBinaryDownload) (string, error) {
 	if !filepath.IsAbs(a.binDir) {
 		return "", errors.New("managed bin directory is not configured")
@@ -49,14 +41,11 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 
-	// A transfer that stops sending is given up, so a retry can run within
-	// the install's time.
 	stallAfter := cmp.Or(a.downloadStall, managedBinaryStallTimeout)
 	transferCtx, stalled := context.WithCancelCause(ctx)
 	defer stalled(nil)
 	stall := time.AfterFunc(stallAfter, func() { stalled(fmt.Errorf("%w: no data for %s", errDownloadStalled, stallAfter)) })
 	defer stall.Stop()
-	// A request the stall timer cut off fails with the stall, not "canceled".
 	stallCause := func(err error) error {
 		if cause := context.Cause(transferCtx); err != nil && errors.Is(cause, errDownloadStalled) {
 			return cause
@@ -70,8 +59,6 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 	hash := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tmp, hash), stallReader{stall, stallAfter, io.LimitReader(response.Body, managedBinaryMaxBytes+1)})
 	err = stallCause(err)
-	// Synced before the rename: a power loss must not leave a truncated
-	// binary in place, which nothing would download again.
 	if err = errors.Join(err, response.Body.Close(), tmp.Sync(), tmp.Close()); err != nil {
 		return "", fmt.Errorf("download %s: %w", download.Name, err)
 	}
@@ -101,8 +88,6 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 	return dest, nil
 }
 
-// extractTarGzMember copies the regular file named member out of an already
-// verified .tar.gz into a private temp file in dir and returns its path.
 func extractTarGzMember(ctx context.Context, archive, member, dir, name string) (string, error) {
 	file, err := os.Open(archive) //nolint:gosec // Daemon-created temp file.
 	if err != nil {
@@ -141,12 +126,10 @@ func extractTarGzMember(ctx context.Context, archive, member, dir, name string) 
 	}
 }
 
-// managedBinaryStallTimeout is how long a download may go without a byte.
 const managedBinaryStallTimeout = time.Minute
 
 var errDownloadStalled = errors.New("download stalled")
 
-// stallReader pushes the stall timer back on every read that brings data.
 type stallReader struct {
 	timer *time.Timer
 	after time.Duration
@@ -161,8 +144,6 @@ func (s stallReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// contextReader stops a copy once ctx ends: an install timeout or a daemon
-// shutdown must not wait out a long extraction.
 type contextReader struct {
 	ctx context.Context
 	r   io.Reader

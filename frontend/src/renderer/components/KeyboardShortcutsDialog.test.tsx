@@ -31,7 +31,6 @@ describe("KeyboardShortcutsDialog", () => {
 		for (const heading of ["General", "Navigation", "Session", "Panels", "Chat, terminal and browser"]) {
 			expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument();
 		}
-		// Header carries the dialog's own chord.
 		expect(screen.getByLabelText("Ctrl + /")).toBeInTheDocument();
 		expect(screen.getByLabelText("Ctrl + PageUp")).toBeInTheDocument();
 		expect(screen.getByLabelText("Ctrl + PageDown")).toBeInTheDocument();
@@ -43,7 +42,6 @@ describe("KeyboardShortcutsDialog", () => {
 		render(<KeyboardShortcutsDialog open onOpenChange={vi.fn()} isMac />);
 
 		for (const { id } of APP_SHORTCUTS) {
-			// Dictation and split panes are listed only in Developer mode, which is off here.
 			if (id === "keyboard-shortcuts" || id === "dictate" || isSplitPaneShortcut(id)) continue;
 			const label = enMessages[shortcutLabelKeys[id] as keyof typeof enMessages] as string;
 			expect(screen.getAllByText(label), `${id} (${label})`).toHaveLength(1);

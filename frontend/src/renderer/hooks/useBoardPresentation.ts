@@ -2,7 +2,6 @@ import { useShellMaybe } from "../lib/shell-context";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { useSystemRequirementsGate } from "./useSystemRequirementsGate";
 
-// Both header owners use the same readiness boundary as the board's center.
 export function useBoardPresentation({
 	projectId,
 	isSuccess,
@@ -24,7 +23,6 @@ export function useBoardPresentation({
 	const showStartup = shell !== null && !shell.daemonStatus.code && (
 		!isDaemonReady || workspaceStartupState === "loading" || (!isSuccess && !isError) || requirementsBlocked
 	);
-	// Browser previews fill an otherwise empty project with demo worker cards.
 	const hasVisibleWorkers = hasWorkerSessions || (usesPreviewWorkspaceData && hasProjects);
 	return {
 		isLoaded,

@@ -115,7 +115,6 @@ export const aoBridge: AoBridge =
 				return true;
 			},
 		},
-		// Outside the desktop app a made link is remembered for this page only.
 		sessionShareUrls: (() => {
 			const urls = new Map<string, string>();
 			return {
@@ -132,7 +131,6 @@ export const aoBridge: AoBridge =
 				},
 			};
 		})(),
-		// Publishing reads local files in the main process: desktop only.
 		cloudShare: {
 			available: async () => false,
 			inspect: async () => {
@@ -333,7 +331,7 @@ export const aoBridge: AoBridge =
 				list: async () => ({ downloads: [] }),
 				action: async () => ({ downloads: [] }),
 				clear: async () => ({ downloads: [] }),
-				onChanged: () => () => { /* preview has no native download events */ },
+				onChanged: () => () => { },
 			},
 			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
 			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
@@ -449,9 +447,6 @@ export const aoBridge: AoBridge =
 			list: async () => [],
 			getActive: async () => null,
 		},
-		// The daemon-served web build has no Electron bridge and so no access to
-		// ~/.ao/remotes.json. Reporting no hosts leaves the UI showing local only,
-		// which is the truth there.
 		remotes: {
 			list: async () => [],
 			syncAccountHosts: async () => undefined,

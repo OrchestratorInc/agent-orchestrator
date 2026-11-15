@@ -14,18 +14,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// asyncCommander behaves like an asynchronous Chat start: Spawn writes
-// "provisioning" through the observer on the request goroutine and answers;
-// the test then settles the start the way the background goroutine would.
 type asyncCommander struct {
 	*fakeCommander
-	observer sessionmanager.ProvisionObserver
-	clock    *fakeClock
-	answerIn time.Duration
-	// afterAsync is work between the provisioning write and the answer
-	// (attachments, the queued prompt).
-	afterAsync time.Duration
-	// settleDuringSpawn settles the start before Spawn answers (a fast start).
+	observer           sessionmanager.ProvisionObserver
+	clock              *fakeClock
+	answerIn           time.Duration
+	afterAsync         time.Duration
 	settleDuringSpawn  domain.SessionProvisionState
 	spawnErrAfterAsync error
 }
@@ -101,7 +95,7 @@ func TestAsyncChatSpawnReportsSpawnedOnlyWhenUsable(t *testing.T) {
 	}
 	cmd.clock.advance(9 * time.Second)
 	settle(cmd, domain.SessionProvisionReady, nil)
-	settle(cmd, domain.SessionProvisionReady, nil) // a repeated write settles nothing more
+	settle(cmd, domain.SessionProvisionReady, nil)
 	spawned := named(sink, "ao.sessions.spawned")
 	if len(spawned) != 1 {
 		t.Fatalf("spawned = %d, want exactly one", len(spawned))
@@ -134,7 +128,6 @@ func TestAsyncChatSpawnFailureKeepsFirstSessionClaimForTheRetry(t *testing.T) {
 		t.Fatal("a failed start must not report spawned or spend the first_for_install claim")
 	}
 
-	// The user retries the failed start: a new attempt, timed from the retry.
 	cmd.observer(context.Background(), domain.SessionRecord{ID: "chat-1", ProjectID: "mer"}, domain.SessionProvisionProvisioning, nil)
 	cmd.clock.advance(3 * time.Second)
 	settle(cmd, domain.SessionProvisionReady, nil)
@@ -161,14 +154,11 @@ func TestAsyncChatSpawnSettledBeforeAnswerReportsOnceWithTheAnswerTime(t *testin
 	if len(spawned) != 1 {
 		t.Fatalf("spawned = %d, want 1", len(spawned))
 	}
-	// Settled at 40ms; the request was answered at 65ms.
 	if p := spawned[0].Payload; p["duration_ms"] != int64(65) || p["spawn_duration_ms"] != int64(40) {
 		t.Fatalf("durations = %#v", p)
 	}
 }
 
-// Resolving the GitHub login can be a network call; an asynchronous start
-// must not wait for it before the agent launches, nor afterwards.
 func TestAsyncChatSpawnDoesNotLookUpGitHubIdentity(t *testing.T) {
 	svc, cmd, sink, _, _, identity := newAsyncSpawnServiceWithIdentity(t)
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
@@ -195,8 +185,6 @@ func TestAsyncChatSpawnErrorAfterGoingAsyncReportsOneFailure(t *testing.T) {
 	}
 }
 
-// A start interrupted by a daemon restart is marked failed by the new process,
-// which never opened that attempt: nothing is reported, and no duration is invented.
 func TestUnopenedAttemptReportsNothing(t *testing.T) {
 	_, cmd, sink, _, _ := newAsyncSpawnService(t)
 	settle(cmd, domain.SessionProvisionFailed, nil)
@@ -222,9 +210,6 @@ func TestSyncSpawnReportsSpawnDuration(t *testing.T) {
 	}
 }
 
-// Workspace reads are gated on the daemon's recorded workspace, not on the
-// start state: a failed start can keep its workspace, and an agent-only retry
-// reuses it without a worktree step.
 func TestSessionReportsWhetherItsWorkspaceIsPublished(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["starting"] = domain.SessionRecord{ID: "starting", ProjectID: "mer", ProvisionState: domain.SessionProvisionProvisioning}
@@ -247,8 +232,6 @@ func TestSessionReportsWhetherItsWorkspaceIsPublished(t *testing.T) {
 	}
 }
 
-// A start cancelled on purpose (killed mid-start, daemon shutdown) is not a
-// launch failure; a start that ran out of its time budget is.
 func TestCancelledAsyncChatStartIsNotASpawnFailure(t *testing.T) {
 	svc, cmd, sink, _, milestones := newAsyncSpawnService(t)
 	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
@@ -269,8 +252,6 @@ func TestCancelledAsyncChatStartIsNotASpawnFailure(t *testing.T) {
 	}
 }
 
-// Spawn durations compare two readings from this process; converting to UTC
-// would drop Go's monotonic reading and let a wall-clock adjustment skew them.
 func TestSpawnDurationClockKeepsTheMonotonicReading(t *testing.T) {
 	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore()})
 	if got := svc.monoNow().String(); !strings.Contains(got, "m=") {

@@ -151,7 +151,6 @@ describe("BrowserProfileStore", () => {
 		expect((await store.load()).error).toBeUndefined();
 		expect(store.getDefaultProfileId()).toBe(legacy.profiles[0]!.id);
 
-		// Unsetting afterwards is a durable choice: the upgrade must not run again.
 		await store.setDefaultProfileId(null);
 		const reloaded = new BrowserProfileStore({ stateDir });
 		await reloaded.load();

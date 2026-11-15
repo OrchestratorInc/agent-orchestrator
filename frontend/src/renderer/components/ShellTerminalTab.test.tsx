@@ -37,7 +37,6 @@ function renderTab(overrides: Partial<Parameters<typeof ShellTerminalTab>[0]> = 
 	const onSelect = vi.fn();
 	const onClose = vi.fn();
 	const onRename = vi.fn();
-	// A tab's menu looks up session actions, which need a query client.
 	render(
 		<QueryClientProvider client={new QueryClient()}>
 			<TooltipProvider>
@@ -203,7 +202,7 @@ describe("ShellTerminalTab rename", () => {
 
 describe("ShellTerminalTab rename gesture per platform", () => {
 	it("macOS/Linux: double-click enters edit, right-click does not", () => {
-		renderTab(); // isWindowsPlatform() defaults to false
+		renderTab();
 		const tab = screen.getByRole("tab", { name: "ao" });
 		fireEvent.contextMenu(tab);
 		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
@@ -214,8 +213,6 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 	it("macOS/Linux: two quick clicks enter edit even without a native dblclick (trackpad)", () => {
 		renderTab();
 		const tab = screen.getByRole("tab", { name: "ao" });
-		// Two plain clicks, no dblclick event — mimics a trackpad double-tap that
-		// the OS delivers as separate clicks.
 		fireEvent.click(tab, { detail: 1 });
 		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 		fireEvent.click(tab, { detail: 1 });

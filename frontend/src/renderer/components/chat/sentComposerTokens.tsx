@@ -1,25 +1,16 @@
 import { createContext, Fragment, useContext, useMemo, useSyncExternalStore, type ReactNode } from "react";
 import type { ChatSkill } from "../../types/conversation";
 
-/**
- * A skill or file chip the composer sent. The message itself carries only `wire`
- * (`/review`, `src/app.ts`, `"docs/a b.md"`), so a sent message can mark it again
- * only for a wire this records or a skill the session lists.
- */
 export type ComposerSentToken = {
 	kind: "skill" | "file";
-	/** The skill name or the workspace path. */
 	value: string;
-	/** What the chip shows: `/review`, or a file's name. */
 	display: string;
-	/** The text the chip put in the message. */
 	wire: string;
 };
 
 export type ComposerTokenSegment = { text: string; token?: ComposerSentToken };
 
 const STORAGE_KEY = "ao:chat:sent-composer-tokens:v1";
-/** Scopes kept, oldest dropped first. A scope is a session, or a first message sent before its session existed. */
 const MAX_SCOPES = 100;
 const MAX_TOKENS_PER_SCOPE = 100;
 const MAX_WIRE_LENGTH = 1024;
@@ -65,7 +56,6 @@ function notify() {
 
 function subscribe(listener: () => void) {
 	listeners.add(listener);
-	// Another window sending keeps this one's chips in step.
 	const onStorage = (event: StorageEvent) => {
 		if (event.key !== STORAGE_KEY) return;
 		cache = undefined;
@@ -82,10 +72,6 @@ export function sessionTokenScope(sessionId: string): string {
 	return `session:${sessionId}`;
 }
 
-/**
- * A send with no session yet (the new chat page) is found again by its text,
- * stored as a hash and length so a long prompt does not fill storage.
- */
 export function messageTokenScope(text: string): string {
 	const trimmed = text.trim();
 	let hash = 5381;
@@ -93,7 +79,6 @@ export function messageTokenScope(text: string): string {
 	return `message:${hash.toString(36)}:${trimmed.length}`;
 }
 
-/** Remembers the chips a send carried, so its bubble can show them again. */
 export function recordSentComposerTokens(scope: string, tokens: readonly ComposerSentToken[]): void {
 	const sent = tokens.filter(validToken);
 	if (sent.length === 0) return;
@@ -105,12 +90,10 @@ export function recordSentComposerTokens(scope: string, tokens: readonly Compose
 	try {
 		globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(cache));
 	} catch {
-		// Storage full or unavailable: the chips still show until reload.
 	}
 	notify();
 }
 
-/** The recorded chips for these scopes, re-read when a send records more. */
 function useSentComposerTokens(scopes: readonly string[]): readonly ComposerSentToken[] {
 	const store = useSyncExternalStore(subscribe, load, load);
 	const key = scopes.join("\n");
@@ -124,24 +107,16 @@ export function skillToken(skill: Pick<ChatSkill, "name">): ComposerSentToken {
 	return { kind: "skill", value: skill.name, display: `/${skill.name}`, wire: `/${skill.name}` };
 }
 
-/** Code the user wrote, fenced or inline, is never turned into chips. */
 const CODE_SPANS = /```[\s\S]*?(?:```|$)|`[^`\n]+`/g;
 
 function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Builds a splitter for text at known chip wires, compiled once per token set. A
- * wire counts only as a whole word: at the start or after whitespace, and followed
- * by the end, whitespace, or closing punctuation. So `/reviewer`, `a/review`,
- * `@review` and `/Users/me` stay text.
- */
 export function composerTokenSplitter(tokens: readonly ComposerSentToken[]): (text: string) => ComposerTokenSegment[] {
 	const byWire = new Map<string, ComposerSentToken>();
 	for (const token of tokens) if (!byWire.has(token.wire)) byWire.set(token.wire, token);
 	if (byWire.size === 0) return (text) => [{ text }];
-	// Longest first, so a wire that extends another wins.
 	const alternatives = [...byWire.keys()].sort((a, b) => b.length - a.length).map(escapeRegExp);
 	const pattern = new RegExp(`(?<=^|\\s)(?:${alternatives.join("|")})(?=$|\\s|[.,;:!?)\\]]+(?:$|\\s))`, "g");
 	return (text) => (text ? splitAt(text, pattern, byWire) : [{ text }]);
@@ -166,20 +141,10 @@ function splitAt(text: string, pattern: RegExp, byWire: ReadonlyMap<string, Comp
 	return segments;
 }
 
-/** The skills the session's agent lists, so a sent `/name` is marked like the chip it was. */
 export const ChatTokenSkills = createContext<readonly ChatSkill[]>([]);
 
-/** Renders a run of text, marking the sent skills and files in it. */
 export type ComposerTokenRenderer = (text: string, renderPlain?: (text: string) => ReactNode) => ReactNode;
 
-/**
- * A text renderer that colors a sent message's skills and files, or undefined when
- * the message can have none. Only exact wires count: a skill the session lists, or
- * a chip this app recorded when the message was sent. The text stays what was sent,
- * so selection, copy and find are unchanged. It handles one run of inline text, so
- * a Markdown renderer can call it per text node (list items and emphasis included)
- * and leave code elements alone. Stable while the known tokens are.
- */
 export function useComposerTokenRenderer(sessionId: string, text: string): ComposerTokenRenderer | undefined {
 	const skills = useContext(ChatTokenSkills);
 	const textScope = useMemo(() => messageTokenScope(text), [text]);

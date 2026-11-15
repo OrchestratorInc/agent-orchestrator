@@ -15,9 +15,7 @@ import (
 )
 
 func TestParseLinkNext(t *testing.T) {
-	// GitHub base URL (no path prefix)
 	ghBase := "https://api.github.com"
-	// GitLab base URL (has /api/v4 prefix)
 	glBase := "https://gitlab.com/api/v4"
 
 	cases := []struct {
@@ -26,7 +24,6 @@ func TestParseLinkNext(t *testing.T) {
 		baseURL string
 		want    string
 	}{
-		// GitHub cases
 		{
 			name:    "gh quoted next strips absolute host",
 			link:    `<https://api.github.com/repos/o/r/issues?state=all&per_page=100&page=2>; rel="next"`,
@@ -57,7 +54,6 @@ func TestParseLinkNext(t *testing.T) {
 			baseURL: ghBase,
 			want:    "",
 		},
-		// GitLab cases
 		{
 			name:    "gl quoted next strips absolute host and api prefix",
 			link:    `<https://gitlab.com/api/v4/projects/1/issues?state=all&per_page=100&page=2>; rel="next"`,
@@ -239,7 +235,7 @@ func TestPreflightCache_ConcurrentFirstCallers(t *testing.T) {
 	var calls int32
 	probe := func(context.Context) error {
 		atomic.AddInt32(&calls, 1)
-		time.Sleep(50 * time.Millisecond) // slow probe
+		time.Sleep(50 * time.Millisecond)
 		return nil
 	}
 	c := &PreflightCache{}
@@ -252,15 +248,11 @@ func TestPreflightCache_ConcurrentFirstCallers(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	// At least one call must have happened; ideally exactly 1 but the race
-	// window is tiny so we just assert it wasn't called 10 times.
 	if got := atomic.LoadInt32(&calls); got > 2 {
 		t.Fatalf("probe calls = %d, want at most 2 (mutex should serialize)", got)
 	}
 }
 
-// TestPreflightCache_StaleServer ensures Run works against a real
-// httptest server end-to-end (simulating the actual preflight probe).
 func TestPreflightCache_RealHTTPProbe(t *testing.T) {
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

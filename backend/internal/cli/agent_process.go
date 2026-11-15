@@ -90,9 +90,6 @@ func (c *commandContext) runSupervisedProcess(ctx context.Context, sessionID, re
 		return
 	}
 
-	// The child shares the terminal foreground process group and therefore
-	// receives Ctrl-C directly. Consume the supervisor's copy so it remains
-	// alive long enough to reap the child and publish the exit observation.
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	_ = child.Wait()
@@ -113,8 +110,6 @@ func (c *commandContext) reportSupervisedExit(sessionID, reviewID, launchID stri
 		req = setReviewActivityAPIRequest{State: "exited", Event: "process-exited", LaunchID: launchID}
 	}
 	if err := c.postJSON(ctx, path, req, nil); err != nil {
-		// Reconciliation will recover this event from process absence. Keep the
-		// delivery failure visible without preventing the terminal's shell.
 		c.reportHookFailure("agent-process", "process-exited", activityID, err)
 	}
 }

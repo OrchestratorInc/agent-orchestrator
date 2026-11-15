@@ -25,20 +25,13 @@ func testSteerPrompt(wait time.Duration) *SteerPrompt {
 	}
 }
 
-// handoffAgent steers the way Antigravity's `agy acp` does: a second
-// session/prompt while one is running makes the agent answer the earlier one
-// with end_turn and carry on under the new one. refuse makes it reject the
-// second prompt instead, as an agent that does not steer would.
 type handoffAgent struct {
 	*fakeAgent
 	release chan struct{}
-	// stop ends every prompt at test cleanup. The SDK's agent side cancels a
-	// session's earlier prompt context when a new prompt arrives, which
-	// Antigravity does not do, so the fake ignores its request context.
-	stop chan struct{}
+	stop    chan struct{}
 
 	mu      sync.Mutex
-	running chan struct{} // closed when a newer prompt takes over the work
+	running chan struct{}
 	prompts []string
 	refuse  bool
 	started chan struct{}
@@ -71,7 +64,7 @@ func (a *handoffAgent) prompt(_ context.Context, params acpsdk.PromptRequest) (a
 	}
 	handedOff := make(chan struct{})
 	if a.running != nil {
-		close(a.running) // hand the earlier prompt off
+		close(a.running)
 		a.steered <- text
 	}
 	a.running = handedOff
@@ -141,8 +134,6 @@ func startPromptSteerConversation(t *testing.T, agent *handoffAgent, steer *Stee
 	return opened.(*conversation), ref.ProviderTurnID
 }
 
-// turnCompletions collects TurnCompleted events for turn until quiet passes
-// with no event.
 func turnCompletions(t *testing.T, events <-chan ports.ChatEvent, turn string, quiet time.Duration) []ports.ChatEvent {
 	t.Helper()
 	var completed []ports.ChatEvent
@@ -178,7 +169,6 @@ func TestACPSteerPromptKeepsOneTurnAcrossTheHandoff(t *testing.T) {
 	if got := <-agent.steered; got != "edit staging.yaml instead" {
 		t.Fatalf("agent got steer %q", got)
 	}
-	// The first prompt has returned end_turn, but the turn is still running.
 	if done := turnCompletions(t, conv.Events(), turn, 100*time.Millisecond); len(done) != 0 {
 		t.Fatalf("turn completed at the handoff: %+v", done)
 	}
@@ -293,18 +283,13 @@ func TestACPSteerPromptSupportComesFromTheBinding(t *testing.T) {
 	}
 }
 
-// ackAgent steers the way Hermes does: a `/steer <text>` prompt while a turn
-// runs is answered at once, after an acknowledgement message, and the running
-// prompt keeps the turn. decline makes it acknowledge without taking it.
 type ackAgent struct {
 	*fakeAgent
 	release chan struct{}
 	stop    chan struct{}
 	started chan struct{}
 	decline bool
-	// silent answers a /steer without an acknowledgement, as an agent that
-	// does not know the command would.
-	silent bool
+	silent  bool
 
 	mu      sync.Mutex
 	running bool
@@ -423,7 +408,6 @@ func startAckConversation(t *testing.T, agent *ackAgent) (*conversation, string)
 	return opened.(*conversation), ref.ProviderTurnID
 }
 
-// collectTurn gathers message text and completions for turn until quiet.
 func collectTurn(t *testing.T, events <-chan ports.ChatEvent, turn string, quiet time.Duration) (string, []ports.ChatEvent) {
 	t.Helper()
 	var text strings.Builder
@@ -501,8 +485,6 @@ func TestACPSteerPromptDeclinedAcknowledgementIsARefusal(t *testing.T) {
 func TestACPSteerPromptAcknowledgementOutsideASteerIsOrdinaryText(t *testing.T) {
 	agent := newAckAgent()
 	conv, turn := startAckConversation(t, agent)
-	// No steer was sent, so a reply that happens to look like an
-	// acknowledgement is the agent's answer and must be shown.
 	if conv.steerAcknowledgement(turn, "ACK: something") {
 		t.Fatal("text was hidden as an acknowledgement in a turn that sent no steer")
 	}

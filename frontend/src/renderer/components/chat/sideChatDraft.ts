@@ -11,14 +11,12 @@ export type SideDeliveryReceipt = {
 	};
 };
 
-// Serialized only into the daemon's launch-scoped side store and Electron RAM.
 export type SideChatDraft = {
 	version: 1;
 	text: string;
 	attachments: ChatDraftAttachment[];
 	references: ChatDraftExcerptReference[];
 	pendingDelivery?: SideDeliveryReceipt;
-	// A source-side command owns its destination and frozen request across retries.
 	pendingCommand?: {
 		creationKey: string;
 		destinationId?: string;
@@ -26,7 +24,6 @@ export type SideChatDraft = {
 		cancelRequested?: boolean;
 		receipt: SideDeliveryReceipt;
 	};
-	// Keep the last acknowledged main-composer handoff for retries after remount.
 	lastHandoffDelivery?: SideDeliveryReceipt;
 };
 
@@ -52,7 +49,6 @@ export function parseSideChatDraft(raw: string): SideChatDraft {
 			return value as SideChatDraft;
 		}
 	} catch {
-		/* Earlier side drafts were plain text. */
 	}
 	return { ...emptySideChatDraft(), text: raw };
 }

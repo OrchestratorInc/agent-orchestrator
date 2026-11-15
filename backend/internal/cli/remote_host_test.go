@@ -137,7 +137,6 @@ func TestRemoteHostCLITunnelOnlyUsesLoopbackRoute(t *testing.T) {
 		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 			requests = append(requests, r.Method+" "+r.URL.Path)
 		}
-		// A daemon without pairing codes.
 		if r.URL.Path == "/api/v1/mobile/pairing-code" {
 			http.NotFound(w, r)
 			return
@@ -181,8 +180,6 @@ func TestRemoteHostCLITunnelRefusesLoopbackOnlyListener(t *testing.T) {
 }
 
 func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
-	// The connector line follows the daemon's own cloudflared download: only
-	// one in progress is reported as on its way.
 	for installing, want := range map[bool]string{
 		true:  "Tunnel: downloading cloudflared",
 		false: "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable --tunnel`",
@@ -195,7 +192,6 @@ func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
 				if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 					requests = append(requests, r.Method+" "+r.URL.Path)
 				}
-				// A daemon without pairing codes.
 				if r.URL.Path == "/api/v1/mobile/pairing-code" {
 					http.NotFound(w, r)
 					return
@@ -303,8 +299,6 @@ func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
 	}
 }
 
-// A machine whose account link AO Cloud refuses must not claim the
-// account's devices list it (#7976).
 func TestRemoteHostCLISaysARefusedLinkMayNotBeListed(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

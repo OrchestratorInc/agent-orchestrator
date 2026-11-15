@@ -1,9 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { openInspector } from "./support/open-inspector";
 
-// dev:web (VITE_NO_ELECTRON=1) serves lib/mock-data.ts. Use stable session URLs
-// so fixture title changes do not prevent these tests from reaching Reviews.
-
 test("the Reviews tab renders the reviewer panel for a session that owns PRs", async ({ page }) => {
 	await page.goto("/#/projects/ao-demo/sessions/demo-ready");
 
@@ -11,8 +8,6 @@ test("the Reviews tab renders the reviewer panel for a session that owns PRs", a
 
 	await inspector.getByRole("tab", { name: "Reviews" }).click();
 
-	// The reviewer card surfaces the harness, its approved verdict, and the rerun
-	// action — never the empty state, since this session owns a PR.
 	await expect(inspector.getByText("No pull request opened yet.")).toHaveCount(0);
 	const reviewRow = inspector.getByTestId("review-pr-row");
 	await expect(reviewRow).toHaveAttribute("aria-expanded", "false");

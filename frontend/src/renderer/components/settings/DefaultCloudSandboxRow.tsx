@@ -10,27 +10,12 @@ import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
-/**
- * Where the org's cloud sessions run when a project does not pick a provider,
- * and which provider new projects start on. Every org may run on every provider
- * the deployment offers and picks its default here: an org with the coder
- * capability (WorkOS metadata capabilities=coder) starts on Coder, every other
- * org on Freestyle. On a deployment with a single provider the org sees it,
- * fixed. The control plane stores the choice per org and applies it to every
- * session it places, from the desktop, mobile or `ao spawn`.
- */
 export function DefaultCloudSandboxRow() {
 	const { cloudEnabled } = useCloudGate();
 	if (!cloudEnabled) return null;
 	return <DefaultCloudSandboxRowInner />;
 }
 
-/**
- * The row in its own Cloud section of General settings, for every signed-in
- * cloud user (not only Developer Mode), so admins can reach the choice. It
- * appears only when the org has a provider to choose: an org on a single
- * provider (a Coder customer, say) sees no new section, heading included.
- */
 export function DefaultCloudSandboxSection() {
 	const { cloudEnabled } = useCloudGate();
 	if (!cloudEnabled) return null;

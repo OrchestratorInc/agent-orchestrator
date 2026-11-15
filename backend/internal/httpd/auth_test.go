@@ -60,27 +60,21 @@ func TestAccountTokenAuthenticatesWithoutReplacingPairingPassword(t *testing.T) 
 func TestAuthLockoutResetsAfterCooldown(t *testing.T) {
 	nowP := time.Now()
 	h, _ := newAuthUnderTest("secret12", func() time.Time { return nowP })
-	// Lock the source with 5 failures.
 	for i := 0; i < 5; i++ {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req("Bearer wrong"))
 	}
-	// Still within cooldown → 429 even with the right password.
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req("Bearer secret12"))
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("during cooldown: got %d want 429", w.Code)
 	}
-	// Advance past the 1-minute cooldown.
 	nowP = nowP.Add(time.Minute + time.Second)
-	// A single WRONG attempt must NOT immediately re-lock — it starts a fresh
-	// window and returns 401, not 429.
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req("Bearer wrong"))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("first attempt after cooldown: got %d want 401 (fresh window, not re-locked)", w.Code)
 	}
-	// And the correct password now succeeds.
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req("Bearer secret12"))
 	if w.Code != http.StatusOK {
@@ -116,7 +110,6 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 			t.Fatalf("attempt %d: got %d want 401", i, w.Code)
 		}
 	}
-	// 6th attempt — even with the RIGHT password — is locked out.
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req("Bearer secret12"))
 	if w.Code != http.StatusTooManyRequests {
@@ -124,10 +117,6 @@ func TestAuthLockoutAfterFive(t *testing.T) {
 	}
 }
 
-// A request that carries no password is not a guess. Opening the tunnel URL in a
-// browser fetches the page, its favicon and touch icons without one, and every
-// device behind the same public IP shares the visitor's lockout. Counting those
-// locked the phone out before it sent the correct password (#7980).
 func TestTokenlessRequestsDoNotCountTowardLockout(t *testing.T) {
 	h, lock := newAuthUnderTest("secret12", time.Now)
 	tunnelReq := func(path, auth string) *http.Request {
@@ -143,7 +132,6 @@ func TestTokenlessRequestsDoNotCountTowardLockout(t *testing.T) {
 			t.Fatalf("tokenless %s: got %d want 401", path, w.Code)
 		}
 	}
-	// A preview file with no cookie and an empty bearer carry no password either.
 	for _, r := range []*http.Request{
 		tunnelReq("/api/v1/sessions/s1/preview/files/index.html", ""),
 		tunnelReq("/api/v1/sessions", "Bearer "),
@@ -159,8 +147,6 @@ func TestTokenlessRequestsDoNotCountTowardLockout(t *testing.T) {
 		t.Fatalf("correct password after tokenless requests: got %d want 200", w.Code)
 	}
 
-	// Wrong passwords still count, and tokenless requests in between neither
-	// add to nor clear the count.
 	for i := range 5 {
 		h.ServeHTTP(httptest.NewRecorder(), tunnelReq("/api/v1/sessions", fmt.Sprintf("Bearer wrong%d", i)))
 		h.ServeHTTP(httptest.NewRecorder(), tunnelReq("/favicon.ico", ""))
@@ -307,8 +293,6 @@ func TestLANManagerPasswordRotationClearsPriorLockout(t *testing.T) {
 	}
 }
 
-// reqPathCookie builds a request to an arbitrary path, optionally carrying the
-// Bearer header and/or the preview auth cookie, for the preview-cookie tests.
 func reqPathCookie(method, path, auth, cookie string) *http.Request {
 	r := httptest.NewRequest(method, path, nil)
 	r.RemoteAddr = "192.168.1.50:5555"
@@ -321,9 +305,6 @@ func reqPathCookie(method, path, auth, cookie string) *http.Request {
 	return r
 }
 
-// A preview subresource (image/CSS/JS) is fetched by the WebView WITHOUT our
-// Authorization header, carrying only the cookie the top-level load set. It must
-// authenticate on the preview-files path.
 func TestPreviewCookieAuthenticatesSubresource(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 	w := httptest.NewRecorder()
@@ -333,8 +314,6 @@ func TestPreviewCookieAuthenticatesSubresource(t *testing.T) {
 	}
 }
 
-// The top-level preview file load (Bearer header) must set the auth cookie,
-// scoped tightly to that session's preview-files directory and HttpOnly.
 func TestPreviewFileSetsScopedCookie(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 	w := httptest.NewRecorder()
@@ -360,10 +339,6 @@ func TestPreviewFileSetsScopedCookie(t *testing.T) {
 	}
 }
 
-// After a password regenerate the WebView still holds the cookie minted under the
-// OLD password. The top-level load re-authenticates via the Bearer header (the
-// mobile app has the new password), so the server must overwrite the stale cookie
-// — otherwise the page's subresources keep sending the old token and 401.
 func TestPreviewCookieRefreshedAfterPasswordChange(t *testing.T) {
 	h, _ := newAuthUnderTest("newpass12", time.Now)
 	w := httptest.NewRecorder()
@@ -387,10 +362,6 @@ func TestPreviewCookieRefreshedAfterPasswordChange(t *testing.T) {
 	}
 }
 
-// The cookie must NOT authenticate any non-preview endpoint: a preview page that
-// tries POST /kill with only the cookie is rejected. This is the server-side
-// half of the guarantee (the cookie's Path already stops the browser sending it
-// here at all).
 func TestPreviewCookieRejectedOnOtherEndpoints(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 	w := httptest.NewRecorder()
@@ -400,12 +371,10 @@ func TestPreviewCookieRejectedOnOtherEndpoints(t *testing.T) {
 	}
 }
 
-// A normal (non-preview) authenticated request must not get an auth cookie set,
-// so the cookie only ever exists for the preview flow.
 func TestNoCookieSetOnNonPreviewRoutes(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req("Bearer secret12")) // path /api/v1/sessions
+	h.ServeHTTP(w, req("Bearer secret12"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d want 200", w.Code)
 	}
@@ -420,7 +389,6 @@ func TestAuthLockoutIsPerSource(t *testing.T) {
 	now := time.Now()
 	h, _ := newAuthUnderTest("secret12", func() time.Time { return now })
 
-	// Source A: lock with 5 failed attempts from 192.168.1.50
 	sourceA := "192.168.1.50:5555"
 	for i := 0; i < 5; i++ {
 		w := httptest.NewRecorder()
@@ -429,23 +397,19 @@ func TestAuthLockoutIsPerSource(t *testing.T) {
 			t.Fatalf("source A attempt %d: got %d want 401", i, w.Code)
 		}
 	}
-	// Verify source A is now locked
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, reqFrom(sourceA, "Bearer secret12"))
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("source A locked check: got %d want 429", w.Code)
 	}
 
-	// Source B: should NOT be locked despite source A being locked
 	sourceB := "192.168.1.99:6666"
-	// B with correct password should be 200, not 429
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, reqFrom(sourceB, "Bearer secret12"))
 	if w.Code != http.StatusOK {
 		t.Fatalf("source B with correct password: got %d want 200", w.Code)
 	}
 
-	// B with wrong password should be 401, not 429
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, reqFrom(sourceB, "Bearer wrong"))
 	if w.Code != http.StatusUnauthorized {
@@ -453,8 +417,6 @@ func TestAuthLockoutIsPerSource(t *testing.T) {
 	}
 }
 
-// reqTo builds a request to an arbitrary path so the identity exemption can be
-// probed alongside the normal authenticated surface.
 func reqTo(method, path, auth string) *http.Request {
 	r := httptest.NewRequest(method, path, nil)
 	r.RemoteAddr = "192.168.1.50:5555"
@@ -464,10 +426,6 @@ func reqTo(method, path, auth string) *http.Request {
 	return r
 }
 
-// The phone must be able to ask "who are you?" before it presents a
-// credential. Without this, verifying an endpoint's identity would require
-// sending the bearer token to whatever device happens to hold that private IP
-// on the current network — see docs/adr/0003.
 func TestAuthExemptsIdentityProbe(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 
@@ -479,8 +437,6 @@ func TestAuthExemptsIdentityProbe(t *testing.T) {
 	}
 }
 
-// The exemption is one method on one exact path. These are the guards that
-// stop it widening into a general hole in the LAN listener.
 func TestAuthExemptionIsNarrow(t *testing.T) {
 	h, _ := newAuthUnderTest("secret12", time.Now)
 
@@ -503,8 +459,6 @@ func TestAuthExemptionIsNarrow(t *testing.T) {
 	}
 }
 
-// A probe carrying no credential must not count toward the lockout, or an
-// unauthenticated phone racing several endpoints would lock itself out.
 func TestIdentityProbeDoesNotCountTowardLockout(t *testing.T) {
 	h, lock := newAuthUnderTest("secret12", time.Now)
 

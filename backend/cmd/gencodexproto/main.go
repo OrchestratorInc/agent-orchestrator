@@ -1,20 +1,3 @@
-// Command gencodexproto generates Go bindings for the Codex app-server protocol
-// from the schema the provider itself publishes.
-//
-// The protocol is a machine-readable contract: `codex app-server
-// generate-json-schema --out DIR` writes the whole method and payload surface as
-// draft-07 JSON Schema. Reading it beats hand-writing structs, because the
-// failure mode of hand-writing is silent: a field spelled slightly wrong
-// unmarshals to a zero value and the driver reports "no output" rather than
-// "wrong shape". Every payload here is a compile-time type instead.
-//
-// Usage:
-//
-//	go run ./cmd/gencodexproto -out internal/adapters/chatdriver/codexappserver/codexproto/protocol.gen.go
-//
-// With no -schema, the generator asks the installed provider for its schema, so
-// what lands in the tree always describes a real build rather than a snapshot
-// someone remembered to update.
 package main
 
 import (
@@ -73,8 +56,6 @@ func main() {
 	src := g.render()
 	formatted, err := format.Source(src)
 	if err != nil {
-		// Write the unformatted source next to the target so the syntax error is
-		// readable; a gofmt failure here is a generator bug, not a schema problem.
 		_ = os.WriteFile(*out+".broken", src, 0o600)
 		fatal("gofmt: %v (unformatted source at %s.broken)", err, *out)
 	}
@@ -106,10 +87,6 @@ func providerVersion(binary string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-/* ---- schema model ------------------------------------------------------- */
-
-// schema is the subset of draft-07 the Codex protocol actually uses. Verified by
-// walking every published file: no patternProperties, no const, no if/then.
 type schema struct {
 	Ref                  string             `json:"$ref"`
 	Type                 json.RawMessage    `json:"type"`
@@ -126,20 +103,16 @@ type schema struct {
 	Format               string             `json:"format"`
 	Definitions          map[string]*schema `json:"definitions"`
 
-	// permissive marks a schema written as the bare literal `true` or `false`.
 	permissive bool
 }
 
-// UnmarshalJSON accepts draft-07's boolean schemas. `true` means "any value" and
-// `false` means "no value"; both render as raw JSON, which is the only honest Go
-// type for a payload the schema declines to describe.
 func (s *schema) UnmarshalJSON(data []byte) error {
 	var anything bool
 	if err := json.Unmarshal(data, &anything); err == nil {
 		*s = schema{permissive: true}
 		return nil
 	}
-	type plain schema // no UnmarshalJSON, so this does not recurse
+	type plain schema
 	var p plain
 	if err := json.Unmarshal(data, &p); err != nil {
 		return err
@@ -148,8 +121,6 @@ func (s *schema) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// types reports the declared JSON types, which the schema writes either as a
-// string or as a list including "null" for an optional value.
 func (s *schema) types() []string {
 	if len(s.Type) == 0 {
 		return nil
@@ -165,15 +136,12 @@ func (s *schema) types() []string {
 	return nil
 }
 
-// nullable reports whether the value may be absent, which decides whether the
-// Go field is a pointer.
 func (s *schema) nullable() bool {
 	for _, t := range s.types() {
 		if t == "null" {
 			return true
 		}
 	}
-	// anyOf: [{...}, {"type": "null"}] is how the schema spells an optional $ref.
 	for _, v := range s.AnyOf {
 		for _, t := range v.types() {
 			if t == "null" {
@@ -184,7 +152,6 @@ func (s *schema) nullable() bool {
 	return false
 }
 
-// base strips the null arm so the remaining schema describes the value itself.
 func (s *schema) base() *schema {
 	if len(s.AnyOf) > 0 {
 		var concrete []*schema
@@ -198,31 +165,26 @@ func (s *schema) base() *schema {
 			return concrete[0]
 		}
 	}
-	// allOf with a single arm is a wrapper the schema uses to attach a description
-	// to a $ref.
 	if len(s.AllOf) == 1 && s.Ref == "" && len(s.Properties) == 0 {
 		return s.AllOf[0]
 	}
 	return s
 }
 
-/* ---- method table ------------------------------------------------------- */
-
 type method struct {
-	Name      string // wire method, e.g. "thread/start"
-	Direction string // ClientRequest | ClientNotification | ServerRequest | ServerNotification
-	Params    string // Go type of params, empty when the method carries none
-	Result    string // Go type of the result, empty for notifications
+	Name      string
+	Direction string
+	Params    string
+	Result    string
 	Doc       string
 }
 
 type generator struct {
 	version string
-	defs    map[string]*schema // merged definitions, by name
+	defs    map[string]*schema
 	methods []method
 }
 
-// unionFiles map a published union file to the direction it describes.
 var unionFiles = map[string]string{
 	"ClientRequest.json":      "ClientRequest",
 	"ClientNotification.json": "ClientNotification",
@@ -233,8 +195,6 @@ var unionFiles = map[string]string{
 func load(dir string) (*generator, error) {
 	g := &generator{defs: map[string]*schema{}}
 
-	// The v2 bundle carries every type including the response shapes, which the
-	// per-direction union files omit.
 	bundle := filepath.Join(dir, "codex_app_server_protocol.v2.schemas.json")
 	if err := g.mergeDefs(bundle); err != nil {
 		return nil, err
@@ -270,9 +230,6 @@ func load(dir string) (*generator, error) {
 	return g, nil
 }
 
-// mergeDefs folds one file's definitions into the shared namespace. The union
-// files repeat types the bundle already declares; a genuine disagreement is a
-// generator-stopping error rather than a silently chosen winner.
 func (g *generator) mergeDefs(path string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -296,9 +253,6 @@ func (g *generator) mergeDefs(path string) error {
 	return nil
 }
 
-// sameShape compares what the generator reads and ignores what it only echoes.
-// The bundle carries `title` and `$schema` that the per-direction files omit, so
-// comparing documentation would report a conflict on every shared definition.
 func sameShape(a, b *schema) bool {
 	ja, err1 := json.Marshal(stripDocs(a))
 	jb, err2 := json.Marshal(stripDocs(b))
@@ -341,8 +295,6 @@ func stripDocs(s *schema) *schema {
 	return &out
 }
 
-// collectMethods reads a direction's `oneOf`, where each arm is an envelope whose
-// `method` is a single-value enum and whose `params` points at the payload.
 func (g *generator) collectMethods(path, direction string) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -365,7 +317,6 @@ func (g *generator) collectMethods(path, direction string) error {
 		if params, ok := arm.Properties["params"]; ok {
 			m.Params = refName(params.base().Ref)
 		}
-		// Requests answer with `<Params-stem>Response` when the bundle declares one.
 		if strings.HasSuffix(direction, "Request") && m.Params != "" {
 			if stem, ok := strings.CutSuffix(m.Params, "Params"); ok {
 				if _, exists := g.defs[stem+"Response"]; exists {
@@ -385,10 +336,6 @@ func refName(ref string) string {
 	return exportName(ref[strings.LastIndex(ref, "/")+1:])
 }
 
-/* ---- Go type mapping ---------------------------------------------------- */
-
-// goType renders the Go type for a schema. `owner` and `field` name inline
-// object types, which the schema declares anonymously inside properties.
 func (g *generator) goType(s *schema, owner, field string, inline *[]inlineType) string {
 	s = s.base()
 
@@ -399,9 +346,6 @@ func (g *generator) goType(s *schema, owner, field string, inline *[]inlineType)
 		return g.goType(s.AllOf[0], owner, field, inline)
 	}
 
-	// A string enum inline in a property: the schema names most of these through a
-	// $ref, so what is left is a one-off. Rendering it as a plain string keeps the
-	// generated surface small without losing any wire information.
 	if len(s.Enum) > 0 {
 		return "string"
 	}
@@ -433,8 +377,6 @@ func (g *generator) goType(s *schema, owner, field string, inline *[]inlineType)
 		}
 		return "[]" + g.goType(s.Items, owner, field, inline)
 	case "object":
-		// A map when the schema constrains additional properties and declares no
-		// fixed fields; a named struct otherwise.
 		if len(s.Properties) == 0 && len(s.AdditionalProperties) > 0 {
 			var sub schema
 			if err := json.Unmarshal(s.AdditionalProperties, &sub); err == nil && len(s.AdditionalProperties) > 0 {
@@ -452,8 +394,6 @@ func (g *generator) goType(s *schema, owner, field string, inline *[]inlineType)
 		return name
 	}
 
-	// oneOf/anyOf that survived: a union the generator will not guess at. Left as
-	// raw JSON so the caller decides, rather than picking an arm and being wrong.
 	if len(s.OneOf) > 0 || len(s.AnyOf) > 0 {
 		if enumUnion(s) {
 			return "string"
@@ -468,8 +408,6 @@ type inlineType struct {
 	s    *schema
 }
 
-// enumUnion reports a oneOf whose every arm is a documented string enum — the
-// schema's way of writing a Rust enum of unit variants.
 func enumUnion(s *schema) bool {
 	arms := s.OneOf
 	if len(arms) == 0 {
@@ -491,8 +429,6 @@ func enumUnion(s *schema) bool {
 	return true
 }
 
-// taggedUnion reports the discriminator shared by every arm of a oneOf, if there
-// is one. Codex uses this for its Rust enums with struct variants.
 func taggedUnion(s *schema) (string, bool) {
 	arms := s.OneOf
 	if len(arms) < 2 {
@@ -532,8 +468,6 @@ func taggedUnion(s *schema) (string, bool) {
 	}
 	return keys[0], true
 }
-
-/* ---- rendering ---------------------------------------------------------- */
 
 func (g *generator) render() []byte {
 	var b strings.Builder
@@ -598,8 +532,6 @@ func (g *generator) renderMethods(b *strings.Builder) {
 	}
 	b.WriteString(")\n\n")
 
-	// A table rather than a switch: the driver's conformance test walks it to
-	// assert that every method AO claims to handle still exists upstream.
 	b.WriteString("// MethodInfo describes one method's direction and payload types.\ntype MethodInfo struct {\n")
 	b.WriteString("\tName      string\n\tDirection string\n\t// Params and Result name the generated types, empty when the method has none.\n")
 	b.WriteString("\tParams string\n\tResult string\n}\n\n")
@@ -631,8 +563,6 @@ func (g *generator) renderTypes(b *strings.Builder) {
 	}
 	sort.Strings(names)
 
-	// Inline object types discovered while rendering fields are appended as they
-	// are found, so the loop walks a growing list.
 	var inline []inlineType
 	emitted := map[string]bool{}
 
@@ -653,8 +583,6 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 		return
 	}
 
-	// A named string enum: a Go string type plus its values, so an invalid value
-	// cannot be constructed by accident.
 	if len(s.Enum) > 0 && isStringEnum(s) {
 		emitted[name] = true
 		doc(b, name, s.Description)
@@ -696,10 +624,6 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 		return
 	}
 
-	// A tagged union flattens to one struct with the discriminator typed and every
-	// arm's fields optional. This is how the driver already reads thread items:
-	// switch on the tag, then read the fields that tag implies. A Go sum type
-	// would be more precise and much less usable at a call site.
 	if tag, ok := taggedUnion(s); ok {
 		emitted[name] = true
 		g.renderFlattenedUnion(b, name, s, tag, inline, emitted)
@@ -711,18 +635,10 @@ func (g *generator) renderDef(b *strings.Builder, name string, s *schema, inline
 		return
 	}
 
-	// Everything else is an alias: a scalar, an array, a map, or a union the
-	// generator declines to guess at.
 	emitted[name] = true
 	doc(b, name, s.Description)
 	target := g.goType(s, name, "", inline)
 
-	// A DEFINED type over json.RawMessage does not inherit its UnmarshalJSON, so
-	// encoding/json falls back to treating it as []byte and demands a base64
-	// string. Every numeric value then fails to decode — silently, if the caller
-	// ignores the error. That cost us every `serverRequest/resolved` notification,
-	// because request ids arrive as numbers. A type ALIAS keeps the methods, so
-	// callers cannot be trapped by a name that looks decodable and is not.
 	if target == "json.RawMessage" {
 		fmt.Fprintf(b, "type %s = %s\n\n", name, target)
 		return
@@ -765,9 +681,6 @@ func (g *generator) renderField(
 	if goName == "" {
 		return
 	}
-	// Two JSON names can normalize to one Go name (`type` and `Type`); keep the
-	// first and leave the second reachable only as raw JSON rather than emitting
-	// a struct that does not compile.
 	if used[goName] {
 		goName += "_"
 	}
@@ -779,9 +692,6 @@ func (g *generator) renderField(
 	if optional {
 		tag += ",omitempty"
 	}
-	// Pointers only where zero and absent differ and the caller would care: a
-	// missing exit code is not exit code 0, but an absent slice and an empty one
-	// are the same thing to every reader.
 	if optional && needsPointer(typ) {
 		typ = "*" + typ
 	}
@@ -791,10 +701,6 @@ func (g *generator) renderField(
 	fmt.Fprintf(b, "\t%s %s `json:%q`\n", goName, typ, tag)
 }
 
-// widen finds a single Go type for two arms of a tagged union that name the same
-// field differently. Both must reduce to the same JSON kind, or the result is raw
-// JSON — a wrong type here would decode to a zero value silently, which is the
-// exact failure this generator exists to prevent.
 func (g *generator) widen(a, b string) string {
 	ka, kb := g.jsonKind(a), g.jsonKind(b)
 	if ka != kb || ka == "" {
@@ -814,8 +720,6 @@ func (g *generator) widen(a, b string) string {
 	}
 }
 
-// jsonKind reduces a generated Go type to the JSON kind it encodes, resolving
-// named types through the schema that produced them.
 func (g *generator) jsonKind(typ string) string {
 	typ = strings.TrimPrefix(typ, "*")
 	switch typ {
@@ -833,8 +737,6 @@ func (g *generator) jsonKind(typ string) string {
 	if strings.HasPrefix(typ, "[]") || strings.HasPrefix(typ, "map[") {
 		return ""
 	}
-	// A named definition: resolve one level. Every named type the protocol uses in
-	// a conflicting position is a string enum or a scalar alias.
 	for name, def := range g.defs {
 		if exportName(name) != typ {
 			continue
@@ -868,9 +770,6 @@ func needsPointer(typ string) bool {
 	}
 }
 
-// renderFlattenedUnion emits one struct covering every arm, with the shared
-// discriminator first. A field that appears in more than one arm with the same
-// type is emitted once.
 func (g *generator) renderFlattenedUnion(
 	b *strings.Builder, name string, s *schema, tag string,
 	inline *[]inlineType, emitted map[string]bool,
@@ -913,11 +812,6 @@ func (g *generator) renderFlattenedUnion(
 				byName[p] = field{json: p, typ: typ, desc: ps.Description, required: armRequired[p]}
 				continue
 			}
-			// The same field name with a different type across arms needs one Go
-			// type. Where the arms agree on the underlying JSON kind — six string
-			// enums for `status`, four integer widths for `durationMs` — widening
-			// to that kind keeps the field readable and stays true to the wire.
-			// Where they genuinely disagree, raw JSON is the honest rendering.
 			if existing.typ != typ {
 				existing.typ = g.widen(existing.typ, typ)
 				byName[p] = existing
@@ -940,7 +834,6 @@ func (g *generator) renderFlattenedUnion(
 		}
 		used[goName] = true
 		typ := f.typ
-		// Every non-discriminator field is optional: it belongs to some arms only.
 		if needsPointer(typ) {
 			typ = "*" + typ
 		}
@@ -1003,7 +896,6 @@ func oneLine(s string) string {
 	return s
 }
 
-// exportName turns a JSON or schema name into an exported Go identifier.
 func exportName(s string) string {
 	var b strings.Builder
 	upper := true
@@ -1011,8 +903,6 @@ func exportName(s string) string {
 		alpha := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 		digit := r >= '0' && r <= '9'
 		switch {
-		// Anything that is not alphanumeric is a word boundary. The schema uses
-		// `_`, `-`, `/`, `.` and, for JSON Schema's own keywords, `$`.
 		case !alpha && !digit:
 			upper = true
 		case digit:
@@ -1026,12 +916,9 @@ func exportName(s string) string {
 		}
 	}
 	out := b.String()
-	// A Go identifier cannot begin with a digit.
 	if out != "" && out[0] >= '0' && out[0] <= '9' {
 		out = "N" + out
 	}
-	// Initialisms, so the generated names read like Go rather than like a
-	// transliteration.
 	for _, pair := range [][2]string{
 		{"Id", "ID"}, {"Url", "URL"}, {"Uri", "URI"}, {"Api", "API"},
 		{"Json", "JSON"}, {"Http", "HTTP"}, {"Mcp", "MCP"}, {"Sdp", "SDP"},

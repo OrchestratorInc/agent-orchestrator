@@ -332,8 +332,6 @@ func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 205 {
-		// Late activity belongs to an older turn. The latest turn must retain
-		// durable row ordering even when the first page represents only that turn.
 		if err := h.st.UpsertActivity(context.Background(), h.ctrl.ConversationID(), "provider-turn-1", domain.ConversationActivity{
 			ID: fmt.Sprintf("suggestion-activity-%d", i), ProviderItemID: fmt.Sprintf("suggestion-item-%d", i),
 			Kind: domain.ActivityKindUsage, Status: domain.ActivityStatusCompleted,
@@ -347,8 +345,6 @@ func TestPromptSuggestionReadsBoundedPagesAcrossActivityHistory(t *testing.T) {
 		}
 		return `{"prompt":"Run the tests."}`, nil
 	})
-	// Activity does not count toward a page, so the read and its revalidation
-	// each take one bounded page despite the 205 late activities.
 	if prompt, err := h.svc.PromptSuggestion(context.Background(), testSession, rows.Turns[len(rows.Turns)-1].ID); err != nil || prompt != "Run the tests." || reads != 2 {
 		t.Fatalf("paged suggestion: prompt=%q err=%v reads=%d", prompt, err, reads)
 	}

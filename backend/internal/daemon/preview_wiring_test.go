@@ -73,9 +73,6 @@ func TestManagedPreviewExitClearsMatchingPreviewURL(t *testing.T) {
 }
 
 func TestManagedPreviewExitLeavesUnrelatedPreviewURLAlone(t *testing.T) {
-	// The session's preview URL no longer points at the failed server: either
-	// the user replaced it with a static-file preview or the server was
-	// restarted on a different URL before the exit callback ran.
 	fake := &fakePreviewExitSessions{sessions: map[domain.SessionID]domain.Session{
 		"ao-1": fakePreviewSession("ao-1", "file:///tmp/index.html"),
 		"ao-2": fakePreviewSession("ao-2", "http://127.0.0.1:9999/"),

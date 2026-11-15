@@ -7,15 +7,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// VersionRefreshPolicy is the daemon's current setting for moving sessions to
-// a newly installed harness release.
 type VersionRefreshPolicy struct {
 	Chats     bool
 	Terminals bool
 	MinIdle   time.Duration
 }
 
-// SetVersionRefreshPolicy late-binds the daemon's version-refresh setting.
 func (m *Manager) SetVersionRefreshPolicy(policy func() VersionRefreshPolicy) {
 	m.versionPolicyMu.Lock()
 	defer m.versionPolicyMu.Unlock()
@@ -32,11 +29,6 @@ func (m *Manager) currentVersionPolicy() (VersionRefreshPolicy, bool) {
 	return policy(), true
 }
 
-// SessionTurnEnded is told by the lifecycle manager that a session went idle.
-// A session still on a replaced release is checked again once it has been
-// quiet for the policy's MinIdle, so it moves then rather than at the next
-// sweep. It never blocks the caller. (Account Manager moves its sessions on
-// the same signal, #6274.)
 func (m *Manager) SessionTurnEnded(rec domain.SessionRecord) {
 	if rec.StaleBinary == nil || rec.StaleBinary.SwitchFailedAt != nil || rec.IsTerminated {
 		return
@@ -61,7 +53,6 @@ func (m *Manager) SessionTurnEnded(rec domain.SessionRecord) {
 		if !ok {
 			return
 		}
-		// The same permit sweeps take, so turn ends cannot start more.
 		release, err := m.versionMoves.acquire(ctx)
 		if err != nil {
 			return

@@ -3,8 +3,6 @@ import type { AoBridge } from "../src/preload";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// Renderer integration: real project-add API client and import dialogs, with
-// deterministic daemon responses and a fake native picker/workspace snapshot.
 test("renderer: importing an alias opens the registered project without starting another orchestrator @T0", async ({ page }) => {
 	const projectId = "already-registered";
 	const selectedPath = "/alias/registered-project";

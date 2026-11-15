@@ -12,8 +12,6 @@ import (
 
 const walSizeLimit = 32 << 20
 
-// plainDSN opens ao.db without AO's pragmas, so no limit is set on the
-// connection and its commits leave the -wal file at whatever size it reached.
 func plainDSN(dataDir string) string {
 	return databaseURI(dataDir) + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 }
@@ -33,9 +31,6 @@ func TestPragmasSetJournalSizeLimit(t *testing.T) {
 	}
 }
 
-// A burst that grows the -wal file past the cap (a large migration, or a reader
-// holding back the checkpoint) must not leave it at that size for the life of
-// the daemon: the writer Open returns cuts it back at the next WAL reset.
 func TestOpenWriterTrimsAnInflatedWALAtTheNextReset(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir)
@@ -44,9 +39,6 @@ func TestOpenWriterTrimsAnInflatedWALAtTheNextReset(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	// Inflate the log from a connection that has no limit. It checkpoints the
-	// log into the database right after the commit, so the writer is free to
-	// reset it on its next transaction.
 	burst, err := sql.Open("sqlite", plainDSN(dir))
 	if err != nil {
 		t.Fatalf("open burst connection: %v", err)

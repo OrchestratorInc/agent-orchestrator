@@ -8,8 +8,6 @@ import (
 
 func init() { browseProviderCredentials["prime-agent"] = primeAgentConfiguredProviders }
 
-// primeAgentKeyEnv mirrors Prime Agent's built-in provider credential
-// variables (its Pi runtime's getApiKeyEnvVars), first match wins there.
 var primeAgentKeyEnv = map[string][]string{
 	"github-copilot":         {"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"},
 	"anthropic":              {"ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"},
@@ -43,10 +41,6 @@ var primeAgentKeyEnv = map[string][]string{
 	"xiaomi-token-plan-sgp":  {"XIAOMI_TOKEN_PLAN_SGP_API_KEY"},
 }
 
-// primeAgentConfiguredProviders reports the providers Prime Agent holds a
-// credential for: logins and keys in its agent directory's auth.json, keyed
-// custom providers in models.json, its built-in providers' variables, and the
-// ambient AWS and Google Cloud credentials Bedrock and Vertex accept.
 func primeAgentConfiguredProviders(_ string, env map[string]string) []string {
 	found := map[string]bool{}
 	if dir := primeAgentDir(env); dir != "" {
@@ -76,8 +70,6 @@ func primeAgentConfiguredProviders(_ string, env map[string]string) []string {
 	return sortedProviderSet(found)
 }
 
-// primeAgentDir mirrors Prime's getAgentDir: its own override (with tilde
-// expansion), then ~/.prime/agent. Pi's override belongs to another harness.
 func primeAgentDir(env map[string]string) string {
 	home := catalogHome(env)
 	if dir := envValue(env, "PRIME_AGENT_CODING_AGENT_DIR"); dir != "" {

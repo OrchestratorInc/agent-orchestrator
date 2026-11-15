@@ -9,8 +9,6 @@ describe("MultiStepLoader", () => {
 		const view = render(<MultiStepLoader ariaLabel="Session setup activity" activeIndex={1} duration={1_000} steps={steps} />);
 		const activity = screen.getByRole("status", { name: "Session setup activity" });
 		const phrase = within(activity).getByTestId("multi-step-loader-step");
-		// The stage the loader mounts on shows at once; a loader taking over from
-		// another must not blank its label.
 		expect(phrase.querySelector(".multi-step-loader__step")).toBeNull();
 		for (const step of steps) expect(activity).toHaveTextContent(step);
 		expect(phrase).toHaveTextContent(steps[1]);
@@ -19,7 +17,6 @@ describe("MultiStepLoader", () => {
 		expect(within(activity).getAllByTestId("multi-step-loader-check")).toHaveLength(1);
 		expect(within(activity).getByTestId("multi-step-loader-active-dot")).toHaveClass("multi-step-loader__dot");
 		view.rerender(<MultiStepLoader ariaLabel="Session setup activity" activeIndex={2} duration={1_000} steps={steps} />);
-		// Advancing animates the new stage in.
 		expect(within(activity).getByTestId("multi-step-loader-step").querySelector(".multi-step-loader__step")).toHaveStyle("--multi-step-loader-duration: 1000ms");
 		expect(within(activity).getAllByTestId("multi-step-loader-check")).toHaveLength(2);
 		expect(within(activity).getAllByTestId("multi-step-loader-active-dot")).toHaveLength(1);

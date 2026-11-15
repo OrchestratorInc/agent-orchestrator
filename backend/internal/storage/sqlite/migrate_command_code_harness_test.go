@@ -5,10 +5,6 @@ import (
 	"testing"
 )
 
-// TestMigration0194AllowsCommandCodeAndReversesTheCurrentSchema mirrors the
-// fx, DeepSeek, and Codewhale coverage: the new harness must be insertable on
-// the schema 0194 upgrades, an unknown harness must still be rejected, and the
-// down migration must restore the exact prior constraint.
 func TestMigration0194AllowsCommandCodeAndReversesTheCurrentSchema(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 193)
 	upTo(t, db, 193)
@@ -30,7 +26,6 @@ func TestMigration0194AllowsCommandCodeAndReversesTheCurrentSchema(t *testing.T)
 	if _, err := db.Exec(insert, "unknown", 3, "unknown-agent"); err == nil {
 		t.Fatal("unknown harness bypassed the CHECK constraint")
 	}
-	// Clear the new harness value before downgrading to the older contract.
 	mustExec(t, db, `UPDATE sessions SET harness = '' WHERE harness = 'command-code'`)
 	downTo(t, db, 193)
 	var after string
@@ -46,11 +41,6 @@ func TestMigration0194AllowsCommandCodeAndReversesTheCurrentSchema(t *testing.T)
 	}
 }
 
-// TestReconcileCommandCodeAfterBurnedMigration covers a database that never ran
-// an earlier harness migration: goose skips the burned number, the current-schema
-// rewrite in 0194 matches nothing, and the repair is the only thing that adds
-// Command Code. It must also leave every earlier harness intact, which is the
-// failure mode when a migration widens a schema variant the repair also relies on.
 func TestReconcileCommandCodeAfterBurnedCommandCodeMigration(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 193)
 	if _, err := db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (194, 1)`); err != nil {

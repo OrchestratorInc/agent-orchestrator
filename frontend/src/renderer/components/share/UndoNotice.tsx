@@ -4,26 +4,15 @@ import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { Button } from "../ui/button";
 
-/** How long "Stopped sharing · Undo" stays up. Access is gone at once, not when it goes. */
 export const UNDO_NOTICE_MS = 8_000;
 
 export type UndoOffer = {
 	message: string;
-	/** Restores what was stopped; absent when it can't be shared again the same way. */
 	undo?: () => Promise<unknown>;
 };
 
 type Shown = UndoOffer & { id: number; shownAt: number };
 
-/**
- * The Undo offer after stopping a share, for a surface inside a modal (the
- * share dialog, Settings). The global toast sits outside the modal's focus
- * trap, where neither the keyboard nor a screen reader can reach it, so while
- * the surface is up the offer is shown in it. When the surface goes (the
- * dialog closes, the page changes) the offer moves to the global toast for
- * the time it has left; an offer made while the surface is down goes there
- * directly.
- */
 export function useUndoNotice(active: boolean) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -72,7 +61,6 @@ export function useUndoNotice(active: boolean) {
 	}, []);
 	const clearFailure = useCallback(() => setFailed(false), []);
 
-	// Hands a live offer to the global toast when the surface goes away.
 	const handOff = useCallback(() => {
 		const current = shownRef.current;
 		setShown(null);
@@ -89,10 +77,6 @@ export function useUndoNotice(active: boolean) {
 	return { shown, failed, show, dismiss, undo, clearFailure };
 }
 
-/**
- * "Stopped sharing with Platform · Undo", in the global toast's look, inside
- * the surface the share was stopped from. Hovering or focusing it holds it.
- */
 export function UndoNotice({ notice, onUndo, onDismiss, className }: {
 	notice: { id: number; message: string; undo?: unknown } | null;
 	onUndo: () => void;

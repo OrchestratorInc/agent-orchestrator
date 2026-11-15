@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Real SQL operations reject an expired context; the ordinary fake ignores it.
 type contextRespectingStore struct{ *fakeStore }
 
 func (s *contextRespectingStore) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
@@ -67,7 +66,6 @@ func TestTimedOutTerminalSwitchRollbackKeepsEditsMadeDuringIt(t *testing.T) {
 		t.Fatalf("error=%v, want target timeout", err)
 	}
 	got := st.sessions[rec.ID]
-	// The preview is kept too, by the lifecycle's metadata merge, which this fake does not do.
 	if got.DisplayName != "renamed while target starts" || !got.IsPinned {
 		t.Fatalf("rollback lost concurrent user edits: %+v", got)
 	}

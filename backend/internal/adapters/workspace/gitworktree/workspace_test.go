@@ -30,14 +30,8 @@ func TestCommandArgs(t *testing.T) {
 		{"rev parse", revParseVerifyArgs(repo, "origin/main"), []string{"-C", repo, "rev-parse", "--verify", "--quiet", "origin/main"}},
 		{"add existing", worktreeAddBranchArgs(repo, path, branch, false), []string{"-C", repo, "worktree", "add", path, branch}},
 		{"add new", worktreeAddNewBranchArgs(repo, branch, path, "origin/main", false), []string{"-C", repo, "worktree", "add", "-b", branch, path, "origin/main"}},
-		// --force is git's documented override for a registration whose directory
-		// is gone, and is passed exactly once: `-f -f` would also override an
-		// operator's `git worktree lock`.
 		{"add existing forced", worktreeAddBranchArgs(repo, path, branch, true), []string{"-C", repo, "worktree", "add", "--force", path, branch}},
 		{"add new forced", worktreeAddNewBranchArgs(repo, branch, path, "origin/main", true), []string{"-C", repo, "worktree", "add", "--force", "-b", branch, path, "origin/main"}},
-		// No --force: a dirty worktree must cause `git worktree remove` to fail so
-		// the post-prune safety check surfaces the refusal instead of deleting
-		// uncommitted agent work (review item RA).
 		{"remove", worktreeRemoveArgs(repo, path), []string{"-C", repo, "worktree", "remove", path}},
 		{"prune", worktreePruneArgs(repo), []string{"-C", repo, "worktree", "prune"}},
 		{"list", worktreeListPorcelainArgs(repo), []string{"-C", repo, "worktree", "list", "--porcelain"}},
@@ -148,8 +142,6 @@ func TestUntranslatedGitEnv(t *testing.T) {
 	}
 }
 
-// Only the commands whose messages are matched run untranslated; fetch and
-// update-ref, which run reference-transaction hooks, keep the user's locale.
 func TestReadsGitMessages(t *testing.T) {
 	for _, tc := range []struct {
 		args []string
@@ -291,12 +283,6 @@ func TestCreateReusesRegisteredWorktreeAtExpectedPath(t *testing.T) {
 	}
 }
 
-// TestCreateRecreatesMissingRegisteredWorktreeWithForce covers Fix 3
-// (issue #2775): a registration can survive in `git worktree list` after its
-// directory is gone (a prior daemon or an out-of-band `rm -rf`). Create must
-// not hand that dead path to the runtime; it must materialize a fresh worktree
-// at the same path via `worktree add --force`, git's own override for a
-// missing-but-registered path, without first removing or pruning anything.
 func TestCreateRecreatesMissingRegisteredWorktreeWithForce(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -304,7 +290,6 @@ func TestCreateRecreatesMissingRegisteredWorktreeWithForce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	// Deliberately not created on disk: the registration is stale.
 	path := filepath.Join(ws.managedRoot, "proj", "orchestrator", "proj-orchestrator")
 	cfg := ports.WorkspaceConfig{
 		ProjectID:     "proj",
@@ -315,8 +300,6 @@ func TestCreateRecreatesMissingRegisteredWorktreeWithForce(t *testing.T) {
 		BaseBranch:    "main",
 	}
 
-	// The stale registration is never cleared, so it stays in every listing:
-	// `worktree add --force` re-registers the path itself.
 	var calls []string
 	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
@@ -352,12 +335,6 @@ func TestCreateRecreatesMissingRegisteredWorktreeWithForce(t *testing.T) {
 	assertNoDestructiveRegistrationCleanup(t, "Create", got)
 }
 
-// assertNoDestructiveRegistrationCleanup pins the two cleanup mechanisms
-// stale-registration recovery must not use (PR #3098 review, illegalcall):
-// the repo-wide `git worktree prune`, which also drops sibling sessions'
-// registrations, and `git worktree remove --force`, which is check-then-delete
-// against an earlier os.Stat and deletes a live worktree, uncommitted agent work
-// included, if the directory reappears in between.
 func assertNoDestructiveRegistrationCleanup(t *testing.T, op, calls string) {
 	t.Helper()
 	if strings.Contains(calls, "worktree prune") {
@@ -368,14 +345,6 @@ func assertNoDestructiveRegistrationCleanup(t *testing.T, op, calls string) {
 	}
 }
 
-// TestRestoreRecreatesMissingRegisteredWorktreeWithForce is the Restore
-// counterpart: session_manager.RestoreAll relies on workspace.Restore to
-// re-materialize a worktree whose directory disappeared, but Restore only
-// exercised that path when the git registration was ALSO gone. The observed
-// #2775 case (session agent-orchestrator-78) had a registration and DB row
-// that survived a directory deletion, so Restore returned a handle to a
-// missing directory and the tmux launch command's `cd <path> || exit` guard
-// exited instantly with no diagnostic.
 func TestRestoreRecreatesMissingRegisteredWorktreeWithForce(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -429,14 +398,6 @@ func TestRestoreRecreatesMissingRegisteredWorktreeWithForce(t *testing.T) {
 	assertNoDestructiveRegistrationCleanup(t, "Restore", got)
 }
 
-// TestRestoreRecreatesOnRegisteredBranchNotCfgBranch is the regression test
-// for the real #2775 case: session agent-orchestrator-78 had its worktree
-// registered on a child branch (ao/agent-orchestrator-78/gh-pages-landing),
-// not the root branch AO would pass as cfg.Branch. When the directory is
-// missing and Restore falls through to recreate the worktree, it must
-// recreate it on the registration's OWN branch, not cfg.Branch: otherwise a
-// session on a child branch is silently checked out on root instead, which
-// looks to the agent like its work vanished.
 func TestRestoreRecreatesOnRegisteredBranchNotCfgBranch(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -446,11 +407,6 @@ func TestRestoreRecreatesOnRegisteredBranchNotCfgBranch(t *testing.T) {
 	}
 	path := filepath.Join(ws.managedRoot, "proj", "orchestrator", "proj-orchestrator")
 	const registeredBranch = "ao/proj-orchestrator/gh-pages-landing"
-	// cfg.Branch deliberately differs from the stale registration's branch
-	// (and is not a prefix of it, so a substring match on the recorded git
-	// invocations cannot accidentally pass either way), mirroring how AO
-	// passes the session's root branch through Restore while the on-disk
-	// worktree may have been registered on a child branch.
 	cfg := ports.WorkspaceConfig{
 		ProjectID:     "proj",
 		SessionID:     "proj-1",
@@ -498,11 +454,6 @@ func TestRestoreRecreatesOnRegisteredBranchNotCfgBranch(t *testing.T) {
 	}
 }
 
-// workspaceProjectRepoFake wires the git calls createWorkspaceProjectRepo makes
-// for branch "feature/test" based on origin/main. worktreeList is the porcelain
-// `worktree list` output the pre-check reads, and addResponses answers the
-// `worktree add` invocations: the first matching key wins, an entry with a nil
-// error succeeds. Every recorded call lands in *calls.
 func workspaceProjectRepoFake(t *testing.T, ws *Workspace, output, worktreeList string, calls *[]string, addResponses func(joined string, binary string, args []string) ([]byte, error, bool)) {
 	t.Helper()
 	exitErr := exitStatusOne(t)
@@ -532,12 +483,6 @@ func workspaceProjectRepoFake(t *testing.T, ws *Workspace, output, worktreeList 
 	}
 }
 
-// TestCreateWorkspaceProjectRepoAddsWithForceWhenRegistrationIsStale: the
-// ordinary #2775 shape (a registration at the output path whose directory is
-// gone) is recognised from the `worktree list` pre-check, so the very first add
-// carries git's own `--force` override. Nothing repo-wide (`worktree prune`)
-// and nothing destructive (`worktree remove`) is used to clear the registration
-// first, so a sibling session's registration cannot be collateral.
 func TestCreateWorkspaceProjectRepoAddsWithForceWhenRegistrationIsStale(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -546,7 +491,6 @@ func TestCreateWorkspaceProjectRepoAddsWithForceWhenRegistrationIsStale(t *testi
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	// output is registered but was never created on disk: the stale shape.
 	worktreeList := "worktree " + repo + "\nbranch refs/heads/main\n\nworktree " + output + "\nbranch refs/heads/stale\n\n"
 
 	var calls []string
@@ -577,19 +521,6 @@ func TestCreateWorkspaceProjectRepoAddsWithForceWhenRegistrationIsStale(t *testi
 	assertNoDestructiveRegistrationCleanup(t, "createWorkspaceProjectRepo", strings.Join(calls, "\n"))
 }
 
-// TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm covers the
-// branch-already-created finding (PR #3098 review, illegalcall). When the
-// registration goes stale only AFTER the pre-check, git rejects the plain
-// `add -b` — but it has already created refs/heads/feature/test by then,
-// because git creates the branch before it validates the target path. This fake
-// models that side effect (the previous one modelled the failed `-b` as
-// side-effect-free, which is why the bug slipped through): after the failed
-// attempt, `rev-parse --verify --quiet refs/heads/feature/test` resolves.
-//
-// The recovery must therefore retry on the existing-branch form
-// `worktree add --force <path> <branch>`. Repeating the `-b` form with --force
-// fails against real git with "a branch named 'feature/test' already exists"
-// (exit 255), so this test fails on the previous commit.
 func TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -598,10 +529,8 @@ func TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm(t *testin
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	// The pre-check sees no registration at output, so the first add is plain.
 	worktreeList := "worktree " + repo + "\nbranch refs/heads/main\n\n"
 
-	// What refExists sees for a branch that does not exist yet.
 	absentErr := exitStatusOne(t)
 
 	var calls []string
@@ -616,7 +545,6 @@ func TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm(t *testin
 			return nil, nil, true
 		case strings.Contains(joined, "worktree add -b feature/test "+output+" origin/main"):
 			addAttempts++
-			// git creates the branch, THEN rejects the path.
 			branchCreated = true
 			return nil, commandError{
 				args:   append([]string{binary}, args...),
@@ -625,7 +553,6 @@ func TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm(t *testin
 			}, true
 		case strings.Contains(joined, "worktree add --force -b feature/test "+output+" origin/main"):
 			addAttempts++
-			// The form real git refuses once the branch exists.
 			return nil, commandError{
 				args:   append([]string{binary}, args...),
 				output: "Preparing worktree (new branch 'feature/test')\nfatal: a branch named 'feature/test' already exists",
@@ -663,13 +590,6 @@ func TestCreateWorkspaceProjectRepoRecoveryRetriesOnExistingBranchForm(t *testin
 	assertNoDestructiveRegistrationCleanup(t, "createWorkspaceProjectRepo", got)
 }
 
-// TestAddNewBranchWorktreeRecoveryFailureReportsBothErrors pins the diagnostics
-// on the recovery path. When the retry fails, the original error names the
-// condition recovery was FOR ("is a missing but already registered worktree"),
-// not why recovery failed. The failure that matters most is a lost race:
-// another restore materialized the worktree at path first, so git refuses with
-// "already exists" — reporting only the original sends the reader looking for a
-// stale registration that is no longer there.
 func TestAddNewBranchWorktreeRecoveryFailureReportsBothErrors(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -678,8 +598,6 @@ func TestAddNewBranchWorktreeRecoveryFailureReportsBothErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	// No registration at output, so the first add is plain and the recovery
-	// below is reached only because the path went stale after the pre-check.
 	worktreeList := "worktree " + repo + "\nbranch refs/heads/main\n\n"
 
 	absentErr := exitStatusOne(t)
@@ -700,7 +618,6 @@ func TestAddNewBranchWorktreeRecoveryFailureReportsBothErrors(t *testing.T) {
 				err:    errors.New("exit status 128"),
 			}, true
 		case strings.Contains(joined, "worktree add --force "+output+" feature/test"):
-			// A concurrent restore won the race and materialized the worktree.
 			return nil, commandError{
 				args:   append([]string{binary}, args...),
 				output: "fatal: '" + output + "' already exists",
@@ -727,10 +644,6 @@ func TestAddNewBranchWorktreeRecoveryFailureReportsBothErrors(t *testing.T) {
 	}
 }
 
-// TestValidateConfigRejectsPathEscapingIDs covers review item RB: filepath.Join
-// in managedPath cleans `..` segments before validateManagedPath sees them, so a
-// session id of "../other" would stay inside managedRoot while jumping projects.
-// validateConfig must reject these at the source — before any path is composed.
 func TestValidateConfigRejectsPathEscapingIDs(t *testing.T) {
 	root := t.TempDir()
 	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": root}})
@@ -750,11 +663,9 @@ func TestValidateConfigRejectsPathEscapingIDs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create rejects it directly through validateConfig.
 			if _, err := ws.Create(context.Background(), tc.cfg); !errors.Is(err, ErrUnsafePath) {
 				t.Fatalf("Create err = %v, want ErrUnsafePath", err)
 			}
-			// Restore also goes through validateConfig, so the same guarantee holds.
 			if _, err := ws.Restore(context.Background(), tc.cfg); !errors.Is(err, ErrUnsafePath) {
 				t.Fatalf("Restore err = %v, want ErrUnsafePath", err)
 			}
@@ -762,14 +673,11 @@ func TestValidateConfigRejectsPathEscapingIDs(t *testing.T) {
 	}
 }
 
-// TestValidateConfigAcceptsBenignIDs is a positive guard so the rejection rule
-// above does not creep into normal session/project naming. Hyphens, underscores,
-// dots inside (e.g. "foo.bar"), and digits all stay allowed.
 func TestValidateConfigAcceptsBenignIDs(t *testing.T) {
 	cases := []ports.WorkspaceConfig{
 		{ProjectID: "proj-1", SessionID: "sess_2", Branch: "main"},
 		{ProjectID: "foo.bar", SessionID: "abc-42", Branch: "main"},
-		{ProjectID: "p", SessionID: "..hidden", Branch: "main"}, // leading dots != ".."
+		{ProjectID: "p", SessionID: "..hidden", Branch: "main"},
 	}
 	for i, cfg := range cases {
 		if err := validateConfig(cfg); err != nil {
@@ -885,18 +793,12 @@ func TestDestroyRefusesStillRegisteredPathAndPreservesDirectory(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "still registered") {
 		t.Fatalf("destroy error = %v", err)
 	}
-	// The stub reports a clean `git status`, so the refusal must NOT be typed as
-	// a dirty workspace — Kill/Cleanup would otherwise silently skip a refusal
-	// that has a different cause (e.g. a locked worktree).
 	if errors.Is(err, ports.ErrWorkspaceDirty) {
 		t.Fatalf("destroy error = %v, want non-dirty refusal for clean status", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(path, "keep.txt")); statErr != nil {
 		t.Fatalf("expected directory to be preserved: %v", statErr)
 	}
-	// Belt-and-braces: --force must NEVER be passed to `git worktree remove` from
-	// Destroy. If it ever is, dirty worktrees would be deleted instead of routed
-	// to Skipped by the Session Manager's Cleanup (review item RA).
 	for _, a := range removeArgs {
 		if a == "--force" || a == "-f" {
 			t.Fatalf("git worktree remove was called with %q; --force must never be passed", a)
@@ -904,11 +806,6 @@ func TestDestroyRefusesStillRegisteredPathAndPreservesDirectory(t *testing.T) {
 	}
 }
 
-// TestDestroyClassifiesDirtyWorktree covers the typed dirty refusal: when
-// `git worktree remove` fails, the path stays registered, and `git status`
-// reports uncommitted work, Destroy must wrap ports.ErrWorkspaceDirty so the
-// Session Manager can preserve the workspace (Kill freed=false, Cleanup
-// skipped-with-reason) instead of surfacing an opaque 500.
 func TestDestroyClassifiesDirtyWorktree(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -1030,10 +927,6 @@ func TestStashUncommittedOutsideManagedPathIsUnsafeNotStale(t *testing.T) {
 	}
 }
 
-// TestAddWorktreeRefusesBranchCheckedOutElsewhere covers Bug 3 (a): if the
-// requested branch is already checked out in another worktree of the same repo,
-// Create must surface ports.ErrWorkspaceBranchCheckedOutElsewhere so the HTTP
-// layer can render a typed 409 instead of leaking raw git stderr through a 500.
 func TestAddWorktreeRefusesBranchCheckedOutElsewhere(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -1065,10 +958,6 @@ func TestAddWorktreeRefusesBranchCheckedOutElsewhere(t *testing.T) {
 	}
 }
 
-// TestCreateRejectsInvalidBranchName covers the residual of #152 Bug 3: a branch
-// name rejected by `git check-ref-format` must surface
-// ports.ErrWorkspaceBranchInvalid so the HTTP layer renders a typed 400 instead
-// of leaking raw git stderr through a 500.
 func TestCreateRejectsInvalidBranchName(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -1093,9 +982,6 @@ func TestCreateRejectsInvalidBranchName(t *testing.T) {
 	}
 }
 
-// TestCreateDoesNotCallKilledBranchProbeInvalid covers #5043: a check-ref-format
-// probe that git never finished says nothing about the name, so it must not
-// surface as ports.ErrWorkspaceBranchInvalid (INVALID_BRANCH).
 func TestCreateDoesNotCallKilledBranchProbeInvalid(t *testing.T) {
 	killed := func(t *testing.T) error {
 		if runtime.GOOS == "windows" {
@@ -1146,10 +1032,6 @@ func TestCreateDoesNotCallKilledBranchProbeInvalid(t *testing.T) {
 	}
 }
 
-// TestAddWorktreeReportsBranchNotFetched covers Bug 3 (b): if no local head,
-// no origin remote-tracking branch, no default branch ref, and no tag of the
-// same name is reachable, Create must surface ports.ErrWorkspaceBranchNotFetched
-// so the HTTP layer can render a typed 400 with a `git fetch` suggestion.
 func TestAddWorktreeReportsBranchNotFetched(t *testing.T) {
 	root := t.TempDir()
 	repo := t.TempDir()
@@ -1157,7 +1039,6 @@ func TestAddWorktreeReportsBranchNotFetched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	// Build a real exit-1 error so refExists treats every probe as "absent".
 	exitOne := exitStatusOne(t)
 	ws.run = func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")

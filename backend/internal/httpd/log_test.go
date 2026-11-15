@@ -19,10 +19,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// TestRequestLoggerRecords5xxCause: the wire envelope collapses unrecognized
-// service errors into "Internal server error", so the access log line is the
-// only place the cause can survive. A 500 must carry it; a typed 4xx (whose
-// envelope already explains itself) must not.
 func TestRequestLoggerRecords5xxCause(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -257,9 +253,6 @@ func (s *captureSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 
 func (s *captureSink) Close(context.Context) error { return nil }
 
-// TestRequestLoggerCapturesRegisteredFaultCodes: a registered daemon fault is
-// captured even though it answers with a 4xx, while an ordinary 4xx, the
-// user's own setup script failing, and lock contention stay out of Sentry.
 func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
 	type captured struct{ category, status, code string }
 	var got []captured
@@ -288,7 +281,6 @@ func TestRequestLoggerCapturesRegisteredFaultCodes(t *testing.T) {
 	router.Get("/busy", func(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, apierr.Unavailable("SERVICE_UNAVAILABLE", "busy"))
 	})
-	// An unfinished Codex sign-in is user setup state, even after a deadline.
 	router.Post("/codex-setup", func(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, apierr.Unavailable("CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete"))
 	})

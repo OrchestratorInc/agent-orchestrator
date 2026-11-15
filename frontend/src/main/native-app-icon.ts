@@ -13,10 +13,8 @@ type IconOptions = {
 	run?: (command: string, args: readonly string[]) => Promise<string>;
 };
 
-/** macOS file-type icons can be generic for .app directories. Read the bundle's declared icon instead. */
 export async function readNativeAppIcon(appPath: string, options: IconOptions): Promise<string> {
 	if (options.platform !== "darwin") return options.fileIcon(appPath);
-	// A bare CLI has no application branding; callers keep their existing fallback.
 	if (!appPath.toLowerCase().endsWith(".app")) return "";
 	const run = options.run ?? (async (command, args) => {
 		const { stdout } = await execFileAsync(command, args, { encoding: "utf8", timeout: 5_000, maxBuffer: 1024 * 1024 });

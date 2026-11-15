@@ -7,14 +7,10 @@ import { apiClient } from "../../lib/api-client";
 import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 
-// Remote access away from home needs sign-in. The daemon fake is just enough
-// to start the bridge: enable turns it on with its tunnel, and remote-access
-// asks for one.
 const fake = vi.hoisted(() => ({
 	signedIn: false,
 	signIn: vi.fn(),
 	failRemoteAccess: false,
-	// The quick tunnel's name once remote access starts; "" starts none.
 	tunnelHost: "",
 	status: {
 		enabled: false,
@@ -91,8 +87,6 @@ function renderContent() {
 beforeEach(() => {
 	Object.assign(fake.status, { enabled: false, noPublicTunnel: false, password: "", endpoints: [] });
 	vi.mocked(apiClient.POST).mockClear();
-	// Reset, not cleared: a rejection a test queued and never used must not
-	// reach the next test.
 	vi.mocked(linkThisComputer).mockReset().mockImplementation(async () => ({ hostId: "h_fixture", added: true }));
 	vi.mocked(deleteAccountRemoteHost).mockClear();
 	fake.failRemoteAccess = false;
@@ -117,7 +111,6 @@ test("a signed-in computer starts as signed out, then is linked and asks for its
 	renderContent();
 	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
-	// enable first: an app that quits during the link leaves the quick tunnel, not a LAN-only computer.
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable", "/api/v1/mobile/remote-access"]));
 	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", undefined);
 	expect(vi.mocked(linkThisComputer).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(apiClient.POST).mock.invocationCallOrder[1]);
@@ -154,7 +147,6 @@ test("a new password links the computer again, so its fixed address survives", a
 	renderContent();
 	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
 
-	// Only while the account still lists it: one removed from the account is not listed again.
 	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true }));
 	expect(posted()).toEqual(["/api/v1/mobile/regenerate"]);
 });

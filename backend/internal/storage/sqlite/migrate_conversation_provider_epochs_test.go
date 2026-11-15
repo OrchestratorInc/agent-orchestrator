@@ -34,7 +34,6 @@ INSERT INTO conversation_branches (
 
 	upTo(t, db, 101)
 
-	// The session-owned trigger from 0087 must survive the table rebuild.
 	mustExec(t, db, `
 UPDATE sessions
 SET provider_conversation_id = 'native-a', updated_at = ?
@@ -50,8 +49,6 @@ WHERE id = 'conversation-1:root';`).Scan(&rootProviderID); err != nil {
 		t.Fatalf("root provider id = %q, want native-a", rootProviderID)
 	}
 
-	// Returning to native-a after another provider creates a new ownership node;
-	// it must not collide with the retained root identity.
 	mustExec(t, db, `
 INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,

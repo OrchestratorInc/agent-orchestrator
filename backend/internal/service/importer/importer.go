@@ -1,9 +1,3 @@
-// Package importer is the controller-facing service for the legacy-AO import.
-// It wraps the internal/legacyimport engine with a detection probe (is a legacy
-// install present?) and a trigger that runs the import through the live daemon's
-// store, so the daemon stays the sole writer. Whether to PROMPT for the import
-// is the desktop app's job (the app-state.json migration marker), so this probe
-// reports only physical availability, not "already imported".
 package importer
 
 import (
@@ -24,18 +18,15 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// Store is the storage slice the import runs through; *sqlite.Store satisfies it.
 type Store interface {
 	legacyimport.Store
 }
 
-// Status reports whether a legacy AO install is physically present to import.
 type Status struct {
 	Available  bool   `json:"available"`
 	LegacyRoot string `json:"legacyRoot"`
 }
 
-// Service is the controller-facing import contract.
 type Service interface {
 	Status(ctx context.Context) (Status, error)
 	Run(ctx context.Context) (legacyimport.Report, error)
@@ -43,7 +34,6 @@ type Service interface {
 	PrepareGit(ctx context.Context, in GitPreparationInput) (GitPreparationResult, error)
 }
 
-// Import kinds, next steps, Git preparation actions, and event states shared by the import API.
 const (
 	ImportKindProject   = "project"
 	ImportKindWorkspace = "workspace"
@@ -66,13 +56,11 @@ const (
 
 const importGitHubRepositoryConfigKey = "ao.import.githubRepository"
 
-// ImportValidationInput is the body shape for POST /api/v1/imports/validate.
 type ImportValidationInput struct {
 	ImportKind string `json:"importKind" enum:"project,workspace" minLength:"1"`
 	Path       string `json:"path" minLength:"1"`
 }
 
-// GitPreparationInput is the body shape for POST /api/v1/imports/prepare-git.
 type GitPreparationInput struct {
 	ImportKind       string                          `json:"importKind" enum:"project,workspace" minLength:"1"`
 	Path             string                          `json:"path" minLength:"1"`
@@ -84,14 +72,12 @@ type GitPreparationInput struct {
 	Stepwise         bool                            `json:"stepwise,omitempty"`
 }
 
-// GitHubRepositoryPreparation describes the GitHub repository AO should create for a project import.
 type GitHubRepositoryPreparation struct {
 	Owner   string `json:"owner,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Private *bool  `json:"private,omitempty"`
 }
 
-// GitRepositoryPreparationInput approves Git preparation for one repository.
 type GitRepositoryPreparationInput struct {
 	RepoPath         string                       `json:"repoPath" minLength:"1"`
 	ApprovedActions  []string                     `json:"approvedActions"`
@@ -100,7 +86,6 @@ type GitRepositoryPreparationInput struct {
 	InitialCommitMsg string                       `json:"initialCommitMessage,omitempty"`
 }
 
-// RepoGitStatus describes the Git readiness of one repository candidate.
 type RepoGitStatus struct {
 	RepoPath        string   `json:"repoPath"`
 	IsRepo          bool     `json:"isRepo"`
@@ -112,20 +97,16 @@ type RepoGitStatus struct {
 	BlockingErrors  []string `json:"blockingErrors"`
 }
 
-// ImportValidationResult is shared by project import validation and future
-// workspace import validation.
 type ImportValidationResult struct {
 	ImportKind     string          `json:"importKind"`
 	IsValid        bool            `json:"isValid"`
 	BlockingErrors []string        `json:"blockingErrors"`
 	Root           RepoGitStatus   `json:"root"`
 	ChildRepos     []RepoGitStatus `json:"childRepos,omitempty"`
-	// Warning is advisory UI copy for non-blocking classification details.
-	Warning  string `json:"warning,omitempty"`
-	NextStep string `json:"nextStep" enum:"error,choose_import_kind,prepare_git,continue"`
+	Warning        string          `json:"warning,omitempty"`
+	NextStep       string          `json:"nextStep" enum:"error,choose_import_kind,prepare_git,continue"`
 }
 
-// GitPreparationEvent reports one state transition for a requested Git action.
 type GitPreparationEvent struct {
 	Action   string `json:"action" enum:"git_init,git_commit,create_remote_repository,set_remote"`
 	RepoPath string `json:"repoPath"`
@@ -134,21 +115,16 @@ type GitPreparationEvent struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// GitPreparationResult is the body of POST /api/v1/imports/prepare-git.
 type GitPreparationResult struct {
 	Events     []GitPreparationEvent  `json:"events"`
 	Validation ImportValidationResult `json:"validation"`
 }
 
-// Deps bundles the import service's dependencies.
 type Deps struct {
-	// Store is the rewrite's durable store (the daemon's shared *sqlite.Store).
 	Store Store
-	// Root overrides the legacy AO root to read. Empty -> the default.
-	Root string
+	Root  string
 }
 
-// Manager implements Service over the daemon's store.
 type Manager struct {
 	store Store
 	root  string
@@ -156,7 +132,6 @@ type Manager struct {
 
 var _ Service = (*Manager)(nil)
 
-// New constructs the import service. An empty Root falls back to the default.
 func New(deps Deps) *Manager {
 	root := deps.Root
 	if root == "" {
@@ -165,20 +140,14 @@ func New(deps Deps) *Manager {
 	return &Manager{store: deps.Store, root: root}
 }
 
-// Status reports availability only: legacy data present at the root. It never
-// errors on a missing legacy store; that is simply "not available".
 func (m *Manager) Status(_ context.Context) (Status, error) {
 	return Status{Available: legacyimport.HasLegacyData(m.root), LegacyRoot: m.root}, nil
 }
 
-// Run executes the import through the daemon's store. Idempotent: the engine
-// skips rows that already exist. Legacy files are never modified.
 func (m *Manager) Run(ctx context.Context) (legacyimport.Report, error) {
 	return legacyimport.Run(ctx, m.store, legacyimport.Options{Root: m.root})
 }
 
-// Validate inspects a selected folder for project import readiness without
-// mutating Git or the filesystem.
 func (m *Manager) Validate(ctx context.Context, in ImportValidationInput) (ImportValidationResult, error) {
 	importKind := strings.TrimSpace(in.ImportKind)
 	if importKind != ImportKindProject && importKind != ImportKindWorkspace {
@@ -282,8 +251,6 @@ func (m *Manager) Validate(ctx context.Context, in ImportValidationInput) (Impor
 	return result, nil
 }
 
-// PrepareGit executes approved missing Git preparation actions for a project
-// import. Actions run in a fixed order and are skipped when already satisfied.
 func (m *Manager) PrepareGit(ctx context.Context, in GitPreparationInput) (GitPreparationResult, error) {
 	importKind := strings.TrimSpace(in.ImportKind)
 	if importKind != ImportKindProject && importKind != ImportKindWorkspace {
@@ -544,8 +511,6 @@ func runGitPreparationAction(ctx context.Context, path, action string, in GitRep
 			return fmt.Errorf("record default branch: %w", err)
 		}
 	case GitPreparationActionCommit:
-		// Empty clones already have .git and skip the init action. Record their
-		// actual initial branch too, before committing so a retry cannot lose it.
 		if err := gitdefault.New("git", nil).RecordInitialBranch(ctx, path); err != nil {
 			return err
 		}
@@ -656,9 +621,6 @@ func normalizeImportPath(raw string) (string, error) {
 	return filepath.Clean(abs), nil
 }
 
-// unsafeImportPath protects broad user and AO-owned directories from the Git
-// preparation actions below. Import preparation is deliberately separate from
-// project setup, so it cannot rely on the latter's path-safety guard.
 func unsafeImportPath(path string) bool {
 	clean := comparableImportPath(path)
 	if filepath.Dir(clean) == clean {
@@ -799,9 +761,6 @@ func importRemoteExists(path, name string) bool {
 }
 
 func resolveImportOriginURL(path string) string {
-	// `git remote get-url origin` falls back to the literal string "origin"
-	// when the remote section exists without a URL. Read the configured value
-	// directly so validation can repair that incomplete state.
 	out, err := aoprocess.Command("git", "-C", path, "config", "--get", "remote.origin.url").Output()
 	if err != nil {
 		return ""

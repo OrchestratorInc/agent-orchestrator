@@ -54,7 +54,6 @@ func newKeepAwakeBridge(t *testing.T, ka KeepAwakeController) (*BridgeService, *
 	}, lan
 }
 
-// Unsupported platforms report nothing to toggle and refuse the switch.
 func TestKeepAwakeUnsupportedWithoutController(t *testing.T) {
 	b, _ := newKeepAwakeBridge(t, nil)
 	if got := b.Status().KeepAwake; got != (KeepAwakeStatus{}) {
@@ -83,7 +82,6 @@ func TestKeepAwakeIndependentOfBridge(t *testing.T) {
 	if !ka.active || ka.starts != 1 {
 		t.Fatal("enabling mobile must not acquire another awake hold")
 	}
-	// Enable rewrites persisted state; the choice must survive it.
 	if st, _ := mobilebridge.Load(b.ConfigPath); !st.KeepAwake {
 		t.Fatal("Enable dropped the persisted KeepAwake choice")
 	}
@@ -231,7 +229,6 @@ func TestLidAwakeIndependentOfBridgeAndSurvivesLegacyRequests(t *testing.T) {
 	if st, err := mobilebridge.Load(b.ConfigPath); err != nil || !st.KeepAwakeLid || !st.BrowserRemoteAccess {
 		t.Fatalf("enable dropped browser sharing or closed-lid preference: %+v, %v", st, err)
 	}
-	// A legacy client's boolean-only request must retain the new preference.
 	if _, err := b.SetKeepAwake(false); err != nil {
 		t.Fatal(err)
 	}

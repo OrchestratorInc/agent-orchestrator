@@ -215,7 +215,6 @@ describe("AgentModelCombobox", () => {
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(picker);
 		expect(screen.queryByRole("menuitem", { name: /Default/ })).not.toBeInTheDocument();
-		// The models are listed with none selected.
 		const sonnet = screen.getByRole("menuitem", { name: "Sonnet" });
 		expect(sonnet).not.toHaveAttribute("aria-current");
 	});
@@ -313,8 +312,6 @@ describe("AgentModelCombobox", () => {
 		renderCombobox(models);
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 
-		// The first 50 catalog models. The custom-model action appears
-		// only after the user types a value that does not match the catalog.
 		expect(screen.getAllByRole("menuitem")).toHaveLength(50);
 		expect(screen.getByText("Showing 50 of 1,397 matching models — type to narrow")).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: /Model 1000/ })).not.toBeInTheDocument();

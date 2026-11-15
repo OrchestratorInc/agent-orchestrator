@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// Check statuses. A key is "unverified" when AO has no reviewed endpoint for
-// its provider, and "unreachable" when the provider could not answer.
 const (
 	CheckValid       = "valid"
 	CheckInvalid     = "invalid"
@@ -20,33 +18,22 @@ const (
 	CheckUnreachable = "unreachable"
 )
 
-// CheckResult reports whether a provider accepted a key, with the model IDs
-// that key can list. It never carries the key.
 type CheckResult struct {
 	Status string   `json:"status" enum:"valid,invalid,unverified,unreachable"`
 	Models []string `json:"models,omitempty"`
 }
 
-// checkEndpoint is one provider's reviewed, fixed model-list request. The key
-// is sent only to url (and validateURL, when the list itself is public).
 type checkEndpoint struct {
-	url string
-	// validateURL, when set, authenticates the key because url is public.
-	validateURL string
-	authorize   func(*http.Request, string)
-	// prefix is stripped from each listed ID (Gemini lists "models/<id>").
-	prefix string
-	// rejectsWith400 marks providers that answer a bad key with HTTP 400
-	// (Gemini's API_KEY_INVALID, xAI) instead of 401 or 403.
+	url            string
+	validateURL    string
+	authorize      func(*http.Request, string)
+	prefix         string
 	rejectsWith400 bool
-	// regional marks providers whose keys belong to one region's endpoint, so
-	// a key this endpoint rejects may still be valid at another.
-	regional bool
+	regional       bool
 }
 
 func bearer(req *http.Request, key string) { req.Header.Set("Authorization", "Bearer "+key) }
 
-// checkEndpoints is a package variable so tests can point it at a local server.
 var checkEndpoints = map[string]checkEndpoint{
 	"ANTHROPIC_API_KEY": {url: "https://api.anthropic.com/v1/models?limit=1000", authorize: func(req *http.Request, key string) {
 		req.Header.Set("x-api-key", key)
@@ -62,34 +49,25 @@ var checkEndpoints = map[string]checkEndpoint{
 	"XAI_API_KEY":        {url: "https://api.x.ai/v1/models", authorize: bearer, rejectsWith400: true},
 	"MISTRAL_API_KEY":    {url: "https://api.mistral.ai/v1/models", authorize: bearer},
 	"FIREWORKS_API_KEY":  {url: "https://api.fireworks.ai/inference/v1/models", authorize: bearer},
-	// Moonshot's .ai and .cn platforms issue separate keys.
-	"MOONSHOT_API_KEY": {url: "https://api.moonshot.ai/v1/models", authorize: bearer, regional: true},
-	// Matches the China endpoint the Qwen DashScope method configures; an
-	// international key is not accepted there.
-	"DASHSCOPE_API_KEY": {url: "https://dashscope.aliyuncs.com/compatible-mode/v1/models", authorize: bearer, regional: true},
+	"MOONSHOT_API_KEY":   {url: "https://api.moonshot.ai/v1/models", authorize: bearer, regional: true},
+	"DASHSCOPE_API_KEY":  {url: "https://dashscope.aliyuncs.com/compatible-mode/v1/models", authorize: bearer, regional: true},
 }
 
-// checkClient never follows a redirect: Go drops Authorization on a
-// cross-host hop but would re-send x-api-key or x-goog-api-key, and follow an
-// https-to-http downgrade. A redirect reads as unreachable.
 var checkClient = &http.Client{
 	Timeout:       10 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
 const (
-	// OpenRouter's full catalog alone runs to several megabytes.
 	maxCheckBody   = 32 << 20
 	maxCheckModels = 1000
 )
 
-// Checkable reports whether AO can ask name's provider to accept a key.
 func Checkable(name string) bool {
 	_, ok := checkEndpoints[name]
 	return ok
 }
 
-// Check asks name's provider whether it accepts value and lists its models.
 func Check(ctx context.Context, name, value string) (CheckResult, error) {
 	if !validName(name) || !validValue(value) || value == "" {
 		return CheckResult{}, errors.New("invalid provider credential")
@@ -140,9 +118,6 @@ func fetch(ctx context.Context, url string, endpoint checkEndpoint, key string) 
 	return CheckValid, body
 }
 
-// modelIDs reads the OpenAI-style {"data":[{"id"}]} and Gemini-style
-// {"models":[{"name"}]} shapes. An unexpected shape lists no models; the key
-// was still accepted.
 func modelIDs(body []byte, prefix string) []string {
 	var list struct {
 		Data []struct {

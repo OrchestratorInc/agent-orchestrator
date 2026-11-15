@@ -36,7 +36,6 @@ describe("useCloudModelCatalog", () => {
 		await act(async () => { await vi.advanceTimersByTimeAsync(UNVERIFIED_CATALOG_REFRESH_MS + 10); });
 		expect(seen.at(-1)).toBe("worker");
 		expect(listUserAgentModels).toHaveBeenCalledTimes(2);
-		// The account's own list is not polled.
 		await act(async () => { await vi.advanceTimersByTimeAsync(3 * UNVERIFIED_CATALOG_REFRESH_MS); });
 		expect(listUserAgentModels).toHaveBeenCalledTimes(2);
 	});
@@ -51,7 +50,6 @@ describe("useCloudModelCatalog", () => {
 		const to = async (at: number) => { await after(at - now); now = at; };
 		await to(10);
 		expect(listUserAgentModels).toHaveBeenCalledTimes(1);
-		// Each gap doubles from 15s, and stops growing at 5 minutes.
 		const gaps = [15_000, 30_000, 60_000, 120_000, 240_000, MAX_UNVERIFIED_CATALOG_REFRESH_MS, MAX_UNVERIFIED_CATALOG_REFRESH_MS];
 		let readAt = 0;
 		for (const [index, gap] of gaps.entries()) {
@@ -68,12 +66,11 @@ describe("useCloudModelCatalog", () => {
 		listUserAgentModels.mockResolvedValue(release);
 		render(<QueryClientProvider client={new QueryClient()}><Probe onState={() => undefined} /></QueryClientProvider>);
 		await after(10);
-		await after(15_000 + 30_000 + 60_000 + 50); // three more reads: the next is 120s away
+		await after(15_000 + 30_000 + 60_000 + 50);
 		expect(listUserAgentModels).toHaveBeenCalledTimes(4);
 		await act(async () => { focusManager.setFocused(false); });
 		await act(async () => { focusManager.setFocused(true); });
 		await after(10);
-		// Focus reads it at once, and the next read is 15s later, not 120s.
 		expect(listUserAgentModels).toHaveBeenCalledTimes(5);
 		await after(UNVERIFIED_CATALOG_REFRESH_MS + 50);
 		expect(listUserAgentModels).toHaveBeenCalledTimes(6);
@@ -88,7 +85,6 @@ describe("useCloudModelCatalog", () => {
 		view.rerender(<QueryClientProvider client={client}><Probe onState={() => undefined} /><Probe onState={() => undefined} /></QueryClientProvider>);
 		await after(5_000);
 		view.rerender(<QueryClientProvider client={client}><Probe onState={() => undefined} /><Probe onState={() => undefined} /><Probe onState={() => undefined} /></QueryClientProvider>);
-		// Reads at 0, 15s, 45s and 105s: one per interval, not one per picker.
 		await after(105_000 - 10_000 + 50);
 		expect(listUserAgentModels).toHaveBeenCalledTimes(4);
 	});

@@ -29,7 +29,6 @@ func TestPrimeAgentConfiguredProvidersReadsAuthStoreAndEnvironment(t *testing.T)
 		t.Fatalf("providers = %v, want %v", got, want)
 	}
 
-	// PRIME_AGENT_CODING_AGENT_DIR moves the store; Bedrock follows AWS credentials.
 	other := filepath.Join(home, "other")
 	writeProviderTestFile(t, filepath.Join(other, "auth.json"), `{"github-copilot":{"type":"oauth","refresh":"r"}}`)
 	env["PRIME_AGENT_CODING_AGENT_DIR"] = other

@@ -30,8 +30,6 @@ export function usePreparedClone(hostId?: string) {
 		if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
 		if (response?.status === 404 || response?.status === 405) {
 			supportsCheckoutRelease.current = false;
-			// Older daemons lack this optional preflight. Keep the dialog's path
-			// preview and let prepare enforce destination conflicts as before.
 			return { remoteUrl: input.remoteUrl, path: "", exists: false, canUseExisting: false };
 		}
 		if (error) throw error;
@@ -70,8 +68,6 @@ export function usePreparedClone(hostId?: string) {
 		const current = currentRef.current;
 		if (!current) return;
 		if (!supportsCheckoutRelease.current) {
-			// Legacy daemons cannot release ownership without deleting files.
-			// Preserve the checkout rather than send an unsupported keep flag.
 			currentRef.current = null;
 			inputRef.current = null;
 			return;
@@ -106,11 +102,6 @@ async function prepareCloneOnce(client: DaemonClient, body: { remoteUrl: string;
 	return data;
 }
 
-/**
- * Clones through the streaming route, reporting each git step as it starts.
- * Resolves null when the daemon predates the route, so the caller can clone
- * through the JSON route instead.
- */
 async function prepareCloneStream(
 	client: DaemonClient,
 	body: { remoteUrl: string; destinationParent: string },
@@ -145,7 +136,6 @@ async function prepareCloneStream(
 		if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
 		throw err;
 	} finally {
-		// The daemon closes after its last event; this only drops a stream we stop reading early.
 		void reader.cancel().catch(() => undefined);
 	}
 	if (signal.aborted) throw new DOMException("Cancelled", "AbortError");

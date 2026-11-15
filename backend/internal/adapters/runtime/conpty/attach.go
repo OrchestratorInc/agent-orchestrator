@@ -1,8 +1,3 @@
-// attach.go - conpty Attach: a loopback Stream over the B3 pty-host. Unlike
-// tmux, conpty does not spawn an attach CLI; it dials the session's
-// loopback host and speaks the B1 framing protocol directly. The host replays
-// the scrollback Snapshot as the first MsgTerminalData on connect, so a fresh
-// Read naturally yields the repaint first.
 package conpty
 
 import (
@@ -17,9 +12,6 @@ import (
 
 var _ ports.Attacher = (*Runtime)(nil)
 
-// Attach opens a fresh attach Stream for the session by dialing its loopback
-// pty-host. rows/cols size the host's PTY from birth when known (a MsgResize is
-// sent right after connect). ctx cancellation closes the Stream.
 func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, cols uint16) (ports.Stream, error) {
 	sess, err := r.resolveWithEvidence(ctx, handle.ID)
 	if err != nil {
@@ -36,13 +28,8 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 	pipe := newBytePipe()
 	s := &loopbackStream{conn: conn, pr: pipe, pw: pipe}
 
-	// Pump host frames: MsgTerminalData payloads go into the pipe that Read
-	// drains. The first such frame is the scrollback snapshot, so the replay
-	// arrives before any live output.
 	go s.pump()
 
-	// ctx cancellation must terminate the stream (mirrors the unix/windows
-	// spawn paths closing the PTY on ctx.Done).
 	go func() {
 		<-ctx.Done()
 		_ = s.Close()
@@ -54,9 +41,6 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 			return nil, err
 		}
 	}
-	// A detached host deliberately survives its child for scrollback. Ask for
-	// the child status on every attach so a pane opened after process exit gets
-	// the same definitive exit signal as a pane that observed the live event.
 	statusFrame, _ := EncodeMessage(MsgStatusReq, nil)
 	if _, err := conn.Write(statusFrame); err != nil {
 		_ = s.Close()
@@ -65,10 +49,6 @@ func (r *Runtime) Attach(ctx context.Context, handle ports.RuntimeHandle, rows, 
 	return s, nil
 }
 
-// loopbackStream is a ports.Stream backed by a single loopback connection to the
-// pty-host. The pump goroutine reframes host output into a bytePipe so Read
-// presents a plain byte stream (all buffered output per Read); Write/Resize
-// encode client frames onto the conn.
 type loopbackStream struct {
 	conn io.ReadWriteCloser
 	pr   *bytePipe
@@ -77,14 +57,11 @@ type loopbackStream struct {
 	closeOnce sync.Once
 }
 
-// pump reads framed host messages and writes MsgTerminalData payloads into the
-// pipe. It closes the pipe when the connection ends so Read returns EOF.
 func (s *loopbackStream) pump() {
 	processExited := false
 	parser := NewMessageParser(func(msgType byte, payload []byte) {
 		switch msgType {
 		case MsgTerminalData:
-			// Write blocks once the pipe is full, preserving back-pressure and order.
 			_, _ = s.pw.Write(payload)
 		case MsgStatusRes:
 			var status StatusPayload
@@ -126,7 +103,7 @@ func (s *loopbackStream) Write(p []byte) (int, error) {
 
 func (s *loopbackStream) Resize(rows, cols uint16) error {
 	payload, _ := json.Marshal(ResizePayload{Cols: int(cols), Rows: int(rows)})
-	frame, err := EncodeMessage(MsgResize, payload) // small JSON payload, never overflows uint32
+	frame, err := EncodeMessage(MsgResize, payload)
 	if err != nil {
 		return err
 	}
@@ -134,9 +111,6 @@ func (s *loopbackStream) Resize(rows, cols uint16) error {
 	return err
 }
 
-// Close closes the conn and the pipe. Idempotent. Closing the conn unblocks
-// pump's Read, which then closes the pipe-writer too; closing both here makes
-// Close safe to call directly (e.g. on ctx cancel) without waiting for pump.
 func (s *loopbackStream) Close() error {
 	var err error
 	s.closeOnce.Do(func() {

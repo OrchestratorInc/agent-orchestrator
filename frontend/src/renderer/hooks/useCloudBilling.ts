@@ -6,13 +6,6 @@ import { cloudBillingQueryKey, useCloudOffering } from "./useCloudOffering";
 
 export { cloudBillingQueryKey };
 
-/**
- * The signed-in org's plan, limits and usage. Undefined while signed out or
- * loading, and never fetched for an org that is not on self-serve billing
- * (contract, billing off): those orgs have no plans to show. The fallback for
- * an older control plane reads the same cache entry to learn the billing mode,
- * but only a self-serve org polls it.
- */
 export function useCloudBilling(options: { pollUntil?: number } = {}) {
 	const { status } = useCloudSession();
 	const { client, ready } = useCloudCp();
@@ -30,7 +23,6 @@ export function useCloudBilling(options: { pollUntil?: number } = {}) {
 	return { ...query, orgId, offering };
 }
 
-/** The paid plan to show beside the user's name, or null for none. */
 export function paidPlanBadge(summary: CloudCpBillingSummary | undefined): string | null {
 	if (!summary?.enabled || !summary.entitled || summary.exempt) return null;
 	if (summary.billingMode !== undefined && summary.billingMode !== "self_serve") return null;

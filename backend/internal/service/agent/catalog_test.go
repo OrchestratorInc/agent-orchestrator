@@ -403,7 +403,6 @@ func TestEmptyModelDiscoveryPreservesRetrySequence(t *testing.T) {
 						t.Fatalf("attempt %d: retryAt = %v, want %s", attempt+1, got.RetryAt, wantRetryAt)
 					}
 				}
-				// Automatic reads must respect both the backoff and the stop limit.
 				if _, err := svc.RevalidateModels(ctx, "claude-code", ""); err != nil {
 					t.Fatal(err)
 				}
@@ -1004,9 +1003,6 @@ func TestFindInstalledBinaryKeepsNameOnlyGooseMatchUnknown(t *testing.T) {
 func TestPresslyGooseDoesNotSatisfyStartupOrFreshInventory(t *testing.T) {
 	var normalResolveCalls atomic.Int32
 	var presenceCalls atomic.Int32
-	// The Goose adapter's help-level Pressly classification is covered in its
-	// own tests. Inject the resulting identity-unknown observation here so this
-	// service contract cannot inspect host-wide fallback paths.
 	pressly := identityPendingAgent{
 		fakeAgent:          fakeAgent{err: ports.ErrAgentBinaryNotFound},
 		normalResolveCalls: &normalResolveCalls,
@@ -1375,8 +1371,6 @@ func TestProbeRechecksCachedUnauthorizedAuthentication(t *testing.T) {
 	}
 }
 
-// cachingAuthAgent answers auth checks from a cache only an invalidation clears,
-// as the Claude adapter does with its CLI report.
 type cachingAuthAgent struct {
 	mutableAuthAgent
 	cached *ports.AgentAuthStatus
@@ -1612,11 +1606,6 @@ func TestModelsLeaderCancellationDoesNotCancelCoalescedLoad(t *testing.T) {
 	}
 }
 
-// A picker opened for an agent that has never been discovered must not wait on
-// a slow CLI: it gets the capability fallback at once, marked refreshing, and
-// the discovered catalog is persisted in the background for the next read.
-// The saved catalog is listed without readiness; an update waits for the
-// startup readiness pass before it discovers.
 func TestModelUpdateWaitsForStartupReadiness(t *testing.T) {
 	now := time.Now().UTC()
 	record := cachedModelRecord(t, "codex", "", now, false)
@@ -1653,8 +1642,6 @@ func TestModelUpdateWaitsForStartupReadiness(t *testing.T) {
 	}
 }
 
-// Readiness that lasts through the whole wait limit must not eat into the
-// discovery's own timeout: discovery still gets its full budget afterwards.
 func TestModelUpdateKeepsFullDiscoveryBudgetAfterReadinessWait(t *testing.T) {
 	previousWait, previousTimeout := modelUpdateReadinessWait, modelCatalogLoadTimeout
 	modelUpdateReadinessWait = 60 * time.Millisecond
@@ -1663,7 +1650,7 @@ func TestModelUpdateKeepsFullDiscoveryBudgetAfterReadinessWait(t *testing.T) {
 	discoverer := successfulModelDiscoverer()
 	discoverer.delay = 80 * time.Millisecond
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, &fakeModelCache{}, discoverer)
-	svc.readinessWarm = make(chan struct{}) // never finishes
+	svc.readinessWarm = make(chan struct{})
 
 	got, err := svc.revalidateModels(context.Background(), "codex", "")
 	if err != nil {
@@ -1679,12 +1666,10 @@ func TestModelRefreshBypassesStartupReadiness(t *testing.T) {
 		t.Run(fmt.Sprintf("joinBackground=%t", joinBackground), func(t *testing.T) {
 			discoverer := successfulModelDiscoverer()
 			svc := newService([]agentregistry.HarnessAgent{harnessAgent("codex", "Codex", nil)}, &fakeModelCache{}, discoverer)
-			svc.readinessWarm = make(chan struct{}) // never finishes
+			svc.readinessWarm = make(chan struct{})
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			if joinBackground {
-				// The first cache read starts a coalesced background load, which
-				// must be woken when spawn asks for an explicit rediscovery.
 				first, err := svc.Models(ctx, "codex", "", false)
 				if err != nil || first.RefreshState != "refreshing" {
 					t.Fatalf("first read = %#v, %v", first, err)
@@ -1834,8 +1819,6 @@ func TestGlobalModelDiscoveryUsesAODirectoryWithoutProject(t *testing.T) {
 	}
 }
 
-// Model catalogs are device-wide: a picker opened in any project reads the one
-// catalog per agent instead of waiting on a discovery of its own.
 func TestModelsSharesOneDeviceCatalogAcrossProjects(t *testing.T) {
 	cache := &fakeModelCache{}
 	discoverer := successfulModelDiscoverer()
@@ -2183,8 +2166,6 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, discoverer)
 
-	// The cache is served at once while the credential inputs are checked in
-	// the background; it reports itself refreshing so open views re-read it.
 	got, err := svc.Models(context.Background(), "claude-code", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -2192,7 +2173,6 @@ func TestClaudeModelsRejectProviderCacheWhenCredentialFingerprintChanges(t *test
 	if len(got.Models) != 1 || got.Models[0].ID != "us.anthropic.claude-opus-v1" || got.RefreshState != "refreshing" {
 		t.Fatalf("first read = %#v, want the cached catalog marked refreshing", got)
 	}
-	// A later read returns the catalog rediscovered for the current credential.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		got, err = svc.Models(context.Background(), "claude-code", "", false)
@@ -2217,8 +2197,6 @@ func TestGlobalModelsNeverBorrowAnotherScopesCatalog(t *testing.T) {
 		catalog: ports.AgentModelCatalog{AgentID: "cursor", SelectionMode: ports.ModelSelectionCatalog, Models: []ports.AgentModelInfo{{ID: "cursor/global"}}, Source: "catalog"},
 	}
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("cursor", "Cursor", nil)}, cache, discoverer)
-	// Older builds wrote per-project rows. They are never read: the device
-	// catalog discovers its own instead of showing a leftover project row.
 	got, err := svc.Models(context.Background(), "cursor", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -2327,7 +2305,6 @@ func TestModelsFingerprintsTheSameInputsDiscoveryReads(t *testing.T) {
 	if _, err := svc.Models(context.Background(), "claude-code", "proj-1", false); err != nil {
 		t.Fatal(err)
 	}
-	// Fingerprinting and discovery must use the same inputs.
 	fingerprinted := discoverer.lastFingerprintRequest.Load()
 	if fingerprinted == nil {
 		t.Fatal("catalog fingerprint was never requested")
@@ -2361,7 +2338,6 @@ func TestModelsAsksClientsToRevalidateAnAgedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Just discovered: nothing to revalidate, so the client must not be nudged.
 	if fresh.RefreshRecommended {
 		t.Fatal("a freshly discovered catalog asked for revalidation")
 	}
@@ -2384,8 +2360,6 @@ func TestModelsAsksClientsToRevalidateAnAgedCatalog(t *testing.T) {
 	discoverer.catalog.Models = []ports.AgentModelInfo{{ID: "model-two"}}
 	discoverer.mu.Unlock()
 
-	// A CLI-backed catalog can drift with no change to the binary or its config,
-	// so an aged cache hit is what replaces the manual "Refresh models" button.
 	stale, err := svc.Models(context.Background(), "opencode", "proj-1", false)
 	if err != nil {
 		t.Fatal(err)
@@ -2484,8 +2458,6 @@ func TestSignInRequiredDiscoveryStoresAnIdlePlaceholderThatLoadsAfterSignIn(t *t
 	}
 	assertIdleWithoutRetries(t, cache, "kiro")
 
-	// The placeholder has never succeeded, so cache-first readers are told to
-	// revalidate; that is how the models appear once the user signs in.
 	read, err := svc.Models(context.Background(), "kiro", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -2516,7 +2488,6 @@ func TestSignInRequiredDiscoveryKeepsTheCachedCatalogAndRetryBudget(t *testing.T
 		t.Fatal(err)
 	}
 
-	// An earlier ordinary failure leaves the cached list stale with its error.
 	discoverer.mu.Lock()
 	discoverer.err = errors.New("kiro model discovery timed out after 20s")
 	discoverer.mu.Unlock()
@@ -2525,7 +2496,6 @@ func TestSignInRequiredDiscoveryKeepsTheCachedCatalogAndRetryBudget(t *testing.T
 	}
 
 	discoverer.signOut()
-	// More skipped attempts than the failure retry budget allows.
 	for range modelCatalogMaxRetries + 2 {
 		got, err := svc.Models(context.Background(), "kiro", "", true)
 		if err != nil {
@@ -2536,7 +2506,6 @@ func TestSignInRequiredDiscoveryKeepsTheCachedCatalogAndRetryBudget(t *testing.T
 		}
 		assertIdleWithoutRetries(t, cache, "kiro")
 	}
-	// Cache-first reads show the sign-in state, not the earlier timeout.
 	read, err := svc.Models(context.Background(), "kiro", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -2563,7 +2532,6 @@ func TestSignInOutsideAOReloadsACatalogThatLoadedEarlierTheSameDay(t *testing.T)
 	noon := time.Date(2026, 9, 24, 12, 0, 0, 0, time.Local)
 	svc.now = func() time.Time { return noon }
 
-	// Models load in the morning, then the user signs out and a refresh is skipped.
 	if _, err := svc.Models(context.Background(), "kiro", "", true); err != nil {
 		t.Fatal(err)
 	}
@@ -2572,7 +2540,6 @@ func TestSignInOutsideAOReloadsACatalogThatLoadedEarlierTheSameDay(t *testing.T)
 		t.Fatal(err)
 	}
 
-	// The user signs back in from a terminal; AO's auth probe is never called.
 	discoverer.signIn(ports.AgentModelInfo{ID: "model-two"})
 	noon = noon.Add(time.Hour)
 	read, err := svc.Models(context.Background(), "kiro", "", false)
@@ -2582,7 +2549,6 @@ func TestSignInOutsideAOReloadsACatalogThatLoadedEarlierTheSameDay(t *testing.T)
 	if !read.RefreshRecommended {
 		t.Fatal("same-day catalog skipped for sign-in is not due for revalidation")
 	}
-	// The cache-first read revalidates in the background.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		got, err := svc.Models(context.Background(), "kiro", "", false)
@@ -2700,7 +2666,6 @@ func TestWarmModelCatalogsStartsAsynchronously(t *testing.T) {
 	}
 }
 
-// Catalog browsing must not wait on recency hints used only by task pickers.
 type forbiddenCatalogSessionLookup struct{}
 
 func (forbiddenCatalogSessionLookup) ListAllSessions(context.Context) ([]domain.SessionRecord, error) {
@@ -2717,7 +2682,6 @@ func TestModelCatalogServesPersistedModelsDuringBlockedRefresh(t *testing.T) {
 		fakeModelDiscoverer: successfulModelDiscoverer(),
 		started:             make(chan struct{}), release: make(chan struct{}),
 	}
-	// The persisted catalog came from an earlier daemon process.
 	discoverer.discoverCalls.Store(1)
 	svc := newService([]agentregistry.HarnessAgent{harnessAgent("fx", "FX", nil)}, cache, discoverer)
 	svc.ctx = ctx
@@ -2756,8 +2720,6 @@ func TestSettingsAndTaskModelsSharePersistentCatalog(t *testing.T) {
 			if _, err := svc.Models(ctx, agentID, "", true); err != nil {
 				t.Fatal(err)
 			}
-			// Settings must read the task catalog saved by a previous daemon,
-			// even when no Settings-specific catalog has ever been discovered.
 			restarted := newService(svc.agents, cache, discoverer)
 			restarted.ctx = ctx
 			restarted.sessions = forbiddenCatalogSessionLookup{}
@@ -2871,8 +2833,6 @@ func TestModelsAppliesModelGateWithoutCachingItsResult(t *testing.T) {
 		t.Fatalf("cache stored the gated catalog: %s", stored.CatalogJSON)
 	}
 
-	// Pickers replace their catalog with the revalidation response, so it must
-	// not re-enable what the read path disabled.
 	revalidated, err := svc.RevalidateModels(context.Background(), "fx", "")
 	if err != nil {
 		t.Fatal(err)

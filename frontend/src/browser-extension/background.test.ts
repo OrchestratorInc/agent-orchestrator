@@ -68,11 +68,9 @@ it("reconnects to AO when Chrome wakes the service worker with its alarm or at s
 		expect(createAlarm).toHaveBeenCalledWith("ao-reconnect", { periodInMinutes: 0.5 });
 		expect(connectNative).toHaveBeenCalledTimes(1);
 
-		// Connected: the alarm does not open a second port.
 		listeners.alarm?.({ name: "ao-reconnect" });
 		expect(connectNative).toHaveBeenCalledTimes(1);
 
-		// AO went away and the worker's reconnect timer died with it.
 		ports[0]!.onDisconnect?.();
 		vi.clearAllTimers();
 		listeners.alarm?.({ name: "ao-reconnect" });

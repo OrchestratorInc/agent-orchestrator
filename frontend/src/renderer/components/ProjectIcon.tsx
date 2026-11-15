@@ -3,8 +3,6 @@ import { Folder, FolderOpen } from "@/components/app-icons";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 
-// Tile colours for projects without an avatar. Picked by a hash of the
-// project path, so a project keeps its colour across launches.
 const PROJECT_LETTER_TILE_COLORS = [
 	"bg-red-400/20",
 	"bg-orange-400/20",
@@ -26,9 +24,6 @@ function projectTileColor(seed: string): string {
 	return PROJECT_LETTER_TILE_COLORS[Math.abs(hash) % PROJECT_LETTER_TILE_COLORS.length];
 }
 
-/** A project's icon. With repository avatars on: the owner avatar as a 4px-radius
- *  squircle, or a colour-coded first-letter tile while it loads and when there
- *  is no avatar or it fails. With them off: a folder. */
 export function ProjectIcon({
 	avatarUrl,
 	name,
@@ -72,7 +67,6 @@ export function ProjectIcon({
 					draggable={false}
 					onError={() => setFailedUrl(avatarUrl)}
 					onLoad={() => setLoadedUrl(avatarUrl)}
-					// A cached image can finish before React attaches onLoad.
 					ref={(node) => {
 						if (node?.complete && node.naturalWidth > 0 && loadedUrl !== avatarUrl) setLoadedUrl(avatarUrl);
 					}}

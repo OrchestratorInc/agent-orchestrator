@@ -61,9 +61,6 @@ func (p *Plugin) execute(ctx context.Context, workingDir string, env map[string]
 	return runner(probeCtx, binary, workingDir, env, args...)
 }
 
-// GetAgentHooks installs only AO's hidden standing-instruction rule. Lifecycle
-// observation is configured later, after AO has assigned the runtime launch
-// generation, and never mutates Codewhale's user hook table.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -108,9 +105,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// PrepareRuntimeLaunch is an optional session-manager capability invoked after
-// AO assigns AO_RUNTIME_LAUNCH_ID. It creates a per-generation lifecycle
-// overlay under AO_DATA_DIR and points only this Codewhale process at it.
 func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -198,11 +192,6 @@ type savedSessionIdentity struct {
 	} `json:"metadata"`
 }
 
-// ResolveNativeSessionID maps Codewhale's process-local lifecycle identity to
-// the durable UUID accepted by --resume. PrepareRuntimeLaunch gives each AO
-// generation a unique Runtime store; Codewhale records that exact path in the
-// saved conversation, making this lookup deterministic without scraping the
-// TUI or selecting the newest session in a workspace.
 func (p *Plugin) ResolveNativeSessionID(ctx context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err

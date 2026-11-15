@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Benchmarks actual service navigation in a 2,000-file Git repository. Keep
-// the existing short cache window open to measure a burst of folder expands.
 func BenchmarkWorkspaceTreeNavigation(b *testing.B) {
 	root := b.TempDir()
 	git := func(args ...string) {

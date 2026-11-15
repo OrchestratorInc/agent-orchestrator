@@ -15,9 +15,6 @@ import (
 const defaultTaskPreparationTTL = 5 * time.Minute
 const maxTaskPreparationsPerProject = 2
 
-// taskPreparation is the daemon-owned speculative worktree behind one opaque
-// modal token. The session row reserves the final id and stays hidden until a
-// spawn claims it.
 type taskPreparation struct {
 	record  domain.SessionRecord
 	project domain.ProjectRecord
@@ -33,9 +30,6 @@ type taskPreparation struct {
 	cleaning         bool
 }
 
-// PrepareTaskWorkspace reserves the final session id and starts only the Git
-// worktree work. Provider startup and project post-create commands still wait
-// for an explicit Start Task action.
 func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.ProjectRecord) (domain.TaskPreparationToken, error) {
 	if project.ID == "" {
 		return "", nil
@@ -49,7 +43,7 @@ func (m *Manager) PrepareTaskWorkspace(ctx context.Context, project domain.Proje
 	}
 	if active >= maxTaskPreparationsPerProject {
 		m.taskPreparationsMu.Unlock()
-		return "", nil // ordinary Start Task remains available without speculation
+		return "", nil
 	}
 	now := m.clock()
 	projectID := domain.ProjectID(project.ID)
@@ -93,12 +87,9 @@ func (m *Manager) createTaskPreparation(ctx context.Context, prep *taskPreparati
 		Kind:            domain.KindWorker,
 		TaskPreparation: domain.TaskPreparationToken(prep.record.ID),
 	}, prep.record.ID, prep.record.Metadata.Branch, baseRefs)
-	// Persist any partial worktree before rollback: a cancellation can arrive
-	// after git has created a path/branch but before Create returned success.
 	recordCtx, recordCancel := spawnRollbackContext(ctx)
 	defer recordCancel()
 	if ws.BaseSHA != "" {
-		// Promotion replaces this hidden row's session-facing diff metadata.
 		_, recordErr := m.store.SetTaskPreparationBase(recordCtx, prep.record.ID, ws.BaseSHA, ws.BaseRef)
 		err = errors.Join(err, recordErr)
 	}
@@ -138,9 +129,6 @@ func (m *Manager) createTaskPreparation(ctx context.Context, prep *taskPreparati
 	close(prep.done)
 }
 
-// claimTaskPreparation atomically transfers cleanup ownership to Spawn. An
-// absent, expired, or wrong-project token is only a cache miss: Spawn falls
-// back to creating its own worktree.
 func (m *Manager) claimTaskPreparation(token domain.TaskPreparationToken, projectID domain.ProjectID) *taskPreparation {
 	token = domain.TaskPreparationToken(strings.TrimSpace(string(token)))
 	if token == "" {
@@ -178,9 +166,6 @@ func (m *Manager) awaitTaskPreparation(ctx context.Context, prep *taskPreparatio
 	return prep.workspace, prep.workspaceProject, prep.err
 }
 
-// CancelTaskPreparation is idempotent. Once Spawn has claimed the token,
-// cancellation is deliberately ignored so closing the modal cannot delete the
-// newly-visible session's worktree.
 func (m *Manager) CancelTaskPreparation(ctx context.Context, token domain.TaskPreparationToken) error {
 	token = domain.TaskPreparationToken(strings.TrimSpace(string(token)))
 	if token == "" {
@@ -215,9 +200,6 @@ func (m *Manager) CancelTaskPreparation(ctx context.Context, token domain.TaskPr
 	return err
 }
 
-// scheduleTaskPreparationCleanup arms the normal expiry path. Failed cleanup
-// uses the same timer so a transient Git or database error never permanently
-// consumes the only cleanup handle.
 func (m *Manager) scheduleTaskPreparationCleanup(token domain.TaskPreparationToken, prep *taskPreparation) {
 	prep.timer = time.AfterFunc(m.taskPreparationTTL, func() {
 		cleanupCtx, cleanupCancel := spawnRollbackContext(m.backgroundContext)
@@ -279,9 +261,6 @@ func (m *Manager) discardClaimedTaskPreparation(ctx context.Context, prep *taskP
 	}
 }
 
-// CleanupInterruptedTaskPreparations reclaims hidden work from a previous
-// daemon run before ordinary session reconciliation can mistake it for a live
-// session.
 func (m *Manager) CleanupInterruptedTaskPreparations(ctx context.Context) error {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
@@ -310,10 +289,6 @@ func (m *Manager) cleanupTaskPreparationRecord(ctx context.Context, rec domain.S
 		return err
 	}
 	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
-		// Git may have completed an add before its session_worktrees upsert.
-		// A missing child row makes the parent appear clean when that nested
-		// child is ignored by the parent repo. Preserve the entire preparation
-		// until every possible nested worktree has a durable cleanup handle.
 		if err := m.requireCompletePreparedWorkspaceProject(ctx, project, rows); err != nil {
 			return err
 		}
@@ -382,8 +357,6 @@ func (m *Manager) destroyPreparedWorkspace(ctx context.Context, ws ports.Workspa
 			continue
 		}
 		info := workspaceInfoFromRepoInfo(row)
-		// CreationSHA fences branch deletion, but an unknown creation SHA must
-		// not disable Destroy's unregistered-nonempty directory guard.
 		info.BaseSHA = firstNonEmptyString(row.CreationSHA, row.BaseSHA)
 		if err := m.workspace.Destroy(ctx, info); err != nil {
 			return err

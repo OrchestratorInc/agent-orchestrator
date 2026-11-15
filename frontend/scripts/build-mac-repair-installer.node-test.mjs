@@ -46,7 +46,6 @@ async function guardFixture(t) {
   helpers.plist = path.join(dir, 'plist');
   await writeFile(helpers.plist, `#!/bin/bash\ncase "$3" in /Applications/Other.app/*) echo foreign.app; exit 0;; esac\ncase "$2" in *CFBundleIdentifier) /bin/cat '${dir}/bundle';; *CFBundleShortVersionString) /bin/cat '${dir}/old';; *CFBundleVersion) /bin/cat '${dir}/build';; *) exit 1;; esac\n`, { mode: 0o755 });
   let guard = await renderGuard({ version, architectures: ['arm64'] }, true);
-  // Test-only source transformation: the shipped script has no environment override.
   for (const [from, to] of Object.entries({ '/usr/sbin/sysctl': helpers.arch, '/usr/bin/uname': helpers.uname, '/usr/bin/id': helpers.id, '/bin/ps': helpers.ps, '/usr/libexec/PlistBuddy': helpers.plist })) guard = guard.replaceAll(from, `'${to}'`);
   guard = guard.replaceAll('/Applications', `${dir}/Applications`);
   const file = path.join(dir, 'preinstall');
@@ -174,7 +173,6 @@ test('native macOS packaging produces a fixed atomic bundle replacement and exec
   await writeFile(path.join(app, 'Contents/MacOS/agent-orchestrator'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const output = path.join(dir, 'fixture.unsigned.pkg');
   await buildRepairInstaller({ app, output, unsignedForTesting: true, dataDir: dir }, (c, a) => {
-    // Only this test fixture bypasses trust/lipo: it is a tiny non-release shell app.
     if (c === '/bin/bash') return '';
     if (c === '/usr/bin/lipo') return 'arm64';
     return native(c, a);

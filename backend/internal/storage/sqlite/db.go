@@ -1,6 +1,3 @@
-// Package sqlite owns SQLite connection setup and goose-managed schema
-// migrations. Typed CRUD lives in the store subpackage; this package keeps the
-// public Open entrypoint and compatibility aliases for callers.
 package sqlite
 
 import (
@@ -20,24 +17,14 @@ import (
 
 	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 
-	// modernc.org/sqlite is the pure-Go (CGO-free) SQLite driver — chosen so the
-	// daemon cross-compiles and ships as a static binary with no libsqlite/CGO
-	// toolchain dependency, at the cost of some raw throughput vs a C-backed driver.
 	_ "modernc.org/sqlite"
 )
 
-// Store is the SQLite-backed persistence layer.
 type Store = sqlitestore.Store
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// pragmas are applied on every connection open. WAL + NORMAL lets readers run
-// concurrently with the writer; busy_timeout absorbs brief writer contention;
-// foreign_keys enforces the cascades and the CDC triggers' lookups;
-// journal_size_limit (32 MiB, per connection) makes the writer cut the -wal file
-// back to that size when it resets the log, instead of leaving it at its
-// high-water mark until the last connection closes.
 const pragmas = "?_pragma=journal_mode(WAL)" +
 	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=foreign_keys(ON)" +
@@ -48,19 +35,13 @@ const readOnlyPragmas = "?mode=ro" +
 	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=foreign_keys(ON)"
 
-// maxReaders caps the reader pool. WAL allows many concurrent readers.
 const maxReaders = 8
 
-// databaseURI preserves filesystem characters instead of interpreting them as
-// SQLite URI parameters/fragments. Both pools and read-only opens must address
-// the same literal file, including percent signs and Windows drive paths.
 func databaseURI(dataDir string) string {
 	file := url.URL{Path: filepath.Join(dataDir, "ao.db")}
 	return "file:" + file.EscapedPath()
 }
 
-// An older raw file: URI may have stored this directory's data elsewhere. Do
-// not silently replace that database with an empty one after fixing the URI.
 func checkLegacyDatabasePath(dataDir string) error {
 	intended := filepath.Join(dataDir, "ao.db")
 	if _, err := os.Stat(intended); err == nil {
@@ -116,17 +97,6 @@ func checkLegacyDatabasePath(dataDir string) error {
 	return nil
 }
 
-// Open opens (creating if absent) the SQLite database under dataDir and returns
-// a Store. It uses TWO pools against the same file:
-//
-//   - a single WRITER connection (writeDB, MaxOpenConns=1): every write goes
-//     here, so a write and the CDC triggers' subqueries it fires always see the
-//     prior writes on the same connection (read-your-writes). This is required
-//     because the pr/pr_checks triggers SELECT from sessions/pr to fill in the
-//     event's project_id; a pooled writer could land that read on a connection
-//     that hasn't caught up to the commit and read NULL.
-//   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
-//     it; WAL readers see the latest committed snapshot.
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
@@ -154,12 +124,6 @@ func Open(dataDir string) (*Store, error) {
 	return store, nil
 }
 
-// withSearchIndex opens the reader pool beside an open, migrated writer, then
-// the optional session search index (search_db.go).
-//
-// The index never decides whether the store opens: one that cannot be opened
-// is recorded on the store (SessionSearchUnavailable) and search stays off,
-// while every other read and write works as usual.
 func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
 	readDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -188,8 +152,6 @@ func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
 	return store, nil
 }
 
-// OpenReadOnly opens an existing SQLite database under dataDir without creating
-// the directory, opening a writable connection, or running migrations.
 func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 	dsn := databaseURI(dataDir) + readOnlyPragmas
 
@@ -220,29 +182,14 @@ func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 	return sqlitestore.NewStore(writeDB, readDB), nil
 }
 
-// gooseMu serialises calls into goose. goose v3 keeps its baseFS / logger /
-// dialect as package-level globals (goose.SetBaseFS, goose.SetLogger,
-// goose.SetDialect), so two concurrent Open() calls — uncommon in production
-// but normal in -race test runs — race on those writes. The cost of holding the
-// mutex is one process-startup migration; readers and writers afterwards never
-// touch goose.
 var gooseMu sync.Mutex
 
-// cachedMigrationVersion holds the one-time computed expected migration version.
-// The first call to expectedMigrationVersion populates it; subsequent calls
-// return the cached value without re-scanning embedded files or touching goose
-// globals.
 var cachedMigrationVersion struct {
 	sync.Once
 	version int64
 	err     error
 }
 
-// expectedMigrationVersion returns the highest version number among the
-// embedded migration files. This is the version a fully-migrated database must
-// have recorded as applied in goose_db_version.
-//
-// The result is computed once and cached for the lifetime of the process.
 func expectedMigrationVersion() (int64, error) {
 	cachedMigrationVersion.Do(func() {
 		cachedMigrationVersion.err = computeExpectedMigrationVersion()
@@ -269,18 +216,6 @@ func computeExpectedMigrationVersion() error {
 	return nil
 }
 
-// OpenPreMigrated opens an already-fully-migrated SQLite database under
-// dataDir, skipping all migration and repair logic. It is intended for test
-// helpers that clone a known-good template database and need to open the copy
-// without paying the ~55 ms migration overhead on every clone.
-//
-// It verifies that the database's goose_db_version records the expected
-// current migration version; if the database is stale or has never been
-// migrated, it returns an error so the caller can fall back to the production
-// Open path rather than silently using an incompatible schema.
-//
-// Migration tests and any code that needs the production startup path must
-// continue to call Open, not this function.
 func OpenPreMigrated(dataDir string) (*Store, error) {
 	want, err := expectedMigrationVersion()
 	if err != nil {
@@ -391,10 +326,6 @@ func migrate(db *sql.DB) error {
 	if err := prepareSessionReviewerAgentConfigMigration(db); err != nil {
 		return fmt.Errorf("prepare session reviewer agent-config migration: %w", err)
 	}
-	// Builds can advance a database past a migration that is added or
-	// renumbered later (notably across fast-moving Nightly releases). Apply
-	// those embedded migrations instead of permanently wedging daemon startup
-	// on goose's out-of-order-history guard.
 	if err := goose.Up(db, "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
@@ -406,11 +337,6 @@ const (
 	computerUseMigrationVersion       int64 = 20261023123504180
 )
 
-// repairRenumberedComputerUseMigrationHistory keeps development databases that
-// ran this branch before its app_settings.computer_use migration moved from
-// 20261021135126673 to 20261023123504180, after main's migrations. Such a
-// database has the column and a receipt under the old number; the receipt
-// moves to the new number so goose does not add the column twice.
 func repairRenumberedComputerUseMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil {
@@ -437,8 +363,6 @@ const (
 	usageLimitResetMigrationVersion int64 = 20261019220421514
 )
 
-// Adopt identifiable quota previews without skipping main's unrelated 0213/0214.
-// Foreign 0201 receipts remain intact; collided quota receipts move with their schema.
 func repairRenumberedUsageLimitMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil {
@@ -481,8 +405,6 @@ SELECT (SELECT COUNT(*) FROM pragma_table_info('conversation_turns')
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// A quota-shaped preview with no stale-binary columns owns the old 0213
-	// receipt. Relocate it so Goose can apply main's shipped 0213 normally.
 	moved, err := tx.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = 213
 AND NOT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'stale_binary_since')`, usageLimitMigrationVersion)
 	if err != nil {
@@ -497,8 +419,6 @@ AND NOT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'stale_
 			return err
 		}
 	}
-	// The deadline CDC body identifies quota's old 0214; main's receipt is
-	// retained when its version-refresh column is present.
 	if _, err := tx.Exec(`UPDATE goose_db_version SET version_id = ? WHERE version_id = 214
 AND NOT EXISTS (SELECT 1 FROM pragma_table_info('app_settings') WHERE name = 'version_refresh')
 AND EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'trigger'
@@ -509,12 +429,6 @@ AND EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'trigger'
 	return tx.Commit()
 }
 
-// repairRenumberedCueMigrationHistory preserves preview Cue databases that
-// recorded 0149, 0155, 0156, 0159, 0161, 0162, or 0163 for Cues before main
-// assigned those versions to other features. Move only an identifiable Cue
-// schema to 0168 before the upstream migration repairs inspect or reuse old
-// entries. 0163 is now the fx harness migration, so a 0163 row is cues only
-// when that harness is still absent.
 func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
@@ -591,10 +505,6 @@ func repairRenumberedCueMigrationHistory(db *sql.DB) error {
 	return tx.Commit()
 }
 
-// repairRenumberedTaskProvisioningMigrationHistory preserves development
-// databases that applied this branch's migrations at 0149/0150, 0150/0151,
-// or 0155/0156/0157. Main owns those numbers now; map the physical schema to
-// 0156/0157/0158 before Goose replays the missing main migrations.
 func repairRenumberedTaskProvisioningMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -676,8 +586,6 @@ SELECT COALESCE((
 		return err
 	}
 	if oldProvision155 && provisionColumns == 2 && unrealHarness == 0 {
-		// This branch used 0155 before main shipped the Unreal Agent migration
-		// at that number. Shift highest first so each applied marker survives.
 		if creationSHAColumn != 0 {
 			if _, err := mapVersion(157, 158); err != nil {
 				return err
@@ -701,7 +609,6 @@ SELECT COALESCE((
 	if provisionColumns == 2 && !canonicalProvisionApplied {
 		legacyVersion := int64(149)
 		if reviewerColumn != 0 {
-			// Once main's catalog column exists, 0150 belongs to main.
 			if catalogColumn == 0 {
 				legacyVersion = 150
 			} else {
@@ -734,8 +641,6 @@ SELECT COALESCE((
 		released150 = released150 || mapped && legacyVersion == 150
 	}
 	if released150 && catalogColumn == 0 {
-		// Main's 0151 may already have installed global catalog triggers. Drop
-		// them before replaying 0150, then replay 0151 to restore global CDC.
 		if _, err := tx.Exec(`DROP TRIGGER IF EXISTS agent_model_catalog_cdc_insert`); err != nil {
 			return err
 		}
@@ -749,11 +654,6 @@ SELECT COALESCE((
 	return tx.Commit()
 }
 
-// repairRenumberedAgentInstallJobsMigrationHistory preserves development
-// databases opened while the harness-installer branch owned versions 0119 or
-// 0120. Main later assigned those versions to idempotent data repairs, so move
-// the exact installer-table shape to its canonical 0123 ledger entry and let
-// Goose replay the real 0119 and 0120 migrations.
 func repairRenumberedAgentInstallJobsMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -804,14 +704,6 @@ SELECT COALESCE((
 	return tx.Commit()
 }
 
-// prepareCancelledConversationTurnsMigration repairs the staging table left
-// by an interrupted 0118 table rebuild. The migration runs without a wrapping
-// transaction because it temporarily disables foreign keys, so a process exit
-// can leave conversation_turns_next behind and make every retry fail at CREATE
-// TABLE. When the source table remains it is still authoritative and the stale
-// copy is discarded. If the interruption happened after the source was
-// dropped, promote the staging table back to the source name and let 0118
-// perform the complete rebuild again.
 func prepareCancelledConversationTurnsMigration(db *sql.DB) error {
 	var sourceTable, stagingTable int
 	if err := db.QueryRow(
@@ -845,9 +737,6 @@ func prepareCancelledConversationTurnsMigration(db *sql.DB) error {
 	return tx.Commit()
 }
 
-// prepareUsageCostMigration releases a falsely-applied usage migration before
-// 0101 adds columns to its tables. Some field profiles recorded versions
-// 44-53 from a foreign build without ever creating the real 0052 usage schema.
 func prepareUsageCostMigration(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -868,11 +757,6 @@ WHERE type = 'table' AND name IN ('usage_bindings', 'usage_sources', 'model_usag
 	return err
 }
 
-// prepareAutoInjectReviewMigration preserves development databases whose
-// physical review-injection schema exists without the corresponding goose
-// ledger entry. Without this repair, goose replays 0084 and startup stops on
-// the first duplicate column. Fresh schemas still run the migration normally;
-// only the complete four-table shape is accepted as already applied.
 func prepareAutoInjectReviewMigration(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -912,10 +796,6 @@ SELECT COALESCE((
 	return err
 }
 
-// preparePRCommentReviewIDMigration preserves development databases that
-// acquired pr_comment.review_id while this migration was being renumbered but
-// do not have its canonical 0106 ledger entry. Recording the physically present
-// effect prevents goose from replaying the ALTER TABLE over the existing column.
 func preparePRCommentReviewIDMigration(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -950,11 +830,6 @@ SELECT COALESCE((
 	return err
 }
 
-// prepareBrowserVerifierMigration preserves development databases that ran an
-// earlier version of this branch where the verifier was mistakenly added to
-// shipped migration 0048. The restored 0048 no longer owns the column, so mark
-// the new 0081 migration applied when its exact schema effect already exists;
-// otherwise goose applies 0081 normally.
 func prepareBrowserVerifierMigration(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -989,16 +864,6 @@ SELECT COALESCE((
 	return err
 }
 
-// prepareQueuedTurnPromotionMigration preserves development databases that ran
-// the promotion migration while it still used version 86 or 88. Upstream now
-// owns both numbers, so record the promotion schema as version 89. If version 88
-// came from the old promotion migration, remove that ledger entry so goose can
-// apply upstream's auto-inject-CI migration at its canonical version.
-// prepareSessionReviewerAgentConfigMigration preserves databases that
-// already have sessions.reviewer_agent_config from an in-flight local run but
-// do not yet record the canonical 0118 migration version. Recording that
-// physically present effect prevents goose from replaying the ALTER TABLE over
-// the existing column on the next startup.
 func prepareSessionReviewerAgentConfigMigration(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -1146,11 +1011,6 @@ SELECT COALESCE((
 	return nil
 }
 
-// prepareReviewPerHarnessMigration makes the fresh 0080 rebuild executable on
-// field databases that already recorded 0048/0049 as applied without actually
-// running their SQL. Once 0080 has applied, it still repairs the physical review
-// table if it is missing columns or constraints expected by current queries, but
-// does not recreate review_session after the rebuild drops it.
 func prepareReviewPerHarnessMigration(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -1346,14 +1206,8 @@ func quoteSQLiteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-// providerSwitchingVersion is the provider switching migration's version.
 const providerSwitchingVersion = 20261020131539535
 
-// repairRenumberedProviderSwitchingMigrationHistory moves a database that ran
-// provider switching under an earlier number in this branch's preview builds
-// to its version. It would otherwise apply the migration again,
-// and those numbers are left for main. The migration's table tells this
-// branch's entry apart from another migration that took the number.
 func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
 	var gooseTable, turnsTable, applied int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&gooseTable); err != nil || gooseTable == 0 {
@@ -1365,9 +1219,6 @@ func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, providerSwitchingVersion).Scan(&applied); err != nil || applied != 0 {
 		return err
 	}
-	// Earlier builds also used 0196, 0199 and 0200, which main has since
-	// taken. Those count as this migration's only while main's own schema for
-	// that number is absent; goose then applies main's file, as it is missing.
 	for _, old := range []struct {
 		version int64
 		mainHas string
@@ -1397,19 +1248,7 @@ func repairRenumberedProviderSwitchingMigrationHistory(db *sql.DB) error {
 	return nil
 }
 
-// repairRenumberedChatMigrationHistory preserves databases opened by this
-// feature branch before its Chat migrations moved from 0052-0065 to 0066-0079.
-// The files are byte-for-byte identical after the rename, so recording the new
-// numbers is safer than replaying their ALTER/CREATE statements over an already
-// upgraded schema. Version 0052 now belongs to model usage on main; if that
-// physical schema is absent, release the burned ledger entry so goose can apply
-// the real 0052 migration below.
 func repairRenumberedChatMigrationHistory(db *sql.DB) error {
-	// Probe on a read-only query first. A fresh database (the common import
-	// path and the cli import test) has no goose_db_version table yet, so there
-	// is nothing to repair; entering a write transaction would needlessly
-	// create WAL/SHM files and is the exact I/O surface that surfaced as a
-	// transient SQLITE_IOERR_WRITE on macOS CI runners.
 	var gooseTable int
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
@@ -1435,15 +1274,12 @@ func repairRenumberedChatMigrationHistory(db *sql.DB) error {
 		return nil
 	}
 
-	// Only enter a write transaction when there is actual repair work to do.
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Earlier dev builds used 0179-0181 for hibernation. Move that physical
-	// schema to 0190 so main's sender metadata, startup steps, and artifacts apply.
 	if _, err := tx.Exec(`
 UPDATE goose_db_version SET version_id = 190
 WHERE is_applied = 1
@@ -1505,12 +1341,6 @@ SELECT COALESCE((
 	return tx.Commit()
 }
 
-// repairRenumberedUsageCostMigrationHistory preserves development databases
-// opened while this feature's migrations occupied 0109-0112 and, later,
-// 0110-0113. Main now owns 0109-0112, while the same usage migrations live at
-// 0113-0116. Record each physically present usage effect at its canonical
-// number, then release only the collided main numbers whose physical effects
-// are absent.
 func repairRenumberedUsageCostMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -1522,9 +1352,6 @@ func repairRenumberedUsageCostMigrationHistory(db *sql.DB) error {
 		return nil
 	}
 
-	// provider_hint and the durable event pricing columns arrived together in
-	// the first usage-cost migration. Requiring the complete retained shape
-	// avoids rewriting unrelated migration history on databases without it.
 	var costShape int
 	if err := db.QueryRow(`
 SELECT (SELECT COUNT(*) FROM pragma_table_info('usage_bindings') WHERE name = 'provider_hint')
@@ -1645,12 +1472,6 @@ WHERE name = 'cloud_offering'`).Scan(&cloudShape); err != nil {
 	return tx.Commit()
 }
 
-// repairRenumberedCodexProfileMigrationHistory preserves development
-// databases opened before the stacked Codex-profile migrations were moved out
-// of version numbers subsequently claimed by main. Early Phase 1 builds used
-// 0117 to drop agent_inventory_cache; 0117 now enables Kimi usage. Release the
-// collided ledger entry only when the canonical physical effect is absent so
-// goose can apply the real migration. The drop remains safe at canonical 0122.
 func repairRenumberedCodexProfileMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -1705,14 +1526,6 @@ SELECT (SELECT COUNT(*) FROM sqlite_master
 	return err
 }
 
-// repairRenumberedAgentInventoryMigrationHistory preserves development
-// databases opened while this branch used 0119, 0120, or 0121 to drop
-// agent_inventory_cache. Main now owns those versions for completed-plan
-// finalization, activity timestamp normalization, and reviewer configuration;
-// the identical cache drop lives at 0122. An absent cache table plus a collided
-// ledger entry identifies the branch history: mark the physical drop at 0122,
-// then release the newest collided version so goose can apply main's migration
-// with WithAllowMissing.
 func repairRenumberedAgentInventoryMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -1792,15 +1605,6 @@ SELECT COALESCE((
 	return tx.Commit()
 }
 
-// repairRenumberedPRReviewPartialMigrationHistory preserves databases opened by
-// earlier revisions of this branch: the review_partial column first shipped as
-// 0123, a number main later claimed for agent_install_jobs. On those databases
-// goose would skip main's 0123 (its effects missing) and fail 0130 on the
-// duplicate column. Remap the recorded history — review_partial physically
-// present while agent_install_jobs is not identifies the branch build — and
-// re-initialize certainty conservatively, matching the migration default: rows
-// written before the completeness semantics landed carry no reliable signal, so
-// they stay uncertain until the next successful full review fetch.
 func repairRenumberedPRReviewPartialMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -1822,10 +1626,6 @@ func repairRenumberedPRReviewPartialMigrationHistory(db *sql.DB) error {
 		return nil
 	}
 
-	// The branch's 0123 ran only on builds predating main's 0123-0129. If
-	// agent_install_jobs exists, main's 0123 already ran and this database took
-	// the migration through 0130 (or never saw the old numbering) — nothing to
-	// remap.
 	var agentInstallJobsTable int
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_install_jobs'`,
@@ -1854,8 +1654,6 @@ SELECT COALESCE((
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Release 123 so goose applies main's agent_install_jobs, and record 130 as
-	// applied so goose does not replay the ALTER on the existing column.
 	if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = 123`); err != nil {
 		return err
 	}
@@ -1872,21 +1670,12 @@ SELECT COALESCE((
 			return err
 		}
 	}
-	// The column predates the conservative default; re-initialize to uncertain
-	// so pre-semantics rows cannot publish exact thread counts.
 	if _, err := tx.Exec(`UPDATE pr SET review_partial = TRUE`); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// repairBurnedAutomationsMigrationHistory preserves development databases that
-// applied automations at an earlier version, including 159, which now belongs
-// to main's PR discussion migration. The physical schemas determine whether
-// Goose should apply PR discussion at 159 and automations at canonical 161.
-// An older automation build also used 156; release it only when the canonical
-// session-provisioning columns are absent. Once 162 has dropped the PR
-// discussion columns, their absence no longer says anything about 159.
 func repairBurnedAutomationsMigrationHistory(db *sql.DB) error {
 	var gooseTable int
 	if err := db.QueryRow(
@@ -1965,23 +1754,6 @@ SELECT COALESCE((
 	return nil
 }
 
-// schemaRepairs lists the column-level effects of migrations that real
-// installs are known to skip. Issue #3475/#3476: profiles exist whose
-// goose_db_version already records versions 40 through 46 (written by a
-// foreign build), so goose silently skips the real migrations carrying those
-// numbers and the generated queries then fail with "no such column" — every
-// session list 500s while /healthz stays green. A versioned repair migration
-// cannot fix this class, because a burned version number is exactly what
-// caused it; instead the physical schema is verified on every startup.
-//
-// Each entry keys on one column. postAdd statements replay the rest of the
-// skipped migration's effects (backfills, index swaps) and run ONLY when the
-// column was just added, so healthy databases — where those statements would
-// clobber live data — are never touched.
-//
-// Any migration whose schema the generated queries depend on MUST add an entry
-// here when a burned field profile can skip it, or the session list can regress
-// to the 500s this exists to prevent.
 var schemaRepairs = []struct {
 	version int64
 	table   string
@@ -1989,12 +1761,10 @@ var schemaRepairs = []struct {
 	addDDL  string
 	postAdd []string
 }{
-	// 0040_add_session_diff_base.sql
 	{version: 40, table: "sessions", column: "diff_base_sha",
 		addDDL: `ALTER TABLE sessions ADD COLUMN diff_base_sha TEXT NOT NULL DEFAULT ''`},
 	{version: 40, table: "sessions", column: "diff_base_ref",
 		addDDL: `ALTER TABLE sessions ADD COLUMN diff_base_ref TEXT NOT NULL DEFAULT ''`},
-	// 0041_notification_resolution.sql
 	{version: 41, table: "notifications", column: "resolved_at",
 		addDDL: `ALTER TABLE notifications ADD COLUMN resolved_at TIMESTAMP`,
 		postAdd: []string{
@@ -2006,7 +1776,6 @@ var schemaRepairs = []struct {
 			`CREATE INDEX IF NOT EXISTS idx_notifications_unresolved
     ON notifications(resolved_at, created_at DESC, id DESC)`,
 		}},
-	// 0042_review_run_unique_per_harness.sql
 	{version: 42, table: "sessions", column: "reviewer_harness",
 		addDDL: `ALTER TABLE sessions ADD COLUMN reviewer_harness TEXT NOT NULL DEFAULT ''`,
 		postAdd: []string{
@@ -2017,9 +1786,6 @@ var schemaRepairs = []struct {
         AND status NOT IN ('failed', 'cancelled')
         AND (status = 'running' OR verdict NOT IN ('', 'changes_requested'))`,
 		}},
-	// 0043_add_session_pinned.sql. The trigger replay hangs off pinned_at, the
-	// second of the two columns: it references both, and SQLite resolves a
-	// trigger body at CREATE time, so it cannot run until both exist.
 	{version: 43, table: "sessions", column: "is_pinned",
 		addDDL: `ALTER TABLE sessions ADD COLUMN is_pinned BOOLEAN NOT NULL DEFAULT 0`},
 	{version: 43, table: "sessions", column: "pinned_at",
@@ -2054,13 +1820,8 @@ BEGIN
         NEW.updated_at);
 			END`,
 		}},
-	// 0081_browser_capability_verifier.sql. Keep the generated session queries
-	// healthy even if a field database has already burned this migration number.
 	{version: 81, table: "sessions", column: "browser_capability_verifier",
 		addDDL: `ALTER TABLE sessions ADD COLUMN browser_capability_verifier TEXT NOT NULL DEFAULT ''`},
-	// A pre-renumbered chat-mode branch created conversations before the
-	// current_session_id controller binding existed, then later builds recorded
-	// 0052 as applied. Generated chat queries require the column on startup.
 	{version: 66, table: "conversations", column: "current_session_id",
 		addDDL: `ALTER TABLE conversations ADD COLUMN current_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL`,
 		postAdd: []string{
@@ -2068,24 +1829,14 @@ BEGIN
 			`CREATE INDEX IF NOT EXISTS idx_conversations_current_session ON conversations(current_session_id)
     WHERE current_session_id IS NOT NULL`,
 		}},
-	// Version 86 was briefly used by queued-turn promotion on a development
-	// branch. Ensure those databases also receive upstream's version-86 effect.
 	{version: 86, table: "workspace_repos", column: "default_branch",
 		addDDL: `ALTER TABLE workspace_repos ADD COLUMN default_branch TEXT NOT NULL DEFAULT ''`},
-	// These columns are referenced by every generated conversation turn/message
-	// query, so verify their physical presence on every startup.
 	{version: 89, table: "conversation_turns", column: "promotion_started_at",
 		addDDL: `ALTER TABLE conversation_turns ADD COLUMN promotion_started_at TIMESTAMP`},
 	{version: 89, table: "conversation_turns", column: "promoted_to_turn_id",
 		addDDL: `ALTER TABLE conversation_turns ADD COLUMN promoted_to_turn_id TEXT REFERENCES conversation_turns(id) ON DELETE SET NULL`},
-	// 0106_pr_comment_review_id.sql. Session projections join this column, so a
-	// field database that recorded 0106 without its physical effect must be
-	// repaired before the first list request.
 	{version: 106, table: "pr_comment", column: "review_id",
 		addDDL: `ALTER TABLE pr_comment ADD COLUMN review_id TEXT NOT NULL DEFAULT ''`},
-	// 0108_conversation_retry_source.sql. Some stacked development builds
-	// recorded 0108 without applying its physical schema; 0118 rebuilds this
-	// table and must see the retry lineage column before goose reaches it.
 	{version: 108, table: "conversation_turns", column: "retry_of_turn_id",
 		addDDL: `ALTER TABLE conversation_turns ADD COLUMN retry_of_turn_id TEXT REFERENCES conversation_turns(id) ON DELETE RESTRICT`,
 		postAdd: []string{
@@ -2093,27 +1844,14 @@ BEGIN
     ON conversation_turns(conversation_id, retry_of_turn_id)
     WHERE retry_of_turn_id IS NOT NULL`,
 		}},
-	// 0130_pr_review_partial.sql. Generated PR reads select this column, so a
-	// field database that burned version 130 must not lose it. The default
-	// matches the migration: unknown historical certainty stays partial.
 	{version: 130, table: "pr", column: "review_partial",
 		addDDL: `ALTER TABLE pr ADD COLUMN review_partial BOOLEAN NOT NULL DEFAULT TRUE`},
-	// 0132_conversation_opencode_mode.sql. Generated conversation reads select
-	// this column, so repair field databases that recorded 0132 without adding it.
 	{version: 132, table: "conversations", column: "opencode_mode",
 		addDDL: `ALTER TABLE conversations ADD COLUMN opencode_mode TEXT NOT NULL DEFAULT ''`},
-	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
-	// another migration first, and generated message reads select this column.
 	{version: 199, table: "conversation_messages", column: "continuation",
 		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
 }
 
-// reconcileSchema verifies that the columns in schemaRepairs physically exist
-// and replays the skipped migration's effects for any that are missing. It is
-// idempotent: a healthy database (migrations applied normally, or one already
-// repaired by hand or a previous startup) is left untouched. Failures surface
-// as a specific, actionable startup error instead of an opaque INTERNAL_ERROR
-// on the first session list.
 func reconcileSchema(db *sql.DB) error {
 	for _, rc := range schemaRepairs {
 		var count int
@@ -2140,8 +1878,6 @@ func reconcileSchema(db *sql.DB) error {
 	if err := reconcileHarnessConstraint(db); err != nil {
 		return err
 	}
-	// A missing column fails reads loudly; a missing revision trigger silently
-	// disables every session CAS. Do not admit that database as healthy.
 	var revisionColumn, revisionTrigger int
 	if err := db.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'revision'),
@@ -2213,35 +1949,24 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		return fmt.Errorf("schema repair: enable writable_schema for sessions harness constraint: %w", err)
 	}
 	if !needsNativeAssistant {
-		// Older constraints need exact historical repairs. Temporarily remove
-		// Hermes wherever it appears before the final fake entry, apply those
-		// repairs, then append Hermes below without removing later harnesses.
 		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''hermes'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
 			return fmt.Errorf("schema repair: normalize Hermes constraint: %w", err)
 		}
 		needsNativeAssistant = true
 	}
 	if !needsStakpak {
-		// Stakpak's migration also inserts it before 'fake', so remove it the
-		// same way before the exact repairs and append it again below.
 		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''stakpak'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
 			return fmt.Errorf("schema repair: normalize Stakpak constraint: %w", err)
 		}
 		needsStakpak = true
 	}
 	if !needsDockerAgent {
-		// Docker Agent must stay last before 'fake' (its migration's Down
-		// anchors on "'docker-agent', 'fake'))"), but the appends below would
-		// land after it. Remove it the same way and append it again last.
 		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''docker-agent'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
 			return fmt.Errorf("schema repair: normalize Docker Agent constraint: %w", err)
 		}
 		needsDockerAgent = true
 	}
 	if !needsMiniMaxCode {
-		// MiniMax Code's migration runs after Docker Agent's, so it is last
-		// before 'fake' on a fresh database. Remove it the same way and append
-		// it again after Docker Agent.
 		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''minimax-code'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
 			return fmt.Errorf("schema repair: normalize MiniMax Code constraint: %w", err)
 		}
@@ -2259,9 +1984,6 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		)
 	}
 	if needsKimchi {
-		// After the Muse repair (if any), the constraint will be in one of
-		// these known states — each gets Kimchi inserted in the same
-		// position as migration 0054 does.
 		repairs = append(repairs,
 			replacement{sessionsHarnessCheckWithMuse, sessionsHarnessCheckWithMuseKimchi},
 			replacement{sessionsHarnessCheckWithMuseQM, sessionsHarnessCheckWithMuseQMKimchi},
@@ -2283,9 +2005,6 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		)
 	}
 	if needsGemini {
-		// Goose runs before reconciliation. A legacy constraint can therefore
-		// miss migration 0163, then reach the OMP shape through repairs above.
-		// Widen both known variants here without dropping the legacy QM value.
 		for _, old := range []string{
 			sessionsHarnessCheckWithMuseKimchiPrimeAgentOMP,
 			sessionsHarnessCheckWithMuseQMKimchiPrimeAgentOMP,
@@ -2326,43 +2045,23 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		}
 	}
 	if needsDeepSeek {
-		// Migration 0166 rewrites the current constraint variants by exact string.
-		// A database that skipped an earlier harness migration matches none of
-		// them, so it reaches this repair with the harness list still missing
-		// entries; goose has already run, so nothing else adds this harness. Every
-		// variant ends with the retained 'fake' fixture harness, so anchor there
-		// instead of enumerating the shapes repaired above.
 		repairs = append(repairs, replacement{"'fake'))", "'deepseek-harness', 'fake'))"})
 	}
 	if needsOpenHands {
-		// Migration 0192 rewrites the current constraint variants by exact
-		// string. A database that skipped an earlier harness migration matches
-		// none of them, so it reaches this repair with the harness list still
-		// missing entries; goose has already run, so nothing else adds this
-		// harness. Every variant ends with the retained 'fake' fixture harness,
-		// so anchor there instead of enumerating the shapes repaired above.
-		// This runs after the DeepSeek repair, so a database missing both gets
-		// 'deepseek-harness', 'openhands', 'fake' in that order.
 		repairs = append(repairs, replacement{"'fake'))", "'openhands', 'fake'))"})
 	}
 	if needsCodewhale {
 		repairs = append(repairs, replacement{"'fake'))", "'codewhale', 'fake'))"})
 	}
 	if needsCommandCode {
-		// Migration 0194 rewrites the constraint by anchoring on the retained
-		// 'fake' fixture harness, for the same reason as DeepSeek above. A
-		// database that skipped an earlier harness migration reaches this repair
-		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
-	// Append only after the exact legacy recognizers have repaired older lists.
 	if needsFX {
 		repairs = append(repairs, replacement{"'fake'))", "'fx', 'fake'))"})
 	}
 	if needsOpenCodeV2 {
 		repairs = append(repairs, replacement{"'fake'))", "'opencode-v2', 'fake'))"})
 	}
-	// Add the new harness only after exact historical variants are repaired.
 	if needsNativeAssistant {
 		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
 	}
@@ -2372,11 +2071,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsStakpak {
 		repairs = append(repairs, replacement{"'fake'))", "'stakpak', 'fake'))"})
 	}
-	// Docker Agent comes last, matching the migration order of a fresh database.
 	if needsDockerAgent {
 		repairs = append(repairs, replacement{"'fake'))", "'docker-agent', 'fake'))"})
 	}
-	// MiniMax Code's migration runs after Docker Agent's, so it follows it.
 	if needsMiniMaxCode {
 		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
 	}

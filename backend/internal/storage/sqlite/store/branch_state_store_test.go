@@ -39,7 +39,6 @@ func TestSessionBranchStateRoundTripsAndStreamsOnChange(t *testing.T) {
 		t.Fatalf("events = %+v, want one session_updated", events)
 	}
 
-	// Writing the same facts again is not a change.
 	baseSeq, _ = s.LatestSeq(ctx)
 	if _, err := s.SetSessionBranchState(ctx, session.ID, want); err != nil {
 		t.Fatalf("rewrite branch state: %v", err)

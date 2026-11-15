@@ -7,30 +7,21 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dial
 
 export type DescriptionImage = { alt: string; src: string };
 
-/** A thumbnail that shows an icon instead when the picture can't load. */
 function Thumbnail({ image }: { image: DescriptionImage }) {
 	const [failed, setFailed] = useState(false);
 	if (failed) return <ImageIcon aria-hidden="true" className="size-icon-sm text-passive" />;
 	return <img alt="" className="size-full object-cover object-top" onError={() => setFailed(true)} src={image.src} />;
 }
 
-/**
- * The description's images, one at a time over the app: full size, stepped
- * through with the arrows, the arrow keys or the thumbnail row. An image the
- * provider only serves to a signed-in browser says so and links to the original.
- */
 export function PRImageGallery({ images, index, onIndexChange }: {
 	images: DescriptionImage[];
-	/** The image shown, or null when the gallery is closed. */
 	index: number | null;
 	onIndexChange: (index: number | null) => void;
 }) {
 	const { t } = useTranslation();
-	// The last image stays in place while the gallery fades out, instead of an empty frame.
 	const [last, setLast] = useState(0);
 	const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
 	useEffect(() => { if (index !== null) setLast(index); }, [index]);
-	// Images can change under an open gallery (fresh details); past the end it closes.
 	useEffect(() => { if (index !== null && index >= images.length) onIndexChange(null); }, [images.length, index, onIndexChange]);
 	const shown = index ?? last;
 	const image = images[shown];
@@ -57,7 +48,6 @@ export function PRImageGallery({ images, index, onIndexChange }: {
 					{count > 1 ? <span className="shrink-0 text-xs font-normal text-muted-foreground">{t("pr.description.imagePosition", { index: shown + 1, count })}</span> : null}
 				</DialogTitle>
 				<DialogDescription className="sr-only">{t("pr.description.imageFromDescription")}</DialogDescription>
-				{/* Room for the picture from the first frame, so the gallery doesn't open as a thin strip while it loads. */}
 				<div className="relative flex min-h-[50vh] items-center justify-center overflow-hidden rounded-md bg-muted/40">
 					{broken ? (
 						<div className="flex max-w-sm flex-col items-center gap-2 p-6 text-center text-xs text-muted-foreground">

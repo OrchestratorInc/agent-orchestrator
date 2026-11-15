@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 )
 
-// The Chat driver starts Codex directly, so AO's managed .cmd launcher must
-// resolve to the native executable in the current managed release.
 func TestResolveNativeWindowsCodexUnwrapsTheManagedLauncher(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
@@ -33,7 +31,6 @@ func TestResolveNativeWindowsCodexUnwrapsTheManagedLauncher(t *testing.T) {
 	}
 }
 
-// A shim outside AO's launcher directory keeps its own npm prefix lookup.
 func TestWindowsNativeCodexCandidatesIgnoreTheManagedReleaseForOtherShims(t *testing.T) {
 	binaryutil.SetManagedBinDir(filepath.Join(t.TempDir(), "bin"))
 	t.Cleanup(func() { binaryutil.SetManagedBinDir("") })

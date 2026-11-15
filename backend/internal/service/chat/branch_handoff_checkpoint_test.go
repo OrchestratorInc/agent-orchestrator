@@ -67,7 +67,6 @@ func TestOriginalBranchTUIRoundtripDoesNotInheritEditedBranchCheckpoint(t *testi
 	}
 	commitMode(domain.SessionModeTUI, domain.SessionModeChat, "thread-fresh")
 
-	// The provider returns only the requested branch, never the other branch's suffix.
 	replayTurn := func(id, text string) []ports.ChatEvent {
 		return []ports.ChatEvent{
 			{Kind: ports.ChatEventTurnStarted, ProviderEventID: "start-" + id, ProviderTurnID: id},
@@ -116,8 +115,6 @@ func TestOriginalBranchTUIRoundtripDoesNotInheritEditedBranchCheckpoint(t *testi
 		t.Fatal(err)
 	}
 	commitMode(domain.SessionModeChat, domain.SessionModeTUI, "thread-1")
-	// No new TUI input: the original branch's durable high-water mark is the only
-	// replay boundary. A stale edited-branch hook must not become mandatory text.
 	commitMode(domain.SessionModeTUI, domain.SessionModeChat, "thread-1")
 	cfg.ProviderConversationID = "thread-1"
 	if _, err := svc.Start(ctx, cfg); err != nil {

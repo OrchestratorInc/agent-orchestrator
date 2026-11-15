@@ -326,24 +326,14 @@ func codexWindowsDACLACEs(
 			codexWindowsAccessDeniedObjectACEType,
 			codexWindowsAccessDeniedCallbackACEType,
 			codexWindowsAccessDeniedCallbackObjectACEType:
-			// Deny ACEs cannot grant access. Their trustee layout is irrelevant to
-			// these policies, so leave them to the Windows access check.
 			continue
 		default:
-			// Compound, object, and callback allow ACEs have layouts or semantics
-			// this decoder does not implement. Reject them rather than risk
-			// treating an effective grant as a harmless non-allow ACE.
 			return nil, errors.New("codex path ACL contains an unsupported effective ACE")
 		}
 	}
 	return aces, nil
 }
 
-// codexWindowsTrustedInstallerSIDString is NT SERVICE\TrustedInstaller. Windows
-// makes it the owner of the system drive root and of everything under
-// %SystemRoot%, so it is an unavoidable ancestor owner for any path AO creates.
-// It is a service SID that no interactive account can assume without already
-// holding SYSTEM, which makes it at least as trustworthy as BUILTIN\Administrators.
 const codexWindowsTrustedInstallerSIDString = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 
 func codexWindowsTrustedInstallerSID() (*windows.SID, error) {

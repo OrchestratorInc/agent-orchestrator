@@ -3,8 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 
-// Real DndContext (no mock): proves the grip is wired to dnd-kit's KeyboardSensor.
-
 function queued(texts: string[]): QueuedMessage[] {
 	return texts.map((text, index) => {
 		const turnId = `queued-${index + 1}`;
@@ -44,7 +42,6 @@ describe("QueuedMessageDock keyboard reorder", () => {
 		const [grip] = screen.getAllByRole("button", { name: "Drag to reorder queued message" });
 		grip.focus();
 		await user.keyboard(" ");
-		// The first grip is the next message to send: rows read in send order.
 		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/queued-1/));
 		await user.keyboard("{Escape}");
 		await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/cancelled/i));

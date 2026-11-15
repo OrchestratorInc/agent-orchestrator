@@ -28,7 +28,6 @@ const (
 //go:embed assets/ao-activity.ts
 var mimoHookSource string
 
-// GetAgentHooks installs AO-owned MiMo Code hooks and standing instructions.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -64,7 +63,6 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	return nil
 }
 
-// AreHooksInstalled reports whether AO's MiMo Code activity hook is installed.
 func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -75,7 +73,6 @@ func (p *Plugin) AreHooksInstalled(ctx context.Context, workspacePath string) (b
 	return isManagedFile(mimoHookPath(workspacePath), mimoHookSentinel)
 }
 
-// UninstallHooks removes only AO-owned MiMo Code workspace artifacts.
 func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err

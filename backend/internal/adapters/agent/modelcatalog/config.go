@@ -127,12 +127,6 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 			paths = append(paths, filepath.Join(home, ".config", "goose", "config.yaml"))
 		}
 	case "deepseek-harness":
-		// DeepSeek Harness's catalog comes from a live `dsh --profile acp`
-		// session, and the profile decides the model route, so the profile's own
-		// files are the configuration discovery consults. Without them the
-		// fingerprint would be the dsh binary alone, and a route changed in the
-		// web setup flow would leave the day's cached choices in place —
-		// including choices the new session rejects.
 		if root := deepseekProfileDir(home, env); root != "" {
 			for _, name := range [...]string{"cordis.yml", "cordis.patch.yml", "package.json"} {
 				paths = append(paths, filepath.Join(root, name))
@@ -165,7 +159,6 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	return paths
 }
 
-// hermesConfigHome resolves HERMES_HOME exactly as the adapter and Hermes do.
 func hermesConfigHome(_ string, env map[string]string) string {
 	root, err := hermes.ResolveHome(env)
 	if err != nil {
@@ -174,13 +167,8 @@ func hermesConfigHome(_ string, env map[string]string) string {
 	return root
 }
 
-// hermesReasoningLevels are the native --reasoning values Hermes accepts.
 var hermesReasoningLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
-// discoverHermesCatalog lists the models Hermes cached for its configured
-// provider, with the config.yaml default marked. Hermes keeps the provider in
-// its own configuration and AO passes only --model, so models from any other
-// provider would launch against the wrong endpoint and are left out.
 func discoverHermesCatalog(base ports.AgentModelCatalog, paths []string) (ports.AgentModelCatalog, error) {
 	if len(paths) != 2 {
 		return base, fmt.Errorf("hermes model configuration was not found")
@@ -218,8 +206,6 @@ func discoverHermesCatalog(base ports.AgentModelCatalog, paths []string) (ports.
 	return base, nil
 }
 
-// hermesConfiguredProvider returns config.yaml's explicit model.provider.
-// "auto" picks a provider from credentials at run time, so no cache applies.
 func hermesConfiguredProvider(raw []byte) string {
 	var config struct {
 		Model yaml.Node `yaml:"model"`
@@ -239,8 +225,6 @@ func hermesConfiguredProvider(raw []byte) string {
 	return ""
 }
 
-// parseHermesProviderCache reads one provider's models from Hermes's
-// provider_models_cache.json ({provider: {"models": [ids...]}}).
 func parseHermesProviderCache(raw []byte, provider string) ([]ports.AgentModelInfo, error) {
 	var cache map[string]struct {
 		Models []string `json:"models"`
@@ -258,9 +242,6 @@ func parseHermesProviderCache(raw []byte, provider string) ([]ports.AgentModelIn
 	return models, nil
 }
 
-// parseHermesModels reports the model Hermes's own configuration selects. The
-// provider stays native configuration, so only that provider's default is a
-// reproducible catalog entry; other model IDs can still be typed directly.
 func parseHermesModels(raw []byte) ([]ports.AgentModelInfo, error) {
 	var config struct {
 		Model yaml.Node `yaml:"model"`
@@ -326,8 +307,6 @@ func qwenConfigHome(home string, env map[string]string) string {
 	return root
 }
 
-// deepseekProfileDir resolves the ACP profile directory, honouring DSH_HOME the
-// way DeepSeek Harness itself does (its home-paths package falls back to ~/.dsh).
 func deepseekProfileDir(home string, env map[string]string) string {
 	root := strings.TrimSpace(env["DSH_HOME"])
 	if root == "" {
@@ -384,10 +363,6 @@ func configDiscoveryFingerprint(agentID, workingDir string, env map[string]strin
 	return fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 }
 
-// fingerprintConfigPaths hashes the contents of the configuration a discovery
-// consults, so an edit to any of it invalidates the cached catalog. A path that
-// does not exist contributes nothing, keeping the fingerprint stable until one
-// appears.
 func fingerprintConfigPaths(paths []string) string {
 	hash := sha256.New()
 	for _, path := range paths {
@@ -517,8 +492,6 @@ func parseGooseModels(raw []byte) ([]ports.AgentModelInfo, error) {
 	if err := yaml.Unmarshal(raw, &config); err != nil {
 		return nil, err
 	}
-	// AO can pass Goose a model override but not a provider override. Offering
-	// another provider's models would produce a launch Goose cannot reproduce.
 	provider := strings.TrimSpace(config.ActiveProvider)
 	item, ok := config.Providers[provider]
 	if !ok || provider == "" {

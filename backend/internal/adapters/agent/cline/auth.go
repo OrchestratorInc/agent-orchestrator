@@ -15,14 +15,11 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	// Cline's own provider settings decide first; CLINE_API_KEY is the
-	// fallback. A settings read error only surfaces when no key is set either.
 	status, ok, providerErr := clineProviderAuthStatus(ctx)
 	if providerErr == nil && ok {
 		return status, nil
@@ -96,7 +93,6 @@ func clineProviderAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 			if strings.TrimSpace(provider.Settings.APIKey) != "" || strings.TrimSpace(provider.Settings.APIKeyAlt) != "" {
 				evidence.Method = domain.AgentAccountMethodAPIKey
 			} else if provider.Settings.Auth != nil {
-				// A Cline account login carries who signed in in its access token.
 				evidence.Email, evidence.Name = authprobe.TokenIdentity(provider.Settings.Auth.AccessToken)
 			}
 			ports.RecordAuthEvidence(ctx, evidence)

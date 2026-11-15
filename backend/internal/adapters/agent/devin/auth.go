@@ -13,13 +13,11 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
 	return status, err
 }
 
-// AuthStatusWithDiagnostics reports which check produced the native verdict.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -28,7 +26,6 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, nil, err
 	}
-	// Native login decides first; the environment key is the fallback.
 	var identity domain.AgentAccountIdentity
 	status, steps, err := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"auth", "status"}}, 8*time.Second, func(output []byte) (ports.AgentAuthStatus, bool) {
 		status := authprobe.StatusFromText(string(output))
@@ -55,8 +52,6 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return status, domain.AgentAccountIdentity{}, steps, nil
 }
 
-// devinAccountFromStatus reads only display fields from a successful native
-// status report. Credential values, file paths and account IDs are not copied.
 func devinAccountFromStatus(output string) domain.AgentAccountIdentity {
 	identity := domain.AgentAccountIdentity{Method: domain.AgentAccountMethodAccount}
 	section, tier := "", ""

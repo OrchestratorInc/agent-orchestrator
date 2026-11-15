@@ -15,8 +15,6 @@ import (
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
-// chromeMode wires the Chrome extension runtime: its broker, the per-session
-// target store, and the native-host installer.
 type chromeMode struct {
 	broker    *browserruntime.Broker
 	token     string
@@ -25,8 +23,6 @@ type chromeMode struct {
 	log       *slog.Logger
 }
 
-// newChromeMode prepares Chrome mode. It returns nil (and logs) when the
-// daemon cannot support it; the panel runtime keeps working either way.
 func newChromeMode(cfg config.Config, log *slog.Logger) *chromeMode {
 	executable, err := os.Executable()
 	if err == nil {
@@ -64,8 +60,6 @@ func newChromeMode(cfg config.Config, log *slog.Logger) *chromeMode {
 	return mode
 }
 
-// serve listens for the extension's native host and publishes the endpoint
-// file the host reads. It returns once the listener is up.
 func (m *chromeMode) serve(ctx context.Context, runFilePath string) error {
 	ln, addr, err := browserruntime.ListenNamed(runFilePath, "chrome")
 	if err != nil {
@@ -89,8 +83,6 @@ func (m *chromeMode) serve(ctx context.Context, runFilePath string) error {
 			m.log.Warn("browser chrome: serve stopped with error", "err", err)
 		}
 	}()
-	// Keep an enabled registration pointing at this daemon's binary and the
-	// extension bundled with it, so app updates and moves stay connected.
 	go func() {
 		defer sentryobs.RecoverBackground()
 		if err := m.installer.Refresh(); err != nil {
@@ -100,17 +92,14 @@ func (m *chromeMode) serve(ctx context.Context, runFilePath string) error {
 	return nil
 }
 
-// lifecycle tears down sessions in both runtimes.
 func (m *chromeMode) lifecycle(panel *browserruntime.Broker) browsersvc.Lifecycle {
 	return browsersvc.Lifecycle{Panel: panel, Chrome: m.broker, Targets: m.targets}
 }
 
-// ChromeStatus implements controllers.BrowserChromeService.
 func (m *chromeMode) ChromeStatus() controllers.BrowserChromeStatusResponse {
 	return m.response(m.installer.Status())
 }
 
-// SetupChrome implements controllers.BrowserChromeService.
 func (m *chromeMode) SetupChrome() (controllers.BrowserChromeStatusResponse, error) {
 	status, err := m.installer.Setup()
 	if err == nil {
@@ -119,7 +108,6 @@ func (m *chromeMode) SetupChrome() (controllers.BrowserChromeStatusResponse, err
 	return m.response(status), err
 }
 
-// RemoveChrome implements controllers.BrowserChromeService.
 func (m *chromeMode) RemoveChrome() (controllers.BrowserChromeStatusResponse, error) {
 	status, err := m.installer.Remove()
 	if err == nil {

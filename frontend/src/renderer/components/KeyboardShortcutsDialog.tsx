@@ -42,9 +42,6 @@ function shortcutCategoryLabel(category: ShortcutCategory, t: TFunction): string
 	return t(shortcutCategoryLabelKeys[category]);
 }
 
-// Fixed, context-sensitive keys that belong to a surface rather than the app:
-// the chat composer, terminal, file editor and Browser panel handle them
-// themselves, so they are listed here for reference and are not customizable.
 function contextualShortcuts(isMac: boolean): readonly { id: string; label: MessageKey; keys: readonly string[] }[] {
 	const primary = isMac ? "⌘" : "Ctrl";
 	return [
@@ -123,8 +120,6 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 	const isCommandPaletteEnabled = useCommandPaletteEnabled();
 	const overrides = useKeybindingsStore((state) => state.overrides);
 	const paletteShortcuts: readonly AppShortcutId[] = ["command-palette", "quick-open-file"];
-	// The dialog's own chord sits in the header, so it is not repeated as a row.
-	// Dictation is in preview behind Developer mode.
 	const developerMode = useUiStore((state) => state.developerMode);
 	const splitPanes = useSplitPanesEnabled();
 	const availableShortcuts = APP_SHORTCUTS.filter(
@@ -145,8 +140,6 @@ export const KeyboardShortcutsDialog = memo(function KeyboardShortcutsDialog({
 					if (!customizingRef.current) { restoreFocusOnClose(event); return; }
 					customizingRef.current = false;
 					event.preventDefault();
-					// The settings page has replaced the prior surface by the time
-					// the help dialog finishes closing; focus its command search.
 					requestAnimationFrame(() => document.querySelector<HTMLInputElement>('[data-section="keyboard-shortcuts"] input[type="search"]')?.focus());
 				}}
 			>

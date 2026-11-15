@@ -10,12 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// RenameTaskBranch gives a launched task's temporary branch its generated
-// name. The checkout never moves, so a running agent keeps its working
-// directory, and AO keeps attributing refs under the temporary namespace to
-// the session. It refuses once the temporary branch is pushed, because the
-// agent's later plain `git push` would then name a different remote branch.
-// Git never force-renames, and another claimant gets a suffix.
 func (w *Workspace) RenameTaskBranch(ctx context.Context, info ports.WorkspaceProjectInfo, branch string) (ports.WorkspaceProjectInfo, error) {
 	repos, err := w.taskRepos(info)
 	if err != nil {
@@ -49,8 +43,6 @@ candidates:
 		if suffix > 1 {
 			candidate = fmt.Sprintf("%s-%d", namespace, suffix)
 		}
-		// The generated name is the temporary one; a workspace project's
-		// temporary branch is the bare namespace.
 		if candidate == strings.TrimSuffix(info.Root.Branch, "/root") {
 			return info, nil
 		}
@@ -70,9 +62,6 @@ candidates:
 	return info, fmt.Errorf("gitworktree: no unused task branch for %q", branch)
 }
 
-// RevertTaskBranch puts back the branches original held before a rename the
-// caller could not record. It is exact: no suffix and no guard. On error it
-// reports the branches Git holds: the first repositories are already back.
 func (w *Workspace) RevertTaskBranch(ctx context.Context, renamed, original ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
 	from, err := w.taskRepos(renamed)
 	if err != nil {
@@ -110,26 +99,20 @@ func (w *Workspace) renameTaskCandidate(ctx context.Context, info ports.Workspac
 	if err == nil {
 		return withTaskBranches(info, moves), false, nil
 	}
-	// All repositories share one task name, so undo the ones already renamed,
-	// last first.
 	undo := make([]branchMove, n)
 	for i := range undo {
 		mv := moves[n-1-i]
 		undo[i] = branchMove{mv.path, mv.to, mv.from}
 	}
 	if undone, undoErr := w.moveBranches(ctx, undo); undoErr != nil {
-		// Report what Git now holds: the first repositories kept the new name.
 		return withTaskBranches(info, moves[:n-undone]), false, errors.Join(err, undoErr)
 	}
-	// Another project sharing this repository may have claimed the name.
 	if claimed, _ := w.refExists(ctx, repos[n].RepoPath, "refs/heads/"+branch); claimed {
 		return info, true, nil
 	}
 	return info, false, err
 }
 
-// withTaskBranches puts the first repositories (and the root with the first)
-// on the branches the landed moves gave them.
 func withTaskBranches(info ports.WorkspaceProjectInfo, landed []branchMove) ports.WorkspaceProjectInfo {
 	if len(landed) > 0 {
 		info.Root.Branch = landed[0].to
@@ -143,9 +126,6 @@ func withTaskBranches(info ports.WorkspaceProjectInfo, landed []branchMove) port
 
 type branchMove struct{ path, from, to string }
 
-// moveBranches renames branches in order and reports how many landed. Shutdown
-// cannot cancel it, so Git never stops halfway through renaming the branch a
-// live agent has checked out.
 func (w *Workspace) moveBranches(ctx context.Context, moves []branchMove) (int, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()

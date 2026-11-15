@@ -6,11 +6,8 @@ import type { MessageKey } from "../i18n";
 
 export type SystemRequirement = components["schemas"]["SystemRequirement"];
 
-// Stagger step between each row's entrance animation (brief: ~120-180ms).
 const STAGGER_STEP_MS = 150;
 
-// The backend's stable id -> label for "harness" is "agent harness" (see
-// systemcheck.go); the product name for this row is "Coding agent".
 export function requirementDisplayLabel(requirement: SystemRequirement, t: TFunction): string {
 	return requirement.id === "harness" ? t("startup.codingAgentLabel") : requirement.label;
 }
@@ -22,18 +19,12 @@ const MISSING_DETAIL_KEYS: Record<string, MessageKey> = {
 	gh: "startup.detailGhMissing",
 };
 
-// requirement.detail is backend-authoritative (systemcheck.go) and hardcoded
-// English. That's fine when satisfied — it's a resolved path or a
-// comma-joined list of installed agent names, not prose — but the "why this
-// is missing" sentence needs to live in the frontend's i18n system like every
-// other string here, not leak untranslated English next to a localized label.
 export function requirementDetailText(requirement: SystemRequirement, t: TFunction): string | undefined {
 	if (requirement.satisfied) return requirement.detail;
 	const key = MISSING_DETAIL_KEYS[requirement.id];
 	return key ? t(key) : requirement.detail;
 }
 
-/** Checklist of startup requirements, in the backend's stable order. */
 export function SystemRequirementsChecklist({
 	requirements,
 	ready,

@@ -12,7 +12,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type AwakeControlProps = { className?: string; tabIndex?: number };
 
-/** Reflect toggle intent immediately; paused requests remain visible and clearable. */
 export function AwakeControl(props: AwakeControlProps) {
 	if (!isMacPlatform()) return null;
 	return <MacAwakeControl {...props} />;
@@ -20,7 +19,6 @@ export function AwakeControl(props: AwakeControlProps) {
 
 export type StayAwake = ReturnType<typeof useStayAwake>;
 
-/** Why Stay Awake paused itself, or "" when it did not. */
 function awakePauseReason(t: TFunction, stay: StayAwake): string {
 	return stay.reason === "low_battery"
 		? t("awake.pausedBattery", "Paused: battery below {{percent}}%.\nResumes after charging.", { percent: stay.stopBatteryPercent })
@@ -60,7 +58,6 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 						className={cn(
 							NAV_ROW_HIGHLIGHT_HOST_CLASS,
 							"inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg disabled:opacity-50",
-							// The shared navigation highlight owns both the selected fill and hover pill.
 							highlighted ? "text-foreground" : "text-muted-foreground",
 							className,
 						)}
@@ -84,25 +81,14 @@ function MacAwakeControl({ className, tabIndex }: AwakeControlProps) {
 	);
 }
 
-/**
- * Stay Awake for the sidebar footer's Mobile menu. The always-mounted trigger
- * holds it and hands it to {@link AwakeMenuItem}, so a failed toggle is still
- * badged and explained after the menu closes. Disabled off macOS.
- */
 export function useFooterStayAwake(): StayAwake {
 	return useStayAwake(isMacPlatform());
 }
 
-/** True when Stay Awake needs a look: it paused, or the last toggle failed. */
 export function awakeNeedsAttention(stay: StayAwake): boolean {
 	return isMacPlatform() && (stay.attention || !!stay.error);
 }
 
-/**
- * Stay Awake as a switch row in a dropdown (the sidebar footer's Mobile menu).
- * A second line appears only when it paused or failed, saying why. Renders
- * nothing off macOS.
- */
 export function AwakeMenuItem({ stay }: { stay: StayAwake }) {
 	if (!isMacPlatform()) return null;
 	return <MacAwakeMenuItem stay={stay} />;

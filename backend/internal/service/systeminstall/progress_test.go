@@ -24,7 +24,6 @@ func percentOf(progress *Progress) int {
 }
 
 func TestProgressTrackerReadsUVDownloadSizes(t *testing.T) {
-	// Captured from `uv tool install mistral-vibe` without a TTY.
 	head := "Resolved 98 packages in 4.50s\n" +
 		"Downloading pydantic-core (1.9MiB)\n" +
 		"Downloading cryptography (3.8MiB)\n" +
@@ -81,7 +80,6 @@ func TestProgressTrackerCountsHomebrewDependencies(t *testing.T) {
 }
 
 func TestProgressTrackerReadsCarriageReturnPercentages(t *testing.T) {
-	// curl's progress bar redraws one line with carriage returns.
 	progress := trackOutput("Downloading binary\n", "\r####                        12.5%", "\r############                45.0%", "\r")
 	if progress.Phase != ProgressDownloading || percentOf(progress) != 45 {
 		t.Fatalf("curl bar = %+v, want downloading 45%%", progress)
@@ -95,7 +93,6 @@ func TestProgressTrackerReadsCarriageReturnPercentages(t *testing.T) {
 }
 
 func TestProgressTrackerMovesToInstallingWhenAScriptReportsSuccess(t *testing.T) {
-	// Captured from https://install.openhands.dev/install.sh without a TTY.
 	if progress := trackOutput("[INFO] Starting OpenHands CLI installation...\n"); progress.Phase != "" {
 		t.Fatalf("before any download line phase = %q, want none", progress.Phase)
 	}
@@ -115,7 +112,6 @@ func TestProgressTrackerReportsNoPhaseUntilALineNamesOne(t *testing.T) {
 	if progress := trackOutput(); progress != nil {
 		t.Fatalf("silent installer = %+v, want no progress", progress)
 	}
-	// Captured from Aider's official script: lower case, no log-level prefix.
 	if progress := trackOutput("downloading uv 0.5.9 aarch64-apple-darwin\n"); progress.Phase != ProgressDownloading {
 		t.Fatalf("lower-case download line phase = %q, want downloading", progress.Phase)
 	}
@@ -125,7 +121,6 @@ func TestProgressTrackerReportsNoPhaseUntilALineNamesOne(t *testing.T) {
 }
 
 func TestProgressTrackerTreatsAScriptTitleAsNoPhase(t *testing.T) {
-	// Captured from https://chatgpt.com/codex/install.sh without a TTY.
 	head := "==> Installing Codex CLI\n" +
 		"==> Detected platform: macOS (Apple Silicon)\n" +
 		"==> Resolved version: 0.166.0\n"
@@ -240,7 +235,6 @@ func TestAgentInstallPublishesNoPhaseWhileTheInstallerIsSilent(t *testing.T) {
 	if _, err := s.StartAgent(context.Background(), TargetCodex, "npm"); err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
-	// Past several publish ticks, so a default phase would have been published.
 	time.Sleep(3 * progressPublishInterval)
 	job, err := s.Status(context.Background(), TargetCodex)
 	close(release)

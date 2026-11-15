@@ -14,7 +14,6 @@ beforeEach(() => {
 	tokenMock.mockResolvedValue("token-1");
 });
 
-// Session attachments are bytes both ways, which the text channel cannot carry.
 describe("cloud control-plane binary requests", () => {
 	it("sends the bytes with the main process's token and returns the response bytes", async () => {
 		const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
@@ -44,7 +43,6 @@ describe("cloud control-plane binary requests", () => {
 		expect(fetchImpl).not.toHaveBeenCalled();
 	});
 
-	// A fetch that answers only when its signal aborts, as a stalled upload does.
 	const stalledFetch = () => vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
 		init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
 	}));
@@ -68,7 +66,6 @@ describe("cloud control-plane binary requests", () => {
 		const first = proxy.requestBinary({ ...base, requestId: "upload-1" }, sender);
 		const second = proxy.requestBinary({ ...base, requestId: "upload-2" }, sender);
 		await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
-		// Another WebContents cannot cancel it.
 		proxy.cancelBinary(other, "upload-1");
 		proxy.cancelBinary(sender, "upload-1");
 		await expect(first).rejects.toThrow();
@@ -101,8 +98,6 @@ describe("cloud control-plane binary requests", () => {
 	});
 });
 
-// The token goes only to the control plane the daemon is configured for: a
-// renderer that names another server gets an error, and nothing is sent.
 describe("cloud control-plane URL pinning", () => {
 	const sender = { id: 1, isDestroyed: () => false, send: vi.fn(), once: vi.fn() };
 	const elsewhere = ["https://evil.example", "https://cp.example.com.evil.example", "https://cp.example.com:8443", "http://127.0.0.1:9999", "https://cp.example.com/other"];
@@ -142,7 +137,6 @@ describe("cloud control-plane URL pinning", () => {
 	});
 });
 
-// Host tokens open a shell on the account's machines; only the main process reads them.
 describe("the account's machine directory", () => {
 	const listing = JSON.stringify({ hosts: [{ hostId: "h1", label: "VM", url: "https://h1.example", token: "a".repeat(64) }], fixedAddresses: true });
 	const hosts = { baseUrl: "https://cp.example.com", path: "/api/cloud/v1/me/hosts", method: "GET" };

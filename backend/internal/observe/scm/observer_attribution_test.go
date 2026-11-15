@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// Model real conditional requests: an acknowledged ETag returns 304, and an
-// incremental cursor excludes PRs last updated before it.
 type discoveryRecoveryProvider struct {
 	*fakeProvider
 	listedAfter []time.Time
@@ -67,7 +65,7 @@ func TestPoll_IdentityRecoveryRetriesMissedDiscoveries(t *testing.T) {
 			if obs.Cache.RepoPRListETag[key] != "" || !obs.Cache.LastSyncCursor[key].IsZero() {
 				t.Fatal("successful existing PR refresh acknowledged incomplete discovery")
 			}
-			now = now.Add(time.Hour) // beyond the five-minute overlap
+			now = now.Add(time.Hour)
 			provider.identityErr = nil
 			provider.identity = ports.SCMIdentity{Login: "alice", Human: true}
 			if err := obs.Poll(context.Background()); err != nil {
@@ -108,8 +106,6 @@ func TestPoll_ExistingAndExplicitAttachmentsStayStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// An older association no longer matches the owner's namespace. A second
-	// session now exactly matches both branches; discovery must not take over.
 	other := owner
 	other.ID = ""
 	other.Metadata.Branch = "renamed"
@@ -143,7 +139,6 @@ func TestPoll_ExistingAndExplicitAttachmentsStayStable(t *testing.T) {
 				provider.openPRs[prKey(testRepo, 0)] = append(provider.openPRs[prKey(testRepo, 0)], observed.PR)
 			}
 		}
-		// Recreate the observer to prove ownership is durable, not cache state.
 		obs := New(provider, store, nil, Config{Logger: quietSlog(), Clock: func() time.Time { return now }, ScopedIdentityResolver: provider})
 		if err := obs.Poll(ctx); err != nil {
 			t.Fatal(err)

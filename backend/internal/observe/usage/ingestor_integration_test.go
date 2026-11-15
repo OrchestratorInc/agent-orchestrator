@@ -20,9 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// Break caught: activating a new catalog after estimation but before the
-// source event commit could leave an old-version event behind after the new
-// provider backfill had already passed it.
 func TestIngestorHoldsPricingFenceThroughApplyUsageChunk(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -80,8 +77,6 @@ WHERE usage_source_id = ?`, source.ID).Scan(&total, &version))
 	}
 }
 
-// Break caught: shutdown cancellation while ingestion waits for catalog
-// activation admission must leave both the source cursor and events untouched.
 func TestIngestorCancelsWhileWaitingForPricingFence(t *testing.T) {
 	dataDir := t.TempDir()
 	store, source, path, now := seedCodexIngestionSource(t, dataDir)
@@ -122,8 +117,6 @@ func TestIngestorCancelsWhileWaitingForPricingFence(t *testing.T) {
 	}
 }
 
-// Break caught: optional price arithmetic failure must not strand valid token
-// facts or their durable transcript cursor in an endless retry loop.
 func TestIngestorPersistsUsageUnpricedWhenEstimationOverflows(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -1199,8 +1192,6 @@ func TestIngestorConflictedSourceLeavesSettledBindingAlone(t *testing.T) {
 		t.Fatalf("bindings=%+v err=%v", bindings, err)
 	}
 
-	// The conflict left the cursor at 0 with the whole transcript unread. Later
-	// passes must not flip the settled binding back through finalizing.
 	seq, err := store.LatestSeq(ctx)
 	mustNoError(t, err)
 	for range 3 {
@@ -1443,7 +1434,6 @@ func TestIngestorCorrectedConflictCanRecover(t *testing.T) {
 				ArtifactPath: path, FileIdentity: identity, State: domain.UsageSourcePending, UpdatedAt: now,
 			})
 			mustNoError(t, err)
-			// A bounded first chunk leaves a durable checkpoint before the conflict.
 			ingestor := NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }, ChunkBytes: int64(len(prefix))})
 			if test.prefix {
 				_, err = ingestor.Ingest(ctx, source.ID)
@@ -1457,7 +1447,6 @@ func TestIngestorCorrectedConflictCanRecover(t *testing.T) {
 			storedContent := line("msg-1", 3)
 			parsed := parseRecords(sourceCtx, []jsonlRecord{{Data: []byte(storedContent), Offset: int64(len(prefix))}}, int64(len(content)), now)
 			mustNoError(t, parsed.err)
-			// Seed the already-recorded event without moving the source cursor.
 			cursor := cursorFromSource(sourceCtx.Source, sourceCtx.Source.ByteOffset, now)
 			mustNoError(t, store.ApplyUsageChunk(ctx, source.ID, sourceCtx.Source.ByteOffset, sourceCtx.Source.UpdatedAt, cursor, parsed.Events))
 			_, err = ingestor.Ingest(ctx, source.ID)
@@ -1467,7 +1456,6 @@ func TestIngestorCorrectedConflictCanRecover(t *testing.T) {
 			if !ok || settled.Source.State != domain.UsageSourceComplete || settled.Source.LastErrorCode != domain.UsageErrorSourceEventConflict || settled.BindingState != domain.UsageBindingPartial {
 				t.Fatalf("did not settle transaction conflict: %+v", settled)
 			}
-			// Correct the conflict on the same inode, with and without changing size.
 			corrected := prefix + storedContent
 			wantTokens := int64(11)
 			if test.prefix {
@@ -1488,7 +1476,6 @@ func TestIngestorCorrectedConflictCanRecover(t *testing.T) {
 				t.Fatal("fixture changed inode")
 			}
 			now = now.Add(defaultFinalizationWait + time.Second)
-			// Recovery must use durable state, even after an ingestor restart.
 			ingestor = NewIngestor(store, IngestorConfig{Clock: func() time.Time { return now }})
 			_, err = ingestor.Ingest(ctx, source.ID)
 			mustNoError(t, err)

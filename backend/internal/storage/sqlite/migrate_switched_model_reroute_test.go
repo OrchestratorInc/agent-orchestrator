@@ -6,11 +6,6 @@ import (
 	"time"
 )
 
-// A chat switched from Claude Code to Codex before switches cleared the model
-// reroute kept Claude's, so its composer still named claude-sonnet-5-5. The
-// migration clears a reroute that a later provider switch replaced, and keeps one
-// the current provider recorded, one in a chat that never switched, and one it
-// cannot place in the timeline.
 func TestMigrationClearsModelReroutesFromBeforeAProviderSwitch(t *testing.T) {
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261111145612313)
 	at := time.Date(2026, time.November, 13, 5, 43, 0, 0, time.UTC)
@@ -35,14 +30,11 @@ INSERT INTO conversation_activities (id, conversation_id, sequence, kind, status
 VALUES (? || '-' || ?, ?, ?, 'system', 'completed', '', ?, ?, ?);`,
 			conversation, sequence, conversation, sequence, detail, at, at)
 	}
-	// Claude rerouted, then the chat switched to Codex.
 	activity("switched", 3, rerouted)
 	activity("switched", 7, switched)
-	// The chat switched, then the new provider rerouted.
 	activity("rerouted-after", 3, switched)
 	activity("rerouted-after", 7, rerouted)
 	activity("unswitched", 3, rerouted)
-	// A switch, but no timeline row says when the reroute happened.
 	activity("unplaced", 7, switched)
 
 	upTo(t, db, 20261113111818788)

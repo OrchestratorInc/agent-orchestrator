@@ -5,12 +5,10 @@ import { looksLikeEmail } from "../../../hooks/useTeams";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
 
-/** Splits typed or pasted text into addresses: commas, semicolons and whitespace separate them. */
 export function splitEmails(text: string): string[] {
 	return text.split(/[\s,;]+/).map((part) => part.trim()).filter(Boolean);
 }
 
-/** Adds addresses to chips, lowercased, skipping ones already there. */
 function withEmails(chips: readonly string[], added: readonly string[]): string[] {
 	const next = [...chips];
 	for (const email of added) {
@@ -20,18 +18,10 @@ function withEmails(chips: readonly string[], added: readonly string[]): string[
 	return next;
 }
 
-/**
- * Email chips beside one action: Enter, a comma or a space turns what was typed
- * into a chip, and a pasted list becomes several. The action stays disabled
- * while a chip is not an email address, and the first such chip is named under
- * the field. Submitting takes what is still typed too.
- */
 export function InviteField({ actionLabel, busy = false, disabled = false, onSubmit }: {
-	/** Invite on a live link; Add while setting a link up before it is published. */
 	actionLabel: string;
 	busy?: boolean;
 	disabled?: boolean;
-	/** Called with every address; resolves true when they were taken, clearing the field. */
 	onSubmit: (emails: string[]) => Promise<boolean> | boolean;
 }) {
 	const { t } = useTranslation();
@@ -55,8 +45,6 @@ export function InviteField({ actionLabel, busy = false, disabled = false, onSub
 		}
 		setChips(pending);
 		setTyped("");
-		// Only what was sent leaves the field: anything added while it was on
-		// its way stays, still to be sent.
 		if (await onSubmit(pending)) {
 			const sent = new Set(pending.map((email) => email.toLowerCase()));
 			setChips((current) => current.filter((chip) => !sent.has(chip.toLowerCase())));
@@ -65,7 +53,6 @@ export function InviteField({ actionLabel, busy = false, disabled = false, onSub
 	const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
 		if (event.key === "Enter") {
 			event.preventDefault();
-			// Enter on a typed address makes it a chip; on nothing typed, it submits.
 			if (typed.trim()) commit(typed);
 			else void submit();
 		} else if ((event.key === "," || event.key === " " || event.key === ";") && typed.trim()) {

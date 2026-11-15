@@ -17,8 +17,6 @@ import (
 )
 
 func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
-	// The launch env resolves the persona's HERMES_HOME; keep the test off the
-	// machine's real Hermes configuration.
 	home := t.TempDir()
 	t.Setenv("HERMES_HOME", home)
 	if err := os.WriteFile(filepath.Join(home, "config.yaml"),
@@ -47,9 +45,6 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Follow AO rules."},
 		},
 		{
-			// Hermes reads an explicit environment prompt ahead of its
-			// configuration, so the persona from config.yaml must not replace
-			// it when the launch inherits one.
 			name: "a session-env explicit prompt wins over the config persona",
 			cfg: acpdriver.LaunchConfig{
 				SystemPrompt: "Follow AO rules.",
@@ -62,9 +57,6 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 			env:  map[string]string{"HERMES_EPHEMERAL_SYSTEM_PROMPT": "Use my team conventions\n\nFollow AO rules."},
 		},
 		{
-			// The hook-config path preserves the pre-AO prompt through the
-			// marker; the launch must keep composing from that original even
-			// when both the environment entry and the config carry a persona.
 			name: "the preserved original marker wins over env and config",
 			cfg: acpdriver.LaunchConfig{
 				SystemPrompt: "Follow AO rules.",
@@ -128,9 +120,6 @@ func TestSessionPreambleNilWithoutStandingPrompt(t *testing.T) {
 	}
 }
 
-// Hermes' ACP adapter runs /reset and its /new and /clear aliases as a
-// history-clearing command only for a text-only prompt whose first word is the
-// command, case-insensitively; anything else reaches the model as a prompt.
 func TestResetsConversationMatchesHermesResetCommands(t *testing.T) {
 	text := func(parts ...string) []acpsdk.ContentBlock {
 		blocks := make([]acpsdk.ContentBlock, 0, len(parts))
@@ -172,8 +161,6 @@ func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
 		want string
 	}{
 		{ports.PermissionModeDefault, hermesModeDefault},
-		// NormalizePermissionMode collapses unknown modes onto Default, so an
-		// unrecognized AO mode still lands on Hermes' explicit ask mode.
 		{ports.PermissionMode("bogus"), hermesModeDefault},
 		{ports.PermissionModeAcceptEdits, hermesModeAcceptEdits},
 		{ports.PermissionModeAuto, hermesModeDontAsk},
@@ -186,9 +173,6 @@ func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
 	}
 }
 
-// The chat launch path respects the same process-environment bound as the TUI
-// path: a persona plus instructions that do not fit fail the launch instead of
-// truncating silently.
 func TestConfigureRejectsPromptExceedingEnvBound(t *testing.T) {
 	t.Setenv("HERMES_HOME", t.TempDir())
 	_, _, err := configure(context.Background(), acpdriver.LaunchConfig{
@@ -237,8 +221,6 @@ func TestPermissionPolicyAutoApprovesOnlyInBypassMode(t *testing.T) {
 		t.Fatalf("default policy handled the request with %q, want passthrough", id)
 	}
 
-	// Bypass answers allow_once even when persistent kinds are offered: Hermes
-	// caches those grants across a later switch to Default.
 	id, handled := permissionPolicy(ports.PermissionModeBypassPermissions, request)
 	if !handled || id != "allow_once" {
 		t.Fatalf("bypass policy = (%q, %v), want allow_once", id, handled)

@@ -14,13 +14,11 @@ export type ArtifactVersion = components["schemas"]["ArtifactVersionResponse"];
 const versionsKey = (sessionId: string, path: string, hostId?: string) =>
 	["session-artifact-versions", hostId ?? "", sessionId, path] as const;
 
-/** A cloud session's artifacts keep their versions in the control plane, not the local daemon. */
 export interface CloudArtifactVersions {
 	client: CloudCpClient;
 	orgId: string;
 }
 
-/** The kept versions of one artifact file, newest first; the first is current. */
 export function useArtifactVersions({ cloud, enabled, hostId, path, sessionId }: { cloud?: CloudArtifactVersions; enabled: boolean; hostId?: string; path: string; sessionId: string }) {
 	return useQuery({
 		enabled,
@@ -37,11 +35,6 @@ export function useArtifactVersions({ cloud, enabled, hostId, path, sessionId }:
 	});
 }
 
-/**
- * Whether another host's daemon can show and restore a media version. An older
- * one would serve the live file under the version's label and refuse the
- * restore, so its media files keep no History here.
- */
 export function useHostServesMediaVersions({ enabled, hostId, path, sessionId }: { enabled: boolean; hostId?: string; path: string; sessionId: string }): boolean {
 	const { data } = useQuery({
 		enabled,
@@ -59,15 +52,10 @@ export function useHostServesMediaVersions({ enabled, hostId, path, sessionId }:
 	return data === true;
 }
 
-/**
- * Records an edit of the file the observer has not noticed yet, then refreshes
- * the cached list with the result. The history menu runs it when it opens.
- */
 export function useSyncArtifactVersions({ cloud, hostId, path, sessionId }: { cloud?: CloudArtifactVersions; hostId?: string; path: string; sessionId: string }) {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async (): Promise<ArtifactVersionSummary[]> => {
-			// The control plane records every committed file as it lands, so its list is current.
 			if (cloud) return (await cloud.client.listSessionArtifactVersions(cloud.orgId, sessionId, path)).versions;
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/artifact-versions/sync", {
 				params: { path: { sessionId } },
@@ -80,7 +68,6 @@ export function useSyncArtifactVersions({ cloud, hostId, path, sessionId }: { cl
 	});
 }
 
-/** One version's text content. A saved version never changes, so it is cached for good. */
 export function useArtifactVersion({ cloud, hostId, path, sessionId, version }: { cloud?: CloudArtifactVersions; hostId?: string; path: string; sessionId: string; version: number | null }) {
 	return useQuery({
 		enabled: version !== null,
@@ -98,7 +85,6 @@ export function useArtifactVersion({ cloud, hostId, path, sessionId, version }: 
 	});
 }
 
-/** Rewrites the file with an earlier version; the restore becomes the newest version. */
 export function useRestoreArtifactVersion({ cloud, hostId, path, rawUrl, sessionId }: { cloud?: CloudArtifactVersions; hostId?: string; path: string; rawUrl?: string; sessionId: string }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -120,8 +106,6 @@ export function useRestoreArtifactVersion({ cloud, hostId, path, rawUrl, session
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: sessionArtifactFileQueryOptions(sessionId, path, rawUrl).queryKey }),
 				queryClient.invalidateQueries({ queryKey: versionsKey(sessionId, path, hostId) }),
-				// The session's artifact list carries each file's modified time
-				// (and, for a cloud file, the link that changes with it).
 				queryClient.invalidateQueries({ queryKey: cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) }),
 			]);
 		},

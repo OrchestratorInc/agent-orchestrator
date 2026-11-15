@@ -10,18 +10,6 @@ import (
 	"time"
 )
 
-// End-to-end coverage for the provider signal AO used to drop.
-//
-// These are here rather than only in the unit tests because the claim is about the
-// whole stack: the driver has to read the notification, the projection has to write
-// it, the store has to keep it, and the snapshot route has to serve it. A field that
-// is right in three of those four is not shipped.
-//
-// One turn drives all of it, because one turn is what the provider gives: asking for
-// a planned multi-step edit produces a plan, reasoning, a file change and thread
-// status transitions together, and spending four model calls to observe them
-// separately would buy nothing.
-
 func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 	requireE2E(t)
 
@@ -54,11 +42,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 		return false
 	})
 
-	/* ---- plan ---------------------------------------------------------- */
-
-	// A plan is structured steps carrying their own status. The provider re-sends the
-	// whole plan on every change, so what must be here is the LATEST one, not a stack
-	// of three.
 	var plan *turnPlan
 	for _, turn := range snap.Turns {
 		if turn.Plan != nil && len(turn.Plan.Steps) > 0 {
@@ -88,12 +71,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 		}
 	}
 
-	/* ---- reasoning ----------------------------------------------------- */
-
-	// Reasoning used to be a row with no text at all, because the old driver looked
-	// for a `text` field a reasoning item does not have. Whether the provider streams
-	// summaries depends on the installed config, so an empty summary is tolerated —
-	// but a row that has text must carry it where the client reads it.
 	reasoning := activitiesOfKind(snap, "reasoning")
 	if len(reasoning) == 0 {
 		t.Logf("the provider reported no reasoning items for this turn")
@@ -107,8 +84,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 			t.Logf("reasoning text: %q", trim(text, 90))
 		}
 	}
-
-	/* ---- file changes -------------------------------------------------- */
 
 	changes := activitiesOfKind(snap, "file_change")
 	if len(changes) == 0 {
@@ -128,8 +103,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 			if file.Path == "" {
 				t.Errorf("changed file has no path: %+v", file)
 			}
-			// The provider spells the change kind as an object. AO's own status is what
-			// a client can actually read.
 			switch file.Status {
 			case "added", "modified", "deleted", "renamed":
 			default:
@@ -139,7 +112,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 				sawPatch = true
 			}
 		}
-		// The label used to be "Edited files" whether one path or thirty changed.
 		if row.Summary == "Edited files" && len(files) == 1 {
 			t.Errorf("a single-file change was labelled generically: %q", row.Summary)
 		}
@@ -149,10 +121,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 			"until the turn's aggregate arrives")
 	}
 
-	/* ---- thread state -------------------------------------------------- */
-
-	// Every turn produces thread/status/changed, so this is the one piece of provider
-	// state that must be present regardless of local configuration.
 	if snap.ThreadState == nil {
 		t.Fatalf("the provider reported no thread state\n%s", describe(snap))
 	}
@@ -165,10 +133,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 		t.Errorf("a thread nobody archived reported archivedAt = %v", *snap.ThreadState.ArchivedAt)
 	}
 
-	/* ---- MCP servers --------------------------------------------------- */
-
-	// Configuration-dependent: an install with no tool servers reports none, and that
-	// is a real answer rather than a failure.
 	if len(snap.MCPServers) == 0 {
 		t.Logf("no MCP servers configured for this install")
 	}
@@ -184,12 +148,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 		}
 	}
 
-	/* ---- reroute and account ------------------------------------------- */
-
-	// Neither is provokable from a test. Asserting they are ABSENT is still worth
-	// doing: a snapshot that claimed the model had been swapped, or that the account
-	// needed re-authentication, when neither happened would be a worse lie than
-	// reporting nothing.
 	if snap.ModelReroute != nil {
 		t.Errorf("a turn nobody rerouted reported one: %+v", snap.ModelReroute)
 	}
@@ -198,8 +156,6 @@ func TestChatE2EProviderStateFromOneTurn(t *testing.T) {
 	}
 }
 
-// The reload is the only recovery for a tool server that failed to start, so the
-// route has to work on an idle conversation and be refused on a busy one.
 func TestChatE2EReloadMCPServers(t *testing.T) {
 	requireE2E(t)
 
@@ -225,7 +181,6 @@ func TestChatE2EReloadMCPServers(t *testing.T) {
 	}
 	t.Logf("reload reported %d tool servers", len(reloaded.Servers))
 
-	// Mid-turn it is refused rather than pulling tools out from under work in flight.
 	d.mustCall("POST", "/sessions/"+session+"/conversation/messages", http.StatusAccepted,
 		map[string]any{
 			"text":            "Count slowly from one to twenty in words, one per line.",
@@ -239,16 +194,11 @@ func TestChatE2EReloadMCPServers(t *testing.T) {
 			t.Errorf("the busy refusal talks about rolling back: %q", apiErr.Message)
 		}
 	case status == http.StatusOK:
-		// The turn finished before the second call landed. Not a failure of the rule,
-		// just a race this test cannot control, and saying so is better than
-		// pretending the assertion held.
 		t.Log("the turn completed before the busy reload landed; the refusal was not exercised")
 	default:
 		t.Errorf("busy reload -> %d %s %q", status, apiErr.Code, apiErr.Message)
 	}
 }
-
-/* ---- helpers ----------------------------------------------------------- */
 
 func activitiesOfKind(s snapshot, kind string) []activity {
 	var out []activity
@@ -274,9 +224,6 @@ func detailString(t *testing.T, a activity, key string) string {
 	return value
 }
 
-// detailFile mirrors what a client reads out of a file_change activity: AO's own
-// per-file shape, including the patch text that lets a diff render before the turn's
-// aggregate arrives.
 type detailFile struct {
 	Path      string `json:"path"`
 	OldPath   string `json:"oldPath"`

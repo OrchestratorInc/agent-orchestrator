@@ -53,7 +53,6 @@ afterEach(async () => {
 });
 
 
-/** Opens a harness page from the list and returns it. */
 async function openHarness(agentId: string): Promise<HTMLElement> {
 	const row = await waitFor(() => {
 		const button = document.querySelector<HTMLElement>(`button[data-agent="${agentId}"]`);
@@ -172,7 +171,6 @@ it("closes a remote login terminal returned after switching away from its host",
 	const claude = await openHarness("claude-code");
 	await userEvent.click(await within(claude).findByRole("button", { name: "Login" }));
 	await waitFor(() => expect(calls).toContain("POST /token-a/api/v1/agents/claude-code/auth"));
-	// Host selection lives on the harness list.
 	await userEvent.click(screen.getByRole("button", { name: "All harnesses" }));
 	await userEvent.click(screen.getByRole("button", { name: "Host" }));
 	await userEvent.click(screen.getByRole("menuitem", { name: "This computer" }));

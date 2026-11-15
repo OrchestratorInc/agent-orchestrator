@@ -12,7 +12,6 @@ function highlightRegistry(): { Highlight?: new (...ranges: Range[]) => unknown;
 	return { Highlight: api.Highlight, registry: api.CSS?.highlights };
 }
 
-/** The selected range and its text when it lies in a rendered markdown body, table, or PDF page inside container. */
 function renderedSelection(container: HTMLElement): { quote: string; range: Range } | null {
 	const selection = window.getSelection();
 	if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
@@ -25,12 +24,6 @@ function renderedSelection(container: HTMLElement): { quote: string; range: Rang
 	return quote ? { quote, range: range.cloneRange() } : null;
 }
 
-/**
- * Feedback on text selected in a rendered artifact: selecting text opens the
- * same feedback composer as the rest of the app, under the selection, and the
- * comment goes to the worker with the selected text. The selection stays
- * highlighted while the composer is open.
- */
 export function ArtifactSelectionAsk({
 	annotation,
 	containerRef,
@@ -53,8 +46,6 @@ export function ArtifactSelectionAsk({
 		const container = containerRef.current;
 		if (!container) return;
 		let timer: number | null = null;
-		// The selection is final once the pointer or the Shift+arrow key is
-		// released; a drag can end outside the artifact.
 		const capture = (event: Event) => {
 			if (popoverRef.current?.contains(event.target as Node)) return;
 			if (timer !== null) window.clearTimeout(timer);
@@ -65,11 +56,9 @@ export function ArtifactSelectionAsk({
 				const nextTarget = { path, side: "file" as const, surface: "focused" as const, quote: next.quote };
 				const key = fileAnnotationKey(nextTarget);
 				ranges.set(key, next.range);
-				// Selecting the same text again keeps its open composer.
 				if (!annotationRef.current.targets.some((open) => fileAnnotationKey(open) === key)) annotationRef.current.begin(nextTarget);
 			}, 0);
 		};
-		// Clicking away closes an empty composer; a written comment stays.
 		const onPointerDown = (event: PointerEvent) => {
 			const open = targetRef.current;
 			if (!open || popoverRef.current?.contains(event.target as Node)) return;
@@ -94,8 +83,6 @@ export function ArtifactSelectionAsk({
 		return () => registry.delete(HIGHLIGHT_NAME);
 	}, [range]);
 
-	// Under the selection; without room there, above it. It follows the
-	// selection as the artifact scrolls and the comment grows.
 	useLayoutEffect(() => {
 		const popover = popoverRef.current;
 		if (!popover || !range) return;
@@ -124,7 +111,6 @@ export function ArtifactSelectionAsk({
 		<div
 			className="z-overlay w-96 max-w-[calc(100vw-1rem)] [&_form]:shadow-lg"
 			ref={popoverRef}
-			// Above the full-screen artifact, which shares the overlay layer.
 			style={{ left: 0, position: "fixed", top: 0, zIndex: "calc(var(--z-overlay) + 1)" }}
 		>
 			<FileAnnotationComposer annotation={annotation} key={fileAnnotationKey(target)} target={target} />

@@ -13,17 +13,14 @@ import (
 	devimportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/devimport"
 )
 
-// DevImportService is the controller-facing developer import service contract.
 type DevImportService interface {
 	RunProjects(ctx context.Context, in devimportsvc.RunInput) (devimport.Report, error)
 }
 
-// DevController owns developer-only API routes.
 type DevController struct {
 	Import DevImportService
 }
 
-// Register mounts developer REST routes on the supplied router.
 func (c *DevController) Register(r chi.Router) {
 	r.Post("/dev/import-projects", c.importProjects)
 }

@@ -26,11 +26,6 @@ declare global {
 	}
 }
 
-/**
- * Installs a deterministic in-page implementation of the daemon terminal mux.
- * It drives the real terminal client, useTerminalSession, and xterm renderer;
- * only the WebSocket/PTY boundary is replaced.
- */
 export async function installFakeTerminalMux(
 	page: Page,
 	initialReplay: Record<string, string>,

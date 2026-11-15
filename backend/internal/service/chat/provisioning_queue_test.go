@@ -18,11 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// An asynchronous spawn puts the session on screen before its controller
-// exists. Everything the user types in that window has to land somewhere
-// durable, in order — refusing it would be a message lost from a session the
-// user is already looking at and typing into.
-
 func openProvisioningStore(t *testing.T, state domain.SessionProvisionState) (*sqlite.Store, domain.SessionID) {
 	t.Helper()
 	dir := t.TempDir()
@@ -151,8 +146,6 @@ func TestSendWhileProvisioningQueuesInOrder(t *testing.T) {
 		t.Fatalf("messages out of order: %q then %q",
 			snapshot.Messages[0].Text, snapshot.Messages[1].Text)
 	}
-	// A session that is still starting is connecting, not stopped: a client that
-	// reads "stopped" hides the composer the user is meant to keep typing into.
 	if snapshot.Controller != ports.ChatControllerConnecting {
 		t.Fatalf("controller state = %q, want connecting", snapshot.Controller)
 	}
@@ -221,9 +214,6 @@ func TestProvisioningSendPiggybacksReportsOnlyOnRecordedTurn(t *testing.T) {
 	}
 }
 
-// The queue is for sessions that are starting. A session with no controller for
-// any other reason has a real reason, and accepting a message it will never
-// dispatch would be worse than refusing it.
 func TestSendWithoutControllerStillRefusedWhenNotProvisioning(t *testing.T) {
 	st, provisioningSession := openProvisioningStore(t, domain.SessionProvisionReady)
 	svc := provisioningService(t, st)
@@ -297,10 +287,6 @@ func TestSendDuringAccountMoveQueuesForTheNewAgent(t *testing.T) {
 	}
 }
 
-// The queue advances the conversation sequence without a single provider event.
-// Start must still treat this as a conversation's first controller: reserving a
-// fresh provider boundary here would open a brand-new session as if it were a
-// resumed one whose provider thread could not be reached.
 func TestFirstControllerAfterQueuedPromptIsNotFencedAsResume(t *testing.T) {
 	st, provisioningSession := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	svc := provisioningService(t, st)
@@ -328,9 +314,6 @@ func TestFirstControllerAfterQueuedPromptIsNotFencedAsResume(t *testing.T) {
 		t.Fatal("queued turns were fenced off as provider history")
 	}
 
-	// The turn has to still be there to be drained. Start settles work a dead
-	// controller left behind, and a queue written before the first controller
-	// existed looks exactly like that unless it is excluded.
 	snapshot, err := svc.Snapshot(ctx, provisioningSession)
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
@@ -423,11 +406,6 @@ func startOrchestratorController(t *testing.T, st *sqlite.Store, svc *chatsvc.Se
 	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
 }
 
-// An orchestrator's controller runs on the project conversation, but what the
-// user types while it provisions is queued before that controller exists
-// (#6523). The opening prompt must drain in the project conversation and stay
-// visible after the context boundary a fresh controller records there, both for
-// a new project and for a replacement orchestrator inheriting earlier history.
 func TestOrchestratorOpeningPromptDrainsInProjectConversation(t *testing.T) {
 	for _, inherited := range []bool{false, true} {
 		name := "new_project"
@@ -497,10 +475,6 @@ func TestOrchestratorOpeningPromptDrainsInProjectConversation(t *testing.T) {
 	}
 }
 
-// Older builds left an orchestrator bound to both a provisioning row holding the
-// stranded opening prompt and the project row it actually ran on (#6523). That
-// prompt is stale once the session has run, so a restart shows the project
-// transcript and must not replay it.
 func TestStrandedPromptFromEarlierRunIsNotReplayed(t *testing.T) {
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	ctx := context.Background()
@@ -541,8 +515,6 @@ func TestStrandedPromptFromEarlierRunIsNotReplayed(t *testing.T) {
 	}
 }
 
-// staleLookupStore returns, once, the conversation a Send read before the
-// orchestrator's first controller moved the queue out of it.
 type staleLookupStore struct {
 	*sqlite.Store
 	stale *domain.ConversationRecord
@@ -557,10 +529,6 @@ func (s *staleLookupStore) ConversationForSession(ctx context.Context, id domain
 	return s.Store.ConversationForSession(ctx, id)
 }
 
-// A Send can read the provisioning row just before the orchestrator's first
-// controller moves the queue to the project conversation (#6523). The prompt
-// must still be delivered: it lands in the project conversation after the
-// prompts that moved, not in the row nothing reads any more.
 func TestQueuedSendRacingFirstStartLandsInProjectConversation(t *testing.T) {
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	ctx := context.Background()
@@ -628,7 +596,6 @@ func TestRetryAfterControllerStartedButBeforeDrainKeepsOpeningPrompt(t *testing.
 	if _, err := st.SetSessionProvisionState(ctx, id, domain.SessionProvisionProvisioning, "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	// Model daemon replacement: the old controller did not dispatch or clean up.
 	next := provisioningService(t, st)
 	start.ProviderConversationID = "thread-1"
 	if _, err := next.Start(ctx, start); err != nil {
@@ -726,11 +693,6 @@ func TestProvisioningRetryStillReservesBoundaryForPriorProviderHistory(t *testin
 	}
 }
 
-// A replacement orchestrator inherits the project conversation, whose branch
-// still names its predecessor's provider thread. Its first controller is a fresh
-// provider thread, so it needs its own boundary. Without one only the session
-// learned the new handle, and the next resume was refused because the branch and
-// session handles disagree.
 func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *testing.T) {
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	ctx := context.Background()
@@ -784,7 +746,6 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 			if boundary == nil {
 				return chatsvc.ControllerCommit{}, nil
 			}
-			// The spawn path publishes the boundary with the session owner.
 			rec, _, err := st.GetSession(ctx, id)
 			if err != nil {
 				return chatsvc.ControllerCommit{}, err
@@ -831,8 +792,6 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 		t.Fatal(err)
 	}
 
-	// After a restart the provider replays the same exchange under turn ids
-	// it reconstructs, as ACP does, so only the text can correlate it.
 	replay := &nativeHistoryConversation{fakeConversation: newFakeConversation(), events: []ports.ChatEvent{
 		{Kind: ports.ChatEventTurnStarted, ProviderEventID: "replay-start", ProviderTurnID: "replayed-turn"},
 		{Kind: ports.ChatEventUserMessageCompleted, ProviderEventID: "replay-user", ProviderTurnID: "replayed-turn", ProviderItemID: "replay-user-item", Text: "opening brief"},
@@ -875,10 +834,6 @@ func TestReplacementOrchestratorFirstStartReservesBoundaryForInheritedThread(t *
 	}
 }
 
-// A replacement orchestrator nobody wrote to never had a turn on its own
-// boundary, so its provider may never have saved the thread (Codex keeps no
-// rollout before the first message). After a restart it starts fresh in place
-// instead of failing every resume, and the branch moves to the fresh thread.
 func TestUnansweredReplacementOrchestratorStartsFreshAfterRestart(t *testing.T) {
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
 	ctx := context.Background()
@@ -946,7 +901,6 @@ func TestUnansweredReplacementOrchestratorStartsFreshAfterRestart(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	// The provider cannot find thread-1 and starts fresh-thread in its place.
 	fresh := newFakeConversation()
 	fresh.providerConversationID = "fresh-thread"
 	var resumedCfg ports.ChatResumeConfig

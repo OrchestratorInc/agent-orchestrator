@@ -77,11 +77,6 @@ func TestReconcileNativeHistoryUsesLegacyAliasForAttachmentOnlyUserTurn(t *testi
 	}
 }
 
-// Hermes' session/load replay carries id-less chunks, stripped reply text, and
-// the failed-turn boundary row on interrupted turns, under turn ids the live
-// projection never used. The stored completed turn must absorb the stripped
-// reply (boundary whitespace differs) without a duplicate, and the interrupted
-// turn must not gain a replayed reply on top.
 func TestReconcileNativeHistoryAbsorbsHermesReplayShape(t *testing.T) {
 	const completedReply = "Answer one.\n"
 	const interruptedPrompt = "Do turn two."
@@ -123,8 +118,6 @@ func TestReconcileNativeHistoryAbsorbsHermesReplayShape(t *testing.T) {
 			t.Fatalf("recovered completion not upgraded to AO's known state: %#v", event)
 		}
 	}
-	// The interrupted turn keeps its user prompt, its recovered completion is
-	// corrected, and no replayed reply is added on top.
 	if len(byTurn["live-turn-2"]) != 2 {
 		t.Fatalf("interrupted turn kept %d events, want only the boundaries: %#v",
 			len(byTurn["live-turn-2"]), byTurn["live-turn-2"])

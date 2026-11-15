@@ -44,7 +44,6 @@ import gooseDarkLogo from "../assets/agents/goose-dark.svg";
 import gooseLightLogo from "../assets/agents/goose-light.svg";
 import grokDarkLogo from "../assets/agents/grok-dark.svg";
 import grokLightLogo from "../assets/agents/grok-light.svg";
-// NousResearch/hermes-agent: apps/desktop/assets/icon.png.
 import hermesLogo from "../assets/agents/hermes.png";
 import kilocodeDarkLogo from "../assets/agents/kilocode-dark.svg";
 import kilocodeLightLogo from "../assets/agents/kilocode-light.svg";
@@ -73,10 +72,6 @@ import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 import vibeLogo from "../assets/agents/vibe.svg";
 
-// Official brand marks keyed by the harness name AO stores on session.provider.
-// A { light, dark } pair is used where the brand ships separate marks for each
-// background; a single mark reads on both. Agents without an asset fall back to
-// a lettered tile.
 const LOGOS: AgentLogoSources = {
 	codex: codexLogo,
 	codewhale: { light: codewhaleLightLogo, dark: codewhaleDarkLogo },
@@ -122,21 +117,10 @@ const LOGOS: AgentLogoSources = {
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
 };
 
-/**
- * Agent mark for board/task cards: the harness's real brand logo rendered bare —
- * no tile, border, or background — so each brand's own shape shows (codex,
- * claude, cursor, … carry their own rounded backgrounds). Agents without an
- * asset fall back to a bare initial. Kept small so the title stays the hero.
- *
- * The provider is exposed as the accessible name (alt / aria-label), not just a
- * hover title, so surfaces that show the logo in place of visible agent text —
- * e.g. the archive cards — still name the agent for screen readers.
- */
 export function AgentAvatar({ provider, className, decorative = false }: AgentAvatarProps) {
 	return <ProductAgentAvatar className={className} decorative={decorative} logoSources={LOGOS} provider={provider} />;
 }
 
-/** The logo an agent draws, or none. */
 function logoFor(provider: string): AgentLogoSources[string] {
 	const key = getAgentIdentity(provider).logoKey;
 	return key ? LOGOS[key] : undefined;
@@ -148,7 +132,6 @@ function sameLogo(a: AgentLogoSources[string], b: AgentLogoSources[string]): boo
 	return a.light === b.light && a.dark === b.dark;
 }
 
-/** Whether another agent draws the same logo (OpenCode and OpenCode 2), so the mark alone does not name the agent. */
 export function sharesAgentMark(provider: string): boolean {
 	const logo = logoFor(provider);
 	const own = getAgentIdentity(provider).logoKey;

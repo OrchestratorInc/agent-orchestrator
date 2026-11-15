@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// Foreground delivery raises the window and sends real input to whatever has
-// focus; it is refused on direct actions, run_steps steps, and the batch.
 func TestCallRefusesForegroundDelivery(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	s := newTestService(t, driver, "darwin")
@@ -21,20 +19,17 @@ func TestCallRefusesForegroundDelivery(t *testing.T) {
 		tool      string
 		arguments map[string]any
 	}{
-		"direct action":       {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "foreground"}},
-		"run_steps step":      {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "foreground"})},
-		"run_steps batch":     {"run_steps", map[string]any{"pid": 7, "window_id": 9, "delivery_mode": "foreground", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
-		"foreground fallback": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "foreground_fallback": true, "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
-		// The driver coerces a boolean string to the boolean before running.
+		"direct action":              {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "foreground"}},
+		"run_steps step":             {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "foreground"})},
+		"run_steps batch":            {"run_steps", map[string]any{"pid": 7, "window_id": 9, "delivery_mode": "foreground", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
+		"foreground fallback":        {"run_steps", map[string]any{"pid": 7, "window_id": 9, "foreground_fallback": true, "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
 		"foreground fallback string": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "foreground_fallback": " TRUE ", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
-		// The driver reads delivery_mode in any letter case, and the older
-		// dispatch field as delivery_mode.
-		"direct any case":          {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "escape", "delivery_mode": "Foreground"}},
-		"direct dispatch":          {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "escape", "dispatch": "foreground"}},
-		"run_steps step case":      {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "FOREGROUND"})},
-		"run_steps step dispatch":  {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "dispatch": "foreground"})},
-		"run_steps batch dispatch": {"run_steps", map[string]any{"pid": 7, "window_id": 9, "dispatch": "Foreground", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
-		"run_steps alias step":     {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"tool": "key", "args": map[string]any{"key": "end", "delivery_mode": "foreground"}}}}},
+		"direct any case":            {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "escape", "delivery_mode": "Foreground"}},
+		"direct dispatch":            {"press_key", map[string]any{"pid": 7, "window_id": 9, "key": "escape", "dispatch": "foreground"}},
+		"run_steps step case":        {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "delivery_mode": "FOREGROUND"})},
+		"run_steps step dispatch":    {"run_steps", step(map[string]any{"pid": 7, "window_id": 9, "key": "end", "dispatch": "foreground"})},
+		"run_steps batch dispatch":   {"run_steps", map[string]any{"pid": 7, "window_id": 9, "dispatch": "Foreground", "steps": []any{map[string]any{"press_key": map[string]any{"key": "end"}}}}},
+		"run_steps alias step":       {"run_steps", map[string]any{"pid": 7, "window_id": 9, "steps": []any{map[string]any{"tool": "key", "args": map[string]any{"key": "end", "delivery_mode": "foreground"}}}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := s.Call(context.Background(), CallRequest{Tool: tc.tool, Arguments: tc.arguments})
@@ -55,8 +50,6 @@ func TestCallRefusesForegroundDelivery(t *testing.T) {
 	}
 }
 
-// The driver's own advice to retry in the foreground is answered with AO's,
-// in results and in errors; an app's own labels in the tree are not advice.
 func TestDriverForegroundAdviceIsReplaced(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	answer := `{"summary":"Sent end","hint":"If it didn't land, retry with delivery_mode:\"foreground\"."}`
@@ -95,7 +88,6 @@ func TestDriverForegroundAdviceIsReplaced(t *testing.T) {
 	}
 }
 
-// bring_to_front is offered and followed by a read of the window it raised.
 func TestBringToFrontReadsTheRaisedWindow(t *testing.T) {
 	driver := &fakeDriver{daemonUp: true}
 	var tools []string

@@ -10,10 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// A turn's artifacts stay readable however a later turn changes them. The
-// version store moves a renamed file's history to its new path, so the old
-// path has none, and keeps only a file's latest versions; a fork of the
-// earlier turn copies the turn's artifacts from what the turn kept.
 func TestSnapshotTurnKeepsArtifactsALaterTurnRenamesOrReplaces(t *testing.T) {
 	h := newHarness(t)
 	h.write("report.md", "q3 report")
@@ -34,8 +30,6 @@ func TestSnapshotTurnKeepsArtifactsALaterTurnRenamesOrReplaces(t *testing.T) {
 	if err := h.cap.SnapshotTurn(h.ctx, h.sess, []string{"turn-b"}); err != nil {
 		t.Fatal(err)
 	}
-	// The next turn renames one artifact, renames another over a third, and
-	// deletes a fourth.
 	for _, move := range [][2]string{{"page.html", "final.html"}, {"notes.md", "report.md"}} {
 		if err := os.Rename(filepath.Join(h.dir, move[0]), filepath.Join(h.dir, move[1])); err != nil {
 			t.Fatal(err)
@@ -67,9 +61,6 @@ func TestSnapshotTurnKeepsArtifactsALaterTurnRenamesOrReplaces(t *testing.T) {
 	}
 }
 
-// Only the latest MaxKeptTurns turns keep their artifact lists, and content
-// that no kept list names any more is removed, so a session that is never
-// forked holds a bounded amount of it.
 func TestSnapshotTurnKeepsOnlyTheLatestTurns(t *testing.T) {
 	h := newHarness(t)
 	clock := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)

@@ -90,8 +90,6 @@ test.beforeEach(async ({ page }) => {
 
 test("chat minimap does not make the session pane scroll horizontally", async ({ page }) => {
 
-	// The inspector is closed by default, so minimap markers are available.
-
 	const marker = page.locator("[data-chat-scroll-marker]").first();
 	await expect(marker).toBeVisible();
 	await marker.hover();
@@ -104,8 +102,6 @@ test("chat minimap does not make the session pane scroll horizontally", async ({
 		overflow: node.scrollWidth - node.clientWidth,
 		overflowX: getComputedStyle(node).overflowX,
 	}));
-	// Keep the assertion red-capable: the marker still crosses the pane edge, but
-	// the pane must clip that visual flourish instead of offering a native scrollbar.
 	expect(pane.overflow).toBeGreaterThan(0);
 	expect(pane.overflowX).toBe("hidden");
 });

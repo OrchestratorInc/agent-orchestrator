@@ -11,23 +11,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
-// Sessions is the session side of a cue invocation: resolving an active session
-// to message, or spawning a worker when no session was requested.
 type Sessions interface {
 	Get(ctx context.Context, id domain.SessionID) (domain.Session, error)
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
 }
 
-// CommandTerminals dispatches trusted command cues to shells without an agent.
 type CommandTerminals interface {
 	RunCueCommand(context.Context, shellterm.RunCueCommandInput) (shellterm.ShellTerminal, error)
 }
 
-// Invoke runs one cue. Agent cues are delivered to the selected session, or
-// spawn a worker when no session is requested. Command cues open a
-// normal terminal in the selected session worktree or project root and
-// never create or message an agent.
 func (s *Service) Invoke(ctx context.Context, cueID domain.CueID, input InvokeInput) (InvokeResult, error) {
 	if err := ctx.Err(); err != nil {
 		return InvokeResult{}, err
@@ -100,10 +93,6 @@ func (s *Service) Invoke(ctx context.Context, cueID domain.CueID, input InvokeIn
 	return InvokeResult{Kind: domain.CueTypeAgent, SessionID: spawned.ID}, nil
 }
 
-// sessionMessageable reports whether a cue may be injected into a session:
-// it must exist in the cue's project, not be terminated or exited, and must
-// not be blocked on a pending decision (stray input could answer a permission
-// dialog on the user's behalf). Delivery performs its own final state checks.
 func sessionMessageable(sess domain.Session, projectID domain.ProjectID) bool {
 	if sess.IsTerminated {
 		return false

@@ -8,8 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A mismatch alone is never proof: only the coordinator's exact native identity
-// may introduce an independent context. These lookups do not transfer ownership.
 func (m *Manager) chatProviderTransition(ctx context.Context, rec domain.SessionRecord) (*domain.SessionInterfaceTransition, error) {
 	store, ok := m.store.(chatProviderOwnershipStore)
 	if !ok || rec.Metadata.ProviderConversationID == "" || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
@@ -45,12 +43,12 @@ func (m *Manager) prepareLiveChatProviderHandoff(ctx context.Context, rec domain
 		}); ok {
 			conversation, err = projects.ProjectConversation(ctx, rec.ProjectID)
 			if errors.Is(err, domain.ErrNoConversation) {
-				return nil, nil // first Chat use in this project
+				return nil, nil
 			}
 		}
 	}
 	if errors.Is(err, domain.ErrNoConversation) && rec.Kind != domain.KindOrchestrator {
-		return nil, nil // first Chat use for a worker
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
@@ -75,7 +73,6 @@ func (m *Manager) prepareLiveChatProviderHandoff(ctx context.Context, rec domain
 	return reserveChatProviderHandoff(ctx, store, rec, *transition, conversation)
 }
 
-// Recovery may repair only this session's history, never adopt a successor's.
 func (m *Manager) prepareRecoveredChatProviderHandoff(ctx context.Context, rec domain.SessionRecord) (*domain.ChatProviderHandoff, error) {
 	if !rec.IsTerminated {
 		return nil, nil
@@ -106,18 +103,16 @@ func reserveChatProviderHandoff(ctx context.Context, store chatProviderOwnership
 	if err != nil {
 		return nil, err
 	}
-	// A project root's session_id records the orchestrator that created it; after
-	// a rebind the conversation's current session owns that root.
 	owned := branch.SessionID == rec.ID || (conversation.Scope == domain.ConversationScopeProject &&
 		branch.ParentBranchID == "" && conversation.SessionID == rec.ID)
 	if owned && branch.ProviderConversationID == rec.Metadata.ProviderConversationID {
-		return nil, nil // also makes retry after a committed boundary idempotent
+		return nil, nil
 	}
 	if branch.SessionID == "" || branch.ProviderConversationID == "" {
 		if conversation.LatestSequence > 0 || conversation.SessionID != rec.ID {
 			return nil, errors.New("cannot prove ownership of the previous Chat history")
 		}
-		return nil, nil // positively unused root needs no context boundary
+		return nil, nil
 	}
 	return &domain.ChatProviderHandoff{
 		BoundaryID:     interfaceTransitionProviderBoundaryID(transition.ID),

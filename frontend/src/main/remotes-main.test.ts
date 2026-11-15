@@ -11,7 +11,6 @@ import { ExpectedIpcError, installIpcErrorCapture, resetMainErrorCaptureForTests
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
-// ipcMain stand-in: records what was registered and lets a test invoke it.
 function fakeIpc() {
 	const handlers = new Map<string, Handler>();
 	return {
@@ -43,7 +42,6 @@ function registerRemotes(
 	});
 }
 
-// AO Cloud's host directory, as the main process reads it.
 function cloudListing(...hosts: Array<{ hostId: string; label: string; url: string }>): RemotesIpcDeps["cloudRequest"] {
 	return async () => ({ status: 200, body: JSON.stringify({ hosts: hosts.map((host) => ({ ...host, token: "a".repeat(64) })) }) });
 }
@@ -531,7 +529,6 @@ describe("registerRemotesIpc", () => {
 			});
 			const linked = ipc.invoke("remotes:linkAccountHost", url);
 			await vi.waitFor(() => expect(requests).toHaveLength(2));
-			// AO Cloud may take more than a minute to register; other handlers do not wait for it.
 			await expect(ipc.invoke("remotes:list")).resolves.toHaveLength(1);
 			finishRegistration();
 			await expect(linked).resolves.toBeUndefined();
@@ -615,7 +612,6 @@ describe("registerRemotesIpc", () => {
 				),
 			});
 			await ipc.invoke("remotes:syncAccountHosts", TEST_ACCOUNT);
-			// Neither password is replaced by the account token, and the host the account dropped goes.
 			expect(JSON.parse(await readFile(file, "utf8")).remotes).toEqual([
 				{ hostId: "h_paired", label: "Renamed", url: "https://moved.example", sealedPassword: "sealed-pairing", accountUserId: TEST_ACCOUNT },
 				{ hostId: "h_token", label: "Token", url: "https://token.example", sealedPassword: "sealed-token", accountToken: true, accountUserId: TEST_ACCOUNT },
@@ -687,7 +683,6 @@ describe("registerRemotesIpc", () => {
 			registerRemotes(ipc.ipcMain, { file, registry, requireAccount: signedIn, identity: async () => "h_workbox", probe: async () => "online", pair });
 			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
 			expect(pair).toHaveBeenCalledTimes(1);
-			// Connected: the new credential would restart the proxy, so no swap.
 			await ipc.invoke("remotes:connect", "http://192.0.2.1:1");
 			expect(pair).toHaveBeenCalledTimes(1);
 			await registry.disconnect("http://192.0.2.1:1");
@@ -714,7 +709,6 @@ describe("registerRemotesIpc", () => {
 			});
 			const connected = ipc.invoke("remotes:connect", "http://192.0.2.1:1");
 			if (code !== "BAD_PASSWORD") {
-				// Removed on purpose: the kept password must not bring the device back.
 				await expect(connected).rejects.toThrow(/is unauthorized$/);
 				expect(start).not.toHaveBeenCalled();
 				expect(await saved(file)).toMatchObject([{ password: token, fallbackPassword: "old" }]);
@@ -736,7 +730,6 @@ describe("registerRemotesIpc", () => {
 			});
 			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("offline");
 			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toBeUndefined();
-			// The retry sends the spent code again; the token issued for it is used instead.
 			await expect(ipc.invoke("remotes:add", { label: "New", url: "https://new.example", password: "Code1234" })).resolves.toBe("online");
 			expect((await saved(file)).find((entry) => entry.hostId === "h_new")).toMatchObject({ password: token });
 			expect(pair).toHaveBeenCalledOnce();

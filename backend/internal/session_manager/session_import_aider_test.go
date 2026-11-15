@@ -306,7 +306,6 @@ func TestAiderRecoversPublishedHistoryAfterLostCheckpoint(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				// A fresh adapter must establish recovery from disk, not memory.
 				m.agents = singleAgent{agent: aider.New()}
 				result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
 				if damage == "none" {

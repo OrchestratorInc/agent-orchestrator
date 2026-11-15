@@ -3,10 +3,6 @@ import { useEffect, useRef } from "react";
 import { clearCloudChatCaches } from "../lib/cloud-chat-history";
 import { useUiStore } from "../stores/ui-store";
 
-/**
- * Drops what the previous cloud account left on screen: failed actions (an
- * orchestrator spawn its plan refused) and per-project startup errors.
- */
 export function clearPreviousAccountState(queryClient: QueryClient): void {
 	const mutations = queryClient.getMutationCache();
 	for (const mutation of mutations.getAll()) {
@@ -16,13 +12,6 @@ export function clearPreviousAccountState(queryClient: QueryClient): void {
 	clearCloudChatCaches(queryClient);
 }
 
-/**
- * When the signed-in cloud user changes (sign-out, or another account), clears
- * the previous account's leftovers and leaves a page that is not one of this
- * machine's local projects, so the new account never sees the old account's
- * project or its errors. The first known user (app start) and token refreshes
- * of the same user change nothing.
- */
 export function useCloudAccountSwitchReset({
 	userId,
 	ready,
@@ -30,12 +19,9 @@ export function useCloudAccountSwitchReset({
 	onLocalPage,
 	leavePage,
 }: {
-	/** The signed-in cloud user, or null when signed out. */
 	userId: string | null;
-	/** False while the cloud session is still loading. */
 	ready: boolean;
 	queryClient: QueryClient;
-	/** True when the current page is not a cloud project or session. */
 	onLocalPage: boolean;
 	leavePage: () => void;
 }): void {

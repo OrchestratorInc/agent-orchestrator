@@ -16,7 +16,6 @@ import (
 	"time"
 )
 
-// triageRunDir returns the single scratch folder a triage run wrote under state.
 func triageRunDir(t *testing.T, state string) string {
 	t.Helper()
 	dirs, err := filepath.Glob(filepath.Join(state, "triage", "*"))
@@ -323,7 +322,6 @@ func TestTriageSnapshotIncludesUncaughtDesktopErrors(t *testing.T) {
 }
 
 func TestTriageSnapshotIncludesOnlyRecentDaemonCrashOutput(t *testing.T) {
-	// The test clock is 2026-10-20T12:34:56Z.
 	deps, _, dir := triageTestDeps(t)
 	crashDir := filepath.Join(dir, "logs")
 	if err := os.MkdirAll(crashDir, 0o700); err != nil {

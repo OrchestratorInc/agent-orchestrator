@@ -39,9 +39,6 @@ if (!platform || !arch) {
 	throw new Error(`ACP runtime packaging is unsupported on ${process.platform}/${process.arch}`);
 }
 
-// Release builds run natively on their target OS. This keeps AO's packaged Node
-// runtime aligned with the adapter's >=22 requirement without making the user
-// install Node globally.
 const extension = process.platform === "win32" ? "zip" : "tar.gz";
 const archiveName = `node-v${NODE_VERSION}-${platform}-${arch}.${extension}`;
 const baseURL = `https://nodejs.org/dist/v${NODE_VERSION}`;
@@ -96,10 +93,6 @@ patchClaudeFoldedPromptSettlement(claudeAdapter);
 patchClaudeStaleIdleDebt(claudeAdapter);
 patchClaudeSteerSettlement(claudeAdapter);
 
-// The Claude Agent SDK declares platform-native Claude executables as optional
-// dependencies. --omit=optional excludes them; this removal is defense-in-depth.
-// At runtime AO sets
-// CLAUDE_CODE_EXECUTABLE to the user's already-installed Claude Code binary.
 const anthropicDir = join(outDir, "node_modules", "@anthropic-ai");
 const nativeClaudePackages = [
 	"claude-agent-sdk-darwin-arm64",
@@ -135,15 +128,11 @@ try {
 	const nodeOut = join(outDir, "node");
 	if (!existsSync(extracted)) throw new Error(`Node archive did not contain ${extracted}`);
 	renameSync(extracted, nodeOut);
-	// Only the runtime executable is needed; npm, headers, docs, and corepack are
-	// build/development tools and would add roughly 80 MB to every desktop update.
 	pruneNodeDistribution(nodeOut);
 } finally {
 	rmSync(workDir, { recursive: true, force: true });
 }
 
-// A build-time invariant, not a comment: packaging fails if a Claude native
-// executable was accidentally left in the shipped runtime.
 for (const name of nativeClaudePackages) {
 	if (existsSync(join(anthropicDir, name))) {
 		throw new Error(`ACP runtime contains packaged Claude Code dependency ${name}`);
@@ -157,8 +146,6 @@ function run(command, args, options = {}) {
 	if (result.status !== 0) throw new Error(`${command} exited ${result.status}`);
 }
 
-// Release runners sometimes lose the nodejs.org connection mid-body; one
-// dropped socket used to fail the whole stable release.
 async function download(url) {
 	let lastError;
 	for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {

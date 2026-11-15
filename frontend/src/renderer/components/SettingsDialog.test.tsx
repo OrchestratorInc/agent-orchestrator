@@ -85,8 +85,6 @@ vi.mock("./GlobalSettingsForm", () => ({
 	),
 }));
 
-// Cloud projects come from the control plane; none by default, so the
-// local-daemon form stays in play unless a test seeds one.
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudProjectsQuery: () => cloudProjectsState,
 	workspaceQueryOptions: {
@@ -101,8 +99,6 @@ vi.mock("./CuesDialog", () => ({
 	),
 }));
 
-// Project settings › Sharing shows the whole project's sharing panel on the
-// page; the panel has its own suites.
 vi.mock("./ShareSessionDialog", () => ({
 	ShareSessionDialog: () => <div role="dialog" data-testid="share-dialog" />,
 	ProjectSharePanel: (props: { orgId: string; projectId: string; people?: boolean }) => (
@@ -115,16 +111,11 @@ vi.mock("./ProjectScriptsSettings", () => ({
 	CloudProjectScriptsSettings: ({ projectId, cloudOrgId }: { projectId: string; cloudOrgId: string }) => <div data-testid="cloud-project-scripts-settings">{cloudOrgId}/{projectId}</div>,
 }));
 
-// The dialog reads the cloud gate to decide whether the Cloud nav page exists;
-// mocked so these tests need no QueryClientProvider (same pattern as Sidebar).
-// Cloud is off unless a test turns it on (then the org can share, as for Teams).
 const teamsGate = vi.hoisted(() => ({ cloudEnabled: false, teams: true, myTeamsAsked: [] as boolean[] }));
 vi.mock("../hooks/useCloudGate", () => ({
 	useCloudGate: () => ({ cloudEnabled: teamsGate.cloudEnabled, localEnabled: true }),
 }));
 
-// The dialog reads the org's offering to gate the Coder and Upgrade pages.
-// Nothing resolved here (signed out), so neither page is visible.
 vi.mock("../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ customCoder: false, selfServeBilling: false, ...(teamsGate.cloudEnabled ? { features: ["share"], org: { id: "org-1" } } : {}) }),
 }));
@@ -345,11 +336,9 @@ describe("SettingsDialog", () => {
 		useUiStore.getState().openProjectSettings("cloud-1");
 		renderSettingsDialog();
 
-		// Opened without a Cloud org, the project is still routed to its control-plane settings.
 		expect(await screen.findByTestId("cloud-project-settings")).toHaveTextContent("org-1");
 		expect(screen.getByRole("button", { name: "General" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
-		// Scripts, environment and cues are project settings on Cloud projects too.
 		for (const section of ["Scripts", "Environment", "Cues"]) {
 			expect(screen.getByRole("button", { name: section })).toBeInTheDocument();
 		}
@@ -364,16 +353,13 @@ describe("SettingsDialog", () => {
 
 		const nav = await screen.findByRole("navigation", { name: "Settings sections" });
 		await userEvent.click(within(nav).getByRole("button", { name: "Sharing" }));
-		// The whole project, in a build with Teams: people and links, on the page.
 		const panel = await screen.findByTestId("project-share-panel");
 		expect(panel.dataset).toMatchObject({ org: "org-1", project: "cloud-1", people: "true" });
-		// Project settings is the window; sharing opens no second one in it.
 		expect(screen.queryByTestId("share-dialog")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
 	});
 
 	it("has no Sharing page where the project's organization can't share it", async () => {
-		// Sharing is off for the organization (or Cloud is), as for a session's Share.
 		cloudProjectsState.data = [{ id: "cloud-1", orgId: "org-1", displayName: "ao-landing" }];
 		useUiStore.getState().openProjectSettings("cloud-1");
 		const first = renderSettingsDialog();
@@ -381,14 +367,12 @@ describe("SettingsDialog", () => {
 		expect(screen.queryByRole("button", { name: "Sharing" })).not.toBeInTheDocument();
 		first.unmount();
 
-		// A project of another organization than the one signed in.
 		teamsGate.cloudEnabled = true;
 		useUiStore.getState().openProjectSettings("cloud-2", { cloudOrgId: "org-2" });
 		renderSettingsDialog();
 		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Sharing" })).not.toBeInTheDocument();
 
-		// A local project.
 		localWorkspacesState.ids = ["proj-1"];
 		act(() => useUiStore.getState().openProjectSettings("proj-1"));
 		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
@@ -488,7 +472,6 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveTextContent("harness");
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
-		// Accounts are on each harness's Account tab; there is no page of their own.
 		expect(screen.queryByRole("button", { name: "Subscriptions" })).toBeNull();
 	});
 
@@ -535,7 +518,6 @@ describe("SettingsDialog", () => {
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("diagnostics");
 		expect(screen.getByRole("button", { name: "Diagnostics" })).toBeInTheDocument();
-		// The live monitor is a page of its own: the aggregate view never mounts it.
 		expect(globalSettingsItemsFor("all", { cloudEnabled: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).not.toContain("diagnostics");
 		expect(visibleGlobalSettings({ cloudEnabled: true, diagnostics: true, customCoder: false, selfServeBilling: false }).map((item) => item.id)).toContain("diagnostics");
 	});
@@ -597,7 +579,6 @@ describe("SettingsDialog", () => {
 			expect(teamsPageFor({ share: true, orgId: "org-north", mine: here })).toBe("manage");
 			expect(teamsPageFor({ share: false, orgId: "org-north", mine: elsewhere })).toBe("member");
 			expect(teamsPageFor({ share: false, orgId: "org-north", mine: here })).toBe("none");
-			// Not shown until the person's teams are known, nor by a control plane from before teams.
 			expect(teamsPageFor({ share: true, orgId: "org-north", mine: { isPending: true, error: null } })).toBe("none");
 			expect(teamsPageFor({ share: true, orgId: "org-north", mine: { isPending: false, error: new CloudCpError("404 page not found", { status: 404 }) } })).toBe("none");
 		});
@@ -624,7 +605,6 @@ describe("SettingsDialog", () => {
 		const sections = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button");
 		await userEvent.click(sections[1]);
 		await userEvent.click(sections[2]);
-		// Closing returns to the page immediately, even with section history.
 		await userEvent.click(screen.getByRole("button", { name: "Back" }));
 		await vi.waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
@@ -710,7 +690,6 @@ describe("SettingsDialog", () => {
 			expect(start).toBe(0);
 			fire(channel);
 			expect(activeIndex()).toBe((start + direction + count) % count);
-			// A full lap lands back on the starting section.
 			for (let i = 1; i < count; i += 1) fire(channel);
 			expect(activeIndex()).toBe(start);
 		});

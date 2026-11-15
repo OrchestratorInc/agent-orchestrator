@@ -25,27 +25,15 @@ const (
 	defaultBranchResolutionBudget = 5 * time.Second
 )
 
-// ErrUnsafePath is returned when a resolved worktree path escapes the managed
-// root (path traversal guard). It is an adapter-local alias of
-// ports.ErrWorkspaceUnsafePath, so cleanup can report it by name.
 var (
 	ErrUnsafePath = ports.ErrWorkspaceUnsafePath
 )
 
-// teardownLocks serializes the repo-touching git worktree teardown sequences
-// (destroy, ForceDestroy, forceDestroyPath) per repository. Each writes shared
-// `.git/worktrees/*` metadata, and project removal now tears down all of a
-// project's sessions concurrently, so interleaved prune/remove/list commands
-// against one repo would race. Different repositories are independent and stay
-// unlocked, so unrelated projects still tear down in parallel.
 var (
 	teardownMu    sync.Mutex
 	teardownLocks = map[string]*sync.Mutex{}
 )
 
-// repoTeardownLock canonicalizes repo and returns the release for the
-// per-repository teardown lock a single git worktree teardown sequence must
-// hold while it mutates the repo.
 func repoTeardownLock(repo string) (func(), error) {
 	key, err := physicalAbs(repo)
 	if err != nil {
@@ -62,38 +50,23 @@ func repoTeardownLock(repo string) (func(), error) {
 	return m.Unlock, nil
 }
 
-// ErrPreservedConflict is an adapter-local alias of ports.ErrPreservedConflict.
-// Tests inside this package use this name; callers outside use ports.ErrPreservedConflict
-// and errors.Is works because the adapter wraps the ports sentinel.
 var ErrPreservedConflict = ports.ErrPreservedConflict
 
-// ErrBranchCheckedOutElsewhere and ErrBranchNotFetched are adapter-local aliases
-// of the port-level sentinels: they preserve the gitworktree-prefixed message
-// while letting the service layer match on ports.ErrWorkspaceBranchCheckedOutElsewhere
-// / ports.ErrWorkspaceBranchNotFetched without importing this package. Tests
-// inside the adapter use these names; callers outside use the port sentinels.
 var (
 	ErrBranchCheckedOutElsewhere = ports.ErrWorkspaceBranchCheckedOutElsewhere
 	ErrBranchNotFetched          = ports.ErrWorkspaceBranchNotFetched
 	ErrBranchInvalid             = ports.ErrWorkspaceBranchInvalid
 	ErrDefaultBranchUnresolved   = ports.ErrWorkspaceDefaultBranchUnresolved
-	// ErrWorktreeLocked is an adapter-local alias of ports.ErrWorkspaceLocked,
-	// following the same aliasing convention as the branch sentinels above.
-	ErrWorktreeLocked = ports.ErrWorkspaceLocked
-	// ErrPathOccupied is an adapter-local alias of ports.ErrWorkspacePathOccupied.
-	ErrPathOccupied = ports.ErrWorkspacePathOccupied
+	ErrWorktreeLocked            = ports.ErrWorkspaceLocked
+	ErrPathOccupied              = ports.ErrWorkspacePathOccupied
 )
 
-// RepoResolver maps a project to the absolute path of its source git repo.
 type RepoResolver interface {
 	RepoPath(projectID domain.ProjectID) (string, error)
 }
 
-// StaticRepoResolver is a RepoResolver backed by a fixed project→repo-path map.
 type StaticRepoResolver map[domain.ProjectID]string
 
-// RepoPath returns the configured repo path for a project, or an error if none
-// is configured.
 func (r StaticRepoResolver) RepoPath(projectID domain.ProjectID) (string, error) {
 	path := r[projectID]
 	if path == "" {
@@ -102,28 +75,20 @@ func (r StaticRepoResolver) RepoPath(projectID domain.ProjectID) (string, error)
 	return path, nil
 }
 
-// Options configures a gitworktree Workspace. ManagedRoot and RepoResolver are
-// required; Binary falls back to git from PATH.
 type Options struct {
 	Binary       string
 	ManagedRoot  string
 	RepoResolver RepoResolver
-	// Logger receives the failures background removal cannot return to a
-	// caller. Optional; nil silences them.
-	Logger *slog.Logger
+	Logger       *slog.Logger
 }
 
-// Workspace creates per-session git worktrees under a managed root. It
-// implements ports.Workspace.
 type Workspace struct {
 	binary      string
 	managedRoot string
 	repos       RepoResolver
 	run         commandRunner
 	logger      *slog.Logger
-	// discards tracks background worktree removals so tests can wait for them.
-	// Production never waits: that deferral is the point (see discard.go).
-	discards sync.WaitGroup
+	discards    sync.WaitGroup
 }
 
 type commandRunner func(ctx context.Context, binary string, args ...string) ([]byte, error)
@@ -135,8 +100,6 @@ var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
 var _ ports.WorkspacePreparationBranchCleaner = (*Workspace)(nil)
 
-// New builds a gitworktree Workspace, validating that ManagedRoot and
-// RepoResolver are set and resolving the root to an absolute, symlink-free path.
 func New(opts Options) (*Workspace, error) {
 	binary := opts.Binary
 	if binary == "" {
@@ -159,17 +122,10 @@ func New(opts Options) (*Workspace, error) {
 		run:         runCommand,
 		logger:      opts.Logger,
 	}
-	// A daemon that died mid-removal leaves directories under the discard root
-	// that nothing else will ever look at again. Sweeping at construction is
-	// the one moment we know the root is ours.
 	w.sweepDiscarded()
 	return w, nil
 }
 
-// ResolveDefaultBranch selects a canonical remote-tracking ref using only local
-// repository state. A slash is treated as a remote qualifier only when its
-// prefix exactly matches a configured remote; otherwise it remains part of an
-// origin branch name such as release/2026.
 func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
 	repo, err := physicalAbs(repoPath)
 	if err != nil {
@@ -233,8 +189,6 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 	}, nil
 }
 
-// FetchDefaultBranch refreshes the exact target returned by
-// ResolveDefaultBranch using an explicit refspec.
 func (w *Workspace) FetchDefaultBranch(ctx context.Context, repoPath string, target ports.WorkspaceDefaultBranch) error {
 	repo, err := physicalAbs(repoPath)
 	if err != nil {
@@ -276,8 +230,6 @@ func (w *Workspace) remoteExists(ctx context.Context, repo, remote string) (bool
 	return false, nil
 }
 
-// Create adds a git worktree for the session under the managed root, checking
-// out the requested branch, and returns where it landed.
 func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	if err := validateConfig(cfg); err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -359,9 +311,6 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	}
 	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true, cfg.RequireNewBranch)
 	if err != nil {
-		// An occupied path is refused before git runs, so there is no prepared
-		// branch or worktree to roll back, and the rollback would misreport the
-		// untouched folder as an unregistered partial worktree.
 		if cfg.FreshBranch && !errors.Is(err, ErrPathOccupied) {
 			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
@@ -381,8 +330,6 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 	return ports.WorkspaceInfo{Path: path, Branch: cfg.Branch, BaseSHA: baseSHA, BaseRef: baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 }
 
-// rollbackPreparedAdd cleans only the exact registered worktree, without
-// forcing dirty files away, then deletes the branch only at its creation SHA.
 func (w *Workspace) rollbackPreparedAdd(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceInfo, error) {
 	records, err := w.listRecords(ctx, info.RepoPath)
 	if err != nil {
@@ -415,11 +362,6 @@ func (w *Workspace) rollbackPreparedAdd(ctx context.Context, info ports.Workspac
 	return ports.WorkspaceInfo{}, nil
 }
 
-// CreateWorkspaceProject materialises a root-as-repo workspace session: the
-// parent repo worktree is created at the session root, then each registered
-// child repo is created at its relative path inside that root. All repos share
-// one branch name; if the requested branch already exists in any repo, one
-// suffixed branch that is free in every repo is selected and used everywhere.
 func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.WorkspaceProjectConfig) (ports.WorkspaceProjectInfo, error) {
 	if err := validateWorkspaceProjectConfig(cfg); err != nil {
 		return ports.WorkspaceProjectInfo{}, err
@@ -507,9 +449,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 			return ports.WorkspaceProjectInfo{}, err
 		}
 	}
-	// Resolve every repository base before creating the first worktree. Besides
-	// keeping remote probing within one aggregate budget, this prevents a later
-	// unresolved child from leaving session branches behind in earlier repos.
 	remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
 	defer cancelRemote()
 	for i := range repos {
@@ -563,8 +502,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 				return fail(err)
 			}
 			if localBranch {
-				// A recovered branch may already contain user commits. Only a SHA
-				// durably captured by its original creation can authorize deletion.
 				creationSHA = ""
 			} else {
 				creationSHA, err = w.revParse(ctx, repo.repoPath, repo.seedRef)
@@ -620,7 +557,7 @@ func (w *Workspace) rollbackWorkspaceProjectPreparation(ctx context.Context, out
 	defer cancel()
 	keep := make(map[string]bool, len(out.Worktrees)+len(touched))
 	for _, row := range out.Worktrees {
-		keep[row.Path] = true // recovered worktrees are not ours to roll back
+		keep[row.Path] = true
 	}
 	for i := len(touched) - 1; i >= 0; i-- {
 		row := touched[i]
@@ -628,9 +565,6 @@ func (w *Workspace) rollbackWorkspaceProjectPreparation(ctx context.Context, out
 		if _, err := w.rollbackPreparedAdd(cleanupCtx, info); err != nil {
 			cause = errors.Join(cause, err)
 			keep[row.Path] = true
-			// A nested child can be ignored by its parent repo. If it is dirty,
-			// the parent may look clean and remove the child's files, so do not
-			// continue teardown toward the root after any child failure.
 			break
 		}
 		delete(keep, row.Path)
@@ -815,8 +749,6 @@ func hasWorkspaceManagedComponent(path string) bool {
 	return false
 }
 
-// DestroyWorkspaceProject removes worktrees children first, preserving any
-// uncommitted changes even when a start is cancelled after publication.
 func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.WorkspaceProjectInfo) error {
 	var firstErr error
 	for i := len(info.Worktrees) - 1; i >= 0; i-- {
@@ -846,19 +778,11 @@ func (w *Workspace) DestroyWorkspaceProject(ctx context.Context, info ports.Work
 	return firstErr
 }
 
-// Destroy removes the session's worktree and prunes it from the repo, refusing
-// (rather than force-deleting) if git still has the path registered afterwards.
 func (w *Workspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	_, err := w.DestroyReclaim(ctx, info)
 	return err
 }
 
-// DestroyReclaim is Destroy plus the reclaim outcome. A worktree directory that
-// was already gone before this call leaves nothing for `git worktree remove` to
-// operate on: the prune below still clears the stale registration and the final
-// os.RemoveAll is a no-op on a missing path, so the whole teardown reports
-// success without any disk having been released. Callers that count reclaimed
-// workspaces need that told apart from a real removal.
 func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
 	reclaim, err := w.destroy(ctx, info)
 	if err == nil {
@@ -867,11 +791,6 @@ func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo
 	return reclaim, err
 }
 
-// deleteFileSnapshots drops the Chat rollback snapshots of a session whose
-// worktree is gone, since nothing can restore them any more, and then those of
-// any other session in the repository whose worktree went without a Destroy. A
-// failure only leaves unreachable refs behind, so it is logged rather than
-// failing teardown.
 func (w *Workspace) deleteFileSnapshots(ctx context.Context, info ports.WorkspaceInfo) {
 	if info.SessionID == "" {
 		return
@@ -887,9 +806,6 @@ func (w *Workspace) deleteFileSnapshots(ctx context.Context, info ports.Workspac
 	w.deleteOrphanedFileSnapshots(ctx, repo)
 }
 
-// deleteOrphanedFileSnapshots drops the Chat rollback snapshots of every session
-// whose worktree is no longer registered in repo, however that session ended. A
-// failure only leaves unreachable refs behind, so it is logged.
 func (w *Workspace) deleteOrphanedFileSnapshots(ctx context.Context, repo string) {
 	records, err := w.listRecords(ctx, repo)
 	if err == nil {
@@ -904,8 +820,6 @@ func (w *Workspace) deleteOrphanedFileSnapshots(ctx context.Context, repo string
 	}
 }
 
-// DeletePreparedBranch is called only after a speculative worktree is gone.
-// A branch that moved beyond its original base belongs to the user and stays.
 func (w *Workspace) DeletePreparedBranch(ctx context.Context, info ports.WorkspaceInfo) error {
 	if info.Branch == "" || info.BaseSHA == "" {
 		return nil
@@ -962,18 +876,11 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	if err != nil {
 		return ports.WorkspaceReclaimAlreadyAbsent, err
 	}
-	// Serialize this repo's teardown against other sessions of the same project
-	// being killed concurrently; git worktree metadata is shared per repo.
 	unlock, err := repoTeardownLock(repo)
 	if err != nil {
 		return ports.WorkspaceReclaimAlreadyAbsent, fmt.Errorf("gitworktree: repo path: %w", err)
 	}
 	defer unlock()
-	// Sampled before any teardown step runs, so it reflects the state this call
-	// found rather than the state it left behind. Only a definite absence counts
-	// as already-absent; a stat that fails for any other reason (permissions, a
-	// racing writer) stays on the removed path so an unknown is never reported
-	// as "nothing to do".
 	reclaim := ports.WorkspaceReclaimRemoved
 	if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
 		reclaim = ports.WorkspaceReclaimAlreadyAbsent
@@ -981,8 +888,6 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	if err := w.requireReachableRepo(repo); err != nil {
 		return reclaim, err
 	}
-	// A speculative add may have left a nonempty directory before Git registered
-	// it. Never treat that as a clean worktree just because it has no registration.
 	if info.BaseSHA != "" {
 		records, err := w.listRecords(ctx, repo)
 		if err != nil {
@@ -998,15 +903,10 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 			}
 		}
 	}
-	// Move the directory aside rather than waiting out `git worktree remove`'s
-	// walk of an ignored-file mountain; falls through to the git-driven path
-	// below whenever the move is not clearly safe.
 	if handled, err := w.discardWorktree(ctx, repo, path); handled {
 		return reclaim, err
 	}
 	_, removeErr := w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
-	// The lift reads the registration's lock from porcelain output, which git
-	// never translates, rather than matching the remove error's text.
 	if removeErr != nil && w.liftStaleAddLock(ctx, repo, path) {
 		_, removeErr = w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
 	}
@@ -1022,16 +922,11 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 			if rec.Locked || isLockedWorktreeRemoveError(removeErr) {
 				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: %w (worktree remove: %w)", path, ports.ErrWorkspaceLocked, removeErr)
 			}
-			// Distinguish the dirty-worktree refusal (uncommitted agent work)
-			// from other registration leftovers (e.g. a locked worktree) so the
-			// Session Manager can preserve the workspace without erroring.
 			dirty, statusErr := w.isDirty(ctx, path)
 			if statusErr == nil && dirty {
 				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: %w (worktree remove: %w)", path, ports.ErrWorkspaceDirty, removeErr)
 			}
 			if statusErr != nil {
-				// A failed probe must stay visible: without it the caller can't
-				// tell "not dirty" from "couldn't check".
 				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: path is still registered after git worktree prune (worktree remove: %w; dirty probe: %w)", path, removeErr, statusErr)
 			}
 			return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: path is still registered after git worktree prune (worktree remove: %w)", path, removeErr)
@@ -1047,14 +942,6 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	return reclaim, nil
 }
 
-// ForceDestroy removes the session's worktree unconditionally (--force), prunes
-// it from git's worktree list, and falls back to os.RemoveAll if any filesystem
-// residue remains.
-//
-// ponytail: only safe to call AFTER the session's uncommitted work has been
-// captured via StashUncommitted. Calling it before capture silently
-// discards agent work. For interactive teardown (ao session kill, ao cleanup)
-// use Destroy, which refuses dirty worktrees via ErrWorkspaceDirty.
 func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) error {
 	if info.Path == "" {
 		return fmt.Errorf("%w: empty path", ErrUnsafePath)
@@ -1075,16 +962,7 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 	if err := w.requireReachableRepo(repo); err != nil {
 		return err
 	}
-	// Force teardown has no refusal to honour, so the move is unconditional:
-	// rename the directory out of the way, drop the registration, unlink in the
-	// background. This runs on daemon shutdown and orchestrator replacement,
-	// which stalled on the same unlink that used to stall a kill.
 	if discarded, moved := w.discard(path); moved {
-		// A failed prune must leave both halves intact. Deleting anyway would
-		// report failure while destroying the directory and stranding its
-		// registration, and that dangling entry blocks the path from being
-		// used again; restoring lets the caller retry against the state it
-		// started from.
 		if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
 			w.undiscard(discarded, path)
 			return fmt.Errorf("gitworktree: worktree prune: %w", err)
@@ -1092,31 +970,16 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 		w.removeInBackground(discarded)
 		return nil
 	}
-	// --force bypasses git's dirty check; errors here are advisory (the path may
-	// already be gone). We proceed to prune regardless.
 	_, _ = w.run(ctx, w.binary, worktreeForceRemoveArgs(repo, path)...)
 	if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
 		return fmt.Errorf("gitworktree: worktree prune: %w", err)
 	}
-	// os.RemoveAll as a backstop: cleans up filesystem residue left behind if
-	// git worktree remove --force still left the directory (e.g. files outside
-	// git tracking).
 	if err := removeAllWithRetry(ctx, path); err != nil {
 		return fmt.Errorf("gitworktree: force remove path %q: %w", path, err)
 	}
 	return nil
 }
 
-// StashUncommitted captures all uncommitted work in the session's worktree
-// into a git commit object WITHOUT mutating the working tree or the global
-// stash stack. The commit is stored at refs/ao/preserved/<session-id>.
-//
-// It builds the preserve commit through a temporary index file so tracked
-// edits AND new non-ignored files are captured while .gitignore-d files are
-// silently skipped (honoured because we never pass -f/--force to git-add).
-//
-// Returns the full ref name (e.g. "refs/ao/preserved/sess-1"). Returns an
-// empty string (and no error) if the worktree is clean.
 func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceInfo) (string, error) {
 	if info.Path == "" {
 		return "", fmt.Errorf("%w: empty path", ErrUnsafePath)
@@ -1146,7 +1009,6 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", fmt.Errorf("gitworktree: worktree %q is not registered: %w", path, ports.ErrWorkspaceStale)
 	}
 
-	// Early exit for clean worktrees: nothing to preserve.
 	dirty, err := w.isDirty(ctx, path)
 	if err != nil {
 		if isNotGitRepositoryError(err) {
@@ -1158,7 +1020,6 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		return "", nil
 	}
 
-	// Log the count of ignored paths that will be skipped.
 	if skipCount, err := w.countIgnoredPaths(ctx, path); err == nil {
 		slog.InfoContext(ctx, "gitworktree: StashUncommitted skipping ignored paths",
 			"session", string(info.SessionID),
@@ -1166,30 +1027,21 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 		)
 	}
 
-	// Reserve a unique path for the temp index in the system temp dir (not ~/.ao).
-	// We must NOT pre-create the file: git requires GIT_INDEX_FILE to either not
-	// exist (it creates it) or be a valid git index. os.CreateTemp gives us a
-	// unique name; we close and remove it immediately so git gets an absent path.
 	tmpIdx, err := os.CreateTemp("", "ao-preserve-idx-*")
 	if err != nil {
 		return "", fmt.Errorf("gitworktree: reserve temp index path: %w", err)
 	}
 	tmpIdxPath := tmpIdx.Name()
 	_ = tmpIdx.Close()
-	// Remove now so git sees an absent path (not a 0-byte corrupt index).
 	_ = os.Remove(tmpIdxPath)
-	// Deferred remove is a best-effort cleanup in case git leaves the file.
 	defer func() { _ = os.Remove(tmpIdxPath) }()
 
-	// Stage all tracked and non-ignored untracked files into the temp index.
-	// GIT_INDEX_FILE overrides the index so the real index is never touched.
 	addCmd := aoprocess.CommandContext(ctx, w.binary, addAllTempIndexArgs(path)...)
 	addCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return "", commandError{args: append([]string{w.binary}, addAllTempIndexArgs(path)...), output: string(out), err: err}
 	}
 
-	// Write the staged tree to get a tree SHA.
 	writeTreeCmd := aoprocess.CommandContext(ctx, w.binary, writeTreeArgs(path)...)
 	writeTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
 	treeOut, err := writeTreeCmd.CombinedOutput()
@@ -1198,29 +1050,22 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	}
 	treeSHA := strings.TrimSpace(string(treeOut))
 
-	// Resolve HEAD. An unborn HEAD (no commits yet) means we omit the -p flag
-	// from commit-tree so the preserve commit has no parent.
 	headOut, headErr := w.run(ctx, w.binary, revParseHeadArgs(path)...)
 	headSHA := ""
 	if headErr == nil {
 		headSHA = strings.TrimSpace(string(headOut))
 	}
-	// headErr != nil means unborn HEAD: headSHA stays empty, commit-tree gets no -p.
 
-	// If the preserve tree SHA equals HEAD's tree SHA the working tree is
-	// effectively clean from git's perspective (only ignored files differ).
 	if headSHA != "" {
 		headTreeOut, err := w.run(ctx, w.binary, "-C", path, "rev-parse", headSHA+"^{tree}")
 		if err == nil {
 			headTreeSHA := strings.TrimSpace(string(headTreeOut))
 			if headTreeSHA == treeSHA {
-				// Nothing to preserve beyond ignored files.
 				return "", nil
 			}
 		}
 	}
 
-	// Create a commit object that wraps the preserve tree.
 	msg := "ao preserved " + string(info.SessionID)
 	commitOut, err := w.run(ctx, w.binary, commitTreeArgs(path, treeSHA, headSHA, msg)...)
 	if err != nil {
@@ -1228,7 +1073,6 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	}
 	commitSHA := strings.TrimSpace(string(commitOut))
 
-	// Point the preserve ref at the commit.
 	ref := "refs/ao/preserved/" + string(info.SessionID)
 	if _, err := w.run(ctx, w.binary, updateRefArgs(path, ref, commitSHA)...); err != nil {
 		return "", fmt.Errorf("gitworktree: update-ref %q: %w", ref, err)
@@ -1240,8 +1084,6 @@ func isNotGitRepositoryError(err error) bool {
 	return strings.Contains(err.Error(), "not a git repository")
 }
 
-// countIgnoredPaths returns the number of entries listed by
-// "git status --ignored --porcelain" that start with "!!" (ignored).
 func (w *Workspace) countIgnoredPaths(ctx context.Context, worktree string) (int, error) {
 	out, err := w.run(ctx, w.binary, ignoredCountArgs(worktree)...)
 	if err != nil {
@@ -1256,13 +1098,6 @@ func (w *Workspace) countIgnoredPaths(ctx context.Context, worktree string) (int
 	return count, nil
 }
 
-// ApplyPreserved replays the capture created by StashUncommitted onto the
-// (freshly re-added) worktree using a true three-way merge (cherry-pick --no-commit).
-// On clean success, the preserve ref is deleted.
-// On conflict, the ref is kept, conflict markers are left in the affected files,
-// and ErrPreservedConflict (wrapped) is returned so the caller can surface it.
-//
-// NEVER deletes the preserve ref on a failed or conflicted apply.
 func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo, ref string) error {
 	if info.Path == "" {
 		return fmt.Errorf("%w: empty path", ErrUnsafePath)
@@ -1271,30 +1106,18 @@ func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo
 		return errors.New("gitworktree: ApplyPreserved: ref must not be empty")
 	}
 
-	// Resolve the ref to its commit SHA.
 	resolveOut, err := w.run(ctx, w.binary, revParseVerifyArgs(info.Path, ref)...)
 	if err != nil {
 		return fmt.Errorf("gitworktree: ApplyPreserved resolve ref %q: %w", ref, err)
 	}
 	commitSHA := strings.TrimSpace(string(resolveOut))
 
-	// Apply the preserve commit via "git cherry-pick --no-commit <sha>".
-	// cherry-pick computes the diff between the preserve commit and its parent
-	// (the HEAD at save time) and 3-way-merges it onto the current working tree.
-	// On conflict it leaves textual conflict markers in the affected files and
-	// exits non-zero WITHOUT committing or moving HEAD. Conflict detection uses
-	// the exit code only (not output text) to stay locale-independent.
 	applyErr := w.runCherryPickNoCommit(ctx, info.Path, commitSHA)
 	if applyErr != nil {
-		// Any non-zero exit from the merge step is a conflict: keep the ref,
-		// leave conflict markers in place, and surface the sentinel.
 		return fmt.Errorf("%w: %w", ErrPreservedConflict, applyErr)
 	}
 
-	// Clean apply: remove the preserve ref so it is never replayed twice.
 	if _, err := w.run(ctx, w.binary, deleteRefArgs(info.Path, ref)...); err != nil {
-		// Log but do not fail: the work is already applied. A dangling preserve
-		// ref is harmless; the next StashUncommitted will overwrite it.
 		slog.WarnContext(ctx, "gitworktree: ApplyPreserved could not delete preserve ref",
 			"ref", ref,
 			"err", err,
@@ -1303,14 +1126,6 @@ func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo
 	return nil
 }
 
-// AddExclude appends git ignore patterns to the worktree's local info/exclude so
-// daemon-generated files never surface as untracked changes. The exclude file is
-// resolved via `git rev-parse --git-common-dir`, not `--git-dir`: git reads
-// info/exclude from $GIT_COMMON_DIR, and this adapter only ever creates linked
-// worktrees, where --git-dir points into .git/worktrees/<name> (per-worktree)
-// while --git-common-dir points at the shared main .git. Writing under --git-dir
-// would land info/exclude in a directory git never consults, making the exclude a
-// no-op. Idempotent: patterns already present are skipped.
 func (w *Workspace) AddExclude(ctx context.Context, info ports.WorkspaceInfo, patterns ...string) error {
 	if len(patterns) == 0 {
 		return nil
@@ -1362,9 +1177,6 @@ const (
 	maxObservedWorkspaceCommits = 20
 )
 
-// ObserveWorkspace returns a bounded, read-only Git snapshot for handoff and
-// recovery. It deliberately lives in the workspace adapter so the session
-// manager does not grow an out-of-band dependency on the git executable.
 func (w *Workspace) ObserveWorkspace(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceObservation, error) {
 	path := strings.TrimSpace(info.Path)
 	if path == "" {
@@ -1392,8 +1204,6 @@ func (w *Workspace) ObserveWorkspace(ctx context.Context, info ports.WorkspaceIn
 	}
 	changes, staged, untracked := parseObservedWorkspaceChanges(string(statusOut), maxObservedWorkspaceChanges)
 
-	// Unit and record separators avoid ambiguity from spaces in subjects. Git
-	// subjects cannot contain a newline, and the bounded output is local-only.
 	logFormat := "%H%x1f%s%x1f%aI%x1e"
 	logOut, err := w.run(ctx, w.binary, "-C", path, "log", "-n", fmt.Sprintf("%d", maxObservedWorkspaceCommits), "--pretty=format:"+logFormat)
 	if err != nil {
@@ -1457,9 +1267,6 @@ func parseObservedWorkspaceCommits(output string) []ports.WorkspaceCommit {
 	return commits
 }
 
-// runCherryPickNoCommit runs "git -C <worktree> cherry-pick --no-commit <sha>"
-// and captures combined output so any conflict details are available in the
-// returned commandError. Exit code detection happens in the caller.
 func (w *Workspace) runCherryPickNoCommit(ctx context.Context, worktree, commitSHA string) error {
 	args := cherryPickNoCommitArgs(worktree, commitSHA)
 	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
@@ -1470,8 +1277,6 @@ func (w *Workspace) runCherryPickNoCommit(ctx context.Context, worktree, commitS
 	return nil
 }
 
-// Restore re-attaches to an existing worktree for the session if one is still
-// present, recreating the handle without disturbing its contents.
 func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, error) {
 	if err := validateConfig(cfg); err != nil {
 		return ports.WorkspaceInfo{}, err
@@ -1491,11 +1296,6 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 	if err != nil {
 		return ports.WorkspaceInfo{}, err
 	}
-	// recreateBranch is the branch used if we fall through to recreate the
-	// worktree below. It defaults to cfg.Branch (the "no prior registration"
-	// case) but is overridden to the stale registration's own branch when one
-	// is found, so a session sitting on a child branch is not silently
-	// recreated on cfg.Branch (typically the root branch) instead.
 	recreateBranch := cfg.Branch
 	if rec, ok := findWorktree(records, path); ok {
 		missing, err := registeredWorktreeDirMissing(rec)
@@ -1509,15 +1309,6 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 			}
 			return ports.WorkspaceInfo{Path: path, Branch: branch, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: repo}, nil
 		}
-		// The registration outlived its directory (issue #2775: a session's git
-		// worktree registration and DB row survived a deletion that removed only
-		// the directory). Fall through to recreate the worktree at path below,
-		// on the registration's own branch (not cfg.Branch), instead of
-		// returning a handle to a directory that does not exist, which
-		// previously made `cd <path> || exit` in the tmux launch command exit
-		// instantly with no diagnostic. addWorktree re-registers the stale path
-		// itself via `worktree add --force`; the registration is left in place
-		// until then.
 		if rec.Branch != "" {
 			recreateBranch = rec.Branch
 		}
@@ -1561,17 +1352,6 @@ func (w *Workspace) existingWorktree(ctx context.Context, repo, path string, cfg
 			return ports.WorkspaceInfo{}, false, err
 		}
 		if missing {
-			// Report "no existing worktree" so Create falls through to
-			// addWorktree, which re-registers this stale path in one step via
-			// `worktree add --force`.
-			//
-			// Unlike Restore, Create deliberately recreates on cfg.Branch and
-			// not on rec.Branch. Restore is re-attaching to a live session
-			// whose branch may have moved on past what AO recorded, so the
-			// registration is the better source of truth there; Create is
-			// materializing a NEW session, where a registration at this path is
-			// a leftover from a prior session of the same name and its branch
-			// says nothing about what the caller asked for.
 			return ports.WorkspaceInfo{}, false, nil
 		}
 		branch := rec.Branch
@@ -1583,39 +1363,6 @@ func (w *Workspace) existingWorktree(ctx context.Context, repo, path string, cfg
 	return ports.WorkspaceInfo{}, false, nil
 }
 
-// registeredWorktreeDirMissing reports whether a git-registered worktree's
-// directory no longer exists on disk. A worktree registration (and the
-// session's DB row) can outlive its directory when something removes the path
-// out of band of AO's own teardown (issue #2775: session agent-orchestrator-78
-// kept its branches and worktree registration but its directory was gone, so
-// handing that path straight to the runtime made the tmux launch command's
-// `cd <path> || exit` guard exit instantly with no diagnostic). When it reports
-// true, the caller materializes a fresh worktree at the same path with
-// `git worktree add --force` (see worktreeAddForce), which re-registers the
-// path itself: nothing here removes or prunes a registration first.
-//
-// This is deliberately a pure observation. Recovering by first clearing the
-// stale registration would mean either the repo-wide `git worktree prune`,
-// which also drops the registration of every OTHER worktree of the repo whose
-// directory git currently cannot see (verified against real git: two worktrees
-// with their directories both deleted, one prune removes BOTH registrations,
-// silently reintroducing the "recreated on the wrong branch" failure
-// recreateBranch exists to prevent for a sibling session that never asked to be
-// touched), or the target-specific `git worktree remove --force`, which is
-// check-then-delete against this stat: if anything materializes the worktree
-// between the two, the force-remove deletes a live worktree and any uncommitted
-// agent work in it. `worktree add --force` has neither problem: it touches only
-// this path's registration, and git refuses it outright when the directory
-// exists and is non-empty, so a lost race fails loudly instead of destroying
-// work.
-//
-// If rec is locked (`git worktree lock`), this returns ErrWorktreeLocked
-// instead of reporting a recoverable registration. Verified against real git: a
-// single `worktree add --force` refuses a missing-but-locked registration (it
-// demands `-f -f`), and `git worktree prune` leaves such a registration in
-// place too, so attempting recovery here would just relay an opaque git error
-// downstream. Locking is an explicit operator signal not to touch a worktree,
-// so recovering it automatically would be wrong even if git allowed it.
 func registeredWorktreeDirMissing(rec worktreeRecord) (bool, error) {
 	info, err := os.Stat(rec.Path)
 	if err != nil {
@@ -1637,9 +1384,6 @@ func registeredWorktreeDirMissing(rec worktreeRecord) (bool, error) {
 }
 
 func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBranch, baseRef, seedRef string, resolveExistingBase, requireNewBranch bool) (string, error) {
-	// Refuse early if the branch is already checked out in another worktree:
-	// `git worktree add` will fail, but its stderr leaks through as an opaque
-	// 500. A typed sentinel lets the HTTP layer surface a 409.
 	records, err := w.listRecords(ctx, repo)
 	if err != nil {
 		return "", err
@@ -1647,19 +1391,10 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 	if conflict, ok := findWorktreeByBranch(records, branch); ok && filepath.Clean(conflict.Path) != filepath.Clean(path) {
 		return "", fmt.Errorf("%w: %q is checked out at %q", ErrBranchCheckedOutElsewhere, branch, conflict.Path)
 	}
-	// A registration at path whose directory is gone makes a plain add fail
-	// ("is a missing but already registered worktree; use 'add -f' to
-	// override"), so re-register it in the same add instead of clearing it
-	// first. records is the freshly listed state, so this decision and the add
-	// it feeds are as close together as git allows.
 	force, err := staleRegistrationForPath(records, path)
 	if err != nil {
 		return "", err
 	}
-	// The opposite leftover: a folder at path that git no longer registers.
-	// `git worktree add` refuses any non-empty path ("'<path>' already
-	// exists"), which for a fixed path such as a project's orchestrator
-	// worktree blocks every later add there (issue #7358).
 	if err := w.clearOrphanedWorktreePath(ctx, repo, path, records); err != nil {
 		return "", err
 	}
@@ -1672,10 +1407,6 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		if requireNewBranch {
 			return "", fmt.Errorf("%w: %q", ports.ErrWorkspaceBranchAlreadyExists, branch)
 		}
-		// Create needs a freshly resolved base for accurate initial diffs even
-		// when the requested branch already exists. Restore already has durable
-		// base metadata and only needs to reattach that branch; making it resolve
-		// again can fail after remote metadata becomes unavailable.
 		if resolveExistingBase {
 			refs, err := w.resolveWorktreeRefsWithBudget(ctx, repo, branch, baseBranch)
 			if err != nil {
@@ -1716,18 +1447,12 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		}
 	}
 
-	// Restore reaches this path when its local branch is gone but its durable
-	// comparison ref remains. Fresh creation returns above after resolving its
-	// seed and comparison refs independently.
 	if err := w.addNewBranchWorktree(ctx, repo, branch, path, seedRef, force); err != nil {
 		return "", fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, seedRef, err)
 	}
 	return baseRef, nil
 }
 
-// staleRegistrationForPath reports whether records carries a registration for
-// path whose directory is gone, i.e. whether an add at path needs git's
-// `--force` override to re-register it. No registration at all is not stale.
 func staleRegistrationForPath(records []worktreeRecord, path string) (bool, error) {
 	rec, ok := findWorktree(records, path)
 	if !ok {
@@ -1736,23 +1461,6 @@ func staleRegistrationForPath(records []worktreeRecord, path string) (bool, erro
 	return registeredWorktreeDirMissing(rec)
 }
 
-// clearOrphanedWorktreePath makes an unregistered, non-empty path usable for
-// `git worktree add` when it is provably an orphaned worktree of repo: its
-// `.git` file points into repo's `<common-dir>/worktrees/` at an admin entry
-// that no longer exists, so git has forgotten it (pruned, or its admin dir was
-// removed) while the folder stayed behind. Such a folder is moved aside to a
-// sibling `<name>.orphaned-<UTC timestamp>` and never deleted: it can still
-// hold uncommitted work, and its files stay readable there.
-//
-// Anything else at path fails with ErrPathOccupied and is left untouched: a
-// regular file or symlink, a plain folder, a full clone, or a worktree of a
-// different repository. A registered path (live or stale) is not this
-// function's business (existingWorktree and staleRegistrationForPath handle
-// it), and an empty directory is left alone because git adds into one.
-//
-// It is generic over every add path (Create, Restore, workspace projects);
-// in practice it matters for paths that are reused across sessions, such as
-// the per-project orchestrator worktree.
 func (w *Workspace) clearOrphanedWorktreePath(ctx context.Context, repo, path string, records []worktreeRecord) error {
 	if _, ok := findWorktree(records, path); ok {
 		return nil
@@ -1786,11 +1494,6 @@ func (w *Workspace) clearOrphanedWorktreePath(ctx context.Context, repo, path st
 	return nil
 }
 
-// isOrphanedWorktreeOf reports whether path is a linked worktree of repo
-// whose registration git has dropped: path/.git is a `gitdir: <dir>` file,
-// <dir> sits directly under repo's `<common-dir>/worktrees`, and <dir> is gone.
-// A relative gitdir (written with worktree.useRelativePaths) is resolved
-// against path, as git does.
 func (w *Workspace) isOrphanedWorktreeOf(ctx context.Context, repo, path string) (bool, error) {
 	gitFile := filepath.Join(path, ".git")
 	fi, err := os.Lstat(gitFile)
@@ -1801,7 +1504,6 @@ func (w *Workspace) isOrphanedWorktreeOf(ctx context.Context, repo, path string)
 		return false, fmt.Errorf("gitworktree: inspect %q: %w", gitFile, err)
 	}
 	if !fi.Mode().IsRegular() {
-		// A directory (a full clone) or a symlink: not a linked worktree.
 		return false, nil
 	}
 	data, err := os.ReadFile(gitFile)
@@ -1818,8 +1520,6 @@ func (w *Workspace) isOrphanedWorktreeOf(ctx context.Context, repo, path string)
 		gitdir = filepath.Join(path, gitdir)
 	}
 	if _, err := os.Lstat(gitdir); err == nil {
-		// The admin entry still exists, so git did not forget this worktree;
-		// whatever made it unlisted here is not ours to repair.
 		return false, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("gitworktree: inspect worktree admin dir %q: %w", gitdir, err)
@@ -1843,53 +1543,14 @@ func (w *Workspace) isOrphanedWorktreeOf(ctx context.Context, repo, path string)
 	return filepath.Dir(adminDir) == adminRoot, nil
 }
 
-// addNewBranchWorktree runs `git worktree add [--force] -b <branch> <path>
-// <baseRef>` and recovers when git rejects path as a stale registration that
-// the caller's own pre-check did not see (the directory vanished between that
-// check and this add).
-//
-// The retry deliberately does NOT repeat the `-b` form. git creates
-// refs/heads/<branch> BEFORE it validates the target path, so a `-b` attempt
-// that fails on the stale registration still leaves the branch behind:
-// verified against git 2.54, the failed add prints "Preparing worktree (new
-// branch '<branch>')", exits 128, and `show-ref` then finds the branch. A
-// `--force -b` retry therefore never recovers, it fails with "a branch named
-// '<branch>' already exists" (exit 255), which is the bug this addresses.
-// Retrying on the existing-branch form `worktree add --force <path> <branch>`
-// checks out the branch the first attempt just created, at baseRef, which is
-// exactly what the `-b` form would have produced.
-//
-// Both callers reach the `-b` form only after confirming refs/heads/<branch>
-// did not exist (addWorktree via refExists, createWorkspaceProjectRepo via
-// workspaceProjectBranchFree), so a branch present after the failed attempt is
-// the one that attempt created, never a pre-existing branch this would hijack.
-// The ref is re-read rather than assumed, so a future caller that skips that
-// precondition still gets the correct form.
-//
-// A recovery that fails outright leaves the created branch ref behind. That is
-// deliberate: the failure that matters here is "path exists and is non-empty",
-// which means something else materialized the worktree at path first, possibly
-// checked out on this very branch, and deleting the ref would then damage the
-// worktree that won. The leftover ref is harmless and self-correcting: the next
-// addWorktree for it takes the existing-branch path, and workspaceProjectBranch
-// simply picks the next free candidate.
 func (w *Workspace) addNewBranchWorktree(ctx context.Context, repo, branch, path, baseRef string, force bool) error {
 	_, err := w.run(ctx, w.binary, worktreeAddNewBranchArgs(repo, branch, path, baseRef, force)...)
 	if err == nil {
 		return nil
 	}
-	// --force was already in play, so the stale registration is not what failed.
 	if force || !isMissingRegisteredWorktreeError(err) {
 		return err
 	}
-	// Report the recovery failure alongside the original: on its own, the
-	// original ("is a missing but already registered worktree") names the
-	// condition recovery was FOR, not the reason recovery failed, and the two
-	// are routinely different. The interesting ones are "'<path>' already
-	// exists" (another restore materialized the worktree first, so this one
-	// lost the race and must not be read as a stale registration) and "missing
-	// but locked" (a registration that acquired a lock after the caller's
-	// pre-check). Joining keeps errors.Is working for both.
 	created, refErr := w.refExists(ctx, repo, "refs/heads/"+branch)
 	if refErr != nil {
 		return errors.Join(err, refErr)
@@ -1988,8 +1649,6 @@ func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspa
 	if err != nil {
 		return "", err
 	}
-	// addWorktree handles both the ordinary new-branch path and a preparation
-	// recovered after a daemon crash left this branch or registration behind.
 	if _, err := w.addWorktree(ctx, repo.repoPath, repo.outputPath, branch, repo.baseBranch, baseRef, seedRef, false, requireNewBranch); err != nil {
 		return "", fmt.Errorf("gitworktree: workspace repo %q worktree add branch %q from %q: %w", repo.name, branch, seedRef, err)
 	}
@@ -2005,9 +1664,6 @@ func (w *Workspace) forceDestroyPath(ctx context.Context, repo, path string) err
 	if err := w.requireReachableRepo(repo); err != nil {
 		return err
 	}
-	// Force teardown has no refusal to honour, so the move is unconditional:
-	// rename the directory out of the way, drop the registration, unlink in the
-	// background.
 	if discarded, ok := w.discard(path); ok {
 		if err := w.pruneWorktrees(ctx, repo); err != nil {
 			w.undiscard(discarded, path)
@@ -2037,18 +1693,8 @@ func isMissingRegisteredWorktreeError(err error) bool {
 	return strings.Contains(err.Error(), "is a missing but already registered worktree")
 }
 
-// gitAddLockReason is the lock git itself writes while `git worktree add`
-// checks the tree out, and removes once it finishes.
 const gitAddLockReason = "initializing"
 
-// liftStaleAddLock unlocks a registration still carrying git's own add-time
-// lock. Destroy only runs on a workspace AO has retired, so no add is still in
-// flight there: the lock outlived a `git worktree add` that died midway, and it
-// would otherwise block every later removal. Only the lock is lifted; removal
-// stays the ordinary non-forced one, so uncommitted work is still refused. A
-// lock with any other reason is someone's deliberate "keep" and is left alone.
-// Reports whether the lock was lifted; when it was not, removal reports the
-// lock as before.
 func (w *Workspace) liftStaleAddLock(ctx context.Context, repo, path string) bool {
 	records, err := w.listRecords(ctx, repo)
 	if err != nil {
@@ -2079,8 +1725,6 @@ func (w *Workspace) validateBranch(ctx context.Context, repo, branch string) err
 	if err == nil {
 		return nil
 	}
-	// A probe git never finished (killed by a signal, or cut off by the
-	// caller's context) says nothing about the name (#5043).
 	var exitErr *exec.ExitError
 	if ctx.Err() != nil || (errors.As(err, &exitErr) && exitErr.ExitCode() == -1) {
 		return fmt.Errorf("gitworktree: branch name check for %q did not finish: %w", branch, errors.Join(err, ctx.Err()))
@@ -2088,13 +1732,8 @@ func (w *Workspace) validateBranch(ctx context.Context, repo, branch string) err
 	return fmt.Errorf("%w: %q (%w)", ErrBranchInvalid, branch, err)
 }
 
-// errNoBaseRef is an internal sentinel: every candidate base ref is missing.
-// addWorktree translates it into ErrBranchNotFetched.
 var errNoBaseRef = errors.New("gitworktree: no base ref found")
 
-// worktreeRefs keeps the ref used to seed a session branch separate from the
-// repository-default ref used for diffs. A fetched session branch may be ahead
-// of the default; returning it as the diff base would hide all of those commits.
 type worktreeRefs struct {
 	seedRef string
 	baseRef string
@@ -2112,9 +1751,6 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 	resolution, err := resolver.Resolve(ctx, remoteCtx, repo)
 	if err != nil {
 		if errors.Is(err, gitdefault.ErrUnresolved) {
-			// A fetched requested branch remains a valid seed when the remote
-			// exposes no default metadata. There is no authoritative comparison
-			// ref in this case, so preserve the legacy fallback to that branch.
 			if requestedExists {
 				return worktreeRefs{seedRef: requestedRef, baseRef: requestedRef}, nil
 			}
@@ -2177,14 +1813,9 @@ func (w *Workspace) resolveWorktreeRefsFromDefault(ctx context.Context, repo, br
 		}
 	}
 
-	// Preserve the adapter's fallback when the configured default is missing:
-	// an already-fetched session branch or same-named tag can still be resumed,
-	// but is used as the comparison ref only because no default ref is available.
 	if requestedExists {
 		return worktreeRefs{seedRef: requestedRef, baseRef: requestedRef}, nil
 	}
-	// Also probe a same-named tag so requests like `--branch v1.2.3` can
-	// auto-track when the tag is fetched but no branch ref exists.
 	tagRef := "refs/tags/" + branch
 	fallbackCandidates := []string{branch, tagRef}
 	for _, ref := range fallbackCandidates {
@@ -2213,9 +1844,6 @@ func (w *Workspace) refExists(ctx context.Context, repo, ref string) (bool, erro
 	return false, fmt.Errorf("gitworktree: verify ref %q: %w", ref, err)
 }
 
-// isDirty reports whether the worktree at path has uncommitted changes or
-// untracked files — the same check `git worktree remove` performs before
-// refusing without --force.
 func (w *Workspace) isDirty(ctx context.Context, path string) (bool, error) {
 	out, err := w.run(ctx, w.binary, statusPorcelainArgs(path)...)
 	if err != nil {
@@ -2265,11 +1893,6 @@ func (w *Workspace) repoPathForInfo(info ports.WorkspaceInfo) (string, error) {
 	return w.repoPath(info.ProjectID)
 }
 
-// requireReachableRepo reports the project repo as unavailable when it is no
-// longer on disk. Teardown is the only caller: every git command it runs is
-// `git -C <repo> ...`, so a deleted project directory turns each one into an
-// opaque exit 128, and the session it belongs to can never be deleted. Create
-// and Restore deliberately do not use this: there, a missing repo must fail.
 func (w *Workspace) requireReachableRepo(repo string) error {
 	if info, err := os.Stat(repo); err == nil && info.IsDir() {
 		return nil
@@ -2288,17 +1911,6 @@ func (w *Workspace) repoPathForConfig(cfg ports.WorkspaceConfig) (string, error)
 	return w.repoPath(cfg.ProjectID)
 }
 
-// enableWorktreeConfig opts linked worktrees into Git's per-worktree config
-// file. Without this extension, every worktree uses the shared .git/config,
-// so a worker's `git config` write can alter the human checkout as well. The
-// worker prompt separately prohibits remote mutations and directs agents to
-// use `git config --worktree`: Git's remote commands (and explicit
-// `git config --local`) remain repository-scoped even when this extension is
-// enabled.
-//
-// Repositories registered with AO are standalone checkouts. The .git check
-// avoids turning unit-test fakes and non-git paths into a new error before the
-// normal worktree commands report their more useful failure.
 func (w *Workspace) enableWorktreeConfig(ctx context.Context, repo string) error {
 	if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -2397,11 +2009,6 @@ func validateWorkspaceProjectConfig(cfg ports.WorkspaceProjectConfig) error {
 	return nil
 }
 
-// validatePathComponent rejects id values that could escape the managed root
-// once joined into a path. filepath.Join cleans `..` before validateManagedPath
-// runs, so a session id of "../other" would otherwise resolve back inside
-// managedRoot while breaking per-project isolation. Reject any path separator
-// or the special `.`/`..` components at the source.
 func validatePathComponent(name, value string) error {
 	if strings.ContainsAny(value, `/\`) {
 		return fmt.Errorf("%w: %s %q must not contain path separators", ErrUnsafePath, name, value)
@@ -2430,8 +2037,6 @@ func (w *Workspace) restorePath(cfg ports.WorkspaceConfig) (string, error) {
 	return w.managedPath(cfg)
 }
 
-// resolvedSessionPrefix returns cfg.SessionPrefix when set, otherwise the first
-// 12 characters of the project ID (matching the display-prefix convention).
 func resolvedSessionPrefix(cfg ports.WorkspaceConfig) string {
 	if p := strings.TrimSpace(cfg.SessionPrefix); p != "" {
 		return p
@@ -2539,8 +2144,6 @@ func moveStrayPathAside(path string) (string, error) {
 	return movePathAside(path, ".stray")
 }
 
-// movePathAside renames path to the first free sibling path+suffix,
-// path+suffix-2, ... so nothing at path is ever deleted or overwritten.
 func movePathAside(path, suffix string) (string, error) {
 	for i := 0; i < 100; i++ {
 		candidate := path + suffix
@@ -2574,11 +2177,6 @@ func runCommand(ctx context.Context, binary string, args ...string) ([]byte, err
 	return out, nil
 }
 
-// readsGitMessages reports a git command whose messages this adapter reads as
-// text, so it runs untranslated: `git worktree` (remove's and add's errors,
-// and the "initializing" lock reason add writes) and `git status` (the "not a
-// git repository" probe). Every other command, and any hook it runs, keeps the
-// user's locale.
 func readsGitMessages(args []string) bool {
 	for i := 0; i < len(args); i++ {
 		if args[i] == "-C" || args[i] == "-c" {
@@ -2590,12 +2188,6 @@ func readsGitMessages(args []string) bool {
 	return false
 }
 
-// untranslatedGitEnv switches only the message language to English, so
-// sorting, dates and character type stay the user's, also for the
-// post-checkout hook `git worktree add` runs. With LC_MESSAGES=C gettext
-// ignores LANGUAGE. LC_ALL would override it, so its value moves to LANG,
-// where it still sets every other category; the LC_* values it overrode go
-// with it.
 func untranslatedGitEnv(environ []string) []string {
 	all := ""
 	for _, kv := range environ {

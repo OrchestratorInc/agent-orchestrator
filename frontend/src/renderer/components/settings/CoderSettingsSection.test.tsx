@@ -7,9 +7,6 @@ import { CloudCpError } from "../../lib/cloud-cp";
 import type { UseCoderTemplatesResult } from "../../hooks/useCoderTemplates";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 
-// Mutable mock state so each test drives the loaded config and the template list
-// independently. The section under test is gated on a saved connection
-// (tokenSet) and rendered from the useCoderTemplates result.
 const mocks = vi.hoisted(() => ({
 	config: { data: undefined as unknown },
 	templates: { value: { templates: [], isLoading: false, isError: false } as UseCoderTemplatesResult },
@@ -37,7 +34,6 @@ vi.mock("../../hooks/useCoderTemplates", () => ({ useCoderTemplates: () => mocks
 const INVALID_WORKING_DIRECTORY = "Enter a path that starts with /, ~/ or $HOME/ and names a folder below it, without . or .. segments. {repo} is the only placeholder.";
 
 const savedConfig = { baseUrl: "https://coder.test", owner: "me", defaultTemplateId: "t-1", tokenSet: true };
-// A control plane that knows every Workspace setup field reports protectSecretFiles.
 const currentConfig = { ...savedConfig, protectSecretFiles: true };
 
 function renderSection(queryClient = new QueryClient()) {
@@ -94,13 +90,9 @@ describe("CoderSettingsSection templates list", () => {
 			isError: false,
 		};
 		renderSection();
-		// Scope to the templates section: its rows sit in the section's grouped
-		// card (dividers come from the card), so there is no separate list element.
 		const list = within(screen.getByRole("heading", { name: "Templates on your Coder" }).closest("section")!);
-		// Prefers displayName, with the short description as subtext.
 		expect(list.getByText("Orchestrator Dev-kit (Medium)")).toBeInTheDocument();
 		expect(list.getByText("4 vCPU / 16 GB")).toBeInTheDocument();
-		// Falls back to the slug name when no displayName is set.
 		expect(list.getByText("ao-devkit-large")).toBeInTheDocument();
 	});
 });
@@ -126,10 +118,8 @@ describe("CoderSettingsSection dev environment", () => {
 		expect(screen.getByRole("textbox", { name: "Working directory" })).toHaveValue("~/work/{repo}");
 		expect(screen.getByRole("textbox", { name: "Workspace ready check" })).toHaveValue("grep -q '^Ready' ~/.bootstrap-status");
 		expect(screen.getByRole("textbox", { name: "Ready check timeout (seconds)" })).toHaveValue("600");
-		// Per-session commands are project settings, not connection settings.
 		expect(screen.queryByRole("textbox", { name: "Startup script" })).toBeNull();
 		expect(screen.getByText(/open the project's settings and choose Scripts/)).toBeInTheDocument();
-		// Nothing changed and no new token: nothing to save.
 		expect(screen.getByRole("button", { name: "Save and fetch templates" })).toBeDisabled();
 	});
 
@@ -147,7 +137,6 @@ describe("CoderSettingsSection dev environment", () => {
 		const reuse = screen.getByRole("switch", { name: "Use the template's existing checkout" });
 		expect(reuse).toBeDisabled();
 		expect(reuse).not.toBeChecked();
-		// A working directory without the workspace user is refused, not silently dropped.
 		await user.type(screen.getByRole("textbox", { name: "Working directory" }), "~/work/{{repo}");
 		expect(screen.getByText('Turn on "Run the agent as the workspace user" to set a working directory.')).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Save and fetch templates" })).toBeDisabled();
@@ -251,7 +240,6 @@ describe("CoderSettingsSection dev environment", () => {
 			templateId: "t-1",
 			parameters: { region: "eu" },
 			startupTimeoutSeconds: 1800,
-			// Carried through unchanged: a token rotation must not reset the workspace setup.
 			workerUser: "workspace",
 			reuseExistingCheckout: false,
 			workingDirectory: "",
@@ -262,8 +250,6 @@ describe("CoderSettingsSection dev environment", () => {
 	});
 
 	it("clears a stored ready check and turns the workspace user off on a current control plane", async () => {
-		// A control plane that reports protectSecretFiles knows every field and keeps
-		// the stored value of any field left out, so the save sends them all.
 		mocks.config.data = {
 			...currentConfig, templateId: "t-1",
 			workerUser: "workspace", reuseExistingCheckout: false, workingDirectory: "~/work/{repo}",
@@ -299,8 +285,6 @@ describe("CoderSettingsSection dev environment", () => {
 	});
 
 	it("hides the newer fields and still clears the older ones on an older control plane", async () => {
-		// An older control plane does not report protectSecretFiles and rejects
-		// workingDirectory and protectSecretFiles; it knows the other fields.
 		mocks.config.data = {
 			...savedConfig, workerUser: "workspace", reuseExistingCheckout: false,
 			readyProbe: "grep -q '^Ready' ~/.bootstrap-status", readyProbeTimeoutSeconds: 600,
@@ -386,7 +370,6 @@ describe("CoderSettingsSection removing the connection", () => {
 		expect(await within(dialog).findByRole("alert")).toHaveTextContent(
 			"Sessions still run on this Coder connection. Remove their projects or sessions first.",
 		);
-		// The connection stays on the page.
 		expect(screen.getByLabelText("Coder URL or IP *")).toHaveValue("https://coder.test");
 	});
 

@@ -14,20 +14,8 @@ import { sameControlPlaneUrl, type ControlPlaneUrlResolver } from "./cloud-contr
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 import { previewCertificate } from "./preview-certificate";
 
-// Loopback HTTPS proxy fronting AO Cloud sessions' agent browsers (the
-// Chromium a sandbox's agent drives, streamed by its CDP viewer), which the
-// Browser panel shows as agent tabs. A tab cannot put the person's cloud
-// bearer on its requests, and the viewer reaches its socket, uploads and
-// downloads by paths on its own origin. So each session's viewer gets its own
-// preview origin here, and every request it makes goes to the control
-// plane's agent-browser route with a fresh bearer and without its cookies.
-//
-// The agent browser can drive the person's logged-in pages: a socket or an
-// upload is taken only from the viewer's own origin.
 export type CloudAgentProxy = {
-	/** The session's agent browser for its agent tab; "" when the sandbox has none. */
 	agentBrowserUrl: (baseUrl: unknown, orgId: unknown, sessionId: unknown) => Promise<string>;
-	/** Whether a URL is one of the agent-browser viewers this proxy serves now. */
 	isAgentBrowserUrl: (url: string) => boolean;
 	close: () => Promise<void>;
 };
@@ -35,21 +23,15 @@ export type CloudAgentProxy = {
 type Target = { base: URL; orgId: string; sessionId: string };
 type Running = { port: number; hosts: Map<string, Target>; stop: () => Promise<void> };
 
-// What both HTTP/1.1 and HTTP/2 requests to the TLS server look like here.
 type ProxyRequest = Readable & { headers: IncomingHttpHeaders; url?: string; method?: string; authority?: string };
 type ProxyResponse = Writable & { headersSent: boolean; writeHead(status: number, headers?: OutgoingHttpHeaders): unknown };
 
-// Next to cloud-auth.bin: origins stay the same across restarts, so the
-// viewer keeps its storage, and cannot be guessed without this file.
 const SECRET_FILE = "cloud-agent-browser.key";
 const ID = /^[\w-]{1,128}$/;
-// The viewer's own routes, by method; its socket is ws/cdp.
 const GET_TAILS = /^(?:v\/cdp|stats|download\/[\w-]+)$/;
 const STRIP_REQUEST_HEADERS = new Set(["host", "origin", "cookie", "authorization", "proxy-authorization", ...HOP_BY_HOP_HEADERS]);
-// The CP's cookies are not the viewer's.
 const STRIP_RESPONSE_HEADERS = new Set([...HOP_BY_HOP_HEADERS, "set-cookie"]);
 
-// Never the URL: the viewer puts its token in the query.
 function warn(message: string): void {
 	console.warn(`[cloud-agent-proxy] ${message}`);
 }
@@ -70,18 +52,12 @@ function cpUrl({ base, orgId, sessionId }: Target, tail: string, search = ""): U
 	return new URL(`${base.origin}${basePath}/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/sessions/${encodeURIComponent(sessionId)}/agent-browser/${tail}${search}`);
 }
 
-// How long to leave a session whose agent browser is not connected before
-// asking the CP again: its Retry-After in seconds, kept within reason.
 export function retryAfterMs(header: string | null): number {
 	const seconds = Number(header);
 	if (!header || !Number.isFinite(seconds)) return 30_000;
 	return Math.min(Math.max(seconds, 5), 300) * 1_000;
 }
 
-/**
- * controlPlaneUrl, when given, is the configured control plane: the bearer
- * goes only there, and a session named on any other gets no agent browser.
- */
 export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?: ControlPlaneUrlResolver): CloudAgentProxy {
 	const bearer = async (): Promise<string | null> => (await getCloudAccessToken(getDataDir()).catch(() => null)) || null;
 	let secret: Promise<Buffer> | undefined;
@@ -92,8 +68,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 		}));
 	let current: Promise<Running> | undefined;
 	let live: Running | undefined;
-	// Sessions whose agent browser the CP said is not connected, until when
-	// not to ask it again (its Retry-After).
 	const notConnectedUntil = new Map<string, number>();
 
 	const start = async (key: Buffer): Promise<Running> => {
@@ -102,8 +76,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 		const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false });
 		let port = 0;
 
-		// The registered session a request is for, the viewer's own origin, and
-		// the route it asks for; null for any other host.
 		const route = (rawHost: string | undefined, rawUrl: string | undefined) => {
 			const hostname = rawHost?.toLowerCase().replace(/:\d+$/, "") ?? "";
 			const target = hosts.get(hostname);
@@ -118,7 +90,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 		};
 
 		const handleRequest = async (req: ProxyRequest, res: ProxyResponse): Promise<void> => {
-			// HTTP/2 carries the host in :authority rather than a Host header.
 			const found = route(req.headers.host ?? req.authority, req.url);
 			const allowed = found && ((req.method === "GET" && GET_TAILS.test(found.tail)) || (req.method === "POST" && found.tail === "upload"));
 			if (!found || !allowed) return answer(res, 404, "unknown path");
@@ -126,7 +97,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			if (req.method === "GET" ? origin !== undefined && origin !== found.origin : origin !== found.origin) {
 				return answer(res, 403, "agent browser origin mismatch");
 			}
-			// Closing the tab must also close its request to the CP.
 			let proxied: ClientRequest | undefined;
 			let left = false;
 			res.once("close", () => {
@@ -138,12 +108,10 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			if (!token) return answer(res, 401, "no Orchestrator Cloud session");
 			const headers: OutgoingHttpHeaders = {};
 			for (const [name, value] of Object.entries(req.headers)) {
-				// HTTP/2 pseudo-headers (":authority", ":path") are not forwardable headers.
 				if (!name.startsWith(":") && !STRIP_REQUEST_HEADERS.has(name)) headers[name] = value;
 			}
 			headers.authorization = `Bearer ${token}`;
 			const fail = (error: Error): void => {
-				// The tab left (destroying the request reports an error): no one to answer.
 				if (left) return;
 				warn(`control plane failed on ${req.method} ${found.tail.split("/", 1)[0]} (${error.message})`);
 				if (res.headersSent) res.destroy(error);
@@ -152,7 +120,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			const url = cpUrl(found.target, found.tail, found.search);
 			proxied = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, { method: req.method, headers }, (upstream) => {
 				const status = upstream.statusCode ?? 0;
-				// HTTP/2 carries only 200-599 as a final status: writeHead would throw on the rest.
 				if (!(status >= 200 && status <= 599)) {
 					upstream.resume();
 					return fail(new Error(`invalid status ${status}`));
@@ -162,7 +129,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 					if (!STRIP_RESPONSE_HEADERS.has(name)) out[name] = value;
 				}
 				res.writeHead(status, out);
-				// Destroyed with an error, a cut-off download is not taken as complete.
 				const cut = () => res.destroy(new Error("control plane response ended early"));
 				upstream.on("aborted", cut);
 				upstream.on("error", cut);
@@ -170,7 +136,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			});
 			proxied.setTimeout(0);
 			proxied.on("error", fail);
-			// Streamed both ways: uploads and downloads can be large.
 			req.pipe(proxied);
 		};
 
@@ -183,7 +148,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 			const upstream = new WebSocket(url, { headers: { authorization: `Bearer ${token}` }, perMessageDeflate: false, handshakeTimeout: 8_000 });
 			let client: WebSocket | undefined;
-			// Unheard, a socket error would crash the main process; "close" follows it.
 			upstream.on("error", (error: Error) => warn(`control plane socket failed (${error.message})`));
 			const abandon = () => upstream.terminate();
 			socket.once("close", abandon);
@@ -202,15 +166,11 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 		};
 
 		const { cert, key: tlsKey } = previewCertificate();
-		// HTTPS so the Browser panel trusts it as a preview (preview-certificate.ts);
-		// HTTP/1.1 stays on for the socket.
 		const server = createSecureServer({ cert, key: tlsKey, allowHTTP1: true });
 		server.on("secureConnection", (socket: TLSSocket) => {
 			sockets.add(socket);
 			socket.once("close", () => sockets.delete(socket));
 		});
-		// A sign-out mid-request (the bearer lookup reports it) stops this server
-		// under the request: that must not reach the main process as a rejection.
 		server.on("request", (req, res) => void handleRequest(req, res).catch(() => res.destroy()));
 		server.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => void handleUpgrade(req, socket, head).catch(() => socket.destroy()));
 		port = await listenOnStablePort(server, createHmac("sha256", key).update("port").digest());
@@ -219,7 +179,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			hosts,
 			stop: () => new Promise<void>((resolve) => {
 				hosts.clear();
-				// close() alone waits on open sockets forever.
 				for (const socket of sockets) socket.destroy();
 				server.close(() => resolve());
 			}),
@@ -229,7 +188,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 	const running = (key: Buffer): Promise<Running> => {
 		if (!current) {
 			const opening: Promise<Running> = start(key).then(async (started) => {
-				// Closed while it was starting.
 				if (current !== opening) {
 					await started.stop();
 					throw new Error("the cloud agent browser proxy closed");
@@ -238,7 +196,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 				return started;
 			});
 			current = opening;
-			// A start that failed is not kept: the next session tries again.
 			opening.catch(() => {
 				if (current === opening) current = undefined;
 			});
@@ -257,13 +214,8 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 				if (!configured || !sameControlPlaneUrl(base.href, configured)) return "";
 			}
 			const target: Target = { base, orgId, sessionId };
-			// Only a sandbox whose agent browser runs has an agent tab: the CP answers
-			// 409 for one without, or asleep, saying when to ask again (older CPs
-			// answer 502); one the agent has not used yet answers that it is not
-			// running. A CP this cannot reach gets none either.
 			const sessionKey = `${base.href}\n${orgId}\n${sessionId}`;
 			const now = Date.now();
-			// Forget sessions whose wait is over, so closed ones do not pile up.
 			for (const [key, until] of notConnectedUntil) if (until <= now) notConnectedUntil.delete(key);
 			if (notConnectedUntil.has(sessionKey)) return "";
 			const token = await bearer();
@@ -278,7 +230,6 @@ export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?
 			if (!(await agentBrowserRunning(probe))) return "";
 			const key = await loadKey();
 			const { port, hosts } = await running(key);
-			// Its own origin per session, unguessable without the secret.
 			const host = `ao-preview-${createHmac("sha256", key).update(`agent\n${orgId}\n${sessionId}`).digest("hex").slice(0, 32)}.localhost`;
 			hosts.set(host, target);
 			return agentViewerUrl(host, port);

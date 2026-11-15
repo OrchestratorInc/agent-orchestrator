@@ -39,7 +39,6 @@ type OpenTeam = { orgId: string; teamId: string; external: boolean };
 
 const MEMBERS_SHOWN = 50;
 
-/** "4 sessions and 1 project", in the person's language. */
 export function lostText(t: TFunction, impact: Pick<CloudCpTeamImpact, "sessions" | "projects">, locale: string): string {
 	const parts: string[] = [];
 	if (impact.sessions) parts.push(t("teams.count.sessions", { count: impact.sessions }));
@@ -47,20 +46,12 @@ export function lostText(t: TFunction, impact: Pick<CloudCpTeamImpact, "sessions
 	return listNames(parts, locale, (count) => t("share.summary.more", { count }));
 }
 
-/**
- * Settings › Teams: the workspace's teams and the ones the person is in
- * elsewhere, and a page per team for its people and what's shared with it.
- * `manage` is off in a workspace that can't share: then only the teams the
- * person is in elsewhere show, to open or leave.
- */
 export function TeamsSection({ titleHidden, manage = true }: { titleHidden: boolean; manage?: boolean }) {
 	const { t } = useTranslation();
 	const { ready } = useCloudCp();
 	const { org, error, refetch } = useCloudOrg();
 	const [openTeam, setOpenTeam] = useState<OpenTeam | null>(null);
-	// The row a team page was opened from, focused again on the way back.
 	const [returnTo, setReturnTo] = useState<string | null>(null);
-	// Lives above the page and the list, so Back keeps the offer in Settings.
 	const undoNotice = useUndoNotice(true);
 	const notice = (
 		<UndoNotice
@@ -148,8 +139,6 @@ function TeamsList({ orgId, manage, titleHidden, focusTeamId, onOpen }: {
 	const mine = useMyTeams();
 	const [creating, setCreating] = useState(false);
 	const elsewhere = (mine.data ?? []).filter((team) => team.orgId !== orgId);
-	// Both lists settle before anything shows, so "No teams yet" never flashes
-	// and "Teams you're in" doesn't pop in under the workspace's own.
 	const loading = (manage && teams.isPending) || mine.isPending;
 	const unavailable = teamsUnavailable(teams.error) || teamsUnavailable(mine.error);
 	useEffect(() => {
@@ -174,7 +163,6 @@ function TeamsList({ orgId, manage, titleHidden, focusTeamId, onOpen }: {
 			}}
 		/>
 	) : null;
-	// A control plane from before teams: nothing to show, and nothing wrong.
 	if (unavailable) return <TeamsNotice titleHidden={titleHidden} text={t("teams.unavailable")} />;
 	if (loading) return <TeamsSkeleton />;
 	if (manage && teams.error) {
@@ -256,7 +244,6 @@ type Confirming =
 
 type ShareChange = { entry: CloudCpShareEntry; role: "viewer" | "editor"; modeCap: "read-only" | "standard" | "trusted" };
 
-/** The same share in a team's list: one per session, or the whole project. */
 function sameShare(a: CloudCpShareEntry, b: CloudCpShareEntry): boolean {
 	return a.projectId === b.projectId && a.scope === b.scope && (a.sessionId ?? "") === (b.sessionId ?? "");
 }
@@ -273,13 +260,11 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 	const backRef = useRef<HTMLButtonElement>(null);
 	const teamKey = teamQueryKey(baseUrl, team.orgId, team.teamId, team.external);
 	const teamChange = ["team-change", team.teamId] as const;
-	// Refetches once the last change in flight settles, so a later change isn't undone by an earlier one's read.
 	const settle = () => {
 		if (queryClient.isMutating({ mutationKey: teamChange }) <= 1) invalidateTeamsAndShares(queryClient);
 	};
 	const setDetail = (update: (data: CloudCpTeamDetail) => CloudCpTeamDetail) =>
 		queryClient.setQueryData<CloudCpTeamDetail>(teamKey, (data) => (data ? update(data) : data));
-	// The team as the lists show it: its name and size change there at once too.
 	const setListed = (update: (listed: CloudCpTeam) => CloudCpTeam | null) => {
 		for (const key of [teamsQueryKey(baseUrl, team.orgId), myTeamsQueryKey(baseUrl)]) {
 			queryClient.setQueryData<CloudCpTeam[]>(key, (list) => list?.flatMap((listed) => {
@@ -295,7 +280,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 		setListed((listed) => ({ ...listed, name: next.team.name, memberCount: next.team.memberCount }));
 	};
 
-	// Opening a page puts focus on its way back, so the keyboard starts here.
 	useEffect(() => {
 		backRef.current?.focus();
 	}, []);
@@ -306,7 +290,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 			client.addTeamMembers(team.orgId, team.teamId, people.filter((recipient): recipient is Extract<Recipient, { kind: "person" }> => recipient.kind === "person").map((recipient) => ({ email: recipient.email }))),
 		onSuccess: (next, people) => {
 			applyDetail(next);
-			// Only who was sent: anyone picked while it was on its way stays.
 			const sent = new Set(people.map(recipientKey));
 			setAdding((current) => current.filter((recipient) => !sent.has(recipientKey(recipient))));
 		},
@@ -329,7 +312,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 				setDetail((data) => ({ ...data, team: { ...data.team, name: before } }));
 				setListed((listed) => ({ ...listed, name: before }));
 			}
-			// Back to the field with what was typed, next to the error.
 			setRenaming(name);
 		},
 		onSettled: settle,
@@ -369,7 +351,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 				modeCap: entry.modeCap ?? defaultCap(entry.role),
 				...(entry.deniedCommands?.length ? { deniedCommands: entry.deniedCommands } : {}),
 			}),
-		// Back in the list at once; the new grant takes its place when it exists.
 		onMutate: async ({ entry, index }) => {
 			await queryClient.cancelQueries({ queryKey: teamKey });
 			setDetail((data) => {
@@ -438,7 +419,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 				setDetail((data) => ({ ...data, team: { ...data.team, memberCount: Math.max(0, data.team.memberCount - 1) }, members: data.members.filter((other) => other.id !== change.member.id) }));
 				setListed((listed) => ({ ...listed, memberCount: Math.max(0, listed.memberCount - 1) }));
 			} else {
-				// Gone from the lists before going back to them, not after a round trip.
 				setListed(() => null);
 				onBack();
 			}
@@ -492,7 +472,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 								event.preventDefault();
 								const name = renaming.trim();
 								if (!name) return;
-								// The new name shows at once; a failure brings the field back.
 								setRenaming(null);
 								if (name !== data.team.name) rename.mutate(name);
 							}}
@@ -530,7 +509,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 										</DropdownMenuItem>
 									) : null}
 									{data.team.yourRole ? (
-										// The last owner can't leave (a team needs an owner), so it says why instead of asking.
 										<DropdownMenuItem
 											disabled={data.team.yourRole === "owner" && owners <= 1}
 											onSelect={() => setConfirming({ kind: "leave" })}
@@ -625,7 +603,6 @@ function TeamPage({ team, onBack, undoNotice }: { team: OpenTeam; onBack: () => 
 								role={entry.role}
 								modeCap={entry.modeCap ?? defaultCap(entry.role)}
 								scope={entry.scope}
-								// The latest change's error is the one shown.
 								onChange={({ role, modeCap }) => {
 									undoNotice.clearFailure();
 									if (!stopShare.isPending) stopShare.reset();
@@ -713,7 +690,6 @@ function MemberRow({ member, manage, lastOwner, onRole, onRemove }: {
 		{ value: "owner" as const, label: t("teams.roleOwner"), disabled: !member.workspaceMember && member.role !== "owner" },
 		{ value: "member" as const, label: t("teams.roleMember"), disabled: lastOwner },
 	], [lastOwner, member.role, member.workspaceMember, t]);
-	// Why a role can't be chosen, under it in the menu.
 	const roleReason = (role: "owner" | "member") =>
 		role === "owner" ? t("teams.ownerNeedsWorkspace") : t("teams.lastOwnerStays");
 	const name = member.name || member.email || t("teams.invitedPerson");

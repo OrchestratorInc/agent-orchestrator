@@ -26,7 +26,6 @@ func TestRecordSaveStampsTheUserAndReadVersionReturnsTheContent(t *testing.T) {
 	if len(vs) != 2 || vs[0].Version != 2 || vs[0].Source != domain.ArtifactVersionSourceUser {
 		t.Fatalf("after the save: %+v, want version 2 written by the user", vs)
 	}
-	// The observer's next ticks see the saved file already versioned.
 	h.tick()
 	h.tick()
 	if got := len(h.versions("plan.md")); got != 2 {

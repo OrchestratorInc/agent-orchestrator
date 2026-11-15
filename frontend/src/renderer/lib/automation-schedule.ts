@@ -12,7 +12,6 @@ export type ScheduleFields = {
 	weekday: WeekdayCode;
 	hour: string;
 	minute: string;
-	/** Original anchored or unmapped RRULE, preserved until a schedule edit. */
 	legacyRaw: string | null;
 };
 
@@ -115,16 +114,12 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 	if ((lines.length > 1 && !anchored) || trimmed.includes("INTERVAL=")) {
 		return emptyCustom();
 	}
-	// Saved daemon rules include an anchor. Show their actual schedule while
-	// preserving that anchor until the user explicitly changes the schedule.
 	const legacyRaw = anchored ? trimmed : null;
 
 	const parts = parseRRuleParts(trimmed);
 	const hour = parts.BYHOUR ?? defaultHour;
 	const minute = parts.BYMINUTE ?? defaultMinute;
 	const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
-	// Every simple form represents exactly one clock time. Lists and other
-	// unsupported values must retain the raw rule and valid fallback fields.
 	if (!parseTimeValue(time)) return emptyCustom();
 
 	if (isSimpleDaily(parts)) {
@@ -217,7 +212,6 @@ export function schedulesEqual(a: ScheduleFields, b: ScheduleFields): boolean {
 	);
 }
 
-/** 24-hour clock values as HH:mm. Empty means unset. */
 export function parseTimeValue(value: string): { hour: number; minute: number } | null {
 	const match = value.trim().match(/^(\d{2}):(\d{2})$/);
 	if (!match) return null;
@@ -262,7 +256,6 @@ export function parseHourMinute(hour: string, minute: string): { hour: number; m
 	return { hour: h, minute: m };
 }
 
-/** Digits-only draft → HH:mm, rejecting any digit that would make an invalid clock. */
 export function formatTimeDraft(raw: string): string {
 	const out: string[] = [];
 	for (const ch of raw.replace(/\D/g, "")) {
@@ -294,7 +287,6 @@ export function formatTimeDraft(raw: string): string {
 	return `${digits.slice(0, 2)}:${digits.slice(2)}`;
 }
 
-/** A recurrence rule reduced to what a person reads in a list: cadence and clock time. */
 export type ScheduleSummary =
 	| { kind: "daily"; time: { hour: number; minute: number } | null }
 	| { kind: "weekdays"; time: { hour: number; minute: number } | null }
@@ -302,12 +294,6 @@ export type ScheduleSummary =
 	| { kind: "monthly"; day: number; time: { hour: number; minute: number } | null }
 	| { kind: "other"; frequency: string | null; time: { hour: number; minute: number } | null };
 
-/**
- * Summarizes a daemon RRULE (optionally with a DTSTART line) for display.
- * Rules with an interval, or day lists AO does not author, fall back to
- * `other` with only their frequency so the list never claims a cadence
- * the scheduler will not follow.
- */
 export function describeSchedule(rruleText: string): ScheduleSummary {
 	const parts = parseRRuleParts(rruleText);
 	const frequency = parts.FREQ?.toLowerCase() || null;

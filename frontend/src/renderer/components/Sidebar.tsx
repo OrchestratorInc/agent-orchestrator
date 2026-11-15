@@ -169,78 +169,47 @@ import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { RemoteHostsSection } from "./RemoteHostsSection";
 
-// macOS paints framed chrome: the fixed TitlebarNav cluster carries the
-// sidebar toggle + history arrows above this surface. Windows hangs the sidebar
-// under its custom titlebar.
 const isMac = isMacPlatform();
 const brandInTitlebar = isMac || isLinuxPlatform();
 const noDragStyle = isMac ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
-// One row-action layout shared by project rows, session rows, and the section
-// header "+": 24px quiet icon buttons (Button size="icon-xs"), 14px icons, a 6px
-// gap, and a 4px right inset, vertically centered in the row, so every action's
-// right edge lines up. `.sidebar-icon-action` opts out of the sidebar focus fill
-// in styles.css; the Button's hover pill owns the fill.
 const ROW_ACTIONS_CLASS = "absolute inset-y-0 right-1 flex items-center gap-0.5";
-/** Long enough that sweeping the pointer across the list starts no agents. */
 const AGENT_WARM_UP_HOVER_MS = 300;
 const ROW_ACTION_BUTTON_CLASS = "sidebar-icon-action [&_svg]:size-icon-md";
 const HOVER_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 
-// Shared nav-row chrome (Codex-style): inset pill, 14px type, no accent bar.
-// Plain fill stays for non-interactive status rows; interactive rows use
-// {@link NavRowHighlight} via {@link NAV_ROW_HIGHLIGHT_HOST_CLASS}.
 const NAV_ROW_CLASS =
 	"h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground active:bg-interactive-hover active:text-foreground data-[active=true]:bg-interactive-active data-[active=true]:font-medium data-[active=true]:text-foreground";
 
-/** Expanded footer action row: growing highlight behind icon + label. */
 const FOOTER_NAV_BUTTON_CLASS = cn(
 	NAV_ROW_CLASS,
 	NAV_ROW_HIGHLIGHT_HOST_CLASS,
 	"flex h-9 w-full items-center text-left transition-none",
 );
 
-/** Update rows above the account row; collapses away when nothing is pending. */
 const FOOTER_UPDATES_CLASS = "flex flex-col gap-0.5 pt-2 empty:hidden";
 
-/** The footer's bottom row, under any update rows. */
 const FOOTER_BOTTOM_ROW_CLASS = "flex w-full items-center gap-0.5 pt-2";
 
-/** Expanded footer icon action: a 36px square with the growing highlight. */
 const FOOTER_ICON_BUTTON_CLASS = cn(
 	NAV_ROW_HIGHLIGHT_HOST_CLASS,
 	"inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:text-foreground [&_svg]:size-icon-md",
 );
 
-// Top-of-sidebar rows (Search, Automations) and project rows: one 32px row with
-// a 10px inset, 8px icon gap, and 14px icons so edges match the section headers
-// and session rows.
 const SIDEBAR_ROW_CLASS = "h-8 gap-2 [&_svg]:size-icon-md";
 
-// Search + Pinned/Projects section chrome: same type, icon, and row size.
 const SECTION_ROW_CLASS =
 	"flex h-8 w-full min-w-0 items-center gap-2 rounded-md px-2.5 text-sm font-medium text-muted-foreground [&_svg]:size-icon-md [&_svg]:shrink-0";
 
-// Mirrors the daemon's display-name cap (maxDisplayNameLen) and the spawn
-// `--name` flag, so inline edits never round-trip a value the API would reject.
 
-// Reorder drags start from the row's primary click surface. The 4px activation
-// distance keeps a plain navigation/disclosure click from starting a drag;
-// nested action buttons remain outside that activator surface.
 const REORDER_ACTIVATION_DISTANCE = 8;
-// A transparent 1x1 image replaces the browser's default drag ghost, so the
-// dragged row stays put at reduced opacity instead of trailing under the cursor.
 const EMPTY_DRAG_IMAGE = typeof Image === "undefined" ? null : new Image();
 if (EMPTY_DRAG_IMAGE) EMPTY_DRAG_IMAGE.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-/** Stable drag-context id per project's session list. */
 export const sessionDndId = (projectId: string) => `sidebar-sessions-${projectId}`;
 
-// Module constants: useSensor memoizes on the options object, and new sensors
-// change dnd-kit's context, which re-renders every sortable row in the list.
 const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: REORDER_ACTIVATION_DISTANCE } };
-// Space-only start so Enter keeps opening the row.
 const KEYBOARD_SENSOR_OPTIONS = {
 	coordinateGetter: sortableKeyboardCoordinates,
 	keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space"] },
@@ -253,9 +222,6 @@ function useReorderSensors() {
 	);
 }
 
-// Browsers dispatch a click after pointerup even when dnd-kit has just completed
-// a drag. Suppress only that same-turn synthetic click; if no click follows,
-// clear the guard before the next user interaction.
 function usePostDragClickGuard() {
 	const guardedIdRef = useRef<string | null>(null);
 	const clearTimerRef = useRef<number | null>(null);
@@ -288,17 +254,13 @@ function usePostDragClickGuard() {
 
 type SortableRow = ReturnType<typeof useSortable>;
 
-/** Session sorting stays vertical and never inherits dnd-kit's scale correction. */
 function sortableRowStyle({ transform, transition, isDragging, dropTransitionDisabled }: Pick<SortableRow, "transform" | "transition" | "isDragging"> & { dropTransitionDisabled?: boolean }): CSSProperties {
 	return {
 		transform: transform ? CSS.Transform.toString({ ...transform, x: 0, scaleX: 1, scaleY: 1 }) : undefined,
-		// The active row must clear its drag transform immediately on drop; its
-		// siblings retain dnd-kit's smooth displacement while the pointer moves.
 		transition: isDragging || dropTransitionDisabled ? "none" : (transition ?? "transform 180ms cubic-bezier(0.22, 1, 0.36, 1)"),
 	};
 }
 
-// Session drags use their owning list as the visual boundary.
 const restrictToListBounds: Modifier = ({ activeNodeRect, containerNodeRect, transform }) => {
 	if (!activeNodeRect || !containerNodeRect) return transform;
 	const minY = containerNodeRect.top - activeNodeRect.top;
@@ -344,52 +306,28 @@ function useGrabbingCursor(active: boolean) {
 	}, [active]);
 }
 
-/** How the sidebar collapses. Only the "icon" mode shows a rail where every list
- *  must be fully open; "offcanvas" slides the whole sidebar away, and its lists
- *  must keep their open/closed and Show more state while it is hidden. */
-// Asserted rather than annotated: an annotation narrows to "offcanvas" inside
-// the memoized Sidebar, and the "icon" branches would no longer typecheck.
 const SIDEBAR_COLLAPSIBLE = "offcanvas" as "offcanvas" | "icon";
 export const SIDEBAR_DEFAULT_WIDTH = 240;
-/** Floor/ceiling for sidebar resize — pass the same values to useResizable. */
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
 const SIDEBAR_BRAND_TRAILING_GAP = 12;
-/** Narrowest the sidebar may get: SIDEBAR_MIN_WIDTH, widened to show the whole
- *  brand label. Measured, because the label's left edge moves with window zoom
- *  (the traffic-light reserve is divided by the zoom factor) and native
- *  fullscreen (no reserve). The label alone fits in less than the footer's
- *  Settings row needs, so never go below SIDEBAR_MIN_WIDTH. */
 function sidebarMinWidth(): number {
 	const brand = Array.from(document.querySelectorAll<HTMLElement>("[data-sidebar-brand]")).find(
 		(el) => el.getBoundingClientRect().width > 0,
 	);
 	if (!brand) return SIDEBAR_MIN_WIDTH;
-	// Measure the label's natural width (its scrollWidth), not its painted width:
-	// the titlebar clips the label to the sidebar, so the painted width would
-	// shrink the floor to whatever the sidebar already is. Without a separate
-	// label (the Windows header), the whole brand element is the label.
 	const label = brand.querySelector<HTMLElement>("[data-brand-label]");
-	// +1px of slack: scrollWidth is rounded, and a fractional label width would
-	// otherwise clip the last letter at exactly the floor.
 	const fit = label
 		? Math.ceil(label.getBoundingClientRect().left + label.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP + 1)
 		: Math.ceil(brand.getBoundingClientRect().left + brand.scrollWidth + SIDEBAR_BRAND_TRAILING_GAP);
 	return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, fit));
 }
-/** Initial item count shown in expanded sections; Show more/less toggles the remainder.
- *  Collapsed icon rail always shows the full list so projects stay reachable. */
 const SIDEBAR_INITIAL_SECTION_LIMIT = 10;
-/** Initial agent count listed under each expanded project before its own Show more. */
 const SIDEBAR_PROJECT_SESSION_LIMIT = 6;
-/** Initial agent count listed in the Sessions section, which sits above Projects, before its Show more. */
 const SIDEBAR_SESSIONS_LIMIT = 5;
-/** Section scrollers fill the height their flex parent leaves them and scroll inside it. */
 const SECTION_SCROLLER_CLASS =
 	"scrollbar-none overflow-y-auto overflow-x-hidden overscroll-contain group-data-[collapsible=icon]:overflow-visible";
 
-/** Caps a sidebar list at `limit` behind Show more/less. The cap lifts on its
- *  own when the active item sits past it, until the user collapses it again. */
 function useShowMoreCap<T extends { id: string }>(
 	items: T[],
 	limit: number,
@@ -478,7 +416,6 @@ function readExpandedProjectIds(): ReadonlySet<string> {
 const sectionsStorageKey = "ao.sidebar.sections";
 type SidebarSection = "pinned" | "projects" | "scratchpad";
 
-/** Saved open state per section. A missing entry means open. */
 function readSectionsOpen(): Record<SidebarSection, boolean> {
 	const open = { pinned: true, projects: true, scratchpad: true };
 	if (typeof window === "undefined" || !window.localStorage) return open;
@@ -501,7 +438,6 @@ function saveSectionOpen(section: SidebarSection, open: boolean) {
 
 type SidebarProps = {
 	underTopbar?: boolean;
-	/** Chrome height to clear when underTopbar is set. Defaults to --size-toolbar. */
 	topbarOffset?: "toolbar" | "titlebar" | "trafficLights" | "session";
 	workspaceError?: string;
 	workspaces: WorkspaceSummary[];
@@ -511,7 +447,6 @@ type SidebarProps = {
 	onOpenRemoteProject?: (hostId: string, projectId: string) => void;
 	onOpenRemoteOrchestrator?: (hostId: string, projectId: string) => void;
 	onConfigureRemoteProject?: (hostId: string, projectId: string) => void;
-	/** Removes the project optimistically; the shell owns feedback and rollback. */
 	onRemoveRemoteProject?: (hostId: string, projectId: string) => void;
 	onRetryRemoteHosts?: () => void;
 	remoteWorkspaces?: WorkspaceSummary[];
@@ -519,17 +454,10 @@ type SidebarProps = {
 	onCloneProject: (input: CloneProjectInput) => Promise<void>;
 	onCreateProject: (input: CreateProjectInput) => Promise<void>;
 	onInitializeProject: (path: string) => Promise<void>;
-	/**
-	 * Removes the project optimistically; the shell owns feedback and rollback.
-	 * `cloud` tells a local project from a cloud project with the same id.
-	 */
 	onRemoveProject: (projectId: string, cloud: boolean) => void;
-	/** Fixed shell chrome that also consumes the live sidebar width. */
 	resizeAuxiliaryTargetRef?: RefObject<HTMLElement | null>;
 };
 
-// Selection state comes from the URL: which project/session is active is the
-// route params, and clicks navigate rather than mutate a store.
 function useSelection() {
 	const navigate = useNavigate();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
@@ -548,7 +476,6 @@ function useSelection() {
 	const goUsage = useCallback(() => void navigate({ to: "/usage" }), [navigate]);
 	const goStandaloneBoard = useCallback(() => void navigate({ to: "/sessions" }), [navigate]);
 	const goGlobalSettings = useCallback(() => openGlobalSettings(), [openGlobalSettings]);
-	// Asking to connect a phone is the consent to turn Connect Mobile on, so the code starts preparing at once.
 	const goConnectMobile = useCallback(() => openGlobalSettings("mobile", { startPairing: true }), [openGlobalSettings]);
 	const goSettings = useCallback((projectId: string, cloudOrgId?: string) => openProjectSettings(projectId, { cloudOrgId }), [openProjectSettings]);
 	const goProject = useCallback(
@@ -583,8 +510,6 @@ function useSelection() {
 		goArtifacts,
 		goUsage,
 		goStandaloneBoard,
-		// Settings is a modal — open it in place so the current page (session
-		// terminal, board, etc.) stays underneath.
 		goGlobalSettings,
 		goConnectMobile,
 		goSettings,
@@ -593,9 +518,6 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goUsage, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// Rows showing the red alert sit above the rest, but only in the default
-// order: once the user has dragged rows into their own order, it wins. Stable,
-// so the order still holds within each group.
 function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): WorkspaceSession[] {
 	if (hasManualOrder) return sessions;
 	const flagged = sessions.filter((session) => getSessionRowIndicator(session) === "attention");
@@ -603,16 +525,10 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 	return [...flagged, ...sessions.filter((session) => !flagged.includes(session))];
 }
 
-// The icons a row or a collapsed project can show, plus the working
-// spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
-// Each state has its own glyph, so colour is never the only difference: a red
-// alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
 	review: { Icon: CircleAlert, tone: "text-status-in-review" },
-	// Done, so it sits a step below the colours that ask something of you.
 	merged: { Icon: GitMerge, tone: "text-status-merged opacity-70" },
 } as const satisfies Record<SessionRowMarker, { Icon: unknown; tone: string }>;
 
@@ -632,19 +548,12 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 	);
 }
 
-// A row flags only what the user has something to do about, a spinner while
-// its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
-// there on mount does not.
 export function SessionStatusDot({ session, indicator }: {
 	session: WorkspaceSession;
 	indicator: ReturnType<typeof getSessionRowIndicator>;
 }) {
-	// A working agent shows the spinner even when its PR has a state to flag:
-	// the agent may be on another PR, and the hover card has the PR detail.
-	// The marker returns once the agent stops.
 	const working = indicator === "working";
 	const marker = working ? null : indicator;
-	// Filled until the user has opened the session since it last changed.
 	const unread = useSessionUnread(session);
 	const previous = useRef(marker);
 	const [popped, setPopped] = useState(false);
@@ -652,8 +561,6 @@ export function SessionStatusDot({ session, indicator }: {
 		if (previous.current !== marker && marker) setPopped(true);
 		previous.current = marker;
 	}, [marker]);
-	// Rows with nothing to flag still get a quiet dot, so every title starts on
-	// the same column: filled while unread, hollow once the user has read it.
 	const stopped =
 		session.activity?.state === "exited" || session.status === "exited" || session.status === "no_signal";
 	return (
@@ -697,10 +604,6 @@ export {
 	type NextSessionNavigation,
 } from "../types/workspace";
 
-// Built on shadcn's sidebar primitives (components/ui/sidebar): the provider in
-// _shell owns the persistent open state. Collapsed sidebars move fully off-canvas.
-// Memoized: the shell re-renders several times per route change, and each
-// sidebar render reaches every project row's presence wrapper and footer.
 export const Sidebar = memo(function Sidebar({
 	underTopbar = true,
 	topbarOffset = "toolbar",
@@ -727,21 +630,15 @@ export const Sidebar = memo(function Sidebar({
 	const selection = useSelection();
 	const { state, setOpen, toggleSidebar } = useSidebar();
 	const isCollapsed = state === "collapsed";
-	// List behavior (force-open sections, lifted Show more caps) belongs to the
-	// icon rail only; toggling an offcanvas sidebar must not change any list.
 	const isIconRail = isCollapsed && SIDEBAR_COLLAPSIBLE === "icon";
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
-	// One IPC subscription for both footer variants of the restart-to-update prompt.
 	const updateStatus = useUpdateStatus();
 	const openUpdateInstallPrompt = useUiStore((state) => state.openUpdateInstallPrompt);
-	// Daemon status for the smoke suite's sr-only mirror in the footer. Null when
-	// rendered outside the shell (unit tests) — the mirror simply doesn't render.
 	const daemonStatus = useShellMaybe()?.daemonStatus ?? null;
 	const commandPaletteEnabled = useCommandPaletteEnabled();
 	const settingsPage = useSettingsPage();
 	const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const developerMode = useUiStore((s) => s.developerMode);
-	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const artifactTotal = useMemo(
 		() => artifactCount(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud"))),
@@ -764,22 +661,16 @@ export const Sidebar = memo(function Sidebar({
 		selection.activeSessionId ? selection.activeProjectId : undefined,
 	).current;
 	useLayoutEffect(() => {
-		// Offcanvas: the panel slides off-screen on collapse — no need to hide content.
-		// Reveal immediately on expand so there's no fade-in delay.
 		if (!isCollapsed) {
 			setExpandedChromeVisible(true);
 		}
 	}, [isCollapsed]);
 
-	// Disclosure state is persisted as the IDs of projects that were expanded.
-	// An empty/missing store intentionally means all projects start collapsed.
 	const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => readExpandedProjectIds());
 	const [collapsedRemoteProjects, setCollapsedRemoteProjects] = useState<ReadonlySet<string>>(() => new Set());
 	const [dismissedInitialActiveProjectIds, setDismissedInitialActiveProjectIds] = useState<ReadonlySet<string>>(
 		() => new Set(),
 	);
-	// Every project row gets this handler: a new one per toggle would re-render
-	// all of them to open or close one.
 	const toggleProjectDisclosure = useLatestCallback((id: string) => {
 		const routeFallbackActive =
 			initialActiveSessionProjectId === id && !dismissedInitialActiveProjectIds.has(id);
@@ -811,8 +702,6 @@ export const Sidebar = memo(function Sidebar({
 			return next;
 		});
 	}, [importedProjects]);
-	// Section disclosure: every section header collapses its own body.
-	// Header clicks are saved. Opening a section to reveal the active session is not.
 	const [pinnedOpen, setPinnedOpen] = useState(() => readSectionsOpen().pinned);
 	const [projectsOpen, setProjectsOpen] = useState(() => readSectionsOpen().projects);
 	const [scratchpadOpen, setScratchpadOpen] = useState(() => readSectionsOpen().scratchpad);
@@ -821,11 +710,6 @@ export const Sidebar = memo(function Sidebar({
 		saveSectionOpen(section, !open);
 	};
 
-	// Keyboard navigation (⌘⇧[ / ⌘⇧], ⌘1-9, attention jumps) can land on a row
-	// that is scrolled out, in a collapsed project or inside a closed section.
-	// Open whatever hides the active session, then scroll its row into view.
-	// Only a change of session triggers this, so a project the user collapses
-	// while staying on a session is left alone.
 	const activeSessionKey = selection.activeSessionId ?? selection.activeRemoteSessionId;
 	const activeProjectKey = selection.activeProjectId;
 	useEffect(() => {
@@ -849,9 +733,6 @@ export const Sidebar = memo(function Sidebar({
 				row.scrollIntoView?.({ block: "nearest" });
 				return;
 			}
-			// Not rendered yet: its section may be closed. Open only the sections
-			// that hold it, once, then retry. An orchestrator has no row (its
-			// button sits on the project row), so it must not open Scratchpad.
 			if (attempts === 0) {
 				if (pinnedSessions.some((session) => session.id === activeSessionKey)) setPinnedOpen(true);
 				if (standaloneWorkspace.sessions.some((session) => session.id === activeSessionKey)) {
@@ -867,12 +748,6 @@ export const Sidebar = memo(function Sidebar({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [activeSessionKey]);
 
-	// agent-orchestrator's sidebar resize: drag the right edge (200-420px,
-	// persisted), double-click to reset to 240px. Drives --ao-sidebar-w on :root,
-	// only to the two layout consumers and fixed titlebar strip, rather than
-	// :root. Dragging clamps
-	// at SIDEBAR_MIN_WIDTH — collapsing stays on the explicit toggle (⌘B /
-	// titlebar button), never on a drag.
 	const resizeScopeRef = useRef<HTMLDivElement>(null);
 	const getResizeTargets = useCallback(() => {
 		const scope = resizeScopeRef.current;
@@ -903,9 +778,6 @@ export const Sidebar = memo(function Sidebar({
 	const setProjectOrder = useSidebarOrderStore((state) => state.setProjectOrder);
 	const pinnedProjectIds = useSidebarOrderStore((state) => state.pinnedProjectIds);
 	useLayoutEffect(() => {
-		// Preserve absent IDs in place: creation can publish its order before the
-		// query snapshot arrives. Reconcile before paint so a late snapshot cannot
-		// briefly show older, newly discovered projects above that creation.
 		useSidebarOrderStore.getState().reconcileProjectOrder(workspaces.map((workspace) => workspace.id));
 	}, [workspaces, pendingCreatedProjectIds]);
 	const orderedWorkspaces = useMemo(
@@ -913,10 +785,6 @@ export const Sidebar = memo(function Sidebar({
 		[pinnedProjectIds, projectOrder, workspaces],
 	);
 
-	// The ad hoc group is a bucket for projectless sessions, not a project: it
-	// gets its own Sessions section above the project list rather than a
-	// project row appended to the end of it. The person's own Cloud standalone
-	// agents join it there; each keeps its project, which routes it.
 	const projectWorkspaces = useMemo(() => {
 		const scratchpads = new Set(ownScratchpadWorkspaces(orderedWorkspaces));
 		return orderedWorkspaces.filter((workspace) => !scratchpads.has(workspace));
@@ -924,8 +792,6 @@ export const Sidebar = memo(function Sidebar({
 	const standaloneWorkspace = useMemo((): WorkspaceSummary => {
 		const scratchpads = ownScratchpadWorkspaces(workspaces);
 		const local = scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND);
-		// Sessions always shows, even with no standalone session yet, so its "+"
-		// is there to start the first one.
 		if (scratchpads.length === 1 && local) return local;
 		return {
 			...(local ?? scratchpadSummary(t("standalone.workspaceName"))),
@@ -946,15 +812,9 @@ export const Sidebar = memo(function Sidebar({
 	);
 	const projectDragClickGuard = usePostDragClickGuard();
 	const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
-	// Keep the active id and drop target in refs so dragover can decide without a
-	// full-list re-render while dragging: only the dragged row re-renders (via
-	// `isDragged`), and the drop line updates through dedicated React state.
 	const draggingProjectIdRef = useRef<string | null>(null);
 	const projectDropTargetRef = useRef<{ overId: string; placement: ProjectDropPlacement } | null>(null);
 	useGrabbingCursor(draggingProjectId !== null);
-	// The drop line is a single element placed at the boundary's gap centre, so
-	// "after A" and "before B" resolve to the same spot (no shift across the
-	// boundary). Its top animates so the line slides between projects.
 	const [dropLine, setDropLine] = useState<{ top: number; visible: boolean }>({ top: 0, visible: false });
 
 	const clearProjectDropIndicator = useCallback(() => {
@@ -965,7 +825,6 @@ export const Sidebar = memo(function Sidebar({
 	const handleProjectDragStart = useCallback((event: ReactDragEvent<HTMLElement>, projectId: string) => {
 		if (!projectIds.includes(projectId)) return;
 		event.dataTransfer.effectAllowed = "move";
-		// Some engines refuse to begin a drag unless the transfer carries data.
 		event.dataTransfer.setData("text/plain", projectId);
 		if (EMPTY_DRAG_IMAGE) event.dataTransfer.setDragImage(EMPTY_DRAG_IMAGE, 0, 0);
 		draggingProjectIdRef.current = projectId;
@@ -990,13 +849,11 @@ export const Sidebar = memo(function Sidebar({
 		const row = event.currentTarget;
 		const rect = row.getBoundingClientRect();
 		const placement: ProjectDropPlacement = event.clientY <= rect.top + rect.height / 2 ? "before" : "after";
-		// Pinned and unpinned projects reorder only within their own group.
 		const pinned = useSidebarOrderStore.getState().pinnedProjectIds;
 		if (pinned.includes(activeId) !== pinned.includes(overId) || reorderAtProjectBoundary(projectIds, activeId, overId, placement) === null) {
 			clearProjectDropIndicator();
 			return;
 		}
-		// Only invite the drop once this is a real reorder target.
 		event.preventDefault();
 		event.dataTransfer.dropEffect = "move";
 		const target = projectDropTargetRef.current;
@@ -1044,8 +901,6 @@ export const Sidebar = memo(function Sidebar({
 		if (target.hostId) void remoteNavigate(sessionNavigateTarget(target.workspaceId, target.id, target.hostId));
 		else selection.goSession(target.workspaceId, target.id);
 	});
-	// Pinned rows are memoized; the route is read when a kill lands, so a route
-	// change does not re-render them.
 	const handlePinnedSessionKilled = useLatestCallback(
 		(killedSession: WorkspaceSession) => {
 			if (killedSession.hostId) {
@@ -1063,7 +918,6 @@ export const Sidebar = memo(function Sidebar({
 			if (nextRoute.target === "session") {
 				selection.goSession(killedSession.workspaceId, nextRoute.sessionId);
 			} else if (workspace?.standaloneAgent) {
-				// A Cloud standalone agent has no board to fall back to.
 				selection.goHome();
 			} else {
 				selection.goProject(killedSession.workspaceId);
@@ -1072,7 +926,6 @@ export const Sidebar = memo(function Sidebar({
 	);
 
 	return (
-		// Pinned sidebars start below shell chrome.
 		<SidebarRoot
 			collapsible={SIDEBAR_COLLAPSIBLE}
 			resizeScopeRef={resizeScopeRef}
@@ -1080,30 +933,17 @@ export const Sidebar = memo(function Sidebar({
 			data-topbar-offset={underTopbar ? topbarOffset : undefined}
 			className={cn(
 				"sidebar-focusless",
-				// Keep the transparent 1px border on every route so navigation
-				// cannot change the content width. Match it with the left gutter.
 				"pl-px border-transparent",
-				// Prefer top/bottom over h-svh/inset-y so titlebar offset (`top-(--sidebar-chrome-offset)`)
-				// clears chrome without fighting a second height constraint.
 				!underTopbar
 					? "top-0 bottom-0"
 					: "top-(--sidebar-chrome-offset) bottom-0 h-auto!",
 			)}
 		>
 			<SidebarHeader className="gap-0 p-0 px-3 pt-2 group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:pt-2">
-				{/*
-				 * Brand → home. Design contracts (do not regress):
-				 * - Click navigates home; do NOT add hover/focus *fill* (styles.css
-				 *   opts `[data-sidebar-brand]` out of `.sidebar-focusless` wash).
-				 * - Keyboard focus uses the dedicated outline rule in styles.css —
-				 *   never `focus-visible:outline-none` (global kill would leave it blind).
-				 * - No separate "home" affordance on the mark — the whole brand is the control.
-				 */}
 				<Pressable
 					aria-label={t("shell.goHome")}
 					className={cn(
 						"group/brand flex w-full shrink-0 items-center gap-1.5 rounded-md px-0.5 text-left",
-						// macOS/Linux show the brand in TitlebarNav instead.
 						brandInTitlebar && "hidden",
 						"group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-1 group-data-[collapsible=icon]:px-0 group-data-[collapsible=icon]:pb-2",
 						commandPaletteEnabled ? "pb-2" : "pb-3",
@@ -1141,7 +981,6 @@ export const Sidebar = memo(function Sidebar({
 				<SettingsSidebarNav layer={settingsPage} />
 			) : (
 			<>
-			{/* Keep Search + section chrome fixed above the scrollable sidebar content. */}
 			<div className="flex shrink-0 flex-col gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
 				{commandPaletteEnabled ? (
 					<SidebarGroup className="p-0 pb-0.5 group-data-[collapsible=icon]:pb-1">
@@ -1185,7 +1024,6 @@ export const Sidebar = memo(function Sidebar({
 					) : null}
 				</SidebarMenu>
 
-				{/* Pinned — collapsible; hidden when empty. */}
 				{pinnedSessions.length > 0 && (
 					<div className="sidebar-expanded-chrome flex shrink-0 flex-col group-data-[collapsible=icon]:hidden">
 						<SectionDisclosure
@@ -1219,12 +1057,9 @@ export const Sidebar = memo(function Sidebar({
 
 			<SidebarContent className="scrollbar-none gap-0 px-2 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
 				<SidebarGroup className="min-h-0 flex-1 p-0">
-					{/* Tree (project-sidebar__tree) */}
 					<SidebarGroupContent
 						className="sidebar-sections-container grid min-h-0 flex-1 auto-rows-[minmax(0,auto)] content-start group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:flex-col"
 					>
-						{/* Sessions (projectless agents) sit above Projects so standalone
-						    agents are easy to find and start. */}
 						{!workspaceError ? (
 							<ScratchpadSection
 								workspace={standaloneWorkspace}
@@ -1234,8 +1069,6 @@ export const Sidebar = memo(function Sidebar({
 								onToggle={() => toggleSection("scratchpad", scratchpadOpen, setScratchpadOpen)}
 							/>
 						) : null}
-						{/* Projects — collapsible; the "+" stays mounted through the empty
-						    state so it keeps owning the ⌘N create flow. */}
 						<div className="sidebar-expanded-chrome flex shrink-0 pb-0.5 group-data-[collapsible=icon]:hidden">
 							<SectionDisclosure
 								label={t("shell.projects")}
@@ -1358,15 +1191,9 @@ export const Sidebar = memo(function Sidebar({
 			</>
 			)}
 
-			{/* Footer: update rows on top, then one row with the account on the
-			    left and the Mobile menu (Connect mobile, Stay Awake) and Settings
-			    as icons. No divider. Bottom spacing stays inside the footer so
-			    there is no empty strip beneath it. */}
 			<SidebarFooter
 				className="relative mt-auto gap-0 overflow-hidden px-2 !pb-2 !pt-0 transition-[padding] duration-200 ease-linear group-data-[collapsible=icon]:min-h-20 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:overflow-visible group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:!pb-2 group-data-[collapsible=icon]:!pt-1.5"
 			>
-				{/* Always-present daemon status mirror for the smoke suite: no visible
-				    daemon-state copy is guaranteed to be mounted elsewhere. */}
 				{daemonStatus && (
 					<span aria-hidden="true" className="sr-only" data-testid="daemon-status" data-state={daemonStatus.state}>
 						daemon {daemonStatus.state}
@@ -1400,10 +1227,6 @@ export const Sidebar = memo(function Sidebar({
 				<>
 				<div
 					aria-hidden={isCollapsed || undefined}
-					// `hidden` (display: none) is for the real icon rail only. Hiding the footer
-					// this way while an offcanvas sidebar slides away drops its content at once,
-					// before the slide finishes. aria-hidden and tabIndex -1 already keep it
-					// out of reach while collapsed.
 					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col"
 				>
@@ -1470,7 +1293,6 @@ export const Sidebar = memo(function Sidebar({
 				)}
 			</SidebarFooter>
 
-			{/* useResizable owns clamp. */}
 			<ResizeHandle
 				className="group-data-[state=collapsed]:hidden"
 				onDoubleClick={onResizeDoubleClick}
@@ -1492,7 +1314,6 @@ type Selection = ReturnType<typeof useSelection>;
 
 type ProjectItemProps = {
 	workspace: WorkspaceSummary;
-	/** The repository owner's avatar, shown in place of the folder icon. */
 	avatarUrl?: string;
 	hostLabel?: string;
 	onOpenOrchestrator?: () => void;
@@ -1510,18 +1331,12 @@ type ProjectItemProps = {
 	onProjectDrop: (event: ReactDragEvent<HTMLElement>) => void;
 };
 
-// The part of the route selection one project row renders from. A switch
-// between two other projects' sessions leaves it unchanged. The active project
-// keys on the raw session id: a just-opened session may not be listed yet.
 function projectSelectionKey(workspace: WorkspaceSummary, selection: Selection): string {
 	const sessionId = selection.activeSessionId ?? "";
 	if (selection.activeProjectId === workspace.id) return `active\u0000${sessionId}`;
 	return workspace.sessions.some((session) => session.id === sessionId) ? sessionId : "";
 }
 
-// Session switches replace the shared selection object. Re-render a project
-// only when its own slice of the selection (or any other prop) changed, so a
-// switch does not re-render every project's rows, menus, and dialogs.
 function projectItemPropsEqual(previous: ProjectItemProps, next: ProjectItemProps): boolean {
 	const keys = Object.keys(next) as (keyof ProjectItemProps)[];
 	if (keys.length !== Object.keys(previous).length) return false;
@@ -1534,7 +1349,6 @@ function projectItemPropsEqual(previous: ProjectItemProps, next: ProjectItemProp
 		a.goSettings === b.goSettings && projectSelectionKey(previous.workspace, a) === projectSelectionKey(next.workspace, b);
 }
 
-/** Builds a menu's rows when the open menu mounts them. */
 function LazyMenuEntries({ build }: { build: () => MenuEntry[] }) {
 	return <MenuEntries entries={build()} />;
 }
@@ -1560,8 +1374,6 @@ const ProjectItem = memo(function ProjectItem({
 	const { t } = useTranslation();
 	const nameWithHost = hostLabel ? `${workspace.name} · ${hostLabel}` : workspace.name;
 	const isStandalone = workspace.id === STANDALONE_WORKSPACE_ID;
-	// A Cloud standalone agent (here, one shared with the person) is one
-	// session: it has no board, orchestrator or project settings to offer.
 	const isAgent = workspace.standaloneAgent === true;
 	const prefersReducedMotion = useReducedMotion();
 	const activeProjectMatches = selection.activeProjectId === workspace.id;
@@ -1577,9 +1389,6 @@ const ProjectItem = memo(function ProjectItem({
 	const queryClient = useQueryClient();
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [isSpawning, setIsSpawning] = useState(false);
-	// Skip enter animation on first mount — sessions arrive async and we don't
-	// want them to slide in on every sidebar load. Only animate on subsequent
-	// expand/collapse toggles.
 	const [animReady, setAnimReady] = useState(false);
 	const hasInteractedWithDisclosure = useRef(false);
 	useEffect(() => {
@@ -1593,12 +1402,6 @@ const ProjectItem = memo(function ProjectItem({
 	const requestNewTask = useUiStore((state) => state.requestNewTask);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const projectIsDragging = isDragged;
-	// Keep completed PR sessions reachable while their runtime still exists.
-	// Only termination removes a worker from the sidebar; archived sessions stay
-	// reachable through SessionsBoard.
-	// A project shared from another organization lists every session shared
-	// with this person, its orchestrator included: a guest has no orchestrator
-	// of their own to reach it through.
 	const visibleSessions = useMemo(
 		() => (workspace.shared
 			? [...workspace.sessions].sort((a, b) => Number(isOrchestratorSession(b)) - Number(isOrchestratorSession(a)))
@@ -1615,7 +1418,6 @@ const ProjectItem = memo(function ProjectItem({
 		},
 		[sessionOrder, visibleSessions],
 	);
-	// Publish the order shown here so keyboard navigation follows it.
 	useEffect(() => {
 		const sessionIds = sessions.map((session) => session.id);
 		useSidebarOrderStore.getState().setSessionOrder(projectKey, sessionIds);
@@ -1632,8 +1434,6 @@ const ProjectItem = memo(function ProjectItem({
 		const content = projectSessionsRef.current;
 		const scroller = header?.closest<HTMLElement>("[data-sidebar-section-scroller]");
 		if (!activeProjectMatches || !expanded || !header || !content || !scroller) return;
-		// Keep the sticky header clear while preventing session rows from painting
-		// through it. Scroll/resize only changes the clip, not the list's layout.
 		const updateClip = () => {
 			const covered = Math.max(0, header.getBoundingClientRect().bottom - content.getBoundingClientRect().top);
 			content.style.clipPath = `inset(${covered}px 0 0 0)`;
@@ -1649,20 +1449,15 @@ const ProjectItem = memo(function ProjectItem({
 			content.style.removeProperty("clip-path");
 		};
 	}, [activeProjectMatches, expanded, showAllSessions]);
-	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
-			// Only the listed slice is draggable, so keep the still-hidden tail
-			// behind it rather than letting applyOrder float it to the front.
 			const listed = new Set(next);
 			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
 		},
 		[sessions],
 	);
-	// Stable row handlers: selection changes on every session switch, and a new
-	// handler would re-render every row (with its menus, tooltips, and dialogs).
 	const openSession = useLatestCallback((sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
 		selection.goSession(workspace.id, sessionId);
@@ -1678,8 +1473,6 @@ const ProjectItem = memo(function ProjectItem({
 			selection.goProject(workspace.id);
 		}
 	});
-	// The project's live orchestrator (if any) backs the hover Orchestrator
-	// button: navigate to it when present, otherwise spawn one first.
 	const orchestrator = newestActiveOrchestrator(workspace.sessions);
 	const canResumeOrchestrator = useCanResumeAgent(orchestrator, workspace.hostId);
 	const orchestratorReply = useOrchestratorReplyState({
@@ -1693,10 +1486,6 @@ const ProjectItem = memo(function ProjectItem({
 		onToggle(workspace.id);
 	};
 
-	// Mirrors the session topbar's launcher: attach to the running orchestrator, or
-	// spawn one via the daemon and follow it once the workspace refetches.
-	// Expand a collapsed project so opening the orchestrator also reveals its
-	// session list — otherwise the tree stays shut while you're inside it.
 	const openOrchestrator = async () => {
 		if (isSpawning || isProjectProvisioning || isProjectRestarting) return;
 		if (!expanded) toggleDisclosure();
@@ -1705,12 +1494,9 @@ const ProjectItem = memo(function ProjectItem({
 			return;
 		}
 		if (orchestrator) {
-			// Mirrors useProjectOrchestratorAction; both launchers must stay in step.
 			if (canResumeOrchestrator && workspace.kind !== "cloud") {
 				setIsSpawning(true);
 				try {
-					// Start the resume, then open the chat while it runs; its
-					// composer shows the startup shimmer in the meantime.
 					const resume = resumeOrchestrator(orchestrator.id);
 					selection.goSession(workspace.id, orchestrator.id);
 					await resume;
@@ -1731,11 +1517,7 @@ const ProjectItem = memo(function ProjectItem({
 			selection.goSession(workspace.id, orchestrator.id);
 			return;
 		}
-		// A guest cannot start an orchestrator in someone else's project.
 		if (workspace.shared) return;
-		// A cloud project has no local orchestrator-agent config, so the settings
-		// fallback below would dead-end it. Spawn the orchestrator as a cloud
-		// session in its own sandbox instead.
 		if (workspace.kind === "cloud") {
 			setIsSpawning(true);
 			try {
@@ -1767,18 +1549,12 @@ const ProjectItem = memo(function ProjectItem({
 		}
 	};
 
-	// Expanded + already on the project board → collapse. Expanded + on a
-	// session (orchestrator or worker) → board. Collapsed → expand + board.
-	// Do not treat orchestratorActive like the board: the project row is the
-	// one-click path back from the orchestrator button.
 	const onProjectClick = () => {
 		if (consumeDragClick(workspace.id)) return;
 		if (isStandalone) {
 			toggleDisclosure();
 			return;
 		}
-		// A Cloud standalone agent listed here (one shared with the person) has
-		// no board: its row opens its one session.
 		if (workspace.standaloneAgent) {
 			if (!expanded) toggleDisclosure();
 			const agentSession = workerSessions(workspace.sessions)[0];
@@ -1795,9 +1571,6 @@ const ProjectItem = memo(function ProjectItem({
 		}
 	};
 
-	// Folder icon always toggles disclosure, even when another project is
-	// selected — without this, collapsing a non-active project required a
-	// select click then a second click (felt like a double-click).
 	const onFolderClick = (event: MouseEvent) => {
 		event.stopPropagation();
 		if (consumeDragClick(workspace.id)) return;
@@ -1808,32 +1581,20 @@ const ProjectItem = memo(function ProjectItem({
 	const removeProject = () => setConfirmOpen(true);
 	const isCloudProject = !workspace.hostId && workspace.kind === CLOUD_PROJECT_KIND;
 	const copyToClipboard = useCopyToClipboard();
-	// Pins are a local list preference; remote host rows and the Scratchpad
-	// have their own sections and are not pinnable.
 	const canPin = !isStandalone && !workspace.hostId;
 	const isPinned = useSidebarOrderStore((state) => canPin && state.pinnedProjectIds.includes(workspace.id));
 	const setProjectPinned = useSidebarOrderStore((state) => state.setProjectPinned);
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
-	// The shell's archive modal opens over the current page, scoped to this
-	// project; nothing navigates. A store action, so the row takes no new prop.
-	// Closing it returns focus to the ⋮ trigger or the right-clicked row.
 	const openArchive = () => useUiStore.getState().openArchive({
 		projectId: workspace.id,
 		hostId: workspace.hostId,
 		returnFocus: menuFocusReturnTarget(),
 	});
-	// The ⋮ button and right-click show these same rows. Built only while a menu
-	// is open, so the archive count costs a closed row nothing.
 	const buildMenuEntries = (): MenuEntry[] => {
-		// The project's archived sessions: every project row has the entry, the
-		// Scratchpad's is its own section's row. A noun, not "Archive", so it never
-		// reads as archiving the project. Hidden while empty, as the board's button
-		// and the Cmd+K command are.
 		const archivedCount = isStandalone ? 0 : workerSessions(workspace.sessions).filter(isArchivedSession).length;
 		return [
-			// A new task in someone else's agent is a dead end: it takes no session but its own.
 			...(!isAgent
 				? [{
 					kind: "item" as const,
@@ -1875,7 +1636,6 @@ const ProjectItem = memo(function ProjectItem({
 				}]
 				: []),
 			{ kind: "separator", id: "path-sep" },
-			// A remote host's path names a folder on that machine, not this one.
 			...(workspace.path && !workspace.hostId
 				? [{
 					kind: "item" as const,
@@ -1904,12 +1664,10 @@ const ProjectItem = memo(function ProjectItem({
 						label: t("shell.projectSettings"),
 						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
 					},
-					// A project shared from another organization is its organization's to delete.
 					...(workspace.shared ? [] : [{
 						kind: "item" as const,
 						id: "remove",
 						icon: <Trash2 aria-hidden="true" />,
-						// A Cloud project is deleted for good; a local one only leaves the sidebar.
 						label: isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle"),
 						destructive: true,
 						onSelect: removeProject,
@@ -1919,8 +1677,6 @@ const ProjectItem = memo(function ProjectItem({
 		];
 	};
 
-	// Removal is optimistic: the row, its sessions and its pin leave at once,
-	// and the shell reports the outcome with a toast.
 	const handleConfirmRemove = () => {
 		setConfirmOpen(false);
 		onRemoveProject(workspace.id, workspace.kind === CLOUD_PROJECT_KIND);
@@ -1962,7 +1718,6 @@ const ProjectItem = memo(function ProjectItem({
 					>
 						<div className={cn("relative", projectIsDragging && "cursor-grabbing")}>
 							<div>
-								{/* project-sidebar__proj-row */}
 								<SidebarMenuButton
 									aria-label={hostLabel ? t(isStandalone ? "shell.toggleProject" : "shell.openProjectDashboard", { name: nameWithHost }) : undefined}
 									aria-current={dashboardActive ? "page" : undefined}
@@ -1973,8 +1728,6 @@ const ProjectItem = memo(function ProjectItem({
 									className={cn(
 										NAV_ROW_CLASS,
 										NAV_ROW_HIGHLIGHT_HOST_CLASS,
-										// Same 32px row, gap, and icon size as Search/Automations and the
-										// Projects header so icons and labels share one left edge.
 										SIDEBAR_ROW_CLASS,
 										!workspace.hostId && "cursor-grab active:cursor-grabbing",
 										isPinned ? "pr-sidebar-project-actions-pinned" : "pr-sidebar-project-actions",
@@ -1985,17 +1738,12 @@ const ProjectItem = memo(function ProjectItem({
 									)}
 								>
 									<NavRowHighlight active={projectActive} disabled={projectIsDragging} />
-									{/* Expanded sidebar: visual folder/chevron icon (decorative — toggle button is a sibling).
-		    size-icon-md matches the Projects section row; an 18px centered box was
-		    optically indenting these icons relative to the header. */}
 									<span
 										aria-hidden="true"
 										className="relative z-[1] inline-flex size-icon-md shrink-0 translate-y-px items-center justify-center group-data-[collapsible=icon]:hidden"
 										data-expanded={expanded ? "" : undefined}
 										data-project-folder-visual=""
 									>
-										{/* 1.2 — contextual icon swap: scale 0.8↔1 (animated); opacity snaps for hide.
-										    Hover paint lives in styles.css (fine pointer only). */}
 										<span
 											className="inline-flex size-icon-md items-center justify-center transition-[scale] duration-normal ease-[var(--ease-out)] motion-reduce:transition-none"
 											data-project-folder-icon=""
@@ -2016,9 +1764,6 @@ const ProjectItem = memo(function ProjectItem({
 											<ChevronRight />
 										</span>
 									</span>
-									{/* Collapsed icon rail: the project icon, with a red badge when a session
-									    waits on the user. The session list is hidden here, so the badge
-									    shows whether or not the project is expanded. */}
 									<span
 										aria-hidden="true"
 										className="relative z-[1] hidden size-8 items-center justify-center group-data-[collapsible=icon]:inline-flex"
@@ -2038,8 +1783,6 @@ const ProjectItem = memo(function ProjectItem({
 										{workspace.name}
 									</span>
 									{workspace.shared ? <SharedProjectMark share={workspace.shared} /> : null}
-									{/* The host badge shrinks and truncates in narrow sidebars so it never
-									    runs under the row actions; half the row stays for the name. */}
 									{hostLabel && (
 										<Badge
 											variant="outline"
@@ -2052,8 +1795,6 @@ const ProjectItem = memo(function ProjectItem({
 										<CloudMark className="sidebar-expanded-chrome relative z-[1] translate-y-px group-data-[collapsible=icon]:hidden" />
 									)}
 								</SidebarMenuButton>
-								{/* Folder disclosure toggle: sibling of the nav button, absolutely positioned over
-	    the icon area so it intercepts clicks there without nesting buttons. */}
 								<Pressable
 									aria-label={t("shell.toggleProject", {
 										name: nameWithHost,
@@ -2066,8 +1807,6 @@ const ProjectItem = memo(function ProjectItem({
 									type="button"
 								/>
 							</div>
-							{/* Per-project actions: orchestrator and kebab menu. Outside the row's
-		navigation surface so their own presses stay independent. */}
 						<div
 								className={cn(
 									"sidebar-expanded-chrome z-chrome",
@@ -2118,8 +1857,6 @@ const ProjectItem = memo(function ProjectItem({
 										<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
 									</Tooltip>
 								) : null}
-								{/* A guest may open a shared orchestrator but never start one, and the
-								    project's own actions belong to its organization. */}
 								{!isStandalone && (!workspace.shared || orchestrator) ? (
 									<>
 										<Tooltip>
@@ -2191,10 +1928,7 @@ const ProjectItem = memo(function ProjectItem({
 								)}
 							</div>
 						</div>
-						{/* end outer relative */}
 					</div>
-					{/* project-sidebar__sessions: indented under the project parent so worker
-          sessions read as children without adding a persistent guide rail. */}
 		<AnimatePresence initial={false}>
 			{expanded && sessions.length > 0 && (
 				<motion.div
@@ -2236,7 +1970,6 @@ const ProjectItem = memo(function ProjectItem({
 												onOpen={openSession}
 											/>
 											{hiddenSessionCount > 0 ? (
-												// Indented to the session list so its label starts on the status-dot column.
 												<div className="pl-4">
 													<ShowMoreRow
 														className="px-3"
@@ -2266,7 +1999,6 @@ const ProjectItem = memo(function ProjectItem({
 										? t("shell.deleteCloudProjectLead", { name: workspace.name })
 										: t("shell.removeProjectLead", { name: workspace.name })}
 								</p>
-								{/* The lead already says a Cloud project is deleted for good. */}
 								{isCloudProject ? null : <p className="mt-1 text-xs text-muted-foreground">{t("shell.removeProjectBody")}</p>}
 								{openPullRequestCount > 0 ? (
 									<p className="mt-2 text-xs font-medium text-error">
@@ -2288,24 +2020,18 @@ const ProjectItem = memo(function ProjectItem({
 	);
 }, projectItemPropsEqual);
 
-/** Whether the Scratchpad section lists the session: a worker that is not archived. */
 function scratchpadListsSession(session: WorkspaceSession): boolean {
 	return !isOrchestratorSession(session) && session.isTerminated !== true;
 }
 
-/** Whether the session is in the Scratchpad's archive (the /sessions page). */
 function scratchpadArchivesSession(session: WorkspaceSession): boolean {
 	return !isOrchestratorSession(session) && isArchivedSession(session);
 }
 
-/** The Scratchpad section's own fields, for when it holds Cloud standalone agents alone. */
 function scratchpadSummary(name: string): Pick<WorkspaceSummary, "id" | "name" | "kind" | "path"> {
 	return { id: STANDALONE_WORKSPACE_ID, name, kind: STANDALONE_PROJECT_KIND, path: "" };
 }
 
-/** Projectless ("ad hoc") agents, shown as "Sessions". Their own section above
- *  Projects — same header chrome, own capped scroller, own Show more — instead
- *  of a project row appended to the project list. */
 function ScratchpadSection({
 	workspace,
 	selection,
@@ -2330,7 +2056,6 @@ function ScratchpadSection({
 		() => applyOrder(visibleSessions, (session) => session.id, sessionOrder, "start"),
 		[sessionOrder, visibleSessions],
 	);
-	// Publish the order shown here so keyboard navigation follows it.
 	const scratchpadKey = sessionUiKey(workspace.id, workspace.hostId);
 	useEffect(() => {
 		const sessionIds = sessions.map((session) => session.id);
@@ -2343,24 +2068,17 @@ function ScratchpadSection({
 		showAll,
 		toggleShowAll,
 	} = useShowMoreCap(sessions, SIDEBAR_SESSIONS_LIMIT, selection.activeSessionId, isCollapsed);
-	// Stable while the ids are: a rebuilt array would invalidate every sortable row.
 	const listedSessionIds = useStableArray(useMemo(() => listedSessions.map((session) => session.id), [listedSessions]));
-	// With every session archived, the section keeps one row: the way to them,
-	// rather than a header with nothing under it.
 	const archivedCount = useMemo(() => workspace.sessions.filter(scratchpadArchivesSession).length, [workspace.sessions]);
 	const showArchivedRow = listedSessions.length === 0 && archivedCount > 0;
 	const commitSessionOrder = useCallback(
 		(next: string[] | null) => {
 			if (!next) return;
-			// Only the listed slice is draggable, so keep the still-hidden tail
-			// behind it rather than letting applyOrder float it to the front.
 			const listed = new Set(next);
 			setSessionOrder([...next, ...sessions.filter((session) => !listed.has(session.id)).map((session) => session.id)]);
 		},
 		[sessions],
 	);
-	// A Cloud standalone agent opens on its own project's route, a local one on
-	// the scratchpad's.
 	const scratchpadRouteOf = (sessionId: string) => {
 		const session = workspace.sessions.find((candidate) => candidate.id === sessionId);
 		return session?.cloud ? session.workspaceId : STANDALONE_WORKSPACE_ID;
@@ -2372,7 +2090,6 @@ function ScratchpadSection({
 	const handleSessionKilled = useLatestCallback((killedSession: WorkspaceSession) => {
 		if (selection.activeSessionId !== killedSession.id) return;
 		const nextRoute = resolveNextNavigationAfterSessionKill(workspace, killedSession.id, sessions);
-		// An ad hoc agent has no project board to fall back to.
 		if (nextRoute.target === "session") {
 			selection.goSession(scratchpadRouteOf(nextRoute.sessionId), nextRoute.sessionId);
 		} else {
@@ -2520,8 +2237,6 @@ const PinnedSessionRow = memo(function PinnedSessionRow({
 	return <SessionRow session={session} active={active} hostLabel={hostLabel} indented={false} onKilled={onKilled} onOpen={onOpen} />;
 });
 
-// A session row inside its project's drag context. The Pinned section renders
-// plain SessionRows instead: that list is ordered by pin time, not by hand.
 const SortableSessionRow = memo(function SortableSessionRow({
 	session,
 	active,
@@ -2548,8 +2263,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	const { isDragging, listeners, setActivatorNodeRef, setNodeRef, transform, transition } = useSortable({
 		id: session.id,
 	});
-	// dnd-kit's context changes on unrelated list renders and re-renders this
-	// wrapper. Keep the row's props stable so the heavy SessionRow skips it.
 	const open = useCallback(() => {
 		if (!consumeDragClick(session.id)) onOpen(session.id);
 	}, [consumeDragClick, onOpen, session.id]);
@@ -2572,9 +2285,6 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	);
 });
 
-/** The reorderable session list shared by a project's tree and the Scratchpad
- *  section. It owns the drag context; the committed order stays with the caller
- *  so each list keeps its own persistence and slicing rules. */
 function SessionReorderList({
 	dndId,
 	testId,
@@ -2596,18 +2306,12 @@ function SessionReorderList({
 	sessionIds: string[];
 	activeSessionId?: string;
 	indented?: boolean;
-	/** Badge Cloud sessions, in a list (the Scratchpad) that mixes them with local ones. */
 	cloudBadge?: boolean;
-	/** While a project is being dragged, leave the session lists as plain rows:
-	 *  otherwise every expanded project's DnD context measures its sortable
-	 *  descendants on drop. */
 	plain?: boolean;
 	onReorder: (next: string[] | null) => void;
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	// Suppress the vertical glide for the first 500ms after the list mounts, so the
-	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
 	const [layoutSettled, setLayoutSettled] = useState(false);
 	useEffect(() => {
 		const timer = window.setTimeout(() => setLayoutSettled(true), 500);
@@ -2628,12 +2332,7 @@ function SessionReorderList({
 			setDropTransitionDisabledId(null);
 			return;
 		}
-		// reorderById rejects any id that is not in THIS list, so a stray
-		// cross-list drop leaves both lists' orders untouched.
 		const next = reorderById(sessionIds, sessionId, String(over.id));
-		// Commit the destination DOM order before dnd-kit removes its live transform.
-		// Otherwise the row briefly snaps back to its derived (usually top) position,
-		// then Motion animates it forward to the persisted destination.
 		flushSync(() => {
 			onReorder(next);
 			setListDragging(false);
@@ -2702,9 +2401,6 @@ type SessionReorder = Pick<SortableRow, "isDragging" | "listeners" | "setActivat
 	dropTransitionDisabled: boolean;
 };
 
-// One worker-session row. Reads as a link by default; double-click/double-tap
-// on the name or F2 flips the label into an inline input (Enter/blur saves,
-// Escape cancels) that persists through the daemon rename endpoint.
 const SessionRow = memo(function SessionRow({
 	session,
 	active,
@@ -2720,27 +2416,19 @@ const SessionRow = memo(function SessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
-	/** Mark the row as a Cloud session, in a list (the Scratchpad) that mixes them with local ones. */
 	cloud?: boolean;
 	indented?: boolean;
-	/** The list order. Present only for rows in a reorderable list: the row then
-	 *  animates its vertical position (and nothing else) when the order changes. */
 	layoutDependency?: string;
 	listIsDragging?: boolean;
-	/** Project drags pause nested session projection work. */
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: () => void;
-	/** Present only for rows inside a reorderable project list. */
 	reorder?: SessionReorder;
 }) {
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	useGrabbingCursor(Boolean(reorder?.isDragging));
-	// The open row keeps a full-contrast title, so it gets the spinner without
-	// the shimmer.
 	const indicator = getSessionRowIndicator(session);
 	const working = indicator === "working";
-	// Having the session open reads it, including anything that lands while it is open.
 	const markRead = useSessionReadStore((state) => state.markRead);
 	useEffect(() => {
 		if (!active) return;
@@ -2756,7 +2444,6 @@ const SessionRow = memo(function SessionRow({
 	);
 	const rename = useSessionRename(session, refreshWorkspaces);
 	const [contextMenuOpen, setContextMenuOpen] = useState(false);
-	// No preview while renaming, dragging, or with the context menu open.
 	const preview = useSessionPreviewHover(
 		Boolean(reorder?.isDragging || listIsDragging || rename.isEditing || contextMenuOpen),
 	);
@@ -2772,7 +2459,6 @@ const SessionRow = memo(function SessionRow({
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-	// A remote chat prefetches its page too; only a local agent can be woken from here.
 	const canPrefetchChat = session.mode === "chat" && !session.cloud && !active && !listIsDragging && !reorder?.isDragging;
 	const canPrefetch = canPrefetchChat && !session.hostId;
 	useEffect(() => () => clearTimeout(hoverTimerRef.current), [canPrefetch]);
@@ -2782,8 +2468,6 @@ const SessionRow = memo(function SessionRow({
 		if (!canPrefetchChat || (!session.hostId && !hasTrustedApiBaseUrl()) || queryClient.getQueryData(conversationQueryKey(session.id, session.hostId))) return;
 		void queryClient.prefetchInfiniteQuery(conversationQueryOptions(session.id, session.hostId));
 	};
-	// A stopped agent takes seconds to come back. Start it while the pointer rests
-	// on the row so the chat is ready when it opens; opening joins this request.
 	const warmUpAgent = () => {
 		if (!canPrefetch || session.needsResume || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
 		void resumeAgentOnOpen(session.id)
@@ -2793,17 +2477,12 @@ const SessionRow = memo(function SessionRow({
 				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
 	};
-	// A session shared from another organization is the sharer's to name.
 	const renamable = !session.cloud?.shared;
 	const beginRename = useCallback(() => {
 		if (!renamable) return;
-		// The editor replaces the row, unmounting a context menu that is still
-		// open. Radix reports that close from an effect the unmount skips, so
-		// contextMenuOpen would stay true and keep the preview off for good.
 		setContextMenuOpen(false);
 		rename.begin();
 	}, [rename.begin, renamable]);
-	// Owned here so both the hover Archive button and the context menu open the same confirm.
 	const [archiveOpen, setArchiveOpen] = useState(false);
 
 	if (rename.isEditing) {
@@ -2849,8 +2528,6 @@ const SessionRow = memo(function SessionRow({
 
 	return (
 		<ContextMenu onOpenChange={setContextMenuOpen}>
-			{/* Controlled by the hover hook; Radix still reports Escape and outside
-			    presses, which close it. */}
 			<HoverCard closeDelay={0} onOpenChange={(open) => !open && preview.hide()} open={preview.open} openDelay={0}>
 			<ContextMenuTrigger asChild>
 				<HoverCardTrigger asChild>
@@ -2929,8 +2606,6 @@ const SessionRow = memo(function SessionRow({
 								<span
 									className={cn(
 										"min-w-0 flex-1 truncate",
-										// Only a session that needs you reads at full brightness; the
-										// rest sit back, so the list has a clear lead.
 										active || marker === "attention"
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
@@ -2954,8 +2629,6 @@ const SessionRow = memo(function SessionRow({
 							</span>
 						</Pressable>
 					</div>
-					{/* The timestamp is stable at the right edge. Pin and kill use label
-					    space while idle, then reveal without changing the row footprint. */}
 					<SessionActions
 						archiveOpen={archiveOpen}
 						isDragging={Boolean(reorder?.isDragging)}
@@ -2968,8 +2641,6 @@ const SessionRow = memo(function SessionRow({
 				</SidebarMenuSubItem>
 				</HoverCardTrigger>
 			</ContextMenuTrigger>
-			{/* The board card, still: hovering a row previews the session without opening
-			    it, and the pointer can move onto the card to use its PR links. */}
 			<HoverCardContent
 				align="center"
 				animation={preview.animation}
@@ -2983,7 +2654,6 @@ const SessionRow = memo(function SessionRow({
 			</HoverCardContent>
 			</HoverCard>
 			<ContextMenuContent className="min-w-44">
-				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
 				<SessionContextMenuItems onArchive={session.cloud?.shared ? undefined : () => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
@@ -3023,8 +2693,6 @@ const SessionActions = memo(function SessionActions({
 	const { t } = useTranslation();
 	const { mutate: pinSession } = usePinSession();
 	const { mutate: unpinSession } = useUnpinSession();
-	// Optimistic: navigate + drop the row as soon as kill starts (onMutate),
-	// not after the daemon round-trip.
 	const onKilledRef = useRef(onKilled);
 	onKilledRef.current = onKilled;
 	const { mutate: terminateSession, isPending: isKilling } = useTerminateSession({
@@ -3033,8 +2701,6 @@ const SessionActions = memo(function SessionActions({
 		},
 	});
 
-	// The row used to archive on the bare click while the session page asked
-	// first; both surfaces now open the same confirm before anything moves.
 	const handleArchive = (event: React.MouseEvent) => {
 		event.stopPropagation();
 		onArchiveOpenChange(true);
@@ -3053,7 +2719,6 @@ const SessionActions = memo(function SessionActions({
 		>
 			<div
 				className={cn(
-					/* 1.3 — pin/kill: scale 0.8↔1 from center (not origin-right — that reads as a slide) */
 					ROW_ACTIONS_CLASS,
 					"origin-center scale-[0.8] opacity-0",
 					"transition-[scale] duration-normal ease-[var(--ease-out)]",
@@ -3074,10 +2739,8 @@ const SessionActions = memo(function SessionActions({
 							}}
 							type="button"
 						>
-							{/* The same pin as a pinned project's unpin button. */}
 							<Pin aria-hidden="true" />
 						</Button>}
-				{/* Archiving is the owner workspace's; a guest's archive would always be refused. */}
 				{session.cloud?.shared ? null : (
 					<SessionArchiveDialog
 						onConfirm={confirmArchive}
@@ -3112,11 +2775,9 @@ const SessionActions = memo(function SessionActions({
 	);
 });
 
-// AO account sign-in is shared by Cloud execution and remote hosts.
 function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, status, signIn } = useCloudSession();
-	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
@@ -3139,11 +2800,9 @@ function CloudSignInRow({ tabIndex }: { tabIndex: number }) {
 	);
 }
 
-// Icon-rail variant for the collapsed sidebar.
 function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, status, signIn } = useCloudSession();
-	// Dev + loopback CP: open the local email/password dialog instead of WorkOS.
 	const { available: localAuthAvailable } = useCloudLocalAuth();
 	const openLocalSignIn = useLocalSignInDialogStore((s) => s.openDialog);
 	const onSignIn = () => (localAuthAvailable ? openLocalSignIn() : signIn());
@@ -3170,12 +2829,6 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	);
 }
 
-/**
- * The footer's bottom row: the account on the left, then the Mobile menu and
- * Settings as icons. Without AO Cloud the left side is the labelled
- * Settings row instead, so Settings never shows twice. While the cloud session
- * is still loading the left side stays empty and the icons hold their place.
- */
 function FooterAccountRow({
 	onConnectMobile,
 	onOpenSettings,
@@ -3236,15 +2889,8 @@ function FooterAccountRow({
 	);
 }
 
-/**
- * The footer's Mobile menu: Connect mobile, plus the Stay Awake toggle on macOS
- * (keeping the Mac awake is what lets the phone reach it). Off macOS there is
- * nothing to group, so the icon opens Connect mobile directly. A paused or
- * failed Stay Awake badges the icon so the warning is not hidden inside the menu.
- */
 function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () => void; tabIndex: number }) {
 	const { t } = useTranslation();
-	// Held here, not in the menu row, so a failed toggle outlives the menu.
 	const stay = useFooterStayAwake();
 	const attention = awakeNeedsAttention(stay);
 	const label = isMac ? t("settings.mobile") : t("settings.connectMobile");
@@ -3313,15 +2959,9 @@ function FooterMobileMenu({ onConnectMobile, tabIndex }: { onConnectMobile: () =
 	);
 }
 
-/**
- * The signed-in account's menu; shared by the footer row and the icon rail.
- * The header carries the full name, email and plan, which the one-line footer
- * row leaves out so nothing there has to truncate.
- */
 function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 	const { t } = useTranslation();
 	const { session, signOut } = useCloudSession();
-	// The plan badge is self-serve billing only; a contract org has no plan to show.
 	const billing = useCloudBilling();
 	const plan = billing.offering.selfServeBilling ? paidPlanBadge(billing.data) : null;
 	const name = accountName(session?.user);
@@ -3353,10 +2993,6 @@ function CloudAccountMenuContent({ side }: { side: "top" | "right" }) {
 	);
 }
 
-// CloudAccountRow: avatar and name for an existing cloud session (the
-// signed-in state), opening the account menu. One line, no email: the email
-// and plan live in the menu header. At the narrowest sidebar the name truncates.
-// The sign-in entry point is CloudSignInRow.
 function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
@@ -3389,7 +3025,6 @@ function CloudAccountRow({ tabIndex }: { tabIndex: number }) {
 	);
 }
 
-/** The name for the one-line footer row: the display name, else the email's local part. */
 function accountShortName(user: { displayName?: string; email?: string } | undefined): string {
 	const display = user?.displayName?.trim();
 	if (display && display !== user?.email) return display;
@@ -3397,14 +3032,12 @@ function accountShortName(user: { displayName?: string; email?: string } | undef
 	return local || "Orchestrator Cloud";
 }
 
-/** The signed-in person's name, falling back to their email. */
 function accountName(user: { displayName?: string; email?: string } | undefined): string {
 	const display = user?.displayName?.trim();
 	if (display && display !== user?.email) return display;
 	return user?.email ?? "Orchestrator Cloud";
 }
 
-/** The profile picture from the sign-in provider, or the person's initials. */
 function AccountAvatar({
 	size = "md",
 	user,
@@ -3444,7 +3077,6 @@ function AccountAvatar({
 	);
 }
 
-// Icon-rail variant for collapsed sidebar.
 function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	const { t } = useTranslation();
 	const { configured, session, status } = useCloudSession();
@@ -3478,8 +3110,6 @@ function CloudAccountRailButton({ tabIndex }: { tabIndex: number }) {
 	);
 }
 
-/** Releases a section's initial cap. Sits below its section's scroller so the
- *  cap can never hide the control that lifts it. */
 function ShowMoreRow({
 	label,
 	expanded,
@@ -3532,9 +3162,7 @@ function SectionDisclosure({
 	open?: boolean;
 	onToggle?: () => void;
 	className?: string;
-	/** Optional trailing control (e.g. Projects "+") — its own button, not the row. */
 	trailing?: ReactNode;
-	/** When false, render a static label row with no chevron, toggle, or hover fill. */
 	collapsible?: boolean;
 }) {
 	const labelRow = (
@@ -3607,8 +3235,6 @@ function SectionDisclosure({
 	);
 }
 
-/** Search + Automations share this one row so their hover/focus/active treatment
- * (NavRowHighlight pill, foreground text, instant) cannot drift apart. */
 function SidebarTopNavRow({
 	active = false,
 	disabled,
@@ -3656,7 +3282,6 @@ function SidebarTopNavRow({
 	);
 }
 
-/** Settings sections in place of the project tree while the settings page is open. */
 export function SettingsSidebarNav({ layer }: { layer: NonNullable<ReturnType<typeof useSettingsPage>> }) {
 	const { t } = useTranslation();
 	return (
@@ -3692,10 +3317,6 @@ function SidebarSearchButton({ onOpen }: { onOpen: () => void }) {
 				icon={<Search aria-hidden="true" />}
 				label={t("shell.search")}
 				onClick={() => {
-					// Open on the microtask after this click rather than inside it: mounting
-					// the palette dialog while this button's tooltip layer is still tearing
-					// down from the same pointer sequence dismissed it immediately. The
-					// "defers opening" test pins the deferral so it is not dropped as noise.
 					queueMicrotask(onOpen);
 				}}
 				tooltip={isCollapsed ? t("shell.search") : undefined}
@@ -3719,10 +3340,6 @@ function CreateProjectButton({
 	onOpenExistingProject: (path: string) => void | Promise<void>;
 }) {
 	const { t } = useTranslation();
-	// Single CreateProjectFlow owner for the sidebar: the header "+" stays mounted
-	// (CSS-hidden when collapsed) so it can own
-	// openSignal for ⌘N on every shell route. The collapsed rail button below
-	// reuses this flow via requestCreateProject().
 	const createProjectNonce = useUiStore((state) => state.createProjectNonce);
 	const folderDropRequest = useUiStore((state) => state.folderDropRequest);
 	const requestNewTask = useUiStore((state) => state.requestNewTask);

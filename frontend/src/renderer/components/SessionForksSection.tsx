@@ -8,12 +8,6 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { useSessionForkOptions } from "./SessionForkControls";
 import { Button } from "./ui/button";
 
-/**
- * The inspector's Forks section, in plain sentences: which session this one
- * was forked from, linked, with the original's pull requests as read-only
- * links; and which sessions were forked from this one, each linked. Nothing
- * renders for a session that is neither a fork nor forked.
- */
 export function SessionForksSection({ session }: { session: WorkspaceSession }) {
 	const options = useSessionForkOptions(session);
 	const { t } = useTranslation();
@@ -23,7 +17,6 @@ export function SessionForksSection({ session }: { session: WorkspaceSession }) 
 	const sourcePRs = options.data?.sourcePRs ?? [];
 	if (!origin && forks.length === 0) return null;
 	const open = (sessionId: string) => void navigate(sessionNavigateTarget(session.workspaceId, sessionId, session.hostId));
-	// Inside a sentence, a long name wraps with it rather than spilling out.
 	const sessionLink = (sessionId: string) => (
 		<Button type="button" variant="link" className="inline whitespace-normal text-left font-medium text-foreground" onClick={() => open(sessionId)} />
 	);
@@ -71,8 +64,6 @@ export function SessionForksSection({ session }: { session: WorkspaceSession }) 
 								{forks.map((fork) => (
 									<li className="min-w-0 truncate" key={fork.sessionId}>
 										{fork.exists ? (
-											// Left-aligned and shrinkable, so a long name keeps its start
-											// ("Fork 3 of …") and is cut at its end; hover shows it all.
 											<Button type="button" variant="link" className="min-w-0 max-w-full shrink justify-start font-medium text-foreground" title={fork.title} onClick={() => open(fork.sessionId)}>
 												<span className="truncate">{fork.title}</span>
 											</Button>

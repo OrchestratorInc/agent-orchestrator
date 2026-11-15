@@ -1,5 +1,3 @@
-// Electron main is the only desktop Sentry sender. The policy controller owns
-// this transport's lifetime, and the SDK never receives raw renderer text.
 import * as Sentry from "@sentry/electron/main";
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -15,10 +13,6 @@ export function electronMainSentryDsn(version: string, isDev: boolean): string {
 	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isPublishedSentryBuild(version, isDev) ? DEFAULT_ELECTRON_SENTRY_DSN : "");
 }
 
-// One install in ten sends non-fatal errors: sha256(install_id) read as a
-// big-endian uint32, modulo 10, equals 0. The daemon uses the same hash
-// (sentryobs.InstallInErrorSample), so an install is in or out everywhere.
-// Main-process crashes and uncaught exceptions send from every install.
 const ERROR_SAMPLE_RATE = "0.1";
 const ALWAYS_SENT_KINDS = new Set(["uncaught_exception", "process_exit"]);
 
@@ -26,9 +20,6 @@ export function installInErrorSample(installId: string): boolean {
 	return installId !== "" && createHash("sha256").update(installId).digest().readUInt32BE(0) % 10 === 0;
 }
 
-// Per install and UTC day, keyed on the final scrubbed fingerprint. The
-// counters live on disk so a reload, a new window or a restart cannot hand a
-// crash loop a fresh budget.
 const ERRORS_PER_FINGERPRINT_PER_DAY = 3;
 const ERRORS_PER_INSTALL_PER_DAY = 25;
 export const ERROR_BUDGET_FILE = "telemetry_sentry_budget.json";
@@ -41,7 +32,7 @@ function readErrorBudget(file: string): ErrorBudgetState {
 			const fingerprints = Object.fromEntries(Object.entries(parsed.fingerprints).filter((entry): entry is [string, number] => Number.isSafeInteger(entry[1])));
 			return { day: parsed.day, total: parsed.total as number, fingerprints };
 		}
-	} catch { /* missing or corrupt: start a fresh day */ }
+	} catch { }
 	return { day: "", total: 0, fingerprints: {} };
 }
 
@@ -58,7 +49,7 @@ export function createErrorBudget(file: string): (fingerprint: readonly string[]
 			const temporary = `${file}.${process.pid}.tmp`;
 			writeFileSync(temporary, JSON.stringify(state), { mode: 0o600 });
 			renameSync(temporary, file);
-		} catch { /* the in-memory budget still holds for this run */ }
+		} catch { }
 		return true;
 	};
 }
@@ -102,11 +93,8 @@ const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "in
 const EXPECTED_NOISE = /^(?:AbortError|net::ERR_NETWORK_CHANGED|net::ERR_INTERNET_DISCONNECTED|net::ERR_NETWORK_IO_SUSPENDED)$/i;
 const DRAIN_TIMEOUT_MS = 2_000;
 const DEBUG_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-// Electron main's own bundles. Any install path before .vite/build is dropped.
 const MAIN_BUNDLE = /[\\/]\.vite[\\/]build[\\/]([A-Za-z0-9_][A-Za-z0-9_.-]{0,80}\.js)$/;
 
-// The app-relative URL Sentry matches against an uploaded source map's debug
-// ID: app://renderer/assets/... for the renderer, app:///.vite/build/... for main.
 function safeAbsPath(filename: unknown, renderer: boolean): string | undefined {
 	if (typeof filename !== "string") return undefined;
 	if (renderer) {
@@ -202,8 +190,6 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		: processReason ? "Electron process failure" : `Electron main ${exceptionType} in ${topFunction}`;
 	return {
 		type: undefined,
-		// Rebuilt events must keep a JS platform: Sentry applies source maps
-		// (debug IDs) only to javascript or node events.
 		platform: renderer ? "javascript" : "node",
 		event_id: event.event_id,
 		timestamp: event.timestamp,
@@ -219,8 +205,6 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	};
 }
 
-// A handled main-process failure reported through captureMainError. Its title
-// and grouping come only from the fixed category and reason.
 function scrubMainHandledEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent | null {
 	const category = event.tags?.["ao.category"];
 	const reason = event.tags?.["ao.reason"];
@@ -234,7 +218,6 @@ function scrubMainHandledEvent(event: Sentry.ErrorEvent, installId: string, vers
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "warning" ? event.level : "error",
 		message: `Electron main ${category} failure (${reason})`,
-		// IPC failures group per channel; everything else per category and reason.
 		fingerprint: ["electron", "handled", category, reason, ...(category === "ipc" && isSafeMainErrorDetail(detail) ? [detail] : []), "electron-main"],
 		tags: { surface: "electron-main", kind: "handled", category, reason, ...(isSafeMainErrorDetail(detail) ? { detail } : {}) },
 		user: { id: installId },
@@ -288,8 +271,6 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		],
 		maxBreadcrumbs: 0,
 		sendDefaultPii: false,
-		// Sampling is per install, not per event, and happens in beforeSend
-		// together with the persisted per-fingerprint and per-install caps.
 		sampleRate: 1,
 		tracesSampleRate: 0,
 		skipOpenTelemetrySetup: true,
@@ -307,8 +288,6 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || EXPECTED_NOISE.test(safe.message)) return;
 			const category = safe.tags?.category;
 			const code = safe.tags?.code;
-			// The SDK replaces frame debug IDs with main's own lookup, so renderer
-			// chunk IDs travel as images keyed by the frame's app URL.
 			const debugImages = [...new Map((safe.exception?.frames ?? []).filter((frame) => frame.filename && frame.debug_id).map((frame) => [`app://renderer/${frame.filename}`, frame.debug_id as string])).entries()]
 				.map(([code_file, debug_id]) => ({ type: "sourcemap" as const, code_file, debug_id }));
 			Sentry.captureEvent({

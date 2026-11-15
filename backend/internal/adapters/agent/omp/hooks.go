@@ -29,9 +29,6 @@ func ompExtensionPath(workspacePath string) string {
 	return filepath.Join(workspacePath, ".omp", ompExtensionsDirName, ompExtensionFileName)
 }
 
-// GetAgentHooks installs AO's project-local OMP activity extension. Launch and
-// restore also pass this exact file explicitly, so status tracking does not
-// depend on extension auto-discovery.
 func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
 	if err := ctx.Err(); err != nil {
 		return err

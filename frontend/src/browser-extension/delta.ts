@@ -1,7 +1,3 @@
-// Snapshot deltas for `ao browser snapshot --delta`, in the shape the CLI
-// renders for AO's Browser panel: full, unchanged, or the changed refs plus
-// one contiguous replacement of tree lines.
-
 import type { RefInfo } from "./snapshot";
 
 export type SnapshotState = { revision: number; text: string; refs: Record<string, RefInfo> };
@@ -17,10 +13,6 @@ export type SnapshotDelta =
 	| { kind: "unchanged"; revision: number; baseRevision: number }
 	| { kind: "delta"; revision: number; baseRevision: number; changes: RefChange[]; treeChange?: TreeChange };
 
-/**
- * Compare a new snapshot with the base the agent holds. A missing base, or an
- * explicit full request, returns the whole tree.
- */
 export function snapshotDelta(
 	base: SnapshotState | undefined,
 	current: { text: string; refs: Record<string, RefInfo> },

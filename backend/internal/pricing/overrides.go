@@ -20,14 +20,12 @@ type modelOverride struct {
 	version string
 }
 
-// PriceOverrideVersionPrefix marks a cost priced at the user's own rates.
 const PriceOverrideVersionPrefix = "ao-override:"
 
 var overrideRatePattern = regexp.MustCompile(`^\d{1,9}(\.\d{1,12})?$`)
 
 var perMillion = big.NewRat(1_000_000, 1)
 
-// ValidatePriceOverride checks one override against this snapshot: rates must be decimals and a price-as target must name a row the catalog prices.
 func (s *Snapshot) ValidatePriceOverride(override domain.UsagePriceOverride) error {
 	if _, err := parseOverride(override); err != nil {
 		return err
@@ -102,7 +100,6 @@ func (s *Snapshot) priceAsRow(target string) (providerID, modelID string, ok boo
 	return "", "", false
 }
 
-// PriceAsModels lists the required providers' models as price-as targets.
 func (s *Snapshot) PriceAsModels() []string {
 	if s == nil {
 		return nil
@@ -119,7 +116,6 @@ func (s *Snapshot) PriceAsModels() []string {
 	return out
 }
 
-// SetPriceOverrides publishes the current catalog with these overrides in place of the last set, and returns the stored model IDs whose price changed.
 func (m *Manager) SetPriceOverrides(ctx context.Context, overrides []domain.UsagePriceOverride) ([]string, error) {
 	release, err := m.fence.Acquire(ctx)
 	if err != nil {

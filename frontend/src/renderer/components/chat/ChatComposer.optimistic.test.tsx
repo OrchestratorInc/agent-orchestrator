@@ -317,7 +317,6 @@ describe("optimistic message delivery", () => {
 		expect(field).toHaveTextContent("write a README");
 		expect(field).toHaveAttribute("contenteditable", "true");
 		expect(await screen.findByTestId("unsent-message-strip")).toHaveTextContent("inspect this image");
-		// The parked image leaves memory with the next draft, so Retry re-reads its staged file.
 		const response = new Response();
 		vi.spyOn(response, "blob").mockResolvedValue(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
 		const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(response);

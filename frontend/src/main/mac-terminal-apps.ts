@@ -4,10 +4,6 @@ import { promisify } from "node:util";
 
 export type MacTerminalApp = { bundleId: string; name: string; appPath: string; iconDataUrl?: string };
 
-// Query Launch Services, rather than scanning app names or developer-tool
-// categories (which would also match IDEs). Shell-role handlers can execute
-// programs; folder support gives us a standard way to send the workspace.
-// This script only reads registrations and bundle metadata, never runs an app.
 export const MAC_TERMINAL_APPS_SCRIPT = `
 ObjC.import("AppKit");
 ObjC.import("CoreServices");

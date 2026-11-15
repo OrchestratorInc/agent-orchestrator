@@ -9,8 +9,6 @@ describe("packaged renderer CSP", () => {
 			.toEqual(["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:* https://staging-api.aoagents.dev https://api.aoagents.dev"]);
 	});
 
-	// A just-sent attachment's tile draws from the composer's object URL. Without
-	// blob: the packaged app blocked it and the tile showed only its alt text.
 	it.each(["img-src", "media-src", "connect-src"])("lets just-sent attachments load from object URLs in %s", (name) => {
 		const directive = contentSecurityPolicy("build")
 			.split("; ")
@@ -24,7 +22,6 @@ describe("packaged renderer CSP", () => {
 	});
 
 	it("lets gallery cards load cached artifact previews, in the build and in serve mode", () => {
-		// The dev app has no CSP at all, so only this test notices the scheme being dropped.
 		for (const mode of ["build", "serve"] as const) {
 			const imgSrc = contentSecurityPolicy(mode).split("; ").find((directive) => directive.startsWith("img-src "));
 			expect(imgSrc?.split(" ")).toContain(`${ARTIFACT_SNAPSHOT_SCHEME}:`);

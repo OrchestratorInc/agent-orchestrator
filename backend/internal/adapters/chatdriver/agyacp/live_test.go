@@ -14,15 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestLiveAntigravityACPConformance is the registration gate for this binding.
-// Run explicitly with AO_LIVE_AGY=1 and AO_AGY_ACP_SERVER_PATH (or a managed
-// copy). It uses the operator's Google sign-in through a private GEMINI_HOME, so
-// it never writes the operator's ~/.gemini. CI never depends on it.
-//
-// It proves, against the real server: standing instructions reach the model;
-// Reject blocks a tool; yolo runs one without asking; a later switch back to
-// default asks again (no cached allow_always grant); interrupt ends a turn and
-// the conversation continues; and a closed conversation resumes with context.
 func TestLiveAntigravityACPConformance(t *testing.T) {
 	if os.Getenv("AO_LIVE_AGY") != "1" {
 		t.Skip("set AO_LIVE_AGY=1 to run against the local Antigravity ACP server and Google sign-in")
@@ -46,8 +37,6 @@ func TestLiveAntigravityACPConformance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// Only the separate server needs AO's sign-in bootstrap; `agy acp` reuses
-	// the CLI's login.
 	if target, err := newResolver(agy.New().ResolveBinary).target(ctx); err == nil && !target.cli {
 		if _, err := os.Stat(filepath.Join(geminiHome, "antigravity-acp", "settings.json")); err != nil {
 			t.Fatalf("auth bootstrap did not persist the sign-in choice: %v", err)
@@ -55,8 +44,6 @@ func TestLiveAntigravityACPConformance(t *testing.T) {
 	}
 
 	t.Run("standing instructions", func(t *testing.T) {
-		// agy acp inspects the workspace first unless told not to; tools are not
-		// what this checks.
 		turn := runTurn(ctx, t, conversation, "Do not use any tools. Reply with exactly: pong", ports.ChatTurnSettings{}, nil)
 		if !strings.Contains(turn.answer, "BANANA") {
 			t.Fatalf("answer %q ignored the standing instructions", turn.answer)
@@ -145,12 +132,6 @@ func TestLiveAntigravityACPConformance(t *testing.T) {
 	})
 }
 
-// TestLiveAgyACPSteersARunningTurn proves steering against the real `agy acp`
-// (agy CLI 1.5.4 or newer). Run explicitly with AO_LIVE_AGY=1. It uses an empty
-// private GEMINI_HOME (the CLI's login lives outside it) and the default
-// approval mode: it approves the one sleep command and requests that stay in
-// the test's temporary folders, and rejects anything else. While that command runs it steers, then
-// checks that the turn took the guidance and AO saw one turn, not two.
 func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	if os.Getenv("AO_LIVE_AGY") != "1" {
 		t.Skip("set AO_LIVE_AGY=1 to run against the local agy CLI and Google sign-in")
@@ -172,8 +153,6 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// End the provider too: a closed conversation leaves its persistent host and
-	// agy running for a later resume.
 	defer func() {
 		if terminator, ok := conversation.(ports.ChatProviderTerminator); ok {
 			_ = terminator.Terminate()
@@ -241,15 +220,11 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 		t.Fatalf("Steer: %v", err)
 	}
 	answer := reply.String()
-	// The markers exist only in the steer, so either one shows the model read
-	// it, and the one it picks says which file it chose. agy streams other text
-	// before the answer, so the reply as a whole is not compared.
 	if !strings.Contains(answer, "NEXT-FILE-STAGING") || strings.Contains(answer, "NEXT-FILE-PROD") ||
 		!strings.Contains(strings.ToLower(answer), "staging.yaml") {
 		t.Fatalf("the turn did not take the guidance: reply=%q", answer)
 	}
 	t.Logf("reply: %q", answer)
-	// Nothing else may complete: the handoff was not a second turn.
 	quiet := time.After(3 * time.Second)
 	for waiting := true; waiting; {
 		select {
@@ -263,20 +238,12 @@ func TestLiveAgyACPSteersARunningTurn(t *testing.T) {
 	}
 }
 
-// liveSteerCommand is the slow command the live steering test has the agent
-// run, and the only command it approves outright.
 const liveSteerCommand = "sleep 20; echo slow-check-done"
 
-// liveSteerApproves reports whether the live steering test approves a request:
-// exactly liveSteerCommand, or a read that stays in its temporary folders.
 func liveSteerApproves(summary, workspace string) bool {
 	return summary == liveSteerCommand || staysInTestFolders(summary, workspace)
 }
 
-// staysInTestFolders reports whether an approval touches only the test's
-// temporary folders: a read-only command run in them, or a file under them,
-// such as agy reading its own log of the backgrounded command. The model
-// sometimes takes such a look after the steer, and rejecting it ends the turn.
 func staysInTestFolders(summary, workspace string) bool {
 	root := filepath.Dir(workspace)
 	roots := []string{root}
@@ -285,7 +252,7 @@ func staysInTestFolders(summary, workspace string) bool {
 	}
 	under := func(path string) bool {
 		if strings.HasPrefix(path, "~") {
-			return false // the shell expands it to the real home
+			return false
 		}
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(workspace, path)
@@ -299,7 +266,7 @@ func staysInTestFolders(summary, workspace string) bool {
 		return false
 	}
 	if strings.ContainsAny(summary, "\r\n") {
-		return false // a second line would be a second command
+		return false
 	}
 	if file, ok := strings.CutPrefix(summary, "File "); ok {
 		return under(strings.TrimSpace(file))
@@ -321,11 +288,6 @@ func staysInTestFolders(summary, workspace string) bool {
 	return true
 }
 
-// TestLiveAntigravityACPAndCLIShareConversationAcrossCopiedDatabases verifies
-// the provider's shared UUID/schema claim across its separate storage roots.
-// The test copies the closed SQLite file in each direction, then exercises the
-// real `agy --conversation` and ACP `session/load` resume paths. AO's automatic
-// database bridge is a separate implementation step.
 func TestLiveAntigravityACPAndCLIShareConversationAcrossCopiedDatabases(t *testing.T) {
 	if os.Getenv("AO_LIVE_AGY") != "1" {
 		t.Skip("set AO_LIVE_AGY=1 to run against the local Antigravity ACP server, CLI, and Google sign-in")
@@ -489,8 +451,6 @@ func nextEvent(ctx context.Context, t *testing.T, conversation ports.ChatConvers
 		if event.Kind == ports.ChatEventError {
 			t.Fatalf("controller error: %v", event.Err)
 		}
-		// The daemon acknowledges each persisted event; the persistent host
-		// refuses the next prompt until the previous one is acknowledged.
 		if event.ProviderEventID != "" {
 			if acknowledger, ok := conversation.(ports.ChatProviderEventAcknowledger); ok {
 				if err := acknowledger.AcknowledgeProviderEvent(ctx, event.ProviderEventID); err != nil {
@@ -524,9 +484,6 @@ func assertExists(t *testing.T, path string, want bool) {
 	}
 }
 
-// privateGeminiHome copies only the signed-in account marker into a temporary
-// GEMINI_HOME. Credentials stay in the OS keyring, so the server reuses the
-// operator's sign-in without AO writing their real Antigravity settings.
 func privateGeminiHome(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
@@ -554,8 +511,6 @@ func envMap() map[string]string {
 	return out
 }
 
-// The live steering test approves its slow command only as written, and reads
-// only inside its temporary folders. Anything chained to either is rejected.
 func TestLiveSteerApprovesOnlyItsCommandAndTestFolderReads(t *testing.T) {
 	workspace := filepath.Join(t.TempDir(), "workspace")
 	for _, tc := range []struct {

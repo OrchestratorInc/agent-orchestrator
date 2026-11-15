@@ -10,13 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The payloads here are shaped after frames captured from a real
-// `codex app-server` session (codex-cli 0.146.0), not invented.
-
-// testNow is a fixed clock so the rate-limit reset arithmetic is deterministic. It
-// is the emittedAtMs of the captured account/rateLimits/updated frame below,
-// rounded to the second, which makes the expected remaining durations readable
-// against the real resetsAt values.
 var testNow = time.Unix(1785669503, 0)
 
 func normalizeOne(t *testing.T, method, params string) ports.ChatEvent {
@@ -106,8 +99,6 @@ func TestCodexAuthRecoveryRequiresNativeSignal(t *testing.T) {
 	}
 }
 
-// The provider reports a cancelled turn with its own terminal status. AO must
-// carry that through rather than calling it completed or failed.
 func TestNormalizeInterruptedTurnKeepsItsOwnState(t *testing.T) {
 	ev := normalizeOne(t, "turn/completed", `{"threadId":"th1","turn":{"id":"tu2","status":"interrupted","items":[]}}`)
 	if ev.TurnState != domain.TurnStateInterrupted {
@@ -118,7 +109,6 @@ func TestNormalizeInterruptedTurnKeepsItsOwnState(t *testing.T) {
 	}
 }
 
-// An unrecognized status must not be optimistically read as success.
 func TestNormalizeUnknownTurnStatusFailsClosed(t *testing.T) {
 	ev := normalizeOne(t, "turn/completed", `{"threadId":"th1","turn":{"id":"tu3","status":"someFutureStatus","items":[]}}`)
 	if ev.TurnState != domain.TurnStateFailed {
@@ -133,7 +123,6 @@ func TestNormalizeAssistantStreaming(t *testing.T) {
 		t.Fatalf("delta -> %+v", delta)
 	}
 
-	// An empty delta carries no information and must not bump a revision.
 	normalizeNone(t, "item/agentMessage/delta", `{"itemId":"msg_1","delta":""}`)
 
 	completed := normalizeOne(t, "item/completed",
@@ -143,14 +132,10 @@ func TestNormalizeAssistantStreaming(t *testing.T) {
 	}
 }
 
-// item/started for an assistant message adds nothing: the row is created by the
-// first delta, so emitting an empty message would flash a blank bubble.
 func TestNormalizeAgentMessageStartedIsIgnored(t *testing.T) {
 	normalizeNone(t, "item/started", `{"turnId":"tu1","item":{"id":"msg_1","type":"agentMessage","text":""}}`)
 }
 
-// AO persists the user's message when it accepts the send. The provider echoing
-// it back as an item must not create a duplicate timeline entry.
 func TestNormalizeUserMessageEchoIsIgnored(t *testing.T) {
 	normalizeNone(t, "item/completed", `{"turnId":"tu1","item":{"id":"um_1","type":"userMessage","content":[]}}`)
 	normalizeNone(t, "item/started", `{"turnId":"tu1","item":{"id":"um_1","type":"userMessage","content":[]}}`)
@@ -181,7 +166,6 @@ func TestNormalizeCommandExecutionUnwrapsShellWrapper(t *testing.T) {
 	if detail["command"] != "date -u" {
 		t.Errorf("detail command = %v", detail["command"])
 	}
-	// The raw invocation is kept so the exact thing that ran is recoverable.
 	if detail["rawCommand"] != "/bin/zsh -lc 'date -u'" {
 		t.Errorf("detail rawCommand = %v", detail["rawCommand"])
 	}
@@ -201,8 +185,6 @@ func TestNormalizeCommandExitCodeDrivesStatus(t *testing.T) {
 	if err := json.Unmarshal(ok.Detail, &detail); err != nil {
 		t.Fatalf("detail not decodable: %v", err)
 	}
-	// Provider output aggregation was observed to drop leading bytes, so it must
-	// be flagged rather than presented as the authoritative record.
 	if detail["outputMayBePartial"] != true {
 		t.Errorf("captured output was not flagged as possibly partial: %v", detail)
 	}
@@ -223,7 +205,6 @@ func TestNormalizeOtherItemKinds(t *testing.T) {
 		{"file change", `{"turnId":"t","item":{"id":"i","type":"fileChange","changes":[]}}`, domain.ActivityKindFileChange},
 		{"plan", `{"turnId":"t","item":{"id":"i","type":"plan","text":"1. do it"}}`, domain.ActivityKindPlan},
 		{"reasoning", `{"turnId":"t","item":{"id":"i","type":"reasoning","summary":["thinking"]}}`, domain.ActivityKindReasoning},
-		// An MCP call is not a shell command and must not render as one.
 		{"mcp tool", `{"turnId":"t","item":{"id":"i","type":"mcpToolCall","server":"s","tool":"grep"}}`, domain.ActivityKindMCPTool},
 		{"error", `{"turnId":"t","item":{"id":"i","type":"error","message":"boom"}}`, domain.ActivityKindError},
 	} {
@@ -236,14 +217,10 @@ func TestNormalizeOtherItemKinds(t *testing.T) {
 	}
 }
 
-// An item type this build does not model must produce nothing rather than an
-// activity with guessed semantics.
 func TestNormalizeUnknownItemTypeIsDropped(t *testing.T) {
 	normalizeNone(t, "item/completed", `{"turnId":"t","item":{"id":"i","type":"someFutureItem"}}`)
 }
 
-// Provider bookkeeping is not conversation content. These are the methods a real
-// three-turn session emitted alongside the useful ones.
 func TestNormalizeIgnoresProviderBookkeeping(t *testing.T) {
 	for _, method := range []string{
 		"hook/started",
@@ -251,18 +228,10 @@ func TestNormalizeIgnoresProviderBookkeeping(t *testing.T) {
 		"remoteControl/status/changed",
 		"thread/goal/cleared",
 		"thread/started",
-		// The provider says when a model is being buffered for safety review. It
-		// affects latency, not the conversation, and AO has nothing to do with it.
 		"model/safetyBuffering/updated",
-		// guardianWarning restates an auto-approval decision in prose. The
-		// autoApprovalReview pair carries the same rationale as structure, so reading
-		// both would put one decision on the timeline twice.
 		"guardianWarning",
-		// The client-driven exec API. AO never asks the server to run anything, so an
-		// agent tool call never arrives on these.
 		"command/exec/outputDelta",
 		"process/outputDelta",
-		// The voice surface. AO has none.
 		"thread/realtime/transcript/delta",
 		"thread/realtime/outputAudio/delta",
 		"someMethodAddedNextRelease",
@@ -271,12 +240,7 @@ func TestNormalizeIgnoresProviderBookkeeping(t *testing.T) {
 	}
 }
 
-// The provider broadcasts this once a request is answered; it is how a second
-// client learns an approval card is no longer actionable.
 func TestNormalizeServerRequestResolved(t *testing.T) {
-	// The real shape: requestId is the JSON-RPC id of the original server->client
-	// request, and it arrives as a number. Zero is a legitimate id — the first
-	// approval of a session is id 0 — so it must not be treated as absent.
 	ev := normalizeOne(t, "serverRequest/resolved", `{"threadId":"th1","requestId":0}`)
 	if ev.Kind != ports.ChatEventApprovalResolved {
 		t.Fatalf("kind = %q", ev.Kind)
@@ -289,7 +253,6 @@ func TestNormalizeServerRequestResolved(t *testing.T) {
 		t.Fatalf("request id = %q, want 2", ev.RequestID)
 	}
 
-	// A string id is also legal per the JSON-RPC envelope.
 	if ev := normalizeOne(t, "serverRequest/resolved", `{"requestId":"r-42"}`); ev.RequestID != "r-42" {
 		t.Fatalf("request id = %q, want r-42", ev.RequestID)
 	}
@@ -298,16 +261,11 @@ func TestNormalizeServerRequestResolved(t *testing.T) {
 	normalizeNone(t, "serverRequest/resolved", `{"requestId":null}`)
 }
 
-// usageFrame is a verbatim thread/tokenUsage/updated params payload captured from
-// a live codex app-server turn. The payload key is `tokenUsage`; an earlier build
-// read `usage` and so recorded nothing on every single update.
 const usageFrame = `{"threadId":"019fc232-2814-7980-a6c8-5b597492fab2","turnId":"019fc232-2887-7dc2-83c7-ce57a7c1d218","tokenUsage":{"total":{"totalTokens":18055,"inputTokens":18050,"cachedInputTokens":11008,"cacheWriteInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0},"last":{"totalTokens":18055,"inputTokens":18050,"cachedInputTokens":11008,"cacheWriteInputTokens":0,"outputTokens":5,"reasoningOutputTokens":0},"modelContextWindow":258400}}`
 
 func TestNormalizeTokenUsage(t *testing.T) {
 	ev := normalizeOne(t, "thread/tokenUsage/updated", usageFrame)
 
-	// A typed usage event, not an activity: one timeline row per report is what
-	// buried the conversation, and the provider sends one after every tool call.
 	if ev.Kind != ports.ChatEventUsage {
 		t.Fatalf("kind = %q, want %q", ev.Kind, ports.ChatEventUsage)
 	}
@@ -317,8 +275,6 @@ func TestNormalizeTokenUsage(t *testing.T) {
 	if ev.ProviderTurnID != "019fc232-2887-7dc2-83c7-ce57a7c1d218" {
 		t.Fatalf("turn id = %q", ev.ProviderTurnID)
 	}
-	// Context fullness comes from `last`, and the window from modelContextWindow.
-	// Together they are the whole point: 18055 alone is a number with no scale.
 	if ev.Usage.ContextUsed != 18055 || ev.Usage.ContextWindow != 258400 {
 		t.Fatalf("context = %d/%d, want 18055/258400",
 			ev.Usage.ContextUsed, ev.Usage.ContextWindow)
@@ -331,9 +287,6 @@ func TestNormalizeTokenUsage(t *testing.T) {
 	}
 }
 
-// A model the provider will not state a window for must still report its tokens.
-// Dropping the event would leave the header blank; claiming a window would invent
-// a scale. The window stays zero and the reader decides what to draw.
 func TestNormalizeTokenUsageWithoutContextWindow(t *testing.T) {
 	ev := normalizeOne(t, "thread/tokenUsage/updated",
 		`{"threadId":"th1","turnId":"tu1","tokenUsage":{"total":{"totalTokens":900,"inputTokens":800,"outputTokens":100},"last":{"totalTokens":900,"inputTokens":800,"outputTokens":100}}}`)
@@ -342,9 +295,6 @@ func TestNormalizeTokenUsageWithoutContextWindow(t *testing.T) {
 	}
 }
 
-// rateLimitsFrame is a verbatim account/rateLimits/updated params payload from a
-// live pro account. usedPercent is a percentage, not a token count, and resetsAt
-// is an absolute unix timestamp rather than a duration.
 const rateLimitsFrame = `{"rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":71,"windowDurationMins":10080,"resetsAt":1786159947},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},"individualLimit":null,"spendControlReached":null,"planType":"pro","rateLimitReachedType":null}}`
 
 func TestNormalizeRateLimits(t *testing.T) {
@@ -359,9 +309,6 @@ func TestNormalizeRateLimits(t *testing.T) {
 	if ev.RateLimits.PrimaryUsedPercent != 71 {
 		t.Fatalf("primary = %v, want 71", ev.RateLimits.PrimaryUsedPercent)
 	}
-	// This account reports no secondary window at all. Negative is the port's
-	// "not reported"; zero would claim the quota is untouched, which is a much
-	// more reassuring statement than "no such window".
 	if ev.RateLimits.SecondaryUsedPercent >= 0 {
 		t.Fatalf("secondary = %v, want negative for an unreported window",
 			ev.RateLimits.SecondaryUsedPercent)
@@ -369,7 +316,6 @@ func TestNormalizeRateLimits(t *testing.T) {
 	if ev.RateLimits.SecondaryResetsInSeconds != 0 {
 		t.Fatalf("secondary resets = %d, want 0", ev.RateLimits.SecondaryResetsInSeconds)
 	}
-	// 1786159947 - 1785669503, the remaining seconds of a 7 day window.
 	if got := ev.RateLimits.PrimaryResetsInSeconds; got != 490444 {
 		t.Fatalf("primary resets in %d, want 490444", got)
 	}
@@ -378,8 +324,6 @@ func TestNormalizeRateLimits(t *testing.T) {
 	}
 }
 
-// A reset instant already in the past has nothing left to wait for. Reporting the
-// negative remainder would render as a window that refills in the past.
 func TestNormalizeRateLimitsFloorsElapsedReset(t *testing.T) {
 	ev := normalizeOne(t, "account/rateLimits/updated",
 		`{"rateLimits":{"primary":{"usedPercent":12,"resetsAt":1,"windowDurationMins":300},"planType":"plus"}}`)
@@ -391,8 +335,6 @@ func TestNormalizeRateLimitsFloorsElapsedReset(t *testing.T) {
 	}
 }
 
-// A window reported as genuinely empty is not the same as an absent one, so 0 must
-// survive as 0 rather than collapsing into the negative "not reported" signal.
 func TestNormalizeRateLimitsKeepsReportedZero(t *testing.T) {
 	ev := normalizeOne(t, "account/rateLimits/updated",
 		`{"rateLimits":{"primary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":1786274031},"secondary":{"usedPercent":40,"resetsAt":1785670000},"planType":"pro"}}`)
@@ -407,7 +349,6 @@ func TestNormalizeRateLimitsKeepsReportedZero(t *testing.T) {
 	}
 }
 
-// Malformed params must be skipped, never panic.
 func TestNormalizeToleratesMalformedParams(t *testing.T) {
 	for _, method := range []string{
 		"turn/started", "turn/completed", "item/started", "item/completed",
@@ -418,11 +359,6 @@ func TestNormalizeToleratesMalformedParams(t *testing.T) {
 	}
 }
 
-// A current app-server reports compaction ONLY as a contextCompaction item. The
-// schema still declares a thread/compacted notification and marks it deprecated;
-// 0.146.0 never sends it. Reading only the notification would mean AO silently
-// never noticed a compaction, and a conversation that quietly lost half its
-// history with nothing to mark where reads as if the agent simply forgot.
 func TestNormalizeContextCompactionItem(t *testing.T) {
 	ev := normalizeOne(t, "item/completed",
 		`{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"th1","turnId":"t1","completedAtMs":1785669337435}`)
@@ -434,17 +370,11 @@ func TestNormalizeContextCompactionItem(t *testing.T) {
 	}
 }
 
-// The reclaim is unknown until the item settles: the reduced token figure arrives
-// between start and completion. A row emitted on start would have to be rewritten
-// with the real numbers.
 func TestNormalizeContextCompactionStartIsIgnored(t *testing.T) {
 	normalizeNone(t, "item/started",
 		`{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"th1","turnId":"t1"}`)
 }
 
-// The deprecated spelling, for a provider old enough to send it. It carries only
-// ids: no token figures at all, which is why the reclaim has to be bracketed from
-// token-usage reports rather than read off the event.
 func TestNormalizeDeprecatedCompactedNotification(t *testing.T) {
 	ev := normalizeOne(t, "thread/compacted", `{"threadId":"th1","turnId":"t1"}`)
 	if ev.Kind != ports.ChatEventCompacted {
@@ -456,10 +386,6 @@ func TestNormalizeDeprecatedCompactedNotification(t *testing.T) {
 	normalizeNone(t, "thread/compacted", `"not an object"`)
 }
 
-// `last` and `total` answer different questions and only one of them is the
-// context position. Measured across a compaction: total stayed at 15650 while last
-// fell to 4632, because compaction cannot undo cumulative spend. Reading total
-// would report every compaction as reclaiming nothing.
 func TestContextPositionReadsLastNotTotal(t *testing.T) {
 	used, window, ok := contextPositionFrom(notification{
 		Method: "thread/tokenUsage/updated",
@@ -475,7 +401,6 @@ func TestContextPositionReadsLastNotTotal(t *testing.T) {
 		t.Errorf("context window = %d, want 258400", window)
 	}
 
-	// The window is optional; a report without it must still yield the position.
 	if used, window, ok := contextPositionFrom(notification{
 		Method: "thread/tokenUsage/updated",
 		Params: json.RawMessage(`{"tokenUsage":{"last":{"totalTokens":10},"total":{"totalTokens":10}}}`),

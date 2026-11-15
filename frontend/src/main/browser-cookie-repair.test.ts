@@ -18,7 +18,6 @@ const cookie = (domain: string, name: string, value: string, extra: Partial<Repa
 	...extra,
 });
 
-// An expired set deletes exactly that name, domain and path, as Chromium does.
 function fakeSession(initial: RepairCookie[]) {
 	let jar = [...initial];
 	return {
@@ -34,7 +33,6 @@ function fakeSession(initial: RepairCookie[]) {
 	};
 }
 
-// The keys of every given domain copy, as if a bulk import had created them.
 const imported = (cookies: RepairCookie[]) => new Set(cookies.filter((item) => item.domain?.startsWith(".")).map(cookieKey));
 const repair = (session: ReturnType<typeof fakeSession>) => repairCookies(session, imported(session.jar()));
 

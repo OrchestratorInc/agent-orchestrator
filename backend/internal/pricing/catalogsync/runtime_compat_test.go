@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing/catalogsync"
 )
 
-// Break caught: the generator accepted fractional trailing zeroes that the
-// runtime's stricter canonical decimal decoder rejected.
 func TestGeneratedFractionalRatesLoadInRuntime(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},

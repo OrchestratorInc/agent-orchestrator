@@ -34,7 +34,6 @@ import {
 } from "./ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-/** The view an interface switch leads to: Lucide's boxed prompt or a speech bubble, with rounder corners. */
 export function RoundedInterfaceIcon({ target, className }: { target: SessionInterfaceMode; className?: string }) {
 	return (
 		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"
@@ -68,8 +67,6 @@ const phaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
 	recovery_required: "Interface switch needs attention",
 };
 
-// An account move is the same durable handoff in the same interface; it names
-// the account change instead of a destination interface.
 const accountPhaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
 	requested: "Preparing account switch…",
 	preflighting: "Checking the account…",
@@ -84,8 +81,6 @@ const accountPhaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
 	recovery_required: "Account switch needs attention",
 };
 
-// An agent switch is the same durable handoff, usually in the same interface;
-// it names the agent it switches to.
 const agentPhaseCopy: Record<SessionInterfaceTransition["phase"], string> = {
 	requested: "Preparing agent switch…",
 	preflighting: "Preparing the new agent…",
@@ -126,7 +121,6 @@ export function SessionInterfaceSwitchButton({
 	cancelError?: string;
 	onClick: () => void;
 	onCancel?: () => void;
-	/** Cloud uses a text label so the return-to-TUI action is discoverable. */
 	showLabel?: boolean;
 	mayStartFresh?: boolean;
 	className?: string;
@@ -152,7 +146,6 @@ export function SessionInterfaceSwitchButton({
 				className={cn("relative inline-flex size-7 shrink-0 items-center justify-center text-muted-foreground", className)}
 				title={statusLabel}
 			>
-				{/* TerminalTabFrame is a Tailwind `group`; tab hover swaps spinner → cancel. */}
 				{needsRestart ? (
 					<TriangleAlert aria-hidden="true" className="size-3.5 text-warning" />
 				) : (
@@ -324,10 +317,6 @@ export function SessionInterfaceSwitchDialog({
 	);
 }
 
-// A Cloud session created in Chat whose workspace could not start Chat yet
-// starts in the terminal instead; the control plane records that as a failed
-// tui-to-chat transition carrying one of these codes. It is information, not
-// a failed switch.
 function interfaceStartFallbackMessageKey(transition: SessionInterfaceTransition) {
 	if (transition.phase !== "failed" || transition.sourceMode !== "tui" || transition.targetMode !== "chat") {
 		return undefined;
@@ -359,17 +348,14 @@ function interfaceTransitionHistoryRecoveryPolicy(
 	return undefined;
 }
 
-/** The notice's widest size: w-[min(34rem,calc(100%-1.5rem))]. */
 const TRANSITION_NOTICE_WIDTH_REM = 34;
 const TRANSITION_NOTICE_GUTTER_REM = 1.5;
 
-/** Where the notice sits centered in `pane`, before any clearance moves it. */
 function centeredTransitionNoticeBox(pane: HTMLElement, notice: HTMLElement): ViewportRect {
 	const paneBox = pane.getBoundingClientRect();
 	const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 	const width = Math.max(0, Math.min(TRANSITION_NOTICE_WIDTH_REM * rem, paneBox.width - TRANSITION_NOTICE_GUTTER_REM * rem));
 	const left = paneBox.left + (paneBox.width - width) / 2;
-	// The move is horizontal only, so the notice's own top and bottom stand.
 	const { top, bottom } = notice.getBoundingClientRect();
 	return { left, top, right: left + width, bottom };
 }
@@ -398,13 +384,8 @@ export function SessionInterfaceTransitionNotice({
 	recoveryError?: string;
 }) {
 	const { t } = useTranslation();
-	// Centered at the top of the session pane, under the harness update notice
-	// pinned to the app's top-right edge in a narrow window: then it centers in
-	// the part of the pane the notice leaves clear, so its dismiss stays reachable.
 	const [noticeElement, setNoticeElement] = useState<HTMLDivElement | null>(null);
 	const pane = noticeElement?.offsetParent instanceof HTMLElement ? noticeElement.offsetParent : null;
-	// Move only when the notice, where it centers without the move, would sit
-	// under the update notice; a wide pane leaves it clear in place.
 	const centeredNoticeBox = useCallback(
 		(paneElement: HTMLElement) => (noticeElement ? centeredTransitionNoticeBox(paneElement, noticeElement) : null),
 		[noticeElement],

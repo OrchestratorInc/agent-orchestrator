@@ -12,11 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// The tests in this file each pin a bug the real-data end-to-end run found.
-// They run against the real store: the controller tests stub the service,
-// which is how all of these got through.
-
-// seedChatSessionAt is seedChatSession with the session's own start time.
 func seedChatSessionAt(t *testing.T, store *sqlite.Store, projectID, sessionID, conversationID string, createdAt time.Time) domain.SessionRecord {
 	t.Helper()
 	ctx := context.Background()
@@ -43,7 +38,6 @@ func seedChatSessionAt(t *testing.T, store *sqlite.Store, projectID, sessionID, 
 	return session
 }
 
-// userMessageAt is appendUserMessage at a given time.
 func userMessageAt(t *testing.T, store *sqlite.Store, session domain.SessionRecord, conversationID, messageID, text string, at time.Time) {
 	t.Helper()
 	turn := "turn-" + messageID
@@ -66,7 +60,6 @@ func sessionIDs(results []domain.SessionSearchResult) []string {
 	return ids
 }
 
-// ids renders sessions' store-assigned ids, which tests compare against.
 func ids(sessions ...domain.SessionRecord) string {
 	out := make([]string, 0, len(sessions))
 	for _, session := range sessions {
@@ -84,10 +77,6 @@ func searchWith(t *testing.T, svc *sessionsearch.Service, raw string, params dom
 	return response
 }
 
-// The palette sends q="" with sort=recent the moment Cmd+K opens, and the
-// CLI sends --sort. Both were overwritten by the parser's
-// default, so recents came back empty (total 168, zero rows) and "newest
-// first" was ignored.
 func TestSortFromTheRequestIsNotOverwrittenByTheParser(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	older := seedChatSessionAt(t, f.store, "proj", "sess-older", "conv-older", testNow.Add(-48*time.Hour))
@@ -114,16 +103,12 @@ func TestSortFromTheRequestIsNotOverwrittenByTheParser(t *testing.T) {
 	if got := sessionIDs(newest.Results); strings.Join(got, ",") != ids(newer, older) || newest.Sort != domain.SessionSearchSortRecent {
 		t.Fatalf("newest-first order = %v (sort %q), want the newer session first", got, newest.Sort)
 	}
-	// A typed operator still wins over the request.
 	typed := searchWith(t, f.svc, "deploy sort:relevance", domain.SessionSearchParams{Sort: domain.SessionSearchSortRecent})
 	if got := sessionIDs(typed.Results); strings.Join(got, ",") != ids(older, newer) {
 		t.Fatalf("typed sort:relevance = %v, want relevance order", got)
 	}
 }
 
-// Every Chat session's title document was dated by the indexing pass, so a
-// session whose NAME matched looked newest under sort:recent and passed any
-// after: filter, however old it was.
 func TestTitleDocumentsAreDatedByTheirSession(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	old := seedChatSessionAt(t, f.store, "proj", "sess-old", "conv-old", testNow.Add(-30*24*time.Hour))
@@ -151,10 +136,6 @@ func (p fakePRs) SessionSearchSessionForPR(_ context.Context, url string) (strin
 	return session, ok, nil
 }
 
-// A pasted PR URL resolved to its session and then fell through to a browse
-// that ignored the session filter: every session, newest first. It now lists
-// the PR's session first, then the others that mention it; a PR no AO session
-// owns still finds the sessions that discuss it.
 func TestPastedPRURLListsItsSessionFirstThenMentions(t *testing.T) {
 	store := newFixture(t, sessionsearch.TranscriptRoots{}).store
 	const url = "https://github.com/acme/widgets/pull/6553"
@@ -180,21 +161,16 @@ func TestPastedPRURLListsItsSessionFirstThenMentions(t *testing.T) {
 	if len(unknown.Results) == 0 {
 		t.Fatal("a PR URL with a trailing path segment must still be recognized")
 	}
-	// PR 6553 of another repository is another PR: the mention above is not it.
 	otherRepo := searchWith(t, svc, "https://github.com/other/repo/pull/6553", domain.SessionSearchParams{})
 	if len(otherRepo.Results) != 0 {
 		t.Fatalf("other repository's PR = %v, want nothing: only acme/widgets/pull/6553 was mentioned", sessionIDs(otherRepo.Results))
 	}
-	// A PR no AO session owns still finds the sessions that mention it.
 	unowned := sessionsearch.New(sessionsearch.Options{Store: store, Namer: store, Now: func() time.Time { return testNow }, PRs: fakePRs{}})
 	if listed := sessionIDs(searchWith(t, unowned, url, domain.SessionSearchParams{}).Results); strings.Join(listed, ",") != ids(tester) {
 		t.Fatalf("unowned PR = %v, want the session that mentions it", listed)
 	}
 }
 
-// A filter with no words is a browse, and the browse dropped every filter but
-// project, harness, dates and status: "path:x" or "!word" alone
-// listed every session.
 func TestBrowseAppliesEveryFilter(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -212,7 +188,6 @@ func TestBrowseAppliesEveryFilter(t *testing.T) {
 		t.Fatalf("IndexAll: %v", err)
 	}
 
-	// path: means sessions that changed the file, not ones that printed it.
 	if got := sessionIDs(search(t, f.svc, "status path:src/routes").Results); strings.Join(got, ",") != ids(editor) {
 		t.Fatalf("path: with words = %v, want only the session that edited it", got)
 	}
@@ -231,9 +206,6 @@ func TestBrowseAppliesEveryFilter(t *testing.T) {
 	}
 }
 
-// "· N matches" on a row must be the number of stops find in chat then steps
-// through. It counted reviewer-chat matches find in chat excludes, left out the
-// title find in chat included, and stopped counting at the 2,000-candidate cap.
 func TestRowMatchCountEqualsFindBarStops(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -270,22 +242,14 @@ func TestRowMatchCountEqualsFindBarStops(t *testing.T) {
 	if len(row.Results) != 1 {
 		t.Fatalf("results = %+v", row.Results)
 	}
-	// The reviewer chat matches too, but the row opens the session's own
-	// transcript, where its count and find in chat are.
 	if row.Results[0].ReviewID != "" || row.Results[0].MessageID == "review-msg" {
 		t.Fatalf("row = %+v, want the session's own transcript, not its reviewer chat", row.Results[0])
 	}
-	// Three messages; the command is shown with the first, so it is not
-	// counted on its own; the title and the reviewer chat are not counted.
 	if row.Results[0].SessionMatches != 3 {
 		t.Fatalf("row says %d matches, want 3", row.Results[0].SessionMatches)
 	}
 }
 
-// A long session gathered hundreds of weak matches on common words and beat
-// the session named exactly what was typed (the orchestrator, which relays
-// every worker's messages, and a 600-message review). The tail now counts a
-// handful of a session's other matches.
 func TestALongSessionDoesNotOutrankTheOneNamedForTheQuery(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	named := seedChatSession(t, f.store, "proj", "sess-named", "conv-named")
@@ -307,12 +271,6 @@ func TestALongSessionDoesNotOutrankTheOneNamedForTheQuery(t *testing.T) {
 	}
 }
 
-// Found on the MacBook Pro's archive: "amp smoke test" put the
-// session named "Amp ChatGPT AO smoke test" 8th, and its exact name put it 3rd.
-// Amp transcripts are not indexed, so its name was all it had, and the bounded
-// tail still let long sessions mentioning the words hundreds of times win. A
-// session named for the query now comes first. Only a name someone gave counts:
-// a session whose name is its own id is not "named" for the words in the id.
 func TestASessionNamedForTheQueryLeadsEvenWithNothingButItsName(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	named := seedChatSession(t, f.store, "proj", "sess-amp", "conv-amp")
@@ -323,8 +281,6 @@ func TestASessionNamedForTheQueryLeadsEvenWithNothingButItsName(t *testing.T) {
 		appendUserMessage(t, f.store, busy, "conv-busy", fmt.Sprintf("busy-%d", i), fmt.Sprintf("busy-turn-%d", i),
 			fmt.Sprintf("fresh amp tui smoke session %d: the smoke test passed", i))
 	}
-	// Ids are assigned per project, so this one is amp-smoke-test-1, and its
-	// name is that id.
 	idNamed := seedChatSession(t, f.store, "amp-smoke-test", "unused", "conv-id")
 	renameForSearch(t, f, idNamed, string(idNamed.ID))
 	appendUserMessage(t, f.store, idNamed, "conv-id", "id-msg", "id-turn", "check the release notes")
@@ -340,10 +296,6 @@ func TestASessionNamedForTheQueryLeadsEvenWithNothingButItsName(t *testing.T) {
 	}
 }
 
-// Main added deleting sessions (`ao session delete`, and archived-session
-// retention). The index is not linked to sessions, so a deleted session's text
-// stayed searchable and its rows kept appearing. Deleting a session now takes
-// its documents and sources with it.
 func TestADeletedSessionLeavesTheIndex(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -369,7 +321,6 @@ func TestADeletedSessionLeavesTheIndex(t *testing.T) {
 	if got := search(t, f.svc, "hmac").Results; len(got) != 0 {
 		t.Fatalf("after delete: hmac = %v, want nothing from a deleted session", sessionIDs(got))
 	}
-	// Only the session that was kept is still indexed.
 	if got := sessionIDs(search(t, f.svc, "rotate").Results); len(got) != 1 || got[0] != string(kept.ID) {
 		t.Fatalf("after delete: rotate = %v, want only the kept session", got)
 	}
@@ -380,8 +331,6 @@ func TestADeletedSessionLeavesTheIndex(t *testing.T) {
 	if want := int64(1); coverage.IndexedSources != want {
 		t.Fatalf("indexed sources = %d, want %d: the deleted session's source must go too", coverage.IndexedSources, want)
 	}
-	// Deleting the session only recorded it; the next sweep removes its
-	// documents in short transactions, so nothing of it stays in the index.
 	if _, err := f.svc.Sweep(ctx); err != nil {
 		t.Fatalf("Sweep: %v", err)
 	}
@@ -393,8 +342,6 @@ func TestADeletedSessionLeavesTheIndex(t *testing.T) {
 	}
 }
 
-// Tool details are provider JSON. Indexed raw, snippets showed escapes such as
-// "<" and a literal "\n", and the keys used up the detail budget.
 func TestToolDetailsAreIndexedAsText(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-tool", "conv-tool")
@@ -423,8 +370,6 @@ func TestToolDetailsAreIndexedAsText(t *testing.T) {
 	}
 }
 
-// One-character words are dropped; a query of nothing else answers at once
-// instead of expanding "c*" over the whole index.
 func TestOneCharacterQueriesAnswerWithoutAPrefixScan(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-c", "conv-c")
@@ -440,9 +385,6 @@ func TestOneCharacterQueriesAnswerWithoutAPrefixScan(t *testing.T) {
 	}
 }
 
-// A fresh daemon answered "ready" with nothing indexed until its first pass
-// (started 5 s after boot) finished, so Cmd+K showed "no results" with no
-// "still indexing" note.
 func TestCoverageIsBackfillingUntilTheFirstPassCompletes(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	session := seedChatSession(t, f.store, "proj", "sess-fresh", "conv-fresh")
@@ -466,11 +408,6 @@ func TestCoverageIsBackfillingUntilTheFirstPassCompletes(t *testing.T) {
 	}
 }
 
-// On 126 real Claude Code transcripts, searching for a rare word found the
-// right session within five results 87% of the time but first only 67%. In 68 of the 87 misses, the session ranked first
-// held only a longer word sharing the stem ("rebased" for "rebasing"), which
-// the match admits so word forms are found. The word as typed now ranks first;
-// widened forms still match, after it.
 func TestTheWordAsTypedOutranksItsWidenedForms(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	busy := seedChatSession(t, f.store, "proj", "sess-busy", "conv-busy")
@@ -489,22 +426,14 @@ func TestTheWordAsTypedOutranksItsWidenedForms(t *testing.T) {
 	if strings.Join(sessionIDs(got.Results), ",") != ids(exact, busy) {
 		t.Fatalf("results = %s, want the session holding the word as typed first", describe(got.Results))
 	}
-	// The row opens on the message holding the word as typed, not on the one
-	// that matches it most often in a widened form.
 	if got.Results[0].MessageID != "exact-typed" {
 		t.Fatalf("top row = %q, want the message that says \"rebasing\"", got.Results[0].MessageID)
 	}
-	// Word forms still match: a session that only says "rebased" is still found.
 	if len(got.Results) != 2 {
 		t.Fatalf("results = %s, want the widened session still listed", describe(got.Results))
 	}
 }
 
-// Found in review: the sweep's stamp counted rows and their times, and a
-// rollback changes neither. It only marks the discarded turns. After indexing
-// and then rolling back, every sweep skipped the conversation and the agent's
-// forgotten turn stayed searchable. This goes through Sweep, the production
-// path; IndexChat alone bypasses the skip.
 func TestSweepDropsARolledBackTurn(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -536,9 +465,6 @@ func TestSweepDropsARolledBackTurn(t *testing.T) {
 	}
 }
 
-// Found in review: activities were read from the raw table, so a rolled-back
-// turn's command output and file changes were indexed even by a full reindex,
-// and path: matched an edit that was undone.
 func TestReindexSkipsActivitiesOfARolledBackTurn(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -564,9 +490,6 @@ func TestReindexSkipsActivitiesOfARolledBackTurn(t *testing.T) {
 	}
 }
 
-// Found in review: the content fingerprint hashed each message's length, so an
-// equal-length edit of a queued prompt ("zzalpha" to "zzomega") compared equal
-// and was never re-indexed: the old word stayed and the new one never appeared.
 func TestSweepReindexesAnEqualLengthEdit(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -598,8 +521,6 @@ func TestSweepReindexesAnEqualLengthEdit(t *testing.T) {
 	}
 }
 
-// Found in review: a rename touches no message or activity, so neither the
-// stamp nor the fingerprint saw it, and the old name stayed searchable.
 func TestSweepPicksUpARename(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()
@@ -623,9 +544,6 @@ func TestSweepPicksUpARename(t *testing.T) {
 	}
 }
 
-// Found in review: the stamp's update time is in whole seconds, so an edit in
-// the same second as the last pass left the stamp unchanged and the sweep
-// skipped it, keeping the old text searchable.
 func TestSweepReindexesAnEditInTheSameSecond(t *testing.T) {
 	f := newFixture(t, sessionsearch.TranscriptRoots{})
 	ctx := context.Background()

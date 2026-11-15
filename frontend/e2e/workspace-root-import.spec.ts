@@ -8,8 +8,6 @@ test(`renderer: workspace import preserves the root branch and explains unresolv
 	test.setTimeout(120_000);
 	await installFakeAgent(page, { projectId: "local-root", workers: [] });
 	await page.addInitScript((platform) => {
-		// AO checks all three signals; changing only navigator.platform on a
-		// Mac still takes the macOS path through navigator.userAgent.
 		Object.defineProperty(navigator, "platform", { configurable: true, value: platform });
 		Object.defineProperty(navigator, "userAgent", { configurable: true, value: `Mozilla/5.0 (${platform === "macOS" ? "Macintosh" : platform})` });
 		Object.defineProperty(navigator, "userAgentData", { configurable: true, value: { platform } });
@@ -42,7 +40,6 @@ test(`renderer: workspace import preserves the root branch and explains unresolv
 		}
 		if (pathname === "/api/v1/sessions" && route.request().method() === "POST") {
 			started = true;
-			// A separate runtime failure must retain its real cause in the board.
 			await route.fulfill({ status: 422, json: {
 				error: "invalid", code: "DEFAULT_BRANCH_UNRESOLVED",
 				message: 'resolve workspace repo "__root__" base: remote did not advertise a symbolic HEAD (DEFAULT_BRANCH_UNRESOLVED)',
@@ -53,9 +50,6 @@ test(`renderer: workspace import preserves the root branch and explains unresolv
 	});
 	await page.goto("/#/");
 	await page.evaluate(() => {
-		// The default fixture has a running orchestrator. This test represents a
-		// failed first spawn, so every later CDC/query refresh must also have none.
-		// Otherwise SessionsBoard correctly clears the startup error on refresh.
 		window.__aoFakeAgent!.removeWorker("local-root-orchestrator");
 		const bridge = (window as unknown as { ao: AoBridge }).ao;
 		bridge.app.chooseDirectory = async () => "/repos/local-root";

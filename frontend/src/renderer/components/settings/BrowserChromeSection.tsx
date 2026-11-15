@@ -19,10 +19,6 @@ export const browserChromeQueryKey = ["browser-chrome"] as const;
 
 const SECTION_ID = "browserChrome";
 
-/**
- * Open Settings → Browser and bring "Agents in your Chrome" into view. The
- * section renders after the page switches, so wait for it briefly.
- */
 export function openChromeAgentsSettings(open: (section?: GlobalSettingsSection) => void): void {
 	open("browserProfiles");
 	const deadline = Date.now() + 1_500;
@@ -54,10 +50,6 @@ async function fetchChromeStatus(): Promise<ChromeStatus> {
 	return data;
 }
 
-// Chrome mode lets agents browse in the user's own Chrome through the AO
-// Browser Bridge extension. Setup registers AO's native host with Chrome and
-// takes the user to chrome://extensions with the folder path on the clipboard.
-// Chrome only lets a person load an unpacked extension, so those steps remain.
 export function BrowserChromeSection() {
 	const { t } = useTranslation();
 	const developerMode = useUiStore((state) => state.developerMode);
@@ -95,14 +87,12 @@ export function BrowserChromeSection() {
 		setTimeout(() => setCopied(false), 1500);
 	};
 
-	// One click: the path is ready to paste by the time Chrome's page appears.
 	async function startLoading(path: string) {
 		setOpenFailed(false);
 		await copyPath(path).catch(() => undefined);
 		await aoBridge.app.openChromeExtensions().catch(() => setOpenFailed(true));
 	}
 
-	// A developer-mode feature; stays visible once set up so Remove is reachable.
 	if (!developerMode && !status?.enabled) return null;
 
 	return (

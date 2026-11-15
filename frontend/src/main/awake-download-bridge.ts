@@ -1,7 +1,5 @@
 import type { BrowserDownloadsState } from "../shared/browser-downloads";
 
-// Only typed AO download events count as completion evidence. A silent file or
-// a renderer tab disappearing never supplies a positive download observation.
 export function createAwakeDownloadBridge(options: {
 	baseURL: () => string | null;
 	request: (url: string, init: RequestInit) => Promise<unknown>;
@@ -27,7 +25,6 @@ export function createAwakeDownloadBridge(options: {
 				signal: AbortSignal.timeout(3000),
 			});
 		} catch {
-			/* Wake policy must not interrupt Chromium's transfer. */
 		} finally {
 			inFlight = false;
 			if (dirty && !disposed) {

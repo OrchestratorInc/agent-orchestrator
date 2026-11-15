@@ -19,11 +19,8 @@ func TestSummarizeThreadsGroupsCommentsByThreadOldestFirst(t *testing.T) {
 		{ThreadID: "T1", ID: "c2", Author: "me", Body: "reply", CreatedAt: t0.Add(2 * time.Hour), Resolved: true},
 		{ThreadID: "T1", ID: "c1", Author: "amy", Body: "first", URL: "https://x/c1", CreatedAt: t0, Resolved: true},
 		{ThreadID: "T2", ID: "c0", Author: "ci", IsBot: true, Body: "bot note", CreatedAt: t0.Add(time.Hour)},
-		// Repeated through a URL alias: listed once.
 		{ThreadID: "T1", ID: "c1", Author: "amy", Body: "first", CreatedAt: t0, Resolved: true},
-		// Legacy comment with no thread id: not part of any thread.
 		{ID: "legacy", Author: "old", Body: "legacy"},
-		// Thread with no row: anchor and resolution come from its comments.
 		{ThreadID: "T3", ID: "c9", Author: "zed", File: "c.go", Line: 7, Resolved: false, CreatedAt: t0.Add(4 * time.Hour)},
 	}
 	got := summarizeThreads(threads, comments)

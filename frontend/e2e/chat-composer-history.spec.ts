@@ -86,12 +86,10 @@ async function openChat(page: Page, prompts = sent, skills: unknown[] = []): Pro
 	return composer;
 }
 
-/** The composer's text with its paragraphs joined by newlines, as it is sent. */
 const composerText = (composer: Locator) =>
 	composer.evaluate((element) =>
 		Array.from(element.querySelectorAll("p"), (paragraph) => paragraph.textContent).join("\n"));
 
-/** The paragraph holding the browser's caret. */
 const caretLine = (composer: Locator) =>
 	composer.evaluate((element) => {
 		const node = window.getSelection()?.anchorNode;
@@ -99,8 +97,6 @@ const caretLine = (composer: Locator) =>
 		return Array.from(element.querySelectorAll("p")).indexOf(paragraph as HTMLParagraphElement);
 	});
 
-// Lexical adopts a native caret move on a later selectionchange, so a key pressed
-// right after one must still see where the browser put the caret.
 test("arrow recall follows native caret moves made just before it @T0", async ({ page }) => {
 	const composer = await openChat(page);
 	await page.keyboard.type("draft");
@@ -110,7 +106,6 @@ test("arrow recall follows native caret moves made just before it @T0", async ({
 	await composer.press("ArrowUp");
 	await expect.poll(() => composerText(composer)).toBe(sent[0]);
 
-	// Off the start of a recalled multiline message, Down is caret movement again.
 	await composer.press("ArrowRight");
 	await composer.press("ArrowDown");
 	await expect.poll(() => caretLine(composer)).toBe(1);
@@ -123,8 +118,6 @@ test("arrow recall follows native caret moves made just before it @T0", async ({
 	await expect.poll(() => composerText(composer)).toBe("draft");
 });
 
-// Arrowing to the end of a recalled `/skill` must not complete it: that rewrite would
-// end the walk and save the recalled text over the user's own draft.
 test("arrowing through a recalled skill keeps it and the saved draft @T0", async ({ page }) => {
 	const composer = await openChat(page, ["ask /review"], [review]);
 	await page.keyboard.type("my draft");

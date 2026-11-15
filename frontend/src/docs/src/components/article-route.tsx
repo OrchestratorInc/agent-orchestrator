@@ -20,7 +20,6 @@ import { EnglishArticleNotice, LocalizedTitle } from "./page-locale";
 
 type Props = { params: Promise<{ slug?: string[] }> };
 
-// Escapes `<` so the JSON cannot close the script element.
 function JsonLd({ data }: { data: object }) {
   return <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(data).replace(/</g, "\\u003c") }} />;
 }
@@ -31,11 +30,6 @@ function getArticle(slug: string[] | undefined, locale: SupportedLocale) {
   return page;
 }
 
-/**
- * The article pages for one language. English covers every article; any
- * other language covers only the articles translated into it, under
- * `/<locale>/`.
- */
 export function articleRoute(locale: SupportedLocale) {
   async function Page(props: Props) {
     const { slug } = await props.params;
@@ -49,7 +43,6 @@ export function articleRoute(locale: SupportedLocale) {
         <DocsTitle lang={locale}>{page.data.title}</DocsTitle>
         <DocsDescription lang={locale}>{page.data.description && visibleProductName(page.data.description)}</DocsDescription>
         {locale === DEFAULT_LOCALE && <EnglishArticleNotice />}
-        {/* The Markdown copy is English, also for translated articles. */}
         <PageActions markdownPath={markdownPath(page.slugs)} sourceUrl={sourceUrl(page)} />
         <DocsBody lang={locale}>
           <MDX
@@ -97,7 +90,6 @@ export function articleRoute(locale: SupportedLocale) {
       twitter: { card: "summary_large_image", ...preview },
       alternates: {
         canonical: url,
-        // Only articles that exist in more than one language have alternates.
         languages:
           locales.length > 1
             ? {

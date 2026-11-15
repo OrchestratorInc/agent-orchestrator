@@ -19,16 +19,12 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
 
-	// Give the source a complete durable exchange so the target assertion proves
-	// the bootstrap came from AO's canonical rows, not provider scrollback.
 	completeTurn(t, h, "keep this context", "provider-turn-1")
 	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
 		return len(snapshot.Messages) == 2
 	})
 
-	// A turn this session had in the Terminal UI lives in the terminal turn
-	// table. The note is built from both stores, merged by time.
-	earlier := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC) // before the harness clock
+	earlier := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
 	if err := h.st.RecordTerminalTurnRequest(ctx, domain.TerminalTurn{
 		SessionID: testSession, Harness: domain.HarnessCodex, UserRequest: "terminal ask", RequestedAt: earlier,
 	}); err != nil {
@@ -81,13 +77,10 @@ func TestProviderSwitchPublishesApproximateBranch(t *testing.T) {
 		history[0].UserRequest != "keep this context" || history[1].UserRequest != "terminal ask" {
 		t.Fatalf("session history = %+v (total %d), %v; want the chat turn then the terminal turn", history, total, err)
 	}
-	// A page past the end is empty, not nil: the HTTP layer serialises it as [].
 	if past, total, err := h.svc.SessionHistory(ctx, testSession, 5, 10); err != nil || total != 2 || past == nil || len(past) != 0 {
 		t.Fatalf("history past the end = %#v (total %d), %v; want an empty page", past, total, err)
 	}
 
-	// A switch is not replayed: asking again for the provider that now owns
-	// the session is refused.
 	err = h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness:  domain.HarnessClaudeCode,
 		IdempotencyKey: "switch-once",
@@ -176,7 +169,6 @@ func TestProviderSwitchFailureRestoresSourceController(t *testing.T) {
 	if got := snapshot.Conversation.ModelReroute; got == nil || *got != reroute {
 		t.Fatalf("model reroute after a failed switch = %+v, want the source's %+v", got, reroute)
 	}
-	// The restored source runs with the mode it had, not the one it was launched with.
 	driver.mu.Lock()
 	resumed := driver.resumeCalls[len(driver.resumeCalls)-1]
 	driver.mu.Unlock()
@@ -273,7 +265,6 @@ func TestProviderSwitchCommitsTheTargetsSettingsAndKeepsItsLaunchWrites(t *testi
 	}); err != nil {
 		t.Fatalf("SwitchProvider: %v", err)
 	}
-	// A daemon that dies while the target starts resumes the source with these.
 	if whileStarting.Model != "" || whileStarting.ApprovalMode != domain.PermissionModeAcceptEdits {
 		t.Fatalf("settings while the target starts = %+v, want the source's", whileStarting)
 	}
@@ -300,7 +291,7 @@ func TestProviderSwitchQueuedBehindAnotherStartsFromItsResult(t *testing.T) {
 		go func() {
 			second <- h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessOpenCode})
 		}()
-		time.Sleep(50 * time.Millisecond) // the second switch reaches the lock
+		time.Sleep(50 * time.Millisecond)
 	}
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
 		t.Fatalf("first SwitchProvider: %v", err)
@@ -338,9 +329,6 @@ func TestProviderSwitchRestoredTargetKeepsItsHandoffNote(t *testing.T) {
 	}
 }
 
-// ownerCheckedLaunch stands in for the session manager: each launch writes its
-// own browser verifier, and only while the session still has the owner the
-// launch expects.
 func ownerCheckedLaunch(h **harness) func(context.Context, domain.SessionControllerOwner) (map[string]string, error) {
 	launches := 0
 	return func(ctx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
@@ -388,7 +376,6 @@ func (s failingProviderSwitchStore) CommitProviderSwitch(context.Context, domain
 
 var errProviderSwitchTarget = ports.ErrChatDriverUnavailable
 
-// lastStart is the newest provider start the driver saw.
 func lastStart(driver *editDriverState) ports.ChatStartConfig {
 	driver.mu.Lock()
 	defer driver.mu.Unlock()
@@ -419,7 +406,7 @@ func TestProviderSwitchTargetPermissionMode(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		target  domain.AgentHarness
-		refused ports.PermissionMode // a mode the target will not run in, like Kimi
+		refused ports.PermissionMode
 		picked  domain.PermissionMode
 		want    ports.PermissionMode
 	}{
@@ -459,7 +446,6 @@ func TestProviderSwitchStartsATargetThatRunsOnlyBypassedWithPermissionsBypassed(
 	}); err != nil {
 		t.Fatalf("SetTurnSettings: %v", err)
 	}
-	// Like Pi, the target cannot ask before acting.
 	driver.mu.Lock()
 	driver.onlyMode = ports.PermissionModeBypassPermissions
 	driver.mu.Unlock()
@@ -475,7 +461,6 @@ func TestProviderSwitchStartsATargetThatRunsOnlyBypassedWithPermissionsBypassed(
 		t.Fatalf("target permissions = %q, want the only mode the agent runs in", got)
 	}
 
-	// Leaving it goes back to the chat's own mode, not the one Pi needed.
 	driver.mu.Lock()
 	driver.onlyMode = ""
 	driver.mu.Unlock()
@@ -493,7 +478,6 @@ func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
 		t.Fatalf("SwitchProvider: %v", err)
 	}
-	// The target never had a turn, so its provider never saved the conversation.
 	if err := h.svc.Stop(ctx, testSession); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -520,8 +504,6 @@ func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Start after an unanswered switch: %v", err)
 	}
-	// The switch marker gives the conversation a sequence, but the target's
-	// standing context has not been delivered yet.
 	if resumed.HasPriorTurns {
 		t.Fatal("resume of an unanswered switch target says it has prior turns, so its preamble is dropped")
 	}
@@ -539,8 +521,6 @@ func TestResumeStartsAnUnansweredSwitchBranchFresh(t *testing.T) {
 	}
 }
 
-// liveModelConversation runs its own model, as Claude Code's chat does when it
-// does not offer the one picked for it.
 type liveModelConversation struct {
 	*fakeConversation
 }
@@ -575,7 +555,6 @@ func TestProviderSwitchSavesTheModelATargetRunsWhenThePickDidNotTake(t *testing.
 func TestFailedSwitchRestoresAnUnansweredTargetThatStartsFresh(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
-	// A -> B, and B never answers, so its provider never saved the conversation.
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
 		t.Fatalf("SwitchProvider to B: %v", err)
 	}
@@ -583,7 +562,6 @@ func TestFailedSwitchRestoresAnUnansweredTargetThatStartsFresh(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("GetSession: found=%v err=%v", found, err)
 	}
-	// B -> C fails to start, so B comes back: fresh, with an id of its own.
 	restored := newFakeConversation()
 	restored.providerConversationID = "thread-b-fresh"
 	driver.mu.Lock()
@@ -643,7 +621,6 @@ func TestSwitchWithAMessageKeepsOtherSwitchesOutUntilItIsSent(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Fatal(err)
 	}
-	// It runs after the message reached Claude, which is now working on it.
 	var refusal *domain.ProviderSwitchError
 	if err := <-second; !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalBusy {
 		t.Fatalf("second switch = %v, want it refused while Claude works on the message", err)
@@ -656,14 +633,12 @@ func TestSwitchWithAMessageKeepsOtherSwitchesOutUntilItIsSent(t *testing.T) {
 func TestNewMessageToAnAlreadyActiveTargetRunsWithItsPicks(t *testing.T) {
 	h, _, driver := newEditHarness(t, false)
 	ctx := context.Background()
-	// Another window already brought Claude in, bypassed and on the older model.
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "other-window",
 		Model: "model-old", PermissionMode: domain.PermissionModeBypassPermissions,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// This window still shows the source; it picks Claude with Accept edits and sends a new message.
 	if _, switched, err := h.svc.SwitchProviderAndSend(ctx, testSession, domain.ProviderSwitchRequest{
 		TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "new-pick",
 		Model: "model-picked", PermissionMode: domain.PermissionModeAcceptEdits,
@@ -702,7 +677,6 @@ func TestRetryOfADeliveredMessageDoesNotSwitchBack(t *testing.T) {
 	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessOpenCode, IdempotencyKey: "second"}); err != nil {
 		t.Fatal(err)
 	}
-	// The renderer sends a fresh switch key with each attempt, and the same delivery id.
 	turn, switched, err := h.svc.SwitchProviderAndSend(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, IdempotencyKey: "retry"}, message)
 	if err != nil || !switched || turn.ID != "" {
 		t.Fatalf("retry = %+v, switched %v, %v; want a duplicate", turn, switched, err)

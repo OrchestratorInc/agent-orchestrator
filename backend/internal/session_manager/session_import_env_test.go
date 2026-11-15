@@ -108,8 +108,6 @@ func TestNonImportTerminalLaunchEnvironmentRemainsIdentical(t *testing.T) {
 	project.Config.Env = map[string]string{"SYNTHETIC_WORKSPACE_ID": "project-value", "SYNTHETIC_CLEAR": ""}
 	store.projects[project.ID] = project
 	record := store.sessions["mer-1"]
-	// Capture the existing non-import environment contract with deterministic
-	// issuance and generation; the new preparation branch must not add fields.
 	expected := manager.runtimeEnv(record.ID, record.ProjectID, record.IssueID, project.Config.Env)
 	expected[EnvBrowserCapability] = "synthetic-ordinary-token"
 	expected[EnvRuntimeLaunchID] = "launch-new"

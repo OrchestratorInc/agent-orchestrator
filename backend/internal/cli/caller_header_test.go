@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 )
 
-// An agent's own command names its session so the daemon can file the action
-// under its turn; a command typed in the session's terminal tab does not.
 func TestDaemonRequestsNameTheCallingAgentButNotItsShellTabs(t *testing.T) {
 	for _, tc := range []struct {
 		name, session, shell, want string

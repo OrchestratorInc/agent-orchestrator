@@ -123,7 +123,7 @@ func TestExpoClientRetriesTransientThenSucceeds(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if atomic.AddInt32(&calls, 1) < 3 {
-			w.WriteHeader(http.StatusInternalServerError) // transient
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		_, _ = w.Write([]byte(`{"data":[{"status":"ok","id":"t1"}]}`))
@@ -148,7 +148,7 @@ func TestExpoClientDoesNotRetry4xx(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&calls, 1)
-		w.WriteHeader(http.StatusBadRequest) // permanent
+		w.WriteHeader(http.StatusBadRequest)
 	}))
 	defer srv.Close()
 

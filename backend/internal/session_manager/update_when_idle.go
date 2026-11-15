@@ -10,14 +10,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ChatUpdateHibernator stops an idle Chat provider so an installer can replace
-// its executable.
 type ChatUpdateHibernator interface {
 	HibernateChatForUpdate(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
-// updateStops holds the terminal input gates of terminals stopped for an
-// update, so nothing typed is lost before they resume.
 type updateStops struct {
 	mu     sync.Mutex
 	drains map[domain.SessionID]func()
@@ -45,7 +41,6 @@ func (u *updateStops) release(id domain.SessionID) {
 	}
 }
 
-// liveHarnessSessions lists the sessions whose process runs harness.
 func (m *Manager) liveHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionRecord, error) {
 	recs, err := m.store.ListAllSessions(ctx)
 	if err != nil {
@@ -61,9 +56,6 @@ func (m *Manager) liveHarnessSessions(ctx context.Context, harness domain.AgentH
 	return live, nil
 }
 
-// BusyHarnessSessions lists live sessions of harness that an update may not
-// stop yet: starting, taking a turn, waiting for the user, or (for terminals)
-// running a command such as a dev server.
 func (m *Manager) BusyHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionWait, error) {
 	live, err := m.liveHarnessSessions(ctx, harness)
 	if err != nil {
@@ -100,7 +92,6 @@ func (m *Manager) updateBlocker(ctx context.Context, rec domain.SessionRecord) (
 		if err != nil || commands > 0 {
 			return domain.SessionWaitCommand, true
 		}
-		// A stopped terminal comes back only by resuming its conversation.
 		if !m.terminalResumesNatively(ctx, rec) {
 			return domain.SessionWaitResume, true
 		}
@@ -108,10 +99,6 @@ func (m *Manager) updateBlocker(ctx context.Context, rec domain.SessionRecord) (
 	return "", false
 }
 
-// SessionRuntimeEnv is the environment the session's agent process runs in,
-// as the runtime layers it over the daemon's: the project environment,
-// provider keys and the session's account. It issues no browser capability,
-// for callers that only look the session up through the agent CLI.
 func (m *Manager) SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecord) (map[string]string, error) {
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
@@ -120,9 +107,6 @@ func (m *Manager) SessionRuntimeEnv(ctx context.Context, rec domain.SessionRecor
 	return m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness), nil
 }
 
-// terminalResumesNatively reports whether a terminal stopped for an update
-// could start again on its own conversation, as resumeAfterUpdate requires:
-// the adapter has a restore command and the conversation was persisted.
 func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.SessionRecord) bool {
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
@@ -138,9 +122,6 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
-	// Adapters that look the conversation up through the CLI need the
-	// session's environment: a project-level credential or profile reaches the
-	// session, not the daemon. No browser capability is issued for a probe.
 	probeEnv := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
@@ -157,12 +138,6 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 	return !nativeConversationMissing(ctx, agent, ref, rec.Metadata.AgentSessionID, env)
 }
 
-// StopHarnessSessions stops every live session of harness without ending it:
-// Chat providers are put to sleep (a message sent meanwhile queues and wakes
-// the session afterwards), and terminal agents exit the way ExitAgent exits
-// them, with their input held. It stops nothing more once a session turns out
-// to be busy, and returns every session it stopped, including one whose stop
-// could not be fully recorded, so the caller resumes it.
 func (m *Manager) StopHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionID, error) {
 	live, err := m.liveHarnessSessions(ctx, harness)
 	if err != nil {
@@ -181,8 +156,6 @@ func (m *Manager) StopHarnessSessions(ctx context.Context, harness domain.AgentH
 	return ids, nil
 }
 
-// stopForUpdate reports whether it stopped rec's controller, even when it
-// then failed to record that.
 func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (bool, error) {
 	if err := m.beginAgentOperation(ctx, rec.ID, agentOperationResume); err != nil {
 		return false, err
@@ -215,10 +188,6 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (
 			err = errors.New("terminal became busy")
 		}
 	}
-	// The terminal ends on purpose, as ExitAgent ends it: its launch is
-	// recorded as released before the runtime goes, so the reaper never reads
-	// the dead runtime as a crash and terminates the session while the update
-	// installs.
 	if err == nil {
 		err = m.releaseTerminalRuntime(ctx, current)
 	}
@@ -234,22 +203,16 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (
 	if releaseInput != nil {
 		m.updateStops.hold(rec.ID, releaseInput)
 	}
-	// Exited, the session neither counts as live while the update installs nor
-	// is reaped; resumeAfterUpdate starts it again.
 	if err := m.recordAgentExited(ctx, current); err != nil {
 		return true, fmt.Errorf("record exit: %w", err)
 	}
 	return true, nil
 }
 
-// ResumeHarnessSessions starts sessions stopped for an update again on the
-// installed release, resuming each conversation natively.
 func (m *Manager) ResumeHarnessSessions(ctx context.Context, ids []domain.SessionID) error {
 	var errs []error
 	for _, id := range ids {
 		if err := m.resumeAfterUpdate(ctx, id); err != nil {
-			// The sweep that retries failed version moves starts it later, so
-			// a transient failure does not leave the session stopped.
 			m.versionRetries.note(id)
 			m.logger.Warn("could not resume a session after a harness update; retrying", "sessionID", id, "error", err)
 			errs = append(errs, fmt.Errorf("resume %s after update: %w", id, err))
@@ -268,16 +231,12 @@ func (m *Manager) resumeAfterUpdate(ctx context.Context, id domain.SessionID) er
 		return nil
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		// A wake that failed during the install cleared the hibernation mark
-		// but started nothing, so only a live provider is already resumed.
 		if rec.HibernatedAt == nil && m.chat != nil && m.chat.HasLiveChatController(id) {
 			return nil
 		}
 		if err := m.WakeHibernatedChat(ctx, id); err != nil {
 			return err
 		}
-		// Messages sent while it was stopped stayed queued; deliver them now,
-		// as a wake does. A wake that already delivered them leaves none.
 		return m.chat.DrainChatQueue(ctx, id)
 	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationResume); err != nil {
@@ -289,7 +248,6 @@ func (m *Manager) resumeAfterUpdate(ctx context.Context, id domain.SessionID) er
 		return err
 	}
 	defer releaseHarness()
-	// The input gate stays closed until the new process is up.
 	_, err = m.resumeAgentRecordWithPolicy(ctx, "resume after update", rec, true)
 	result := "succeeded"
 	if err != nil {

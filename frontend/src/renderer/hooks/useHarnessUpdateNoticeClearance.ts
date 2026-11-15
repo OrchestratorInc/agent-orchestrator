@@ -1,12 +1,6 @@
 import { useLayoutEffect, useState, useSyncExternalStore } from "react";
 import type { ViewportRect } from "./useLiveBrowserViewportRect";
 
-/**
- * The window rect the harness update notice (pinned to the center panel's top-right
- * corner) covers, or null while it is not shown. The notice publishes it, so
- * session content that sits in that corner can keep its own controls clear of
- * the notice instead of the notice moving over them.
- */
 let noticeRect: ViewportRect | null = null;
 const listeners = new Set<() => void>();
 
@@ -30,20 +24,12 @@ function subscribe(listener: () => void) {
 const readNoticeRect = () => noticeRect;
 const readNoNotice = () => null;
 
-/** The notice's current window rect, or null while it is not shown. */
 export function useHarnessUpdateNoticeRect(): ViewportRect | null {
 	return useSyncExternalStore(subscribe, readNoticeRect, readNoNotice);
 }
 
-/** Space kept between the notice and the content it would otherwise cover. */
-const CLEARANCE_GAP = 12; // --space-3
+const CLEARANCE_GAP = 12;
 
-/**
- * How far `element` reaches under the notice, counting the gap: the right inset
- * it needs so nothing of it sits beneath the notice. 0 when they do not
- * overlap. Never more than half the element, so a narrow window still leaves
- * the content most of its room.
- */
 export function harnessUpdateNoticeIntrusion(element: ViewportRect, notice: ViewportRect | null): number {
 	if (!notice) return 0;
 	const edge = notice.left - CLEARANCE_GAP;
@@ -53,16 +39,6 @@ export function harnessUpdateNoticeIntrusion(element: ViewportRect, notice: View
 	return Math.ceil(Math.min(element.right - edge, (element.right - element.left) / 2));
 }
 
-/**
- * The right inset `element` needs to keep clear of the harness update notice,
- * re-measured as it resizes, the window resizes, or anything scrolls (a chat
- * timeline moves its content under the fixed notice). Listens only while the
- * notice is shown.
- *
- * `contentBox`, when given, returns where the content that must stay clear
- * would sit inside `element` without any inset; the inset then applies only
- * while that box actually reaches under the notice. Keep it stable.
- */
 export function useHarnessUpdateNoticeClearance(
 	element: HTMLElement | null,
 	contentBox?: (element: HTMLElement) => ViewportRect | null,

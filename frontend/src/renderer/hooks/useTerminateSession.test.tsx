@@ -193,9 +193,6 @@ describe("useTerminateSession", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
-	// Success waits for the workspace refresh so a CDC/refetch cannot resurrect
-	// the row after optimisticKillIds clears. The kill API itself has already
-	// finished before onSuccess runs.
 	it("refreshes workspaces after a successful kill", async () => {
 		postMock.mockResolvedValue({ data: { ok: true }, error: undefined, response: { status: 200 } });
 		const queryClient = newQueryClient();
@@ -239,7 +236,6 @@ describe("useTerminateSession", () => {
 			result.current.mutate(session);
 		});
 
-		// Applied in onMutate — before the daemon round-trip finishes.
 		await waitFor(() =>
 			expect(queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0]?.sessions[0]).toMatchObject({
 				id: "sess-1",
@@ -271,7 +267,6 @@ describe("useTerminateSession", () => {
 			),
 		);
 
-		// Simulate CDC/refetch writing a still-alive snapshot while kill is pending.
 		const { applyOptimisticSessionKills } = await import("./optimistic-session-kills");
 		queryClient.setQueryData(workspaceQueryKey, applyOptimisticSessionKills(workspaces));
 

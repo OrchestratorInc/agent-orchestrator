@@ -107,7 +107,6 @@ it("gives local steps the same time limit field, with no limit by default for Cl
 	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
 	const cleanup = screen.getByLabelText("Time limit for step 1, in minutes");
 	expect(cleanup).toHaveValue("");
-	// No limit reads as a word, and the hint says what empty means.
 	expect(cleanup).toHaveAttribute("placeholder", "none");
 	expect(cleanup).toHaveAccessibleDescription("Time limit in minutes (1 to 120). Leave empty for no limit.");
 	fireEvent.change(cleanup, { target: { value: "5" } });
@@ -127,6 +126,5 @@ it("shows the next step's time limit tooltip at once when moving from one field 
 	await waitFor(() => expect(first).toHaveAttribute("data-state", "delayed-open"));
 	await user.unhover(first);
 	await user.hover(second);
-	// The fields share one tooltip provider, which skips the open delay.
 	expect(second).toHaveAttribute("data-state", "instant-open");
 });

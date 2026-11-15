@@ -41,8 +41,6 @@ describe("TitlebarNav", () => {
 		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
 		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
 		expect(nav).toHaveClass("top-0", "h-toolbar", "left-titlebar-cluster-left-fullscreen");
-		// The brand and the history arrows trade places; the hidden one is inert and
-		// aria-hidden (it collapses to width 0 rather than unmounting).
 		const brand = container.querySelector('[data-slot="titlebar-brand"]');
 		const history = container.querySelector('[data-slot="titlebar-history"]');
 		expect(brand?.hasAttribute("aria-hidden")).toBe(!open);
@@ -59,7 +57,6 @@ describe("TitlebarNav", () => {
 		expect(onResize).toHaveBeenCalledTimes(2);
 		rerender(<TooltipProvider><TitlebarNav zoomFactor={1.25} /></TooltipProvider>);
 		expect(onResize).toHaveBeenCalledTimes(3);
-		// No brand to fit while the sidebar is closed.
 		useUiStore.setState({ isSidebarOpen: false });
 		rerender(<TooltipProvider><TitlebarNav isFullScreen zoomFactor={1.25} /></TooltipProvider>);
 		expect(onResize).toHaveBeenCalledTimes(3);

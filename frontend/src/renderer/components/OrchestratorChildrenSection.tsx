@@ -13,11 +13,6 @@ import { AgentAvatar } from "./AgentAvatar";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { Pressable } from "./ui/pressable";
 
-/**
- * The Workers section of a cloud orchestrator's Summary tab: every session the
- * orchestrator spawned, with live status and its pull requests. Rows navigate
- * to the worker session; PR chips open the PR externally.
- */
 export function OrchestratorChildrenSection({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -106,7 +101,6 @@ function ChildRow({ child, onOpen }: { child: OrchestratorChildView; onOpen: () 
 
 function PullRequestChip({ pr, showRepository = false }: { pr: PullRequestFacts; showRepository?: boolean }) {
 	const { t } = useTranslation();
-	// A multi-repository worker can have a PR on each repository; name it then.
 	const repository = showRepository ? prRepositoryFromUrl(pr.url) : undefined;
 	const label = `${repository ? `${repository} ` : ""}${t("pr.short")} #${pr.number}`;
 	const stateLabel = t(`pr.state.${pr.state}`, { defaultValue: pr.state });

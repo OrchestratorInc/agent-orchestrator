@@ -20,14 +20,12 @@ import (
 
 type connectedSideForkDriver struct {
 	fakeDriver
-	mu      sync.Mutex
-	hosts   []domain.SessionID
-	anchors []string
-	forks   []*fakeConversation
-	configs []ports.ChatStartConfig
-	sources []string
-	// mainConfig is the main session's start config, kept to prove sides copy
-	// rather than mutate it.
+	mu         sync.Mutex
+	hosts      []domain.SessionID
+	anchors    []string
+	forks      []*fakeConversation
+	configs    []ports.ChatStartConfig
+	sources    []string
 	mainConfig ports.ChatStartConfig
 	onFork     func(context.Context) error
 	beforeFork func(context.Context) error

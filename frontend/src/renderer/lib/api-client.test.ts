@@ -110,9 +110,6 @@ describe("apiClient runtime base URL", () => {
 	});
 
 	it("rebases POSTs without Request-as-init, preserving method, body, and headers", async () => {
-		// Regression: `new Request(target, input)` needs the source request's
-		// `duplex` getter, which Electron's Chromium lacks — every request with a
-		// body threw. The rewrite must copy fields explicitly instead.
 		const seen: { url: string; method?: string; body?: string; contentType?: string | null }[] = [];
 		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
 			const headers = new Headers(init?.headers);
@@ -130,8 +127,6 @@ describe("apiClient runtime base URL", () => {
 
 		setApiBaseUrl("http://127.0.0.1:3037");
 
-		// A request built against an older address (the daemon moved while it was
-		// being built) still takes the rebase path.
 		const { error } = await apiClient.POST("/api/v1/sessions", {
 			baseUrl: "http://127.0.0.1:3001",
 			body: { projectId: "p1", prompt: "hello" },
@@ -145,8 +140,6 @@ describe("apiClient runtime base URL", () => {
 		expect(JSON.parse(seen[0].body ?? "{}")).toEqual({ projectId: "p1", prompt: "hello" });
 	});
 
-	// Rebasing buffers the body asynchronously; building against the current
-	// address sends the request in the same task that issued it.
 	it("builds requests against the runtime daemon address and passes them straight to fetch", async () => {
 		const seen: Request[] = [];
 		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
@@ -184,14 +177,11 @@ describe("apiClient runtime base URL", () => {
 			});
 		});
 
-		// Match the base openapi-fetch built the request against (the dev origin
-		// in jsdom), so the rewrite has nothing to do.
 		setApiBaseUrl(window.location.origin);
 		const { error } = await apiClient.GET("/api/v1/projects");
 
 		expect(error).toBeUndefined();
 		expect(seen).toHaveLength(1);
-		// Untouched pass-through: fetch receives the original Request object.
 		expect(seen[0]).toBeInstanceOf(Request);
 	});
 
@@ -211,7 +201,6 @@ describe("apiClient runtime base URL", () => {
 
 		expect(error).toBeUndefined();
 		expect(getApiBaseUrl()).toBe("");
-		// Empty base → no rewrite; openapi-fetch's own request reaches fetch as-is.
 		expect(seen).toHaveLength(1);
 		expect(seen[0].url).toContain("/api/v1/projects");
 	});
@@ -243,8 +232,6 @@ describe("apiClient runtime base URL", () => {
 	});
 });
 
-// Event streams hold their connection for life, so they open on a separate
-// loopback host and leave the daemon's six connections to ordinary requests.
 describe("eventStreamBaseUrl", () => {
 	afterEach(() => setApiDaemonStatus({ state: "stopped" }));
 
@@ -254,7 +241,6 @@ describe("eventStreamBaseUrl", () => {
 	});
 
 	it("keeps streams on 127.0.0.1 unless the daemon serves [::1] too", () => {
-		// The name resolves to ::1 first: without the daemon there, another process would get the streams.
 		expect(eventStreamBaseUrl("http://127.0.0.1:3001", false)).toBe("http://127.0.0.1:3001");
 		expect(eventStreamBaseUrl("http://127.0.0.1:3001/")).toBe("http://127.0.0.1:3001");
 	});
@@ -266,7 +252,6 @@ describe("eventStreamBaseUrl", () => {
 		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
 		setApiDaemonStatus({ state: "ready", port: 3001, pid: 3, ipv6Loopback: false });
 		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
-		// A stopped daemon's last flag does not carry over.
 		setApiDaemonStatus({ state: "ready", port: 3001, pid: 4, ipv6Loopback: true });
 		setApiDaemonStatus({ state: "stopped", ipv6Loopback: true });
 		expect(eventStreamBaseUrl("http://127.0.0.1:3001")).toBe("http://127.0.0.1:3001");
@@ -351,8 +336,6 @@ describe("normalizeApiOperation", () => {
 	});
 
 	it("keeps static child routes instead of treating them as ids", () => {
-		// These match an exact OpenAPI template, so the trailing segment must not
-		// be collapsed to :id (which would break aggregation and hide the route).
 		expect(normalizeApiOperation("GET", "/api/v1/agents/readiness")).toBe("GET /api/v1/agents/readiness");
 		expect(normalizeApiOperation("POST", "/api/v1/agents/readiness/ensure")).toBe(
 			"POST /api/v1/agents/readiness/ensure",
@@ -401,8 +384,6 @@ describe("normalizeApiOperation", () => {
 });
 
 describe("api error telemetry", () => {
-	// The dedupe window keys off Date.now(); jump the clock far past any
-	// earlier test's reports so each test starts with a clean window.
 	let clock = Date.UTC(2100, 0, 1);
 	beforeEach(() => {
 		vi.useFakeTimers({ toFake: ["Date"] });

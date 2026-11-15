@@ -1,4 +1,3 @@
-// Package mimocode implements the MiMo Code terminal-agent adapter.
 package mimocode
 
 import (
@@ -14,14 +13,12 @@ import (
 
 const adapterID = "mimo-code"
 
-// Plugin adapts the MiMo Code CLI to AO's terminal-agent contract.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
 }
 
-// New constructs a MiMo Code adapter.
 func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -31,10 +28,8 @@ var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentBinaryResolutionInvalidator = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
-// EmitsSemanticMessageAcceptance reports that MiMo emits accepted prompt events.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
-// Manifest describes the MiMo Code adapter and its capabilities.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID: adapterID, Name: "MiMo Code", Description: "Run MiMo Code worker sessions.", Version: "0.0.1",
@@ -42,12 +37,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec describes MiMo Code's model override setting.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `mimo --model`.")
 }
 
-// GetLaunchCommand builds the argv for a fresh MiMo Code session.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	binary, err := p.mimoBinary(ctx)
 	if err != nil {
@@ -64,7 +57,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetRestoreCommand builds the argv for restoring an exact MiMo Code session.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -89,7 +81,6 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// SessionInfo returns provider session metadata captured by AO's hook events.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -102,14 +93,10 @@ func validNativeSessionID(id string) bool {
 	return strings.HasPrefix(id, "ses_") && len(id) > len("ses_")
 }
 
-// usesAOAgent reports whether the launch selects AO's agent file (instructions
-// and permission rules). Bypass goes through it too: the CLI's bypass flag stops
-// at a consent screen on every launch.
 func usesAOAgent(mode ports.PermissionMode, inlinePrompt, promptFile string) bool {
 	return mimoAgentPermission(mode) != "" || inlinePrompt != "" || promptFile != ""
 }
 
-// mimoAgentPermission is the permission block AO's agent file carries for mode.
 func mimoAgentPermission(mode ports.PermissionMode) string {
 	switch ports.NormalizePermissionMode(mode) {
 	case ports.PermissionModeAcceptEdits:
@@ -155,15 +142,12 @@ var mimoBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveMiMoCodeBinary locates the user-installed MiMo Code executable.
 func ResolveMiMoCodeBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, mimoBinarySpec)
 }
 
-// ResolveBinary locates and caches the MiMo Code executable.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) { return p.mimoBinary(ctx) }
 
-// InvalidateBinaryResolution clears the cached MiMo Code executable path.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

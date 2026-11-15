@@ -7,9 +7,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Generation is checked separately in CI with the pinned npm run sqlc command.
-// Keep this test offline so the normal storage suite also catches malformed
-// YAML and missing boolean overrides before generated code masks the problem.
 func TestSQLCBooleanOverrides(t *testing.T) {
 	data, err := os.ReadFile("../../../sqlc.yaml")
 	if err != nil {

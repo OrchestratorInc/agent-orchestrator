@@ -11,9 +11,6 @@ import (
 	"testing"
 )
 
-// loginShellHome lays out a pinned ao, a stale one, and a home whose every
-// zsh and bash startup file prepends the stale one's directory and records
-// that it ran.
 func loginShellHome(t *testing.T) (pin, stale, home string) {
 	t.Helper()
 	root := t.TempDir()
@@ -56,9 +53,6 @@ func runLoginShell(t *testing.T, env map[string]string, stdin string, argv ...st
 	return strings.TrimSpace(string(out))
 }
 
-// TestLoginShellEnvKeepsThePinFirst is the #3562 reproduction: every shell
-// starts with the pin first, the user's startup files prepend a stale ao, and
-// with LoginShellEnv the pinned ao still wins after all of them ran.
 func TestLoginShellEnvKeepsThePinFirst(t *testing.T) {
 	pin, stale, home := loginShellHome(t)
 	path := pin + ":/usr/bin:/bin"
@@ -73,11 +67,9 @@ func TestLoginShellEnvKeepsThePinFirst(t *testing.T) {
 		stdin string
 		ran   string
 	}{
-		// Codex runs agent commands this way.
 		{"zsh -lc", []string{"/bin/zsh", "-l", "-c", probe}, "", ".zshenv .zprofile .zlogin"},
 		{"bash -lc", []string{"/bin/bash", "-l", "-c", probe}, "", ".bash_profile"},
 		{"zsh -c", []string{"/bin/zsh", "-c", probe}, "", ".zshenv"},
-		// AO terminals start interactive login shells.
 		{"zsh --login -i", []string{"/bin/zsh", "--login", "-i"}, probe + "\nexit\n", ".zshenv .zprofile .zshrc .zlogin"},
 		{"bash --login -i", []string{"/bin/bash", "--login", "-i"}, "\n" + probe + "\nexit\n", ".bash_profile"},
 	} {
@@ -98,9 +90,6 @@ func TestLoginShellEnvKeepsThePinFirst(t *testing.T) {
 	}
 }
 
-// TestLoginShellEnvRunsTheUsersOwnHooks checks the user's own ZDOTDIR, one
-// set from ~/.zshenv, and BASH_ENV all still run, and that a daemon started
-// inside an AO shell does not take AO's wrappers for the user's.
 func TestLoginShellEnvRunsTheUsersOwnHooks(t *testing.T) {
 	pin, _, home := loginShellHome(t)
 	config := filepath.Join(home, ".config", "zsh")
@@ -124,7 +113,6 @@ func TestLoginShellEnvRunsTheUsersOwnHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The daemon itself started from a shell carrying these wrappers.
 	again, err := LoginShellEnv(path, func(key string) string { return loginEnv[key] }, nil, dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -146,11 +134,6 @@ func TestLoginShellEnvRunsTheUsersOwnHooks(t *testing.T) {
 	}
 }
 
-// TestLoginShellEnvHandsInteractiveShellsBackTheirZDOTDIR covers a terminal:
-// /etc/zshrc (macOS) names the history file after ZDOTDIR before .zshrc, and
-// tools like p10k configure write to ${ZDOTDIR:-~}, so an interactive zsh must
-// end on the user's own directory. An agent's non-interactive shell keeps the
-// wrappers, so the commands it starts stay pinned.
 func TestLoginShellEnvHandsInteractiveShellsBackTheirZDOTDIR(t *testing.T) {
 	pin, _, home := loginShellHome(t)
 	dataDir := filepath.Join(t.TempDir(), "data")

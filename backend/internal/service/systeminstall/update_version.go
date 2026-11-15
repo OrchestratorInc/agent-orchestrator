@@ -23,16 +23,10 @@ type updateVersion struct {
 	build      string
 }
 
-// versionScheme says how a harness formats the suffix after its numeric core.
 type versionScheme int
 
 const (
-	// versionSemver reads a hyphen suffix as a semver prerelease.
 	versionSemver versionScheme = iota
-	// versionBuildSuffix reads a hyphen suffix as a build identifier, such as
-	// Cursor's 2026.10.01-e373342, Amp's 0.0.1791388870-g4d32fb, or Muse's
-	// 1.4.3-R5018.1. These vendors publish no prereleases on the channel AO
-	// checks and order releases by the numeric core alone.
 	versionBuildSuffix
 )
 
@@ -47,12 +41,6 @@ func versionSchemeFor(target Target) versionScheme {
 
 var hermesVersionToken = regexp.MustCompile(`^Hermes Agent (v\d[^ \r\n]*)`)
 
-// installedVersionText narrows a version probe's output to the text naming the
-// installed release. Hermes's --version also prints its release date and its
-// Python and SDK versions, and its Homebrew build reports a stale built-in
-// version, so a Homebrew Cellar path's version wins, then the banner's token.
-// A tagless source checkout's `vgit.<sha>` banner names the release tag at
-// that commit.
 func installedVersionText(target Target, resolvedPath, output string) string {
 	if target != TargetHermes {
 		return output
@@ -78,10 +66,6 @@ func (scheme versionScheme) find(text string) (updateVersion, bool) {
 	var version updateVersion
 	found := false
 	for _, span := range updateVersionPattern.FindAllStringIndex(text, -1) {
-		// Reject partial matches inside a longer version or identifier. A tag
-		// prefix such as rust-v is allowed, but malformed cores are never sliced.
-		// Some CLIs print a sentence-ending period (Copilot: "CLI 1.0.91.").
-		// Only allow one period followed by whitespace/end, never .foo or .. .
 		sentenceEnd := span[1] < len(text) && text[span[1]] == '.' &&
 			(span[1]+1 == len(text) || strings.ContainsRune(" \t\r\n", rune(text[span[1]+1])))
 		if span[0] > 0 && versionTokenByte(text[span[0]-1], false) || span[1] < len(text) && versionTokenByte(text[span[1]], true) && !sentenceEnd {
@@ -92,10 +76,6 @@ func (scheme versionScheme) find(text string) (updateVersion, bool) {
 			return updateVersion{}, false
 		}
 		if found && candidate.display != version.display {
-			// Runtime warnings may precede the CLI version on either stream.
-			// Without an unambiguous version, the advisory must remain unknown.
-			// One release printed with and without its build, as in Muse's
-			// "1.4.3 (1.4.3-R5018.1)", keeps the form that names the build.
 			if !sameRelease(version, candidate) || version.build != "" && candidate.build != "" {
 				return updateVersion{}, false
 			}
@@ -121,9 +101,6 @@ func (scheme versionScheme) parse(text string) (updateVersion, bool) {
 	return version, true
 }
 
-// compare orders two releases. Under versionBuildSuffix, equal cores with
-// different builds have no order: a same-day Cursor rebuild or a new Muse
-// build number is neither provably newer nor provably current.
 func (scheme versionScheme) compare(installed, latest updateVersion) (int, bool) {
 	comparison, canCompare := compareUpdateVersions(installed, latest)
 	if canCompare && comparison == 0 && scheme == versionBuildSuffix && unorderedBuilds(installed, latest) {
@@ -132,7 +109,6 @@ func (scheme versionScheme) compare(installed, latest updateVersion) (int, bool)
 	return comparison, canCompare
 }
 
-// versionAtMost reports whether left is provably no newer than right.
 func versionAtMost(scheme versionScheme, left, right string) bool {
 	l, leftOK := scheme.parse(left)
 	r, rightOK := scheme.parse(right)

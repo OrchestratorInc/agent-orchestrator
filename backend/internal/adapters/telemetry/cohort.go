@@ -10,19 +10,10 @@ import (
 	"strings"
 )
 
-// experimentCohortFile holds this install's experiment bucket, 0-99. It is
-// assigned once, on the first run that reaches it (daemon or desktop, whichever
-// is first), and never changes, so an onboarding test can split installs by
-// bucket range without PostHog feature flags. The desktop app reads and creates
-// the same file (frontend/src/shared/telemetry.ts).
 const experimentCohortFile = "telemetry_experiment_cohort"
 
-// experimentCohortBuckets is the bucket count: experiment_cohort is in [0, 100).
 const experimentCohortBuckets = 100
 
-// loadOrAssignExperimentCohort returns this install's bucket, assigning one if
-// none exists. ok is false when the bucket cannot be read or stored, and the
-// property is then omitted rather than guessed.
 func loadOrAssignExperimentCohort(dataDir string) (int, bool) {
 	if dataDir == "" {
 		return 0, false
@@ -38,8 +29,6 @@ func loadOrAssignExperimentCohort(dataDir string) (int, bool) {
 		if err != nil {
 			return 0, false
 		}
-		// Write a complete temp file, then link it into place: the link fails if
-		// another process won, and a reader never sees a half-written file.
 		if err := os.MkdirAll(dataDir, 0o700); err != nil {
 			return 0, false
 		}

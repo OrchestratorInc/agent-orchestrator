@@ -172,8 +172,6 @@ function renderTopbarSessions(
 	return { ...result, queryClient, rerenderTopbar: () => result.rerender(topbar()) };
 }
 
-// The board header renders ProjectBoardActions; drive them through the same
-// orchestrator hook the board uses so the activity and resume paths stay covered.
 function BoardActionsHarness({ workspace }: { workspace: WorkspaceSummary }) {
 	const actions = useProjectOrchestratorAction({
 		projectId: workspace.id,
@@ -232,7 +230,6 @@ function renderKill(session: WorkspaceSession = worker, orchestratorId?: string)
 	};
 }
 
-// The top bar has no Archive button; ⌘⇧A opens the same confirmation.
 function openArchiveConfirm() {
 	act(() => appShortcutBus.emit({ id: "archive-session" }));
 }
@@ -267,7 +264,6 @@ describe("optimistic orchestrator topbar", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Board" })).toBeDisabled();
 		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
-		// The editor and cue controls hold their place so nothing slides in when the session lands.
 		expect(screen.getByRole("button", { name: "Choose editor", hidden: true })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Run a cue" })).toBeDisabled();
 	});
@@ -285,8 +281,6 @@ describe("optimistic orchestrator topbar", () => {
 });
 
 describe("SessionTopbarActions embedded actions", () => {
-	// The branch belongs to detail surfaces, not the top bar: an orchestrator's
-	// actions stay intact (#3874, regressed by the badge #4252 added beside these actions).
 	it("keeps the worktree branch out of the orchestrator actions", () => {
 		renderTopbar(sessionWith({ ...orchestrator, branch: "ao/orch-root" }));
 
@@ -295,8 +289,6 @@ describe("SessionTopbarActions embedded actions", () => {
 		expect(screen.getByRole("button", { name: "New task" })).toBeInTheDocument();
 	});
 
-	// The shared topbar has no identity block, so the owner tag of a session
-	// someone the project was shared with asked for leads the session actions.
 	it("tags a shared cloud session with its requester", () => {
 		const { container, unmount } = renderTopbar(sessionWith({ cloud: { orgId: "org", requestedBy: { userId: "u1", name: "Vaanya" } } }));
 		const tag = container.querySelector("[data-session-owner-tag]");
@@ -343,7 +335,6 @@ describe("SessionTopbarActions embedded actions", () => {
 		);
 		openArchiveConfirm();
 		await clickKillDialogConfirm();
-		// The Cloud archive goes to the control plane, not the local daemon.
 		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/" });
 	});
@@ -399,8 +390,6 @@ describe("SessionTopbarActions embedded actions", () => {
 });
 
 describe("SessionTopbarActions route", () => {
-	// A session switch renders in the background while the previous session
-	// stays on screen; its actions must follow that session, not the URL.
 	function renderRouted(urlSessionId: string, routeSessionId?: string) {
 		const data: WorkspaceSummary[] = [{
 			id: "proj-1",
@@ -515,8 +504,6 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		});
 	});
 
-	// One emphasized action per view, at the end of the row: New task on an
-	// orchestrator; a worker's Orchestrator link stays quiet.
 	it("ends the orchestrator row with the only emphasized action", () => {
 		renderTopbar(orchestrator);
 
@@ -650,11 +637,6 @@ describe("SessionTopbarActions open-in-editor control", () => {
 	});
 
 	it("hides the open-in-editor control for a cloud session instead of asking the local daemon for it", async () => {
-		// Cloud sessions have no local workspace: the local daemon has never
-		// heard of them, so this control's own "workspace" query would 404 with
-		// "Unknown session" and surface that raw local-daemon error in the
-		// topbar (see issue #4570). Hiding the control for kind === CLOUD_PROJECT_KIND
-		// avoids the query entirely.
 		renderTopbarSessions([worker], "sess-1", undefined, CLOUD_PROJECT_KIND);
 
 		await waitFor(() => {
@@ -762,7 +744,6 @@ describe("SessionArchiveShortcut", () => {
 
 		it("warns when the daemon does not confirm the delete", async () => {
 			useUiStore.setState({ globalToasts: [] });
-			// A failed delete and an older daemon both answer without artifactsDeleted.
 			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
 			renderKill(withArtifacts(["report.md"]));
 
@@ -905,7 +886,6 @@ describe("SessionArchiveShortcut", () => {
 
 		openArchiveConfirm();
 		await clickKillDialogConfirm();
-		// A pending archive ignores the shortcut.
 		openArchiveConfirm();
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 

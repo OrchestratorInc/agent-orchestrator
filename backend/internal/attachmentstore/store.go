@@ -1,6 +1,3 @@
-// Package attachmentstore owns the durable copy of files attached to session
-// messages. Worktree copies are projections for agents; the canonical bytes
-// live under AO's data directory so worktree teardown cannot erase history.
 package attachmentstore
 
 import (
@@ -23,25 +20,19 @@ import (
 )
 
 const (
-	// WorkspaceDir is the worktree-relative directory named in chat messages.
 	WorkspaceDir = ".ao/attachments"
 	durableDir   = "attachments"
-	// MaxFileBytes matches the HTTP attachment limit and also bounds legacy
-	// imports from agent-writable worktrees.
 	MaxFileBytes = 50 << 20
 )
 
 var (
-	// ErrExists reports that the generated name is already owned by history.
 	ErrExists   = errors.New("attachment already exists")
 	errEmpty    = errors.New("attachment is empty")
 	errTooLarge = errors.New("attachment is too large")
 )
 
-// Store persists canonical attachment bytes beneath an AO data directory.
 type Store struct {
-	dataDir string
-	// ponytail: fixed stripes bound memory; use keyed locks if unrelated uploads contend.
+	dataDir         string
 	projectionLocks [64]sync.Mutex
 }
 
@@ -51,7 +42,6 @@ func (s *Store) projectionLock(id domain.SessionID) *sync.Mutex {
 	return &s.projectionLocks[h.Sum64()%uint64(len(s.projectionLocks))]
 }
 
-// New returns a store rooted at dataDir.
 func New(dataDir string) *Store {
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = ""
@@ -59,9 +49,6 @@ func New(dataDir string) *Store {
 	return &Store{dataDir: dataDir}
 }
 
-// Put writes the canonical copy before projecting it into the live worktree.
-// Returning success therefore means both the history copy and the agent-visible
-// copy exist.
 func (s *Store) Put(ctx context.Context, id domain.SessionID, workspacePath, name string, data []byte) error {
 	lock := s.projectionLock(id)
 	lock.Lock()
@@ -86,11 +73,6 @@ func (s *Store) Put(ctx context.Context, id domain.SessionID, workspacePath, nam
 	return nil
 }
 
-// PutCanonical stores an attachment for a session that has no worktree yet.
-// An asynchronous spawn answers the API before its worktree exists, so a file
-// attached to a message typed in that window has nowhere to be written; the
-// canonical copy is already the durable source of truth, and
-// MaterializeWorkspace replays it once the worktree lands.
 func (s *Store) PutCanonical(ctx context.Context, id domain.SessionID, name string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -104,8 +86,6 @@ func (s *Store) PutCanonical(ctx context.Context, id domain.SessionID, name stri
 	return s.writeCanonical(ctx, id, name, data)
 }
 
-// writeCanonical stores bytes in a session's canonical directory only. Callers
-// validate the name first: attachment names and render names follow different rules.
 func (s *Store) writeCanonical(ctx context.Context, id domain.SessionID, name string, data []byte) error {
 	if len(data) == 0 {
 		return errEmpty
@@ -127,9 +107,6 @@ func (s *Store) writeCanonical(ctx context.Context, id domain.SessionID, name st
 	return nil
 }
 
-// ImportWorkspace migrates legacy worktree-only attachments into canonical
-// storage. Existing canonical files win because they are already the durable
-// source of truth. Symlinks and non-regular entries are ignored.
 func (s *Store) ImportWorkspace(ctx context.Context, id domain.SessionID, workspacePath string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -142,8 +119,6 @@ func (s *Store) ImportWorkspace(ctx context.Context, id domain.SessionID, worksp
 	}
 	workspaceRoot, err := os.OpenRoot(workspacePath)
 	if errors.Is(err, fs.ErrNotExist) {
-		// A stale or already-removed worktree has no legacy bytes to import.
-		// Teardown must still be able to finish for that session.
 		return nil
 	}
 	if err != nil {
@@ -213,9 +188,6 @@ func (s *Store) ImportWorkspace(ctx context.Context, id domain.SessionID, worksp
 	return nil
 }
 
-// MaterializeWorkspace projects every canonical attachment into a restored
-// worktree before its controller is relaunched. beforeWrite runs once, only
-// when a file exists, and must succeed before any file becomes visible there.
 func (s *Store) MaterializeWorkspace(ctx context.Context, id domain.SessionID, workspacePath string, beforeWrite func() error) (bool, error) {
 	lock := s.projectionLock(id)
 	lock.Lock()
@@ -283,7 +255,6 @@ func (s *Store) MaterializeWorkspace(ctx context.Context, id domain.SessionID, w
 	return materialized, nil
 }
 
-// Open opens a regular canonical attachment for HTTP serving.
 func (s *Store) Open(ctx context.Context, id domain.SessionID, name string) (*os.File, fs.FileInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -305,8 +276,6 @@ func (s *Store) Open(ctx context.Context, id domain.SessionID, name string) (*os
 	return openRegularFile(ctx, sessionRoot, name)
 }
 
-// RemoveSession removes canonical files only when the owning session row was
-// itself permanently deleted. Kill and cleanup intentionally do not call it.
 func (s *Store) RemoveSession(ctx context.Context, id domain.SessionID) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -341,8 +310,6 @@ func (s *Store) RemoveSession(ctx context.Context, id domain.SessionID) error {
 	return ctx.Err()
 }
 
-// NameFromWorkspacePath recognizes a direct file in the attachment projection.
-// Nested paths and traversal are deliberately rejected.
 func NameFromWorkspacePath(raw string) (string, bool) {
 	raw = strings.ReplaceAll(raw, `\`, "/")
 	raw = strings.TrimPrefix(raw, "/")
@@ -530,15 +497,10 @@ func writeReaderAtomicRoot(ctx context.Context, root *os.Root, dir, name string,
 			}
 			return err
 		}
-		// Linking atomically commits the no-replace target. Temporary-link
-		// cleanup is not part of that commit and the deferred removal retries it.
 		_ = root.Remove(tmpName)
 		return nil
 	}
 	if err := root.Rename(tmpName, target); err != nil {
-		// Windows cannot atomically replace an existing destination with Rename.
-		// This path is used only for a disposable worktree projection; canonical
-		// creation always uses the no-replace hard-link commit above.
 		if runtime.GOOS != "windows" {
 			return err
 		}

@@ -30,12 +30,6 @@ func TestPreviewServerHelper(t *testing.T) {
 	}
 }
 
-// serveUntilFirstRequestThenExit binds the loopback port passed via PORT,
-// answers HTTP requests until AO_PREVIEW_CRASH_AFTER_MS milliseconds have
-// passed (default 200ms), then exits with a non-zero status. That window is
-// long enough for the manager's readiness probe to flip the run to
-// StateReady, and short enough that the subsequent waitForExit goroutine
-// observes a crash rather than a user-initiated stop (issue #4500).
 func serveUntilFirstRequestThenExit(t *testing.T) {
 	t.Helper()
 	port, err := strconv.Atoi(os.Getenv("PORT"))
@@ -148,9 +142,6 @@ func TestManagerFiresOnExitWhenServerCrashesAfterLaunch(t *testing.T) {
 	t.Cleanup(manager.Close)
 
 	gotStatus := make(chan Status, 1)
-	// Register OnExit BEFORE Start so the readiness-to-crash window cannot
-	// outrun the registration. The daemon wires the same way, after building
-	// the preview manager but before any user request can reach Start.
 	manager.SetOnExit(func(_ context.Context, _ domain.SessionID, s Status) {
 		gotStatus <- s
 	})
@@ -163,9 +154,6 @@ func TestManagerFiresOnExitWhenServerCrashesAfterLaunch(t *testing.T) {
 		t.Fatalf("status = %+v, want ready", status)
 	}
 
-	// Wait for the process to die on its own. The crash helper exits with a
-	// non-zero code a few hundred ms after starting; waitForExit then flips
-	// the run to StateFailed and fires the OnExit callback.
 	select {
 	case s := <-gotStatus:
 		if s.State != StateFailed {
@@ -181,8 +169,6 @@ func TestManagerFiresOnExitWhenServerCrashesAfterLaunch(t *testing.T) {
 		t.Fatal("OnExit callback never fired; manager did not notice the server crashed")
 	}
 
-	// Status must reflect the crash immediately, before the
-	// failedStatusRetention window expires (issue #4500).
 	post := manager.Status("ao-1")
 	if post.State != StateFailed {
 		t.Fatalf("post-crash state = %q, want %q", post.State, StateFailed)
@@ -346,10 +332,6 @@ func helperConfiguration(name string, kind TargetKind) Configuration {
 	}
 }
 
-// crashConfiguration returns a configuration whose process boots the
-// readiness probe on the same loopback port and then exits on its own with a
-// non-zero status. The manager should treat this as StateFailed and fire
-// OnExit (issue #4500).
 func crashConfiguration(name string, kind TargetKind) Configuration {
 	return Configuration{
 		Name:               name,

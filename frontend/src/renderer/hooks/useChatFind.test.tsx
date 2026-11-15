@@ -64,8 +64,6 @@ describe("find in chat interactions", () => {
 		expect(get.mock.calls[0][1].params.query).toMatchObject({ query: "hello", anchorMessageId: "m", anchorBlock: 0, anchorOffset: 0, fallbackToPrevious: false });
 		expect(screen.getByText("2/2")).toBeInTheDocument();
 		expect(reveal).toHaveBeenLastCalledWith(hits[1]);
-		// Another result for the same word searches again from its own message
-		// rather than keeping the active match.
 		const calls = get.mock.calls.length;
 		act(() => openFind?.("hello", "other")); await tick();
 		expect(get.mock.calls.length).toBeGreaterThan(calls);

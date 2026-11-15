@@ -214,7 +214,7 @@ func TestTunnelOnlyAfterDisabledSecurePairingPreservesUserServe(t *testing.T) {
 	if err := bridge.Disable(); err != nil {
 		t.Fatal(err)
 	}
-	userServe = true // a separate route takes over after AO successfully cleared its own
+	userServe = true
 	if _, err := bridge.EnableTunnelOnly(); err != nil {
 		t.Fatalf("disabled secure-pairing host could not switch to tunnel-only: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestTunnelOnlyRefusesInterruptedSecurePairingBridge(t *testing.T) {
 	if _, err := bridge.SetSecurePairing(true); err != nil {
 		t.Fatal(err)
 	}
-	bridge.LAN.(*fakeLAN).running = false // daemon/listener died before disabling Serve
+	bridge.LAN.(*fakeLAN).running = false
 	if _, err := bridge.EnableTunnelOnly(); err == nil || bridge.LAN.Running() {
 		t.Fatalf("tunnel-only accepted interrupted secure-pairing bridge: err=%v running=%v", err, bridge.LAN.Running())
 	}

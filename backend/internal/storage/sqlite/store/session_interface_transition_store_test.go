@@ -211,8 +211,6 @@ func TestSessionInterfaceTransitionRecoveryClaimRequiresExactLatestPredecessor(t
 		}
 	}
 	createTerminal("authorized-failure", now)
-	// Transition creation can share one injected/truncated clock tick. The
-	// second insert is still the newer saga and must supersede stale consent.
 	createTerminal("newer-strict-saga", now)
 
 	pending := domain.SessionInterfaceTransition{
@@ -277,9 +275,6 @@ func TestCommitSessionControllerEpochRetiresCheckpointWithoutErasingLastHumanTim
 	}
 }
 
-// A Chat whose controller never started has no conversation row, which the
-// freshness proof accepts. The fresh terminal epoch commits with nothing to
-// release instead of failing "empty root proof changed".
 func TestCommitSessionControllerEpochFreshTerminalWithoutConversation(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()
@@ -306,8 +301,6 @@ func TestCommitSessionControllerEpochFreshTerminalWithoutConversation(t *testing
 	}
 }
 
-// A conversation with provider history is not untouched: the fresh terminal
-// epoch must still fail closed and leave the Chat in place.
 func TestCommitSessionControllerEpochFreshTerminalRefusesTouchedConversation(t *testing.T) {
 	st := newTestStore(t)
 	ctx := context.Background()

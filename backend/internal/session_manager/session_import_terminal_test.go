@@ -76,7 +76,6 @@ func TestTerminalImportUsesNativeRestoreAndAdoptsWithoutChat(t *testing.T) {
 			if len(a.relocations) != 1 || a.relocations[0].LaunchCWD != child || result.Session.Metadata.WorkspacePath != workspace || result.Session.Metadata.ImportSource.ResumeCwd != child {
 				t.Fatalf("relocation = %#v, metadata = %#v", a.relocations, result.Session.Metadata)
 			}
-			// A later native launch uses the pinned directory and never copies again.
 			later := st.sessions[rec.ID]
 			later.Activity.State = domain.ActivityExited
 			later.Metadata.RuntimeLaunchID, later.Metadata.RuntimeHandleID = "", ""

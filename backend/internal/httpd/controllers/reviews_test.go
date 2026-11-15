@@ -20,7 +20,6 @@ import (
 )
 
 type fakeReviewService struct {
-	// triggeredHarness/config record the override the controller forwarded.
 	triggeredHarness  domain.ReviewerHarness
 	triggeredConfig   domain.AgentConfig
 	triggeredMode     domain.ReviewerInterfaceMode

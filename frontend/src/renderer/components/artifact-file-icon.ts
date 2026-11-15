@@ -11,15 +11,8 @@ const SPREADSHEET = /\.(?:xlsx?|ods|numbers)$/i;
 const SLIDES = /\.(?:pptx?|key|odp)$/i;
 const ARCHIVE = /\.(?:zip|tar|t?gz|bz2|xz|7z|rar)$/i;
 
-/**
- * The icon that names an artifact's file type wherever artifacts are listed:
- * the Summary list, the Artifacts page and gallery cards. Pages and Markdown
- * come from the file's kind; everything else from its extension. PDFs and
- * unknown files share the plain file icon.
- */
 export function artifactFileIcon(artifact: { kind: ArtifactKind; path: string }): AppIcon {
 	const { kind, path } = artifact;
-	// Not a globe: that marks a published artifact beside its time.
 	if (kind === "html" || /\.html?$/i.test(path)) return FileCode2;
 	if (kind === "markdown" || isMarkdownPreviewPath(path)) return FileText;
 	if (isRasterImagePath(path) || isSvgPath(path)) return Image;

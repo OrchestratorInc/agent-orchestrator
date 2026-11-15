@@ -32,8 +32,6 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 		if targetAccountID != "" {
 			return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_ACCOUNT_RECONCILIATION_UNAVAILABLE", "The device Codex account could not be refreshed")
 		}
-		// Normal Add remains available when the device store cannot be inspected,
-		// but it must never auto-activate based on an unsafe absence assumption.
 		deviceState.exists = true
 	}
 	if targetAccountID != "" {
@@ -80,7 +78,6 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 		m.clearLoginReservation(id)
 		return CodexAccountLoginTerminalStart{}, apierr.Unavailable("CODEX_LOGIN_TERMINAL_UNAVAILABLE", "Codex login terminal is unavailable")
 	}
-	// Keep account login on the session resolver; PATH may select another install.
 	codex, err := m.resolveBinary(ctx)
 	if err != nil || strings.TrimSpace(codex) == "" {
 		_ = os.RemoveAll(pendingDir)
@@ -113,9 +110,6 @@ func (m *codexAccountManager) openLoginTerminal(ctx context.Context, targetAccou
 	return CodexAccountLoginTerminalStart{Operation: snapshot, ShellTerminal: terminal}, nil
 }
 
-// monitorLoginTerminal owns login completion in the daemon. On Windows the
-// ConPTY host can outlive its command to preserve scrollback, so host liveness
-// is not a reliable signal that Codex has finished writing the credential.
 func (m *codexAccountManager) monitorLoginTerminal(ctx context.Context, operationID, handleID string) {
 	for {
 		m.mu.Lock()
@@ -291,15 +285,8 @@ func (m *codexAccountManager) verifyLogin(ctx context.Context, operationID strin
 		activationCredentialPath := filepath.Join(record.Home, codexCredentialFilename)
 		activateFirst := !op.deviceState.exists
 		if activateFirst {
-			// First-account convenience is only safe while the device store is
-			// still empty. The empty expected value is an explicit compare-and-
-			// swap guard, so an external login that appeared during the terminal
-			// flow is never overwritten.
 			activationErr := m.activateFromCredentialLocked(ctx, record.Snapshot.ID, activationCredentialPath, []byte{})
 			if errors.Is(activationErr, ports.ErrCodexGlobalAccountChanged) {
-				// An external login appeared after Add started. The account is still
-				// safely saved; leave the device untouched and let reconciliation
-				// project the newly authoritative device account.
 				m.requestGlobalReconciliationIfNeeded()
 				activateFirst = false
 			} else if activationErr != nil {
@@ -315,9 +302,6 @@ func (m *codexAccountManager) verifyLogin(ctx context.Context, operationID strin
 		}
 	}
 	m.invalidateCredentialEvidence(record.Snapshot.ID)
-	// A native login just produced and committed this credential. Keep that
-	// immediate success visible while the independent protected check enriches
-	// email, plan and usage in the background.
 	m.catalog.updateSnapshot(record.Snapshot.ID, func(snapshot *domain.CodexAccountSnapshot) {
 		snapshot.Authentication = successfulAuthentication(m.now(), domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, "Codex is signed in.")
 		if observation.Method != domain.CodexAuthMethodUnknown {

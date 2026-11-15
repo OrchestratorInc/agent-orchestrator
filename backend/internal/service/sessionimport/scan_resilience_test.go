@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// One provider's unreadable root, here a file in place of Codex's root, hides only its
-// own chats; the other providers' chats are still offered.
 func TestScanSkipsAProviderWhoseStoreCannotBeRead(t *testing.T) {
 	claudeRoot := t.TempDir()
 	codexRoot := filepath.Join(t.TempDir(), "not-a-directory")
@@ -30,8 +28,6 @@ func TestScanSkipsAProviderWhoseStoreCannotBeRead(t *testing.T) {
 	}
 }
 
-// A terminated import no longer holds its conversation: the chat is offered
-// again instead of pointing at the dead session.
 func TestScanOffersAChatWhoseImportWasTerminated(t *testing.T) {
 	root := t.TempDir()
 	id := "22222222-2222-4222-8222-222222222222"

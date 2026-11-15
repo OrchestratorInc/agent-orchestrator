@@ -104,7 +104,6 @@ function ArtifactPreviewBody({ artifact }: { artifact: ArtifactRow }) {
 	const { client: cloudClient } = useCloudCp(cloud);
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const contentUrl = artifactContentUrl(artifact.sessionId, artifact.path, artifact.rawUrl);
-	// A file the agent rewrites while it is open shows the new content.
 	useArtifactFileChanges({ id: artifact.sessionId, cloud: artifact.cloud }, true);
 	if (artifact.cloud) {
 		const orgId = artifact.cloud.orgId;

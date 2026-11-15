@@ -1,23 +1,5 @@
 package cli
 
-// dto_drift_e2e_test.go is the DTO-drift guard for the `ao spawn` and
-// `ao project add` commands. The CLI defines its OWN request structs
-// (spawnRequest in spawn.go, addProjectRequest in project.go) that are separate
-// copies of the daemon's canonical request DTOs (controllers.SpawnSessionRequest
-// and project.AddInput). Nothing else verifies the two sides agree on JSON field
-// names — a renamed `json:"..."` tag on either side compiles fine but silently
-// breaks at runtime.
-//
-// This test stands up the REAL daemon HTTP router + REAL controllers (with fakes
-// only BELOW the controller, at the service layer) and drives the actual CLI
-// commands through the actual postJSON client over a real loopback HTTP round
-// trip. If the CLI's JSON field names diverge from what the controllers decode,
-// the captured values are wrong/empty and the subtests fail.
-//
-// (This lives in a separate file from the build-tagged e2e_test.go so it runs in
-// the normal `go test ./...` lane — it binds no extra ports beyond httptest and
-// spawns no processes.)
-
 import (
 	"bytes"
 	"context"
@@ -41,9 +23,6 @@ import (
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 )
 
-// fakeSessionService captures the ports.SpawnConfig the controller decodes from
-// the CLI's request body. Its embedded interface keeps unrelated controller
-// methods outside this DTO-drift test's fixture surface.
 type fakeSessionService struct {
 	controllers.SessionService
 	spawned ports.SpawnConfig
@@ -119,9 +98,6 @@ func authorizedCodexInventory() agentsvc.Inventory {
 	}
 }
 
-// fakeProjectManager captures the project.AddInput the controller decodes from
-// the CLI's request body. Every other method is a no-op so it satisfies the
-// projectsvc.Manager interface.
 type fakeProjectManager struct {
 	added projectsvc.AddInput
 }
@@ -184,10 +160,6 @@ func (f *fakeProjectManager) Remove(context.Context, domain.ProjectID) (projects
 	return projectsvc.RemoveResult{}, nil
 }
 
-// startDriftTestDaemon stands up the real router+controllers backed by the
-// supplied fakes and points the CLI's run-file at it. The CLI discovers the
-// server purely via AO_RUN_FILE + the run-file port, so this is a genuine
-// loopback round trip through postJSON.
 func startDriftTestDaemon(t *testing.T, sessions controllers.SessionService, projects projectsvc.Manager) {
 	t.Helper()
 

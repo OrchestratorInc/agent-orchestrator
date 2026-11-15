@@ -1,9 +1,5 @@
 import { fileChangeFiles, type ConversationItem } from "../types/conversation";
 
-/**
- * Absolute paths and a worktree cwd gathered from the same turn's activities, so a
- * turn-diff basename can be shown like the Edited tooltip.
- */
 export type TurnPathHints = {
 	byBase: Map<string, string | undefined>;
 	cwd?: string;
@@ -44,7 +40,6 @@ export function turnPathHints(items: ConversationItem[] | undefined): TurnPathHi
 	return { byBase, cwd };
 }
 
-/** Prefer an absolute path from the turn; otherwise join the worktree cwd. */
 export function resolveTurnFilePath(path: string, hints: TurnPathHints): string {
 	if (looksAbsolutePath(path)) return path;
 	const fromBasename = hints.byBase.get(fileBasename(path));
@@ -56,7 +51,6 @@ export function resolveTurnFilePath(path: string, hints: TurnPathHints): string 
 	return path;
 }
 
-/** Strip a worktree root and keep enough suffix to disambiguate duplicate basenames. */
 export function workspaceRelativeOpenPath(absolutePath: string, cwd?: string): string {
 	const normalized = absolutePath.replace(/\\/g, "/");
 	if (cwd) {
@@ -73,7 +67,6 @@ export function workspaceRelativeOpenPath(absolutePath: string, cwd?: string): s
 	return fileBasename(normalized);
 }
 
-/** Workspace-relative path to open in the Files panel from a turn diff row. */
 export function turnFileOpenPath(path: string, hints: TurnPathHints): string {
 	const normalized = path.replace(/^\.\//, "");
 	if (!looksAbsolutePath(normalized)) {

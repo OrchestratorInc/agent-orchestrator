@@ -59,7 +59,6 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 	if (query.isLoading) return <div className="project-settings-form" aria-busy="true" aria-label={t("settings.project.loading")}><section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section></div>;
 	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-(--settings-row-inset)"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="quiet" size="sm" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
 	const save = async (env: Record<string, string>) => {
-		// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
 		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
 		if (current.error) throw apiErrorException(current.error);
 		if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
@@ -76,11 +75,6 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 	}} />;
 }
 
-/**
- * A Cloud project's environment variables, kept encrypted on the control
- * plane. Only an organization owner or admin sees and changes their values;
- * everyone else sees their names, read-only.
- */
 export function CloudProjectEnvironmentSettings({ projectId, cloudOrgId, onSaveState }: { projectId: string; cloudOrgId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
 	const { t } = useTranslation();
 	const { client, ready, baseUrl } = useCloudCp();
@@ -108,9 +102,7 @@ export function CloudProjectEnvironmentSettings({ projectId, cloudOrgId, onSaveS
 function VariablesEditor({ initial, description, note, readOnly = false, persist, onSaveState, onSaved }: {
 	initial?: Record<string, string>;
 	description: string;
-	/** Who can read the values once they are set, under the description. */
 	note?: string;
-	/** Names only: a Cloud member who is not an owner or admin cannot see or change the values. */
 	readOnly?: boolean;
 	persist: (env: Record<string, string>) => Promise<void>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
@@ -127,7 +119,6 @@ function VariablesEditor({ initial, description, note, readOnly = false, persist
 	const [importedCount, setImportedCount] = useState<number | null>(null);
 	const filled = rows.filter(({ name, value }) => name !== "" || value !== "");
 	const dirty = JSON.stringify(Object.fromEntries(filled.map(({ name, value }) => [name, value]))) !== saved;
-	// The env map this draft would save, or null while a name is invalid or duplicated.
 	const envDraft = (() => {
 		const env: Record<string, string> = {};
 		const names = new Set<string>();
@@ -179,7 +170,6 @@ function VariablesEditor({ initial, description, note, readOnly = false, persist
 		setPasteText("");
 		setActiveTab("variables");
 	};
-	// A draft that cannot be saved must still tell the dialog, or a pending close waits forever.
 	const reject = (message: string) => {
 		setError(message);
 		onSaveState?.({ phase: "failed", dirty, requestPending: false, error: message });
@@ -203,11 +193,9 @@ function VariablesEditor({ initial, description, note, readOnly = false, persist
 			env[name] = row.value;
 		}
 		setError(null);
-		// Autosave does not send the same draft again after this save fails.
 		attempted.current = JSON.stringify(env);
 		mutation.mutate(env);
 	};
-	// Autosave: a draft with valid, unique names saves shortly after the last edit.
 	useEffect(() => {
 		if (readOnly || !dirty || mutation.isPending || activeTab !== "variables" || envDraft === null) return;
 		const key = JSON.stringify(envDraft);

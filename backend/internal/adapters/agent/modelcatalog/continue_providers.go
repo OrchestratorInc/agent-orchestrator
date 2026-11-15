@@ -11,16 +11,8 @@ import (
 
 func init() { browseProviderCredentials["continue"] = continueConfiguredProviders }
 
-// continueSecretRef matches a whole `${{ secrets.NAME }}` value; NAME may be
-// a fully qualified org/package/NAME reference.
 var continueSecretRef = regexp.MustCompile(`^\$\{\{\s*secrets\.([^\s}]+)\s*\}\}$`)
 
-// continueConfiguredProviders reports the providers of config.yaml models
-// whose apiKey Continue can resolve: a literal key, or a secrets reference
-// found where Continue's CLI looks for local secrets (its environment, then
-// the .env files in its home directory and the workspace). Secrets kept only
-// in Continue's hub are not checked, and keyless local providers are not
-// counted as configured.
 func continueConfiguredProviders(workingDir string, env map[string]string) []string {
 	lookup := func(name string) string {
 		if value, ok := env[name]; ok {
@@ -75,8 +67,6 @@ func continueConfiguredProviders(workingDir string, env map[string]string) []str
 	return uniqueProviders(providers)
 }
 
-// continueHomeDir mirrors Continue's CONTINUE_GLOBAL_DIR override of
-// ~/.continue.
 func continueHomeDir(lookup func(string) string) string {
 	if dir := lookup("CONTINUE_GLOBAL_DIR"); dir != "" {
 		return dir

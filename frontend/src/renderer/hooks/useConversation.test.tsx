@@ -92,7 +92,6 @@ it("shows scheduling errors only for the session that requested auto-resume", as
 	expect(result.current.retryControl.autoResumeTurnId).toBeUndefined();
 });
 
-/** The provider state the daemon now serves, in wire shape. */
 const WIRE = {
 	conversationId: "conv-1",
 	sessionId: "ao-1",
@@ -758,8 +757,6 @@ describe("config options read while the cached snapshot outlived the controller"
 	});
 
 	it("reports no error when an opening read is refused because the controller is not running, then loads", async () => {
-		// Opening a chat whose cached snapshot still says "ready" enables the read
-		// before the daemon's own answer arrives; the agent has gone to sleep since.
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const queryKey = conversationConfigOptionsQueryKey("ao-1");
 		getMock.mockResolvedValueOnce({
@@ -770,10 +767,8 @@ describe("config options read while the cached snapshot outlived the controller"
 		const { result } = renderHook(() => useConversationConfigOptions("ao-1", true), { wrapper: catalogWrapper(queryClient) });
 		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.status).toBe("error"));
 		expect(result.current).toMatchObject({ loaded: false, error: undefined, options: [] });
-		// The snapshot that enabled the read is out of date, so it is read again.
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: conversationQueryKey("ao-1") });
 
-		// A poll that gets the same answer does not reload the conversation again.
 		getMock.mockResolvedValueOnce({
 			data: undefined,
 			error: { code: "CHAT_CONTROLLER_NOT_READY", message: "the agent controller for this session is not running" },
@@ -784,7 +779,6 @@ describe("config options read while the cached snapshot outlived the controller"
 		expect(snapshotReloads).toHaveLength(1);
 		expect(result.current.error).toBeUndefined();
 
-		// The controller is back: the next read brings the catalog.
 		getMock.mockResolvedValueOnce({ data: { options: [{ id: "model", currentValue: "a" }] }, error: undefined });
 		await act(async () => { await queryClient.refetchQueries({ queryKey }); });
 		await waitFor(() => expect(result.current.loaded).toBe(true));
@@ -808,9 +802,7 @@ describe("config options read while the cached snapshot outlived the controller"
 		});
 		await waitFor(() => expect(snapshotReloads()).toBe(1));
 
-		// The refreshed snapshot reported the agent asleep, which turns the read off.
 		rerender({ enabled: false });
-		// It reports "ready" again, and the daemon still disagrees: a new conflict.
 		getMock.mockResolvedValueOnce(notRunning);
 		rerender({ enabled: true });
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
@@ -836,13 +828,11 @@ describe("config options read while the cached snapshot outlived the controller"
 		});
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
 
-		// The read is turned off while its request is still out, then it answers "not running".
 		rerender({ enabled: false });
 		await act(async () => { answerLate(notRunning); });
 		await waitFor(() => expect(queryClient.getQueryState(queryKey)?.status).toBe("error"));
 		expect(snapshotReloads()).toBe(1);
 
-		// Turned on again, the next conflict is a new one and reloads the snapshot again.
 		getMock.mockResolvedValueOnce(notRunning);
 		rerender({ enabled: true });
 		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
@@ -1028,8 +1018,6 @@ describe("useConversation snapshot mapping", () => {
 		expect(snapshot.turns[0]?.usageLimit).toEqual(usageLimit);
 	});
 
-	// Absent must stay absent: a client has to tell "the provider said nothing" from
-	// "the provider said everything is fine".
 	it("leaves the new fields undefined when the daemon omits them", async () => {
 		getMock.mockResolvedValue({
 			data: { ...WIRE, modelReroute: undefined, account: undefined, threadState: undefined, mcpServers: [] },
@@ -1082,14 +1070,11 @@ describe("conversation branching commands", () => {
 			body: expect.objectContaining({ ...providerSwitch, message: { text: "first turn", clientMessageId: "m1" } }),
 		}));
 
-		// Refused: the message never left.
 		await act(async () => {
 			await expect(result.current.send({ text: "again", clientMessageId: "m2", providerSwitch })).rejects
 				.toBeInstanceOf(ProviderSwitchFailed);
 		});
-		// The switch notice reports it; the composer does not show it twice.
 		expect(result.current.error).toBeUndefined();
-		// Switched, then the send failed: an ordinary send failure.
 		await act(async () => {
 			const failure = await result.current.send({ text: "later", clientMessageId: "m3", providerSwitch }).catch((error) => error);
 			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
@@ -1103,12 +1088,10 @@ describe("conversation branching commands", () => {
 			.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
 		const providerSwitch = { targetHarness: "codex" };
-		// A remote daemon's gateway gave up, but the daemon may still switch and send.
 		await act(async () => {
 			const failure = await result.current.send({ text: "a", clientMessageId: "m1", providerSwitch }).catch((error) => error);
 			expect(failure).not.toBeInstanceOf(ProviderSwitchFailed);
 		});
-		// The request never got an answer.
 		await act(async () => {
 			const failure = await result.current.send({ text: "b", clientMessageId: "m2", providerSwitch }).catch((error) => error);
 			expect(failure).toBeInstanceOf(TypeError);
@@ -1376,8 +1359,6 @@ describe("steering refusals", () => {
 		).rejects.toBe(failure);
 	});
 
-	// The daemon's own message names which kind of turn refused, which is the part the
-	// user needs; "cannot be steered" alone leaves them nothing to do.
 	it("keeps the daemon's wording for a turn that cannot absorb guidance", async () => {
 		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE");
 		await waitFor(() => {
@@ -1386,7 +1367,6 @@ describe("steering refusals", () => {
 		});
 	});
 
-	// Daemon messages usually end without a full stop, so the advice would run on.
 	it("ends the daemon's sentence before the advice", async () => {
 		apiErrorMessageMock.mockReturnValueOnce("the agent did not collect the guidance within 5s");
 		const result = await steerFailingWith("CHAT_TURN_NOT_STEERABLE");
@@ -1397,7 +1377,6 @@ describe("steering refusals", () => {
 		});
 	});
 
-	// The control is withdrawn instead, so there is nothing to say.
 	it("says nothing when the harness cannot steer at all", async () => {
 		const result = await steerFailingWith("CHAT_STEER_UNSUPPORTED");
 		await waitFor(() => {
@@ -1501,7 +1480,6 @@ describe("controller recovery", () => {
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		});
 
-		// The cached snapshot still says stopped, which would read as a crashed agent.
 		expect(settled).toBe(false);
 		expect(result.current.resumingAgent).toBe(true);
 
@@ -1539,10 +1517,6 @@ describe("useConversationSkills polling", () => {
 	it("stops polling while the controller is not ready", async () => {
 		vi.useFakeTimers();
 		try {
-			// The daemon answers 409 CHAT_CONTROLLER_NOT_READY while no live controller
-			// owns the session. A fixed-interval poll would re-request the catalog every
-			// minute for as long as the surface stayed mounted, turning one readiness
-			// conflict into a steady stream of 409s.
 			apiErrorCodeMock.mockReturnValue("CHAT_CONTROLLER_NOT_READY");
 			getMock.mockResolvedValue({ error: { code: "CHAT_CONTROLLER_NOT_READY" } });
 			const queryClient = new QueryClient({
@@ -1561,7 +1535,6 @@ describe("useConversationSkills polling", () => {
 			await act(async () => {
 				await vi.advanceTimersByTimeAsync(5 * 60_000);
 			});
-			// No further requests: the readiness conflict backs the poll off entirely.
 			expect(getMock).toHaveBeenCalledTimes(1);
 		} finally {
 			vi.useRealTimers();
@@ -1571,8 +1544,6 @@ describe("useConversationSkills polling", () => {
 	it("keeps polling once the catalog loads", async () => {
 		vi.useFakeTimers();
 		try {
-			// An empty catalog is a real answer, not a failure: polling continues so a
-			// skill published later becomes visible without a second event channel.
 			getMock.mockResolvedValue({ data: { skills: [] } });
 			const queryClient = new QueryClient({
 				defaultOptions: { queries: { retry: false } },
@@ -1672,7 +1643,6 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 	const { result } = renderHook(() => useConversation("ao-1"), { wrapper: local });
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(20));
 
-	// A conversation event starts a refresh; the reader scrolls to the top before it lands.
 	void queryClient.invalidateQueries({ queryKey: ["conversation", "ao-1"] }, { cancelRefetch: false });
 	await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
 	act(() => result.current.loadOlder());

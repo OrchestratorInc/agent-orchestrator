@@ -9,7 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// StopAgentsForQuit releases processes without terminating sessions or removing worktrees.
 func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 	records, err := m.store.ListAllSessions(ctx)
 	if err != nil {
@@ -29,7 +28,6 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 			reviewErr := m.teardownReviewerTerminal(ctx, rec.ID)
 			var stopErr error
 			if rec.Activity.State == domain.ActivityExited {
-				// A disconnected controller can still have a surviving provider host.
 				if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || rec.Metadata.RuntimeHandleID != "" {
 					stopErr = m.releaseTerminalRuntime(ctx, rec)
 					if stopErr == nil {

@@ -72,7 +72,6 @@ func (f *fakeSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Se
 type fakeSources struct {
 	latestTurn string
 	refusal    string
-	// olderFiles is the snapshot an older-turn fork copies its files from.
 	olderFiles string
 	anyTurn    bool
 	gotTurn    *string
@@ -342,8 +341,6 @@ func (f fakeAccounts) SessionAccountID(_ context.Context, id domain.SessionID, _
 }
 
 func TestForkKeepsTheSourcesAccount(t *testing.T) {
-	// The agent's own copy of the conversation lives in the account's store,
-	// so the fork must run under the same account to find it.
 	s, sp, _ := newService(source())
 	s.deps.Accounts = fakeAccounts{"p-1": "work"}
 	if _, err := s.Fork(context.Background(), "p-1", "req-1"); err != nil {
@@ -355,8 +352,6 @@ func TestForkKeepsTheSourcesAccount(t *testing.T) {
 }
 
 func TestSessionStillSettingUpIsRefused(t *testing.T) {
-	// A fresh fork has no worktree until its setup finishes; say so rather
-	// than reporting that it isn't a git repository.
 	rec := source()
 	rec.ProvisionState = domain.SessionProvisionState("provisioning")
 	rec.Metadata.WorkspacePath = ""
@@ -487,7 +482,6 @@ func TestForkedFromShowsTheOriginalsCurrentName(t *testing.T) {
 	if opts.ForkedFrom.Title != "Webhook retries" {
 		t.Fatalf("title = %q, want the original's current name", opts.ForkedFrom.Title)
 	}
-	// Once the original is deleted, the name it had when forked is kept.
 	s.deps.Sessions = fakeSessions{"p-9": fork}
 	opts, _ = s.Options(context.Background(), "p-9")
 	if opts.ForkedFrom.Title != "Retry failed webhook deliveries" {

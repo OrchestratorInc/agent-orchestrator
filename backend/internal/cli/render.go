@@ -55,8 +55,6 @@ type renderCheckAPIResponse struct {
 	Network string `json:"network"`
 }
 
-// renderCheckOfflineNote tells the agent why remote resources did not load
-// in a check that ran without network.
 const renderCheckOfflineNote = "The check ran without network access, as your sandbox has none. Remote resources did not load."
 
 func newRenderCommand(ctx *commandContext) *cobra.Command {
@@ -161,8 +159,6 @@ func (c *commandContext) publishRender(cmd *cobra.Command, file, title string, h
 	return err
 }
 
-// postRender inlines a page's local images and shows it in the session's
-// thread. ao render and the html_render MCP tool both publish through it.
 func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int, artifact bool) (renderAPIResponse, error) {
 	var resp renderAPIResponse
 	html, missing, err := inlineLocalImages(html)
@@ -181,10 +177,6 @@ func renderShownText(renderID string) string {
 	return fmt.Sprintf("Shown above your reply (render %s). Do not describe the page; add only what it does not say.", renderID)
 }
 
-// renderArtifactLine reports where a publish kept the page as an artifact, or
-// why it did not; it is empty when no artifact was asked for. A kept page is not
-// registered, and in a session that registered anything else it is not listed,
-// so the line gives the agent the command while it is still acting on the render.
 func renderArtifactLine(resp renderAPIResponse) string {
 	switch {
 	case resp.ArtifactPath != "":
@@ -195,16 +187,10 @@ func renderArtifactLine(resp renderAPIResponse) string {
 	return ""
 }
 
-// quoteShellArg single-quotes value for a POSIX shell. The path it quotes holds
-// the page title, which can repeat text from a document, and the agent runs what
-// it is given, so double quotes would leave "$(...)" and backticks live.
 func quoteShellArg(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-// postRenderCheck inlines a page's local images and has the desktop app
-// screenshot it. A check shows what an unreadable image does to the page
-// instead of refusing it, so missing lists those images.
 func (c *commandContext) postRenderCheck(ctx context.Context, sessionID, html string, width int) (resp renderCheckAPIResponse, missing []string, err error) {
 	html, missing, err = inlineLocalImages(html)
 	if err != nil {
@@ -247,8 +233,6 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 			return err
 		}
 	}
-	// Image paths and console text come from the page and from any script it
-	// loads, so they are marked as untrusted the way `ao browser console` marks them.
 	lines := make([]string, 0, len(resp.ConsoleMessages)+1)
 	if len(missing) > 0 {
 		lines = append(lines, "missing images: "+strings.Join(missing, ", "))
@@ -263,11 +247,6 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 	return err
 }
 
-// writeRenderCheckScreenshot writes the check's PNG to target and returns its
-// absolute path. Unlike `ao browser screenshot`, it replaces an earlier file at
-// target, so the check, fix, check-again loop can reuse one --out path. Only a
-// regular file is replaced, never a symlink or a directory, and the new file
-// lands with one rename.
 func writeRenderCheckScreenshot(encoded, target string) (string, error) {
 	if encoded == "" {
 		return "", errors.New("render check returned an empty screenshot")

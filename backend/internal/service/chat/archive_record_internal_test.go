@@ -5,9 +5,6 @@ import (
 	"testing"
 )
 
-// The record has only strings, pointers and slices today. A zero bool or number added
-// to it later is a real value (an exit code of 0, a flag that is false), not an empty
-// one, and must survive the filter.
 func TestDropEmptyArchiveFieldsKeepsZeroBoolsNumbersAndStructs(t *testing.T) {
 	type pair struct{ A, B int }
 	record := map[string]any{

@@ -13,9 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The live tests drive AO's real driver against the user's own Copilot CLI,
-// account, and premium-request quota. Run them explicitly with
-// AO_LIVE_COPILOT_ACP=1; CI never depends on them.
 func requireLive(t *testing.T) {
 	t.Helper()
 	if os.Getenv("AO_LIVE_COPILOT_ACP") != "1" {
@@ -25,8 +22,6 @@ func requireLive(t *testing.T) {
 
 const liveCodeword = "AO-COPILOT-7Q"
 
-// Standing instructions reach Copilot through the per-session agent profile,
-// and survive session/load.
 func TestLiveCopilotStandingInstructionsAndResume(t *testing.T) {
 	requireLive(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -50,8 +45,6 @@ func TestLiveCopilotStandingInstructionsAndResume(t *testing.T) {
 		t.Fatalf("standing instructions not applied: answer = %q", answer)
 	}
 	providerID := conversation.ProviderConversationID()
-	// Stop the provider process, as a session stop does. Close alone detaches
-	// and leaves the detached host owning the Copilot session.
 	stop := conversation.Close
 	if terminator, ok := conversation.(ports.ChatProviderTerminator); ok {
 		stop = terminator.Terminate
@@ -69,8 +62,6 @@ func TestLiveCopilotStandingInstructionsAndResume(t *testing.T) {
 		t.Fatalf("Resume: %v", err)
 	}
 	defer resumed.Close()
-	// An interface switch refreshes history on the resumed connection. Copilot
-	// refuses a second session/load unless the session is closed first.
 	refresher, ok := resumed.(ports.ChatHistoryRefresher)
 	if !ok {
 		t.Fatal("resumed Copilot conversation cannot refresh history")
@@ -84,10 +75,6 @@ func TestLiveCopilotStandingInstructionsAndResume(t *testing.T) {
 	}
 }
 
-// Default asks before a destructive shell command and honors a rejection.
-// Bypass runs it without asking, and switching back to default asks again:
-// Copilot cannot leave bypass when launched with --allow-all, which is why
-// the binding selects bypass through allow_all.
 func TestLiveCopilotApprovals(t *testing.T) {
 	requireLive(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
@@ -186,8 +173,6 @@ func runTurnWith(ctx context.Context, t *testing.T, conversation ports.ChatConve
 			if !ok {
 				t.Fatalf("conversation closed mid-turn; answer=%q", answer.String())
 			}
-			// Commit each event the way the chat controller does, so the provider
-			// accepts the next prompt.
 			if acker, ok := conversation.(ports.ChatProviderEventAcknowledger); ok && event.ProviderEventID != "" {
 				if err := acker.AcknowledgeProviderEvent(ctx, event.ProviderEventID); err != nil {
 					t.Fatalf("AcknowledgeProviderEvent: %v", err)

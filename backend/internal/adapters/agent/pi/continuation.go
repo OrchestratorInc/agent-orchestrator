@@ -20,8 +20,6 @@ var (
 	_ ports.AgentTranscriptLocator           = (*Plugin)(nil)
 )
 
-// NativeSessionConfigDir returns Pi's session-state root. A project environment
-// may explicitly select PI_CODING_AGENT_DIR; otherwise Pi uses ~/.pi/agent.
 func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -33,16 +31,10 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 	return dir, nil
 }
 
-// ProbeNativeSession uses Pi's local JSONL transcript as authoritative backing
-// state for pi-acp's session/load. Pi stores one <time>_<session-id>.jsonl
-// below a per-cwd directory in <config>/sessions.
 func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSessionRef) (ports.NativeSessionAvailability, error) {
 	return nativeconfig.ProbeTranscript(ctx, ref, p.LocateTranscript)
 }
 
-// LocateTranscript finds Pi's provider-owned JSONL by native session id. pi-acp
-// resolves a session by id across every cwd folder, so this does too rather
-// than depending on the lossy dashed-path directory name.
 func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRef) (string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return "", false, err

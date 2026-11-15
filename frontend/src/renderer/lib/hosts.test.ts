@@ -14,7 +14,6 @@ describe("refKey", () => {
 	});
 
 	it("round-trips an id that itself contains a colon", () => {
-		// Ids come from another machine; nothing guarantees they are colon-free.
 		const ref: Ref = { host: "http://192.0.2.1:3011", id: "weird:id" };
 		expect(parseRefKey(refKey(ref))).toEqual(ref);
 	});

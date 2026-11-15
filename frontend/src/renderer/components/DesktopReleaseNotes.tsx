@@ -3,7 +3,6 @@ import Markdown, { type Components } from "react-markdown";
 import { prepareDesktopReleaseNotes } from "../lib/desktop-release-notes";
 import { AppLink } from "./AppLink";
 
-// Published release bodies retain the old owner after a repository rename.
 const AO_RELEASE_LINK_PATTERN =
 	/^https:\/\/github\.com\/(?:OrchestratorInc|Untrivial-ai)\/agent-orchestrator\/(?:pull\/\d+|commit\/[0-9a-f]{7,40}|compare\/v\d+\.\d+\.\d+(?:-nightly\.\d{12})?\.\.\.v\d+\.\d+\.\d+(?:-nightly\.\d{12})?)$/i;
 
@@ -11,8 +10,6 @@ const releaseNoteComponents: Components = {
 	h3: ({ children }) => (
 		<h3 className="mt-4 text-sm font-medium text-foreground first:mt-0">{children}</h3>
 	),
-	// Generated notes use bold paragraphs as section headings; keep them below
-	// the dialog title's weight so the notes never outrank it.
 	strong: ({ children }) => <strong className="font-medium text-foreground">{children}</strong>,
 	p: ({ children }) => <p className="mt-2 first:mt-0">{children}</p>,
 	ul: ({ children }) => <ul className="mt-2 list-disc space-y-1 pl-5">{children}</ul>,
@@ -23,8 +20,6 @@ const releaseNoteComponents: Components = {
 		</blockquote>
 	),
 	code: ({ children }) => <code className="font-mono text-[0.92em]">{children}</code>,
-	// Release notes open in the user's own browser, never the Orchestrator
-	// Browser, whichever way the link is activated.
 	a: ({ href, children }) => href ? (
 		<AppLink
 			href={href}

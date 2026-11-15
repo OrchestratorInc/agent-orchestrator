@@ -9,10 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// LegacySwitchHandoffPath is the finalized handoff file the agent switching on
-// main wrote for the switch that brought harness into the session on nativeID,
-// or "" when there is none. That handoff rode the agent's hidden system prompt,
-// so a native restore must carry it again.
 func (s *Store) LegacySwitchHandoffPath(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, nativeID string) (string, error) {
 	var path string
 	err := s.readDB.QueryRowContext(ctx, `

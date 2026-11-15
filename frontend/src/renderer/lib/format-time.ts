@@ -3,11 +3,6 @@ import { appI18n, type MessageKey } from "../i18n";
 
 const DAY_MS = 86_400_000;
 
-/**
- * `longUnits` counts spans past a month in months and years ("3mo ago",
- * "14y ago") instead of days, for dates that can be years old, such as a
- * branch's last commit.
- */
 export function formatTimeCompact(
 	isoDate: string | null | undefined,
 	{ longUnits = false, now = Date.now() }: { longUnits?: boolean; now?: number | Date } = {},
@@ -24,7 +19,6 @@ export function formatTimeCompact(
 	});
 }
 
-/** Extra-terse relative time for space-constrained navigation rows. */
 export function formatTimeTerse(
 	isoDate: string | null | undefined,
 	now: number | Date = Date.now(),

@@ -128,8 +128,6 @@ func TestAppMemorySumsAppRootsAndSessionsOnce(t *testing.T) {
 	}
 	var snapshots int
 	reader := newTestMemoryReader(t, recs, &snapshots)
-	// The tmux server (100) already contains session a (200 → 300) and the
-	// terminated session's shell (400); every pid must count exactly once.
 	reader.deps.AppRootPIDs = func() []int { return []int{100} }
 	app, err := reader.AppMemory(context.Background())
 	if err != nil {
@@ -185,7 +183,6 @@ func TestListMemoryReportsCPUAsRateBetweenSamples(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 4s of CPU over 8s: half a core, all of it claude's.
 	if second[0].CPUPercent != 50 || second[0].Processes[1].CPUPercent != 50 || second[0].Processes[0].CPUPercent != 0 {
 		t.Fatalf("second sample = %+v, want 50%% on claude", second[0])
 	}
@@ -209,13 +206,11 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	if first.SwapBytesPerSec != 0 || first.CPUPercent != 0 || first.SwapUsedBytes != 1<<30 || first.CPUCount != 8 || first.Load1 != 2.5 {
 		t.Fatalf("first = %+v", first)
 	}
-	// Nothing earlier to measure against: the zero is unknown, and the graph
-	// must be able to tell it from an idle machine.
 	if first.CPUMeasured {
 		t.Fatal("first sample must not claim a measured CPU rate")
 	}
-	pages += 1024                   // 4 MiB in 2s
-	busy, idle = busy+300, idle+300 // half the elapsed ticks were busy
+	pages += 1024
+	busy, idle = busy+300, idle+300
 	now = now.Add(2 * time.Second)
 	second, err := r.SystemMemory(context.Background())
 	if err != nil {
@@ -229,9 +224,6 @@ func TestSystemMemoryDerivesSwapRateFromCounters(t *testing.T) {
 	}
 }
 
-// TestSystemMemoryDerivesSwapRateFromReportedPageSize guards against
-// hardcoding 4 KiB pages: on Apple Silicon vm_stat reports 16 KiB pages, and
-// the swap rate must scale with whatever page size this reading carries.
 func TestSystemMemoryDerivesSwapRateFromReportedPageSize(t *testing.T) {
 	now := time.Unix(2000, 0)
 	pages := uint64(100)
@@ -242,7 +234,7 @@ func TestSystemMemoryDerivesSwapRateFromReportedPageSize(t *testing.T) {
 	if _, err := r.SystemMemory(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	pages += 1024 // 16 MiB at a 16 KiB page size, in 2s
+	pages += 1024
 	now = now.Add(2 * time.Second)
 	second, err := r.SystemMemory(context.Background())
 	if err != nil {
@@ -253,9 +245,6 @@ func TestSystemMemoryDerivesSwapRateFromReportedPageSize(t *testing.T) {
 	}
 }
 
-// TestSystemMemorySharesOneReadingWithinCacheTTL guards the host read's cost:
-// on macOS each read runs vm_stat, and every open window polls this, so
-// callers inside CacheTTL must share one reading rather than each run their own.
 func TestSystemMemorySharesOneReadingWithinCacheTTL(t *testing.T) {
 	now := time.Unix(2000, 0)
 	reads := 0
@@ -287,10 +276,6 @@ func TestSystemMemorySharesOneReadingWithinCacheTTL(t *testing.T) {
 }
 
 func TestSystemMemoryDerivesCPUFromTheProcessTableWhenTheHostHasNoTicks(t *testing.T) {
-	// macOS today: ReadSystem cannot report system-wide ticks (no cgo), so
-	// SystemMemory must fall back to what it already samples for the session
-	// rows: every process's own CPU-seconds, divided by elapsed time and core
-	// count to land in the same 0..100 range a tick counter would give.
 	now := time.Unix(2000, 0)
 	table, err := procmem.Parse("100 1 900 00:00:10 launchd\n200 100 3000 00:00:00 claude\n")
 	if err != nil {
@@ -311,8 +296,6 @@ func TestSystemMemoryDerivesCPUFromTheProcessTableWhenTheHostHasNoTicks(t *testi
 		t.Fatalf("first sample has nothing to compare against, want 0, got %v", first.CPUPercent)
 	}
 
-	// 4 seconds of CPU across all processes over 2 elapsed seconds, on 4
-	// cores: 4 core-seconds used / (2s * 4 cores) = 50%.
 	table, err = procmem.Parse("100 1 900 00:00:14 launchd\n200 100 3000 00:00:00 claude\n")
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +326,6 @@ func TestSystemMemoryCPUFallbackNeverExceedsOneHundred(t *testing.T) {
 	if _, err := r.SystemMemory(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// One process alone used far more than one core's worth of wall time.
 	table, err = procmem.Parse("100 1 900 00:03:00 a\n")
 	if err != nil {
 		t.Fatal(err)
@@ -362,8 +344,6 @@ func TestAppMemoryOwnExcludesSessionsUnderTheDaemon(t *testing.T) {
 	recs := []domain.SessionRecord{{ID: "s-a", Metadata: domain.SessionMetadata{RuntimeHandleID: "a"}}}
 	var snapshots int
 	reader := newTestMemoryReader(t, recs, &snapshots)
-	// The tmux server (100) is the daemon's child in practice; session a
-	// (200 → 300) hangs under it. Own must not count the session's 1.6 GB.
 	reader.deps.AppRootPIDs = func() []int { return []int{100} }
 	app, err := reader.AppMemory(context.Background())
 	if err != nil {
@@ -377,23 +357,13 @@ func TestAppMemoryOwnExcludesSessionsUnderTheDaemon(t *testing.T) {
 	}
 }
 
-// reviewerHandleStore fakes the review store's live-handle listing.
 type reviewerHandleStore struct{ handles []domain.ReviewerHandle }
 
 func (s reviewerHandleStore) ListLiveReviewerHandles(context.Context) ([]domain.ReviewerHandle, error) {
 	return s.handles, nil
 }
 
-// TestAppMemoryIncludesDetachedReviewerRoot covers issue #5948: a reviewer
-// pane has no session row, is not necessarily a descendant of the daemon,
-// and can outlive the worker that spawned it. AppMemory must still find it
-// (through the review record, not the session-root walk) and report it
-// separately enough to name in a "why is AO using memory" breakdown.
 func TestAppMemoryIncludesDetachedReviewerRoot(t *testing.T) {
-	// 100 (tmux server) -> 200 (worker's shell) -> 300 (claude): the live
-	// worker's tree, same as the other fixtures. 500 -> 600 is the reviewer:
-	// PPID 1, reparented to init, no relation to 100 at all — exactly what a
-	// detached reviewer host looks like once nothing is tracking it anymore.
 	table := `
   100     1   900 tmux: server
   200   100  3000 bash
@@ -445,9 +415,6 @@ func TestAppMemoryIncludesDetachedReviewerRoot(t *testing.T) {
 	}
 }
 
-// TestSystemMemoryCoalescesConcurrentReads: callers that miss the cache at the
-// same moment share one host read. Separate reads would each move the swap and
-// CPU baseline, and the later ones would report a rate over almost no time.
 func TestSystemMemoryCoalescesConcurrentReads(t *testing.T) {
 	now := time.Unix(2000, 0)
 	var reads atomic.Int32
@@ -472,7 +439,6 @@ func TestSystemMemoryCoalescesConcurrentReads(t *testing.T) {
 		}()
 	}
 	started.Wait()
-	// Let every caller reach the shared read before the host answers.
 	for reads.Load() == 0 {
 		time.Sleep(time.Millisecond)
 	}

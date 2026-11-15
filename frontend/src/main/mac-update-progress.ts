@@ -17,7 +17,6 @@ async function atomicJSON(file: string, value: unknown): Promise<void> {
 	await rename(temporary, file);
 }
 
-/** The helper is copied outside the .app so Squirrel never counts it as AO. */
 export async function startMacUpdateProgress(options: {
 	stateDir: string;
 	resourcesPath: string;
@@ -35,7 +34,6 @@ export async function startMacUpdateProgress(options: {
 	};
 	await atomicJSON(path.join(attempt, "request.json"), request);
 	const executable = path.join(attempt, "ao-update-progress");
-	// Preserve the signer's executable bytes. Never re-sign or modify them here.
 	await copyFile(path.join(options.resourcesPath, "update-helper", "ao-update-progress"), executable);
 	const child = spawn(executable, [attempt], {
 		detached: true,
@@ -59,7 +57,7 @@ export async function startMacUpdateProgress(options: {
 			child.removeListener("exit", onExit);
 			child.stdout?.removeListener("data", onData);
 			if (error) {
-				child.kill(); // Only our own helper; AO remains open on failure.
+				child.kill();
 				reject(error);
 			} else resolve();
 		};
@@ -90,7 +88,6 @@ export async function startMacUpdateProgress(options: {
 	return { assertAlive, fail: (message) => atomicJSON(path.join(attempt, "error.json"), { message }) };
 }
 
-/** Only the replacement process, after loading its shell, can finish this attempt. */
 export async function acknowledgeMacUpdateRestart(options: {
 	stateDir: string;
 	appPath: string;
@@ -112,7 +109,6 @@ export async function acknowledgeMacUpdateRestart(options: {
 		await atomicJSON(path.join(attempt, "complete.json"), { ...request, pid });
 		return true;
 	} catch {
-		// No active update is normal. A corrupt/stale attempt must never block startup.
 		return false;
 	}
 }

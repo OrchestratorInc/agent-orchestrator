@@ -131,11 +131,6 @@ func TestRenameTaskBranchRetriesConcurrentBranchConflict(t *testing.T) {
 	}
 }
 
-// A rename after launch must never strand refs the agent already made under the
-// temporary namespace, because AO attributes PRs to the session by that prefix.
-// Only a pushed temporary branch blocks the rename: a plain `git push` would
-// then name a different remote branch. Local work under the temporary name
-// stays attributed to the session through that namespace.
 func TestRenameTaskBranchGuard(t *testing.T) {
 	for name, tc := range map[string]struct {
 		act     func(t *testing.T, git, repo, path string)
@@ -178,7 +173,6 @@ func TestRenameTaskBranchToItsOwnName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A workspace project's temporary branch is the bare namespace.
 	for i, temporary := range []string{"ao/proj-1/root", "ao/proj-2"} {
 		id := fmt.Sprintf("proj-%d", i+1)
 		root, err := ws.Create(context.Background(), ports.WorkspaceConfig{ProjectID: "proj", SessionID: domain.SessionID(id), Branch: temporary})
@@ -192,8 +186,6 @@ func TestRenameTaskBranchToItsOwnName(t *testing.T) {
 	}
 }
 
-// When undoing a partial multi-repository rename also fails, the result still
-// says which branches Git holds.
 func TestRenameTaskBranchReportsFailedUndo(t *testing.T) {
 	git, ws, info := newTwoRepoTask(t)
 	root, last := info.Worktrees[0].Path, info.Worktrees[len(info.Worktrees)-1].Path
@@ -215,7 +207,6 @@ func TestRenameTaskBranchReportsFailedUndo(t *testing.T) {
 	requireBranchesMatchGit(t, git, got)
 }
 
-// When the undo stops partway, the result says which branches Git holds.
 func TestRevertTaskBranchReportsFailedUndo(t *testing.T) {
 	git, ws, original := newTwoRepoTask(t)
 	ctx := context.Background()
@@ -238,8 +229,6 @@ func TestRevertTaskBranchReportsFailedUndo(t *testing.T) {
 	requireBranchesMatchGit(t, git, got)
 }
 
-// newTwoRepoTask creates a workspace-project task with a root and one child
-// repository on the temporary branch ao/proj-1.
 func newTwoRepoTask(t *testing.T) (string, *Workspace, ports.WorkspaceProjectInfo) {
 	t.Helper()
 	git := requireGit(t)
@@ -269,8 +258,6 @@ func requireBranchesMatchGit(t *testing.T, git string, got ports.WorkspaceProjec
 	}
 }
 
-// RevertTaskBranch restores each repository's own original branch exactly,
-// even with refs under the temporary namespace that a rename would skip.
 func TestRevertTaskBranchIsExact(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()

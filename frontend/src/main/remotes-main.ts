@@ -8,16 +8,12 @@ import type { RemoteRegistry } from "./remote-registry";
 import { ACCOUNT_TOKEN, DEVICE_TOKEN_PREFIX, addRemote, holdsAccountToken, holdsPairingPassword, readRemotes, updateRemote, type RemoteChanges, type RemoteEntry } from "./remotes-store";
 import { ExpectedIpcError } from "./main-error-capture";
 
-// An isolated desktop run must not read or write the real user's credentials.
-// Without an override, keep the existing ~/.ao location.
 export function remotesFilePath(): string {
 	return path.join(process.env.AO_DATA_DIR?.trim() || path.join(os.homedir(), ".ao"), "remotes.json");
 }
 
 type RunFile = (file: string, args: string[], options: { timeout: number }) => Promise<{ stdout: string }>;
 
-/** The name other devices list this machine under: macOS's Computer Name
- * ("Dhruv’s Mac mini"), else the host name without its mDNS suffix. */
 export async function computerName(
 	run: RunFile = promisify(execFile),
 	platform: NodeJS.Platform = process.platform,
@@ -28,17 +24,13 @@ export async function computerName(
 			const name = (await run("/usr/sbin/scutil", ["--get", "ComputerName"], { timeout: 2_000 })).stdout.trim();
 			if (name) return name;
 		} catch {
-			// No Computer Name set; the host name still identifies the machine.
 		}
 	}
 	return hostname().replace(/\.local$/i, "");
 }
 
-// The slice of Electron's ipcMain these handlers need, so tests need no Electron.
 type IpcMainLike = {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the listener
-	// args must unify Electron's IpcMain (any[]) with a test fake (unknown[]),
-	// and `never[]` rejects both; `any[]` here leaks nowhere past registration.
 	handle(channel: string, listener: (event: unknown, ...args: any[]) => Promise<unknown>): void;
 };
 
@@ -48,9 +40,7 @@ export type RemotesIpcDeps = {
 	requireAccount: () => Promise<void>;
 	getAccountId: () => Promise<string>;
 	localIdentity: () => Promise<string | null>;
-	/** An AO Cloud request made with the signed-in session; paths start with /api/cloud/v1. */
 	cloudRequest: (method: string, path: string, options?: { body?: unknown; signal?: AbortSignal }) => Promise<{ status: number; body: string }>;
-	/** How long reading the account's machines from AO Cloud may take. */
 	accountDirectoryTimeoutMs?: number;
 	probe?: (entry: RemoteEntry) => Promise<RemoteHealth>;
 	identity?: (entry: Pick<RemoteEntry, "url">) => Promise<string>;
@@ -65,11 +55,6 @@ class LocalIdentityUnavailableError extends ExpectedIpcError {
 
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
-/**
- * Saved AO daemons in ~/.ao/remotes.json. Everything the renderer receives back
- * is password-free (see remotes-ipc.ts); a password only travels renderer -> main
- * when the user adds or edits one. Account host tokens never reach the renderer.
- */
 export function registerRemotesIpc(
 	ipcMain: IpcMainLike,
 	{
@@ -112,7 +97,6 @@ export function registerRemotesIpc(
 	};
 	const askAgainAt = new Map<string, number>();
 	const ASK_AGAIN_MS = 60 * 60_000;
-	// A password is kept as the fallback; a spent pairing code is not.
 	const pairOwnToken = async (entry: RemoteEntry): Promise<{ entry: RemoteEntry; result: PairDeviceResult["kind"] }> => {
 		const result = await pair(entry, entry.password, { name: await deviceName(), platform: process.platform });
 		if (result.kind === "unsupported" && entry.hostId) askAgainAt.set(entry.hostId, Date.now() + ASK_AGAIN_MS);
@@ -123,8 +107,6 @@ export function registerRemotesIpc(
 			result: "paired",
 		};
 	};
-	// A token issued for an add or edit whose probe then failed, by account and host.
-	// The code it replaced is spent, so a retry with the same code uses the token. In memory only.
 	const unsaved = new Map<string, { typed: string } & Pick<RemoteEntry, "password" | "fallbackPassword">>();
 	const unsavedKey = (account: string, hostId: string) => `${account}\n${hostId}`;
 	const pairOrReuse = async (account: string, typed: RemoteEntry) => {
@@ -140,8 +122,6 @@ export function registerRemotesIpc(
 			unsaved.delete(unsavedKey(account, typed.hostId));
 		}
 	};
-	// Keep edits and connects ordered so an update cannot leave a stale proxy.
-	// ponytail: one queue includes network probes; split by host if five-host setup is too slow.
 	let pending: Promise<void> = Promise.resolve();
 	const ordered = <T>(operation: () => Promise<T>): Promise<T> => {
 		const result = pending.then(operation, operation);
@@ -158,8 +138,6 @@ export function registerRemotesIpc(
 		const account = await accountID();
 		const entries = await readRemotes(file);
 		if (!account) return entries;
-		// Legacy rows stay local-only: show them without attributing them to the
-		// signed-in account, while keeping other accounts isolated.
 		return entries.filter((item) => !item.accountUserId || item.accountUserId === account);
 	};
 
@@ -173,8 +151,6 @@ export function registerRemotesIpc(
 		const account = await accountID();
 		const localHostId = await requireLocalIdentity();
 		refuseSelf(input.hostId, localHostId);
-		// Probe before saving: a host that never answered is worse than no host,
-		// because it looks configured.
 		let hostId: string;
 		try {
 			hostId = await identity(input);
@@ -236,7 +212,6 @@ export function registerRemotesIpc(
 		const entry = await findRemote(file, url, hostId);
 		const localHostId = await localIdentity();
 		refuseSelf(entry.hostId, localHostId);
-		// A local restart must not retire an already verified, unchanged remote proxy.
 		if (!localHostId) {
 			const connected = registry.connected(entry);
 			if (connected && await accountID() === account) return connected;
@@ -250,8 +225,6 @@ export function registerRemotesIpc(
 			throw error;
 		}
 		let current = entry;
-		// Only a release without device tokens, as after a rollback, refuses a token with
-		// BAD_PASSWORD; the kept password works there. Any other answer, or none, keeps it out.
 		if (health === "unauthorized" && current.fallbackPassword && current.password.startsWith(DEVICE_TOKEN_PREFIX)
 			&& await authErrorCode(current) === "BAD_PASSWORD") {
 			const previous: RemoteEntry = { ...current, password: current.fallbackPassword, fallbackPassword: undefined };
@@ -261,8 +234,6 @@ export function registerRemotesIpc(
 			}
 		}
 		if (health !== "online") throw new ExpectedIpcError(`host ${url} is ${health}`);
-		// Swap a pairing password for this device's own token, but never under a
-		// live connection: the new credential restarts the host's proxy.
 		if (holdsPairingPassword(current) && !registry.connected(current) && Date.now() >= (askAgainAt.get(current.hostId ?? "") ?? 0)) {
 			const paired = await pairOwnToken(current);
 			if (paired.result === "paired") {
@@ -271,15 +242,11 @@ export function registerRemotesIpc(
 		}
 		return registry.connect(current);
 	}));
-	// AO Cloud calls run outside the ordered queue: a slow answer must not hold
-	// up list, connect and the other handlers for locally paired hosts.
 	const accountHosts = async <T>(method: string, path: string, options: { body?: unknown; timeoutMs?: number } = {}): Promise<T> => {
 		const signal = options.timeoutMs === undefined ? undefined : AbortSignal.timeout(options.timeoutMs);
 		let response: { status: number; body: string };
 		try {
 			const pending = cloudRequest(method, `/api/cloud/v1/me/hosts${path}`, { body: options.body, signal });
-			// The signal cancels the fetch; the race also ends a wait that never
-			// reaches the fetch, such as a stalled sign-in refresh.
 			response = signal
 				? await Promise.race([pending, new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))])
 				: await pending;
@@ -293,17 +260,12 @@ export function registerRemotesIpc(
 	const importAccountHost = async (account: string, host: AccountHost) => {
 		if (!host.hostId || !ACCOUNT_TOKEN.test(host.token ?? "")) throw new ExpectedIpcError("Invalid account host credential.");
 		const local = (await readRemotes(file)).find((entry) => entry.hostId === host.hostId);
-		// Keep the original password on the machine that performed pairing; a
-		// Cloud refresh must not replace it with the narrower account token. A
-		// password this launch cannot decrypt is kept the same way.
 		if (local && (local.sealedPassword || (local.password && !holdsAccountToken(local)))) {
 			if (local.label !== host.label || local.url !== host.url) await updateRemote(file, local.url, { label: host.label, url: host.url });
 			return;
 		}
 		await addRemote(file, { hostId: host.hostId, label: host.label, url: host.url, password: host.token, accountUserId: account });
 	};
-	// Syncs read the directory at the same time. One that started before an
-	// already applied one holds an older listing and writes nothing.
 	let startedSyncs = 0;
 	let appliedSync = 0;
 	ipcMain.handle("remotes:syncAccountHosts", async (_event, expectedAccountId: string) => {
@@ -318,8 +280,6 @@ export function registerRemotesIpc(
 			for (const host of hosts) await importAccountHost(account, host);
 			const current = new Set(hosts.map((host) => host.hostId));
 			for (const entry of await owned()) {
-				// Only account-imported credentials are directory-managed. A machine
-				// paired here with its original password remains a local pairing.
 				if (entry.hostId && !current.has(entry.hostId) && holdsAccountToken(entry)) {
 					await removeSavedRemote(file, entry.url, disconnect);
 				}
@@ -328,7 +288,6 @@ export function registerRemotesIpc(
 	});
 	ipcMain.handle("remotes:linkAccountHost", async (_event, url: string) => {
 		await accountID();
-		// Read before issuing: issuing the token moves it from any other account.
 		const { hostKeys } = await accountHosts<{ hostKeys?: boolean }>("GET", "", { timeoutMs: accountDirectoryTimeoutMs });
 		const issued = await ordered(async () => {
 			const account = await accountID();
@@ -349,14 +308,10 @@ export function registerRemotesIpc(
 			if (!response.ok) throw new ExpectedIpcError("The host did not accept account linking. Check its password and version.");
 			const result = await response.json() as { hostId?: string; token?: string; hostKey?: string };
 			if (result.hostId !== entry.hostId || !ACCOUNT_TOKEN.test(result.token ?? "")) throw new ExpectedIpcError("The host returned an invalid account credential.");
-			// With the machine's host key AO Cloud needs its own signature; an AO Cloud
-			// that does not say it takes host keys refuses the field.
 			const hostKey = hostKeys === true && /^[A-Za-z0-9_-]{43}$/.test(result.hostKey ?? "") ? result.hostKey : undefined;
 			return { account, hostId: entry.hostId, registration: { label: entry.label, url: entry.url, token: result.token, hostKey } };
 		});
 		if (await accountID() !== issued.account) throw new ExpectedIpcError("Account changed during remote connection.");
-		// No time limit: AO Cloud may first make the machine's tunnel, which can
-		// take more than a minute.
 		await accountHosts("PUT", `/${encodeURIComponent(issued.hostId)}`, { body: issued.registration });
 	});
 	ipcMain.handle("remotes:disconnect", async (_event, url: string) => ordered(() => disconnect(url)));

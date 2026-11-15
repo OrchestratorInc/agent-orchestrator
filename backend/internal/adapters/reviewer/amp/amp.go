@@ -1,4 +1,3 @@
-// Package amp adapts Amp's normal interactive TUI for AO reviews.
 package amp
 
 import (
@@ -15,28 +14,22 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Reviewer builds Amp's interactive reviewer command.
 type Reviewer struct {
 	resolveBinary func(context.Context) (string, error)
 }
 
-// New returns the production Amp reviewer adapter.
 func New() *Reviewer { return &Reviewer{resolveBinary: workeramp.ResolveAmpBinary} }
 
-// Harness returns Amp's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerAmp }
 
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)
 
-// ReviewPromptReadinessHints reuses Amp's worker-TUI prompt markers.
 func (*Reviewer) ReviewPromptReadinessHints(ctx context.Context) (ports.PromptReadinessHints, error) {
 	return workeramp.New().PromptReadinessHints(ctx, ports.LaunchConfig{})
 }
 
-// ReviewCommand launches Amp's permanent interactive TUI. AO never uses
-// --execute; the review task is injected after the pane starts.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	binary, err := r.resolveBinary(ctx)
 	if err != nil {
@@ -60,16 +53,11 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Amp reviewer pane by relaunching the
-// reviewer command with the current AO-owned task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
 }
 
-// reviewerModeArgs launches the reviewer in the configured Amp mode. Amp's
-// model picker is its mode list, so a configured model value is a mode, as it
-// is for Amp workers. Values Amp does not list are dropped.
 func reviewerModeArgs(config domain.AgentConfig) []string {
 	mode := strings.TrimSpace(config.Mode)
 	if mode == "" {
@@ -111,12 +99,10 @@ func writeReviewerSettings(root string) (string, error) {
 	return path, nil
 }
 
-// ReviewMessage returns the next AO-owned task reference.
 func (*Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel interrupts Amp's current operation while preserving the pane.
 func (*Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInterrupt, Interrupts: 2}, nil
 }

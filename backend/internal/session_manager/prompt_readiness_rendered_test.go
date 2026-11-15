@@ -11,9 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// renderedReadinessRuntime serves a sequence of rendered viewports, the way a
-// full-screen TUI on the alternate screen is only visible through
-// GetStyledOutput while the raw output ring holds no contiguous text.
 type renderedReadinessRuntime struct {
 	*fakeRuntime
 	screens     []string
@@ -202,8 +199,6 @@ func TestSpawn_WrappedBlockingDialogAtTimeoutStillFails(t *testing.T) {
 	}
 }
 
-// A caller deadline shorter than the delivery reserve skips the readiness
-// wait; blocking patterns must still keep the prompt out of a startup dialog.
 func TestSpawn_ShortDeadlineStillGuardsBlockingDialog(t *testing.T) {
 	dialog := testTrustDialog + "\nNo, quit n\nGrok Build 1.0.77"
 	cases := []struct {

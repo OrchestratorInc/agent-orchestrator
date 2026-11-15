@@ -1,12 +1,3 @@
-/**
- * The Coder templates the picker offers for a new session
- * (GET /orgs/{orgId}/sandbox/coder/templates). Empty when the deployment does
- * not offer coder or the org is not entitled — the picker then shows only
- * "Default". Enabled only when the caller has already resolved that coder is the
- * active provider, and never for an org whose offering lacks coder (the control
- * plane answers 403 provider_forbidden there).
- */
-
 import { useQuery } from "@tanstack/react-query";
 import type { CloudCpCoderTemplate } from "../lib/cloud-cp/types";
 import { useCloudCp } from "./useCloudCp";
@@ -15,9 +6,6 @@ import { useCloudOffering } from "./useCloudOffering";
 export interface UseCoderTemplatesResult {
 	templates: CloudCpCoderTemplate[];
 	isLoading: boolean;
-	// True when the list could not be loaded — most often an unreachable Coder or a
-	// bad API token. Callers that only drive a dropdown can ignore it; the settings
-	// page uses it to show a "couldn't load" state.
 	isError: boolean;
 }
 

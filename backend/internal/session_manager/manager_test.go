@@ -33,8 +33,6 @@ import (
 
 var ctx = context.Background()
 
-// The scheduler's durable run identity must cross the existing spawn boundary
-// into the seed row so retries can adopt the same session.
 func TestSeedRecordPreservesAutomationRunIdentity(t *testing.T) {
 	runID := domain.AutomationRunID("run-1")
 	rec := seedRecord(ports.SpawnConfig{
@@ -67,12 +65,9 @@ type fakeStore struct {
 
 	createClientRequestErr error
 	promoteTaskErr         error
-	// worktrees maps session ID to its saved worktree rows (shutdown-saved marker).
-	worktrees map[domain.SessionID][]domain.SessionWorktreeRecord
-	// sharedLog, when non-nil, receives an ordered call entry for each
-	// UpsertSessionWorktree invocation so ordering tests can compare across fakes.
-	sharedLog    *[]string
-	loginDemands []string
+	worktrees              map[domain.SessionID][]domain.SessionWorktreeRecord
+	sharedLog              *[]string
+	loginDemands           []string
 }
 
 func (s *fakeStore) RequireSessionLogin(_ context.Context, id domain.SessionID, reason string, _ time.Time) error {
@@ -159,10 +154,6 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	if f.updateSessionErr != nil {
 		return f.updateSessionErr
 	}
-	// Like the real store, a full-row update never writes the title,
-	// artifact_dir, session_output_type, runtime_released_launch_id or branch
-	// naming facts; only their narrow writes do. Nor does it put back a
-	// renamed task's temporary branch.
 	if existing, ok := f.sessions[rec.ID]; ok {
 		rec.DisplayName = existing.DisplayName
 		rec.Metadata.ArtifactDir = existing.Metadata.ArtifactDir
@@ -423,7 +414,6 @@ func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool,
 	if !ok {
 		return false, nil
 	}
-	// Mirror the sqlite gate: only delete rows still in seed state.
 	if rec.IsTerminated || rec.Metadata.WorkspacePath != "" || rec.Metadata.RuntimeHandleID != "" || rec.Metadata.AgentSessionID != "" || rec.Metadata.Prompt != "" ||
 		rec.Metadata.LatestUserPrompt != "" || rec.Metadata.LatestAssistantUpdate != "" || rec.Metadata.NativeTranscriptPath != "" {
 		return false, nil
@@ -472,8 +462,7 @@ type fakeLCM struct {
 	prepared       []string
 	cancelled      []string
 	chatBoundaries []domain.ConversationBranch
-	// terminated counts MarkTerminated calls per session id.
-	terminated map[domain.SessionID]int
+	terminated     map[domain.SessionID]int
 }
 
 func (l *fakeLCM) PrepareLaunch(id domain.SessionID, launchID string) error {
@@ -523,9 +512,6 @@ func (l *fakeLCM) MarkChatSpawned(
 	return l.MarkSpawned(ctx, id, metadata)
 }
 
-// Production Lifecycle Manager merges launch handles into the existing row;
-// launch metadata never replaces replay checkpoint provenance. Keep the shared
-// session-manager fake faithful to that ownership boundary.
 func preserveCheckpointOnFakeMarkSpawned(
 	base, launched domain.SessionMetadata,
 ) domain.SessionMetadata {
@@ -639,9 +625,6 @@ func (l *fakeLCM) changeControllerEpoch(
 	return true, nil
 }
 
-// MarkTerminated mirrors the real lifecycle.Manager, which refuses to write on
-// a dead context. The fake used to ignore ctx entirely, which hid the fact that
-// Kill was recording terminal intent on its own expiring teardown budget.
 func (l *fakeLCM) MarkTerminated(ctx context.Context, id domain.SessionID) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -658,32 +641,29 @@ func (l *fakeLCM) MarkTerminated(ctx context.Context, id domain.SessionID) error
 }
 
 type fakeRuntime struct {
-	createErr          error
-	createErrSequence  []error
-	createIDs          []string
-	destroyErr         error
-	destroyErrSequence []error
-	onDestroy          func(call int, handle ports.RuntimeHandle)
-	created, destroyed int
-	lastCfg            ports.RuntimeConfig
-	outputs            []string
-	outputCalls        int
-	outputErr          error
-	interruptErr       error
-	interrupts         []string
-	onInterrupt        func(ports.RuntimeHandle)
-	// aliveByHandle maps a RuntimeHandle.ID to its liveness; missing = false.
+	createErr               error
+	createErrSequence       []error
+	createIDs               []string
+	destroyErr              error
+	destroyErrSequence      []error
+	onDestroy               func(call int, handle ports.RuntimeHandle)
+	created, destroyed      int
+	lastCfg                 ports.RuntimeConfig
+	outputs                 []string
+	outputCalls             int
+	outputErr               error
+	interruptErr            error
+	interrupts              []string
+	onInterrupt             func(ports.RuntimeHandle)
 	aliveByHandle           map[string]bool
 	aliveErr                error
 	supervisedErr           error
 	supervisedAliveOverride *bool
 	supervisedSequence      []bool
-	// exitedLaunches marks launches whose managed agent child is gone even
-	// though the pane (aliveByHandle) survives, as the strict probe reports it.
-	exitedLaunches map[string]bool
-	destroyedIDs   []string
-	fencedResult   ports.FencedProbeResult
-	fencedRefs     []ports.FencedRuntimeRef
+	exitedLaunches          map[string]bool
+	destroyedIDs            []string
+	fencedResult            ports.FencedProbeResult
+	fencedRefs              []ports.FencedRuntimeRef
 }
 
 func (r *fakeRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) error {
@@ -968,13 +948,10 @@ func (supervisedLaunchAgent) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
 
-// fakeAgents resolves every harness to the same fakeAgent.
 type fakeAgents struct{}
 
 func (fakeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return fakeAgent{}, true }
 
-// recordingAgent captures the LaunchConfig it is handed so a test can assert the
-// session manager resolved and forwarded a project's agent config.
 type recordingAgent struct {
 	fakeAgent
 	lastConfig   ports.AgentConfig
@@ -1008,8 +985,6 @@ func (a *recordingAgent) GetRestoreCommand(_ context.Context, cfg ports.RestoreC
 	a.restoreCalls++
 	a.lastConfig = cfg.Config
 	a.lastRestore = cfg
-	// Mirror real adapters: with no native agent-session id to resume, signal
-	// "cannot restore" so the manager falls back to a fresh launch.
 	if cfg.Session.Metadata[ports.MetadataKeyAgentSessionID] == "" {
 		return nil, false, nil
 	}
@@ -1200,80 +1175,51 @@ func requireNoPromptDir(t *testing.T, dataDir string, id domain.SessionID) {
 	}
 }
 
-// alwaysResumeAgent mimics Claude Code: it pins a deterministic session id, so
-// GetRestoreCommand can resume any session even with no captured agentSessionId
-// and no prompt.
 type alwaysResumeAgent struct{ fakeAgent }
 
 func (alwaysResumeAgent) GetRestoreCommand(_ context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	return []string{"resume", cfg.Session.ID}, true, nil
 }
 
-// missingAgents resolves no harness, simulating a typo'd or unregistered agent.
 type missingAgents struct{}
 
 func (missingAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return nil, false }
 
 type fakeWorkspace struct {
-	createErr   error
-	createCount int
-	destroyErr  error
-	destroyed   int
-	// destroyReclaim, when set, is the reclaim outcome DestroyReclaim reports.
-	destroyReclaim ports.WorkspaceReclaim
-	// destroyReclaimByPath overrides destroyReclaim for one workspace path, so a
-	// multi-repo test can have one repo still on disk while another is already
-	// gone — the state a partly cleaned workspace project is actually in.
+	createErr            error
+	createCount          int
+	destroyErr           error
+	destroyed            int
+	destroyReclaim       ports.WorkspaceReclaim
 	destroyReclaimByPath map[string]ports.WorkspaceReclaim
-	// destroyCtxErr records ctx.Err() as seen by Destroy, so a test can prove
-	// teardown does not inherit a caller's cancellation.
-	destroyCtxErr error
-	// destroyHook runs at the top of Destroy, so a test can make teardown burn
-	// real time against Kill's budget.
-	destroyHook func()
-	fetchErr    error
-	fetches     []fetchDefaultBranchCall
-	resolves    []resolveDefaultBranchCall
-	resolved    map[string]ports.WorkspaceDefaultBranch
-	fetchFunc   func(context.Context, string, ports.WorkspaceDefaultBranch) error
-	// createRepoPath, when set, is returned as the RepoPath of a single-repo
-	// Create so tests can assert it survives the spawn->teardown metadata round
-	// trip (production Create resolves this path; the zero default keeps every
-	// other test's behavior unchanged).
-	createRepoPath string
-	// baseRef is the authoritative ref returned with single-repo workspaces.
-	// When empty, an explicit BaseBranch is echoed to match the real adapter.
-	baseRef string
-	// lastDestroyInfo records the WorkspaceInfo passed to the most recent Destroy
-	// so tests can assert teardown fed it the persisted repo path.
-	lastDestroyInfo   ports.WorkspaceInfo
-	lastCfg           ports.WorkspaceConfig
-	restoreConfigs    []ports.WorkspaceConfig
-	projectErr        error
-	projectDestroyed  int
-	lastProjectCfg    ports.WorkspaceProjectConfig
-	projectCreateInfo ports.WorkspaceProjectInfo
-	// path, when set, is returned as the workspace path so provisioning tests
-	// can point at a real temp directory.
-	path string
-	// stashRef is returned by StashUncommitted (empty means clean worktree).
-	stashRef        string
-	stashErr        error
-	applyErr        error
-	forceDestroyErr error
-	// stashCalls counts StashUncommitted invocations.
-	stashCalls int
-	stashHook  func()
-	// excludePatterns records patterns passed to AddExclude; addExcludeErr, when
-	// set, is returned so best-effort handling can be exercised.
-	excludePatterns []string
-	addExcludeErr   error
-	// calls records the sequence of workspace method calls for ordering assertions.
-	calls []string
-	// sharedLog, when non-nil, receives entries alongside calls so ordering
-	// tests can compare workspace calls against store calls in one sequence.
-	sharedLog      *[]string
-	restoredBranch string
+	destroyCtxErr        error
+	destroyHook          func()
+	fetchErr             error
+	fetches              []fetchDefaultBranchCall
+	resolves             []resolveDefaultBranchCall
+	resolved             map[string]ports.WorkspaceDefaultBranch
+	fetchFunc            func(context.Context, string, ports.WorkspaceDefaultBranch) error
+	createRepoPath       string
+	baseRef              string
+	lastDestroyInfo      ports.WorkspaceInfo
+	lastCfg              ports.WorkspaceConfig
+	restoreConfigs       []ports.WorkspaceConfig
+	projectErr           error
+	projectDestroyed     int
+	lastProjectCfg       ports.WorkspaceProjectConfig
+	projectCreateInfo    ports.WorkspaceProjectInfo
+	path                 string
+	stashRef             string
+	stashErr             error
+	applyErr             error
+	forceDestroyErr      error
+	stashCalls           int
+	stashHook            func()
+	excludePatterns      []string
+	addExcludeErr        error
+	calls                []string
+	sharedLog            *[]string
+	restoredBranch       string
 }
 
 type fetchDefaultBranchCall struct {
@@ -1397,9 +1343,6 @@ func (w *fakeWorkspace) Destroy(ctx context.Context, info ports.WorkspaceInfo) e
 	return w.destroyErr
 }
 
-// DestroyReclaim makes the fake report reclaim outcomes like the real git
-// worktree adapter. destroyReclaim is empty in every pre-existing test, which
-// keeps them on the "a completed teardown released something" default.
 func (w *fakeWorkspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo) (ports.WorkspaceReclaim, error) {
 	err := w.Destroy(ctx, info)
 	reclaim := w.destroyReclaim
@@ -1613,8 +1556,6 @@ func TestSend_WritesAttachmentAndAppendsReference(t *testing.T) {
 		t.Fatalf("delivered message missing attachment reference block: %q", got)
 	}
 
-	// The referenced path in the delivered message must be the file actually
-	// written to disk, not just well-formed text.
 	refLine := ""
 	for _, line := range strings.Split(got, "\n") {
 		if strings.HasPrefix(line, "- .ao/attachments/attachment-") {
@@ -1656,11 +1597,6 @@ func TestSend_WithoutAttachmentSkipsWorkspaceWrite(t *testing.T) {
 	}
 }
 
-// A session with no WorkspacePath has nowhere safe to write an attachment:
-// StageAttachments' filepath.Join would otherwise produce a relative
-// ".ao/attachments" path, writing beneath the daemon's own working directory
-// instead of the session's worktree and handing the agent a reference it
-// cannot reach. Send must refuse rather than silently mis-deliver.
 func TestSend_RejectsAttachmentWithEmptyWorkspace(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
@@ -1683,8 +1619,6 @@ func newManager() (*Manager, *fakeStore, *fakeRuntime, *fakeWorkspace) {
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	rt := &fakeRuntime{}
 	ws := &fakeWorkspace{}
-	// Stub lookPath so the pre-launch agent-binary check passes; the fakeAgent
-	// returns argv ["launch"] which is not a real binary on PATH.
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 	return m, st, rt, ws
@@ -1757,8 +1691,7 @@ func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 		DefaultBranch: "develop",
 		Env:           map[string]string{"FOO": "bar"},
 		AgentConfig:   domain.AgentConfig{Model: "base-model"},
-		// A worker role override wins over the base agent config for workers.
-		Worker: domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "worker-model"}},
+		Worker:        domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "worker-model"}},
 	}}
 	agent := &recordingAgent{}
 	rt := &fakeRuntime{}
@@ -1798,7 +1731,6 @@ func TestSpawn_ResolvesProjectConfig(t *testing.T) {
 		t.Fatalf("launch model = %q, want request model override", agent.lastConfig.Model)
 	}
 
-	// A project with no stored config defaults new sessions to Auto permissions.
 	st.projects["bare"] = domain.ProjectRecord{ID: "bare"}
 	agent.lastConfig = ports.AgentConfig{Model: "stale"}
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "bare", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
@@ -1914,8 +1846,6 @@ func TestResumeHarnessGateRejectsCodexMaintenance(t *testing.T) {
 	}
 }
 
-// TestSpawnModelValidation asserts spawn rejects models a fixed-catalog harness
-// cannot honor, while harnesses that accept arbitrary model ids pass through.
 func TestSpawnModelValidation(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
@@ -1927,8 +1857,6 @@ func TestSpawnModelValidation(t *testing.T) {
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-	// Amp has a fixed mode list; "high" is valid. The spawn model override is
-	// routed into AgentConfig.Mode so adapters that read Mode receive the value.
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "high"}}); err != nil {
 		t.Fatalf("amp spawn with model high failed: %v", err)
 	}
@@ -1939,7 +1867,6 @@ func TestSpawnModelValidation(t *testing.T) {
 		t.Fatalf("amp launch model = %q, want empty after routing to mode", agent.lastConfig.Model)
 	}
 
-	// Amp rejects a model outside its mode list.
 	before := len(st.sessions)
 	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentConfig: ports.AgentConfig{Model: "invalid-mode"}})
 	if err == nil {
@@ -1952,7 +1879,6 @@ func TestSpawnModelValidation(t *testing.T) {
 		t.Fatalf("invalid model left a session row behind: %d sessions, want %d", len(st.sessions), before)
 	}
 
-	// Codex accepts arbitrary custom model ids.
 	st.projects["codex-proj"] = domain.ProjectRecord{ID: "codex-proj", Config: domain.ProjectConfig{
 		Worker: domain.RoleOverride{Harness: domain.HarnessCodex},
 	}}
@@ -1961,9 +1887,6 @@ func TestSpawnModelValidation(t *testing.T) {
 	}
 }
 
-// TestSpawnAmpModelOverrideLaunchArgv uses the real Amp adapter to verify that
-// a spawn model override for Amp ends up as `--mode <value>` in the actual
-// launch argv instead of silently being dropped because Amp reads Config.Mode.
 func TestSpawnAmpModelOverrideLaunchArgv(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("PATH setup differs on windows")
@@ -1997,8 +1920,6 @@ func TestSpawnAmpModelOverrideLaunchArgv(t *testing.T) {
 		t.Fatalf("launch argv = %#v, want %#v", rt.lastCfg.Argv, want)
 	}
 
-	// The user-visible resolved model is still persisted, not cleared by the
-	// adapter-facing normalization that moved it into Mode.
 	if len(st.sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(st.sessions))
 	}
@@ -2011,10 +1932,6 @@ func TestSpawnAmpModelOverrideLaunchArgv(t *testing.T) {
 	}
 }
 
-// TestSpawnAmpProjectDefaultModePersistsAsModel verifies that when Amp's mode
-// comes from project/role config (not an explicit spawn --model override), the
-// resolved value is still reported as metadata.Model instead of appearing as
-// the agent default.
 func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("PATH setup differs on windows")
@@ -2056,8 +1973,6 @@ func TestSpawnAmpProjectDefaultModePersistsAsModel(t *testing.T) {
 	}
 }
 
-// TestSpawnModelPersisted asserts the resolved model is stored on the session
-// metadata and survives a store round-trip.
 func TestSpawnModelPersisted(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
@@ -2093,12 +2008,6 @@ func TestSpawnModelPersisted(t *testing.T) {
 	}
 }
 
-// A spawn that names a harness other than the role override's must not inherit
-// that role's model: it was tuned for the other agent and would reach the
-// selected harness as an unknown provider alias. The harness picks its own
-// default instead, while harness-neutral permissions still carry over.
-// Both roles resolve through the same override, so both leak the same way; the
-// orchestrator case is asserted explicitly rather than left implied.
 func TestSpawn_DropsRoleModelOnHarnessMismatch(t *testing.T) {
 	roleConfig := domain.RoleOverride{
 		Harness:     domain.HarnessOpenCode,
@@ -2134,8 +2043,6 @@ func TestSpawn_DropsRoleModelOnHarnessMismatch(t *testing.T) {
 			if agent.lastConfig.Permissions != domain.PermissionModeAuto {
 				t.Fatalf("launch permissions = %q, want auto (harness-neutral)", agent.lastConfig.Permissions)
 			}
-			// The mismatched model must not survive into the record the API
-			// and UI read back either.
 			stored, ok, err := st.GetSession(ctx, rec.ID)
 			if err != nil || !ok {
 				t.Fatalf("get session: err=%v ok=%v", err, ok)
@@ -2382,8 +2289,6 @@ func TestExitAgentStopsOnlyControllerAndPreservesSessionIdentity(t *testing.T) {
 		got.Metadata.RuntimeLaunchID != "launch-current" || got.Metadata.AgentSessionID != "native-thread-1" {
 		t.Fatalf("exit changed resumable identity: %+v", got.Metadata)
 	}
-	// The release is recorded before the terminal goes, so the reaper never
-	// sees the dead runtime as a crash and ends the session.
 	if got.Metadata.RuntimeReleasedLaunchID != "launch-current" {
 		t.Fatalf("released launch = %q, want launch-current", got.Metadata.RuntimeReleasedLaunchID)
 	}
@@ -2420,7 +2325,6 @@ func newExitedResumeManager(t *testing.T, runtime runtimeController, agent ports
 		Executable:  func() (string, error) { return "/opt/ao", nil },
 		NewLaunchID: func() string { return "launch-new" },
 	})
-	// The exited fixture's pane may survive, but its launched agent has exited.
 	if fake, ok := runtime.(interface{ base() *fakeRuntime }); ok {
 		if fake.base().exitedLaunches == nil {
 			fake.base().exitedLaunches = map[string]bool{}
@@ -2543,8 +2447,6 @@ func TestResumeAgent_RefusesTUIWhoseLaunchedAgentIsStillAlive(t *testing.T) {
 	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime}
 	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"claude", "--resume", "side-run"}}}
 	m, st, _ := newExitedResumeManager(t, runtime, agent)
-	// A side `claude -p` in the worktree reported SessionEnd under the current
-	// launch, but the exact agent AO launched is still running (#6454).
 	delete(baseRuntime.exitedLaunches, "launch-old")
 	before := st.sessions["mer-1"]
 
@@ -2771,7 +2673,7 @@ func TestSpawnPreparedClientRequestRetriesAfterStorageFullWithoutDuplicateWorker
 	if len(st.sessions) != 1 || ws.createCount != 1 || ws.destroyed != 1 || rt.created != 0 {
 		t.Fatalf("failed promotion left sessions=%d workspaces=%d destroyed=%d runtimes=%d", len(st.sessions), ws.createCount, ws.destroyed, rt.created)
 	}
-	st.deletePrepErr = nil // storage recovered; retry must not reclaim the failed preparation
+	st.deletePrepErr = nil
 	created, _, _, err := m.Spawn(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -3099,7 +3001,6 @@ func (a *modelCheckingMemcodeAgent) GetAgentHooks(ctx context.Context, cfg ports
 }
 
 func (a *modelCheckingMemcodeAgent) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
-	// Exercise Memcode's real launch validation without requiring its executable.
 	if _, err := memcode.New().AfterStartCommand(ctx, cfg); err != nil {
 		return nil, err
 	}
@@ -3597,9 +3498,6 @@ func TestSpawn_AfterStartPromptFailureCleansUpWorkspaceProjectRows(t *testing.T)
 	}
 }
 
-// terminatedOnReReadStore wraps fakeStore and reports the spawned session as
-// terminated every time GetSession is called AFTER CreateSession, so the guard
-// re-reads a terminated row and suppresses the after-start prompt delivery.
 type terminatedOnReReadStore struct {
 	*fakeStore
 	spawned domain.SessionID
@@ -3608,16 +3506,12 @@ type terminatedOnReReadStore struct {
 
 func (s *terminatedOnReReadStore) CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	out, err := s.fakeStore.CreateSession(ctx, rec)
-	// fakeStore assigns the "{project}-{n}" id inside CreateSession, so capture
-	// it from the returned record.
 	s.spawned = out.ID
 	s.saw = true
 	return out, err
 }
 
 func (s *terminatedOnReReadStore) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
-	// Once spawn created the row, surface it as terminated so the guard's
-	// just-in-time re-read sees a dead session and suppresses the write.
 	if s.saw && id == s.spawned {
 		rec := s.sessions[id]
 		rec.IsTerminated = true
@@ -3627,18 +3521,13 @@ func (s *terminatedOnReReadStore) GetSession(ctx context.Context, id domain.Sess
 	return s.fakeStore.GetSession(ctx, id)
 }
 
-// TestSpawn_AfterStartPromptSuppressedTerminationFailsSpawn: if a session is
-// gone by the time the after-start prompt is delivered, the Guard's Deliver
-// suppresses — and deliverAfterStartPrompt must surface that as an error
-// (not fold it into nil / report a successful spawn with no prompt). This is
-// the case the Guard.Send wrapper used to swallow (see review on #2357).
 func TestSpawn_AfterStartPromptSuppressedTerminationFailsSpawn(t *testing.T) {
 	base := newFakeStore()
 	base.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	st := &terminatedOnReReadStore{fakeStore: base}
 	rt := &fakeRuntime{}
 	ws := &fakeWorkspace{}
-	msg := &fakeMessenger{} // underlying messenger is fine; suppression comes from the guard's re-read
+	msg := &fakeMessenger{}
 	agent := &recordingAgent{}
 	lcm := &fakeLCM{store: base}
 	m := New(Deps{
@@ -3655,8 +3544,6 @@ func TestSpawn_AfterStartPromptSuppressedTerminationFailsSpawn(t *testing.T) {
 	if err == nil {
 		t.Fatal("Spawn err = nil, want failure because the after-start prompt was suppressed (session terminated)")
 	}
-	// The suppressed termination must not have been folded into success: the
-	// prompt was never delivered.
 	if len(msg.msgs) != 0 {
 		t.Fatalf("delivered prompts = %#v, want none (delivery was suppressed)", msg.msgs)
 	}
@@ -3704,10 +3591,6 @@ func TestSpawn_PromptDeliveryStrategyFailureCleansUpWorkspaceProjectRows(t *test
 	}
 }
 
-// TestSpawn_StampsUTCTimestamps locks the default clock to UTC so spawn-stamped
-// CreatedAt/UpdatedAt match every other session write (rename, activity), which
-// all use time.Now().UTC(). A local default produced mixed-timezone timestamps
-// in `ao session get` (created in local time, updated in UTC).
 func TestSpawn_StampsUTCTimestamps(t *testing.T) {
 	m, st, _, _ := newManager()
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
@@ -3861,11 +3744,6 @@ func TestSpawn_AgentRuntimeEnvAugmenterReachesRuntime(t *testing.T) {
 	}
 }
 
-// TestSpawn_DeletesSeedRowOnWorkspaceFailure covers the failed-spawn cleanup:
-// when workspace materialization fails (e.g. gitworktree refuses a branch
-// checked out elsewhere), nothing observable was built, so the seed row is
-// deleted outright rather than parked as a terminated orphan that clutters
-// session lists.
 func TestSpawn_DeletesSeedRowOnWorkspaceFailure(t *testing.T) {
 	m, st, rt, ws := newManager()
 	ws.createErr = ports.ErrWorkspaceBranchCheckedOutElsewhere
@@ -3881,9 +3759,6 @@ func TestSpawn_DeletesSeedRowOnWorkspaceFailure(t *testing.T) {
 	}
 }
 
-// TestSpawn_ParksRowTerminatedWhenSeedDeleteFails asserts the fallback: if the
-// seed-row delete itself fails, the failed spawn still parks the row as
-// terminated so it never looks live.
 func TestSpawn_ParksRowTerminatedWhenSeedDeleteFails(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.createErr = ports.ErrWorkspaceBranchNotFetched
@@ -4126,11 +4001,6 @@ func TestKillCleanupScriptFailurePreservesWorkspaceForRetry(t *testing.T) {
 	}
 }
 
-// A caller that gives up must not take the teardown down with it. The REST
-// layer caps a request at cfg.RequestTimeout, and a session whose worktree
-// carries a large ignored tree used to run past that: the request context was
-// cancelled mid-Kill, so the agent was already stopped while the row still read
-// as alive, and the caller got a 500 for a session that was half gone.
 func TestKill_CompletesTeardownAfterCallerContextIsCancelled(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4236,16 +4106,6 @@ func TestKill_ReviewerTeardownFailureLeavesSessionActive(t *testing.T) {
 	}
 }
 
-// TestKill_TerminatesIncompleteHandle: a session whose runtime handle or
-// workspace path is missing is still terminated — the destroy steps are
-// skipped, but the session moves to terminal state so it can be cleaned up
-// from the dashboard.
-// fakeShellTerminalCloser stands in for shellterm.Service in ordering tests:
-// it records which sessions it was asked to begin/end teardown for, and —
-// when sharedLog is set — appends into the same call sequence a fakeWorkspace
-// (and fakeStore) logs into, so a test can assert shell terminals are drained
-// BEFORE the worktree they point at is torn down, and the gate is released
-// AFTER.
 type fakeShellTerminalCloser struct {
 	began     []domain.SessionID
 	ended     []domain.SessionID
@@ -4305,12 +4165,6 @@ func (f *fakeReviewerTerminator) RestoreReviewer(_ context.Context, id domain.Se
 	return f.restoreErr
 }
 
-// TestKill_ClosesScopedShellTerminalsBeforeWorkspaceTeardown is the regression
-// for the bug where Kill removed a session's worktree while a shell terminal
-// scoped to it was still open, pointed at a directory that no longer existed
-// (and, on Windows, an open handle on that directory could refuse deletion).
-// The gate must also release (EndSessionTeardown) once Kill's own teardown is
-// done, or the session's shell terminals would stay locked out forever.
 func TestKill_ClosesScopedShellTerminalsBeforeWorkspaceTeardown(t *testing.T) {
 	m, st, _, ws := newManager()
 	var calls []string
@@ -4352,11 +4206,6 @@ func TestKill_ClosesScopedShellTerminalsBeforeWorkspaceTeardown(t *testing.T) {
 	}
 }
 
-// TestKill_RefusesWorkspaceTeardownWhenShellTerminalsWontClose is the
-// regression for the bug where a shell terminal that failed to close was
-// logged and forgotten, then the worktree was destroyed anyway — leaving a
-// still-live shell pointed at nothing. Kill must refuse the workspace release
-// in that case, the same shape as a dirty-workspace refusal.
 func TestKill_RefusesWorkspaceTeardownWhenShellTerminalsWontClose(t *testing.T) {
 	m, st, rt, ws := newManager()
 	m.SetShellTerminalCloser(&fakeShellTerminalCloser{err: errors.New("shellterm-1: still alive")})
@@ -4381,17 +4230,11 @@ func TestKill_RefusesWorkspaceTeardownWhenShellTerminalsWontClose(t *testing.T) 
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Error("session should still be marked terminated")
 	}
-	// Same guard the plain dirty-workspace refusal applies (#2319): the restore
-	// marker must not survive a user kill, or the next boot's RestoreAll could
-	// resurrect a session the user explicitly terminated — even though the
-	// worktree itself was left alone because a shell wouldn't confirm closed.
 	if rows := st.worktrees["mer-1"]; len(rows) != 0 {
 		t.Errorf("restore marker = %+v, want cleared", rows)
 	}
 }
 
-// A nil closer (SetShellTerminalCloser never called, e.g. a daemon boot path
-// that skips shellterm) must be a no-op, not a nil-pointer panic.
 type fakeBranchStateRecorder struct {
 	st    *fakeStore
 	ws    *fakeWorkspace
@@ -4444,10 +4287,6 @@ func TestKill_TerminatesIncompleteHandle(t *testing.T) {
 	}
 }
 
-// TestKill_DirtyWorkspacePreservesAndTerminates: a workspace teardown
-// refused because of uncommitted work must NOT force-remove the worktree. Kill
-// succeeds with freed=false and still marks the session terminated; cleanup can
-// reclaim the preserved worktree after the user resolves the dirty state.
 func TestKill_DirtyWorkspacePreservesAndTerminates(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4467,10 +4306,6 @@ func TestKill_DirtyWorkspacePreservesAndTerminates(t *testing.T) {
 	}
 }
 
-// A project directory the user deleted leaves git unable to reclaim the
-// session's worktree, and failing the kill for that stranded the session in
-// the sidebar permanently: every retry answered 500 and the row never left.
-// The session must still terminate, with the worktree preserved on disk.
 func TestKill_MissingProjectRepoPreservesWorkspaceAndTerminates(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyErr = fmt.Errorf("gitworktree: repository %q is no longer on disk: %w", "/gone", ports.ErrWorkspaceRepoUnavailable)
@@ -4488,13 +4323,6 @@ func TestKill_MissingProjectRepoPreservesWorkspaceAndTerminates(t *testing.T) {
 	}
 }
 
-// A worktree whose directory is still pinned by a process handle (a live agent
-// or scoped shell on Windows) survives the removeAll retry budget. git has
-// already unregistered it by then, so nothing is being reconciled — only the
-// directory cannot go away right now. Erroring the kill for that stranded the
-// session in the sidebar forever: every retry answered 500 and the row never
-// left (#3408). The kill must succeed with freed=false, and the leftover
-// directory is left for a later `ao session cleanup` pass to retry.
 func TestKill_DeferredWorkspaceRemovalPreservesAndTerminates(t *testing.T) {
 	m, st, _, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4531,13 +4359,6 @@ func TestKill_DeletesStaleRestoreMarker(t *testing.T) {
 	}
 }
 
-// TestKill_UnnamedWorkspaceErrorPreservesAndTerminates is the #5463 regression
-// on the workspace half. A teardown failure AO has no typed name for (a locked
-// worktree git will not prune, a path that no longer resolves to a live
-// worktree) used to fail the kill, which left `terminated` false — and
-// `ao session cleanup` only walks terminated sessions, so the row was reachable
-// by no path at all. Nothing is force-removed: the worktree stays on disk for
-// cleanup to retry and report on. Only the session's claim on the sidebar goes.
 func TestKill_UnnamedWorkspaceErrorPreservesAndTerminates(t *testing.T) {
 	m, st, _, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4558,12 +4379,6 @@ func TestKill_UnnamedWorkspaceErrorPreservesAndTerminates(t *testing.T) {
 	}
 }
 
-// TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone pins the
-// runtime half of #5463 shut. Every runtime's Destroy returns nil when it
-// confirms the session is absent, so an error means it may still be live — and
-// a follow-up IsAlive cannot overrule that: conpty's probe dials a listener the
-// graceful shutdown already closed, so a hung pty-host reads as gone. Kill must
-// surface the error and leave the session and its workspace alone.
 func TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4582,8 +4397,6 @@ func TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone(t *testing.T)
 	}
 }
 
-// forgettingInputGate records which terminals Session Manager tells the
-// terminal mux to forget.
 type forgettingInputGate struct {
 	mu        sync.Mutex
 	forgotten []string
@@ -4607,8 +4420,6 @@ func (g *forgettingInputGate) calls() []string {
 	return slices.Clone(g.forgotten)
 }
 
-// A killed session's runtime is gone, so the terminal mux can drop its input
-// timestamp; it is keyed by the runtime handle id (#5691).
 func TestKill_ForgetsTerminalInputAfterRuntimeDestroy(t *testing.T) {
 	m, st, rt, _ := newManager()
 	gate := &forgettingInputGate{}
@@ -4628,8 +4439,6 @@ func TestKill_ForgetsTerminalInputAfterRuntimeDestroy(t *testing.T) {
 	}
 }
 
-// A failed destroy leaves the runtime possibly live with a draft in it, so its
-// input timestamp must stay for the idle and draft proofs.
 func TestKill_KeepsTerminalInputWhenRuntimeDestroyFails(t *testing.T) {
 	m, st, rt, _ := newManager()
 	gate := &forgettingInputGate{}
@@ -4645,8 +4454,6 @@ func TestKill_KeepsTerminalInputWhenRuntimeDestroyFails(t *testing.T) {
 	}
 }
 
-// Cleanup destroys a terminated session's leftover runtime (usually already
-// gone after the agent exited on its own) and then drops its input timestamp.
 func TestCleanup_ForgetsTerminalInputOfTerminatedSessions(t *testing.T) {
 	m, st, _, _ := newManager()
 	gate := &forgettingInputGate{}
@@ -4661,9 +4468,6 @@ func TestCleanup_ForgetsTerminalInputOfTerminatedSessions(t *testing.T) {
 	}
 }
 
-// Forgetting waits on the terminal's write fence under the caller's context.
-// If that fails the runtime is still destroyed, so the kill must not fail: the
-// only cost is one stale input timestamp.
 func TestKill_SucceedsWhenForgettingTerminalInputFails(t *testing.T) {
 	m, st, _, _ := newManager()
 	gate := &forgettingInputGate{err: context.DeadlineExceeded}
@@ -4678,11 +4482,6 @@ func TestKill_SucceedsWhenForgettingTerminalInputFails(t *testing.T) {
 	}
 }
 
-// TestKill_InconclusiveRuntimeProbeStaysFailClosed pins the other side.
-// ErrRuntimeProbeInconclusive means the runtime may still be live, and its port
-// contract forbids callers from treating the session as dead. Terminating here
-// would leave a possibly-live agent running with no row pointing at it, so the
-// kill must keep failing and the workspace must stay untouched.
 func TestKill_InconclusiveRuntimeProbeStaysFailClosed(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4727,12 +4526,6 @@ func TestKill_WorkspaceProjectDestroysChildrenBeforeRoot(t *testing.T) {
 	}
 }
 
-// TestKill_WorkspaceProjectAlreadyAbsentStaysFreed guards the boundary between
-// the two answers destroyWorkspaceProjectRows returns. Kill's freed flag is not
-// a disk-reclaim count: freed=false means the workspace was preserved, and the
-// CLI prints "workspace preserved" from it. A worktree that was already gone
-// was torn down, not preserved, so collapsing freed onto the reclaim outcome
-// would make kill report a preserved workspace that does not exist.
 func TestKill_WorkspaceProjectAlreadyAbsentStaysFreed(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyReclaim = ports.WorkspaceReclaimAlreadyAbsent
@@ -4818,9 +4611,6 @@ func TestKill_WorkspaceProjectDirtyRowRefusesRemoval(t *testing.T) {
 	}
 }
 
-// Same deferred outcome through the workspace-project path: a child repo whose
-// removal is deferred must not fail the kill, and the leftover rows stay marked
-// for a later cleanup pass to retry (#3408).
 func TestKill_WorkspaceProjectDeferredRowDefersRemoval(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyErr = fmt.Errorf("gitworktree: force remove path %q: %w (deferred: %w)", "/ws/mer-1/api", ports.ErrWorkspaceDeferred, errors.New("access denied"))
@@ -5104,17 +4894,8 @@ func TestRestore_AppliesProjectAgentMode(t *testing.T) {
 	}
 }
 
-// TestRestore_RefreshesModelFromSessionMetadata is the regression for the
-// ChatUI ↔ TUI model-persistence bug (#4893). When TUI is rebuilt (from an
-// interface transition or a daemon restore), the harness restore command must
-// carry the model the user last selected in ChatUI — refreshed from the
-// session's durable metadata — rather than silently reverting to the project
-// configured default. It must also still resume the SAME conversation, never
-// minting a new session.
 func TestRestore_RefreshesModelFromSessionMetadata(t *testing.T) {
 	st := newFakeStore()
-	// The project default would otherwise win; the session's own persisted model
-	// (the ChatUI choice) must take precedence for the rebuild.
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{AgentConfig: domain.AgentConfig{Model: "project-default-model"}}}
 	seedTerminal(st, "mer-1", domain.SessionMetadata{
 		WorkspacePath:  "/ws/mer-1",
@@ -5130,12 +4911,9 @@ func TestRestore_RefreshesModelFromSessionMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RestoreWithMode: %v", err)
 	}
-	// The ChatUI model, not the project default, reaches the harness restore cmd.
 	if agent.lastConfig.Model != "5.6-luna" {
 		t.Fatalf("restore config model = %q, want the session's ChatUI choice 5.6-luna", agent.lastConfig.Model)
 	}
-	// History is preserved: the restore resumed the existing native conversation
-	// (agent-x) rather than spawning a new session.
 	if !reflect.DeepEqual(agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID], "agent-x") {
 		t.Fatalf("resume identity = %q, want agent-x (conversation must be preserved)", agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	}
@@ -5144,15 +4922,8 @@ func TestRestore_RefreshesModelFromSessionMetadata(t *testing.T) {
 	}
 }
 
-// TestRestore_RefreshesEffortFromSessionMetadata is the effort sibling of the
-// ChatUI ↔ TUI persistence bug above: a per-spawn or ChatUI-selected reasoning
-// effort recorded on the session's durable metadata must reach the harness
-// restore command for every effort-capable harness, not silently revert to the
-// project default for everyone except Claude Code.
 func TestRestore_RefreshesEffortFromSessionMetadata(t *testing.T) {
 	st := newFakeStore()
-	// The project default would otherwise win; the session's own persisted
-	// effort must take precedence for the rebuild.
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
 		AgentConfig: domain.AgentConfig{Model: "project-default-model", Effort: "low"},
 	}}
@@ -5173,21 +4944,14 @@ func TestRestore_RefreshesEffortFromSessionMetadata(t *testing.T) {
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
 		t.Fatal(err)
 	}
-	// The persisted effort, not the project default, reaches the harness restore cmd.
 	if agent.lastConfig.Effort != "high" {
 		t.Fatalf("restore config effort = %q, want the session's persisted effort high", agent.lastConfig.Effort)
 	}
-	// History is preserved: the restore resumed the existing native conversation
-	// rather than spawning a new session.
 	if !reflect.DeepEqual(agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID], "codex-native-1") {
 		t.Fatalf("resume identity = %q, want codex-native-1 (conversation must be preserved)", agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	}
 }
 
-// TestPersistChatModel is the regression for the ChatUI-side half of #4893. The
-// manager must record a model the user picked in ChatUI onto the session's
-// durable metadata before the next prompt routes, and a model-only write must
-// never disturb the conversation identity or terminating state.
 func TestPersistChatModel(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -5211,7 +4975,6 @@ func TestPersistChatModel(t *testing.T) {
 	if rec.Metadata.Model != "5.6-luna" {
 		t.Fatalf("persisted model = %q, want 5.6-luna", rec.Metadata.Model)
 	}
-	// The conversation/history and terminating state are untouched.
 	if rec.Metadata.AgentSessionID != "claude-native-1" {
 		t.Fatalf("resume identity changed to %q, want claude-native-1 preserved", rec.Metadata.AgentSessionID)
 	}
@@ -5222,7 +4985,6 @@ func TestPersistChatModel(t *testing.T) {
 		t.Fatalf("session state changed, want active and non-terminated: %+v", rec)
 	}
 
-	// Clearing the override lets a later TUI rebuild follow provider defaults.
 	if err := m.PersistChatModel(ctx, "mer-1", ""); err != nil {
 		t.Fatalf("PersistChatModel(empty): %v", err)
 	}
@@ -5282,17 +5044,8 @@ func TestCleanup_ReclaimsTerminalWorkspaces(t *testing.T) {
 	}
 }
 
-// TestCleanup_SkipsWorkspaceStillReferencedByLiveSession: a terminated
-// session's workspace must NOT be reclaimed while a live (non-terminated)
-// session references the same path. Persistent/shared worktrees (the
-// orchestrator's) are reused across respawn, so a terminated predecessor and
-// a live successor can share one path — reclaiming it deletes the live
-// session's cwd out from under it.
 func TestCleanup_SkipsWorkspaceStillReferencedByLiveSession(t *testing.T) {
 	m, st, rt, ws := newManager()
-	// Terminated predecessor and live successor share one persistent worktree.
-	// The predecessor keeps its OWN runtime handle (independent of the shared
-	// workspace and of the successor's handle).
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/shared", RuntimeHandleID: "mer-1-runtime"})
 	live := mkLive("mer-2")
 	live.Metadata.WorkspacePath = "/ws/shared"
@@ -5314,16 +5067,11 @@ func TestCleanup_SkipsWorkspaceStillReferencedByLiveSession(t *testing.T) {
 	if ws.destroyed != 0 {
 		t.Fatalf("destroyed = %d, want 0 — shared live workspace must not be torn down", ws.destroyed)
 	}
-	// The workspace is preserved, but the predecessor's own runtime must still be
-	// reclaimed — keying the skip on the workspace path must not leak its runtime.
 	if rt.destroyed != 1 || len(rt.destroyedIDs) != 1 || rt.destroyedIDs[0] != "mer-1-runtime" {
 		t.Fatalf("runtime destroyed = %d ids=%v, want the skipped session's own handle torn down", rt.destroyed, rt.destroyedIDs)
 	}
 }
 
-// TestCleanup_LiveWorkspaceGuardNormalizesPaths: the shared-path guard must
-// compare canonicalized paths, so a trailing slash or "." segment on one
-// record doesn't let a live session's worktree slip through as "not shared".
 func TestCleanup_LiveWorkspaceGuardNormalizesPaths(t *testing.T) {
 	m, st, _, ws := newManager()
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/shared/"})
@@ -5343,19 +5091,12 @@ func TestCleanup_LiveWorkspaceGuardNormalizesPaths(t *testing.T) {
 	}
 }
 
-// TestCleanup_ReclaimsUnsharedWhileSkippingShared: a shared-path skip must not
-// stop cleanup from reclaiming an adjacent terminated workspace that no live
-// session references. The orchestrator's persistent worktree (shared across
-// respawn) is the motivating case for the skip.
 func TestCleanup_ReclaimsUnsharedWhileSkippingShared(t *testing.T) {
 	m, st, _, ws := newManager()
-	// Terminated orchestrator predecessor shares its persistent worktree with
-	// the live orchestrator successor.
 	orchTerm := domain.SessionRecord{ID: "mer-orch-1", ProjectID: "mer", Kind: domain.KindOrchestrator, Metadata: domain.SessionMetadata{WorkspacePath: "/ws/orchestrator"}, IsTerminated: true, Activity: domain.Activity{State: domain.ActivityExited}}
 	st.sessions["mer-orch-1"] = orchTerm
 	orchLive := domain.SessionRecord{ID: "mer-orch-2", ProjectID: "mer", Kind: domain.KindOrchestrator, Metadata: domain.SessionMetadata{WorkspacePath: "/ws/orchestrator"}, Activity: domain.Activity{State: domain.ActivityActive}}
 	st.sessions["mer-orch-2"] = orchLive
-	// An unrelated terminated worker whose workspace nobody else uses.
 	seedTerminal(st, "mer-3", domain.SessionMetadata{WorkspacePath: "/ws/mer-3"})
 
 	res, err := m.Cleanup(ctx, "mer")
@@ -5373,11 +5114,6 @@ func TestCleanup_ReclaimsUnsharedWhileSkippingShared(t *testing.T) {
 	}
 }
 
-// TestCleanup_InterleavedSpawnInOnDestroyPreservesSuccessorWorkspace proves that
-// when an orchestrator successor spawns during Cleanup (for example via an
-// onDestroy runtime teardown callback) and acquires the persistent worktree,
-// Cleanup's final ownership check coordinates with Spawn under the workspace gate
-// so the live successor's working directory is never deleted.
 func TestCleanup_InterleavedSpawnInOnDestroyPreservesSuccessorWorkspace(t *testing.T) {
 	repo := newManagerGitRepo(t)
 	gw, err := gitworktree.New(gitworktree.Options{
@@ -5403,7 +5139,6 @@ func TestCleanup_InterleavedSpawnInOnDestroyPreservesSuccessorWorkspace(t *testi
 		LookPath:  lookPath,
 	})
 
-	// Spawn the initial orchestrator session and confirm its persistent worktree exists.
 	pred, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator})
 	if err != nil {
 		t.Fatalf("spawn predecessor: %v", err)
@@ -5417,13 +5152,11 @@ func TestCleanup_InterleavedSpawnInOnDestroyPreservesSuccessorWorkspace(t *testi
 		t.Fatalf("predecessor README does not exist before cleanup: %v", err)
 	}
 
-	// Mark predecessor terminated so Cleanup targets it.
 	predRec := st.sessions[pred.ID]
 	predRec.IsTerminated = true
 	predRec.Activity = domain.Activity{State: domain.ActivityExited}
 	st.sessions[pred.ID] = predRec
 
-	// Configure onDestroy callback to spawn the successor during predecessor runtime teardown.
 	var successorID domain.SessionID
 	rt.onDestroy = func(call int, handle ports.RuntimeHandle) {
 		succ, _, _, spawnErr := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator})
@@ -5459,11 +5192,6 @@ func TestCleanup_InterleavedSpawnInOnDestroyPreservesSuccessorWorkspace(t *testi
 	}
 }
 
-// TestCleanup_SeparatesAlreadyGoneWorkspacesFromReclaimedOnes keeps the
-// reported count evidence rather than bookkeeping. A workspace whose directory
-// was already missing tears down without error, so counting it as Cleaned
-// claims disk that was never reclaimed and makes a batch run look like it did
-// work it did not do.
 func TestCleanup_SeparatesAlreadyGoneWorkspacesFromReclaimedOnes(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyReclaim = ports.WorkspaceReclaimAlreadyAbsent
@@ -5483,16 +5211,11 @@ func TestCleanup_SeparatesAlreadyGoneWorkspacesFromReclaimedOnes(t *testing.T) {
 	if len(res.Skipped) != 0 {
 		t.Fatalf("skipped = %v, want none: teardown did not fail", res.Skipped)
 	}
-	// Teardown still runs, so any stale registration is reconciled exactly as
-	// before; only the accounting changed.
 	if ws.destroyed != 1 {
 		t.Fatalf("destroyed = %d, want 1", ws.destroyed)
 	}
 }
 
-// TestCleanup_ClosesScopedShellTerminalsBeforeWorkspaceTeardown mirrors the
-// Kill regression: Cleanup must also gate shut a session's scoped shell
-// terminals before reclaiming its worktree, and release the gate afterward.
 func TestCleanup_ClosesScopedShellTerminalsBeforeWorkspaceTeardown(t *testing.T) {
 	m, st, _, ws := newManager()
 	var calls []string
@@ -5530,11 +5253,6 @@ func TestCleanup_ClosesScopedShellTerminalsBeforeWorkspaceTeardown(t *testing.T)
 	}
 }
 
-// TestCleanup_SkipsWorkspaceReleaseWhenShellTerminalsWontClose is the
-// regression for the bug where a shell terminal that failed to close was
-// logged and forgotten, then the worktree reclaimed anyway. Cleanup must skip
-// that session for this run (reporting it in Skipped) rather than reclaiming
-// ground out from under a still-live shell — a later run can retry it.
 func TestCleanup_SkipsWorkspaceReleaseWhenShellTerminalsWontClose(t *testing.T) {
 	m, st, _, ws := newManager()
 	m.SetShellTerminalCloser(&fakeShellTerminalCloser{err: errors.New("shellterm-1: still alive")})
@@ -5555,9 +5273,6 @@ func TestCleanup_SkipsWorkspaceReleaseWhenShellTerminalsWontClose(t *testing.T) 
 	}
 }
 
-// TestCleanup_ReportsSkippedWorkspaces: a refused teardown must be visible in
-// the result with a reason — a silent skip leaves users staring at
-// "Would clean N … 0 sessions cleaned" with no explanation.
 func TestCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 	m, st, _, ws := newManager()
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
@@ -5576,9 +5291,6 @@ func TestCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 		t.Fatalf("reason = %q", res.Skipped[0].Reason)
 	}
 
-	// A non-dirty teardown failure is reported too — but with a fixed public
-	// reason: the raw cause carries internal filesystem paths and belongs in
-	// the server log, not the API response.
 	ws.destroyErr = errors.New("disk on fire")
 	res, err = m.Cleanup(ctx, "mer")
 	if err != nil {
@@ -5591,9 +5303,6 @@ func TestCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 		t.Fatalf("raw internal error leaked into public reason: %q", res.Skipped[0].Reason)
 	}
 
-	// A teardown that fails because the session's project is archived or
-	// unregistered (its repo can no longer be resolved) is reported with a
-	// distinct reason telling the user the worktree must be removed by hand.
 	ws.destroyErr = fmt.Errorf("resolve project repo: %w", ErrProjectNotResolvable)
 	res, err = m.Cleanup(ctx, "mer")
 	if err != nil {
@@ -5607,10 +5316,6 @@ func TestCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 	}
 }
 
-// A deferred removal is a skip, not a failure: the session stays terminated,
-// the leftover directory is reported visibly so the user is not left staring at
-// a silent "0 sessions cleaned", and the next cleanup run retries the unlink
-// (#3408).
 func TestCleanup_ReportsDeferredWorkspaceRemoval(t *testing.T) {
 	m, st, _, ws := newManager()
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
@@ -5630,30 +5335,9 @@ func TestCleanup_ReportsDeferredWorkspaceRemoval(t *testing.T) {
 	}
 }
 
-// TestSpawnTeardown_WorkspaceRepoPathRoundTrip pins the WorkspaceRepoPath round
-// trip that lets teardown reclaim a worktree without re-resolving the project
-// repo. The workspace layer needs the repo path (the canonical repo a worktree
-// hangs off of) to tear a worktree down; persisting it on spawn means teardown
-// reads it straight from metadata instead of re-deriving it from the project,
-// which fails for archived/unregistered projects (#2608).
-//
-// Two independent assertions bite the two halves of the plumbing:
-//   - WRITE side (manager.go Spawn metadata literal): the spawned session's
-//     stored metadata must carry the workspace's RepoPath. Dropping
-//     `WorkspaceRepoPath: ws.RepoPath` there leaves it empty and fails here.
-//   - READ side (manager.go workspaceInfo): teardown must feed that persisted
-//     path back into workspace.Destroy. Dropping `RepoPath:
-//     rec.Metadata.WorkspaceRepoPath` there makes teardown pass an empty repo
-//     path (a real destroyer would then have to re-resolve the project) and
-//     fails here.
-//
-// The prior suite injected teardown failures by stubbing ws.destroyErr directly,
-// so it never exercised this path and left both mutations green.
 func TestSpawnTeardown_WorkspaceRepoPathRoundTrip(t *testing.T) {
 	m, st, _, ws := newManager()
 	const repoPath = "/repos/mer/canonical"
-	// Production Create resolves and returns the canonical repo path; mirror that
-	// so the value is available to be persisted and later reused.
 	ws.createRepoPath = repoPath
 
 	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode})
@@ -5661,7 +5345,6 @@ func TestSpawnTeardown_WorkspaceRepoPathRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// WRITE side: spawn must persist the workspace repo path into stored metadata.
 	stored, ok, err := st.GetSession(ctx, rec.ID)
 	if err != nil {
 		t.Fatalf("get session: %v", err)
@@ -5673,8 +5356,6 @@ func TestSpawnTeardown_WorkspaceRepoPathRoundTrip(t *testing.T) {
 		t.Fatalf("persisted WorkspaceRepoPath = %q, want %q (write side: manager.go Spawn must set WorkspaceRepoPath: ws.RepoPath)", stored.Metadata.WorkspaceRepoPath, repoPath)
 	}
 
-	// READ side: teardown must feed the persisted repo path into the destroyer
-	// rather than leaving it empty for a project re-resolution.
 	if _, err := m.Kill(ctx, rec.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -5709,12 +5390,6 @@ func TestCleanup_WorkspaceProjectDestroysChildrenBeforeRoot(t *testing.T) {
 	}
 }
 
-// TestCleanup_WorkspaceProjectRepeatRunSkipsReleasedWorkspace is the
-// multi-repo half of the false-count fix. A workspace project's teardown
-// succeeds on every later run — the worktrees are gone, so there is nothing
-// left to fail on — and counting those runs as reclaimed is exactly the report
-// that made a batch cleanup look like it freed disk it never touched. The first
-// run records the release, so the second one does not revisit the session.
 func TestCleanup_WorkspaceProjectRepeatRunSkipsReleasedWorkspace(t *testing.T) {
 	m, st, _, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
@@ -5750,11 +5425,6 @@ func TestCleanup_WorkspaceProjectRepeatRunSkipsReleasedWorkspace(t *testing.T) {
 	}
 }
 
-// TestCleanup_WorkspaceProjectPartialReclaimCountsAsCleaned pins the aggregate
-// on the other side. Repos of one workspace project can disagree — a child
-// removed by hand, the root still there — and a session that released any disk
-// at all was reclaimed, so only a project where nothing was left may report
-// already gone.
 func TestCleanup_WorkspaceProjectPartialReclaimCountsAsCleaned(t *testing.T) {
 	m, st, _, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
@@ -5841,8 +5511,6 @@ func TestSpawn_DefaultsBranchFromSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// An empty SpawnConfig.Branch defaults to a unique per-session root branch
-	// under a namespace that can also hold sibling PR branches.
 	if got := st.sessions[s.ID].Metadata.Branch; got != "ao/mer-1/root" {
 		t.Fatalf("default branch = %q, want ao/mer-1/root", got)
 	}
@@ -6299,12 +5967,10 @@ func TestSpawnWorker_AppendsActiveOrchestratorContact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The user prompt must be preserved and stored in metadata as-is.
 	if got := st.sessions[s.ID].Metadata.Prompt; got != "do it" {
 		t.Fatalf("metadata prompt = %q, want %q", got, "do it")
 	}
 
-	// Coordination instructions must be in the system prompt, not the user prompt.
 	systemPrompt := agent.lastLaunch.SystemPrompt
 	for _, want := range []string{
 		"## Orchestrator Agent Coordination",
@@ -6476,7 +6142,6 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Coordinator instructions must be in the system prompt, not the user prompt.
 	systemPrompt := agent.lastLaunch.SystemPrompt
 	for _, want := range []string{
 		"You are the human-facing orchestrator for project mer",
@@ -6504,8 +6169,6 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
 		}
 	}
-	// This orchestrator runs in a terminal, where the html tools and ao render
-	// do not exist, so its prompt does not send it looking for them.
 	if strings.Contains(systemPrompt, "## Showing pages in chat") {
 		t.Fatalf("terminal session prompt names the chat-only html tools:\n%s", systemPrompt)
 	}
@@ -6525,8 +6188,6 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		t.Fatalf("coordinator role must not be in the user prompt:\n%s", agent.lastLaunch.Prompt)
 	}
 
-	// A promptless orchestrator gets no auto-generated kickoff turn: spawning
-	// must deliver nothing to the agent, leaving it idle at an empty input box.
 	if agent.lastLaunch.Prompt != "" {
 		t.Fatalf("prompt = %q, want empty (no kickoff turn)", agent.lastLaunch.Prompt)
 	}
@@ -6555,11 +6216,6 @@ func TestSpawnOrchestrator_ProjectRulesInSystemPrompt(t *testing.T) {
 	}
 }
 
-// TestSpawnOrchestrator_OrchestratorRulesFileInSystemPrompt covers
-// OrchestratorRulesFile: a repo-relative file read fresh on every spawn and
-// restore, mirroring AgentRulesFile for the worker role. Unlike inline
-// OrchestratorRules (persisted as config text), editing this file's contents
-// takes effect on the session's next spawn/restore without any config write.
 func TestSpawnOrchestrator_OrchestratorRulesFileInSystemPrompt(t *testing.T) {
 	dir := t.TempDir()
 	rulesPath := filepath.Join(dir, "orchestrator-rules.md")
@@ -6757,7 +6413,6 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	if strings.Contains(sp, "naturally document-shaped") {
 		t.Fatal("system prompt must not require files for ordinary summaries")
 	}
-	// Only a chat session has a thread to show a page in.
 	const inThread = "it is working material.\n\nIn a chat session, a chart, table, or diagram that answers a question goes in the thread with `html_render`, not into this directory.\n\n"
 	if strings.Contains(sp, "html_render") {
 		t.Fatalf("terminal session prompt names html_render:\n%s", sp)
@@ -6769,7 +6424,6 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	if !strings.Contains(chatPrompt, inThread) {
 		t.Fatalf("chat session prompt missing %q", inThread)
 	}
-	// A kept render is not registered, and only a chat session can keep one.
 	const keptRender = "`ao render --artifact` or `artifact: true` in `html_render`, so run `ao artifact add` on the path it returns"
 	if !strings.Contains(chatPrompt, keptRender) {
 		t.Fatalf("chat session prompt missing %q", keptRender)
@@ -6779,8 +6433,6 @@ func TestSystemPrompt_AppendsArtifactGuidance(t *testing.T) {
 	}
 }
 
-// An orchestrator's files are listed by the same rule as a worker's, so its
-// prompt must name its own artifact directory and tell it to register them.
 func TestSystemPrompt_OrchestratorGetsArtifactGuidance(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
@@ -6847,7 +6499,6 @@ func TestSystemPrompt_ArtifactRequestedOutputWithoutArtifactDir(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
-	// No DataDir: artifactPrompt has no directory to name.
 	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
 	sp, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-7", domain.RequestedOutputArtifact, false)
@@ -6923,9 +6574,6 @@ func TestRestore_WorkerKeepsArtifactOutputPrompt(t *testing.T) {
 	}
 }
 
-// TestRestore_OrchestratorRederivesSystemPrompt: the system prompt is derived,
-// not persisted, so a restored orchestrator must get its role instructions
-// recomputed and handed to the agent's native resume command.
 func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
 	st := newFakeStore()
 	cfg := testRoleAgents()
@@ -7022,9 +6670,6 @@ func TestRestore_PromptFileFailureBlocksFileOnlyHarness(t *testing.T) {
 	}
 }
 
-// TestRestore_FallbackLaunchCarriesSystemPrompt: when the agent has no native
-// session to resume, the fresh-launch fallback must carry the re-derived
-// system prompt alongside the persisted task prompt.
 func TestRestore_FallbackLaunchCarriesSystemPrompt(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -7392,16 +7037,10 @@ func TestRestore_ClaudeCodeWithoutRestoreCommandFallsBackToSavedPrompt(t *testin
 	}
 }
 
-// TestRestore_PromptlessOrchestratorResumesViaAdapter locks the orchestrator
-// fix: a promptless session with no captured agentSessionId is still restorable
-// when the adapter can resume it (Claude pins a deterministic --session-id).
-// Before the fix the metadata-only guard rejected it with ErrNotResumable, so
-// every boot abandoned the orchestrator and spawned a fresh one.
 func TestRestore_PromptlessOrchestratorResumesViaAdapter(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
-		// No AgentSessionID, no Prompt: exactly how orchestrators are persisted.
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-orchestrator"},
 		Activity: domain.Activity{State: domain.ActivityExited},
 	}
@@ -7420,24 +7059,15 @@ func TestRestore_PromptlessOrchestratorResumesViaAdapter(t *testing.T) {
 	}
 }
 
-// TestRestore_PromptlessUnresumableRelaunchesFresh covers the genuine-reboot
-// case: a promptless session whose adapter cannot resume (no native session id,
-// no captured AgentSessionID) must be relaunched fresh via GetLaunchCommand
-// in the SAME id. The orchestrator is the canonical example: after a reboot
-// where tmux is truly gone, RestoreAll must recover it in place rather than
-// abandon it and mint a new one (which caused the id-increment bug).
 func TestRestore_PromptlessUnresumableRelaunchesFresh(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
-		// No AgentSessionID, no Prompt: exactly how an orchestrator is persisted.
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-orchestrator"},
 		Activity: domain.Activity{State: domain.ActivityExited},
 	}
 	rt := &fakeRuntime{}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
-	// fakeAgents resolves to fakeAgent, whose GetRestoreCommand returns ok=false
-	// without an agentSessionId, and GetLaunchCommand returns a valid argv.
 	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
 	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
@@ -7451,25 +7081,15 @@ func TestRestore_PromptlessUnresumableRelaunchesFresh(t *testing.T) {
 	}
 }
 
-// TestRestore_PromptlessWorkerNotResumable is the RED test for the promptless-worker
-// fix: a KindWorker session with no prompt and no captured AgentSessionID (so the
-// adapter returns ok=false) must NOT be blank-relaunched. The session had no task
-// to replay and no native id to resume from, so relaunching fresh would silently
-// drop its work. Restore must return ErrNotResumable and leave the session terminated
-// (runtime.Create must NOT be called).
 func TestRestore_PromptlessWorkerNotResumable(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
-		// No AgentSessionID, no Prompt: promptless worker with no resume handle.
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1/root"},
 		Activity: domain.Activity{State: domain.ActivityExited},
 	}
 	rt := &fakeRuntime{}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
-	// fakeAgents resolves to fakeAgent, whose GetRestoreCommand returns ok=false
-	// when there is no AgentSessionID. With a KindWorker and empty Prompt, this
-	// must produce ErrNotResumable instead of a blank relaunch.
 	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
 	_, err := m.RestoreWithMode(ctx, "mer-1")
@@ -7484,9 +7104,6 @@ func TestRestore_PromptlessWorkerNotResumable(t *testing.T) {
 	}
 }
 
-// lostConversationAgent reserves a native id but reports that no conversation
-// was ever persisted behind it — a session torn down before its first turn, or
-// one whose switch away failed after the source had already stopped.
 type lostConversationAgent struct{ *recordingAgent }
 
 func (lostConversationAgent) NativeConversationExists(
@@ -7527,16 +7144,10 @@ func (a *lostDerivedConversationAgent) NativeConversationExists(
 	return false, nil
 }
 
-// A reserved-but-empty conversation id must not gate restore. Resuming it fails
-// with "No conversation found" on every attempt, while the session's workspace
-// still holds its branch and commits — so the session relaunches fresh into that
-// workspace instead of being stranded.
 func TestRestore_LostNativeConversationRelaunchesFresh(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
-		// An id was reserved, but no prompt was saved: without the probe this
-		// resumes into a conversation that does not exist.
 		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1/root", AgentSessionID: "reserved-but-empty"},
 		Activity: domain.Activity{State: domain.ActivityExited},
 	}
@@ -7625,9 +7236,6 @@ func TestRestore_LostDerivedNativeConversationRelaunchesFresh(t *testing.T) {
 	}
 }
 
-// TestRestore_WorkerPointsAtCurrentOrchestrator: a restored worker's
-// coordination hint must reference the orchestrator active at restore time,
-// not the one from its original spawn.
 func TestRestore_WorkerPointsAtCurrentOrchestrator(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-9"] = domain.SessionRecord{ID: "mer-9", ProjectID: "mer", Kind: domain.KindOrchestrator}
@@ -7647,15 +7255,8 @@ func TestRestore_WorkerPointsAtCurrentOrchestrator(t *testing.T) {
 	}
 }
 
-// TestRestore_RefusesIncompleteHandle covers Bug 2: a terminated row whose
-// spawn failed before the workspace landed (no WorkspacePath, no Branch) must
-// fail Restore with ErrIncompleteHandle — the same typed sentinel Kill returns
-// for the same shape — so the HTTP layer surfaces a typed 409 instead of an
-// opaque 500.
 func TestRestore_RefusesIncompleteHandle(t *testing.T) {
 	m, st, _, _ := newManager()
-	// Seed a terminated row with no workspace and no branch (the post-failure
-	// shape of a Spawn that died before workspace.Create succeeded).
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:           "mer-1",
 		ProjectID:    "mer",
@@ -7667,14 +7268,10 @@ func TestRestore_RefusesIncompleteHandle(t *testing.T) {
 	}
 }
 
-// TestRollbackSpawn_DeletesSeedRow covers Bug 4: a session row in seed state
-// (no workspace, no runtime, no agent session id, not terminated) is deleted
-// outright by RollbackSpawn so the user never sees an orphan terminated row.
 func TestRollbackSpawn_DeletesSeedRow(t *testing.T) {
 	m, st, _, _ := newManager()
 	dataDir := t.TempDir()
 	m.dataDir = dataDir
-	// Seed row matches what CreateSession produces — no Metadata at all.
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:        "mer-1",
 		ProjectID: "mer",
@@ -7696,10 +7293,6 @@ func TestRollbackSpawn_DeletesSeedRow(t *testing.T) {
 	requireNoPromptDir(t, dataDir, "mer-1")
 }
 
-// TestRollbackSpawn_FallsBackToKillForLiveRow asserts the no-resurrection
-// guarantee from Bug 4's RCA: once a row has observable spawn output (workspace
-// + runtime handle), DeleteSession is a no-op and rollback falls back to Kill
-// so the runtime + workspace are torn down rather than abandoned.
 func TestRollbackSpawn_FallsBackToKillForLiveRow(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -7718,10 +7311,6 @@ func TestRollbackSpawn_FallsBackToKillForLiveRow(t *testing.T) {
 	}
 }
 
-// TestSpawn_RejectsMissingAgentBinary covers Bug 6: when the agent adapter
-// returns an argv whose binary is not on PATH, Manager.Spawn must abort BEFORE
-// runtime.Create rather than launching into an empty tmux pane that the
-// reaper later mistakes for a live session.
 func TestSpawn_RejectsMissingAgentBinary(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -8065,8 +7654,6 @@ func TestValidateRuntimePrerequisites_AllowsConfiguredBundledTmux(t *testing.T) 
 	}
 }
 
-// A daemon started by launchd, cron, or a minimal-env shell inherits a PATH
-// without Homebrew's bin directory; the spawn must still find Homebrew tmux.
 func TestSpawn_FindsHomebrewTmuxMissingFromDaemonPATH(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("only macOS gates spawns on tmux")
@@ -8106,8 +7693,6 @@ func TestSpawn_RejectsUnknownHarness(t *testing.T) {
 	if !errors.Is(err, ErrUnknownHarness) {
 		t.Fatalf("err = %v, want ErrUnknownHarness", err)
 	}
-	// The harness is rejected before any durable state is created — no seed row,
-	// no worktree — so an unknown harness never leaves an orphan behind.
 	if len(st.sessions) != 0 {
 		t.Fatalf("no session row should be created, got %d", len(st.sessions))
 	}
@@ -8155,9 +7740,6 @@ func TestSpawn_RejectsExplicitEffortForUnsupportedHarnessBeforeSessionRow(t *tes
 		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
 	}}})
 
-	// TUI is the default session mode: an explicit --effort for a harness that
-	// cannot honor it must fail before any durable state exists, not ride
-	// along unused while the CLI reports success.
 	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
 		ProjectID:     "mer",
 		Kind:          domain.KindWorker,
@@ -8182,10 +7764,6 @@ func TestSpawn_RejectsExplicitEffortForUnsupportedHarnessBeforeSessionRow(t *tes
 	}
 }
 
-// TestSpawn_TUICodexEffortIsResolvedAndPersisted asserts a TUI codex spawn
-// with an explicit effort override resolves and validates it against the model
-// catalog and persists the resolved selection durably, so a later rebuild can
-// keep the choice instead of reverting to the project default.
 func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	m, st, rt, _ := newManager()
 	agent := &recordingAgent{}
@@ -8261,9 +7839,6 @@ func (a *preLaunchRecordingAgent) PreLaunch(_ context.Context, cfg ports.LaunchC
 	return nil
 }
 
-// PreLaunch prepares the provider config the launched process will read, so
-// it gets the same launch environment (for example a project
-// CLAUDE_CONFIG_DIR) the runtime starts the agent with.
 func TestSpawn_PreLaunchReceivesTheLaunchEnvironment(t *testing.T) {
 	m, st, _, _ := newManager()
 	project := st.projects["mer"]
@@ -8284,8 +7859,6 @@ func TestSpawn_PreLaunchReceivesTheLaunchEnvironment(t *testing.T) {
 	}
 }
 
-// pathPinManager builds a manager whose Executable dep is stubbed, plus a
-// buffer capturing its log output, for the hook PATH pin tests.
 func pathPinManager(executable func() (string, error)) (*Manager, *fakeStore, *fakeRuntime, *bytes.Buffer) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -8301,12 +7874,6 @@ func pathPinManager(executable func() (string, error)) (*Manager, *fakeStore, *f
 	return m, st, rt, logBuf
 }
 
-// TestSpawnAndRestore_PinHookPATHToDaemonBinary covers the activity-tracking
-// fix: the spawned session's PATH must put the daemon executable's directory
-// first, so the bare `ao` in the workspace hook commands resolves to the
-// daemon that installed them, not a foreign `ao` earlier on the user's PATH
-// (e.g. the legacy TypeScript CLI, which has no `hooks` command and silently
-// kills activity tracking).
 func TestSpawnAndRestore_PinHookPATHToDaemonBinary(t *testing.T) {
 	daemonExe := filepath.Join(t.TempDir(), "ao")
 	want := filepath.Dir(daemonExe) + string(os.PathListSeparator) + "/usr/bin"
@@ -8343,8 +7910,6 @@ func TestSpawnAndRestore_PinHookPATHToDaemonBinary(t *testing.T) {
 			if got := rt.lastCfg.Env["PATH"]; got != want {
 				t.Fatalf("runtime env PATH = %q, want %q", got, want)
 			}
-			// Login shells the agent starts (Codex's) re-pin after the user's
-			// startup files.
 			if env := rt.lastCfg.Env; runtime.GOOS != "windows" && (env["AO_PATH_PIN"] != filepath.Dir(daemonExe) ||
 				env["ZDOTDIR"] != filepath.Join(m.dataDir, "runtime", "login-shell") || env["BASH_ENV"] != filepath.Join(m.dataDir, "runtime", "login-shell", "bash_env")) {
 				t.Fatalf("runtime env = %v, want the login-shell re-pin for %s", env, filepath.Dir(daemonExe))
@@ -8353,9 +7918,6 @@ func TestSpawnAndRestore_PinHookPATHToDaemonBinary(t *testing.T) {
 	}
 }
 
-// TestSpawn_HookPATHPinUnavailable asserts the degraded path is loud, not
-// silent: when the daemon executable cannot anchor `ao` resolution, PATH is
-// left to the runtime's inherited default and a warning is logged.
 func TestSpawn_HookPATHPinUnavailable(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -8380,9 +7942,6 @@ func TestSpawn_HookPATHPinUnavailable(t *testing.T) {
 	}
 }
 
-// TestSpawn_ProjectPATHIsPinBase asserts a project's PATH override survives the
-// pin as its base rather than being clobbered or clobbering: the daemon dir
-// still comes first.
 func TestValidateSpawnModelOnlyRejectsUnknownStaticChoices(t *testing.T) {
 	if err := validateSpawnModel(domain.HarnessAmp, "high"); err != nil {
 		t.Fatalf("known Amp mode: %v", err)
@@ -8436,9 +7995,6 @@ func TestSpawnAndRestore_PrependsResolvedBinaryAndNodeDirsToRuntimePATH(t *testi
 			t.Fatal(err)
 		}
 	}
-	// The daemon-dir pin stays at the HEAD: the agent binary is launched by
-	// absolute path and does not need its directory first, but a bare `ao` in
-	// the session must resolve to this daemon (see restorePinnedDir).
 	want := strings.Join([]string{filepath.Dir(daemonExe), binDir, nodeDir, "/usr/bin"}, string(os.PathListSeparator))
 
 	for _, operation := range []string{"spawn", "restore"} {
@@ -8480,11 +8036,6 @@ func TestSpawnAndRestore_PrependsResolvedBinaryAndNodeDirsToRuntimePATH(t *testi
 	}
 }
 
-// TestSpawn_LaunchBinaryDirDoesNotShadowDaemonAO is issue #3562: the agent CLI
-// and a stale `ao` can live in the SAME directory (the legacy npm package
-// installs `ao` into the same global bin the agent CLIs use). Prepending the
-// launch binary's directory must not push the daemon-dir pin down, or that
-// stale `ao` wins every bare `ao` inside the session.
 func TestSpawn_LaunchBinaryDirDoesNotShadowDaemonAO(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin")
 	sharedBin := filepath.Join(t.TempDir(), "npm-global", "bin")
@@ -8611,10 +8162,6 @@ func TestSpawn_ScratchRejectsExplicitBranchBeforeSessionRow(t *testing.T) {
 	}
 }
 
-// ---- SaveAndTeardownAll / RestoreAll tests ----
-
-// newLifecycleManager builds a manager wired with a recording workspace fake
-// for the shutdown lifecycle tests.
 func newLifecycleManager() (*Manager, *fakeStore, *fakeRuntime, *fakeWorkspace) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -8654,19 +8201,13 @@ func seedNativeWorkspaceProject(st *fakeStore, id domain.SessionID, kind domain.
 	return rec
 }
 
-// TestSaveAndTeardownAll_CaptureOrderAndMarker verifies (a): for a live session
-// with a workspace, SaveAndTeardownAll must call StashUncommitted BEFORE
-// UpsertSessionWorktree (writing preserved_ref) BEFORE ForceDestroy.
 func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 
-	// Wire a shared ordered call log so we can assert cross-fake ordering:
-	// both fakeStore and fakeWorkspace append to the same slice.
 	var sharedLog []string
 	st.sharedLog = &sharedLog
 	ws.sharedLog = &sharedLog
 
-	// A live session with a workspace path and runtime handle.
 	ws.stashRef = "refs/ao/preserved/mer-1"
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:        "mer-1",
@@ -8680,7 +8221,6 @@ func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 		t.Fatalf("SaveAndTeardownAll err = %v", err)
 	}
 
-	// Stash must come before ForceDestroy in the call log.
 	stashIdx, forceIdx := -1, -1
 	for i, c := range ws.calls {
 		if c == "StashUncommitted:mer-1" {
@@ -8700,8 +8240,6 @@ func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 		t.Fatalf("StashUncommitted (call %d) must come before ForceDestroy (call %d)", stashIdx, forceIdx)
 	}
 
-	// UpsertSessionWorktree (DB write) must be committed BEFORE ForceDestroy.
-	// Use the shared ordered log to compare positions across the store and workspace.
 	upsertIdx, sharedForceIdx := -1, -1
 	for i, c := range sharedLog {
 		if c == "UpsertSessionWorktree:mer-1" {
@@ -8721,7 +8259,6 @@ func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 		t.Fatalf("UpsertSessionWorktree (pos %d) must come before ForceDestroy (pos %d) in shared call log %v", upsertIdx, sharedForceIdx, sharedLog)
 	}
 
-	// DB write (UpsertSessionWorktree) must have recorded the correct row.
 	rows := st.worktrees["mer-1"]
 	if len(rows) == 0 {
 		t.Fatal("UpsertSessionWorktree was not called: no worktree row for mer-1")
@@ -8730,7 +8267,6 @@ func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 		t.Fatalf("preserved_ref = %q, want refs/ao/preserved/mer-1", rows[0].PreservedRef)
 	}
 
-	// The session must be marked terminated.
 	if !st.sessions["mer-1"].IsTerminated {
 		t.Fatal("session must be terminated after SaveAndTeardownAll")
 	}
@@ -8832,11 +8368,6 @@ func TestSaveAndTeardownOne_WorkspaceProjectTerminatesNativeSessionOnce(t *testi
 	}
 }
 
-// TestSaveAndTeardownAll_ClosesScopedShellTerminalsBeforeForceDestroy covers
-// the last coverage gap the second review round flagged: the shutdown
-// save-and-teardown path (also reached by reconcileLive on boot, via the same
-// saveAndTeardownOne) force-removes a worktree just like Kill/Cleanup, and
-// must gate shut any shell terminal scoped to the session first.
 func TestSaveAndTeardownAll_ClosesScopedShellTerminalsBeforeForceDestroy(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 	var sharedLog []string
@@ -9027,8 +8558,6 @@ func TestSaveAndTeardownAllThenRestoreAll_PreservesIgnoredAttachments(t *testing
 	if err := m.SaveAndTeardownAll(ctx); err != nil {
 		t.Fatalf("SaveAndTeardownAll: %v", err)
 	}
-	// The fake records ForceDestroy without touching disk. Reproduce the real
-	// adapter's removal, then provide the empty worktree returned by Restore.
 	if err := os.RemoveAll(workspacePath); err != nil {
 		t.Fatal(err)
 	}
@@ -9251,10 +8780,6 @@ func TestRetireForReplacement_WorkspaceProjectTerminatesNativeSessionOnce(t *tes
 	}
 }
 
-// TestRetireForReplacementClosesScopedShellTerminalsBeforeForceDestroy covers
-// the coverage gap the second review round flagged: RetireForReplacement
-// force-removes a worktree the same as Kill/Cleanup, and must gate shut any
-// shell terminal scoped to the retiring orchestrator first.
 func TestRetireForReplacementClosesScopedShellTerminalsBeforeForceDestroy(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 	var sharedLog []string
@@ -9300,10 +8825,6 @@ func TestRetireForReplacementClosesScopedShellTerminalsBeforeForceDestroy(t *tes
 	}
 }
 
-// A shell terminal that cannot be confirmed closed must fail the whole
-// retirement: unlike Kill, RetireForReplacement has no dirty-refusal path — it
-// always force-destroys — so silently proceeding would remove the worktree
-// out from under a still-live shell.
 func TestRetireForReplacementFailsWhenShellTerminalsWontClose(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 	m.SetShellTerminalCloser(&fakeShellTerminalCloser{err: errors.New("shellterm-1: still alive")})
@@ -9326,8 +8847,6 @@ func TestRetireForReplacementFailsWhenShellTerminalsWontClose(t *testing.T) {
 	}
 }
 
-// TestRetireForReplacementWorkspaceProjectClosesScopedShellTerminalsBeforeForceDestroy
-// is the workspace-project variant of the same coverage gap.
 func TestRetireForReplacementWorkspaceProjectClosesScopedShellTerminalsBeforeForceDestroy(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 	var sharedLog []string
@@ -9780,12 +9299,9 @@ func TestRetireForReplacementRuntimeDestroyFailureBlocksWorkspaceRelease(t *test
 	}
 }
 
-// TestSaveAndTeardownAll_CleanWorktreeWritesEmptyRef verifies that a clean
-// worktree (StashUncommitted returns "") still writes a worktree row (with
-// empty preserved_ref). The row's presence is the shutdown-saved marker.
 func TestSaveAndTeardownAll_CleanWorktreeWritesEmptyRef(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
-	ws.stashRef = "" // clean worktree
+	ws.stashRef = ""
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:        "mer-1",
 		ProjectID: "mer",
@@ -9807,15 +9323,13 @@ func TestSaveAndTeardownAll_CleanWorktreeWritesEmptyRef(t *testing.T) {
 	}
 }
 
-// TestSaveAndTeardownAll_SkipsNoWorkspacePath: sessions without a workspace
-// path are skipped (spawn failed before workspace.Create).
 func TestSaveAndTeardownAll_SkipsNoWorkspacePath(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:        "mer-1",
 		ProjectID: "mer",
 		Kind:      domain.KindWorker,
-		Metadata:  domain.SessionMetadata{}, // no workspace path
+		Metadata:  domain.SessionMetadata{},
 		Activity:  domain.Activity{State: domain.ActivityActive},
 	}
 
@@ -9831,8 +9345,6 @@ func TestSaveAndTeardownAll_SkipsNoWorkspacePath(t *testing.T) {
 	}
 }
 
-// TestSaveAndTeardownAll_SkipsAlreadyTerminated: already-terminated sessions
-// are skipped.
 func TestSaveAndTeardownAll_SkipsAlreadyTerminated(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -9852,8 +9364,6 @@ func TestSaveAndTeardownAll_SkipsAlreadyTerminated(t *testing.T) {
 	}
 }
 
-// TestSaveAndTeardownAll_NoKindFilter: both worker and orchestrator sessions
-// are saved (no kind filter).
 func TestSaveAndTeardownAll_NoKindFilter(t *testing.T) {
 	m, st, _, _ := newLifecycleManager()
 	st.sessions["mer-1"] = domain.SessionRecord{
@@ -9960,13 +9470,9 @@ func TestSaveAndTeardownAll_WorkspaceProjectRegistryDriftPreservesWholeWorkspace
 	}
 }
 
-// TestRestoreAll_RestoresBothWorkerAndOrchestrator verifies (b): RestoreAll
-// restores both a worker and an orchestrator session saved by SaveAndTeardownAll.
 func TestRestoreAll_RestoresBothWorkerAndOrchestrator(t *testing.T) {
 	m, st, rt, _ := newLifecycleManager()
 
-	// Seed two terminated sessions that were saved by SaveAndTeardownAll
-	// (presence of session_worktrees rows is the marker).
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:           "mer-1",
 		ProjectID:    "mer",
@@ -9985,7 +9491,6 @@ func TestRestoreAll_RestoresBothWorkerAndOrchestrator(t *testing.T) {
 		Metadata:     domain.SessionMetadata{WorkspacePath: "/ws/mer-2", Branch: "ao/mer-orchestrator", AgentSessionID: "agent-o"},
 		Activity:     domain.Activity{State: domain.ActivityExited},
 	}
-	// Write the shutdown-saved marker rows.
 	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{SessionID: "mer-1", RepoName: "__root__", PreservedRef: "", State: "removed"}}
 	st.worktrees["mer-2"] = []domain.SessionWorktreeRecord{{SessionID: "mer-2", RepoName: "__root__", PreservedRef: "", State: "removed"}}
 
@@ -10072,14 +9577,9 @@ func TestRestoreAll_RestoresLegacyShutdownMarkerWithoutState(t *testing.T) {
 	}
 }
 
-// TestRestoreAll_SkipsSessionsKilledBeforeShutdown verifies (c): a session
-// the user killed BEFORE shutdown has no session_worktrees row and must NOT
-// be resurrected.
 func TestRestoreAll_SkipsSessionsKilledBeforeShutdown(t *testing.T) {
 	m, st, rt, _ := newLifecycleManager()
 
-	// This session was killed by the user before shutdown: IsTerminated=true,
-	// but no session_worktrees row (SaveAndTeardownAll skipped it).
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID:           "mer-1",
 		ProjectID:    "mer",
@@ -10089,7 +9589,6 @@ func TestRestoreAll_SkipsSessionsKilledBeforeShutdown(t *testing.T) {
 		Metadata:     domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "ao/mer-1/root", Prompt: "do it"},
 		Activity:     domain.Activity{State: domain.ActivityExited},
 	}
-	// Deliberately no entry in st.worktrees for mer-1.
 
 	if err := m.RestoreAll(ctx); err != nil {
 		t.Fatalf("RestoreAll err = %v", err)
@@ -10103,10 +9602,6 @@ func TestRestoreAll_SkipsSessionsKilledBeforeShutdown(t *testing.T) {
 	}
 }
 
-// TestRestoreAll_DeletesMarkerAfterRelaunch covers issue #2319 (b): the
-// shutdown-saved marker is one-shot. After RestoreAll relaunches a session, its
-// session_worktrees marker is deleted, so a second RestoreAll (with no fresh
-// marker) does NOT relaunch it again.
 func TestRestoreAll_DeletesMarkerAfterRelaunch(t *testing.T) {
 	m, st, rt, _ := newLifecycleManager()
 
@@ -10136,10 +9631,6 @@ func TestRestoreAll_DeletesMarkerAfterRelaunch(t *testing.T) {
 	}
 }
 
-// TestRestoreAll_KilledSessionNotResurrectedOnSecondBoot covers issue #2319 (c),
-// the killed-session-resurrection scenario. A terminated session WITH a marker
-// is relaunched exactly once; on a second RestoreAll (no new marker) it stays
-// terminated and is not relaunched again.
 func TestRestoreAll_KilledSessionNotResurrectedOnSecondBoot(t *testing.T) {
 	m, st, rt, _ := newLifecycleManager()
 
@@ -10154,7 +9645,6 @@ func TestRestoreAll_KilledSessionNotResurrectedOnSecondBoot(t *testing.T) {
 	}
 	st.worktrees["mer-1"] = []domain.SessionWorktreeRecord{{SessionID: "mer-1", RepoName: "__root__", State: "removed"}}
 
-	// First boot: marker present, session relaunches once.
 	if err := m.RestoreAll(ctx); err != nil {
 		t.Fatalf("first RestoreAll err = %v", err)
 	}
@@ -10162,8 +9652,6 @@ func TestRestoreAll_KilledSessionNotResurrectedOnSecondBoot(t *testing.T) {
 		t.Fatalf("first RestoreAll must relaunch once, runtime.Create called %d times", rt.created)
 	}
 
-	// Simulate the user killing the relaunched session before the next quit, so
-	// it has no fresh marker, then a second boot.
 	if _, err := m.Kill(ctx, "mer-1"); err != nil {
 		t.Fatalf("kill err = %v", err)
 	}
@@ -10204,9 +9692,6 @@ func TestRestoreAll_SkipsActiveWorkspaceProjectRowsFromUserKilledSession(t *test
 	}
 }
 
-// TestRestoreAll_AppliesPreservedRef: when the session_worktrees row has a
-// non-empty preserved_ref, RestoreAll calls ApplyPreserved after workspace
-// restore but before relaunching.
 func TestRestoreAll_AppliesPreservedRef(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 
@@ -10241,8 +9726,6 @@ func TestRestoreAll_AppliesPreservedRef(t *testing.T) {
 	}
 }
 
-// TestRestoreAll_ConflictLogsAndContinues: when ApplyPreserved returns
-// ErrPreservedConflict, RestoreAll logs and continues (still relaunches).
 func TestRestoreAll_ConflictLogsAndContinues(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
@@ -10395,7 +9878,7 @@ func TestRestoreAll_WorkspaceProjectRootOnlyMarkerRestoresRegisteredChildren(t *
 func TestReconcileLive_DeadSessionRelaunchesInExistingWorktree(t *testing.T) {
 	st := newFakeStore()
 	st.projects["p1"] = domain.ProjectRecord{ID: "p1", Config: testRoleAgents()}
-	rt := &fakeRuntime{aliveByHandle: map[string]bool{}} // handle not alive
+	rt := &fakeRuntime{aliveByHandle: map[string]bool{}}
 	ws := &fakeWorkspace{stashRef: "refs/ao/preserved/s1"}
 	lcm := &fakeLCM{store: st}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
@@ -10443,7 +9926,7 @@ func TestReconcileLive_DeadSessionRelaunchesInExistingWorktree(t *testing.T) {
 func TestReconcileLive_PreservesScopedShellTerminalsWithExistingWorktree(t *testing.T) {
 	st := newFakeStore()
 	st.projects["p1"] = domain.ProjectRecord{ID: "p1", Config: testRoleAgents()}
-	rt := &fakeRuntime{aliveByHandle: map[string]bool{}} // handle not alive
+	rt := &fakeRuntime{aliveByHandle: map[string]bool{}}
 	ws := &fakeWorkspace{stashRef: "refs/ao/preserved/s1"}
 	var sharedLog []string
 	ws.sharedLog = &sharedLog
@@ -10568,8 +10051,6 @@ func TestReconcileLive_RuntimeFailureAfterCapabilityUpdateLeavesSessionResumable
 		t.Fatalf("native identity/worktree changed after failed relaunch: %+v", failed.Metadata)
 	}
 
-	// The failed startup attempt must land in the ordinary Resume Agent state
-	// without treating capability rotation as user-visible session activity.
 	rt.createErr = nil
 	if _, err := m.ResumeAgentWithMode(context.Background(), rec.ID); err != nil {
 		t.Fatalf("ResumeAgentWithMode after dependency recovery: %v", err)
@@ -10663,8 +10144,6 @@ func TestReconcileLive_DoesNotTeardownAfterUncertainRelaunchCommit(t *testing.T)
 		},
 	}
 	st.sessions[rec.ID] = rec
-	// MarkSpawned commits through the lifecycle fake, then relaunchSession reads
-	// the row back. Model storage becoming unavailable only at that final read.
 	st.getSessionErr = errors.New("readback unavailable")
 
 	err := m.reconcileLive(context.Background(), rec)
@@ -10705,12 +10184,6 @@ func TestReconcileLive_AliveSessionAdoptedNoop(t *testing.T) {
 	}
 }
 
-// TestReconcileLive_InterruptedSpawnSeedRowIsRemoved covers a daemon that died
-// between Spawn's CreateSession and its MarkSpawned commit (e.g. the desktop
-// app was closed while "Preparing the worker terminal" was still creating the
-// workspace). The seed row has no workspace and never will: the next daemon
-// must remove it instead of leaving a non-terminated phantom in the sidebar
-// forever, since nothing observable (worktree, runtime) was ever built.
 func TestReconcileLive_InterruptedSpawnSeedRowIsRemoved(t *testing.T) {
 	st := newFakeStore()
 	st.projects["p1"] = domain.ProjectRecord{ID: "p1", Config: testRoleAgents()}
@@ -10771,8 +10244,6 @@ func TestReconcile_LivePassUsesConfiguredConcurrency(t *testing.T) {
 			t.Fatalf("live probes did not overlap; entered = %v", seen)
 		}
 	}
-	// The third session is still queued behind the two blocked probes. It must
-	// already be fenced so neither input nor the periodic reaper can mutate it.
 	for _, id := range ids {
 		if !m.SessionMutationInProgress(id) {
 			t.Fatalf("session %s was not lifecycle-fenced during startup reconcile", id)
@@ -10833,9 +10304,6 @@ func TestReconcileStartupSafetyDefersRuntimeReconciliation(t *testing.T) {
 	}
 }
 
-// TestReconcileLive_ProbeErrorIsNotDeath locks the invariant that a failed
-// IsAlive probe is NOT treated as proof that the session is dead. reconcileLive
-// must propagate the error and must NOT stash, terminate, or destroy.
 func TestReconcileLive_ProbeErrorIsNotDeath(t *testing.T) {
 	st := newFakeStore()
 	rt := &fakeRuntime{aliveErr: errors.New("probe boom")}
@@ -11035,49 +10503,30 @@ func TestReconcileLive_ScratchChatReattachesPersistentController(t *testing.T) {
 	}
 }
 
-// TestReconcile_AdoptAcrossDaemonRestart is the end-to-end durability proof for
-// #2335: it drives the full boot-time Reconcile pass over the exact mix of
-// session states a daemon restart/upgrade leaves behind and asserts agent
-// sessions are decoupled from the daemon's lifetime:
-//
-//   - an alive orchestrator is ADOPTED in place: same id, still live, its runtime
-//     never torn down, and NO new session minted (the id-increment regression
-//     guard: adoption failure used to mint a fresh orchestrator id 14->15->16).
-//   - an alive worker is adopted as a no-op.
-//   - a worker whose runtime died with the daemon is relaunched in its existing
-//     worktree on this same boot under its ORIGINAL id.
-//   - a truly-dead session with no restore marker is NOT resurrected.
 func TestReconcile_AdoptAcrossDaemonRestart(t *testing.T) {
 	st := newFakeStore()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
 	rt := &fakeRuntime{aliveByHandle: map[string]bool{
-		"orch":    true, // orchestrator runtime survived the daemon exit
-		"w-alive": true, // worker runtime survived the daemon exit
-		// "w-dead" is absent -> that worker's runtime died with the daemon.
+		"orch":    true,
+		"w-alive": true,
 	}}
 	ws := &fakeWorkspace{stashRef: "refs/ao/preserved/mer-3"}
 	lcm := &fakeLCM{store: st}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: lcm, LookPath: lookPath})
 
-	// Alive orchestrator: the promptless session whose adoption failure used to
-	// mint a fresh orchestrator id. It must be adopted in place.
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, Harness: domain.HarnessClaudeCode,
 		Metadata: domain.SessionMetadata{Branch: "ao/mer-1/root", WorkspacePath: "/ws/mer-1", RuntimeHandleID: "orch"},
 	}
-	// Alive worker: adopted as a no-op.
 	st.sessions["mer-2"] = domain.SessionRecord{
 		ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		Metadata: domain.SessionMetadata{Branch: "ao/mer-2/root", WorkspacePath: "/ws/mer-2", RuntimeHandleID: "w-alive", AgentSessionID: "agent-2"},
 	}
-	// Dead worker: its runtime died with the daemon; relaunch under the same id
-	// without tearing down the worktree first.
 	st.sessions["mer-3"] = domain.SessionRecord{
 		ID: "mer-3", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		Metadata: domain.SessionMetadata{Branch: "ao/mer-3/root", WorkspacePath: "/ws/mer-3", RuntimeHandleID: "w-dead", AgentSessionID: "agent-3"},
 	}
-	// Truly-dead session the user killed before restart (terminated, no marker).
 	st.sessions["mer-4"] = domain.SessionRecord{
 		ID: "mer-4", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
 		IsTerminated: true, Activity: domain.Activity{State: domain.ActivityExited},
@@ -11088,22 +10537,18 @@ func TestReconcile_AdoptAcrossDaemonRestart(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 
-	// Alive orchestrator + worker adopted in place: same id, still live.
 	if st.sessions["mer-1"].IsTerminated {
 		t.Fatal("alive orchestrator must be adopted in place, not terminated")
 	}
 	if st.sessions["mer-2"].IsTerminated {
 		t.Fatal("alive worker must be adopted in place, not terminated")
 	}
-	// No id increment: Reconcile must never mint a new session row.
 	if st.num != 0 {
 		t.Fatalf("Reconcile minted %d new session(s); adoption must reuse existing ids", st.num)
 	}
-	// Adopted runtimes were never torn down.
 	if rt.destroyed != 0 {
 		t.Fatalf("adopted sessions must not be destroyed; Destroy called %d times", rt.destroyed)
 	}
-	// A dead worker stays stopped until an explicit Resume request.
 	if lcm.terminated["mer-3"] != 0 {
 		t.Fatalf("dead worker must not be marked terminated before relaunch; got %d", lcm.terminated["mer-3"])
 	}
@@ -11119,11 +10564,9 @@ func TestReconcile_AdoptAcrossDaemonRestart(t *testing.T) {
 	if ws.stashCalls != 0 {
 		t.Fatalf("dead worker must reuse its worktree without stashing; got %d stash calls", ws.stashCalls)
 	}
-	// In-place recovery needs no one-shot restore marker.
 	if rows := st.worktrees["mer-3"]; len(rows) != 0 {
 		t.Fatalf("restore marker for mer-3 must be deleted after relaunch; got %+v", rows)
 	}
-	// Truly-dead, unmarked session is NOT resurrected.
 	if !st.sessions["mer-4"].IsTerminated {
 		t.Fatal("terminated session with no restore marker must stay terminated")
 	}
@@ -11152,7 +10595,7 @@ func TestReconcileReap_TerminatedButAliveTmuxDestroyed(t *testing.T) {
 
 func TestReconcileReap_TerminatedAndDeadTmuxLeftAlone(t *testing.T) {
 	st := newFakeStore()
-	rt := &fakeRuntime{aliveByHandle: map[string]bool{}} // t2 not alive
+	rt := &fakeRuntime{aliveByHandle: map[string]bool{}}
 	ws := &fakeWorkspace{}
 	lcm := &fakeLCM{store: st}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
@@ -11170,11 +10613,6 @@ func TestReconcileReap_TerminatedAndDeadTmuxLeftAlone(t *testing.T) {
 	}
 }
 
-// --- Send activity-confirmation tests (issue #2342) ---
-
-// signalingAgent is a fakeAgent that advertises BOTH a prompt-submit and a
-// blocked activity signal, so Manager.Send runs confirmActive for its harness
-// (see ports.SubmitActivitySignaler and ports.BlockedActivitySignaler).
 type signalingAgent struct{ fakeAgent }
 
 func (signalingAgent) EmitsSubmitActivity() bool  { return true }
@@ -11188,19 +10626,11 @@ type startupReadySignalingAgent struct{ fakeAgent }
 
 func (startupReadySignalingAgent) FirstSignalProvesInputReady() bool { return true }
 
-// submitOnlyAgent advertises a prompt-submit signal but NOT a blocked one — a
-// harness like goose/opencode/agy that submits yet installs no permission hook.
-// confirmActive must refuse to nudge it (it could Enter into a decision the
-// harness cannot report).
 type submitOnlyAgent struct{ fakeAgent }
 
 func (submitOnlyAgent) EmitsSubmitActivity() bool  { return true }
 func (submitOnlyAgent) EmitsBlockedActivity() bool { return false }
 
-// newSendTestManager builds a Manager wired for Send confirmation tests with
-// fast (millisecond) confirmation timings so no test waits real seconds. The
-// returned messenger records every Send; the store is mutable so a test can
-// flip Activity.State between polls.
 func newSendTestManager(t *testing.T, agent ports.Agent, messenger ports.AgentMessenger, st *fakeStore) *Manager {
 	t.Helper()
 	rt := &fakeRuntime{}
@@ -11211,8 +10641,6 @@ func newSendTestManager(t *testing.T, agent ports.Agent, messenger ports.AgentMe
 		Runtime: rt, Agents: singleAgent{agent}, Workspace: ws, Store: st,
 		Messenger: messenger, Lifecycle: lcm, LookPath: lookPath,
 	})
-	// Shrink the confirmation budget so the loop runs in milliseconds, not
-	// seconds. m.sendConfirm is unexported; tests live in this package.
 	m.sendConfirm = sendConfirmConfig{
 		pollInterval:    time.Millisecond,
 		attemptDeadline: 2 * time.Millisecond,
@@ -11221,8 +10649,6 @@ func newSendTestManager(t *testing.T, agent ports.Agent, messenger ports.AgentMe
 	return m
 }
 
-// pastStartupGate marks a TUI session as having received its first hook
-// callback so send-path tests exercise post-startup behavior.
 func pastStartupGate(rec domain.SessionRecord) domain.SessionRecord {
 	if rec.FirstSignalAt.IsZero() {
 		rec.FirstSignalAt = time.Now()
@@ -11254,9 +10680,6 @@ func (s *fakeSemanticReceiptStore) accept(id domain.SessionID, launchID, deliver
 }
 
 func TestSend_SkipsConfirmForHooklessHarness(t *testing.T) {
-	// A harness whose adapter does NOT implement the activity-signal interfaces (plain
-	// fakeAgent) must skip confirmActive entirely: one Send, no nudges, and the
-	// call returns immediately without polling.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})
 	msg := &fakeMessenger{}
@@ -11269,7 +10692,6 @@ func TestSend_SkipsConfirmForHooklessHarness(t *testing.T) {
 	if len(msg.msgs) != 1 {
 		t.Fatalf("Send calls = %d, want 1 (no nudges for a hookless harness)", len(msg.msgs))
 	}
-	// Hookless path returns within milliseconds (no 2s+ confirmation wait).
 	if dt := time.Since(start); dt > 250*time.Millisecond {
 		t.Fatalf("Send took %s for a hookless harness; confirmActive should have been skipped", dt)
 	}
@@ -11316,8 +10738,6 @@ func TestSendSemanticTUIRequiresCorrelatedPromptAcceptance(t *testing.T) {
 	}
 }
 
-// A batch accepted before the upgrade that added accepted-delivery columns is
-// recorded only in the conversation checkpoint, and must not be pasted again.
 func TestSendSemanticTUIAcceptsCheckpointRecordedBeforeUpgrade(t *testing.T) {
 	const deliveryID = "report-batch:preupgrade1"
 	st := newFakeStore()
@@ -11517,8 +10937,6 @@ func TestSend_PaneFallbackCannotPairLostPromptHookWithPriorTrustedAssistant(t *t
 		t.Fatalf("pane fallback checkpoint = %+v, want untrusted new prompt with prior assistant/provenance cleared", checkpoint)
 	}
 
-	// A delayed Stop from the old trusted turn must not borrow the new pane
-	// prompt after its UserPromptSubmit hook was lost.
 	if err := lcm.ApplyActivitySignal(ctx, created.ID, ports.ActivitySignal{
 		Event: "stop", AgentSessionID: "native-1", LatestAssistantUpdate: "delayed prior answer",
 		LaunchID: "terminal-generation", Valid: true, State: domain.ActivityIdle,
@@ -11553,8 +10971,6 @@ func TestSend_PaneFallbackCannotPairLostPromptHookWithPriorTrustedAssistant(t *t
 		t.Fatalf("read promoted checkpoint: ok=%v err=%v", ok, err)
 	}
 	promoted := afterHooks.Metadata
-	// Hooks without native identities cannot repair the missing witness, even
-	// after another prompt. Only transcript-backed admission can prove a pair.
 	if promoted.LatestUserPrompt != "later canonical prompt" ||
 		promoted.LatestAssistantUpdate != "" ||
 		promoted.ConversationCheckpointState != domain.ConversationCheckpointPrompt ||
@@ -11617,8 +11033,6 @@ func TestActivitySignal_CASRetryPreservesCorrelatedPermissionPost(t *testing.T) 
 	})
 	st := &activityProjectionBarrierStore{
 		Store: baseStore, updateEntered: make(chan struct{}), releaseUpdate: make(chan struct{}),
-		// The permission request is the first projection. Let it establish the
-		// blocked row, then interleave the correlated post at the next CAS.
 		skipUpdates: 1,
 	}
 	t.Cleanup(func() {
@@ -11825,14 +11239,9 @@ func TestSend_PaneFallbackWinsAgainstStaleLifecycleProjection(t *testing.T) {
 }
 
 func TestSend_ConfirmsAndNudgesUntilActive(t *testing.T) {
-	// A signaling harness starts idle. The first nudge (Enter-only Send) should
-	// flip the session active, after which confirmActive stops. Net: the
-	// initial message plus exactly one nudge.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityIdle}})
-	// A messenger that flips the session active on the first Enter-only nudge,
-	// mimicking the agent accepting the prompt.
 	msg := &flipOnNudgeMessenger{sessionID: "s1", store: st}
 	m := newSendTestManager(t, signalingAgent{}, msg, st)
 
@@ -11854,8 +11263,6 @@ func TestSend_ConfirmsAndNudgesUntilActive(t *testing.T) {
 }
 
 func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
-	// A signaling harness that never goes active must still terminate: at most
-	// maxAttempts Sends (initial + maxAttempts-1 nudges), and Send surfaces ErrDeliveryUnconfirmed.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityIdle}})
@@ -11884,14 +11291,6 @@ func TestSend_ConfirmBudgetCapsRetries(t *testing.T) {
 }
 
 func TestSend_ConfirmAcceptsRetainedSubmissionEvidence(t *testing.T) {
-	// A user prompt whose UserPromptSubmit hook lands AFTER delivery (advancing
-	// LatestUserPromptAt past the delivery instant) but whose turn completes
-	// between activity polls leaves the session idle, with Active never observed.
-	// Confirmation must treat that later durable submission evidence as success
-	// instead of returning a false ErrDeliveryUnconfirmed, which would prompt a
-	// duplicate retry of an already-delivered message. The baseline is the
-	// delivery instant (options.InteractionAt), so the hook's later write is
-	// detectable regardless of when, relative to a store read, it arrives.
 	st := newFakeStore()
 	base := time.Now()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
@@ -11910,12 +11309,6 @@ func TestSend_ConfirmAcceptsRetainedSubmissionEvidence(t *testing.T) {
 }
 
 func TestSend_CoordinationDeliveryIgnoresPromptEvidence(t *testing.T) {
-	// A coordination (ao send) delivery deliberately leaves LatestUserPromptAt
-	// unchanged, so that marker is the wrong evidence for it: an advance during
-	// the confirm window can only come from an unrelated concurrent user prompt,
-	// and crediting it would falsely confirm a coordination send. Here the nudge
-	// advances LatestUserPromptAt but no coordination checkpoint is recorded, so
-	// confirmation must still exhaust its budget and surface ErrDeliveryUnconfirmed.
 	st := newFakeStore()
 	base := time.Now().Add(-time.Hour)
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
@@ -11930,17 +11323,7 @@ func TestSend_CoordinationDeliveryIgnoresPromptEvidence(t *testing.T) {
 	}
 }
 
-// The positive coordination-acceptance case (marker recorded, session back to
-// idle before confirmation polls) is covered end-to-end against a real sqlite
-// store and the real lifecycle write path by
-// TestSend_CoordinationAcceptanceMarker_RealStore in
-// send_confirm_coordination_integration_test.go.
-
 func TestSend_BlockedSessionRejectsDelivery(t *testing.T) {
-	// A session paused on a permission decision (blocked) must not receive the
-	// paste at all: the runtime appends Enter, which could answer the dialog.
-	// Send surfaces ErrAwaitingDecision (the API's 409) and the messenger is
-	// never called, so nothing — message or nudge — reaches the pane.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityBlocked}})
@@ -12010,9 +11393,6 @@ func TestSend_HooklessTUIStartupAllowsDelivery(t *testing.T) {
 }
 
 func TestSend_NoNudgeWhenBlockedAppearsMidWait(t *testing.T) {
-	// The permission dialog can appear between polls (e.g. the delivered prompt
-	// itself triggered a tool approval). The confirm loop must abort on the
-	// first blocked observation instead of nudging after the deadline.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityIdle}})
@@ -12028,9 +11408,6 @@ func TestSend_NoNudgeWhenBlockedAppearsMidWait(t *testing.T) {
 }
 
 func TestSend_StillNudgesWhenWaitingInput(t *testing.T) {
-	// waiting_input (an idle prompt awaiting the next instruction) is the
-	// PRIMARY nudge scenario: a long-idle worker with an unsubmitted pasted
-	// draft. The decision-safety guard must not disable it.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityWaitingInput}})
@@ -12048,9 +11425,6 @@ func TestSend_StillNudgesWhenWaitingInput(t *testing.T) {
 	}
 }
 
-// blockOnSendMessenger records sends and flips the session to ActivityBlocked
-// right after the initial message is delivered, simulating a prompt that
-// immediately triggers a tool-permission dialog.
 type blockOnSendMessenger struct {
 	msgs      []string
 	sessionID domain.SessionID
@@ -12067,19 +11441,9 @@ func (m *blockOnSendMessenger) Send(_ context.Context, _ domain.SessionID, msg s
 }
 
 func TestSend_NoNudgeWhenBlockedAppearsBeforeNudge(t *testing.T) {
-	// The TOCTOU the per-poll check cannot cover: the session is not blocked on
-	// waitForActive's final poll, but a permission dialog lands in the gap
-	// before the Enter-only nudge. The just-in-time re-read in confirmActive
-	// must catch it — exactly one Send, no nudge.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code",
 		Activity: domain.Activity{State: domain.ActivityIdle}})
-	// blockAfterFirstReadStore flips the session to blocked on read #4. The
-	// deterministic read sequence (attemptDeadline 0 makes waitForActive do
-	// exactly one poll): #1 Deliver's pre-paste read, #2 Send's harness lookup,
-	// #3 waitForActive's poll (idle → timeout), #4 the JIT pre-nudge re-read —
-	// which is the first to see blocked, landing the flip in the exact
-	// post-final-poll / pre-nudge window this test exists to cover.
 	bst := &blockAfterFirstReadStore{fakeStore: st, id: "s1"}
 	msg := &fakeMessenger{}
 	m := New(Deps{
@@ -12101,9 +11465,6 @@ func TestSend_NoNudgeWhenBlockedAppearsBeforeNudge(t *testing.T) {
 }
 
 func TestSend_SkipsConfirmForSubmitOnlyHarness(t *testing.T) {
-	// A harness that submits but cannot report blocked (goose/opencode/agy) is
-	// NOT nudge-safe: confirmActive must be skipped entirely, so an Enter can
-	// never reach a permission dialog the harness could not have signalled.
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "goose",
 		Activity: domain.Activity{State: domain.ActivityIdle}})
@@ -12160,11 +11521,6 @@ func TestSwitchTargetsOnlyRetryEnterWhenActivitySignalsMakeItSafe(t *testing.T) 
 	}
 }
 
-// blockAfterFirstReadStore wraps fakeStore and flips the session to
-// ActivityBlocked on the FOURTH GetSession call, so with attemptDeadline 0 the
-// first read to observe blocked is confirmActive's just-in-time pre-nudge
-// re-read (reads #1-#3 are Deliver's pre-paste read, Send's harness lookup,
-// and waitForActive's single poll — see TestSend_NoNudgeWhenBlockedAppearsBeforeNudge).
 type blockAfterFirstReadStore struct {
 	*fakeStore
 	id    domain.SessionID
@@ -12182,9 +11538,6 @@ func (s *blockAfterFirstReadStore) GetSession(ctx context.Context, id domain.Ses
 	return s.fakeStore.GetSession(ctx, id)
 }
 
-// flipOnNudgeMessenger records sends like fakeMessenger and additionally flips a
-// session to ActivityActive the first time it receives an Enter-only nudge (an
-// empty message), simulating the agent accepting the prompt after the retry.
 type flipOnNudgeMessenger struct {
 	msgs      []string
 	sessionID domain.SessionID
@@ -12205,9 +11558,6 @@ func (m *flipOnNudgeMessenger) Send(_ context.Context, _ domain.SessionID, msg s
 	return nil
 }
 
-// advancePromptOnNudgeMessenger models an Enter-only nudge whose prompt is
-// accepted (UserPromptSubmit advances LatestUserPromptAt) while the turn
-// completes within the poll gap, so Activity never settles on Active.
 type advancePromptOnNudgeMessenger struct {
 	msgs      []string
 	sessionID domain.SessionID
@@ -12259,18 +11609,9 @@ func TestRestoreRetainsSpawnPermissionsAfterProjectChange(t *testing.T) {
 	}
 }
 
-// TestKill_TerminatesEvenWhenTeardownBudgetExpires is the third #5463 path,
-// and the one that most likely produced the reported state: a slow teardown
-// (a large worktree on NTFS) runs past killTeardownBudget, so the context that
-// carried it is already dead by the time Kill records terminal intent. Every
-// destructive step has happened at that point — the agent is gone, the worktree
-// is gone — and refusing the one remaining write leaves a session that is dead
-// everywhere except the row the UI reads, reachable by no path afterwards.
 func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	m, st, rt, ws := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
-	// Smaller than the time the fake workspace burns below, so the budget is
-	// already expired when Kill reaches its terminal-intent write.
 	m.killTeardown = 20 * time.Millisecond
 	ws.destroyHook = func() { time.Sleep(60 * time.Millisecond) }
 
@@ -12515,7 +11856,6 @@ func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
 }
 
 func TestPromptOutputContainsMatchesAStyledPrompt(t *testing.T) {
-	// Kimi 2.2 draws its composer border and prompt in different colours.
 	raw := "\x1b[34m│\x1b[39m > \x1b[7m \x1b[27m\r\n"
 	if !promptOutputContains(raw, []string{"│ >"}) {
 		t.Fatal("a prompt split by a colour code was not recognised")
@@ -12601,8 +11941,6 @@ func TestSpawn_BaseBranchOverridesTheProjectDefaultForThisSessionOnly(t *testing
 	}
 }
 
-// An existing branch keeps its own history and would not start from the base,
-// so a branch named with a base must be new.
 func TestSpawn_BaseBranchWithANamedBranchRequiresItToBeNew(t *testing.T) {
 	m, st, _, ws := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
@@ -12612,7 +11950,6 @@ func TestSpawn_BaseBranchWithANamedBranchRequiresItToBeNew(t *testing.T) {
 	if !ws.lastCfg.RequireNewBranch || ws.lastCfg.Branch != "feat/child" {
 		t.Fatalf("workspace branch = %q, require new = %v", ws.lastCfg.Branch, ws.lastCfg.RequireNewBranch)
 	}
-	// Without a base, a named branch may be an existing one to continue.
 	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "feat/other"}); err != nil {
 		t.Fatal(err)
 	}

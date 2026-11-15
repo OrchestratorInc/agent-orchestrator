@@ -82,8 +82,6 @@ type providerSnapshot struct {
 	longContext map[string][]int64
 }
 
-// Snapshot is an immutable, validated view of all provider catalogs. Its maps
-// and exact rational rates are never exposed or mutated after construction.
 type Snapshot struct {
 	providers map[string]providerSnapshot
 	overrides map[string]modelOverride
@@ -94,8 +92,6 @@ type decodedCatalog struct {
 	snapshot *Snapshot
 }
 
-// Catalog is a complete validated catalog candidate together with its exact
-// transport bytes. The byte slices are private defensive copies.
 type Catalog struct {
 	manifestBytes []byte
 	providerBytes map[string][]byte
@@ -103,8 +99,6 @@ type Catalog struct {
 	snapshot      *Snapshot
 }
 
-// ParseCatalog validates and retains a complete candidate for cache install or
-// activation.
 func ParseCatalog(manifestBytes []byte, providerBytes map[string][]byte) (*Catalog, error) {
 	decoded, err := decodeCatalog(manifestBytes, providerBytes)
 	if err != nil {
@@ -122,7 +116,6 @@ func ParseCatalog(manifestBytes []byte, providerBytes map[string][]byte) (*Catal
 	return catalog, nil
 }
 
-// Snapshot returns the catalog's immutable validated snapshot.
 func (c *Catalog) Snapshot() *Snapshot {
 	if c == nil {
 		return nil
@@ -130,8 +123,6 @@ func (c *Catalog) Snapshot() *Snapshot {
 	return c.snapshot
 }
 
-// DecodeCandidate strictly validates a complete manifest and all blobs it
-// references, returning an immutable pricing snapshot.
 func DecodeCandidate(manifestBytes []byte, providerBytes map[string][]byte) (*Snapshot, error) {
 	catalog, err := ParseCatalog(manifestBytes, providerBytes)
 	if err != nil {
@@ -299,7 +290,6 @@ func parseRate(value string) (*big.Rat, error) {
 	return rate, nil
 }
 
-// ProviderIDs lists the providers this snapshot prices, in order.
 func (s *Snapshot) ProviderIDs() []string {
 	if s == nil {
 		return nil
@@ -312,7 +302,6 @@ func (s *Snapshot) ProviderIDs() []string {
 	return ids
 }
 
-// ProviderVersion returns the exact active catalog version for a provider.
 func (s *Snapshot) ProviderVersion(providerID string) string {
 	if s == nil {
 		return ""
@@ -324,18 +313,6 @@ func (s *Snapshot) ProviderVersion(providerID string) string {
 	return provider.version
 }
 
-// ProviderForModel returns the one catalog provider that lists modelID, or ""
-// when no provider does or more than one does.
-//
-// This is the last resort for an event nothing else could attribute: a Claude
-// transcript names no provider, so a session collected before its first hook
-// has only the served model name to go on. That name is a recorded fact — it is
-// what the provider actually answered with — so a lookup is evidence rather
-// than the harness-shaped guess the design forbids.
-//
-// Ambiguity resolves to "". Sentinels like "unknown" and "<synthetic>" appear in
-// no catalog and fall out here for free, as does any model AO has no rates for,
-// which is exactly the event that must stay unpriced anyway.
 func (s *Snapshot) ProviderForModel(modelID string) string {
 	if s == nil || strings.TrimSpace(modelID) == "" {
 		return ""
@@ -346,8 +323,6 @@ func (s *Snapshot) ProviderForModel(modelID string) string {
 		if !ok {
 			continue
 		}
-		// CanonicalModelID strips this provider's own prefix, so a stored
-		// "anthropic/claude-opus-5" still matches its unprefixed catalog entry.
 		if _, ok := provider.models[CanonicalModelID(providerID, modelID)]; !ok {
 			continue
 		}
@@ -359,15 +334,6 @@ func (s *Snapshot) ProviderForModel(modelID string) string {
 	return found
 }
 
-// Estimate contains final per-component integer nano-USD estimates. A nil
-// component is unknown. TotalNanos is present only when every component is
-// known.
-//
-// InputNanos covers every non-cache-read input charge. Cache writes are input
-// that happens to be written to the cache, so folding their charge in here is
-// what keeps the three components disjoint and additive. CacheWriteNanos is
-// the part of InputNanos that the cache writes cost, for reports that show it
-// apart; it is never added to the total again.
 type Estimate struct {
 	InputNanos       *int64
 	CachedInputNanos *int64
@@ -377,16 +343,12 @@ type Estimate struct {
 	PricingVersion   string
 }
 
-// cacheWriteSplit is the provider-specific detail the neutral token vector
-// deliberately folds away. Each field is nil when the stored provider usage
-// object never carried it; a non-nil zero is a known zero.
 type cacheWriteSplit struct {
 	total *int64
 	fiveM *int64
 	oneH  *int64
 }
 
-// Estimate prices one normalized usage event against this immutable snapshot, at the rates of the service tier that served it.
 func (s *Snapshot) Estimate(event domain.ModelUsageEvent) (Estimate, error) {
 	providerID := CanonicalProviderID(event.BillingProviderID)
 	modelID := CanonicalModelID(providerID, event.ModelID)
@@ -456,13 +418,11 @@ func (p providerSnapshot) longContextRow(rowID string, input *int64) string {
 	return rowID
 }
 
-// Speed tiers a report groups usage by.
 const (
 	SpeedStandard = "standard"
 	SpeedUnknown  = "unknown"
 )
 
-// SpeedTier names the tier an event was billed at for reports: "standard", a catalog tier (priority, flex, ultrafast, fast), or "unknown".
 func SpeedTier(providerID domain.UsageProviderID, reported string) string {
 	tier, known := catalogServiceTier(providerID, reported)
 	switch {
@@ -502,11 +462,6 @@ func catalogServiceTier(providerID domain.UsageProviderID, reported string) (tie
 	return "", false
 }
 
-// A catalog without a cache-write rate for the model is not missing data: the
-// provider does not bill writes separately, so the whole uncached bucket is
-// charged at the plain input rate. Only when a distinct write rate exists — as
-// Anthropic publishes, with its own five-minute and one-hour tiers — does the
-// split matter, and only then can an unavailable split leave the cost unknown.
 func estimateInput(event domain.ModelUsageEvent, rates exactRates) (input, cacheWrite *int64, err error) {
 	uncached := event.Tokens.UncachedInputTokens
 	split := cacheWriteSplitFor(event)
@@ -543,8 +498,6 @@ func chargeCacheWrite(split cacheWriteSplit, rates exactRates) (*int64, error) {
 	if *split.total == 0 {
 		return costPointer(0), nil
 	}
-	// Without a distinct one-hour rate the tiers are indistinguishable, so the
-	// whole write bucket takes the single write rate.
 	if rates.write1H == nil {
 		return charge(*split.total, rates.write)
 	}
@@ -558,9 +511,6 @@ func chargeCacheWrite(split cacheWriteSplit, rates exactRates) (*int64, error) {
 	return combinedCharge([]tokenRate{{*split.fiveM, rates.write}, {*split.oneH, rates.write1H}})
 }
 
-// cacheWriteSplitFor reads the write buckets back out of the bounded provider
-// usage object. An event stored before that object was captured, or one whose
-// object omits the counters, simply reports an unknown split.
 func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 	if event.ProviderUsageJSON == "" {
 		return cacheWriteSplit{}
@@ -594,9 +544,6 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 		}
 		return split
 	case domain.UsageProviderOpenAI:
-		// The neutral counters come from last_token_usage when Codex emits it,
-		// so the write bucket must be read from the same per-event object rather
-		// than from the cumulative totals beside it.
 		var usage struct {
 			Last *struct {
 				CacheWriteInputTokens *int64 `json:"cache_write_input_tokens"`
@@ -615,7 +562,6 @@ func cacheWriteSplitFor(event domain.ModelUsageEvent) cacheWriteSplit {
 	}
 }
 
-// chargeOptional prices an uncollected bucket as unknown rather than as zero.
 func chargeOptional(tokens *int64, rate *big.Rat) (*int64, error) {
 	if tokens == nil {
 		return nil, nil
@@ -678,10 +624,6 @@ func checkedCostSum(values ...int64) (int64, error) {
 
 func costPointer(value int64) *int64 { return &value }
 
-// ActivationFence serializes snapshot activation with ingestion/backfill
-// critical sections while allowing waiting callers to cancel. Explicit FIFO
-// admission prevents a newly arriving page from overtaking a catalog swap that
-// is already waiting at the transaction boundary.
 type ActivationFence struct {
 	mu      sync.Mutex
 	held    bool
@@ -693,13 +635,10 @@ type activationFenceWaiter struct {
 	granted bool
 }
 
-// NewActivationFence creates an unlocked activation fence.
 func NewActivationFence() *ActivationFence {
 	return &ActivationFence{}
 }
 
-// Acquire waits for exclusive admission or returns the context error. The
-// returned release function is idempotent.
 func (f *ActivationFence) Acquire(ctx context.Context) (func(), error) {
 	select {
 	case <-ctx.Done():
@@ -717,8 +656,6 @@ func (f *ActivationFence) Acquire(ctx context.Context) (func(), error) {
 	}
 	f.mu.Unlock()
 
-	// Recheck after registering so cancellation cannot strand a waiter, and so
-	// release always observes the same FIFO order callers entered here.
 	if err := ctx.Err(); err != nil {
 		f.cancelOrRelease(waiter)
 		return nil, err
@@ -766,21 +703,17 @@ func (f *ActivationFence) release() {
 	close(next.ready)
 }
 
-// ProviderActivation identifies one provider version made active by a swap.
 type ProviderActivation struct {
 	ProviderID      string
 	PreviousVersion string
 	Version         string
 }
 
-// Manager owns the current immutable snapshot and the shared activation fence.
 type Manager struct {
 	fence   *ActivationFence
 	current atomic.Pointer[Snapshot]
 }
 
-// NewManager creates a manager with an empty snapshot unless initial is a
-// complete validated catalog snapshot.
 func NewManager(initial *Snapshot) *Manager {
 	manager := &Manager{fence: NewActivationFence()}
 	if !validSnapshot(initial) {
@@ -790,14 +723,10 @@ func NewManager(initial *Snapshot) *Manager {
 	return manager
 }
 
-// Fence returns the shared fence Task 4 uses around durable usage writes.
 func (m *Manager) Fence() *ActivationFence { return m.fence }
 
-// Snapshot returns the current immutable snapshot.
 func (m *Manager) Snapshot() *Snapshot { return m.current.Load() }
 
-// WithSnapshot runs fn while holding the activation fence, guaranteeing that
-// the returned snapshot cannot be superseded until fn completes.
 func (m *Manager) WithSnapshot(ctx context.Context, fn func(*Snapshot) error) error {
 	release, err := m.fence.Acquire(ctx)
 	if err != nil {
@@ -807,7 +736,6 @@ func (m *Manager) WithSnapshot(ctx context.Context, fn func(*Snapshot) error) er
 	return fn(m.current.Load())
 }
 
-// Activate atomically publishes a fully validated candidate under the fence.
 func (m *Manager) Activate(ctx context.Context, candidate *Snapshot) ([]ProviderActivation, error) {
 	if !validSnapshot(candidate) {
 		return nil, errors.New("pricing snapshot is not a complete validated candidate")

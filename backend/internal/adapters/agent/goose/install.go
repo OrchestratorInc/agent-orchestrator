@@ -10,9 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ResolveBinary performs a fresh, identity-validated resolution for the
-// plugin. It is the normal readiness/explicit-refresh path, not the cached
-// startup presence shortcut.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -30,10 +27,6 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// ResolveBinaryPresence is the process-free startup check. A cached
-// identity-confirmed path is considered installed; a name-only match is
-// deliberately reported as identity-unknown so startup does not claim
-// Pressly's goose.
 func (p *Plugin) ResolveBinaryPresence(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -68,10 +61,6 @@ func (p *Plugin) clearGooseBinary() {
 	p.binaryMu.Unlock()
 }
 
-// cachedGooseBinary returns a launch cache entry. Entries written by the
-// resolver are rechecked against their local file snapshot so replacing a
-// cached path with another executable cannot make startup trust the old
-// identity.
 func (p *Plugin) cachedGooseBinary() string {
 	p.binaryMu.Lock()
 	cached := p.resolvedBinary
@@ -106,8 +95,6 @@ func cachedGooseBinaryStillValid(path string, cachedInfo os.FileInfo) bool {
 		cachedInfo.ModTime().Equal(currentInfo.ModTime())
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

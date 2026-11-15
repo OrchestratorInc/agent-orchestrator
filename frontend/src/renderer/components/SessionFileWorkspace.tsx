@@ -30,7 +30,6 @@ export function SessionFileWorkspace({
 }: {
 	annotation: FileAnnotationModel;
 	active?: boolean;
-	/** Changes when a pane header is pressed, to move keyboard focus into this file. */
 	focusRequest?: number;
 	fileKey?: string;
 	source?: FileOpenOptions["source"];

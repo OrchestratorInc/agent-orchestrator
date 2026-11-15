@@ -44,8 +44,6 @@ describe("parseEnvBlock", () => {
 
 describe("withFallbackPath", () => {
 	it("appends only floor dirs not already present, preserving the existing order", () => {
-		// /opt/homebrew/bin and /usr/bin are already present and stay put; the rest
-		// of the floor is appended in floor order, with no duplicates added.
 		const result = withFallbackPath("/opt/homebrew/bin:/custom/bin:/usr/bin");
 		expect(result).toBe(
 			"/opt/homebrew/bin:/custom/bin:/usr/bin:/opt/homebrew/sbin:/usr/local/bin:/bin:/usr/sbin:/sbin",

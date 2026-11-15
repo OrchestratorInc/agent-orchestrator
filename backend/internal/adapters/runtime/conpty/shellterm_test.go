@@ -65,8 +65,6 @@ func TestIsChildAlivePreservesUnresolvedHostAndCancellation(t *testing.T) {
 	}
 }
 
-// Only reconciliation's persistence boundary is faked: status and teardown use
-// the real detached-host protocol, whose listener survives its child's exit.
 type shellReconcileStore struct {
 	shellterm.Store
 	records []shellterm.ShellTerminalRecord
@@ -93,7 +91,6 @@ func TestShellReconciliationClosesHostAfterChildExit(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			isolateRegistry(t)
 			hosts := map[string]*inProcHost{}
-			// This host runs inside the test. Never give Destroy a real PID.
 			rt := New(Options{Spawner: fakeSpawnerFor(t, hosts, deadPID())})
 			ctx := context.Background()
 			handle, err := rt.Create(ctx, ports.RuntimeConfig{

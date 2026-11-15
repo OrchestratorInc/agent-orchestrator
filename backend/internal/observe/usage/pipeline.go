@@ -14,8 +14,6 @@ const (
 
 type watcherFactory func(context.Context, []string) (transcriptWatcher, error)
 
-// Pipeline supervises the event-driven transcript watcher and coordinator.
-// Durable cursors remain in SQLite, so recreating either component is safe.
 type Pipeline struct {
 	store       coordinatorStore
 	ingestor    sourceIngestor
@@ -29,7 +27,6 @@ type Pipeline struct {
 	live        atomic.Pointer[Coordinator]
 }
 
-// NewPipeline constructs a supervised usage collection pipeline.
 func NewPipeline(
 	store coordinatorStore,
 	ingestor sourceIngestor,
@@ -55,7 +52,6 @@ func NewPipeline(
 	}
 }
 
-// NotifySourcesChanged requests bounded discovery.
 func (p *Pipeline) NotifySourcesChanged() {
 	select {
 	case p.reconcile <- struct{}{}:
@@ -63,8 +59,6 @@ func (p *Pipeline) NotifySourcesChanged() {
 	}
 }
 
-// NotifyInventoryChanged records newly registered sources without scanning
-// provider roots.
 func (p *Pipeline) NotifyInventoryChanged() {
 	select {
 	case p.inventory <- struct{}{}:
@@ -72,7 +66,6 @@ func (p *Pipeline) NotifyInventoryChanged() {
 	}
 }
 
-// Flush ingests unread usage changes before a read, waiting at most flushWait.
 func (p *Pipeline) Flush(ctx context.Context) {
 	if p == nil {
 		return
@@ -86,8 +79,6 @@ func (p *Pipeline) Flush(ctx context.Context) {
 	coordinator.Flush(ctx)
 }
 
-// Start runs until ctx is canceled, recreating a failed watcher after a bounded
-// delay. The returned channel closes after the active coordinator has stopped.
 func (p *Pipeline) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {

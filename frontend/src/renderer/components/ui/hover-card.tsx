@@ -29,10 +29,6 @@ function HoverCardContent({
 	...props
 }: React.ComponentProps<typeof HoverCardPrimitive.Content> & {
 	portalContainer?: React.ComponentProps<typeof HoverCardPrimitive.Portal>["container"];
-	/**
-	 * "full" fades and zooms in and out. "enter" fades and slides in only, so
-	 * closing is instant. "none" appears and disappears instantly.
-	 */
 	animation?: "full" | "enter" | "none";
 }) {
 	return (

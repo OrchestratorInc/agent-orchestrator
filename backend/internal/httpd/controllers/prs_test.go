@@ -99,8 +99,6 @@ func newPRTestServer(t *testing.T, svc prsvc.ActionManager) *httptest.Server {
 
 const validMergeBody = `{"prUrl":"https://github.com/acme/widgets/pull/42","expectedHeadSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 
-// ---- Nil service → 503 SCM_NOT_CONFIGURED ----
-
 func TestPRsRoutes_NilService_MergeReturns501(t *testing.T) {
 	srv := newPRTestServer(t, nil)
 	body, status, headers := doRequest(t, srv, "POST", "/api/v1/prs/1/merge", "")
@@ -114,8 +112,6 @@ func TestPRsRoutes_NilService_ResolveCommentsReturns501(t *testing.T) {
 	assertJSON(t, headers)
 	assertErrorCode(t, body, status, http.StatusNotImplemented, "NOT_IMPLEMENTED")
 }
-
-// ---- Merge: 200 ----
 
 func TestPRsRoutes_Merge_200(t *testing.T) {
 	stateChangedAt := time.Date(2026, 10, 19, 11, 6, 22, 0, time.UTC)
@@ -143,7 +139,6 @@ func TestPRsRoutes_Merge_200(t *testing.T) {
 	if svc.mergeRequest.PRID != "42" || svc.mergeRequest.PRURL != "https://github.com/acme/widgets/pull/42" || svc.mergeRequest.ExpectedHeadSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("merge request = %#v", svc.mergeRequest)
 	}
-	// The CLI's merge doesn't ask to treat no checks as passing; the PR view's does.
 	if svc.mergeRequest.AllowNoChecks {
 		t.Fatal("a merge that doesn't ask must not allow no checks")
 	}
@@ -152,8 +147,6 @@ func TestPRsRoutes_Merge_200(t *testing.T) {
 		t.Fatalf("status = %d, request = %#v", status, svc.mergeRequest)
 	}
 }
-
-// ---- Merge: 404 ----
 
 func TestPRsRoutes_Merge_404(t *testing.T) {
 	svc := &fakePRService{mergeErr: prsvc.ErrPRNotFound}
@@ -164,8 +157,6 @@ func TestPRsRoutes_Merge_404(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusNotFound, "PR_NOT_FOUND")
 }
 
-// ---- Merge: 409 ----
-
 func TestPRsRoutes_Merge_409(t *testing.T) {
 	svc := &fakePRService{mergeErr: prsvc.ErrPRNotMergeable}
 	srv := newPRTestServer(t, svc)
@@ -175,8 +166,6 @@ func TestPRsRoutes_Merge_409(t *testing.T) {
 	assertErrorCode(t, body, status, http.StatusConflict, "PR_NOT_MERGEABLE")
 }
 
-// ---- Merge: 422 ----
-
 func TestPRsRoutes_Merge_422(t *testing.T) {
 	svc := &fakePRService{mergeErr: prsvc.ErrPRPreconditions}
 	srv := newPRTestServer(t, svc)
@@ -185,8 +174,6 @@ func TestPRsRoutes_Merge_422(t *testing.T) {
 	assertJSON(t, headers)
 	assertErrorCode(t, body, status, http.StatusUnprocessableEntity, "PR_PRECONDITIONS_UNMET")
 }
-
-// ---- ResolveComments: 200 ----
 
 func TestPRsRoutes_ResolveComments_200(t *testing.T) {
 	svc := &fakePRService{resolveResult: prsvc.ResolveResult{Resolved: 3}}
@@ -216,8 +203,6 @@ func TestPRsRoutes_ResolveComments_200_NoBody(t *testing.T) {
 	}
 }
 
-// ---- ResolveComments: 404 ----
-
 func TestPRsRoutes_ResolveComments_404(t *testing.T) {
 	svc := &fakePRService{resolveErr: prsvc.ErrPRNotFound}
 	srv := newPRTestServer(t, svc)
@@ -226,8 +211,6 @@ func TestPRsRoutes_ResolveComments_404(t *testing.T) {
 	assertJSON(t, headers)
 	assertErrorCode(t, body, status, http.StatusNotFound, "PR_NOT_FOUND")
 }
-
-// ---- ResolveComments: 422 ----
 
 func TestPRsRoutes_ResolveComments_422(t *testing.T) {
 	svc := &fakePRService{resolveErr: prsvc.ErrNothingToResolve}

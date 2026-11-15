@@ -11,8 +11,6 @@ describe("apply-initial-theme", () => {
 	});
 
 	it("sends the stored theme preference to main before the shell mounts", async () => {
-		// The vibrancy material follows nativeTheme, so the startup loader needs
-		// main to know the app theme before the shell's own theme effect runs.
 		window.localStorage.setItem(themeStorageKey, "light");
 		const setTheme = vi.spyOn(aoBridge.theme, "set");
 

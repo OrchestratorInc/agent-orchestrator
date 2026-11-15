@@ -13,12 +13,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// skills serves the named skills this session's provider will accept.
-//
-// A driver that cannot enumerate them answers 200 with an empty list, matching
-// how the model catalog reports "no choice here". The composer keys its slash menu
-// off an empty list, so an error would leave `/` behaving as though the feature
-// were broken rather than absent.
 func (c *ConversationsController) skills(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/conversation/skills")
@@ -46,8 +40,6 @@ func conversationSkillsResponse(skills []ports.ChatSkill) ConversationSkillsResp
 	for _, skill := range skills {
 		display := skill.DisplayName
 		if display == "" {
-			// A skill with no label still has to render, and its own name is the
-			// honest fallback.
 			display = skill.Name
 		}
 		out.Skills = append(out.Skills, ConversationSkillResponse{

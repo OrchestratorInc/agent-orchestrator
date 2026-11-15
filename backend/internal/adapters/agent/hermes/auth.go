@@ -21,9 +21,6 @@ var (
 	_ ports.AgentAuthDiagnosticsChecker = (*Plugin)(nil)
 )
 
-// hermesCredentialEnv are the inference-provider keys Hermes reads (its
-// cli-config.yaml.example provider list). Tool and messaging tokens, such as
-// TELEGRAM_BOT_TOKEN or a web-search key, are not model credentials.
 var hermesCredentialEnv = []string{
 	"OPENROUTER_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
 	"ZAI_API_KEY", "GLM_API_KEY", "KIMI_API_KEY", "MINIMAX_API_KEY", "MINIMAX_CN_API_KEY", "XAI_API_KEY",
@@ -31,16 +28,11 @@ var hermesCredentialEnv = []string{
 	"DEEPINFRA_API_KEY", "KILOCODE_API_KEY", "AI_GATEWAY_API_KEY", "GITHUB_TOKEN",
 }
 
-// AuthStatus implements the scoped native adapter contract.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	status, _, _, err := p.AuthStatusWithDiagnostics(ctx)
 	return status, err
 }
 
-// AuthStatusWithDiagnostics asks Hermes which provider it resolves. Hermes has
-// status inventory cannot verify credentials or prove one is missing. A resolved
-// Z.AI route is verified against its selected endpoint; unsupported or inconclusive
-// routes retain the credential-presence result.
 func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -71,13 +63,6 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	return verifyAuthentication(ctx, ports.AgentAuthStatusConfigured, identity, steps)
 }
 
-// providerFromStatus reads `hermes status`. Its "Provider:" row is a display
-// label that falls back to the requested provider even without credentials,
-// so only the "Providers:" row of connected credentials is evidence. That row
-// is not a complete inventory: it omits keyless local routes (LM Studio,
-// Actual Computer, custom endpoints) and SDK credential chains such as an AWS
-// profile, so an empty or non-matching row stays unresolved and the
-// credential stores then decide.
 func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 	selected, connected := "", []string(nil)
 	for _, line := range strings.Split(output, "\n") {
@@ -90,7 +75,6 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 		case "Provider":
 			selected = value
 		case "Providers":
-			// "unknown" means Hermes's own inventory probe failed.
 			if lower := strings.ToLower(value); value == "" || lower == "unknown" || strings.HasPrefix(lower, "none") || lower == "(none)" {
 				continue
 			}
@@ -113,15 +97,11 @@ func providerFromStatus(output string) (string, ports.AgentAuthStatus) {
 	return "", ports.AgentAuthStatusUnknown
 }
 
-// credentialStoreIdentity finds a credential in AO's environment, then Hermes's
-// <HERMES_HOME>/.env (API keys) or auth.json (OAuth). Values are never read out.
 func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, bool) {
 	home, err := ResolveHome(nil)
 	if err != nil {
 		return domain.AgentAccountIdentity{}, false
 	}
-	// A key that a dotenv layer Hermes loads with override assigns, even to
-	// empty, replaces the one AO's environment would pass down.
 	if assigned, known := overridingAssignments(home); known {
 		inherited := slices.DeleteFunc(slices.Clone(hermesCredentialEnv), func(name string) bool {
 			_, ok := assigned[processEnvName(name)]
@@ -140,11 +120,6 @@ func credentialStoreIdentity(ctx context.Context) (domain.AgentAccountIdentity, 
 	return domain.AgentAccountIdentity{}, false
 }
 
-// overridingAssignments collects the names set by the dotenv layers Hermes
-// loads with override (env_loader.load_hermes_dotenv): <HERMES_HOME>/.env
-// when it exists, otherwise the source checkout's project .env, and then any
-// managed scope's .env. known is false when a layer cannot be read the way
-// Hermes reads it, so no inherited key can be trusted.
 func overridingAssignments(home string) (assigned map[string]string, known bool) {
 	assigned = map[string]string{}
 	layers := []string{filepath.Join(home, ".env")}
@@ -160,8 +135,6 @@ func overridingAssignments(home string) (assigned map[string]string, known bool)
 			layers = append(layers, filepath.Join(managed, ".env"))
 		}
 	}
-	// Each layer resolves ${VAR} against the process environment as earlier
-	// layers left it.
 	lookup := func(name string) (string, bool) {
 		if value, ok := assigned[processEnvName(name)]; ok {
 			return value, true
@@ -178,8 +151,6 @@ func overridingAssignments(home string) (assigned map[string]string, known bool)
 	return assigned, true
 }
 
-// envFileHasCredential reads the value Hermes ends up with: a later empty
-// assignment clears an earlier key, and a blank value is no key.
 func envFileHasCredential(path string) bool {
 	bindings, _ := dotenvBindings(path)
 	env := dotenvEnvironment(bindings, os.LookupEnv)
@@ -191,11 +162,6 @@ func envFileHasCredential(path string) bool {
 	return false
 }
 
-// authFileHasCredential looks for a secret held in Hermes's auth store: a
-// token or key in a provider state or credential-pool entry. Hermes keeps a
-// provider's empty pool list after its last credential is removed, and keeps
-// secret-free references to borrowed environment keys, which it never uses
-// once that key is gone. Older stores held provider states at the top level.
 func authFileHasCredential(path string) bool {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -224,8 +190,6 @@ func authFileHasCredential(path string) bool {
 	return false
 }
 
-// holdsSecret reports whether a stored record carries a non-blank token or
-// key field, such as access_token, refresh_token or api_key.
 func holdsSecret(record any) bool {
 	fields, _ := record.(map[string]any)
 	for name, value := range fields {

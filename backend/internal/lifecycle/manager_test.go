@@ -316,13 +316,6 @@ func working(id domain.SessionID) domain.SessionRecord {
 	}
 }
 
-// exited seeds a session whose agent has genuinely QUIESCED (ActivityExited) —
-// the agent came down and is provably resting/idle, not mid-climb. This is the
-// fixture the merged-PR termination contract is meant to be exercised against:
-// flag-termination of a session is legitimate only when the agent has actually
-// stopped working (quiesced), NOT while it is still ActivityActive (#2879).
-// Here the merged lane's sessionComplete must still terminate an agent that
-// merged its PR and then genuinely exited.
 func exited(id domain.SessionID) domain.SessionRecord {
 	rec := working(id)
 	rec.Activity = domain.Activity{State: domain.ActivityExited, LastActivityAt: time.Now()}
@@ -649,10 +642,6 @@ func TestRuntimeObservation_AliveWorkloadCannotResurrectExitedSession(t *testing
 	}
 }
 
-// ExitAgent destroys a terminal on purpose and keeps the session; Resume
-// builds a new one. That runtime's death must leave the session live. A release
-// names one launch only: a later launch that dies after its agent exited is a
-// crash like any other (the exit hook can win the race with the reaper).
 func TestRuntimeObservation_ReleasedRuntimeDeathKeepsSessionLive(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -840,9 +829,6 @@ func TestActivity_MixedHumanPromptKeepsSemanticReceiptAfterCheckpointOverwrite(t
 	}
 }
 
-// Acceptance needs a runtime launch and a store that can record it. Without
-// either, the prompt's activity projection still applies, as before acceptance
-// was recorded at all.
 func TestActivity_CoordinationIDWithoutAcceptanceStillProjectsActivity(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
@@ -1043,7 +1029,7 @@ func TestActivity_TerminalReconciliationRequiresUnchangedSnapshot(t *testing.T) 
 func TestActivity_RepeatedUserPromptFencesTerminalReconciliation(t *testing.T) {
 	m, st, _ := newManager()
 	before := time.Unix(100, 0).UTC()
-	after := before // Session writes need not move the wall-clock timestamp.
+	after := before
 	m.clock = func() time.Time { return after }
 	rec := working("mer-1")
 	rec.FirstSignalAt = before
@@ -1426,9 +1412,6 @@ func TestActivity_MainPromptWithoutTextInvalidatesPriorConversationCheckpoint(t 
 	rec.Metadata.ConversationCheckpointNativeID = "native-current"
 	store.sessions[rec.ID] = rec
 
-	// The event boundary is authoritative even when a provider omits the prompt
-	// text. Retaining the previous completed pair would make it look like the new
-	// turn never started and could permanently gate replay on stale history.
 	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit",
 		LaunchID: "launch-current", AgentSessionID: "native-current",
@@ -1461,9 +1444,6 @@ func TestActivity_CoordinationPromptFollowedByPromptlessStopDoesNotAdvanceCheckp
 	rec.Metadata.ConversationCheckpointNativeID = "native-1"
 	store.sessions[rec.ID] = rec
 
-	// The hook client recognizes AO's continuation kickoff and therefore omits
-	// its text. Lifecycle must still carry that ineligible turn boundary across
-	// to the provider's later Stop, which need not echo the prompt.
 	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit",
 		LaunchID: "terminal-generation", AgentSessionID: "native-1",
@@ -1507,10 +1487,6 @@ func TestActivity_StopWithoutCurrentPromptNeverPairsWithPriorTurn(t *testing.T) 
 	rec.Metadata.ConversationCheckpointNativeID = "native-current"
 	store.sessions[rec.ID] = rec
 
-	// The current turn's UserPromptSubmit was lost. Stop must not combine its
-	// assistant with the only prompt AO has, which belongs to the prior turn. The
-	// older coherent checkpoint stays intact while a hard unresolved-boundary
-	// witness records that replay cannot safely stop there.
 	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityIdle, Event: "stop",
 		LaunchID: "launch-current", AgentSessionID: "native-current",
@@ -1615,11 +1591,6 @@ func TestActivity_NewNativeConversationClearsPriorConversationCheckpoint(t *test
 	}
 }
 
-// TestActivity_OpenCodeParentOnlyTrafficPreservesNativeIdentity pins the
-// plugin-side child filter from the lifecycle side: the OpenCode plugins forward
-// only parent-session events, so folded subagent activity must never move the
-// persisted native id (the restore handle) or reset the parent conversation
-// checkpoint. A child id arriving here would be a plugin regression.
 func TestActivity_OpenCodeParentOnlyTrafficPreservesNativeIdentity(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{domain.HarnessOpenCode, domain.HarnessOpenCodeV2} {
 		t.Run(string(harness), func(t *testing.T) {
@@ -1667,10 +1638,6 @@ func TestActivity_NewRuntimeLaunchClearsPriorConversationCheckpoint(t *testing.T
 	rec.Metadata.ConversationCheckpointUnsettled = true
 	store.sessions[rec.ID] = rec
 
-	// A SessionStart hook proves that this native conversation belongs to the
-	// current runtime launch, but it carries no main-turn checkpoint of its own.
-	// Text observed under the prior launch must not become a hard replay gate for
-	// an interface switch from this launch.
 	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Event: "session-start", LaunchID: "launch-current", AgentSessionID: "native-current",
 	}); err != nil {
@@ -1745,9 +1712,6 @@ func TestActivity_NewCheckpointEpochKeepsLastHumanTimeMonotonic(t *testing.T) {
 				got.Metadata.ConversationCheckpointNativeID != "native-current" {
 				t.Fatalf("current owner did not establish an independent checkpoint with monotonic human time: %+v", got.Metadata)
 			}
-			// The retained time is a session-wide high-water mark, not this
-			// owner's clock. A later prompt below it is ordering-ambiguous and
-			// its Stop must not validate the previous prompt with a new answer.
 			for _, signal := range []ports.ActivitySignal{
 				{Valid: true, State: domain.ActivityActive, Event: "user-prompt-submit",
 					LaunchID: "launch-current", AgentSessionID: "native-current",
@@ -1809,9 +1773,6 @@ func TestActivity_UntaggedTUIHookCannotMutateLaunchedRuntime(t *testing.T) {
 	rec.Metadata.ConversationCheckpointNativeID = "native-current"
 	store.sessions[rec.ID] = rec
 
-	// Once a runtime launch owns the TUI session, an untagged legacy callback
-	// cannot prove that it belongs to that generation. A delayed callback from a
-	// prior launch must therefore be ignored in its entirety.
 	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityIdle, Event: "stop",
 		AgentSessionID: "native-old", LatestAssistantUpdate: "late untagged answer",
@@ -1834,11 +1795,6 @@ func TestActivity_SideHeadlessClaudeRunCannotHijackTUIIdentity(t *testing.T) {
 	rec.Metadata.NativeTranscriptPath = "/claude/projects/wt/native-main.jsonl"
 	store.sessions[rec.ID] = rec
 
-	// A summarizer's `claude -p` in the same worktree inherits AO_SESSION_ID and
-	// the current AO_RUNTIME_LAUNCH_ID, so the generation fence accepts it. Its
-	// sdk-cli entrypoint proves it is not the interactive runtime AO launched:
-	// its identity must not replace the main conversation and its SessionEnd
-	// must not mark the live session exited (#6454).
 	side := []ports.ActivitySignal{
 		{Event: "session-start", LaunchID: "launch-current", AgentSessionID: "native-side",
 			TranscriptPath: "/claude/projects/wt/native-side.jsonl", NativeEntrypoint: "sdk-cli"},
@@ -1859,7 +1815,6 @@ func TestActivity_SideHeadlessClaudeRunCannotHijackTUIIdentity(t *testing.T) {
 		t.Fatalf("headless side run mutated TUI session: got %+v, want %+v", got, rec)
 	}
 
-	// The interactive runtime's own hooks keep their existing semantics.
 	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
 		Valid: true, State: domain.ActivityIdle, Event: "stop", LaunchID: "launch-current",
 		AgentSessionID: "native-main-cleared", NativeEntrypoint: "cli", Timestamp: time.Now().Add(2 * time.Hour),
@@ -2159,8 +2114,6 @@ func TestMarkSpawnedPersistsAndPreservesDiffBase(t *testing.T) {
 		t.Fatalf("spawn diff base = sha:%q ref:%q, want sha:%q ref:%q", got.DiffBaseSHA, got.DiffBaseRef, wantSHA, wantRef)
 	}
 
-	// Restore does not recompute the base. Empty incoming values must preserve
-	// the durable comparison metadata recorded by the initial spawn.
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{
 		WorkspacePath:   "/ws",
 		RuntimeHandleID: "h2",
@@ -2278,10 +2231,6 @@ func TestCommitControllerEpochAllowsExplicitFreshHandoff(t *testing.T) {
 	}
 }
 
-// TestMarkSpawned_StampsUTCActivity locks the lifecycle clock to UTC so
-// activity-driven timestamps match the session manager's spawn timestamps. A
-// local clock here left `ao session get` showing created in UTC but updated in
-// local time.
 func TestMarkSpawned_StampsUTCActivity(t *testing.T) {
 	m, st, _ := newManager()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true}
@@ -2498,12 +2447,9 @@ func TestPRObservation_PRAuthorRepliesAreNotInjected(t *testing.T) {
 	st.prs["mer-1"] = []domain.PullRequest{{URL: "pr1", Author: "worker-account"}}
 	st.comments["pr1"] = []domain.PullRequestComment{
 		{ID: "r1", ThreadID: "T1", Author: "coderabbitai[bot]", IsBot: true, File: "a.go", Line: 3, Body: "merge the buckets", AutoInjectReview: true},
-		// The worker answering, with the PR author's account.
 		{ID: "r2", ThreadID: "T1", Author: "@Worker-Account", File: "a.go", Line: 3, Body: "Fixed in abc123.", AutoInjectReview: true},
 		{ID: "r3", ThreadID: "T1", Author: "alice", File: "a.go", Line: 3, Body: "not quite, keep both links", AutoInjectReview: true},
-		// The author reviewing their own PR still reaches the worker.
 		{ID: "a1", ThreadID: "T2", Author: "worker-account", File: "b.go", Line: 9, Body: "rename this helper", AutoInjectReview: true},
-		// An app named after the author is someone else.
 		{ID: "b1", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot feedback", AutoInjectReview: true},
 		{ID: "b2", ThreadID: "T3", Author: "worker-account[bot]", IsBot: true, File: "c.go", Line: 1, Body: "bot follow-up", AutoInjectReview: true},
 	}
@@ -2588,8 +2534,6 @@ func TestPRObservation_CIFailingAndReviewBothNudge(t *testing.T) {
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
 	}
-	// Both actionable items fire — neither is suppressed by the other — in queue
-	// order (CI first, then review).
 	if len(msg.msgs) != 2 {
 		t.Fatalf("want CI and review nudges, got %d: %v", len(msg.msgs), msg.msgs)
 	}
@@ -2599,7 +2543,6 @@ func TestPRObservation_CIFailingAndReviewBothNudge(t *testing.T) {
 	if !strings.Contains(msg.msgs[1], "fix this") {
 		t.Fatalf("second nudge should carry the review feedback, got %q", msg.msgs[1])
 	}
-	// Re-observing the identical state re-nudges nothing: per-item dedup is intact.
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
 	}
@@ -2608,11 +2551,6 @@ func TestPRObservation_CIFailingAndReviewBothNudge(t *testing.T) {
 	}
 }
 
-// A failed parent-stack lookup (the store read behind the merge-conflict
-// exemption) must not discard the CI/review nudges already queued for the same
-// PR. Only the merge-conflict nudge is skipped this cycle; CI and review still
-// send, the read error still surfaces so the observer logs and re-polls, and the
-// merge-conflict nudge fires once the read recovers.
 func TestPRObservation_MergeConflictReadErrorStillSendsCIAndReview(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -2629,8 +2567,6 @@ func TestPRObservation_MergeConflictReadErrorStillSendsCIAndReview(t *testing.T)
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err == nil {
 		t.Fatal("want the deferred parent-stack read error surfaced")
 	}
-	// CI and review still fired despite the merge-conflict lookup failing; the
-	// merge-conflict nudge itself is skipped this cycle.
 	if len(msg.msgs) != 2 {
 		t.Fatalf("want CI and review nudges sent, got %d: %v", len(msg.msgs), msg.msgs)
 	}
@@ -2646,8 +2582,6 @@ func TestPRObservation_MergeConflictReadErrorStillSendsCIAndReview(t *testing.T)
 		}
 	}
 
-	// Next poll, the read recovers: the merge-conflict nudge now fires while
-	// CI/review stay deduped (their signatures persisted before the error).
 	st.listPRsErr = nil
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
@@ -2663,8 +2597,6 @@ func TestPRObservation_MergeConflictReadErrorStillSendsCIAndReview(t *testing.T)
 func TestPRObservation_CINudgeSanitizesLogTailControlChars(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
-	// A CI log tail with an embedded ANSI escape sequence and a NUL byte; the
-	// agent's pane must receive the visible text without the control bytes.
 	o := ports.PRObservation{Fetched: true, URL: "pr1", CI: domain.CIFailing, Checks: []ports.PRCheckObservation{{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, LogTail: "line1\x1b[2Jline2\x00\ttabbed"}}}
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
@@ -2801,9 +2733,6 @@ func TestPRObservation_MergeConflictNudgesAgent(t *testing.T) {
 	}
 }
 
-// TestPRObservation_CISwitchOffSilencesMergeConflict: the "Automatically fix
-// CI failures" switch also covers merge conflicts, so a session reviewing
-// someone else's PR with it off is never told to rebase that PR.
 func TestPRObservation_CISwitchOffSilencesMergeConflict(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -2816,7 +2745,6 @@ func TestPRObservation_CISwitchOffSilencesMergeConflict(t *testing.T) {
 		t.Fatalf("CI switch is off; want no merge-conflict nudge, got %v", msg.msgs)
 	}
 
-	// Turning the switch back on (taking the PR over) brings the nudge back.
 	st.prPolicies["pr1"] = true
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
@@ -2826,15 +2754,7 @@ func TestPRObservation_CISwitchOffSilencesMergeConflict(t *testing.T) {
 	}
 }
 
-// TestPRObservation_MergeConflictReArmsAfterConflictClears is the regression
-// test for #4528: AO notified on the first conflict but never again, because
-// the "merge-conflict:<url>" = "conflicting" signature sendOnce persists was
-// never cleared. A PR rebased clean and then made conflicting again by a
-// base-branch advance was silently swallowed as a duplicate.
 func TestPRObservation_MergeConflictReArmsAfterConflictClears(t *testing.T) {
-	// Every state that definitively rules a conflict out must re-arm; `blocked`
-	// is deliberately excluded because the observer synthesizes it from
-	// draft/CI/review facts even while provider mergeability is unknown.
 	for _, clear := range []domain.Mergeability{domain.MergeMergeable, domain.MergeUnstable} {
 		t.Run(string(clear), func(t *testing.T) {
 			m, st, msg := newManager()
@@ -2860,9 +2780,6 @@ func TestPRObservation_MergeConflictReArmsAfterConflictClears(t *testing.T) {
 	}
 }
 
-// TestPRObservation_ConsecutiveMergeConflictsStayDeduplicated pins the other
-// half of #4528: the re-arm must not weaken the dedup that stops an unchanged
-// conflict from re-nudging on every poll.
 func TestPRObservation_ConsecutiveMergeConflictsStayDeduplicated(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -2876,10 +2793,6 @@ func TestPRObservation_ConsecutiveMergeConflictsStayDeduplicated(t *testing.T) {
 	}
 }
 
-// TestPRObservation_UnknownMergeabilityDoesNotReArm keeps the re-arm off the
-// transient GitHub reports while it recomputes mergeability after a push or a
-// retarget. Treating unknown as "conflict resolved" would re-nudge on every
-// unknown → conflicting flap of a conflict that never went away.
 func TestPRObservation_UnknownMergeabilityDoesNotReArm(t *testing.T) {
 	for _, transient := range []domain.Mergeability{domain.MergeUnknown, domain.MergeBlocked, ""} {
 		t.Run(string(transient), func(t *testing.T) {
@@ -2897,10 +2810,6 @@ func TestPRObservation_UnknownMergeabilityDoesNotReArm(t *testing.T) {
 	}
 }
 
-// TestPRObservation_MergeConflictDedupSurvivesRestart covers both persistence
-// directions of #4528 across a daemon restart, simulated by a fresh Manager
-// over the same store: an unchanged conflict must stay quiet, and a conflict
-// that cleared before the restart must be free to nudge again.
 func TestPRObservation_MergeConflictDedupSurvivesRestart(t *testing.T) {
 	conflicting := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
 
@@ -2942,9 +2851,6 @@ func TestPRObservation_MergeConflictDedupSurvivesRestart(t *testing.T) {
 	})
 }
 
-// TestPRObservation_ReArmLeavesOtherDedupEntriesIntact guards the blast radius
-// of the re-arm: it must delete only this PR's merge-conflict key, so a
-// resolved conflict cannot replay the CI-failure nudge the same PR row holds.
 func TestPRObservation_ReArmLeavesOtherDedupEntriesIntact(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -2971,9 +2877,6 @@ func TestPRObservation_ReArmLeavesOtherDedupEntriesIntact(t *testing.T) {
 	}
 }
 
-// TestPRObservation_ReArmSkipsStoreWriteWhenNothingArmed keeps a steadily
-// mergeable PR off the write path: the re-arm persists only when it actually
-// cleared an entry, so routine polls do not rewrite an unchanged payload.
 func TestPRObservation_ReArmSkipsStoreWriteWhenNothingArmed(t *testing.T) {
 	m, st, _ := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -2987,12 +2890,6 @@ func TestPRObservation_ReArmSkipsStoreWriteWhenNothingArmed(t *testing.T) {
 	}
 }
 
-// TestPRObservation_ReArmRetriesAfterFailedPersist covers the failure ->
-// successful observation -> restart -> conflict path. The re-arm's in-memory
-// delete stands even when the durable write fails, so a naive implementation
-// would see nothing armed on the next mergeable observation, take the early
-// return, and never retry — leaving the stale "conflicting" signature on disk
-// to suppress the nudge after a restart, recreating #4528.
 func TestPRObservation_ReArmRetriesAfterFailedPersist(t *testing.T) {
 	conflicting := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
 	mergeable := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeMergeable}
@@ -3009,8 +2906,6 @@ func TestPRObservation_ReArmRetriesAfterFailedPersist(t *testing.T) {
 		t.Fatal("a failed re-arm persist should surface to the observer")
 	}
 
-	// Persistence recovers. The next non-conflicting observation must retry the
-	// durable write rather than short-circuit on the now-empty in-memory maps.
 	st.signatureWriteErr = nil
 	if err := m.ApplyPRObservation(ctx, "mer-1", mergeable); err != nil {
 		t.Fatal(err)
@@ -3025,10 +2920,6 @@ func TestPRObservation_ReArmRetriesAfterFailedPersist(t *testing.T) {
 	}
 }
 
-// TestPRObservation_ReArmStillNudgesInProcessAfterFailedPersist pins the other
-// half of the retry contract: the failed persist must not roll the in-memory
-// re-arm back, or a conflict returning before the write succeeds would be
-// deduplicated away inside the running daemon.
 func TestPRObservation_ReArmStillNudgesInProcessAfterFailedPersist(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -3051,9 +2942,6 @@ func TestPRObservation_ReArmStillNudgesInProcessAfterFailedPersist(t *testing.T)
 	}
 }
 
-// TestPRObservation_ReArmStoreFailureSurfacesWithoutLosingNudges checks the
-// deferred-error contract: a failed re-arm persist is reported, but only after
-// the independent CI nudge queued in the same observation has been sent.
 func TestPRObservation_ReArmStoreFailureSurfacesWithoutLosingNudges(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -3091,13 +2979,6 @@ func TestPRObservation_ExitedAgentIsNotNudged(t *testing.T) {
 	}
 }
 
-// TestPRObservation_ReArmClearsConflictWhileSessionExited is the regression
-// test for the delivery-gate finding: a definitively-cleared observation must
-// re-arm the merge-conflict dedup even when it arrives while the session is
-// exited. Exited sessions are still polled, so the sequence
-// conflicting -> exit -> mergeable -> restore -> conflicting must nudge on the
-// final conflict; a re-arm placed behind the dead-session return would skip the
-// clear and let the stale "conflicting" signature swallow the recurrence.
 func TestPRObservation_ReArmClearsConflictWhileSessionExited(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -3111,8 +2992,6 @@ func TestPRObservation_ReArmClearsConflictWhileSessionExited(t *testing.T) {
 		t.Fatalf("first conflict should nudge, got %v", msg.msgs)
 	}
 
-	// The agent exits, then the PR is observed mergeable while exited. No nudge
-	// is delivered (nowhere to write), but the re-arm bookkeeping must still run.
 	exited := working("mer-1")
 	exited.Activity.State = domain.ActivityExited
 	st.sessions["mer-1"] = exited
@@ -3123,8 +3002,6 @@ func TestPRObservation_ReArmClearsConflictWhileSessionExited(t *testing.T) {
 		t.Fatalf("mergeable-while-exited must deliver nothing, got %v", msg.msgs)
 	}
 
-	// The agent is restored and the base advances into a fresh conflict. The
-	// re-arm during the exited window must let this recurrence nudge again.
 	st.sessions["mer-1"] = working("mer-1")
 	if err := m.ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
 		t.Fatal(err)
@@ -3134,12 +3011,6 @@ func TestPRObservation_ReArmClearsConflictWhileSessionExited(t *testing.T) {
 	}
 }
 
-// TestPRObservation_ReArmClearsConflictSurvivesTerminatedRestore covers the
-// terminated variant of the same hazard: a terminated session is excluded from
-// polling, so the clear typically arrives on the first observation after
-// restore. The re-arm still runs ahead of the dead-session return, so even a
-// clear observed in the terminated window (before restore is reflected) drops
-// the stale signature and a later conflict nudges again.
 func TestPRObservation_ReArmClearsConflictSurvivesTerminatedRestore(t *testing.T) {
 	conflicting := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeConflicting}
 	mergeable := ports.PRObservation{Fetched: true, URL: "pr1", Mergeability: domain.MergeMergeable}
@@ -3150,8 +3021,6 @@ func TestPRObservation_ReArmClearsConflictSurvivesTerminatedRestore(t *testing.T
 		t.Fatal(err)
 	}
 
-	// Session terminates; a mergeable observation lands before restore. It must
-	// re-arm despite the terminated gate returning before any delivery.
 	terminated := working("mer-1")
 	terminated.IsTerminated = true
 	st.sessions["mer-1"] = terminated
@@ -3162,8 +3031,6 @@ func TestPRObservation_ReArmClearsConflictSurvivesTerminatedRestore(t *testing.T
 		t.Fatalf("mergeable-while-terminated must deliver nothing, got %v", msg.msgs)
 	}
 
-	// Restored, then a fresh conflict: the re-arm during the terminated window
-	// must let it nudge again rather than dedup against the stale signature.
 	st.sessions["mer-1"] = working("mer-1")
 	if err := m.ApplyPRObservation(ctx, "mer-1", conflicting); err != nil {
 		t.Fatal(err)
@@ -3173,17 +3040,6 @@ func TestPRObservation_ReArmClearsConflictSurvivesTerminatedRestore(t *testing.T
 	}
 }
 
-// TestPRObservation_MergeConflictReachesNeedsInputSession is the regression
-// test for #2173: a session parked awaiting the human (waiting_input) must
-// still receive a merge-conflict nudge, because the human sitting at that
-// prompt may be exactly who needs to act (rebase it themselves, or redirect
-// the agent) — unlike CI-failure/review-feedback nudges, which only the agent
-// can act on and which correctly wait for it to resume (see the sibling test
-// below). Two states are still refused: a session blocked on a live permission
-// dialog, and a waiting_input session on a harness that cannot prove that
-// prompt is a genuine idle composer rather than a masked permission decision
-// (codex maps permission-request to waiting_input) — the harness-aware gate the
-// urgent route consults, so an unsolicited paste never answers a hidden dialog.
 func TestPRObservation_MergeConflictReachesNeedsInputSession(t *testing.T) {
 	const safeHarness = domain.AgentHarness("claude-code")
 	const ambiguousHarness = domain.AgentHarness("codex")
@@ -3221,10 +3077,6 @@ func TestPRObservation_MergeConflictReachesNeedsInputSession(t *testing.T) {
 	}
 }
 
-// TestPRObservation_NeedsInputSessionStillWithholdsOtherNudges is the
-// regression guard: the needs-input gate must keep suppressing CI-failure and
-// review-feedback nudges exactly as before. Only the merge-conflict nudge
-// gets the carve-out in TestPRObservation_MergeConflictReachesNeedsInputSession.
 func TestPRObservation_NeedsInputSessionStillWithholdsOtherNudges(t *testing.T) {
 	for _, state := range []domain.ActivityState{domain.ActivityWaitingInput, domain.ActivityBlocked} {
 		t.Run(string(state), func(t *testing.T) {
@@ -3251,10 +3103,6 @@ func TestPRObservation_NeedsInputSessionStillWithholdsOtherNudges(t *testing.T) 
 	}
 }
 
-// TestPRObservation_DeadSessionGetsNoNudgesOfAnyKind sanity-checks that the
-// merge-conflict carve-out did not overreach: a genuinely dead session
-// (terminated, or its pane already exited to a shell) still gets nothing at
-// all, conflict included, since there is nowhere to deliver it.
 func TestPRObservation_DeadSessionGetsNoNudgesOfAnyKind(t *testing.T) {
 	cases := []struct {
 		name string
@@ -3350,20 +3198,11 @@ func TestPRObservation_MergedUsesConfiguredTerminator(t *testing.T) {
 	}
 }
 
-// TestPRObservation_MergedOnStillWorkingAgentDoesNotTerminate is the RED test
-// for #2879: an agent STILL CLIMBING (ActivityActive / `working`) with one PR
-// merged must NOT be flag-terminated. The merge may be PR #1 of several and
-// the agent is mid-traversal — likely about to push PR #2 in the same session.
-// Flag-terminating here (is_terminated=true, #2811) drops the session from the
-// SCM observer roster, so that follow-up PR is never attributed, never
-// enriched, never nudged. Termination must wait until the agent has actually
-// quiesced (ActivityExited or provably-idle). This test intentionally fails on
-// current code, which terminates on PR-state alone (≥1 merged ∧ none open).
 func TestPRObservation_MergedOnStillWorkingAgentDoesNotTerminate(t *testing.T) {
 	m, st, _ := newManager()
 	terminator := &fakeCompletionTerminator{}
 	m.SetCompletionTerminator(terminator)
-	rec := working("mer-1") // ActivityActive: agent is STILL climbing (#2879)
+	rec := working("mer-1")
 	rec.TerminateOnPRMerge = true
 	st.sessions["mer-1"] = rec
 	st.prs["mer-1"] = []domain.PullRequest{{URL: "pr1", Merged: true}}
@@ -3431,8 +3270,6 @@ func TestPRObservation_MergedRequiresConfiguredTerminator(t *testing.T) {
 	}
 }
 
-// A session with one merged PR and one still-open PR must NOT terminate: the
-// completion bar is "no open PR remains AND at least one merged".
 func TestPRObservation_MergedWithOpenSiblingDoesNotTerminate(t *testing.T) {
 	m, st, _ := newManager()
 	terminator := &fakeCompletionTerminator{}
@@ -3455,7 +3292,6 @@ func TestPRObservation_MergedWithOpenSiblingDoesNotTerminate(t *testing.T) {
 	}
 }
 
-// Once the last open PR merges (all PRs now merged), the session terminates.
 func TestPRObservation_LastMergeTerminatesSession(t *testing.T) {
 	m, st, _ := newManager()
 	terminator := &fakeCompletionTerminator{}
@@ -3475,9 +3311,6 @@ func TestPRObservation_LastMergeTerminatesSession(t *testing.T) {
 	}
 }
 
-// A closed PR that leaves the session with an open sibling and no merge does not
-// terminate; closing the last PR with no merge also does not terminate (nothing
-// shipped).
 func TestPRObservation_ClosedWithoutMergeDoesNotTerminate(t *testing.T) {
 	m, st, _ := newManager()
 	terminator := &fakeCompletionTerminator{}
@@ -3497,9 +3330,6 @@ func TestPRObservation_ClosedWithoutMergeDoesNotTerminate(t *testing.T) {
 	}
 }
 
-// A PR stacked on an open parent (its target branch is the parent's source
-// branch) is exempt from the merge-conflict nudge: conflicts there are expected
-// until the parent merges.
 func TestPRObservation_StackedChildConflictSuppressed(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -3516,8 +3346,6 @@ func TestPRObservation_StackedChildConflictSuppressed(t *testing.T) {
 	}
 }
 
-// The bottom-of-stack PR (not stacked on any open parent) still gets the
-// merge-conflict nudge even when it has open stacked children.
 func TestPRObservation_BottomOfStackConflictNudges(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -3534,10 +3362,6 @@ func TestPRObservation_BottomOfStackConflictNudges(t *testing.T) {
 	}
 }
 
-// TestPRObservation_DedupSurvivesManagerRestart simulates a daemon restart by
-// constructing a second Manager over the same store and asserts that an
-// identical PR observation does not re-fire the nudge — the dedup signature
-// must survive process restart, not just live in the Manager's maps.
 func TestPRObservation_DedupSurvivesManagerRestart(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = working("mer-1")
@@ -3561,9 +3385,6 @@ func TestPRObservation_DedupSurvivesManagerRestart(t *testing.T) {
 		t.Fatalf("signature was not persisted; want a non-empty JSON payload for %q", o.URL)
 	}
 
-	// Simulate daemon restart: the second Manager has no in-memory state but
-	// shares the same store, so it should hydrate seen/attempts from the
-	// persisted payload and suppress the re-send.
 	second := &fakeMessenger{}
 	m2 := New(st, second)
 	if err := m2.ApplyPRObservation(ctx, "mer-1", o); err != nil {
@@ -3573,8 +3394,6 @@ func TestPRObservation_DedupSurvivesManagerRestart(t *testing.T) {
 		t.Fatalf("post-restart manager re-nudged on identical observation, got %d msgs: %v", len(second.msgs), second.msgs)
 	}
 
-	// And a genuinely new signature (different log tail) still fires — proving
-	// the persisted state is per-signature, not a blanket "this PR was nudged".
 	o2 := o
 	o2.Checks = []ports.PRCheckObservation{{Name: "build", CommitHash: "c1", Status: domain.PRCheckFailed, LogTail: "different boom"}}
 	if err := m2.ApplyPRObservation(ctx, "mer-1", o2); err != nil {
@@ -3752,7 +3571,6 @@ func TestApplyTrackerFacts_NudgeSuppressedOnRepeat(t *testing.T) {
 		t.Fatalf("repeat observation must dedup; got %d nudges: %v", len(msg.msgs), msg.msgs)
 	}
 
-	// A genuinely new bot comment still fires.
 	o.Comments = append(o.Comments, ports.TrackerCommentObservation{ID: "bot-2", Author: "ci-bot[bot]", Body: "now check the seed", IsBot: true})
 	if err := m.ApplyTrackerFacts(ctx, "mer-1", o); err != nil {
 		t.Fatalf("third ApplyTrackerFacts: %v", err)
@@ -3765,10 +3583,6 @@ func TestApplyTrackerFacts_NudgeSuppressedOnRepeat(t *testing.T) {
 func TestApplyTrackerFacts_BotCommentWithEmptyIDIsIgnored(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
-	// Bot comment lacks an ID — without one we cannot dedup, and the
-	// zero-value signature collides with m.react.seen's empty default and
-	// would silently suppress every future nudge for this issue. The
-	// reducer must skip it entirely.
 	o := ports.TrackerObservation{
 		Fetched: true,
 		Issue:   ports.TrackerIssueObservation{URL: "https://github.com/o/r/issues/1", State: domain.IssueOpen},
@@ -3783,8 +3597,6 @@ func TestApplyTrackerFacts_BotCommentWithEmptyIDIsIgnored(t *testing.T) {
 	if len(msg.msgs) != 0 {
 		t.Fatalf("bot comment with empty ID must not nudge, got %v", msg.msgs)
 	}
-	// A subsequent, properly-formed bot comment must still nudge — the
-	// earlier empty-ID entry must not have polluted the dedup signature.
 	o.Comments = []ports.TrackerCommentObservation{
 		{ID: "bot-1", Author: "ci-bot[bot]", Body: "now with an id", IsBot: true},
 	}
@@ -3850,8 +3662,6 @@ func TestPRObservation_RetriesAfterMessengerFailure(t *testing.T) {
 func TestActivity_FirstSignalStampsReceipt(t *testing.T) {
 	m, st, _ := newManager()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()}}
-	// A same-state repeat (idle on an idle-seeded row) must still write: the
-	// receipt itself is the durable fact that clears no_signal.
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle}); err != nil {
 		t.Fatal(err)
 	}
@@ -3860,7 +3670,6 @@ func TestActivity_FirstSignalStampsReceipt(t *testing.T) {
 		t.Fatalf("first signal not stamped: %+v", got)
 	}
 	stamped := got.FirstSignalAt
-	// Later signals must not move the receipt.
 	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Timestamp: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
@@ -3970,8 +3779,6 @@ func TestActivity_WaitingInputTransitionEmitsNotification(t *testing.T) {
 	}
 }
 
-// The user answering the agent is what resolves a needs-input notification —
-// there is no manual acknowledgement anywhere in the flow.
 func TestActivity_LeavingNeedsInputResolvesNotification(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -4007,8 +3814,6 @@ func TestActivity_LeavingNeedsInputResolvesNotification(t *testing.T) {
 	}
 }
 
-// An in-family escalation is still the same pause: nothing was answered, so
-// there is nothing to resolve.
 func TestActivity_WaitingInputToBlockedDoesNotResolve(t *testing.T) {
 	st := newFakeStore()
 	sink := &fakeNotificationSink{}
@@ -4028,8 +3833,6 @@ func TestActivity_WaitingInputToBlockedDoesNotResolve(t *testing.T) {
 	}
 }
 
-// Terminating a paused session also clears its ping: nobody is waiting on the
-// user any more.
 func TestMarkTerminated_ResolvesNeedsInputNotification(t *testing.T) {
 	st := newFakeStore()
 	sink := &fakeNotificationSink{}
@@ -4083,9 +3886,6 @@ func TestActivity_BlockedTransitionEmitsNotification(t *testing.T) {
 }
 
 func TestActivity_WaitingInputToBlockedDoesNotReNotify(t *testing.T) {
-	// waiting_input -> blocked is an in-family escalation: the user was already
-	// pinged once for this pause, so no second notification and no telemetry
-	// entry/exit pair.
 	st := newFakeStore()
 	sink := &fakeNotificationSink{}
 	tele := &telemetrySink{}
@@ -4157,10 +3957,6 @@ func TestSCMObservation_ReadyToMergeSuppressedWhileBlocked(t *testing.T) {
 	}
 }
 
-// blockOnNthGetStore wraps fakeStore and flips a session to ActivityBlocked on
-// the Nth GetSession call, reproducing the reactions TOCTOU: the handler's
-// entry guard (1st read) sees the session working, but a permission hook stores
-// blocked before sendOnce's just-in-time re-read (2nd read).
 type blockOnNthGetStore struct {
 	*fakeStore
 	id     domain.SessionID
@@ -4180,9 +3976,6 @@ func (s *blockOnNthGetStore) GetSession(ctx context.Context, id domain.SessionID
 }
 
 func TestSendOnce_NoNudgeWhenBlockedAppearsBeforeSend(t *testing.T) {
-	// The entry guard in ApplyPRObservation reads the session working (read #1);
-	// a permission dialog then stores blocked before sendOnce's just-in-time
-	// re-read (read #2), which must suppress the paste+Enter into the dialog.
 	st := newFakeStore()
 	st.sessions["mer-1"] = working("mer-1")
 	bst := &blockOnNthGetStore{fakeStore: st, id: "mer-1", flipAt: 2}
@@ -4198,8 +3991,6 @@ func TestSendOnce_NoNudgeWhenBlockedAppearsBeforeSend(t *testing.T) {
 }
 
 func TestPRObservation_NudgesSuppressedWhileBlocked(t *testing.T) {
-	// A blocked session must not receive automated CI/review nudges: injected
-	// text could interact with the pending permission dialog.
 	m, st, msg := newManager()
 	rec := working("mer-1")
 	rec.Activity.State = domain.ActivityBlocked
@@ -4396,8 +4187,6 @@ func TestSCMObservation_AnchoredBotReviewNudgesAgent(t *testing.T) {
 	}
 }
 
-// Merging the PR is what resolves a ready-to-merge ping. So is the PR ceasing
-// to be mergeable — either way there is nothing left for the user to merge.
 func TestSCMObservation_ResolvesReadyToMergeWhenNoLongerReady(t *testing.T) {
 	ready := ports.SCMObservation{
 		Fetched:      true,
@@ -4560,7 +4349,6 @@ func TestActivity_WorkerIdleOrchestratorActiveDefersNoNudge(t *testing.T) {
 	}
 }
 
-// fakeLifecycleContainerReaper is a minimal ports.ContainerReaper test double.
 type fakeLifecycleContainerReaper struct {
 	sessions []domain.SessionID
 	removed  int
@@ -4572,7 +4360,6 @@ func (f *fakeLifecycleContainerReaper) ReapSessionContainers(_ context.Context, 
 	return f.removed, f.err
 }
 
-// fakeProjectConfigLoader is a minimal projectConfigLoader test double.
 type fakeProjectConfigLoader struct {
 	projects map[string]domain.ProjectRecord
 	err      error
@@ -4593,11 +4380,6 @@ func newManagerWithContainerReaper(cr ports.ContainerReaper, pl projectConfigLoa
 	return m, st, msg
 }
 
-// TestMarkTerminated_ReapsContainers is the #2652 regression for hooking the
-// shared teardown path: MarkTerminated must reap the terminated session's
-// containers, covering every terminal-state path (Kill, daemon shutdown,
-// Cleanup, RetireForReplacement, tracker-driven termination) through this one
-// choke point rather than only explicit ao session kill.
 func TestMarkTerminated_ReapsContainers(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{removed: 2}
 	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{
@@ -4616,8 +4398,6 @@ func TestMarkTerminated_ReapsContainers(t *testing.T) {
 
 func TestMarkTerminated_ReapsStandaloneSessionContainers(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{}
-	// A standalone session has no project config to load. Make any accidental
-	// lookup fail so the test proves the default reap-enabled policy bypasses it.
 	pl := &fakeProjectConfigLoader{err: errors.New("standalone has no project")}
 	m, st, _ := newManagerWithContainerReaper(cr, pl)
 	rec := working("standalone-1")
@@ -4651,9 +4431,6 @@ func TestMarkTerminated_ReapsContainersAgainWhenAlreadyTerminated(t *testing.T) 
 	}
 }
 
-// TestMarkTerminated_ContainerReapFailureDoesNotFailTermination asserts the
-// best-effort contract: a container reaper error must never fail
-// MarkTerminated, matching every other best-effort teardown step in AO.
 func TestMarkTerminated_ContainerReapFailureDoesNotFailTermination(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{err: errors.New("docker rm: permission denied")}
 	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{
@@ -4674,9 +4451,6 @@ func TestMarkTerminated_ContainerReapFailureDoesNotFailTermination(t *testing.T)
 	}
 }
 
-// TestMarkTerminated_SkipsReapWhenProjectDisables covers the project-level
-// opt-out: ContainerReap.Disabled must suppress the reap without affecting
-// termination.
 func TestMarkTerminated_SkipsReapWhenProjectDisables(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{}
 	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{
@@ -4696,10 +4470,6 @@ func TestMarkTerminated_SkipsReapWhenProjectDisables(t *testing.T) {
 	}
 }
 
-// TestMarkTerminated_ProjectLoadErrorSkipsRatherThanReaps is the regression
-// for failing open: a project-config load error must skip reaping rather than
-// guess and reap anyway. This package's stated bias throughout is to spare on
-// ambiguity, never to reap on it.
 func TestMarkTerminated_ProjectLoadErrorSkipsRatherThanReaps(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{}
 	pl := &fakeProjectConfigLoader{err: errors.New("db unavailable")}
@@ -4717,11 +4487,8 @@ func TestMarkTerminated_ProjectLoadErrorSkipsRatherThanReaps(t *testing.T) {
 	}
 }
 
-// TestMarkTerminated_NilReaperSkipsWithoutProjectLookup confirms nil wiring
-// (the common case — most AO installs run without Docker) skips reaping
-// cleanly without even attempting a project lookup.
 func TestMarkTerminated_NilReaperSkipsWithoutProjectLookup(t *testing.T) {
-	m, st, _ := newManager() // newManager wires no container reaper at all
+	m, st, _ := newManager()
 	st.sessions["mer-1"] = working("mer-1")
 
 	if err := m.MarkTerminated(ctx, "mer-1"); err != nil {
@@ -4732,14 +4499,9 @@ func TestMarkTerminated_NilReaperSkipsWithoutProjectLookup(t *testing.T) {
 	}
 }
 
-// TestMarkTerminated_MissingProjectSkipsRatherThanReaps is the regression for
-// failing open on a missing project record: GetProject returning ok=false,
-// err=nil is ambiguity (AO cannot know whether ContainerReap.Disabled would
-// have applied), not a green light to reap. Must be treated the same as the
-// error path.
 func TestMarkTerminated_MissingProjectSkipsRatherThanReaps(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{}
-	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{}} // no "mer" entry: ok=false, err=nil
+	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{}}
 	m, st, _ := newManagerWithContainerReaper(cr, pl)
 	st.sessions["mer-1"] = working("mer-1")
 
@@ -4754,11 +4516,6 @@ func TestMarkTerminated_MissingProjectSkipsRatherThanReaps(t *testing.T) {
 	}
 }
 
-// TestRuntimeObservation_ConfirmedDeathReapsContainers is the regression for
-// the review finding that ApplyRuntimeObservation's reaper-driven terminal
-// transition (crash/SIGKILL detected by the runtime reaper) bypassed
-// MarkTerminated entirely and left containers unreaped. This confirms the
-// container leg of #2652 now fires on this path too, not just explicit kill.
 func TestRuntimeObservation_ConfirmedDeathReapsContainers(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{removed: 1}
 	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{
@@ -4781,9 +4538,6 @@ func TestRuntimeObservation_ConfirmedDeathReapsContainers(t *testing.T) {
 	}
 }
 
-// TestRuntimeObservation_WorkloadDeathAloneDoesNotReap confirms the
-// non-terminal workload-dead branch (runtime alive, workload dead) does NOT
-// trigger a container reap — only a confirmed session termination should.
 func TestRuntimeObservation_WorkloadDeathAloneDoesNotReap(t *testing.T) {
 	cr := &fakeLifecycleContainerReaper{}
 	pl := &fakeProjectConfigLoader{projects: map[string]domain.ProjectRecord{
@@ -4806,11 +4560,6 @@ func TestRuntimeObservation_WorkloadDeathAloneDoesNotReap(t *testing.T) {
 	}
 }
 
-// mergeMetadata is an explicit allowlist, so a field added to SessionMetadata
-// without a line here is silently dropped on every spawn and restore. That
-// happened to the chat resume handle: the provider still held the conversation,
-// but AO forgot its id, so no restart could ever resume it — and nothing failed
-// loudly, the column was just empty.
 func TestMarkSpawnedPersistsChatControllerFacts(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeStore()
@@ -4851,8 +4600,6 @@ func TestMarkSpawnedPersistsChatControllerFacts(t *testing.T) {
 		t.Fatalf("Chat spawn retained terminal ownership metadata: %+v", got.Metadata)
 	}
 
-	// A relaunch rotates the generation: the new value must replace the old, or
-	// events from the superseded controller could not be told apart.
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{
 		WorkspacePath:          "/ws",
 		ProviderConversationID: "thread-abc",
@@ -4866,11 +4613,6 @@ func TestMarkSpawnedPersistsChatControllerFacts(t *testing.T) {
 	}
 }
 
-// Model is the same allowlist omission as the chat resume handle above, one
-// field over: it is declared on SessionMetadata, has its own sessions.model
-// column, and is read back by the API — but mergeMetadata never copied it, so
-// every `ao spawn --model X` persisted an empty model and the session reported
-// no model at all.
 func TestMarkSpawnedPersistsResolvedModelAndEffort(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeStore()
@@ -4898,8 +4640,6 @@ func TestMarkSpawnedPersistsResolvedModelAndEffort(t *testing.T) {
 			got.Metadata.Effort, "high")
 	}
 
-	// Merged rather than assigned: a relaunch that resolves no explicit model
-	// must leave the recorded one alone instead of blanking it.
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws"}); err != nil {
 		t.Fatalf("second MarkSpawned: %v", err)
 	}
@@ -5090,9 +4830,6 @@ func TestActivitySignalRetryPreservesCursorPermissionCorrelation(t *testing.T) {
 	m := New(st, nil)
 	mustApply(t, m, "mer-1", sig(domain.ActivityBlocked, "before-shell-execution", "git push", ""))
 
-	// Finishing the approved tool removes its in-memory correlation before the
-	// durable write. A revision miss must restore that correlation for the retry,
-	// or the real completion is suppressed and the UI remains stuck on approval.
 	st.conflictNext = true
 	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "after-shell-execution", "git push", ""))
 	if st.conflictNext {
@@ -5103,10 +4840,6 @@ func TestActivitySignalRetryPreservesCursorPermissionCorrelation(t *testing.T) {
 	}
 }
 
-// TestEmitTelemetryStampsRequestID covers the shared lifecycle emit path: an
-// HTTP-driven activity signal must tag its events with the request id so the
-// lifecycle rows join to the request, while reaper/poller ticks (a plain
-// background context) must keep an empty request id.
 func TestEmitTelemetryStampsRequestID(t *testing.T) {
 	cases := []struct {
 		name string
@@ -5150,20 +4883,12 @@ func TestEmitTelemetryStampsRequestID(t *testing.T) {
 	}
 }
 
-// Each unresolved comment gets its own dedup slot. Sharing one key per PR made
-// every poll re-send whichever comments were not the most recent signature
-// written, and made them share the reviewMaxNudge budget so a PR with more
-// comments than that could never deliver the last of them.
 func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
 	comments := make([]domain.PullRequestComment, 0, reviewMaxNudge+2)
 	for i := range reviewMaxNudge + 2 {
 		id := fmt.Sprintf("%d", i+1)
-		// Every comment shares one thread: the observer expands a thread into
-		// one row per comment, so this is the routine shape whenever a worker
-		// replies to a review comment without resolving it. Keying on the
-		// thread would collapse them all back into one dedup slot.
 		comments = append(comments, domain.PullRequestComment{
 			ID: id, ThreadID: "T1", Author: "alice", File: "foo.go", Line: i + 1,
 			Body: "finding " + id, AutoInjectReview: true,

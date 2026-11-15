@@ -186,7 +186,6 @@ func TestCursorResumeRecoversPublishedCopyWithoutCheckpoint(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Recovery must rely on the durable record, not adapter memory.
 			m.agents = singleAgent{agent: &cursorRecoveryAgent{terminalImportAgent: terminalImportAgent{native: true}, plugin: cursor.New()}}
 			result, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
 			if scenario == "unproven target" || scenario == "bad provenance" {

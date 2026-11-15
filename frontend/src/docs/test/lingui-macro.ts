@@ -1,6 +1,5 @@
 import type { MessageDescriptor } from "@lingui/core";
 
-/** Test stand-in for `msg`: returns the English source as the descriptor. */
 export function msg(
   input: TemplateStringsArray | { message: string; context?: string },
   ...values: unknown[]

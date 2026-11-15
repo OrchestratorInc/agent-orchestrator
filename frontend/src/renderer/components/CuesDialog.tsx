@@ -26,14 +26,12 @@ import {
 } from "./ui/dialog";
 import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
 
-/** A Cloud cue the control plane refused as invalid (400, 422) or as clashing with another (409). */
 function isCueRefusal(error: unknown): boolean {
 	return error instanceof CloudCpError && (error.status === 400 || error.status === 409 || error.status === 422) && error.message !== "";
 }
 
 type CuesSettingsProps = {
 	projectId: string;
-	/** A Cloud project's organization: its cues live on the control plane. */
 	cloudOrgId?: string;
 	onBusyChange?: (busy: boolean) => void;
 	createOnly?: boolean;
@@ -167,9 +165,6 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 			else setFormOpen(null);
 		} catch (error) {
 			if (!mounted.current) return;
-			// The control plane refuses a cue its project's rules do not allow (a
-			// name another cue has, ignoring case; a command cue with a prompt, or
-			// an agent cue with a command) and says why: the form shows it.
 			if (isCueRefusal(error)) setFormError(apiErrorMessage(error, t("cues.saveFailed")));
 			else showGlobalToast(t("cues.saveFailed"), apiErrorMessage(error, t("cues.saveFailed")), "error");
 		} finally {
@@ -197,7 +192,6 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 
 	const renderList = () => {
 		if (!cuesQuery.isFetchedAfterMount || cuesQuery.isFetching) {
-			// Hold the list's footprint while loading so nothing flashes before the real rows.
 			return (
 				<div className="project-settings-form" aria-busy="true" aria-label={t("cues.loading")}>
 					<section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section>
@@ -344,7 +338,6 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 		</div>;
 	};
 
-	// The footer action only exists once a list is showing; an empty list carries its own button.
 	const empty = !formOpen && !cuesQuery.isError && (!cuesQuery.isFetchedAfterMount || (cuesQuery.data ?? []).length === 0);
 	return (
 		<div className="flex flex-col gap-(--size-settings-section-inner-gap)">
@@ -388,7 +381,6 @@ function ProjectCuesSettings({ projectId, cloudOrgId, onBusyChange, createOnly =
 	);
 }
 
-/** Session-local creation surface; shares the settings editor and validation. */
 export function CreateCueDialog({ projectId, cloudOrgId, open, onOpenChange, onClosed }: {
 	projectId: string;
 	cloudOrgId?: string;

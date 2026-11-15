@@ -36,8 +36,6 @@ func (f fakePlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
 	return f.authStatus, f.authErr
 }
 
-// scriptedServer answers client requests from a canned table and lets a test push
-// notifications and server->client requests at the driver.
 type scriptedServer struct {
 	t        *testing.T
 	toClient io.WriteCloser
@@ -50,8 +48,6 @@ type scriptedServer struct {
 	seenCh            chan frame
 }
 
-// replyError scripts a JSON-RPC error for a method, which is how a test exercises a
-// provider refusal. app-server answers -32600 for everything it declines.
 func (s *scriptedServer) replyError(method string, code int, message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,16 +73,12 @@ func (s *scriptedServer) push(raw string) {
 	}
 }
 
-// reply scripts the result for a method. Guarded because the server goroutine
-// reads the same map while it is serving the connection.
 func (s *scriptedServer) reply(method, result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.responses[method] = result
 }
 
-// sentMethod reports whether the client ever sent a request for the method. Guarded
-// because the server goroutine appends to the same slice.
 func (s *scriptedServer) sentMethod(method string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,7 +90,6 @@ func (s *scriptedServer) sentMethod(method string) bool {
 	return false
 }
 
-// awaitFrame waits for a frame matching pred among everything the client sent.
 func (s *scriptedServer) awaitFrame(pred func(frame) bool) frame {
 	s.t.Helper()
 	deadline := time.After(3 * time.Second)
@@ -120,8 +111,6 @@ func (s *scriptedServer) awaitFrame(pred func(frame) bool) frame {
 	}
 }
 
-// newTestDriver wires a Driver to a scripted server over in-memory pipes, so no
-// process is ever spawned.
 func newTestDriver(t *testing.T) (*Driver, *scriptedServer) {
 	t.Helper()
 
@@ -203,8 +192,6 @@ func newTestDriver(t *testing.T) (*Driver, *scriptedServer) {
 	return d, srv
 }
 
-// nextEvent returns the next event of interest, skipping ones the test does not
-// assert on.
 func nextEvent(t *testing.T, events <-chan ports.ChatEvent, want ports.ChatEventKind) ports.ChatEvent {
 	t.Helper()
 	deadline := time.After(3 * time.Second)
@@ -245,7 +232,6 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 		t.Fatalf("provider conversation id = %q, want thread-1", got)
 	}
 
-	// initialized must be notified, or the provider never leaves handshake.
 	srv.awaitFrame(func(f frame) bool { return f.Method == "initialized" && f.ID == nil })
 
 	start := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
@@ -280,7 +266,6 @@ func TestStartCompletesHandshakeAndOpensThread(t *testing.T) {
 	if _, ok := rawParams["reasoningEffort"]; ok {
 		t.Fatal("thread/start sent unsupported top-level reasoningEffort")
 	}
-	// Default permissions must match what AO already gives a Codex TUI session.
 	if params.ApprovalPolicy != "never" || params.Sandbox != "danger-full-access" {
 		t.Errorf("default posture = %q/%q, want never/danger-full-access", params.ApprovalPolicy, params.Sandbox)
 	}
@@ -334,15 +319,11 @@ func TestReconnectAdoptsInitializedHostWithoutNativeResume(t *testing.T) {
 		t.Fatalf("ListModels: %v", err)
 	}
 	request := srv.awaitFrame(func(f frame) bool { return f.Method == "model/list" })
-	// 42 went to the initialize the app-server refused.
 	if request.ID == nil || string(*request.ID) != "43" {
 		t.Fatalf("first request id after reconnect = %v, want 43", request.ID)
 	}
 }
 
-// A daemon that stopped before initialize finished leaves a live host whose
-// app-server was never initialized. The reconnect initializes it and opens the
-// stored thread, instead of adopting a host that answers "Not initialized".
 func TestReconnectInitializesAHostThatNeverWas(t *testing.T) {
 	d, srv := newTestDriver(t)
 	proc, err := d.spawn(context.Background(), "codex", "/tmp/ws", nil)
@@ -455,8 +436,6 @@ func TestResumeDoesNotCompeteWithAttachedHostDuringDaemonOverlap(t *testing.T) {
 	}
 }
 
-// A relative cwd would put the agent in a directory relative to app-server's own
-// process, silently editing the wrong tree.
 func TestStartRejectsRelativeWorkspacePath(t *testing.T) {
 	d, _ := newTestDriver(t)
 	_, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "workspace"})
@@ -508,8 +487,6 @@ func TestSendTurnCarriesIdempotencyKey(t *testing.T) {
 	}
 }
 
-// An empty send is a caller bug, not a way to nudge the agent: there is no
-// keystroke concept in Chat mode.
 func TestSendTurnRejectsEmptyText(t *testing.T) {
 	d, _ := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -523,9 +500,6 @@ func TestSendTurnRejectsEmptyText(t *testing.T) {
 	}
 }
 
-// The whole approval design in one test: the provider blocks on a server->client
-// request, AO surfaces it with the provider's own decision list, and the user's
-// choice is what unblocks the turn.
 func TestApprovalIsParkedUntilResolved(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -534,8 +508,6 @@ func TestApprovalIsParkedUntilResolved(t *testing.T) {
 	}
 	defer func() { _ = conv.Close() }()
 
-	// Shaped after a real captured approval: no requestId field, so the JSON-RPC
-	// id is the only correlation key, and decline is not on offer.
 	srv.push(`{"id":0,"method":"item/commandExecution/requestApproval","params":{` +
 		`"threadId":"thread-1","turnId":"turn-1","itemId":"exec-1",` +
 		`"command":"/bin/zsh -lc 'date -u'","cwd":"/tmp/ws",` +
@@ -572,7 +544,6 @@ func TestApprovalIsParkedUntilResolved(t *testing.T) {
 		}
 	}
 
-	// Nothing has been answered yet, so the provider is still blocked.
 	srv.mu.Lock()
 	for _, f := range srv.seen {
 		if f.ID != nil && string(*f.ID) == "0" {
@@ -598,11 +569,6 @@ func TestApprovalIsParkedUntilResolved(t *testing.T) {
 	}
 }
 
-// A structured decision must round-trip exactly, or the provider rejects it.
-// A structured decision must round-trip with the parameters the provider attached
-// to it. The client sends an id and nothing else — it has no way to reconstruct
-// an execpolicy amendment — so AO answers with the provider's own payload for the
-// option that was offered.
 func TestStructuredDecisionIsAnsweredWithTheProvidersOwnPayload(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -611,7 +577,6 @@ func TestStructuredDecisionIsAnsweredWithTheProvidersOwnPayload(t *testing.T) {
 	}
 	defer func() { _ = conv.Close() }()
 
-	// The real captured shape: a mix of plain and object-shaped decisions.
 	srv.push(`{"id":3,"method":"item/commandExecution/requestApproval","params":{"command":"ls","availableDecisions":["accept",{"acceptWithExecpolicyAmendment":{"execpolicy_amendment":["ls"]}},"cancel"]}}`)
 	ev := nextEvent(t, conv.Events(), ports.ChatEventApprovalRequested)
 
@@ -627,9 +592,6 @@ func TestStructuredDecisionIsAnsweredWithTheProvidersOwnPayload(t *testing.T) {
 	}
 }
 
-// A decision the provider never offered is consent AO would be inventing. It must
-// be refused, and — just as important — the request must stay pending so the
-// user's real answer still has something to answer.
 func TestDecisionNotOfferedIsRefusedAndLeavesTheRequestPending(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -638,7 +600,6 @@ func TestDecisionNotOfferedIsRefusedAndLeavesTheRequestPending(t *testing.T) {
 	}
 	defer func() { _ = conv.Close() }()
 
-	// Note there is no decline on offer, which is a real captured case.
 	srv.push(`{"id":4,"method":"item/commandExecution/requestApproval","params":{"command":"rm -rf /","availableDecisions":["accept","cancel"]}}`)
 	ev := nextEvent(t, conv.Events(), ports.ChatEventApprovalRequested)
 
@@ -647,7 +608,6 @@ func TestDecisionNotOfferedIsRefusedAndLeavesTheRequestPending(t *testing.T) {
 		t.Fatalf("err = %v, want ErrChatDecisionNotOffered", err)
 	}
 
-	// The request survived the bad answer, so the offered decision still works.
 	if err := conv.ResolveRequest(context.Background(), ev.RequestID, ports.ChatDecision{ID: "cancel"}); err != nil {
 		t.Fatalf("a refused decision consumed the request: %v", err)
 	}
@@ -657,8 +617,6 @@ func TestDecisionNotOfferedIsRefusedAndLeavesTheRequestPending(t *testing.T) {
 	}
 }
 
-// Answering a request that is no longer waiting is ordinary — two clients can
-// watch the same approval — so it comes back typed rather than as a raw failure.
 func TestResolvingAnUnknownRequestIsTyped(t *testing.T) {
 	d, _ := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -673,8 +631,6 @@ func TestResolvingAnUnknownRequestIsTyped(t *testing.T) {
 	}
 }
 
-// A card the user clicks after the request is gone must fail, never resolve
-// something newer.
 func TestResolveUnknownRequestIsRefused(t *testing.T) {
 	d, _ := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -689,8 +645,6 @@ func TestResolveUnknownRequestIsRefused(t *testing.T) {
 	}
 }
 
-// Answering a request AO does not model could consent to something on the user's
-// behalf, so it must be refused with an error instead.
 func TestUnmodelledServerRequestIsRefused(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -802,10 +756,6 @@ func TestReloadMCPServersMarksFailedInventoryUnavailable(t *testing.T) {
 	}
 }
 
-// app-server multiplexes child-agent thread notifications over the root
-// connection. The adapter's fallback target must remain the root turn; otherwise
-// an interrupt without an explicit id can stop a child and leave the requested
-// root work running.
 func TestNestedThreadDoesNotReplaceRootActiveTurn(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -838,15 +788,12 @@ func TestNestedThreadDoesNotReplaceRootActiveTurn(t *testing.T) {
 	}
 }
 
-// Resume must not quietly become a fresh thread: that would present unrelated
-// history as continuous.
 func TestResumeFailureDoesNotFallBackToStart(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.mu.Lock()
 	delete(srv.responses, "thread/resume")
 	srv.mu.Unlock()
 
-	// Answer thread/resume with an error instead.
 	go func() {
 		f := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/resume" })
 		srv.push(`{"id":` + string(*f.ID) + `,"error":{"code":-32602,"message":"unknown thread"}}`)
@@ -937,8 +884,6 @@ func TestProbeIgnoresAmbientAuthStatus(t *testing.T) {
 	}
 }
 
-// An inconclusive auth probe is not proof of failure, matching how AO already
-// treats runtime probes.
 func TestProbeTreatsUnknownAuthAsUsable(t *testing.T) {
 	d, _ := newTestDriver(t)
 	d.plugin = fakePlugin{bin: "codex", authStatus: ports.AgentAuthStatusUnknown, authErr: errors.New("probe timed out")}
@@ -1010,7 +955,6 @@ func TestInstalledCodexVersionAugmentsNodePATHForNPMLauncher(t *testing.T) {
 	}
 }
 
-// Run under the production executable name so os.Executable identifies the AO pin.
 func TestCodexProcessEnvPreservesDaemonPATH(t *testing.T) {
 	if os.Getenv("AO_TEST_CODEX_PATH_PIN") == "1" {
 		exe, err := os.Executable()
@@ -1172,8 +1116,6 @@ func TestProbeReportsMissingBinary(t *testing.T) {
 	}
 }
 
-// Chat must not be quietly stricter than the terminal path for the same setting.
-// AO's own tools that load agent pages ask this before they use the network.
 func TestSandboxAllowsNetworkFollowsTheCodexSandbox(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -1280,14 +1222,6 @@ func TestBackgroundRefusesNetworkPermissionAndApprovalRequests(t *testing.T) {
 }
 
 func TestEnvSliceIsSortedForReproducibleRelaunch(t *testing.T) {
-	// Sortedness is still the contract: a relaunch should be byte-identical so a
-	// process diff is readable. What changed is that the overlay is merged over the
-	// daemon's environment rather than replacing it.
-	//
-	// This test used to assert envSlice(nil) == nil, "so exec inherits the parent
-	// env". The intent was right and the mechanism never worked: the slice is only
-	// nil when the overlay is empty, which it never is in practice, so the provider
-	// was always launched with a replaced environment.
 	got := envSlice(map[string]string{"ZZ_LAST": "z", "AA_FIRST": "a"})
 	var previous string
 	for _, entry := range got {
@@ -1304,7 +1238,6 @@ func TestEnvSliceIsSortedForReproducibleRelaunch(t *testing.T) {
 	}
 }
 
-// When the process dies, the stream must say so rather than just going quiet.
 func TestControllerStopIsAnnounced(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -1321,10 +1254,6 @@ func TestControllerStopIsAnnounced(t *testing.T) {
 	_ = conv.Close()
 }
 
-// The per-turn shapes are not the same as the thread-level ones: a thread takes
-// `sandbox: "workspace-write"`, a turn takes a tagged
-// `sandboxPolicy: {type:"workspaceWrite"}`. Sending a thread's shape to a turn is
-// rejected as a missing `type`, so this pins the difference.
 func TestTurnSettingsUseTheTurnLevelWireShapes(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -1365,9 +1294,6 @@ func TestTurnSettingsUseTheTurnLevelWireShapes(t *testing.T) {
 	}
 }
 
-// A caller that chooses nothing must produce exactly the payload it did before
-// per-turn settings existed: an empty field is not a value the provider has to
-// interpret.
 func TestNoTurnSettingsSendsNoSettingsFields(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -1392,13 +1318,8 @@ func TestNoTurnSettingsSendsNoSettingsFields(t *testing.T) {
 	}
 }
 
-// The catalog is the provider's. Hidden models are dropped because offering one
-// would fail, while the opened thread's effort is more specific than the generic
-// model default returned by model/list.
 func TestListModelsKeepsCatalogAndUsesThreadEffort(t *testing.T) {
 	d, srv := newTestDriver(t)
-	// Scripted before Start: the server goroutine reads this map, so writing it
-	// afterwards would race the connection it is already serving.
 	srv.reply("thread/start", `{"thread":{"id":"thread-1"},"model":"a","reasoningEffort":"xhigh","cwd":"/tmp/ws"}`)
 	srv.reply("model/list", `{"data":[{"id":"a","displayName":"Model A","description":"first","isDefault":true,"hidden":false,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[{"reasoningEffort":"low"},{"reasoningEffort":"xhigh"}]},{"id":"secret","displayName":"Hidden","isDefault":false,"hidden":true,"defaultReasoningEffort":"low","supportedReasoningEfforts":[]},{"id":"b","displayName":"Model B","isDefault":false,"hidden":false,"defaultReasoningEffort":"low","supportedReasoningEfforts":[]}]}`)
 
@@ -1505,9 +1426,6 @@ func TestDiscoverModelsDrainsEveryModelListPage(t *testing.T) {
 	}
 }
 
-// The on-demand quota read. The reply below is the verbatim account/rateLimits/read
-// result from a live pro account, on ONE line: readFrame is line-delimited, so a
-// pretty-printed reply hangs the test forever rather than failing it.
 func TestReadRateLimitsFromProviderResult(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("account/rateLimits/read", `{"rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":71,"windowDurationMins":10080,"resetsAt":4102444800},"secondary":null,"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},"individualLimit":null,"spendControlReached":false,"planType":"pro","rateLimitReachedType":null},"rateLimitsByLimitId":{"codex_bengalfox":{"limitId":"codex_bengalfox","limitName":"GPT-5.3-Codex-Spark","primary":{"usedPercent":0,"windowDurationMins":10080,"resetsAt":4102444800},"secondary":null,"credits":null,"individualLimit":null,"spendControlReached":null,"planType":"pro","rateLimitReachedType":null}},"rateLimitResetCredits":{"availableCount":0,"credits":[]}}`)
@@ -1530,9 +1448,6 @@ func TestReadRateLimitsFromProviderResult(t *testing.T) {
 	if limits.PrimaryUsedPercent != 71 {
 		t.Errorf("primary = %v, want 71", limits.PrimaryUsedPercent)
 	}
-	// The per-model rateLimitsByLimitId breakdown is deliberately not read: the
-	// account-level window is what stops the next turn, and reading the finer table
-	// would answer a question nobody asked with a much lower number.
 	if limits.SecondaryUsedPercent >= 0 {
 		t.Errorf("secondary = %v, want negative for a window this account lacks",
 			limits.SecondaryUsedPercent)
@@ -1540,16 +1455,12 @@ func TestReadRateLimitsFromProviderResult(t *testing.T) {
 	if limits.PlanLabel != "pro" {
 		t.Errorf("plan = %q, want pro", limits.PlanLabel)
 	}
-	// resetsAt is an absolute instant far in the future, so a positive remainder is
-	// the only correct answer regardless of when the suite runs.
 	if limits.PrimaryResetsInSeconds <= 0 {
 		t.Errorf("primary resets in %d, want a positive remaining duration",
 			limits.PrimaryResetsInSeconds)
 	}
 }
 
-// The capability gates the readout, so it must be advertised or the UI hides a
-// meter the driver can actually feed.
 func TestCapabilitiesAdvertiseUsageAndRateLimits(t *testing.T) {
 	caps := capabilities()
 	if !caps.Has(ports.ChatCapabilityUsage) {
@@ -1560,15 +1471,6 @@ func TestCapabilitiesAdvertiseUsageAndRateLimits(t *testing.T) {
 	}
 }
 
-/* ---- compaction --------------------------------------------------------- */
-
-// The wire shape, and the reason compaction exists: without it a long
-// conversation eventually cannot accept another turn at all.
-//
-// thread/compact/start takes the thread id and nothing else. It is deliberately
-// asserted here rather than assumed, because the sibling turn-level calls take a
-// turn id and a tagged sandbox policy, and sending a turn's params to a thread
-// method is rejected outright.
 func TestCompactSendsOnlyTheThreadID(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.reply("thread/compact/start", `{}`)
@@ -1600,14 +1502,6 @@ func TestCompactSendsOnlyTheThreadID(t *testing.T) {
 	}
 }
 
-// The reclaim figures, end to end over the transport.
-//
-// The provider reports NO tokens on its own compaction event, so before/after are
-// bracketed from the token-usage reports either side of the compaction turn. This
-// replays the exact sequence a live app-server sent: a usage report with the old
-// figure arrives AFTER compaction is requested and before the compaction turn
-// starts, which is why "before" is snapshotted at turn start rather than at the
-// moment Compact is called.
 func TestCompactionReportsWhatItReclaimed(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -1649,8 +1543,6 @@ func TestCompactionReportsWhatItReclaimed(t *testing.T) {
 	}
 }
 
-// A provider build that emits both the deprecated notification and the item
-// reports one compaction, not two. The turn id is the only key both carry.
 func TestCompactionIsReportedOncePerTurn(t *testing.T) {
 	d, srv := newTestDriver(t)
 	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
@@ -1661,8 +1553,6 @@ func TestCompactionIsReportedOncePerTurn(t *testing.T) {
 
 	srv.push(`{"method":"item/completed","params":{"item":{"type":"contextCompaction","id":"cc-1"},"threadId":"thread-1","turnId":"compact-turn"}}`)
 	srv.push(`{"method":"thread/compacted","params":{"threadId":"thread-1","turnId":"compact-turn"}}`)
-	// A marker after both, so the test can prove nothing compaction-shaped came
-	// between them without waiting on a timeout.
 	srv.push(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"compact-turn","status":"completed","items":[]}}}`)
 
 	nextEvent(t, conv.Events(), ports.ChatEventCompacted)
@@ -1680,16 +1570,10 @@ func TestCompactionIsReportedOncePerTurn(t *testing.T) {
 	}
 }
 
-// AO has no context figure until the provider reports one, so a compaction right
-// after a restart genuinely does not know what it saved. Claiming "reclaimed 0
-// tokens" would be a lie rather than a gap.
 func TestCompactionClaimsNoFiguresItDoesNotHave(t *testing.T) {
 	if got := compactionSummary(0, 0); got != "Compacted the conversation history" {
 		t.Errorf("summary with no figures = %q", got)
 	}
-	// Context can also grow across a compaction on a nearly-empty thread: the
-	// summary plus the system prompt outweighed what was there. Measured: an empty
-	// thread compacted from nothing to 4702 tokens.
 	if got := compactionSummary(1000, 4702); got != "Compacted the conversation history" {
 		t.Errorf("summary with no reclaim = %q, want no invented saving", got)
 	}
@@ -1698,21 +1582,12 @@ func TestCompactionClaimsNoFiguresItDoesNotHave(t *testing.T) {
 	}
 }
 
-// Compaction is advertised so the UI can offer the control at all. A driver that
-// can compact but does not say so leaves the affordance hidden and the user with
-// no way out of a full context.
 func TestCompactionIsAdvertised(t *testing.T) {
 	if !capabilities().Has(ports.ChatCapabilityCompaction) {
 		t.Fatal("compaction capability is not advertised")
 	}
 }
 
-// AO's session env is an overlay, not a whole environment. Replacing the process
-// env with it launched the provider with no HOME, USER, TMPDIR or SSH_AUTH_SOCK --
-// and every shell command the agent runs inherits that same env, so `git push` over
-// SSH and every toolchain cache would fail. The provider survived it because its
-// home lookup falls back to the passwd database, which is exactly why nobody
-// noticed.
 func TestEnvSliceMergesOverTheDaemonEnvironment(t *testing.T) {
 	t.Setenv("HOME", "/Users/someone")
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
@@ -1727,14 +1602,12 @@ func TestEnvSliceMergesOverTheDaemonEnvironment(t *testing.T) {
 		got[key] = value
 	}
 
-	// Inherited, because the agent's shell needs them.
 	if got["HOME"] != "/Users/someone" {
 		t.Errorf("HOME = %q, want it inherited from the daemon", got["HOME"])
 	}
 	if got["SSH_AUTH_SOCK"] != "/tmp/agent.sock" {
 		t.Errorf("SSH_AUTH_SOCK = %q; without it the agent cannot push over SSH", got["SSH_AUTH_SOCK"])
 	}
-	// AO's overlay wins: a session must not inherit a stale id.
 	if got["AO_SESSION"] != "p1-1" {
 		t.Errorf("AO_SESSION = %q, want the session's own id to win", got["AO_SESSION"])
 	}
@@ -1743,7 +1616,6 @@ func TestEnvSliceMergesOverTheDaemonEnvironment(t *testing.T) {
 	}
 }
 
-// An empty overlay still has to hand the provider a usable environment.
 func TestEnvSliceWithNoOverlayStillInheritsTheEnvironment(t *testing.T) {
 	t.Setenv("HOME", "/Users/someone")
 	entries := envSlice(nil)
@@ -1779,8 +1651,6 @@ func TestStartAndResumePassAOToolServersInThreadConfig(t *testing.T) {
 	}, {
 		Name: "docs", Type: "http", URL: "http://127.0.0.1:9/mcp",
 	}}
-	// Only AO's own server is pre-approved, and given time for a
-	// computer-use batch.
 	want := `{"mcp_servers":{"ao":{"args":["mcp"],"command":"/opt/ao/bin/ao",` +
 		`"default_tools_approval_mode":"approve","env":{"AO_SESSION_ID":"ao-1"},"tool_timeout_sec":150},` +
 		`"docs":{"url":"http://127.0.0.1:9/mcp"}},"model_reasoning_effort":"high"}`
@@ -1835,7 +1705,6 @@ func TestCodexResumedThreadLeavesTheFastTierItMayHaveBeenLeftOn(t *testing.T) {
 	if err := json.Unmarshal(request.Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	// The tier sticks to the thread, so leaving it has to be said.
 	if tier, ok := params["serviceTier"]; !ok || string(tier) != "null" {
 		t.Fatalf("serviceTier = %s (sent %v), want an explicit null", tier, ok)
 	}

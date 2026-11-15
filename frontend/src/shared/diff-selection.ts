@@ -30,8 +30,6 @@ export function formatDiffSelectionMessage(payload: DiffSelectionPayload): strin
 	const formattedLines = payload.lines.map((line) => {
 		const marker = getMarkerForKind(line.kind);
 		const text = truncateLineText(line.text, MAX_LINE_TEXT_LENGTH);
-		// Marker is either a space (context), '+' (add), or '-' (del).
-		// For readability in message format, add a space after + and - markers to match context format.
 		const separator = marker === " " ? "" : " ";
 		return `${marker}${separator}${text}`;
 	});
@@ -60,16 +58,13 @@ function deriveLineRange(lines: DiffSelectionLine[]): string {
 	const firstLine = lines[0];
 	const lastLine = lines[lines.length - 1];
 
-	// Determine if we have any new numbers
 	const hasAnyNewNo = lines.some((line) => line.newNo !== null);
 
 	if (hasAnyNewNo) {
-		// Prefer new-line range when any line has a new number
 		const startNo = firstLine.newNo ?? firstLine.oldNo ?? "?";
 		const endNo = lastLine.newNo ?? lastLine.oldNo ?? "?";
 		return `lines ${startNo}-${endNo}`;
 	} else {
-		// Fall back to old-line range (for pure deletions)
 		const startNo = firstLine.oldNo ?? "?";
 		const endNo = lastLine.oldNo ?? "?";
 		return `lines ${startNo}-${endNo}`;
@@ -95,8 +90,6 @@ function compactText(value: string, maxLength: number): string {
 }
 
 function truncateLineText(value: string, maxLength: number): string {
-	// Preserve whitespace in diff lines (meaningful indentation, etc.)
-	// Only truncate if line exceeds maxLength.
 	if (value.length <= maxLength) return value;
 	const suffix = "[truncated]";
 	return `${value.slice(0, Math.max(0, maxLength - suffix.length))}${suffix}`;

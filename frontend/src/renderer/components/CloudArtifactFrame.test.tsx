@@ -55,7 +55,6 @@ describe("CloudArtifactFrame", () => {
 		const framed: string[] = [];
 		const first = renderThumbnail((state) => framed.push(state));
 		const frame = await screen.findByTitle("index.html");
-		// Framed but not loaded yet: the card keeps waiting.
 		expect(framed.at(-1)).toBe("loading");
 		fireEvent.load(frame);
 		await vi.waitFor(() => expect(framed.at(-1)).toBe("ready"));
@@ -64,7 +63,6 @@ describe("CloudArtifactFrame", () => {
 		mocks.status = 403;
 		const refused: string[] = [];
 		renderThumbnail((state) => refused.push(state));
-		// The fallback shows while the status is pending too, so wait for the state itself.
 		await vi.waitFor(() => expect(refused.at(-1)).toBe("failed"));
 		expect(refused[0]).toBe("loading");
 		expect(screen.getByText("fallback icon")).toBeTruthy();

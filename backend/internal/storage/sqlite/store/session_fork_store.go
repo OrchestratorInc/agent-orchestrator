@@ -12,7 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// RecordSessionFork stores where a forked session came from.
 func (s *Store) RecordSessionFork(ctx context.Context, fork domain.SessionFork) error {
 	if fork.ForkSessionID == "" || fork.SourceSessionID == "" || fork.RootSessionID == "" {
 		return errors.New("record session fork: fork, source, and root ids are required")
@@ -30,8 +29,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 	return nil
 }
 
-// GetSessionFork returns the lineage of a forked session. found is false for
-// a session that isn't a fork.
 func (s *Store) GetSessionFork(ctx context.Context, forkID domain.SessionID) (domain.SessionFork, bool, error) {
 	row := s.readDB.QueryRowContext(ctx, sessionForkSelect+` WHERE fork_session_id = ?`, string(forkID))
 	fork, err := scanSessionFork(row)
@@ -44,7 +41,6 @@ func (s *Store) GetSessionFork(ctx context.Context, forkID domain.SessionID) (do
 	return fork, true, nil
 }
 
-// ListSessionForks returns a session's direct forks, oldest first.
 func (s *Store) ListSessionForks(ctx context.Context, sourceID domain.SessionID) ([]domain.SessionFork, error) {
 	rows, err := s.readDB.QueryContext(ctx, sessionForkSelect+` WHERE source_session_id = ? ORDER BY fork_number, created_at`, string(sourceID))
 	if err != nil {
@@ -62,8 +58,6 @@ func (s *Store) ListSessionForks(ctx context.Context, sourceID domain.SessionID)
 	return forks, rows.Err()
 }
 
-// NextSessionForkNumber is the number the next fork of rootID gets. Rows are
-// never deleted, so a number is never reused.
 func (s *Store) NextSessionForkNumber(ctx context.Context, rootID domain.SessionID) (int, error) {
 	var highest int
 	err := s.readDB.QueryRowContext(ctx, `SELECT COALESCE(MAX(fork_number), 0) FROM session_forks WHERE root_session_id = ?`, string(rootID)).Scan(&highest)
@@ -93,10 +87,6 @@ func scanSessionFork(row rowScanner) (domain.SessionFork, error) {
 	return fork, nil
 }
 
-// RewriteConversationText replaces every from with to in a conversation's
-// message text, and returns how many messages changed. Forks use it to point
-// their copied history's artifact links at their own copies. Each changed
-// message's revision is bumped so open clients refresh it.
 func (s *Store) RewriteConversationText(ctx context.Context, conversationID, from, to string) (int, error) {
 	if from == "" || from == to {
 		return 0, nil
@@ -113,20 +103,11 @@ func (s *Store) RewriteConversationText(ctx context.Context, conversationID, fro
 	return int(n), err
 }
 
-// replayPlaceholder is how an agent's own history writes content that isn't
-// text, such as a pasted image, when AO imports it.
 var replayPlaceholder = regexp.MustCompile(`\[(?:Image|Audio|Embedded context|File: [^\]]*)\]`)
 
-// CopyForkMessageContent gives a fork's imported user messages back the
-// images and other content of the original's messages they copy. The agent's
-// history replaces such content with placeholders like "[Image]"; each fork
-// message is matched, in order, to the next original message with the same
-// text, and only messages that carried content are changed. It returns how
-// many changed.
 func (s *Store) CopyForkMessageContent(ctx context.Context, sourceConversationID, forkConversationID string) (int, error) {
 	type userMessage struct{ id, text, content string }
 	load := func(conversationID string) ([]userMessage, error) {
-		// A rolled-back turn's messages aren't in the history a fork copies.
 		rows, err := s.readDB.QueryContext(ctx, `SELECT m.id, m.text, COALESCE(m.delivery_content_json, '') FROM conversation_messages m
 			LEFT JOIN conversation_turns t ON t.id = m.turn_id
 			WHERE m.conversation_id = ? AND m.role = 'user' AND t.rolled_back_at IS NULL ORDER BY m.sequence`, conversationID)
@@ -176,8 +157,6 @@ func (s *Store) CopyForkMessageContent(ctx context.Context, sourceConversationID
 	return changed, nil
 }
 
-// SetConversationBranchHandoffNote stores the note a branch's agent starts
-// with: a text-handoff fork's copy of its original's conversation.
 func (s *Store) SetConversationBranchHandoffNote(ctx context.Context, conversationID, branchID, note string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

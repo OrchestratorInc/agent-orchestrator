@@ -99,8 +99,6 @@ func TestMerger_UnknownProviderReturnsError(t *testing.T) {
 }
 
 func TestMerger_SingleProviderFallback(t *testing.T) {
-	// Only gitlab is registered — github was unavailable at construction time.
-	// The merger must still serve gitlab merge requests.
 	gl := &fakeMerger{key: "gitlab"}
 	m := NewMerger(NamedMerger{Key: "gitlab", Merger: gl})
 
@@ -117,8 +115,6 @@ func TestMerger_SingleProviderFallback(t *testing.T) {
 		t.Errorf("MergeCommitSHA = %q, want %q", res.MergeCommitSHA, "sha-gitlab")
 	}
 
-	// A request for the missing provider must still return a clear error, not
-	// a nil deref.
 	ghReq := ports.SCMMergeRequest{
 		PR: ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github"}, Number: 1},
 	}

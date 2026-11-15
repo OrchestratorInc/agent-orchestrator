@@ -14,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// computeWorkspaceManifest computes only the changed-file data needed for the
-// initial Changes paint. Callers should normally use GetWorkspaceManifest so
-// this work is shared and retained across UI mounts.
 func (s *Service) computeWorkspaceManifest(ctx context.Context, id domain.SessionID) (WorkspaceManifest, error) {
 	rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
@@ -39,7 +36,6 @@ func (s *Service) computeWorkspaceManifest(ctx context.Context, id domain.Sessio
 		if err != nil {
 			return WorkspaceManifest{}, err
 		}
-		// Every scratch file is uncommitted: there is no Git history to compare.
 		return finalizeWorkspaceManifest(WorkspaceManifest{
 			SessionID: id,
 			Files:     files,
@@ -86,7 +82,6 @@ func (s *Service) gitWorkspaceManifest(
 		Truncated:      truncated,
 	}
 	if !includeSections {
-		// A workspace project reviews only its uncommitted changes.
 		uncommitted, err := workspaceUncommittedFiles(ctx, root, prefix, excludePrefixes)
 		if err != nil {
 			if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
@@ -180,8 +175,6 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 		Summary:        workspaceSummaryFromFiles(files),
 		Truncated:      truncated,
 	}
-	// listWorkspaceProjectFiles computes the same section, so the manifest and
-	// /files keep one workspaceVersion.
 	if uncommittedErr != nil {
 		if errors.Is(uncommittedErr, ports.ErrWorkspaceRepoUnavailable) {
 			return WorkspaceManifest{}, uncommittedErr
@@ -195,8 +188,6 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 	return finalizeWorkspaceManifest(manifest), nil
 }
 
-// workspaceGitSections computes only the section summaries required by the
-// first review paint. Commit history and ahead/behind remain lazy enrichment.
 func workspaceGitSections(ctx context.Context, root, base string) (WorkspaceFileSections, error) {
 	var sections WorkspaceFileSections
 	var uncommittedTracked []WorkspaceFileSummary

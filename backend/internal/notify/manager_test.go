@@ -163,8 +163,6 @@ func TestHubClearSupersedesQueuedEventsForEverySubscriber(t *testing.T) {
 	}
 }
 
-// Resolution is how a notification leaves the unresolved list: AO observed the
-// underlying issue going away. There is no user-facing resolve action.
 func TestManagerResolveClosesSessionNotificationsAndPublishes(t *testing.T) {
 	now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
 	st := &fakeStore{rows: []domain.NotificationRecord{
@@ -195,8 +193,6 @@ func TestManagerResolveClosesSessionNotificationsAndPublishes(t *testing.T) {
 	}
 }
 
-// A PR-scoped resolution follows the PR, not the session: the same PR's
-// ready-to-merge ping must clear even when it is keyed on another session row.
 func TestManagerResolvePrefersPRScope(t *testing.T) {
 	now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
 	st := &fakeStore{rows: []domain.NotificationRecord{
@@ -221,8 +217,6 @@ func TestManagerResolveRejectsUnknownType(t *testing.T) {
 	}
 }
 
-// A transition observed while the daemon was down never reaches lifecycle, so
-// startup re-checks open rows against the durable facts.
 func TestManagerReconcilePublishesRecoveredResolutions(t *testing.T) {
 	now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
 	st := &fakeStore{rows: []domain.NotificationRecord{

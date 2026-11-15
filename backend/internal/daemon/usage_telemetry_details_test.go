@@ -132,8 +132,6 @@ func TestUsageFlusherReportsNewWorkerPROutcomesWithDetail(t *testing.T) {
 		t.Fatalf("second association first_for_install = %#v", assoc[1].Payload["first_for_install"])
 	}
 
-	// AO merges the first from a phone; the second merges on GitHub, then a
-	// third PR is closed unmerged.
 	if err := store.RecordWorkerPRMergedVia(ctx, first.URL, deliverytelemetry.MergedViaMobile); err != nil {
 		t.Fatal(err)
 	}

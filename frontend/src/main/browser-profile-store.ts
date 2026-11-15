@@ -130,8 +130,6 @@ function parseRegistry(raw: unknown): BrowserProfileRegistry {
 	if (savedDefaultProfileId !== null && (!isBrowserProfileId(savedDefaultProfileId) || !profileIds.has(savedDefaultProfileId))) {
 		throw invalidRegistry("The browser profile registry has an invalid default profile.");
 	}
-	// Registries saved before the first profile became the default get their
-	// oldest profile as the default once. The next write records the marker.
 	const defaultProfileId: BrowserProfileId | null =
 		savedDefaultProfileId ?? (raw.defaultProfileSeeded === true ? null : (profiles[0]?.id ?? null));
 
@@ -222,11 +220,6 @@ export class BrowserProfileStore {
 		return profile ? { ...profile } : undefined;
 	}
 
-	/**
-	 * `undefined` means this session has never chosen a profile (fall back to
-	 * the default). `null` means it explicitly chose Temporary, which must
-	 * stick even once a default profile exists.
-	 */
 	getSessionProfileId(sessionId: string): string | null | undefined {
 		if (this.loadError) return undefined;
 		return this.registry.bindings[sessionId]?.profileId;
@@ -283,11 +276,6 @@ export class BrowserProfileStore {
 		}
 	}
 
-	/**
-	 * The first profile becomes the default. An import passes
-	 * `claimDefault: false` and calls `claimDefaultIfFirst` after it commits,
-	 * so no unbound worker opens a half-imported or rolled-back profile.
-	 */
 	async createProfile(rawName: unknown, { claimDefault = true }: { claimDefault?: boolean } = {}): Promise<BrowserProfile> {
 		const name = normalizeBrowserProfileName(rawName);
 		if (!name) throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile name is invalid.");
@@ -306,7 +294,6 @@ export class BrowserProfileStore {
 		});
 	}
 
-	/** Makes `profileId` the default if no default is set and it is the oldest profile. */
 	async claimDefaultIfFirst(profileId: string): Promise<void> {
 		return this.enqueueMutation((current) => {
 			if (current.defaultProfileId === null && current.profiles[0]?.id === profileId) {
@@ -350,10 +337,6 @@ export class BrowserProfileStore {
 				throw new BrowserProfileStoreError("BROWSER_PROFILE_NOT_FOUND", "Browser profile was not found.");
 			}
 			const nextBindings = { ...current.bindings };
-			// An explicit choice of Temporary (profileId === null) is still recorded
-			// here, not deleted: once a default profile exists, "no binding" and
-			// "explicitly Temporary" must stay distinguishable so the default can't
-			// silently override a session that deliberately opted out of it.
 			if (!nextBindings[sessionId] && Object.keys(nextBindings).length >= BROWSER_PROFILE_MAX_BINDINGS) {
 				throw new BrowserProfileStoreError(
 					"BROWSER_PROFILE_BINDING_LIMIT",
@@ -382,7 +365,6 @@ export class BrowserProfileStore {
 					...current,
 					profiles,
 					bindings,
-					// Deleting the default promotes the oldest remaining profile.
 					defaultProfileId: current.defaultProfileId === profileId ? (profiles[0]?.id ?? null) : current.defaultProfileId,
 				},
 				result: undefined,
@@ -402,10 +384,6 @@ export class BrowserProfileStore {
 		});
 	}
 
-	/**
-	 * Serializes destructive storage work with registry mutation and blocks new
-	 * live usage for the profile while the Electron Session APIs are running.
-	 */
 	async runProfileOperation<T>(profileId: string, isLive: () => boolean, operation: ProfileOperation<T>): Promise<T> {
 		if (!isBrowserProfileId(profileId)) {
 			throw new BrowserProfileStoreError("INVALID_ARGUMENT", "Profile ID is invalid.");

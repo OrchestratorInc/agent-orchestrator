@@ -6,8 +6,6 @@ import (
 	"unicode/utf8"
 )
 
-// The overlap is added in front of each later chunk; it must not move the
-// breaks, or the text a long message keeps would shrink by the overlap.
 func TestTextChunksKeepTheirBreaksAndCarryTheOverlap(t *testing.T) {
 	const limit, overlap = 1024, 96
 	value := strings.Repeat("alpha beta gamma delta\n", 400)
@@ -31,7 +29,6 @@ func TestTextChunksKeepTheirBreaksAndCarryTheOverlap(t *testing.T) {
 		if carried != value[end-len(carried):end] {
 			t.Fatalf("chunk %d carries %q, not the text before it", index, carried)
 		}
-		// Whole words: the carried text starts where a word does.
 		if before := value[end-len(carried)-1]; before != ' ' && before != '\n' {
 			t.Fatalf("chunk %d's overlap starts inside a word (after %q)", index, before)
 		}
@@ -39,8 +36,6 @@ func TestTextChunksKeepTheirBreaksAndCarryTheOverlap(t *testing.T) {
 	}
 }
 
-// The case from review: the break falls between two words of a phrase, and
-// the later chunk must hold both.
 func TestTextChunksHoldAPhraseAcrossABreak(t *testing.T) {
 	value := strings.Repeat("x ", 4092) + "alpha beta"
 	chunks := textChunks(value, maxDocBodyBytes, chunkOverlapBytes, maxMessageChunks)
@@ -52,8 +47,6 @@ func TestTextChunksHoldAPhraseAcrossABreak(t *testing.T) {
 	}
 }
 
-// Text with no spaces is cut at character boundaries, and so is the start of
-// its overlap: an index entry must be valid UTF-8.
 func TestTextChunksOfUnbrokenTextStayValidUTF8(t *testing.T) {
 	value := strings.Repeat("é", 5000) + strings.Repeat("日本語", 3000)
 	chunks := textChunks(value, 1000, 100, 64)
@@ -65,7 +58,6 @@ func TestTextChunksOfUnbrokenTextStayValidUTF8(t *testing.T) {
 			t.Fatalf("chunk %d is not valid UTF-8", index)
 		}
 	}
-	// Each break is where it would be without an overlap.
 	plain := textChunks(value, 1000, 0, 64)
 	for index := range chunks {
 		if !strings.HasSuffix(chunks[index], plain[index]) {
@@ -74,7 +66,6 @@ func TestTextChunksOfUnbrokenTextStayValidUTF8(t *testing.T) {
 	}
 }
 
-// Short text is one chunk, and an overlap as large as the limit still ends.
 func TestTextChunksBounds(t *testing.T) {
 	if got := textChunks("short", 1024, 96, 8); len(got) != 1 || got[0] != "short" {
 		t.Fatalf("short text = %q, want itself", got)

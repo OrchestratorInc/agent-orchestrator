@@ -44,10 +44,6 @@ describe("parseOpenFolderPathArg", () => {
 		expect(parseOpenFolderPathArg(["electron.exe", __filename, dir])).toBe(path.resolve(dir));
 	});
 
-	// Regression: `electron-forge start` (dev) spawns Electron with its own app
-	// path in argv[1] (e.g. "." resolved to the frontend build dir), a REAL
-	// directory. Without excluding it, every dev cold start and second-instance
-	// relaunch would misread AO's own source tree as a dropped project folder.
 	describe("when running unpackaged (process.defaultApp)", () => {
 		const originalDefaultApp = process.defaultApp;
 

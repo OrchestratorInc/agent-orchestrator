@@ -9,10 +9,6 @@ const pngFile = (name: string, bytes = 8, type = "image/png") =>
 
 describe("useImageAttachments", () => {
 	it("retains images from two overlapping addFiles calls", async () => {
-		// Regression probe for the cap-accounting-from-a-stale-snapshot bug: two
-		// addFiles calls fired back-to-back (fast double paste, or paste-then-drop)
-		// must both survive. With a closure snapshot the second call overwrote the
-		// first and silently dropped an image.
 		const { result } = renderHook(() => useImageAttachments());
 
 		await act(async () => {

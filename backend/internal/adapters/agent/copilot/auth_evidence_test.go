@@ -14,7 +14,6 @@ import (
 
 func TestCopilotAuthRecordsItsEvidence(t *testing.T) {
 	t.Run("token environment variable", func(t *testing.T) {
-		// No stored Copilot or GitHub CLI login.
 		clearCopilotAuthProbeEnv(t)
 		t.Setenv("COPILOT_HOME", t.TempDir())
 		previous := authprobe.CmdRunner
@@ -33,7 +32,6 @@ func TestCopilotAuthRecordsItsEvidence(t *testing.T) {
 		}
 	})
 	t.Run("GitHub CLI token from the environment", func(t *testing.T) {
-		// gh auth token prints GH_TOKEN when it is set, whoever hosts.yml names.
 		clearCopilotAuthProbeEnv(t)
 		t.Setenv("COPILOT_HOME", t.TempDir())
 		ghConfig := t.TempDir()
@@ -56,8 +54,6 @@ func TestCopilotAuthRecordsItsEvidence(t *testing.T) {
 			t.Fatalf("evidence = %+v, want %+v", got, want)
 		}
 	})
-	// Copilot CLI checks COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN, its stored
-	// login, then gh auth token; a variable silently overrides a stored login.
 	t.Run("Copilot's own token variable precedes GH_TOKEN", func(t *testing.T) {
 		clearCopilotAuthProbeEnv(t)
 		t.Setenv("COPILOT_HOME", t.TempDir())

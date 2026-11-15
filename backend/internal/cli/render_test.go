@@ -16,8 +16,6 @@ func renderServer(t *testing.T, status int, respBody string) (*httptest.Server, 
 	t.Helper()
 	capture := &previewCapture{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The root command pings /internal/telemetry/cli-invoked before every
-		// run; only the render routes count as the CLI calling the daemon.
 		if !strings.HasSuffix(r.URL.Path, "/renders") && !strings.HasSuffix(r.URL.Path, "/renders/check") {
 			http.NotFound(w, r)
 			return
@@ -69,7 +67,6 @@ func TestRenderPostsThePageToTheSession(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	// The CLI reads local images with the agent's own access and inlines them.
 	if req.HTML != `<!doctype html><img src="data:image/png;base64,iVBORw0KGgo=">` || req.Title != "Turns by day" || req.Height != 420 {
 		t.Fatalf("request = %+v", req)
 	}
@@ -84,7 +81,6 @@ func TestRenderArtifactKeepsThePageOrWarns(t *testing.T) {
 	}{
 		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns by day.html"}`, "saved as artifact: /ao/artifacts/aa-47/Turns by day.html\nto list it as an artifact, run: ao artifact add '/ao/artifacts/aa-47/Turns by day.html'\n", ""},
 		{"kept with shell characters", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Ada's $1M.html"}`, "saved as artifact: /ao/artifacts/aa-47/Ada's $1M.html\nto list it as an artifact, run: ao artifact add '/ao/artifacts/aa-47/Ada'\\''s $1M.html'\n", ""},
-		// The page is in the thread either way, so the command still succeeds.
 		{"not kept", `{"renderId":"r1","artifactError":"save render artifact: disk full"}`, "", "warning: not saved as artifact: save render artifact: disk full\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -161,8 +157,6 @@ func TestRenderCheckWritesTheScreenshotAndPrintsConsole(t *testing.T) {
 	}
 }
 
-// The check, fix, check-again loop reuses one --out path; a symlink or a
-// directory at that path is never replaced.
 func TestRenderCheckReplacesItsEarlierScreenshot(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "aa-47")
 	cfg := setConfigEnv(t)
@@ -259,14 +253,11 @@ func TestRenderCheckInlinesImagesAndListsTheMissingOnes(t *testing.T) {
 	if want := `<img src="data:image/png;base64,iVBORw0KGgo="><img src="` + gone + `">`; req.HTML != want {
 		t.Fatalf("html = %s, want %s", req.HTML, want)
 	}
-	// The paths come from the page, so they are marked untrusted like console text.
 	if want := browserUntrustedText("missing images: " + gone); !strings.Contains(stdout, want) {
 		t.Fatalf("stdout missing %q:\n%s", want, stdout)
 	}
 }
 
-// The agent runs the command this line gives it, and the path holds the page
-// title, so a real shell must read the path back unchanged and run nothing.
 func TestRenderArtifactLineCommandIsSafeInAShell(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {

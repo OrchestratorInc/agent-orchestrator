@@ -96,7 +96,6 @@ func (m *codexAccountSwitchCoordinator) codexAccountSwitchIsActive() bool {
 	return m.codexOperationGate != nil && m.codexOperationGate.ExclusivePendingOrHeld()
 }
 
-// CodexAccountSwitchInProgress is the daemon-wide credential admission fence.
 func (m *codexAccountSwitchCoordinator) CodexAccountSwitchInProgress() bool {
 	return m.codexAccountSwitchIsActive()
 }
@@ -108,9 +107,6 @@ func (m *codexAccountSwitchCoordinator) GetCodexAccountSwitch(ctx context.Contex
 	return m.store.GetCodexAccountSwitch(ctx, id)
 }
 
-// StartCodexAccountSwitch admits and starts one account-service-owned global switch.
-// Existing controllers are deliberately outside this transaction: the operation
-// changes and verifies the device credential only.
 func (m *codexAccountSwitchCoordinator) StartCodexAccountSwitch(ctx context.Context, cfg ports.CodexAccountSwitchConfig) (domain.CodexAccountSwitch, error) {
 	cfg.TargetAccountID = strings.TrimSpace(cfg.TargetAccountID)
 	cfg.IdempotencyKey = strings.TrimSpace(cfg.IdempotencyKey)
@@ -188,9 +184,6 @@ func (m *codexAccountSwitchCoordinator) StartCodexAccountSwitch(ctx context.Cont
 	if !m.startWorker(func() {
 		m.runCodexAccountSwitch(m.backgroundContext, sw)
 	}) {
-		// Shutdown raced with admission before the credential mutation worker
-		// could start. Terminally cancel this pre-mutation journal now so it does
-		// not leave a fake recovery state for the next daemon.
 		settleCtx, cancel := codexAccountSwitchDurableContext(ctx)
 		sw.FailureCode = "switch_cancelled_before_mutation"
 		m.failAndCleanupCodexAccountSwitch(settleCtx, &sw)
@@ -206,8 +199,6 @@ func (m *codexAccountSwitchCoordinator) runCodexAccountSwitch(ctx context.Contex
 	defer func() {
 		m.finishCodexAccountSwitchMutation()
 		if sw.Phase.Terminal() {
-			// The device credential is the source of truth. Reconcile after every
-			// terminal outcome so an external login is matched or imported.
 			_ = m.credentials.EnsureCodexDeviceAccountReconciled(m.backgroundContext)
 		}
 	}()
@@ -236,9 +227,6 @@ func (m *codexAccountSwitchCoordinator) runCodexAccountSwitch(ctx context.Contex
 	}
 }
 
-// runCodexAccountSwitchRecovery never resumes an interrupted user request.
-// It only recognizes an already-installed target; every other local state
-// terminally cancels the old journal and lets reconciliation adopt reality.
 func (m *codexAccountSwitchCoordinator) runCodexAccountSwitchRecovery(ctx context.Context, sw domain.CodexAccountSwitch) {
 	defer func() {
 		m.finishCodexAccountSwitchMutation()
@@ -264,16 +252,12 @@ func (m *codexAccountSwitchCoordinator) runCodexAccountSwitchRecovery(ctx contex
 }
 
 func (m *codexAccountSwitchCoordinator) dispatchCodexAccountSwitch(ctx context.Context, sw *domain.CodexAccountSwitch) {
-	// Switches created before source_kind was introduced are managed-account
-	// switches. Keep that compatibility at the credential coordinator boundary.
 	if sw.SourceKind == "" {
 		sw.SourceKind = domain.CodexAccountSwitchSourceManaged
 	}
 	for {
 		switch sw.Phase {
 		case domain.CodexAccountSwitchRequested, domain.CodexAccountSwitchCheckpointCredential:
-			// Compatibility only: current switches are created directly at the
-			// activating phase because both credentials are already staged.
 			if m.advanceCodexAccountSwitch(ctx, sw, domain.CodexAccountSwitchActivatingAccount, "") != nil {
 				return
 			}
@@ -298,9 +282,6 @@ func (m *codexAccountSwitchCoordinator) dispatchCodexAccountSwitch(ctx context.C
 			m.completeCodexAccountSwitch(ctx, sw)
 			return
 		case domain.CodexAccountSwitchRecoveryRequired:
-			// Compatibility for a switch journal written by an older build. There
-			// is no user-driven recovery anymore: settle it from the current local
-			// credential, then let normal reconciliation adopt that credential.
 			m.settleCodexAccountSwitch(ctx, sw, "legacy_switch_interrupted")
 			return
 		case domain.CodexAccountSwitchCompleted, domain.CodexAccountSwitchFailed:
@@ -313,9 +294,6 @@ func (m *codexAccountSwitchCoordinator) dispatchCodexAccountSwitch(ctx context.C
 	}
 }
 
-// settleCodexAccountSwitch resolves an interrupted operation from local state.
-// If the target is installed, the switch completes. Otherwise the switch ends
-// and ordinary reconciliation adopts whatever credential the device now has.
 func (m *codexAccountSwitchCoordinator) settleCodexAccountSwitch(ctx context.Context, sw *domain.CodexAccountSwitch, failureCode string) bool {
 	state, err := m.credentials.InspectCodexAccountSwitch(ctx, sw.ID, sw.SourceKind, sw.SourceAccountID, sw.TargetAccountID)
 	if err != nil {
@@ -379,7 +357,6 @@ func (m *codexAccountSwitchCoordinator) advanceCodexAccountSwitch(ctx context.Co
 	return errors.New("codex account switch changed concurrently")
 }
 
-// GetActiveCodexAccountSwitch returns the sole nonterminal switch when present.
 func (m *codexAccountSwitchCoordinator) GetActiveCodexAccountSwitch(ctx context.Context) (domain.CodexAccountSwitch, bool, error) {
 	if m.store == nil {
 		return domain.CodexAccountSwitch{}, false, errors.New("codex account switch store is unavailable")
@@ -391,15 +368,10 @@ func (m *codexAccountSwitchCoordinator) GetActiveCodexAccountSwitch(ctx context.
 	return sw, true, nil
 }
 
-// ReconcileCodexAccountSwitches starts the best-effort recovery supervisor.
-// Account-switch recovery must never prevent the rest of the daemon starting.
 func (m *codexAccountSwitchCoordinator) ReconcileCodexAccountSwitches(ctx context.Context) error {
 	if m.credentials == nil || m.store == nil {
 		return nil //nolint:nilerr // account switching is optional when its feature wiring is absent.
 	}
-	// Publish the Codex launch/mutation fence before the first fallible journal
-	// read. A crashed switch may already have crossed the credential mutation
-	// boundary even when SQLite is temporarily unavailable.
 	if err := m.acquireCodexAccountSwitchGate(ctx); err != nil {
 		return err
 	}

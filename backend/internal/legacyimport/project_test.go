@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// nonNilNode returns a non-nil *yaml.Node for struct fields that are captured
-// as raw nodes (tracker, scm, etc.), used to trigger the "dropped" note path.
 func nonNilNode() *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Value: "x"}
 }
@@ -63,7 +61,7 @@ func TestBuildProjectConfig_RemapAndPreserveMain(t *testing.T) {
 		Env:           map[string]string{"K": "V"},
 		AgentConfig:   &legacyAgentConfig{Model: "m", Permissions: "suggest"},
 		Worker:        &legacyRole{Agent: "codex"},
-		Orchestrator:  &legacyRole{Agent: "bogus"}, // no rewrite harness → dropped note
+		Orchestrator:  &legacyRole{Agent: "bogus"},
 		Tracker:       nonNilNode(),
 	}
 	cfg := buildProjectConfig(pc, &notes)
@@ -154,7 +152,6 @@ func TestBuildProjectRecord_DisplayNameAndRegisteredAt(t *testing.T) {
 func TestBuildProjectRecord_DisplayNameFallbacks(t *testing.T) {
 	now := time.Now().UTC()
 	deps := projectRowDeps{now: now}
-	// No preferences, config name == id → empty display name (rewrite falls back to id).
 	rec, _ := buildProjectRecord("proj", legacyProjectConfig{Path: "/r", Name: "proj"}, preferences{}, registeredManifest{}, deps)
 	if rec.DisplayName != "" {
 		t.Fatalf("displayName = %q, want empty", rec.DisplayName)

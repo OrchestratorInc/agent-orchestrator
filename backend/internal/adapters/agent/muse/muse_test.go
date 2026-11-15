@@ -485,10 +485,6 @@ func TestGetRestoreCommandPreservesModel(t *testing.T) {
 	}
 }
 
-// TestGetRestoreCommandAppendsResumeTimePrompt covers resuming a reviewer
-// after it was killed and re-triggered: the new task must be embedded in the
-// resume argv (mirroring GetLaunchCommand), or the resumed session would sit
-// idle with no work to act on.
 func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 	p := &Plugin{resolvedBinary: "muse"}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{

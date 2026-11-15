@@ -12,14 +12,10 @@ type usageSummaryStore interface {
 	ListCompactSessionUsageAggregates(context.Context, domain.ProjectID) ([]domain.CompactSessionUsageAggregate, error)
 }
 
-// SummaryReader derives token and estimated-cost summaries from normalized
-// usage events.
 type SummaryReader struct{ store usageSummaryStore }
 
-// NewSummaryReader constructs a usage summary reader.
 func NewSummaryReader(store usageSummaryStore) *SummaryReader { return &SummaryReader{store: store} }
 
-// ListCompact returns one batch suitable for dashboard cards.
 func (r *SummaryReader) ListCompact(ctx context.Context, projectID domain.ProjectID) ([]domain.CompactSessionUsage, error) {
 	if r == nil || r.store == nil {
 		return nil, fmt.Errorf("usage summary store is unavailable")

@@ -7,11 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// claudeAbortedTurnScreen reproduces the live pane of a Claude Code session
-// whose turn died on an expired OAuth login: the turn's Stop hook never fired,
-// the composer holds an unsent user draft, and the CLI sits idle at the
-// prompt. Captured plain (tmux capture-pane without -e), which is exactly what
-// the activity observer's GetOutput provides.
 func claudeAbortedTurnScreen(draft string) string {
 	rule := strings.Repeat("─", 48)
 	return "⏺ Stopped watching Artifact: \"scm-observer.md\" (connection lost)\n" +

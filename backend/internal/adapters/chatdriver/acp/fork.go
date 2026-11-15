@@ -14,7 +14,6 @@ import (
 
 var _ ports.ChatIsolatedForker = (*Driver)(nil)
 
-// ForkIntoHost copies retained provider context without changing the parent host.
 func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
 	if sourceID == "" || lastTurnID != "" {
 		return nil, fmt.Errorf("%w: ACP forks require a source session and copy current context only", ports.ErrChatCapabilityUnavailable)
@@ -64,8 +63,6 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		conv.discard()
 		return nil, err
 	}
-	// The SDK gives stable and unstable MCP unions distinct Go types but the
-	// same wire shape, including HTTP/SSE transport credentials.
 	encoded, err := json.Marshal(mcpServers)
 	var forkMCP []acpsdk.UnstableMcpServer
 	if err == nil {
@@ -88,7 +85,6 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 			return nil, err
 		}
 	}
-	// Cancellation tears down the destination host before releasing the source.
 	forkCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
 	resp, err := conv.conn.UnstableForkSession(forkCtx, acpsdk.UnstableForkSessionRequest{
@@ -140,8 +136,6 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 		conv.discard()
 		return nil, err
 	}
-	// Some adapters persist a fork without activating it. Restore the child on
-	// this same host before applying settings or accepting its first prompt.
 	child, err := d.resumeSession(ctx, conv, init, launchCfg, ports.ChatResumeConfig{
 		SessionID: cfg.SessionID, ProviderConversationID: childID,
 		DataDir: cfg.DataDir, WorkspacePath: cfg.WorkspacePath, Env: cfg.Env,
@@ -156,7 +150,6 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceID, lastTurnID string, 
 	return child, nil
 }
 
-// DeleteFork is called only for side IDs registered by AO after their host stops.
 func (c *conversation) DeleteFork(ctx context.Context, id string) error {
 	if c.decodeConversationID != nil {
 		var err error

@@ -10,15 +10,8 @@ import (
 	"strings"
 )
 
-// harnessFilename records, per variable, the harnesses whose own Account
-// panel saved it. It never holds a value.
 const harnessFilename = "provider-api-keys-harnesses.json"
 
-// subscriptionKeys are variables that would override how a harness signs in:
-// they make it bill an API account instead of its subscription, or beat the
-// key kept in its own credential store (DeepSeek Harness ranks its launch
-// environment first). A session of that harness receives the variable only
-// when that harness's own panel saved it into AO's store.
 var subscriptionKeys = map[string]string{
 	"ANTHROPIC_API_KEY": "claude-code",
 	"OPENAI_API_KEY":    "codex",
@@ -26,7 +19,6 @@ var subscriptionKeys = map[string]string{
 	"DEEPSEEK_API_KEY":  "deepseek-harness",
 }
 
-// ClaimForHarness records that harness's own panel saved name.
 func ClaimForHarness(ctx context.Context, dataDir, name, harness string) error {
 	if !validName(name) || harness == "" {
 		return errors.New("invalid provider credential")
@@ -47,14 +39,6 @@ func ClaimForHarness(ctx context.Context, dataDir, name, harness string) error {
 	return writeJSON(ctx, dataDir, harnessFilename, claims)
 }
 
-// ReleaseHarness withdraws harness's claim on the variable that would
-// override its own sign-in, once it signs in another way (a subscription,
-// a setup token, its own credential store). The newest sign-in wins, as in
-// the harness's own login menu. The saved key stays in AO's store, so other
-// harnesses keep receiving it, and its other claims are left alone. It
-// returns the variable whose claim it withdrew, or "" when harness held none,
-// so a caller whose sign-in then fails can put the claim back with
-// ClaimForHarness.
 func ReleaseHarness(ctx context.Context, dataDir, harness string) (string, error) {
 	name := ""
 	for variable, owner := range subscriptionKeys {
@@ -134,10 +118,6 @@ func loadClaims(dataDir string) (map[string][]string, error) {
 	return claims, nil
 }
 
-// ForSession splits the stored keys for a session of harness: inject holds
-// the keys it should receive, withhold the names it must not, so a key saved
-// for another harness cannot replace its subscription sign-in. An unknown
-// harness ("") receives every key.
 func ForSession(dataDir, harness string) (inject map[string]string, withhold []string, err error) {
 	keys, err := Load(dataDir)
 	if err != nil {
@@ -161,15 +141,6 @@ func ForSession(dataDir, harness string) (inject map[string]string, withhold []s
 	return inject, withhold, nil
 }
 
-// Withheld maps each key a process run for harness must not receive from AO
-// to what it should see instead: the value the user exported before AO
-// replaced it in the daemon's environment, or "" to blank AO's copy. The
-// daemon exports every stored key to itself for authentication probes, and
-// sessions, reviewers, login commands and probes start from its environment,
-// so each of them applies this on top of it. A value AO never touched is left
-// out. When AO's store can't be read, every key harness's own sign-in would
-// yield to is withheld, so a failure never hands a harness an override it did
-// not choose.
 func Withheld(dataDir, harness string) map[string]string {
 	stored, storeErr := Load(dataDir)
 	_, withhold, err := ForSession(dataDir, harness)
@@ -190,12 +161,6 @@ func Withheld(dataDir, harness string) map[string]string {
 	return out
 }
 
-// HoldBack adds Withheld(dataDir, harness) to env for work run on harness's
-// behalf outside a session (account checks, model discovery), keeping any
-// value env sets itself. It returns env, or a new map when env is nil and
-// something is held back; nil stays nil when nothing is. When ctx has ended
-// it reads nothing and blanks every key harness's own sign-in would yield to,
-// so an aborted check never runs with an override harness did not choose.
 func HoldBack(ctx context.Context, env map[string]string, dataDir, harness string) map[string]string {
 	if strings.TrimSpace(dataDir) == "" {
 		return env
@@ -219,10 +184,6 @@ func HoldBack(ctx context.Context, env map[string]string, dataDir, harness strin
 	return env
 }
 
-// WithheldForSignIn is Withheld for a sign-in command of harness itself. It
-// never receives AO's copy of a key that would override that sign-in, even one
-// harness's own panel saved: the newest sign-in replaces the key, and with it
-// present the CLI would ask about it mid-login or sign in with it instead.
 func WithheldForSignIn(harness string) map[string]string {
 	out := map[string]string{}
 	for _, name := range SubscriptionKeys(harness) {
@@ -236,8 +197,6 @@ func WithheldForSignIn(harness string) map[string]string {
 	return out
 }
 
-// EnvList applies overrides to a KEY=VALUE process environment, replacing
-// any earlier entry for the same name.
 func EnvList(env []string, overrides map[string]string) []string {
 	if len(overrides) == 0 {
 		return env
@@ -260,8 +219,6 @@ func EnvList(env []string, overrides map[string]string) []string {
 	return out
 }
 
-// SubscriptionKeys lists the variables that would override harness's own
-// sign-in (ANTHROPIC_API_KEY for Claude Code, and so on).
 func SubscriptionKeys(harness string) []string {
 	var names []string
 	for name, owner := range subscriptionKeys {

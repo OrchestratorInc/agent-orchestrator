@@ -22,22 +22,17 @@ vi.mock("../SessionLinkPreviewCard", () => ({
 }));
 
 const linkSource = vi.hoisted(() => ({ reads: 0, workspaces: [] as Array<{ id: string; sessions: Array<{ id: string; artifactFiles?: Array<{ path: string }> }> }> }));
-// Like the real source, this reads through the query client, so a render
-// without one fails here as it would in the app.
 vi.mock("../../lib/use-session-link-navigation", async () => {
 	const { useQueryClient } = await import("@tanstack/react-query");
 	return {
 		useSessionLinkSource: () => {
 			useQueryClient();
 			linkSource.reads += 1;
-			// A real source with no data answers a fresh [] on every render.
 			return { ready: true, isLoading: false, isError: false, workspaces: linkSource.workspaces.length > 0 ? linkSource.workspaces : [] };
 		},
 	};
 });
 
-// Mermaid needs real SVG layout APIs jsdom lacks; pin the routing boundary and
-// let MermaidBlock.test.tsx own the block's states.
 vi.mock("../../lib/mermaid-diagram", () => ({
 	isRenderableDiagram: (code: string) => code.trim().length > 0 && code.length <= 20_000,
 	renderMermaidDiagram: vi.fn(async () => '<svg xmlns="http://www.w3.org/2000/svg"><g>diagram</g></svg>'),
@@ -49,14 +44,10 @@ beforeEach(() => {
 	linkSource.reads = 0;
 });
 
-/** Render inside a query client, which a chat's link workspaces are read through. */
 function renderWithQueries(ui: ReactElement) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(ui, { wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
 }
-
-// The point of these is that the SYNTAX stops being visible. Every case here is a
-// shape agents actually emit, and the assertion is that structure replaced markup.
 
 function renderWithLinkHandler(
 	text: string,
@@ -148,7 +139,6 @@ describe("ChatMarkdown", () => {
 		expect(boxes).toHaveLength(2);
 		expect(boxes[0]!.checked).toBe(true);
 		expect(boxes[1]!.checked).toBe(false);
-		// Clicking must not imply AO can rewrite the agent's plan.
 		expect(boxes[0]!.readOnly).toBe(true);
 	});
 
@@ -247,8 +237,6 @@ describe("ChatMarkdown", () => {
 
 		await userEvent.click(screen.getByRole("link", { name: "the component" }));
 
-		// The absolute reference is passed through as written: its tail matching
-		// a workspace file does not make it that file, so the opener asks the daemon.
 		expect(onFileOpen).toHaveBeenCalledWith("/Users/me/project/frontend/src/App.tsx", 42);
 		expect(openExternal).not.toHaveBeenCalled();
 		openExternal.mockRestore();
@@ -297,8 +285,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("escapes raw HTML instead of rendering it", () => {
-		// Agent output is only as trustworthy as the files it just read, so an
-		// <img onerror> in a README must never become a live element.
 		render(<ChatMarkdown text={'before <img src=x onerror="alert(1)"> after'} />);
 		expect(document.querySelector("img")).toBeNull();
 		expect(document.body.textContent).toContain("onerror");
@@ -310,7 +296,6 @@ describe("ChatMarkdown", () => {
 		expect(link).toHaveAttribute("href", "https://example.com/i/1");
 		expect(link).toHaveAttribute("target", "_blank");
 		expect(link).toHaveClass("text-markdown-link", "hover:text-markdown-link-hover");
-		// Without noreferrer the opened page gets a handle on the renderer.
 		expect(link.getAttribute("rel")).toContain("noreferrer");
 	});
 
@@ -370,7 +355,6 @@ describe("ChatMarkdown", () => {
 			onOpen: expect.any(Function),
 		});
 
-		// The card opens the session through the same handler as the link click.
 		(sessionPreview.mock.calls.at(-1)![0] as { onOpen: () => void }).onOpen();
 		expect(onSessionLinkOpen).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/session");
 	});
@@ -528,8 +512,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("opens a Markdown link to a listed artifact's file as that artifact, not as a workspace file", async () => {
-		// A Cloud agent links the file it wrote under the worker's artifact
-		// directory; the file view cannot read outside the checkout (422).
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "conductor-migration-guide.md" }] }] }];
 		const onSessionLinkOpen = vi.fn();
 		const onFileOpen = vi.fn();
@@ -544,9 +526,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("opens a Markdown link to a listed artifact whose name Markdown percent-encodes", async () => {
-		// Markdown percent-encodes a link's target, so a space or a non-ASCII
-		// letter in the file name arrives as %20 or %C3%A9; the listed path is
-		// the name as written.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "Migration Guide.md" }, { path: "notes/résumé.md" }] }] }];
 		const onSessionLinkOpen = vi.fn();
 		const onFileOpen = vi.fn();
@@ -561,8 +540,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("matches a listed artifact whose name itself contains a percent escape", () => {
-		// A file literally named "50%25-done.md": Markdown keeps a valid escape as
-		// written, so the target matches as it is, before any decoding.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "50%25-done.md" }] }] }];
 		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
 			<ChatMarkdown text="[half](/workspace/.ao/worker/artifacts/worker-1/50%25-done.md)" />
@@ -581,8 +558,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("keeps a Markdown link to a listed artifact's file inert in safe-origin text", () => {
-		// Automation reports, review comments and other agents' messages link only
-		// what they wrote as an ao:// link; their file links stay text.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
 		const { container } = renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
 			<ChatMarkdown safeOrigin text="[Approve deployment](/workspace/.ao/worker/artifacts/worker-1/guide.md) or [the guide](ao://sessions/project/worker-1/artifacts/guide.md)" />
@@ -620,8 +595,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("keeps a listed artifact's file link a file link in a chat that cannot open artifact links", async () => {
-		// A new chat or a starting orchestrator has no session link handler: an
-		// artifact link there would do nothing when clicked.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
 		const onFileOpen = vi.fn();
 		renderWithQueries(<ChatLinkProvider onFileOpen={onFileOpen}>
@@ -634,8 +607,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("renders a link to an artifact's file without a query client, as a file link", () => {
-		// An isolated tree (a test, another root) has no query client to read
-		// the session list with; the link stays what it was written as.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "guide.md" }] }] }];
 		render(<>
 			<ChatLinkProvider onSessionLinkOpen={vi.fn()} onFileOpen={vi.fn()}>
@@ -666,8 +637,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("opens a file in this session's artifact directory with the file opener, an HTML page too", async () => {
-		// The file opener shows it in Artifacts, listed or not; the Browser
-		// cannot show a Cloud sandbox file, so the click would do nothing.
 		const onLinkOpen = vi.fn();
 		const onFileOpen = vi.fn();
 		renderWithQueries(<ChatLinkProvider sessionId="s1" onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
@@ -678,15 +647,12 @@ describe("ChatMarkdown", () => {
 		expect(onLinkOpen).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("link", { name: "plan" }));
 		expect(onFileOpen).toHaveBeenLastCalledWith("/workspace/.ao/worker/artifacts/s1/plan.md");
-		// Any other HTML file still opens as a page.
 		await userEvent.click(screen.getByRole("link", { name: "site" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("/workspace/repository/site/index.html");
 		expect(onFileOpen).toHaveBeenCalledTimes(2);
 	});
 
 	it("opens an HTML page in this session's artifact directory with the file opener when a workspace file shares its name", async () => {
-		// A Cloud chat's file list holds the checkout's top-level files once "@"
-		// is used; an artifact named like one of them is still the artifact.
 		const onLinkOpen = vi.fn();
 		const onFileOpen = vi.fn();
 		renderWithQueries(<ChatLinkProvider sessionId="s1" workspacePaths={["index.html"]} onLinkOpen={onLinkOpen} onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
@@ -698,8 +664,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("opens this session's artifact by the link's file path: no query or fragment, an encoded # or ? kept", async () => {
-		// A link's query and fragment are cut while its target is still encoded,
-		// so a name's own "#" or "?" (written %23, %3F) is not taken for one.
 		const onFileOpen = vi.fn();
 		renderWithQueries(<ChatLinkProvider sessionId="s1" onFileOpen={onFileOpen} onSessionLinkOpen={vi.fn()}>
 			<ChatMarkdown text="[raw](/workspace/.ao/worker/artifacts/s1/plan.md?raw), [setup](/workspace/.ao/worker/artifacts/s1/guide.md#setup) and [issue](/workspace/.ao/worker/artifacts/s1/issue%20%2342%3F.md)" />
@@ -744,8 +708,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("links an artifact named with a # or ? in inline code and in a worker report, by its whole name", () => {
-		// Inline code and a report's artifact line are file paths, not link
-		// targets: "#" and "?" there are part of the name.
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "issue#42.md" }, { path: "why?.md" }] }] }];
 		renderWithQueries(<ChatLinkProvider onSessionLinkOpen={vi.fn()}>
 			<ChatMarkdown text="See `worker-1/why?.md`." />
@@ -760,7 +722,6 @@ describe("ChatMarkdown", () => {
 
 	it("links an inline artifact path once a workspace refresh lists it, and unlinks it when it goes", () => {
 		linkSource.workspaces = [];
-		// The same children each time, as a re-render of unchanged markdown passes.
 		const children = <code>plan.md</code>;
 		const path = () => <ChatLinkProvider onSessionLinkOpen={vi.fn()}>
 			<ArtifactPathCode text="/tmp/ao/artifacts/worker-1/plan.md">{children}</ArtifactPathCode>
@@ -866,7 +827,6 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("omits the system-browser item for non-web links but still offers copying", async () => {
-		// mailto must never reach shell.openExternal from the menu.
 		renderWithLinkHandler("[Email support](mailto:support@example.com)", vi.fn());
 
 		fireEvent.contextMenu(screen.getByRole("link", { name: "Email support" }));
@@ -926,16 +886,12 @@ describe("ChatMarkdown", () => {
 	});
 
 	it("renders a fence with no language as a block, not as inline code", () => {
-		// Matching on the `language-*` class alone used to send these down the inline
-		// path, where a whole `go test` transcript rendered as one accent-coloured run.
 		render(<ChatMarkdown text={"```\nok\tgithub.com/aoagents/ao\t0.4s\n```"} />);
 		const code = screen.getByText(/aoagents/);
 		expect(code.closest("pre")).not.toBeNull();
 		expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
 	});
 });
-
-/* -------------------------------------------------------------------------- */
 
 describe("ChatMarkdown images", () => {
 	it("caps a single image's height instead of letting it fill the column", () => {
@@ -953,18 +909,13 @@ describe("ChatMarkdown images", () => {
 		);
 		const gallery = screen.getByRole("group", { name: "Images" });
 		expect(gallery).toHaveClass("flex-wrap");
-		// A gallery is block content; nesting it in a <p> is invalid markup.
 		expect(gallery.closest("p")).toBeNull();
 		const thumbnails = screen.getAllByRole("img");
 		expect(thumbnails).toHaveLength(3);
 		for (const thumbnail of thumbnails) {
 			expect(gallery).toContainElement(thumbnail);
-			// A wide screenshot in a narrow column is clamped by max-w-full; cropping
-			// it would cut the edges off the before/after pair this is for.
 			expect(thumbnail).toHaveClass("h-40", "object-contain");
 			expect(thumbnail).not.toHaveClass("object-cover");
-			// A lazy image has no width until it decodes, so without a floor the row
-			// wraps against zero-width boxes and reflows as each one lands.
 			expect(thumbnail).toHaveClass("min-w-24");
 		}
 	});
@@ -1025,8 +976,6 @@ describe("ChatMarkdown images", () => {
 		expect(link).toContainElement(screen.getByRole("img", { name: "badge" }));
 	});
 });
-
-/* -------------------------------------------------------------------------- */
 
 describe("ChatMarkdown image sources", () => {
 	function renderInSession(text: string) {
@@ -1093,12 +1042,9 @@ describe("ChatMarkdown image sources", () => {
 	});
 });
 
-/* -------------------------------------------------------------------------- */
-
 describe("ChatMarkdown code highlighting", () => {
 	const block = (language: string, code: string) => `\`\`\`${language}\n${code}\n\`\`\``;
 
-	/** The tokens land as `hljs-*` classes; `code-theme.css` colours them. */
 	function tokens(): Element[] {
 		return [...document.querySelectorAll("pre [class*='hljs-']")];
 	}
@@ -1111,8 +1057,6 @@ describe("ChatMarkdown code highlighting", () => {
 
 	it("leaves an unknown language as plain monospace rather than guessing", async () => {
 		render(<ChatMarkdown text={block("brainfuck", "++++[>++++<-]")} />);
-		// Nothing to wait for — there is no grammar to load — so a flush is enough to
-		// prove no upgrade is coming.
 		await waitFor(() => expect(screen.getByText("++++[>++++<-]")).toBeInTheDocument());
 		expect(tokens()).toHaveLength(0);
 		expect(screen.getByText("brainfuck")).toBeInTheDocument();
@@ -1135,8 +1079,6 @@ describe("ChatMarkdown code highlighting", () => {
 		await waitFor(() => expect(tokens().length).toBeGreaterThan(0));
 		first.unmount();
 
-		// A remount is what scrolling does. Without the cache this would flash plain
-		// again; with it the very first commit is already highlighted.
 		render(<ChatMarkdown text={block("sql", code)} />);
 		expect(tokens().length).toBeGreaterThan(0);
 	});
@@ -1267,14 +1209,12 @@ describe("ChatMarkdown streaming fade", () => {
 		const { container, rerender } = render(<ChatMarkdown text="seen" streaming />);
 		Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
 		try {
-			// Its fade could only play once the reader is back, replaying the whole stretch.
 			rerender(<ChatMarkdown text="seen while away" streaming />);
 		} finally {
 			Reflect.deleteProperty(document, "visibilityState");
 		}
 		const afterReturn = fading(container);
 		expect(container.textContent).toBe("seen while away");
-		// Only what arrives once the reader is back fades in.
 		rerender(<ChatMarkdown text="seen while away, back" streaming />);
 		expect(fading(container)).toBe(afterReturn + ", back".length);
 		expect(afterReturn).toBeLessThanOrEqual("seen".length);
@@ -1340,7 +1280,6 @@ describe("ChatMarkdown math", () => {
 	afterEach(() => useUiStore.setState({ renderMath: false }));
 
 	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
-		// With math off, `$a~b$` is prose, and streaming repair escapes its `~`.
 		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
 		act(() => useUiStore.setState({ renderMath: true }));
 		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());

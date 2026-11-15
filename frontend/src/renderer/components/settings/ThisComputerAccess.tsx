@@ -17,26 +17,16 @@ type MobileStatus = Awaited<ReturnType<typeof fetchMobileStatus>>;
 
 async function disableRemoteAccess() {
 	const stopped = await apiClient.POST("/api/v1/mobile/disable");
-	// Disable can report an error after the listener has already stopped.
 	if (stopped.error && (await fetchMobileStatus()).enabled) throw apiErrorException(stopped.error);
 }
 
-/** Puts remote access back the way it was before a turn-on that did not link this computer. */
 async function restoreRemoteAccess(before: MobileStatus) {
 	if (!before.enabled) return disableRemoteAccess();
-	// Remote access that was already on stays on. A LAN-only bridge loses the
-	// tunnel again but keeps its password, so a paired phone stays paired.
 	if (!before.noPublicTunnel) return;
 	const restored = await apiClient.POST("/api/v1/mobile/enable-lan-only");
 	if (restored.error) throw apiErrorException(restored.error);
 }
 
-/**
- * Lets the account's other devices open this computer: turns on the
- * authenticated remote listener with its tunnel and links this machine to the
- * signed-in AO account, so it appears on every device without a password.
- * On means both facts hold; neither is stored here.
- */
 export function ThisComputerAccess() {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -58,7 +48,6 @@ export function ThisComputerAccess() {
 	});
 	const accountHosts = useQuery({
 		queryKey: accountHostsKey,
-		// Only what this row shows: the cache never holds other hosts' tokens.
 		queryFn: async () => (await listAccountRemoteHosts(cloudBaseUrl)).map(({ hostId, label }) => ({ hostId, label })),
 		enabled: usable,
 	});
@@ -73,22 +62,16 @@ export function ThisComputerAccess() {
 
 	const turnOn = async () => {
 		const before = await fetchMobileStatus();
-		// Only a listing this turn-on added is taken back when it fails: one Connect Mobile or an earlier turn-on made stays.
 		let hostId = "";
 		let added = false;
 		let shared = false;
 		try {
-			// A running bridge keeps its password, so a phone paired over Connect Mobile stays paired.
 			let password = before.password ?? "";
-			// Started with its tunnel, as before fixed addresses: an app that quits
-			// while the link runs leaves remote access on, not a LAN-only computer.
 			if (!before.enabled) {
 				const started = await apiClient.POST("/api/v1/mobile/enable");
 				if (started.error || !started.data) throw apiErrorException(started.error);
 				password = started.data.password ?? "";
 			}
-			// remote-access then moves the tunnel to the fixed address the link gave this computer. When
-			// AO Cloud cannot give it one, it is listed at the quick tunnel's address below, as before.
 			({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password).catch(
 				() => ({ hostId: "", added: false }),
 			));
@@ -99,11 +82,9 @@ export function ThisComputerAccess() {
 				setNeedsConnector(true);
 				return;
 			}
-			// No fixed address: listed at the quick tunnel's, as before fixed addresses.
 			if (!hostId) ({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password, { url: ready.url }));
 			shared = true;
 		} finally {
-			// Not shared, the switch shows off; leaving access on, or the account listing this computer, would contradict it.
 			if (!shared) {
 				if (hostId && added) await deleteAccountRemoteHost(cloudBaseUrl, hostId).catch(() => undefined);
 				await restoreRemoteAccess(before);
@@ -112,7 +93,6 @@ export function ThisComputerAccess() {
 	};
 
 	const turnOff = async (hostId: string) => {
-		// Cut access first: the account record only tells devices where to look.
 		await disableRemoteAccess();
 		await deleteAccountRemoteHost(cloudBaseUrl, hostId);
 	};
@@ -125,7 +105,6 @@ export function ThisComputerAccess() {
 		void (next ? turnOn() : turnOff(current.hostId ?? ""))
 			.catch((cause: unknown) => setError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed")))
 			.finally(async () => {
-				// Hold the requested position until the refreshed facts land, so the switch does not flicker back.
 				await Promise.all([
 					queryClient.invalidateQueries({ queryKey: mobileStatusQueryKey }),
 					queryClient.invalidateQueries({ queryKey: accountHostsKey }),
@@ -134,7 +113,6 @@ export function ThisComputerAccess() {
 			});
 	};
 
-	// Linked but not reachable: still starting, or the connector has failed.
 	const unreachable = on && current !== undefined && !tunnelUrl(current);
 	const tunnelError = unreachable ? current?.tunnel?.lastError ?? "" : "";
 	let description = t("remote.shareThisComputerDescription");

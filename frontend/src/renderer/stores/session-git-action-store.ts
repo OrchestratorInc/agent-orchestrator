@@ -5,14 +5,10 @@ export type SessionGitActionKind = "createPR" | "createDraftPR" | "commit" | "co
 export type PendingSessionGitAction = {
 	kind: SessionGitActionKind;
 	startedAt: number;
-	/** The session was seen working on the request, so a later idle means it finished. */
 	sawActive?: boolean;
-	/** When the session went idle without the expected git facts appearing. */
 	idleSince?: number;
 };
 
-// The Summary view unmounts on every tab switch, so a pending git action lives
-// here (keyed by sessionUiKey). Not persisted: a reload re-derives from git facts.
 type SessionGitActionState = {
 	pending: Record<string, PendingSessionGitAction>;
 	start: (key: string, kind: SessionGitActionKind) => void;

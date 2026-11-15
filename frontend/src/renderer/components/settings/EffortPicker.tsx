@@ -14,7 +14,6 @@ export type EffortMenuProps = {
 	defaultValue?: string | null;
 	defaultEffort?: string;
 	availability?: EffortAvailability;
-	/** Chat composer menus: 12px rows with muted inactive items, like the model list. */
 	compact?: boolean;
 };
 
@@ -32,8 +31,6 @@ function effortLevelKey(value: string): (typeof EFFORT_LEVEL_KEYS)[keyof typeof 
 	return Object.hasOwn(EFFORT_LEVEL_KEYS, value) ? EFFORT_LEVEL_KEYS[value as keyof typeof EFFORT_LEVEL_KEYS] : undefined;
 }
 
-// Known levels are localized; anything else a provider reports is shown as-is,
-// capitalized, because we cannot translate names we have never seen.
 export function formatEffortLabel(value: string, t: TFunction): string {
 	const key = effortLevelKey(value.trim().toLowerCase());
 	return key ? t(key) : value.charAt(0).toUpperCase() + value.slice(1);
@@ -55,8 +52,6 @@ export function effortDisplayLabel({ value, choices, followLabel, t, defaultEffo
 		(item) => item.value.toLowerCase() !== "default" && (item.value.toLowerCase() === reported || item.label?.toLowerCase() === reported),
 	);
 	if (choice) return choice.label || formatEffortLabel(choice.value, t);
-	// A provider's default description may be prose, so only a known level name
-	// is trusted as a label.
 	return effortLevelKey(reported) ? formatEffortLabel(reported, t) : followLabel;
 }
 
@@ -88,7 +83,7 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 	</>;
 }
 
-export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; triggerVariant?: "secondary" | "ghost"; menuClassName?: string; footer?: ReactNode; /** Trigger text while following the default; "Effort" when omitted. */ followLabel?: string }) {
+export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; triggerVariant?: "secondary" | "ghost"; menuClassName?: string; footer?: ReactNode; followLabel?: string }) {
 	const { t } = useTranslation();
 	const following = props.value === (props.defaultValue ?? "") || (!props.value && props.defaultValue === "default");
 	const label = effortDisplayLabel({

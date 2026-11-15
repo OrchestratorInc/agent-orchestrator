@@ -41,8 +41,6 @@ it("drops its pending focus move when it unmounts", async () => {
 	await screen.findByRole("listbox", { name: "Additional repository 1" });
 	const setTimer = vi.spyOn(globalThis, "setTimeout");
 	const clearTimer = vi.spyOn(globalThis, "clearTimeout");
-	// Escape closes the list without a choice: the blank row goes, and focus is
-	// moved back to the add button on the next tick.
 	act(() => { fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" }); });
 	expect(screen.queryByRole("combobox", { name: "Additional repository 1" })).toBeNull();
 	const focusMoves = setTimer.mock.results

@@ -1,5 +1,3 @@
-// Production renderer fixtures for opt-in benchmarks, without packaging Electron.
-// AO_PERF_BUILD_DIR can retain each revision's bundle for alternating A/B runs.
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";

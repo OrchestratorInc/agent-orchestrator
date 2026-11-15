@@ -48,8 +48,6 @@ func TestPollSpawnsWorkerForEligibleIssue(t *testing.T) {
 	if call.IssueID != "github:acme/demo#12" {
 		t.Fatalf("IssueID = %q, want canonical github id", call.IssueID)
 	}
-	// Intake spawns have no parent and no schedule, so only an explicit
-	// creator keeps telemetry from counting them as user-started.
 	if call.CreatedBy != domain.SessionCreatedByAutomation {
 		t.Fatalf("CreatedBy = %q, want automation", call.CreatedBy)
 	}
@@ -513,7 +511,6 @@ func TestTrackerRepoGitLabSelfManagedWithPort(t *testing.T) {
 }
 
 func TestParseRepoNativeGitLabNestedGroup(t *testing.T) {
-	// GitLab nested group: full namespace path must be preserved.
 	tests := []struct {
 		name   string
 		remote string
@@ -670,7 +667,6 @@ func TestCanonicalIssueIDGitLabHostDisambiguates(t *testing.T) {
 		})
 	}
 
-	// The core assertion: same native, different hosts → different IDs.
 	dotCom := CanonicalIssueID(domain.TrackerID{Provider: domain.TrackerProviderGitLab, Native: "group/repo#7"})
 	internal := CanonicalIssueID(domain.TrackerID{Provider: domain.TrackerProviderGitLab, Native: "group/repo#7", Host: "gitlab.internal"})
 	if dotCom == internal {

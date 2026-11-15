@@ -101,15 +101,12 @@ func TestSanitizePrompt(t *testing.T) {
 		prompt string
 		want   string
 	}{
-		// Reserved leading characters must be neutralized with a leading newline.
 		{"dash flag", "--yolo", "\n--yolo"},
 		{"at file reference", "@README.md", "\n@README.md"},
 		{"single dash", "-x", "\n-x"},
-		// Normal prompts pass through unchanged.
 		{"normal text", "add a health check", "add a health check"},
 		{"filename no at", "README.md", "README.md"},
 		{"multi-word", "do the thing", "do the thing"},
-		// Empty string passes through (the caller already guards on empty).
 		{"empty", "", ""},
 	}
 	for _, tc := range tests {
@@ -177,7 +174,6 @@ func TestGetLaunchCommandSanitizesPromptWithSystemPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// System prompt is prepended normally; the prompt is still sanitized.
 	want := []string{"kimchi", "--append-system-prompt", "follow repo rules", "\n-flag"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -270,10 +266,6 @@ func TestGetLaunchCommandEmitsToolAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Kimchi's permission loader splits --allow-tool/--deny-tool values by
-	// comma (splitFlag), and repeated flags overwrite (last-wins), so the
-	// adapter must emit a single comma-joined value per flag — not one pair
-	// per rule — to avoid the deny list collapsing to a single entry.
 	if !containsSubsequence(cmd, []string{"--allow-tool", "read,grep,bash(git diff:*)"}) {
 		t.Fatalf("missing single comma-joined --allow-tool; got %#v", cmd)
 	}
@@ -362,9 +354,6 @@ func containsSubsequence(values, needle []string) bool {
 	return false
 }
 
-// countFlagOccurrences counts how many times flagName appears as an element
-// of values, asserting that --allow-tool / --deny-tool are emitted at most
-// once each.
 func countFlagOccurrences(values []string, flagName string) int {
 	n := 0
 	for _, v := range values {
@@ -375,10 +364,6 @@ func countFlagOccurrences(values []string, flagName string) int {
 	return n
 }
 
-// containsString reports whether values contains the given string. It is the
-// slice-membership counterpart to the file's existing substring contains();
-// the two share a name in the claudecode test but are distinguished here to
-// avoid a collision with the substring helper below.
 func containsString(values []string, needle string) bool {
 	for _, v := range values {
 		if v == needle {
@@ -402,21 +387,12 @@ func TestGetRestoreCommand(t *testing.T) {
 		t.Fatal("ok=false, want true")
 	}
 
-	// Full argv: binary + (no permission flag for default) + (no system prompt)
-	// + --session <id> last. Permissions and system prompt are absent here
-	// because the RestoreConfig carries neither, so the only trailing flag is
-	// --session. The tests below assert the permission and system-prompt
-	// re-application paths separately.
 	want := []string{"kimchi", "--session", "019e950e-52e0-7411-961b-d380ca7e610f"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
 }
 
-// TestGetRestoreCommandAppendsResumeTimePrompt covers resuming a reviewer
-// after it was killed and re-triggered: the new task must be embedded in the
-// resume argv (mirroring GetLaunchCommand), or the resumed session would sit
-// idle with no work to act on.
 func TestGetRestoreCommandAppendsResumeTimePrompt(t *testing.T) {
 	p := &Plugin{resolvedBinary: "kimchi"}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
@@ -464,8 +440,6 @@ func TestGetRestoreCommandWithPermissions(t *testing.T) {
 			if !ok {
 				t.Fatal("ok=false, want true")
 			}
-			// The permission flag must be re-applied on resume before
-			// --session, which is appended last.
 			want := append(append([]string{}, tc.want...), "--session", "sess-1")
 			if !reflect.DeepEqual(cmd, want) {
 				t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -491,10 +465,6 @@ func TestGetRestoreCommandEmitsToolAllowlist(t *testing.T) {
 		t.Fatal("ok=false, want true")
 	}
 
-	// Kimchi's permission loader splits --allow-tool/--deny-tool values by
-	// comma (splitFlag), and repeated flags overwrite (last-wins), so the
-	// adapter must emit a single comma-joined value per flag — not one pair
-	// per rule — to avoid the deny list collapsing to a single entry.
 	if !containsSubsequence(cmd, []string{"--allow-tool", "read,grep,bash(git diff:*)"}) {
 		t.Fatalf("missing single comma-joined --allow-tool; got %#v", cmd)
 	}
@@ -507,7 +477,6 @@ func TestGetRestoreCommandEmitsToolAllowlist(t *testing.T) {
 	if n := countFlagOccurrences(cmd, "--deny-tool"); n != 1 {
 		t.Fatalf("--deny-tool appears %d times, want 1; got %#v", n, cmd)
 	}
-	// Tool flags must appear before --session, which is appended last.
 	if !containsSubsequence(cmd, []string{"--deny-tool", "edit,write,bash(git push:*)", "--session", "sess-1"}) {
 		t.Fatalf("tool flags must precede --session; got %#v", cmd)
 	}
@@ -535,8 +504,6 @@ func TestGetRestoreCommandOmitsToolFlagsWhenUnset(t *testing.T) {
 func TestGetRestoreCommandWithSystemPromptFile(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "system.md")
-	// Write content WITH a trailing newline to verify the raw file contents
-	// are passed through without TrimRight trimming.
 	if err := os.WriteFile(file, []byte("file contents win\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -556,10 +523,6 @@ func TestGetRestoreCommandWithSystemPromptFile(t *testing.T) {
 		t.Fatal("ok=false, want true")
 	}
 
-	// The file's raw contents (including the trailing newline) are inlined
-	// as --append-system-prompt before --session (which is appended last).
-	// Inline cfg.SystemPrompt is ignored because the file takes precedence,
-	// mirroring the launch-side behavior.
 	want := []string{"kimchi", "--append-system-prompt", "file contents win\n", "--session", "019e950e-52e0-7411-961b-d380ca7e610f"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
@@ -594,7 +557,6 @@ func TestReadBoundedSystemPromptHonorsCanceledContext(t *testing.T) {
 func TestGetLaunchCommandRejectsOversizedSystemPromptFile(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "system.md")
-	// 128 KiB + 1 byte — one byte over the limit.
 	if err := os.WriteFile(file, bytes.Repeat([]byte("a"), 128*1024+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +573,6 @@ func TestGetLaunchCommandRejectsOversizedSystemPromptFile(t *testing.T) {
 func TestGetRestoreCommandRejectsOversizedSystemPromptFile(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "system.md")
-	// 128 KiB + 1 byte — one byte over the limit.
 	if err := os.WriteFile(file, bytes.Repeat([]byte("a"), 128*1024+1), 0o600); err != nil {
 		t.Fatal(err)
 	}

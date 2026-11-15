@@ -3,16 +3,11 @@ import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-// The packaged macOS app ships cloudflared, so turning on remote access never
-// waits for an install (or needs Homebrew). Windows and Linux keep the
-// winget/apt install offered in the app.
 const VERSION = "2026.10.2";
 const RELEASE_BASE = `https://github.com/cloudflare/cloudflared/releases/download/${VERSION}`;
 const OUTPUT_DIR = path.resolve("cloudflared");
 const DOWNLOAD_ATTEMPTS = 3;
 
-// archive: the release asset; binary: the cloudflared inside it, which is the
-// checksum Cloudflare lists in the release notes.
 const TARGETS = {
 	"darwin-arm64": {
 		asset: "cloudflared-darwin-arm64.tgz",
@@ -34,7 +29,6 @@ const binaryPath = path.join(OUTPUT_DIR, "cloudflared");
 await mkdir(OUTPUT_DIR, { recursive: true });
 if (sha256(await readOrEmpty(binaryPath)) !== target.binary) {
 	const archive = await download(`${RELEASE_BASE}/${target.asset}`);
-	// Check the archive before tar reads it.
 	if (sha256(archive) !== target.archive) throw new Error(`cloudflared archive checksum mismatch: got ${sha256(archive)}`);
 	const work = await mkdtemp(path.join(OUTPUT_DIR, ".work-"));
 	try {

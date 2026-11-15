@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// previewCapture records the request body and path the CLI hit, plus whether
-// the daemon was contacted at all.
 type previewCapture struct {
 	body              string
 	path              string
@@ -20,8 +18,6 @@ type previewCapture struct {
 	called            bool
 }
 
-// previewServer wires an httptest server expecting POST or DELETE on
-// /api/v1/sessions/{id}/preview and captures what the CLI sent.
 func previewServer(t *testing.T, status int, respBody string) (*httptest.Server, *previewCapture) {
 	t.Helper()
 	capture := &previewCapture{}
@@ -217,8 +213,6 @@ func TestPreviewServerCommandsUseSessionShellCapability(t *testing.T) {
 			t.Setenv("AO_PREVIEW_CAPABILITY", "shell-preview-token")
 			cfg := setConfigEnv(t)
 			srv, capture := previewLifecycleServer(t, http.StatusOK, `{"sessionId":"aa-47","state":"stopped","logs":[]}`)
-			// previewLifecycleServer seeds the worker credential for its other
-			// callers; this shell case intentionally has only preview authority.
 			t.Setenv("AO_BROWSER_CAPABILITY", "")
 			writeRunFileFor(t, cfg, srv)
 			_, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, tc.args...)
@@ -321,7 +315,6 @@ func TestPreview_HelpIncludesExamples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Examples section present.
 	if !strings.Contains(out, "EXAMPLES") && !strings.Contains(out, "Examples") {
 		t.Errorf("help output missing Examples section:\n%s", out)
 	}

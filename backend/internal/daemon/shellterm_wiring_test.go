@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// fakeSessionGetter stands in for the real session service so sessionWorkspaceLocator
-// can be tested without a full session stack.
 type fakeSessionGetter struct {
 	sessions map[domain.SessionID]domain.Session
 	err      error
@@ -28,8 +26,6 @@ func (f *fakeSessionGetter) Get(_ context.Context, id domain.SessionID) (domain.
 	return sess, nil
 }
 
-// TestSessionWorkspaceLocator_ReturnsPathWhenItStillExists is the ordinary
-// live-session case: the worktree is still on disk, so the shell opens there.
 func TestSessionWorkspaceLocator_ReturnsPathWhenItStillExists(t *testing.T) {
 	dir := t.TempDir()
 	getter := &fakeSessionGetter{sessions: map[domain.SessionID]domain.Session{
@@ -52,13 +48,6 @@ func TestSessionWorkspaceLocator_ReturnsPathWhenItStillExists(t *testing.T) {
 	}
 }
 
-// TestSessionWorkspaceLocator_FallsBackWhenRecordedPathWasRemoved is the
-// regression this covers: Kill/Cleanup can reclaim a worktree without
-// clearing the session's durable Metadata.WorkspacePath (that field doubles
-// as "what to recreate on restore"). A shell opened against an archived
-// session must not trust a path that no longer exists — it must signal "no
-// workspace" so the caller falls back to the project root instead of trying
-// to chdir into nothing.
 func TestSessionWorkspaceLocator_FallsBackWhenRecordedPathWasRemoved(t *testing.T) {
 	dir := t.TempDir()
 	removed := filepath.Join(dir, "worktree-that-is-gone")
@@ -82,9 +71,6 @@ func TestSessionWorkspaceLocator_FallsBackWhenRecordedPathWasRemoved(t *testing.
 	}
 }
 
-// TestSessionWorkspaceLocator_KeepsDirtyPreservedWorktree: a worktree Kill
-// refused to remove because of uncommitted work still exists on disk, so it
-// must be returned as-is, not treated as reclaimed.
 func TestSessionWorkspaceLocator_KeepsDirtyPreservedWorktree(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "uncommitted.txt"), []byte("wip"), 0o644); err != nil {

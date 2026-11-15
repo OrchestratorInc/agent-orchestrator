@@ -7,10 +7,7 @@ import { queryClient } from "../lib/query-client";
 
 export type LinkPreview = components["schemas"]["LinkPreviewResponse"];
 
-/** How long a hover waits on the skeleton before showing the compact fallback. */
 export const LINK_PREVIEW_SETTLE_MS = 3_000;
-// Matches the daemon's success TTL, so a warm link stays instant for as long as
-// the daemon would serve it without going upstream.
 const LINK_PREVIEW_CACHE_MS = 30 * 60_000;
 
 export function linkPreviewQueryKey(url: string) {
@@ -36,7 +33,6 @@ function linkPreviewQueryOptions(url: string) {
 	};
 }
 
-/** Loads a preview into the cache a hover reads, and resolves with it. Never rejects. */
 export async function preloadLinkPreview(url: string): Promise<LinkPreview | undefined> {
 	await queryClient.prefetchQuery(linkPreviewQueryOptions(url));
 	return queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(url));
@@ -53,33 +49,11 @@ function cachedSnapshot(url: string): LinkPreviewSnapshot {
 	return { url, data: queryClient.getQueryData<LinkPreview>(linkPreviewQueryKey(url)), isError: false, expired: false };
 }
 
-/**
- * Fetches Open Graph metadata for an external URL through the daemon (the
- * renderer CSP blocks direct external fetches). Lazy: pass `enabled` only when
- * the preview is actually being shown.
- *
- * Observes the shared queryClient directly rather than through useQuery so
- * AppLink, which renders in many provider-less contexts, stays safe everywhere.
- *
- * Every hover settles. A failure settles at once; a response that is still
- * outstanding after LINK_PREVIEW_SETTLE_MS reports `isError` so the card shows
- * its fallback, and upgrades in place if the response then arrives.
- *
- * When the last hover on a URL ends its request is aborted, so links that were
- * only passed over do not hold the renderer's few daemon connections. The
- * daemon keeps fetching and caches the result, and owns the failure window, so
- * the next hover always asks it again.
- *
- * Results are keyed by URL: callers like XtermTerminal reuse one hook instance
- * while the hovered URL changes, so state from a previous URL must never be
- * returned for the current one.
- */
 export function useLinkPreview(url: string, enabled: boolean) {
 	const [snapshot, setSnapshot] = useState<LinkPreviewSnapshot>(() => cachedSnapshot(url));
 
 	useEffect(() => {
 		if (!enabled || !url) {
-			// A failure only applies to the hover that saw it.
 			setSnapshot((previous) => (previous.url === url && !previous.isError && !previous.expired ? previous : cachedSnapshot(url)));
 			return;
 		}
@@ -110,12 +84,6 @@ export function useLinkPreview(url: string, enabled: boolean) {
 	};
 }
 
-/**
- * The HTTPS site root of a web link (`https://host/`), whose preview names the
- * site's icon. An http link is looked up over HTTPS too, unless it names its own
- * port, which says nothing about where HTTPS is served. Carries none of the
- * link's path, query or credentials.
- */
 export function linkOrigin(url: string): string | undefined {
 	try {
 		const parsed = new URL(url);
@@ -138,12 +106,6 @@ function previewWithFavicon(url: string): LinkPreview | undefined {
 	return preview?.faviconUrl ? preview : undefined;
 }
 
-/**
- * What the cache knows of a link's site icons: the preview naming them (the
- * link's own, which a hover loaded, or its site root's), "failed" when asking
- * for the site root failed so no icon is coming, or undefined while unknown.
- * Reads the cache only, through one subscription, and updates in place.
- */
 export function useCachedLinkFavicons(url: string): LinkPreview | "failed" | undefined {
 	const origin = useMemo(() => linkOrigin(url), [url]);
 	const read = useCallback(() => {

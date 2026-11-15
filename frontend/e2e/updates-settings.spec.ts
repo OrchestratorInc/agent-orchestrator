@@ -19,9 +19,6 @@ test("downloaded update keeps the full version readable and actions aligned", as
 
 	await expect(page.getByTestId("update-status-line")).toContainText("Downloaded. Restart to finish updating.");
 
-	// The heading carries the base version; the full nightly stamp sits on its
-	// own monospace line. As one heading it wrapped mid-token and swallowed the
-	// row, and the primary action grew across it.
 	const version = page.getByTestId("app-version");
 	await expect(version).toHaveText("v0.12.7");
 	await expect(version).toHaveAttribute("aria-label", "Current version - v0.12.7-nightly.202608240525");
@@ -41,7 +38,6 @@ test("downloaded update keeps the full version readable and actions aligned", as
 	expect(restartBox).not.toBeNull();
 	expect(checkBox).not.toBeNull();
 	expect(Math.abs((restartBox?.height ?? 0) - (checkBox?.height ?? 0))).toBeLessThan(1);
-	// The actions row must not overrun the version block.
 	const versionBox = await version.boundingBox();
 	expect(restartBox?.x ?? 0).toBeGreaterThan((versionBox?.x ?? 0) + (versionBox?.width ?? 0));
 });
@@ -58,7 +54,6 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await expect(page.getByTestId("sidebar-update-downloading")).toContainText("Downloading update");
 	await expect(page.getByTestId("update-status-line")).toContainText(/Starting download…|Downloading…/);
 
-	// A missed push is recovered by one local status read, without feed checks.
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "downloading", version: "2.0.0", percent: 42, transferred: 42_000_000, total: 100_000_000 });
 	});
@@ -105,14 +100,11 @@ for (const width of [1400, 900]) {
 			const bar = (await progress.boundingBox())!;
 			const line = (await statusLine.boundingBox())!;
 			const button = (await action.boundingBox())!;
-			// Starts at the text column and runs up to the actions, not just under
-			// the longest text line (the old track stopped under "Built …").
 			expect(Math.abs(bar.x - line.x)).toBeLessThan(1);
 			expect(button.x - (bar.x + bar.width)).toBeGreaterThanOrEqual(0);
 			expect(button.x - (bar.x + bar.width)).toBeLessThan(48);
 			widths.push(bar.width);
 		}
-		// The track never depends on progress; only the fill does.
 		expect(Math.max(...widths) - Math.min(...widths)).toBeLessThan(1);
 	});
 }
@@ -131,8 +123,6 @@ for (const [label, version, settingsText, sidebarLabel, shortVersion] of [
 		await page.goto("/#/settings");
 		await page.getByRole("button", { name: "Updates", exact: true }).click();
 		await expect(page.getByTestId("update-status-line")).toContainText(settingsText);
-		// The sidebar says "Update available"; the row button's label carries the
-		// full version behind exactly one "v", and the row shows the base one dimmed.
 		const available = page.getByTestId("sidebar-update-available");
 		await expect(available).toContainText("Update available");
 		await expect(available).toContainText(shortVersion);

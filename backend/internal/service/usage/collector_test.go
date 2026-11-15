@@ -109,11 +109,6 @@ func TestCollectorPersistsOnlyCanonicalClaudeProviderHints(t *testing.T) {
 	}
 }
 
-// Break caught: a Claude binding that predates its first hook holds events that
-// can never be attributed, because a Claude transcript names no provider. The
-// hook's route hint is the only evidence, and it arrives long after those events
-// were stored — so the moment it lands has to reopen historical repair, or the
-// session stays unpriced until the next daemon start.
 func TestCollectorReopensHistoricalRepairWhenAClaudeRouteFirstArrives(t *testing.T) {
 	store := collectorTestStore(t)
 	const nativeID = "native-late-route"
@@ -135,7 +130,6 @@ func TestCollectorReopensHistoricalRepairWhenAClaudeRouteFirstArrives(t *testing
 		}
 	}
 
-	// A binding created without a route has no history to reopen yet.
 	hook("")
 	if resolved != 0 {
 		t.Fatalf("route resolutions = %d after the first routeless hook, want 0", resolved)
@@ -146,18 +140,12 @@ func TestCollectorReopensHistoricalRepairWhenAClaudeRouteFirstArrives(t *testing
 		t.Fatalf("route resolutions = %d once the route arrives, want 1", resolved)
 	}
 
-	// Every later hook repeats the same route. Reopening repair on each one
-	// would rescan every legacy source on every turn.
 	hook("anthropic")
 	if resolved != 1 {
 		t.Fatalf("route resolutions = %d after a repeat route, want it to stay 1", resolved)
 	}
 }
 
-// Break caught: the first hook can prove that a custom Claude route exists
-// without naming it. When a later hook identifies that route, treating the
-// non-empty "unidentified" sentinel as already resolved leaves the historical
-// events on their inferred or unavailable price until the next daemon start.
 func TestCollectorReopensHistoricalRepairWhenAClaudeRouteBecomesIdentified(t *testing.T) {
 	store := collectorTestStore(t)
 	const nativeID = "native-identified-route"
@@ -1537,8 +1525,6 @@ func TestCollectorDiscoveryLimitRotatesPendingBindings(t *testing.T) {
 		t.Fatalf("first/second sources=%+v/%+v", firstSources, secondSources)
 	}
 
-	// The cursor is now past the last binding, so the next bounded pass has to
-	// wrap to the start to reach the first binding's newly written rollout.
 	firstPath := filepath.Join(root, "2026", "07", "28", "rollout-native-first.jsonl")
 	writeUsageFixture(t, firstPath, codexSessionMetaFixture(t, "native-first", ""))
 	mustNoError(t, collector.ReconcileSources(context.Background(), 1), "wrapped reconcile")
@@ -2021,8 +2007,6 @@ func TestCollectorDiscoversKimiWireSourcesFromSessionIndex(t *testing.T) {
 	}
 }
 
-// TestCollectorReconcileDiscoversKimiChildCreatedAfterStart catches dropping
-// child agents that appear after the initial Kimi source scan.
 func TestCollectorReconcileDiscoversKimiChildCreatedAfterStart(t *testing.T) {
 	const nativeID = "kimi-session-late-child"
 	store := collectorTestStore(t)
@@ -2385,11 +2369,9 @@ func TestCollectorUnlimitedPassIncludesEarlierBinding(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	collector := NewCollector(store, SourceRoots{CodexSessions: root}, nil)
 	mustNoError(t, collector.BackfillActive(ctx), "backfill")
-	// Establish a bounded-pass cursor past the first pending binding.
 	mustNoError(t, collector.ReconcileSources(ctx, 1), "bounded pass")
 	path := filepath.Join(root, "2026", "11", "05", "rollout-native-review-first.jsonl")
 	writeUsageFixture(t, path, codexSessionMetaFixture(t, "native-review-first", ""))
-	// Negative limit promises all eligible bindings, including the first one.
 	mustNoError(t, collector.ReconcileSources(ctx, -1), "unlimited pass")
 	bindings, err := store.ListUsageBindingsForSession(ctx, first.ID)
 	mustNoError(t, err)

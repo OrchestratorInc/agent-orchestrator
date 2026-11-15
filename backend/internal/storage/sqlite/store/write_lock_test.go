@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// Break caught: shutdown cancellation could lose a race with an available
-// writer token and admit new enrichment work after cancellation.
 func TestContextMutexRejectsPreCanceledAdmissionWithoutLosingToken(t *testing.T) {
 	mutex := newContextMutex()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -24,8 +22,6 @@ func TestContextMutexRejectsPreCanceledAdmissionWithoutLosingToken(t *testing.T)
 	mutex.Unlock()
 }
 
-// Break caught: a backfill waiting behind an ordinary store writer could keep
-// daemon shutdown blocked until that unrelated write released the mutex.
 func TestContextMutexCancelsWhileWaiting(t *testing.T) {
 	mutex := newContextMutex()
 	mutex.Lock()
@@ -53,9 +49,6 @@ func (c *lockAdmissionContext) Err() error {
 	return c.Context.Err()
 }
 
-// Break caught: a writer holding the daemon-wide lock for minutes left no
-// record of who held it, and a report made before release would deadlock any
-// observer that writes.
 func TestContextMutexReportsSlowHolderAfterRelease(t *testing.T) {
 	mutex := newContextMutex()
 	mutex.slowHold = 50 * time.Millisecond

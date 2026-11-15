@@ -13,7 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// A FIFO under the render's name must not hang the same-bytes check.
 func TestSaveRenderAsArtifactSkipsAFIFOWithoutBlocking(t *testing.T) {
 	h := newHarnessForHarness(t, domain.HarnessCodex)
 	ctx := context.Background()

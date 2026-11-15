@@ -1,20 +1,3 @@
-// Trusted input (tier T1) through a transient chrome.debugger attachment.
-// The extension attaches only for the duration of one action, uses the Input
-// domain for pointer and keyboard events plus the Page domain to notice
-// JavaScript dialogs, and detaches immediately. Runtime is enabled only for
-// an explicit console/errors request, then disabled again. Chrome shows its
-// "started debugging this browser" bar while attached; that is the visible
-// cost of trusted events.
-//
-// One exception: when an action opens alert/confirm/prompt, the attachment
-// stays until the dialog is answered, because only the debugger that saw a
-// dialog open can answer it and the page is blocked until then.
-//
-// Every action takes the command's AbortSignal ("Stop all agents" or a
-// cancelled command). Cancellation is checked after waiting for the tab's
-// queue, before attaching, and before every event; a gesture cancelled
-// midway releases whatever it still holds (mouse button, keys).
-
 import type { ChromeApi, DebuggeeTarget } from "./chrome-api";
 import { humanPath, type Point } from "./human-path";
 import { keyEvents } from "./keys";
@@ -22,7 +5,6 @@ import { mouseCapture } from "./pointer-capture";
 import { BridgeError } from "./protocol";
 
 const PROTOCOL_VERSION = "1.3";
-/** How long a debugger screenshot may wait for Chrome to produce a frame. */
 export const SCREENSHOT_TIMEOUT_MS = 4_000;
 
 type Send = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -37,7 +19,6 @@ const DIALOG_OPENED = Symbol("dialog-opened");
 export class TrustedInput {
 	private readonly locks = new Map<number, Promise<unknown>>();
 	private readonly lastPointer = new Map<number, Point>();
-	/** Tabs we stay attached to because a dialog is waiting for an answer. */
 	private readonly pendingDialogs = new Map<number, DialogInfo>();
 	private readonly dialogWaiters = new Map<number, Set<(dialog: DialogInfo) => void>>();
 	private listening = false;
@@ -62,24 +43,20 @@ export class TrustedInput {
 				this.pendingDialogs.delete(source.tabId);
 			}
 		});
-		// The user cancelled the debugging bar, or the tab closed.
 		this.chrome.debugger.onDetach.addListener((source) => {
 			if (source.tabId !== undefined) this.pendingDialogs.delete(source.tabId);
 		});
 	}
 
-	/** The dialog an earlier action left open on this tab, if any. */
 	pendingDialog(tabId: number): DialogInfo | undefined {
 		return this.pendingDialogs.get(tabId);
 	}
 
-	/** Run fn with the debugger attached to tabId, serialized per tab. */
 	async withDebugger<T>(tabId: number, fn: (send: Send) => Promise<T>, signal?: AbortSignal): Promise<T> {
 		this.listen();
 		throwIfAborted(signal);
 		const previous = this.locks.get(tabId) ?? Promise.resolve();
 		const run = previous.catch(() => undefined).then(() => {
-			// The command may have been cancelled while it waited its turn.
 			throwIfAborted(signal);
 			return this.attached(tabId, fn);
 		});
@@ -94,7 +71,6 @@ export class TrustedInput {
 	private async attached<T>(tabId: number, fn: (send: Send) => Promise<T>): Promise<T> {
 		const target: DebuggeeTarget = { tabId };
 		const send: Send = (method, params) => this.chrome.debugger.sendCommand(target, method, params ?? {});
-		// Already attached while a dialog waits: reuse that attachment.
 		const reuse = this.pendingDialogs.has(tabId);
 		if (!reuse) {
 			try {
@@ -109,8 +85,6 @@ export class TrustedInput {
 				);
 			}
 			await send("Page.enable").catch(() => undefined);
-			// Input and screenshots reach a covered window or background tab, but
-			// pages that check focus or visibility would ignore the agent there.
 			await send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => undefined);
 		}
 		try {
@@ -124,12 +98,6 @@ export class TrustedInput {
 		}
 	}
 
-	/**
-	 * Send input events in order, but stop at the moment one of them opens a
-	 * JavaScript dialog: Chrome does not finish dispatching that event until
-	 * the dialog is answered. Stop too when the command is cancelled, after
-	 * releasing any mouse button or key this gesture still holds.
-	 */
 	private async dispatch(tabId: number, send: Send, events: InputEvent[], paceMs = 0, signal?: AbortSignal): Promise<InputResult> {
 		const waiters = this.dialogWaiters.get(tabId) ?? new Set();
 		this.dialogWaiters.set(tabId, waiters);
@@ -148,7 +116,6 @@ export class TrustedInput {
 				await captures("track");
 			}
 			for (const [method, params] of events) {
-				// Human-paced pointer movement: a short, jittered gap between moves.
 				if (paceMs > 0 && params.type === "mouseMoved") await abortableSleep(paceMs + Math.random() * paceMs, signal).catch(() => undefined);
 				if (signal?.aborted) {
 					await held.release(send, async () => {
@@ -168,7 +135,6 @@ export class TrustedInput {
 				if (outcome === DIALOG_OPENED) return { dialogOpened: true, dialog: this.pendingDialogs.get(tabId) };
 				held.track(method, params);
 			}
-			// A handler can open a dialog just after the last event returns.
 			const late = await Promise.race([dialogOpened, sleep(50).then(() => undefined)]);
 			return late === DIALOG_OPENED ? { dialogOpened: true, dialog: this.pendingDialogs.get(tabId) } : {};
 		} finally {
@@ -230,18 +196,10 @@ export class TrustedInput {
 		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, events, 0, signal), signal);
 	}
 
-	/**
-	 * A PNG of this tab's viewport, base64. Unlike captureVisibleTab it needs
-	 * neither the tab in front nor its window on screen, and it can never
-	 * contain another tab.
-	 */
 	async screenshot(tabId: number, signal?: AbortSignal, timeoutMs = SCREENSHOT_TIMEOUT_MS): Promise<string> {
 		this.assertNoDialog(tabId);
 		return this.withDebugger(tabId, async (send) => {
 			throwIfAborted(signal);
-			// A page that loaded inside a minimized window has never painted, and
-			// Chrome waits for a frame that never comes. Detaching (on the way
-			// out) cancels the request.
 			let timer: ReturnType<typeof setTimeout> | undefined;
 			const timedOut = new Promise<never>((_, reject) => {
 				timer = setTimeout(() => reject(new BridgeError("SCREENSHOT_TIMEOUT", "Chrome produced no frame for the session's tab")), timeoutMs);
@@ -256,7 +214,6 @@ export class TrustedInput {
 		}, signal);
 	}
 
-	/** Console messages and exceptions Chrome kept for the page. */
 	async consoleMessages(tabId: number, signal?: AbortSignal): Promise<{ console: ConsoleMessage[]; errors: ConsoleMessage[] }> {
 		this.assertNoDialog(tabId);
 		const console: ConsoleMessage[] = [];
@@ -284,7 +241,6 @@ export class TrustedInput {
 		this.chrome.debugger.onEvent.addListener(listener);
 		try {
 			await this.withDebugger(tabId, async (send) => {
-				// Enabling Runtime replays the messages Chrome kept for the page.
 				await send("Runtime.enable");
 				await abortableSleep(300, signal).catch(() => undefined);
 				await send("Runtime.disable");
@@ -296,7 +252,6 @@ export class TrustedInput {
 		return { console: console.slice(-200), errors: errors.slice(-200) };
 	}
 
-	/** Inspect or answer a JavaScript dialog (alert/confirm/prompt). */
 	async dialog(tabId: number, operation: "status" | "accept" | "dismiss", promptText?: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
 		const pending = this.pendingDialogs.get(tabId);
 		if (operation === "status") return pending ? { open: true, ...pending } : { open: false };
@@ -316,10 +271,6 @@ export class TrustedInput {
 	}
 }
 
-/**
- * Mouse buttons and keys a gesture has pressed but not yet released, so a
- * cancelled gesture never leaves the page with a stuck button or modifier.
- */
 class HeldInput {
 	private mouse?: { x: number; y: number; button: string };
 	private readonly keys = new Map<string, Record<string, unknown>>();
@@ -339,10 +290,6 @@ class HeldInput {
 	async release(send: Send, releaseCapture: () => Promise<void>): Promise<void> {
 		if (this.mouse) {
 			await releaseCapture();
-			// Releasing on the pressed target completes a click (and can submit a
-			// form). Move outside the viewport first, then release there. If the
-			// move fails, the release still uses the outside coordinates. Capture
-			// has already been cleared; buttons:0 prevents re-capture on movement.
 			const outside = { x: -1, y: -1, button: this.mouse.button };
 			await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...outside, buttons: 0 }).catch(() => undefined);
 			await send("Input.dispatchMouseEvent", { type: "mouseReleased", ...outside, buttons: 0, clickCount: 1 }).catch(() => undefined);

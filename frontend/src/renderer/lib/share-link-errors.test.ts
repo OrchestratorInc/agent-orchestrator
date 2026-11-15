@@ -19,7 +19,6 @@ describe("shareLinkErrorMessage", () => {
 		expect(shareLinkErrorMessage(new CloudCpError("forbidden", { status: 403 }), t, TOKEN)).toBe("shareLink.notForYou");
 	});
 	it("asks for a new link when the control plane can't read a short link's code", () => {
-		// A control plane from before codes rejects the unknown field; one with codes rejects a malformed code.
 		expect(shareLinkErrorMessage(new CloudCpError("The request body is invalid.", { status: 400, code: "invalid_request" }), t, CODE)).toBe("shareLink.unavailable");
 		expect(shareLinkErrorMessage(new CloudCpError("The share code is malformed.", { status: 400, code: "invalid_request" }), t, CODE)).toBe("shareLink.unavailable");
 		expect(shareLinkErrorMessage(new CloudCpError("The request body is invalid.", { status: 400 }), appI18n.t.bind(appI18n), CODE))

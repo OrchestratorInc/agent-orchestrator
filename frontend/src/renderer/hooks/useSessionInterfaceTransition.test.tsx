@@ -26,9 +26,6 @@ vi.mock("../lib/api-client", () => ({
 }));
 vi.mock("../lib/host-clients", () => ({ clientForSessionHost: clientForSessionHostMock }));
 
-// Keep these hook tests focused on the local daemon path. The real Cloud
-// readiness hooks subscribe to settings/auth queries and can trigger an
-// unrelated refetch while the test is asserting the first response.
 vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => cloudCpMock,
 }));
@@ -734,8 +731,6 @@ describe("session-scoped interface transition mutations", () => {
 		});
 		await waitFor(() => expect(result.current.startError).toBe("request failed"));
 
-		// Another client starts and progresses the switch; this client's poll picks
-		// up the durable row, whose createdAt is newer than the refused attempt.
 		getMock.mockResolvedValue({
 			data: {
 				supported: true,
@@ -761,7 +756,6 @@ describe("session-scoped interface transition mutations", () => {
 
 		await waitFor(() => expect(result.current.transition?.id).toBe("transition-remote"));
 		expect(result.current.startError).toBeUndefined();
-		// The stale mutation state is dropped, so the refusal cannot reappear.
 		expect(
 			queryClient
 				.getMutationCache()
@@ -1042,7 +1036,6 @@ describe("interface transition poll budget", () => {
 	const draining = { supported: true, transition: { id: "t1", phase: "draining" } };
 	const waiting = { supported: false, reasonCode: "NATIVE_SESSION_UNVERIFIED" };
 
-	// A stand-in for react-query's Query: the scheduler only reads its state.
 	function fakeQuery(data?: object) {
 		const query = {
 			state: {
@@ -1133,11 +1126,8 @@ describe("interface transition poll budget", () => {
 		for (let i = 0; i < 10; i += 1) poll.answer();
 		expect(poll.next()).toBe(false);
 		for (let i = 0; i < 4; i += 1) poll.fail();
-		// An accepted start lands new data: the failure count clears and the
-		// live phase polls at full speed.
 		expect(poll.answer(draining)).toBe(250);
 		expect(poll.fail()).toBe(1_000);
-		// The handoff falls back to a readiness wait: a fresh ten answers.
 		const delays = [poll.answer(waiting)];
 		while (delays.at(-1) !== false && delays.length < 50) delays.push(poll.answer());
 		expect(delays).toEqual([...Array(10).fill(1_000), false]);
@@ -1185,7 +1175,6 @@ describe("interface transition polling through react-query", () => {
 		expect(getSession).toHaveBeenCalledTimes(2);
 		expect(getInterfaceTransition).toHaveBeenCalledTimes(2);
 
-		// A successful explicit refresh after sign-in can settle the handoff.
 		getSession.mockResolvedValue({ session: { interfaceMode: "chat" } });
 		getInterfaceTransition.mockResolvedValue({ supported: true, targetMode: "chat", transition: { ...transition, phase: "completed" } });
 		await act(async () => { await result.current.refreshStatus(); });
@@ -1212,7 +1201,6 @@ describe("interface transition polling through react-query", () => {
 		expect(getMock).toHaveBeenCalledTimes(5);
 		await elapse(60_000);
 		expect(getMock).toHaveBeenCalledTimes(5);
-		// Same end state as mobile: no spinner, the error is the switch's reason.
 		expect(result.current.isLoading).toBe(false);
 		expect(result.current.statusError).toBe("request failed");
 	});

@@ -4,11 +4,6 @@ import { useCloudCp } from "./useCloudCp";
 
 export const cloudGitHubAppReposQueryKey = (baseUrl: string, orgId: string | undefined) => ["cloud-github-app-repos", baseUrl, orgId] as const;
 
-/**
- * Every repository the org's GitHub App installations grant AO, across all
- * pages, without revoked or archived ones. Cloud project setup picks a
- * project's repositories from this list.
- */
 export function useCloudGitHubAppRepositories(orgId: string | undefined, enabled = true) {
 	const { client, baseUrl } = useCloudCp();
 	return useQuery({

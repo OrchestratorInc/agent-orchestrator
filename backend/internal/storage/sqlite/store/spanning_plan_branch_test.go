@@ -11,20 +11,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// A list that spans turns has one current copy per active path. An edited branch
-// that writes its own copy supersedes the copies it can see, the shared ones
-// before its fork included; switching back must make the original branch's copy
-// current again rather than leave that path with no plan at all.
 func TestSpanningPlanStaysCurrentOnTheBranchSwitchedBackTo(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
 	root := conversation.ActiveBranchID
 
-	// The original branch writes the list on its first turn.
 	writeSpanningPlan(t, s, session.ID, conversation.ID, "turn-a", "provider-turn-a", testNow)
 	forkAfter := latestSequence(t, s, conversation.ID)
 
-	// An edited branch forks after that turn and writes its own copy.
 	branch := domain.ConversationBranch{
 		ID: "branch-edited", ConversationID: conversation.ID, ProviderConversationID: "thread-edited",
 		ParentBranchID: root, ForkAfterTurnID: "turn-a", ForkAfterSequence: forkAfter,
@@ -41,7 +35,6 @@ func TestSpanningPlanStaysCurrentOnTheBranchSwitchedBackTo(t *testing.T) {
 		t.Fatalf("on the edited branch, want turn-a's copy superseded and turn-b's current")
 	}
 
-	// Back on the original branch, its own copy is the current one again.
 	if err := s.ActivateConversationBranch(ctx, session.ID, conversation.ID, root, "thread-root", "generation-root", testNow.Add(3*time.Minute)); err != nil {
 		t.Fatalf("ActivateConversationBranch root: %v", err)
 	}
@@ -54,9 +47,6 @@ func TestSpanningPlanStaysCurrentOnTheBranchSwitchedBackTo(t *testing.T) {
 	}
 }
 
-// Editing a message forks and activates a branch in one step. Its path drops the
-// copies written after the fork, so the copy before it is current again; left
-// superseded, the edited branch shows no plan until the agent revises the list.
 func TestSpanningPlanIsCurrentOnABranchForkedByAnEdit(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
@@ -84,9 +74,6 @@ func TestSpanningPlanIsCurrentOnABranchForkedByAnEdit(t *testing.T) {
 	}
 }
 
-// Startup undoes an edit whose branch never recorded its prompt, moving the head
-// back to the source branch. That path holds the copies written after the fork
-// again, so the latest of them is current, not the copy the edit made current.
 func TestSpanningPlanIsCurrentAgainAfterAnAbandonedEditIsRepaired(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
@@ -119,8 +106,6 @@ func TestSpanningPlanIsCurrentAgainAfterAnAbandonedEditIsRepaired(t *testing.T) 
 	}
 }
 
-// writeSpanningPlan starts a turn and writes its copy of a list that spans turns,
-// the way the controller does: the turn's plan, its plan row, then a reconcile.
 func writeSpanningPlan(t *testing.T, s *sqlite.Store, sessionID domain.SessionID, conversationID, turnID, providerTurnID string, written time.Time) {
 	t.Helper()
 	ctx := context.Background()

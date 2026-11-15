@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-// Catalogs use these explicit token counts; no model-name or pricing lookup is
-// used to fill gaps. Table suffixes K/M are the CLI's decimal token units.
 func catalogTokenCount(value any) int64 {
 	var count float64
 	switch v := value.(type) {

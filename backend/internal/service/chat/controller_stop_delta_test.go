@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// Hold a late run before its transaction starts: reconciliation must be able to
-// commit while this delta is waiting, just as it can while the pump is batching.
 type stoppedDeltaStore struct {
 	chatsvc.Store
 	observed chan struct{}
@@ -102,8 +100,6 @@ func TestInterruptRefusalLateDeltasRemainSettled(t *testing.T) {
 				t.Fatalf("Interrupt: %v", err)
 			}
 			gate.unblock()
-			// These arrive strictly after reconciliation, so adding another flush to
-			// Interrupt cannot satisfy the durable terminal-state invariant.
 			conv.emit(
 				ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: providerTurn, ProviderItemID: "reply", Delta: " after-stop"},
 				ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: providerTurn, ProviderItemID: "late-reply", Delta: "late first item"},

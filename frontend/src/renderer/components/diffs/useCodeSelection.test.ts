@@ -4,7 +4,6 @@ import { codeReference, readCodeSelection, restoreCodeSelection, useCodeSelectio
 
 type Row = [line: number, type: string, text: string, alt?: number];
 
-// Pierre's surface shape: a host whose shadow root holds one column per side.
 function surface(columns: Array<{ side?: "deletions" | "additions"; rows: Row[] }>): HTMLElement {
 	const host = document.createElement("diffs-container");
 	const root = host.attachShadow({ mode: "open" });
@@ -29,10 +28,6 @@ function surface(columns: Array<{ side?: "deletions" | "additions"; rows: Row[] 
 	return host;
 }
 
-// jsdom has no shadow-root selection; stand in for Electron 33's, from the start
-// of one row's text to `endOffset` characters into another's. Like Electron's,
-// it calls itself collapsed and hands out a range on the host: only its anchor
-// and focus points can be trusted.
 function select(host: HTMLElement, from: Element, to: Element, endOffset: number, setBaseAndExtent?: (base: Node, baseOffset: number, extent: Node, extentOffset: number) => void) {
 	const hostRange = document.createRange();
 	hostRange.selectNode(host);
@@ -148,7 +143,6 @@ describe("restoreCodeSelection", () => {
 		const captured = readCodeSelection(host)!;
 		expect(captured.textRange!.toString()).toBe(" \tβeta");
 		rebuild(host);
-		// Identical code, now tokenized into a different number of spans.
 		rowAt(host, 0, 0).innerHTML = "<span>α</span><span>😀 \t</span><span>βeta</span>";
 		expect(restoreCodeSelection(host, captured.snapshot)).toBe(true);
 		expect(readCodeSelection(host)!.textRange!.toString()).toBe(" \tβeta");
@@ -176,7 +170,6 @@ describe("restoreCodeSelection", () => {
 		rebuild(host);
 		expect(selection.snapshot.anchor.row.isConnected).toBe(false);
 		expect(restoreCodeSelection(host, selection.snapshot)).toBe(true);
-		// The restored ends land on the new copies of the first and last rows.
 		expect(placed).toEqual([
 			[rowAt(host, 0, 0).firstChild, 0, rowAt(host, 0, 2).firstChild, 2],
 		]);
@@ -186,8 +179,6 @@ describe("restoreCodeSelection", () => {
 		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
 		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 2);
 		const selection = readCodeSelection(host)!;
-		// Escape or a click elsewhere also collapses the selection, but its rows
-		// are still connected — restoring would resurrect a cleared selection.
 		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
 	});
 
@@ -205,7 +196,6 @@ describe("restoreCodeSelection", () => {
 		const recordPlacement = (base: Node, baseOffset: number, extent: Node, extentOffset: number) => { placed.push([base, baseOffset, extent, extentOffset]); };
 		select(host, rowAt(host, 0, 1), rowAt(host, 0, 2), 5, recordPlacement);
 		const selection = readCodeSelection(host)!;
-		// A refresh adds a row up top: the captured indexes now name other rows.
 		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 			const inserted = column.children[0].cloneNode(true) as Element;
 			inserted.setAttribute("data-line", "0");
@@ -248,8 +238,6 @@ describe("restoreCodeSelection", () => {
 		const recordPlacement = (base: Node, baseOffset: number, extent: Node, extentOffset: number) => { placed.push([base, baseOffset, extent, extentOffset]); };
 		select(host, rowAt(host, 0, 0), rowAt(host, 0, 2), 6, recordPlacement);
 		const selection = readCodeSelection(host)!;
-		// Same row count, both endpoints still on their captured text: only the
-		// interior row was rewritten. Restoring would highlight changed code.
 		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 			column.replaceChildren(...[...column.children].map((child) => {
 				const copy = child.cloneNode(true) as Element;
@@ -267,7 +255,6 @@ describe("restoreCodeSelection", () => {
 		const recordPlacement = (base: Node, baseOffset: number, extent: Node, extentOffset: number) => { placed.push([base, baseOffset, extent, extentOffset]); };
 		select(host, rowAt(host, 0, 1), rowAt(host, 0, 2), 4, recordPlacement);
 		const selection = readCodeSelection(host)!;
-		// Only unselected rows were rewritten; the captured span itself is intact.
 		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 			column.replaceChildren(...[...column.children].map((child) => {
 				const copy = child.cloneNode(true) as Element;
@@ -340,8 +327,6 @@ describe("code selection capture scheduling", () => {
 		const column = rowAt(host, 0, 0).parentElement!;
 		const inserted = rowAt(host, 0, 0).cloneNode(true) as Element;
 		inserted.setAttribute("data-line", "9"); inserted.setAttribute("data-alt-line", "9");
-		// Insert line 9 and remove the selected line 11. The same text remains at
-		// index 1, but it is now line 10; total row count has not changed.
 		column.replaceChildren(inserted, column.children[0].cloneNode(true), column.children[2].cloneNode(true));
 		native.removeAllRanges();
 		act(() => fireEvent(document, new Event("selectionchange"))); flush(); flush();
@@ -372,7 +357,6 @@ describe("code selection capture scheduling", () => {
 			}
 			else expect(hook.result.current.ask()).toBe(action !== "reject");
 		});
-		// Redraw before the click-away selectionchange has been processed too.
 		rebuild(host);
 		act(() => fireEvent(document, new Event("selectionchange")));
 		flush(); flush();
@@ -534,19 +518,12 @@ describe("code selection capture scheduling", () => {
 		const hook = renderHook(() => useCodeSelection(containerRef, deliver));
 		act(() => { const next = callback; callback = undefined; next?.(0); });
 		const captured = hook.result.current.source.get()!;
-		// The viewer re-tokenizes: every row is swapped for a fresh identical copy,
-		// and the browser's selection lands on the replacements.
 		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
 			column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
 		}
 		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 3);
-		// The redraw (observed) or the restored selection (selectionchange) schedules
-		// the next capture; run one frame and read what it publishes.
 		act(() => { document.dispatchEvent(new Event("selectionchange")); const next = callback; callback = undefined; next?.(0); });
 		const fresh = hook.result.current.source.get();
-		// Same lines and geometry, but the store must swap to the fresh object:
-		// its old Range collapsed onto the removed rows, and a stale textRange
-		// makes the toolbar refuse Cmd/Ctrl+L.
 		expect(fresh).not.toBe(captured);
 		expect(fresh!.textRange!.startContainer).toBe(rowAt(host, 0, 0).firstChild);
 		expect(fresh!.textRange!.startContainer.isConnected).toBe(true);

@@ -8,8 +8,6 @@ type Context = { params: Promise<{ slug: string[] }> };
 export const dynamic = "force-static";
 export const dynamicParams = false;
 
-// Builds `/markdown/quickstart.md` for each English article. The build moves
-// them to the site root, so the article `/quickstart/` has `/quickstart.md`.
 export async function GET(_request: Request, context: Context) {
   const { slug } = await context.params;
   const path = `/${slug.join("/")}`;

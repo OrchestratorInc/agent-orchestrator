@@ -12,10 +12,6 @@ func (m *Manager) acquireCodexControllerAdmission(ctx context.Context, harness d
 	if harness != domain.HarnessCodex || m.codexOperationGate == nil {
 		return func() {}, nil
 	}
-	// Device reconciliation uses this gate exclusively. A launch joins the
-	// shared side while reconciliation is actively mutating state, but a prior
-	// inconclusive device read is not itself a launch failure. Native Codex
-	// readiness remains the authority in that degraded case.
 	return m.codexOperationGate.AcquireSharedWait(ctx)
 }
 

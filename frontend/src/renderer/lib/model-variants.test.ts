@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { collapseModelVariants, findModelVariant, groupModelsByVendor, modelGroupLabel, pickModelVariant, providerQualifiedChoice, readableModelLabel } from "./model-variants";
 
-// Shapes taken from a real Cursor catalog.
 const catalog = [
 	{ id: "auto", label: "Auto" },
 	{ id: "claude-opus-4-7-xhigh", label: "Claude Opus 4.7 1M" },
@@ -48,7 +47,6 @@ describe("collapseModelVariants", () => {
 		expect(opus?.defaultVariant.id).toBe("claude-opus-4-7-xhigh");
 		expect(family("gpt-5.5")?.efforts).toEqual(["medium", "xhigh"]);
 		expect(family("gemini-3-flash")?.efforts).toEqual([]);
-		// A bare id takes the level its siblings leave free.
 		expect(family("gpt-5.3-codex")?.efforts).toEqual(["medium", "high"]);
 		expect(family("gpt-5.3-codex")?.defaultVariant.id).toBe("gpt-5.3-codex");
 	});
@@ -71,7 +69,6 @@ describe("collapseModelVariants", () => {
 		expect(found?.variant).toMatchObject({ effort: "high", thinking: true, fast: true });
 		const opus = family("claude-opus-4-7")!;
 		expect(pickModelVariant(opus, { effort: "high", thinking: true, fast: false }).id).toBe("claude-opus-4-7-thinking-high");
-		// No fast low variant exists, so effort wins and speed gives way.
 		expect(pickModelVariant(opus, { effort: "low", thinking: false, fast: true }).id).toBe("claude-opus-4-7-low");
 	});
 

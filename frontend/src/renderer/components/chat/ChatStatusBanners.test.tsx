@@ -18,10 +18,6 @@ vi.mock("../../lib/host-clients", async (importOriginal) => ({
 	labelForHost: (hostId: string) => (hostId === "host-air" ? "Macbook Air M1" : undefined),
 }));
 
-// Each of these answers a question the timeline structurally cannot, so the tests are
-// about what is said and when it is withheld — a banner for an ordinary state is noise
-// that teaches readers to ignore the row.
-
 describe("ReauthBanner", () => {
 	const failed = { authenticationState: "required" as const, authFailureId: "f1", reauthReason: "OAuth token has been revoked" };
 	const openGlobalSettings = vi.fn();
@@ -72,7 +68,6 @@ describe("ReauthBanner", () => {
 		expect(screen.getByRole("button", { name: "Log in again" })).toBeDisabled();
 	});
 
-	// A remote session runs on its host, so that host's login is the one to fix.
 	it("names a remote host and logs in on it", async () => {
 		render(<ReauthBanner account={failed} harness="claude-code" hostId="host-air" />);
 		expect(screen.getByRole("status")).toHaveTextContent("Your Claude Code login on Macbook Air M1 has expired.");
@@ -128,7 +123,6 @@ describe("ThreadStateBanner", () => {
 		expect(screen.getByText(/Waiting on: user_input/)).toBeInTheDocument();
 	});
 
-	// active, idle and not_loaded are the ordinary run of a session.
 	it.each(["active", "idle", "not_loaded"] as const)("says nothing for %s", (status) => {
 		const { container } = render(<ThreadStateBanner threadState={{ status }} />);
 		expect(container).toBeEmptyDOMElement();
@@ -155,7 +149,6 @@ describe("McpServerBanner", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
 		expect(screen.queryByText(/startup_timeout|did not report ready/)).not.toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
-		// It overlays the end of the timeline for a few seconds; clicks must pass through.
 		expect(screen.getByRole("status")).toHaveClass("pointer-events-none");
 	});
 
@@ -208,8 +201,6 @@ describe("McpServerBanner", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("Playwright didn’t start. Continuing without it.");
 	});
 
-	// A healthy server is not news. The caller filters, and an empty list must not
-	// draw anything or use up the session's one note.
 	it("says nothing when no server is broken", () => {
 		const { container, rerender } = render(<McpServerBanner sessionId="mcp-healthy" servers={[]} />);
 		expect(container).toBeEmptyDOMElement();

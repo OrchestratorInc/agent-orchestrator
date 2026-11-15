@@ -24,7 +24,7 @@ func TestSessionModeMapsApprovalTiersOntoAntigravityModes(t *testing.T) {
 	for mode, want := range map[ports.PermissionMode]string{
 		ports.PermissionModeDefault:           "default",
 		ports.PermissionModeAcceptEdits:       "auto_edit",
-		ports.PermissionModeAuto:              "yolo", // no classifier mode: auto runs without asking
+		ports.PermissionModeAuto:              "yolo",
 		ports.PermissionModeBypassPermissions: "yolo",
 	} {
 		if got := sessionMode(mode); got != want {
@@ -74,7 +74,7 @@ func TestSessionModeForAgentMapsOntoAgyACPModes(t *testing.T) {
 	for mode, want := range map[ports.PermissionMode]string{
 		ports.PermissionModeDefault:           "default",
 		ports.PermissionModeAcceptEdits:       "accept-edits",
-		ports.PermissionModeAuto:              "accept-edits", // commands are approved by permissionPolicy
+		ports.PermissionModeAuto:              "accept-edits",
 		ports.PermissionModeBypassPermissions: "accept-edits",
 	} {
 		if got := modeFor(mode); got != want {
@@ -310,7 +310,6 @@ func TestResolverLaunchesAgyACPFromANewEnoughCLI(t *testing.T) {
 		}
 	}
 
-	// An explicit server path keeps the separate server even on a new CLI.
 	r := testResolver(t, map[string]string{serverPathEnvVar: server})
 	r.agyCLI = func(context.Context) (string, error) { return cli, nil }
 	r.cliVersion = func(context.Context, string) (string, error) {
@@ -346,8 +345,6 @@ func TestLaunchStartsAgyACPWithTheChatDataFolder(t *testing.T) {
 		t.Fatalf("launch with GEMINI_HOME = %v, %v; want %v", launch.Args, err, want)
 	}
 
-	// The daemon's own GEMINI_HOME reaches agy as the flag too: `agy acp`
-	// ignores the variable, so without it Chat would write ~/.gemini.
 	inherited := testResolver(t, map[string]string{"GEMINI_HOME": "/srv/daemon-gemini"})
 	inherited.agyCLI, inherited.cliVersion = r.agyCLI, r.cliVersion
 	launch, err = buildConfig(nil, inherited, nil).Launch(context.Background(), acpdriver.LaunchConfig{})

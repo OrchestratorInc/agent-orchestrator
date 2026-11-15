@@ -14,9 +14,6 @@ import (
 
 var _ ports.SCMPRStateChanger = (*Provider)(nil)
 
-// ChangePullRequestState closes, reopens, or toggles the draft state of a
-// GitHub pull request. Close and reopen use the REST state field; GitHub only
-// exposes draft toggling through GraphQL, which addresses the PR by node id.
 func (p *Provider) ChangePullRequestState(ctx context.Context, request ports.SCMPRStateRequest) error {
 	if p == nil || p.client == nil {
 		return fmt.Errorf("github scm: state provider is not configured")
@@ -91,7 +88,6 @@ func (p *Provider) setPullRequestDraft(ctx context.Context, request ports.SCMPRS
 	return nil
 }
 
-// pullRequestNodeID looks up the GraphQL node id that draft mutations address.
 func (p *Provider) pullRequestNodeID(ctx context.Context, ref ports.SCMPRRef) (string, error) {
 	data, err := p.client.doGraphQL(ctx, `query PullRequestNodeID($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) { id } }
@@ -108,8 +104,6 @@ func (p *Provider) pullRequestNodeID(ctx context.Context, ref ports.SCMPRRef) (s
 	return id, nil
 }
 
-// mapMutationStatus classifies a failed REST mutation: 404 is an unknown PR,
-// and 405, 409 or 422 is GitHub refusing it.
 func mapMutationStatus(status int, err error) error {
 	switch status {
 	case http.StatusNotFound:
@@ -121,9 +115,6 @@ func mapMutationStatus(status int, err error) error {
 	}
 }
 
-// mapGraphQLMutationError treats a plain GraphQL error payload on a mutation
-// as the provider refusing it; auth, rate-limit, and not-found failures keep
-// their own classification.
 func mapGraphQLMutationError(err error) error {
 	if errors.Is(err, errGraphQL) {
 		return fmt.Errorf("%w: %w", ports.ErrSCMRejected, err)

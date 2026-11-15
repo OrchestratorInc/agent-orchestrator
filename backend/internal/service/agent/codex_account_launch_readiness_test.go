@@ -12,9 +12,6 @@ import (
 
 const otherCodexAccountID = "bb1e9a5d-37ad-43f8-83bd-13de8168f8af"
 
-// codexLaunchReadinessFixture reproduces the important protocol distinction:
-// account/read discovers local metadata while ReadCapacity is a protected call
-// that confirms whether the provider accepts the account.
 type codexLaunchReadinessFixture struct {
 	t                        *testing.T
 	manager                  *codexAccountManager
@@ -58,7 +55,6 @@ func newCodexLaunchReadinessFixture(t *testing.T) *codexLaunchReadinessFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The active account is backed by the device-global Codex home.
 	if err := writeGlobalCredentialAtomic(manager.globalCredentialPath(), activeCredential); err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +250,6 @@ func TestAuthorizedInactiveAccountDoesNotMaskTheActiveAccount(t *testing.T) {
 	if !ok || authentication.State != domain.AgentAuthenticationUnauthorized {
 		t.Fatalf("Codex readiness masked by the inactive account = %#v (structured=%t)", authentication, ok)
 	}
-	// Only the rejected active account is refreshed; inactive accounts are not
-	// refreshed merely to render the list.
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	for _, read := range fixture.reads {
@@ -321,9 +315,6 @@ func TestRotatedCredentialsDoNotReVerifyAnAuthorizedAccount(t *testing.T) {
 	fixture.ensureSettings()
 	reads := fixture.protectedReads()
 
-	// A refresh-capable read can rotate Codex's device-global refresh token, so
-	// the saved copy stops matching. That is expected token maintenance for an
-	// account already proven launch-ready, not new evidence about it.
 	if err := writeGlobalCredentialAtomic(fixture.manager.globalCredentialPath(), []byte("rotated-opaque-credential")); err != nil {
 		t.Fatal(err)
 	}
@@ -350,9 +341,6 @@ func TestExternallyReplacedCredentialsDoNotGetAttributedToOldActiveSlot(t *testi
 		t.Fatal(err)
 	}
 
-	// The user signs in again outside AO. The device-global account material is
-	// replaced, so the recorded failure no longer describes this account and must
-	// not survive the rest of the display window.
 	if err := writeGlobalCredentialAtomic(fixture.manager.globalCredentialPath(), testOAuthCredential("external-account", "replacement-access")); err != nil {
 		t.Fatal(err)
 	}

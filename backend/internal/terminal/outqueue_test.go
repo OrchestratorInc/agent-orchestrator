@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// PTY output arrives in many small reads; consecutive queued output for one
-// terminal must leave as one message, in order, without crossing other
-// terminals' output or non-data messages.
 func TestOutQueueMergesConsecutiveDataForOneTerminal(t *testing.T) {
 	q := newOutQueue()
 	q.push(serverMsg{Ch: chTerminal, ID: "a", Type: msgData, raw: []byte("he")})
@@ -59,8 +56,6 @@ func TestOutQueueBoundsAMergedFrame(t *testing.T) {
 	}
 }
 
-// The test interval is long so scheduler delays under -race or a busy CI
-// machine can't be mistaken for pacing: "immediate" means well under it.
 const testFlushInterval = 200 * time.Millisecond
 
 func startPacedWriteLoop(t *testing.T) (*connState, *fakeConn) {
@@ -86,14 +81,10 @@ func expectImmediateFrame(t *testing.T, c *connState, conn *fakeConn, data strin
 	}
 }
 
-// A frame queued after a quiet period (a keystroke's echo) is written at once;
-// output that keeps arriving within the interval of the previous write waits
-// for it and leaves as one merged frame.
 func TestWriteLoopPacesBurstsButNotIsolatedFrames(t *testing.T) {
 	c, conn := startPacedWriteLoop(t)
 	expectImmediateFrame(t, c, conn, "e")
 
-	// Right behind that write: these chunks must wait out the interval and merge.
 	for _, chunk := range []string{"1", "2", "3"} {
 		c.enqueue(serverMsg{Ch: chTerminal, ID: "a", Type: msgData, raw: []byte(chunk)})
 	}
@@ -106,20 +97,15 @@ func TestWriteLoopPacesBurstsButNotIsolatedFrames(t *testing.T) {
 		t.Fatal("paced burst was never written")
 	}
 
-	// After a quiet period the next frame is immediate again.
 	time.Sleep(testFlushInterval * 3 / 2)
 	expectImmediateFrame(t, c, conn, "x")
 }
 
-// A wake left over from frames an earlier drain already took writes nothing,
-// so it must not restart the pacing window.
 func TestWriteLoopIgnoresEmptyWakeForPacing(t *testing.T) {
 	c, conn := startPacedWriteLoop(t)
 	expectImmediateFrame(t, c, conn, "e")
 
 	c.out.wake <- struct{}{}
-	// Past the window from the real write, but inside one restarted by the
-	// empty wake.
 	time.Sleep(testFlushInterval * 3 / 2)
 	expectImmediateFrame(t, c, conn, "x")
 }

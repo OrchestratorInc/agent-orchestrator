@@ -39,8 +39,6 @@ vi.mock("../../hooks/useCloudCp", () => ({
 	}),
 }));
 
-// Mirror the main process: cancelling aborts the pending login, whose IPC call
-// then rejects with the cancellation error.
 function pendingLogin() {
 	let reject: (err: Error) => void = () => {};
 	bridgeMocks.connectProviderAuth.mockImplementation(
@@ -183,8 +181,6 @@ describe("CloudHarnessLoginPanel", () => {
 		const { onClose } = renderPanel("claude-code", { id: "new" });
 		await user.click(screen.getByRole("button", { name: "Log in with Anthropic" }));
 
-		// The main process keeps it for local sessions only if the control plane
-		// saved it as the default account.
 		expect(bridgeMocks.connectProviderAuth).toHaveBeenCalledWith({
 			baseUrl: "https://cloud.example.test",
 			provider: "claude-code",
@@ -212,8 +208,6 @@ describe("CloudHarnessLoginPanel", () => {
 
 	it("signs an account in again only with its own kind of login", async () => {
 		renderPanel("claude-code", { id: "account-2", credentialType: "api_key" });
-		// An API key account: no browser login or setup token, which the
-		// control plane would refuse as another kind of login.
 		expect(screen.getByPlaceholderText("Paste your Anthropic API key")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Log in with Anthropic" })).toBeNull();
 		expect(screen.queryByText("Or use")).toBeNull();

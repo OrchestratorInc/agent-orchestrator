@@ -15,8 +15,6 @@ func TestAutohandConfiguredProvidersReadKeyedSections(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// api holds Autohand's own company secret, not a model provider; ollama
-	// needs no key; openrouter's key is blank.
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{
 		"provider":"zai",
 		"api":{"baseUrl":"https://api.autohand.ai","companySecret":"secret"},

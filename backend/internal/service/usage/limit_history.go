@@ -20,14 +20,12 @@ type confirmedLogins interface {
 	ConfirmedLogins() map[string]domain.AgentAccountIdentityCheck
 }
 
-// LimitHistoryReader turns the limit readings AO took into the windows each login went through.
 type LimitHistoryReader struct {
 	store  limitReadingStore
 	logins confirmedLogins
 	now    func() time.Time
 }
 
-// NewLimitHistoryReader constructs a limit history reader.
 func NewLimitHistoryReader(store limitReadingStore, logins confirmedLogins) *LimitHistoryReader {
 	return &LimitHistoryReader{store: store, logins: logins, now: time.Now}
 }
@@ -38,7 +36,6 @@ const (
 	pointsFrom      = 24 * time.Hour
 )
 
-// History reads the last days of limit windows, at most 14, which is as long as readings are kept.
 func (r *LimitHistoryReader) History(ctx context.Context, days int) (domain.UsageLimitHistory, error) {
 	if r == nil || r.store == nil {
 		return domain.UsageLimitHistory{}, fmt.Errorf("limit reading store is unavailable")

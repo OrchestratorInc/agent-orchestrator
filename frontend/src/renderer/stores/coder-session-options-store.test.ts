@@ -15,8 +15,6 @@ describe("buildCoderRequestOptions", () => {
 	});
 
 	it("sends only the template id when the template declares no parameters", () => {
-		// A paramless template (e.g. a pre-existing infra template) must never
-		// carry size/startup, or Coder rejects the build.
 		const coder = buildCoderRequestOptions({
 			...base,
 			templateId: "tpl-1",
@@ -94,7 +92,6 @@ describe("useCoderSessionOptionsStore", () => {
 		store.reset();
 		store.setTemplate("tpl-1", []);
 		useCoderSessionOptionsStore.getState().setParameters({ region: "us" });
-		// Re-selecting the same template keeps them.
 		useCoderSessionOptionsStore.getState().setTemplate("tpl-1", ["size"]);
 		expect(useCoderSessionOptionsStore.getState().parameters).toEqual({ region: "us" });
 		useCoderSessionOptionsStore.getState().setTemplate("tpl-2", []);

@@ -7,7 +7,6 @@ const BLOCKS = new Set(["P", "PRE", "LI", "TR", "H1", "H2", "H3", "H4", "H5", "H
 const EXCLUDED = 'button:not([data-excerpt-include]), input, select, textarea, [hidden], .katex-mathml, [data-excerpt-exclude]';
 type TextEntry = { node: Text; start: number; end: number };
 
-/** One projection for capture and navigation, independent of browser whitespace rules. */
 export function excerptRenderedText(root: HTMLElement): { text: string; entries: TextEntry[] } {
 	let text = "";
 	const entries: TextEntry[] = [];
@@ -15,9 +14,7 @@ export function excerptRenderedText(root: HTMLElement): { text: string; entries:
 	const newline = () => { if (text && !text.endsWith("\n")) text += "\n"; };
 	function walk(node: Node) {
 		if (node instanceof Text) {
-			// Newlines between Markdown blocks are structural, not selectable content.
 			if (!node.data.trim() && node.parentElement === markdown) return;
-			// remark-rehype emits both a BR and a formatting newline for hard breaks.
 			if (node.data === "\n" && node.previousSibling instanceof Element && node.previousSibling.tagName === "BR") return;
 			entries.push({ node, start: text.length, end: text.length + node.length });
 			text += node.data;
@@ -44,8 +41,6 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 		return end > start ? [{ ...entry, from: start, to: end }] : [];
 	});
 	if (!selected.length) throw new Error("chat.draft.excerptBodySelection");
-	// Only selected source elements need detailed mappings. Keep them local to
-	// this capture so rerenders and subsequent selections cannot reuse stale DOM.
 	const maps = new Map<HTMLElement, number[] | undefined>();
 	const broadBlocks = new Set(body.querySelectorAll<HTMLElement>("[data-excerpt-block]"));
 	for (const entry of selected) {
@@ -82,8 +77,6 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 	let text = rendered.text.slice(start, end);
 	if (!text.trim()) throw new Error("chat.draft.excerptBodySelection");
 	const chartEntries = selected.filter(entry => entry.node.parentElement?.closest("[data-excerpt-flowchart]"));
-	// Keep the original projection for source coverage; diagram labels and source
-	// belong only to the raw excerpt, never to the readable quote.
 	for (const entry of [...chartEntries].reverse()) {
 		const from = entry.start + entry.from - start;
 		const to = entry.start + entry.to - start;
@@ -94,7 +87,6 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 	const badgeOnly = containsFlowchart && !text.trim();
 	let rawStart = rawBoundary(first.node, first.from);
 	let rawEnd = rawBoundary(last.node, last.to, true);
-	// Plain user messages are not Markdown-rendered and can map directly.
 	if (!rawStart && !rawEnd && rendered.text.replace(/\n$/, "") === source) {
 		rawStart = { position: start, broad: false };
 		rawEnd = { position: end, broad: false };
@@ -102,7 +94,6 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 	let from = rawStart?.position ?? 0;
 	let to = rawEnd?.position ?? source.length;
 	let broad = !rawStart || !rawEnd || rawStart.broad || rawEnd.broad;
-	// A transformed block touched inside the range needs its full underlying source.
 	for (const block of broadBlocks) {
 		if (!selected.some(entry => block.contains(entry.node))) continue;
 		from = Math.min(from, Number(block.dataset.excerptStart));
@@ -130,7 +121,6 @@ export function captureExcerptSnapshot(body: HTMLElement, range: Range, source: 
 	} };
 }
 
-/** Freeze only completed-turn context already available at attachment time. */
 export function captureExcerptTurn(ref: ChatDraftExcerptReference, snapshot: ConversationSnapshot): ChatDraftExcerptReference {
 	if (!ref.snapshot) return ref;
 	const source = snapshot.items.find((item): item is ConversationMessage => item.kind === "message" && item.id === ref.messageId);

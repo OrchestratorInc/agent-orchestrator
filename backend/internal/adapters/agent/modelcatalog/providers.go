@@ -12,11 +12,9 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite" // read OMP's native credential store
+	_ "modernc.org/sqlite"
 )
 
-// configuredProviders is advisory evidence, never an auth verdict or a filter.
-// Missing/unsupported stores and unresolved key commands leave status unknown.
 func configuredProviders(ctx context.Context, agentID string, env map[string]string) []string {
 	if agentID != "opencode" && agentID != "opencode-v2" && agentID != "kilocode" && agentID != "mimo-code" && agentID != "pi" && agentID != "omp" {
 		return nil
@@ -36,8 +34,6 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 			found["cohere"] = true
 		}
 	}
-	// These native provider identifiers are shared by Pi and OpenCode. Do not
-	// infer an environment mapping for arbitrary/custom provider names.
 	if agentID != "omp" {
 		for provider, names := range map[string][]string{
 			"anthropic": {"ANTHROPIC_API_KEY"}, "openai": {"OPENAI_API_KEY"},
@@ -64,8 +60,6 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 			dir = filepath.Join(home, "."+agentID, "agent")
 		}
 		if dir != "" {
-			// An existing OMP database is authoritative, including disabled rows.
-			// Falling back to legacy JSON then could revive removed credentials.
 			if agentID == "omp" {
 				if providers, ok := ompConfiguredProviders(ctx, filepath.Join(dir, "agent.db")); ok {
 					return providers
@@ -91,8 +85,6 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 		if dir != "" {
 			authPath = filepath.Join(dir, "auth.json")
 		}
-		// OpenCode 2 uses integrations in its native database. Legacy auth.json
-		// isn't authoritative there; only known environment evidence is reported.
 	}
 	if authPath != "" {
 		if raw, err := readModelConfig(authPath); err == nil {
@@ -140,8 +132,6 @@ func configuredProviders(ctx context.Context, agentID string, env map[string]str
 			}
 		}
 	}
-	// The native models.dev catalog declares each provider's credential variables.
-	// This covers providers beyond AO's small fallback map without guessing names.
 	for provider, names := range providerEnvNames(providerCachePath(agentID, env)) {
 		for _, key := range names {
 			if key != "" && value(key) != "" {
@@ -191,7 +181,6 @@ func ompConfiguredProviders(ctx context.Context, path string) ([]string, bool) {
 	return providers, true
 }
 
-// Catalog-only cloud placeholders never count as configured credentials.
 func credentialPresence(value string) string {
 	value = strings.TrimSpace(value)
 	if value == modelDiscoveryPresenceValue {
@@ -211,10 +200,6 @@ var providerEnvCache struct {
 	entries map[string]providerEnvEntry
 }
 
-// providerEnvNames returns the credential variables a models.dev cache
-// declares for each provider. The cache can be tens of megabytes and catalog
-// fingerprints consult it on every cached read, so a parse is kept until the
-// file's size or modification time changes.
 func providerEnvNames(path string) map[string][]string {
 	if path == "" {
 		return nil

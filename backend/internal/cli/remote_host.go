@@ -11,14 +11,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// remoteHostStatus mirrors the small part of the loopback mobile status API
-// needed to pair another client with a headless daemon.
 type remoteHostStatus struct {
-	Enabled       bool `json:"enabled"`
-	LoopbackOnly  bool `json:"loopbackOnly"`
-	AccountLinked bool `json:"accountLinked"`
-	// AccountLinkRefused: AO Cloud refused the machine's address under its
-	// account token, so the account's devices may not list it.
+	Enabled                  bool       `json:"enabled"`
+	LoopbackOnly             bool       `json:"loopbackOnly"`
+	AccountLinked            bool       `json:"accountLinked"`
 	AccountLinkRefused       bool       `json:"accountLinkRefused"`
 	HostID                   string     `json:"hostId"`
 	Password                 string     `json:"password"`
@@ -129,8 +125,6 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 							flag = "--tunnel-only"
 						}
 						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable " + flag + "`"
-						// AO downloads its own cloudflared where it has a pinned
-						// build; the tunnel starts by itself when it lands.
 						if status.Tunnel.Installing {
 							message = "Tunnel: downloading cloudflared; run `ao remote-host status` for the HTTPS address"
 						}
@@ -146,7 +140,6 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					return err
 				}
 				if action.name == "enable" {
-					// Only a daemon without pairing codes prints the password.
 					var pairing remoteHostPairingCode
 					err := ctx.doJSON(cmd.Context(), http.MethodPost, "mobile/pairing-code", nil, &pairing)
 					var apiErr apiResponseError

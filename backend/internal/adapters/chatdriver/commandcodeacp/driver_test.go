@@ -74,12 +74,6 @@ func TestConfigureForwardsModel(t *testing.T) {
 	}
 }
 
-// TestConfigureNeverPassesModFlag locks issue #6784: `cmd acp` accepts
-// --mod/--mod-option but silently never loads the mod (verified on
-// v1.82.4/v1.83.0: the same sentinel mod logs under `cmd -p --mod` and logs
-// nothing under `cmd acp --mod`). Passing the flag would look configured while
-// staying inert, so configure must never emit it; standing context rides
-// sessionPreamble instead.
 func TestConfigureNeverPassesModFlag(t *testing.T) {
 	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{})
 	if err != nil {
@@ -92,12 +86,6 @@ func TestConfigureNeverPassesModFlag(t *testing.T) {
 	}
 }
 
-// TestConfigureNeverPassesSystemPromptFlag guards against re-adding a
-// system-prompt launch flag: `cmd acp` accepts no such flag (v1.79.x rejects
-// `--append-system-prompt` with "unknown option" and exits before the host
-// publishes host.json, which surfaces as a missing-descriptor startup
-// failure). Standing instructions ride the first prompt instead; see
-// sessionPreamble.
 func TestConfigureNeverPassesSystemPromptFlag(t *testing.T) {
 	for _, prompt := range []string{
 		"AO standing instructions for start",
@@ -142,10 +130,6 @@ func TestSessionOptionsOmitsEmptyValues(t *testing.T) {
 	}
 }
 
-// Approval changes reach a live Command Code session through session/set_mode,
-// so the binding registers no turn-settings validator. That is only safe while
-// every AO permission mode has an exact Command Code mode id to be applied as;
-// a mode that mapped to "" would silently drop the user's approval choice.
 func TestSessionModeAlwaysYieldsAnAdvertisedModeId(t *testing.T) {
 	advertised := map[string]bool{
 		modeDefault:   true,
@@ -168,9 +152,6 @@ func TestSessionModeAlwaysYieldsAnAdvertisedModeId(t *testing.T) {
 	}
 }
 
-// The mode ids below were read from a live v1.74.0 session/new handshake. If the
-// provider renames one, this binding would silently send an unknown mode id, so
-// pin the vocabulary we verified rather than whatever a doc comment claims.
 func TestVerifiedModeVocabulary(t *testing.T) {
 	for _, id := range []string{modeDefault, modeAutoAccpt, modePlan, modeDontAsk, modeBypass} {
 		if id == "" {
@@ -182,9 +163,6 @@ func TestVerifiedModeVocabulary(t *testing.T) {
 	}
 }
 
-// A registry built with this driver must resolve command-code. Registration is
-// the whole capability gate, so an unregistered binding would leave the desktop
-// with no Chat toggle for a harness that supports it.
 func TestNewDriverTargetsCommandCodeHarness(t *testing.T) {
 	driver := New(stubPlugin{}, slog.New(slog.DiscardHandler))
 	if got := driver.Harness(); got != domain.HarnessCommandCode {
@@ -223,8 +201,6 @@ func TestConfigurePointsTheSessionAtItsOwnHome(t *testing.T) {
 	}
 }
 
-// A session that cannot write its memory would run with no AO role at all, so the
-// launch fails rather than starting a role-less conversation.
 func TestConfigureFailsWhenTheSessionHomeCannotBeWritten(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "file-not-a-dir")
 	if err := os.WriteFile(dataDir, []byte("x"), 0o600); err != nil {

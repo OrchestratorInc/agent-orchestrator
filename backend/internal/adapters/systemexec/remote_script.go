@@ -24,8 +24,6 @@ const (
 	remoteScriptMaxRedirects    = 5
 )
 
-// RunInstallScript downloads a fixed HTTPS installer into private AO-owned
-// storage, executes the complete file, and removes it afterward.
 func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScriptCommand, stdout, stderr io.Writer) (result ports.InstallScriptResult, err error) {
 	if a.installerRoot == "" {
 		return result, errors.New("installer scratch directory is not configured")
@@ -85,9 +83,6 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 
 	argv := append([]string(nil), command.Interpreter...)
 	if extension == ".ps1" {
-		// Some desktop environments disable PowerShell module autoloading. Both
-		// vendor installers and their checksum checks need Get-FileHash, so load
-		// its bundled module explicitly before invoking the untouched script.
 		launcherPath := filepath.Join(jobDir, "launch.ps1")
 		launcher := "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop\n& (Join-Path $PSScriptRoot 'installer.ps1')" + powerShellArgs(command.Args) + "\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE }; exit 1 }\n"
 		if err := os.WriteFile(launcherPath, []byte(launcher), 0o600); err != nil {
@@ -98,15 +93,10 @@ func (a Adapter) RunInstallScript(ctx context.Context, command ports.InstallScri
 		argv = append(argv, scriptPath)
 		argv = append(argv, command.Args...)
 	}
-	// The job directory is the working directory too, so files an installer
-	// writes to relative paths stay private and are removed with it.
 	err = a.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: command.Env, Dir: jobDir, Isolated: command.Isolated}, stdout, stderr)
 	return result, err
 }
 
-// getHTTPS fetches a fixed daemon-owned HTTPS URL, refusing a plain-HTTP URL
-// or redirect and more than remoteScriptMaxRedirects hops. what names the
-// download in errors. The caller closes the body of the returned response.
 func (a Adapter) getHTTPS(ctx context.Context, rawURL, what string) (*http.Response, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
@@ -138,9 +128,6 @@ func (a Adapter) getHTTPS(ctx context.Context, rawURL, what string) (*http.Respo
 
 var powerShellParameterName = regexp.MustCompile(`^-[A-Za-z][A-Za-z0-9]*$`)
 
-// powerShellArgs renders fixed installer arguments into the launcher source:
-// parameter names stay bare so they bind as switches, and every other value is
-// a single-quoted literal so nothing in it is evaluated.
 func powerShellArgs(args []string) string {
 	var b strings.Builder
 	for _, arg := range args {

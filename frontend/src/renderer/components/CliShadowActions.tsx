@@ -9,8 +9,6 @@ import { Button } from "./ui/button";
 
 type Shadowed = Extract<CliShadowStatus, { kind: "shadowed" }>;
 
-// Details and the actions sit below the hook that holds the status, and a
-// version check or a fix from either one has to reach it.
 const refreshers = new Set<(status: CliShadowStatus) => void>();
 let refreshSequence = 0;
 
@@ -30,7 +28,6 @@ export function useCliShadowStatus(): CliShadowStatus | null {
 			const next = await aoBridge.cliShadow.inspect(identity);
 			if (request === latest.current) setStatus(next);
 		} catch {
-			// An advisory check that fails has nothing to tell the user.
 		}
 	}, []);
 	useEffect(() => {
@@ -57,8 +54,6 @@ export function useCliShadowTitle(status: CliShadowStatus | null): string | null
 	return t("cliShadow.titleDifferent");
 }
 
-// Keeps each path segment whole on a line of its own when it fits, so a line
-// only ends at a slash and never inside a file name.
 function PathText({ path }: { path: string }) {
 	return (
 		<span className="font-mono">

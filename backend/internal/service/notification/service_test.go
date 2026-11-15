@@ -198,8 +198,6 @@ func TestMarkAllReadReturnsUpdatedCount(t *testing.T) {
 	}
 }
 
-// Acknowledging every unread row would strand anything past the client's last
-// loaded page, so an explicit id list must scope the write to those rows.
 func TestMarkAllReadWithIDsScopesToThoseNotifications(t *testing.T) {
 	st := &fakeStore{markAllCount: 99}
 	mgr := New(Deps{Store: st})

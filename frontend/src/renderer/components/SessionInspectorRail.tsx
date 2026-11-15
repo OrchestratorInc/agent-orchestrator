@@ -55,8 +55,6 @@ export function sizingGeometryEqual(a: InspectorSizing, b: InspectorSizing): boo
 		a.minWidth === b.minWidth && a.maxPercent === b.maxPercent && a.storageKey === b.storageKey;
 }
 
-// One inspector layout for local, cloud, and remote sessions. The host only
-// changes where the inspector's data comes from, not how its rail behaves.
 export function SessionInspectorRail({
 	sessionKey,
 	children,
@@ -103,21 +101,12 @@ export function SessionInspectorRail({
 		max: maxWidth,
 		edge: "left",
 		restoreMin: restoreMinWidth,
-		// Restore the preferred width after a narrow window or zoom level widens again.
 		reclampOnWindowResize: true,
 	});
-	// Restore a destination session's layout in the same frame as the route
-	// change. Only later open/close changes within that session animate. The
-	// geometry is plain inline style (not a JS animation) so the first painted
-	// frame of the destination already has its final inspector width: a JS
-	// animation library applies even instant targets after paint.
 	const [motionState, setMotionState] = useState({ sessionKey, isOpen, animate: false });
 	if (motionState.sessionKey !== sessionKey || motionState.isOpen !== isOpen) {
 		setMotionState({ sessionKey, isOpen, animate: motionState.sessionKey === sessionKey });
 	}
-	// The toggle owns the transition only until it lands, so later width-var
-	// changes (window reclamp, view profile) never inherit it. Expiring also
-	// settles a close whose transitionend was skipped (e.g. a hidden window).
 	useEffect(() => {
 		if (!motionState.animate) return;
 		const timer = window.setTimeout(
@@ -129,7 +118,6 @@ export function SessionInspectorRail({
 	const animate = !prefersReducedMotion && motionState.animate;
 	const motionMode = animate ? "animated" : "instant";
 	const hidden = !isOpen && settledClosed;
-	// Settle a close before paint when it is instant, otherwise when the slide ends.
 	useLayoutEffect(() => {
 		if (isOpen || settledClosed || !onCloseAnimationComplete) return;
 		if (!animate) {

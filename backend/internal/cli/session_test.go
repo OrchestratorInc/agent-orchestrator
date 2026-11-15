@@ -222,7 +222,6 @@ func TestSessionList_JSONOutputDecodes(t *testing.T) {
 	if got.Data[0].ID != "demo-1" || got.Data[0].ProjectID != "demo" || got.Data[0].Role != "worker" {
 		t.Fatalf("unexpected JSON entry: %#v", got.Data[0])
 	}
-	// `session get --json` already carries the display name; `ls --json` must too so scripts can tell sessions apart.
 	if got.Data[0].DisplayName != "Current Name" {
 		t.Fatalf("displayName = %q, want %q", got.Data[0].DisplayName, "Current Name")
 	}
@@ -316,8 +315,6 @@ func TestSessionList_ThreadCountUnknownVersusObservedZero(t *testing.T) {
 				{"id":"zero-1","projectId":"demo","kind":"worker","activity":{"state":"idle","lastActivityAt":"2026-06-02T11:55:00Z"},"isTerminated":false,"createdAt":"2026-06-02T11:00:00Z","updatedAt":"2026-06-02T12:00:00Z","status":"idle","prs":[{"number":2,"ci":"passing","review":"approved"}]}
 			]}`)
 		case "/api/v1/sessions/old-1/pr":
-			// A pre-change daemon: the summary endpoint succeeds but does not
-			// carry unresolvedThreadCount. That must read as unknown, not zero.
 			_, _ = io.WriteString(w, `{"sessionId":"old-1","prs":[{"number":1,"ci":{"state":"passing"},"review":{"decision":"approved"}}]}`)
 		case "/api/v1/sessions/zero-1/pr":
 			_, _ = io.WriteString(w, `{"sessionId":"zero-1","prs":[{"number":2,"ci":{"state":"passing"},"review":{"decision":"approved","unresolvedThreadCount":0}}]}`)
@@ -485,9 +482,6 @@ func TestSessionKill_SuccessWithProjectScope(t *testing.T) {
 	}
 }
 
-// TestSessionKill_PreservedWorkspaceNote: freed=false means the daemon
-// terminated the session but kept the worktree (uncommitted changes are never
-// force-deleted) — the CLI must say so instead of implying a full teardown.
 func TestSessionKill_PreservedWorkspaceNote(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -665,11 +659,6 @@ func TestSessionCleanup_YesSkipsPrompt(t *testing.T) {
 	}
 }
 
-// TestSessionCleanup_ReportsAlreadyGoneWorkspacesSeparately: a workspace whose
-// directory was already missing tears down without error but reclaims nothing.
-// Folding it into the cleaned count is what lets a batch run report hundreds of
-// sessions cleaned while disk usage does not move, so the summary has to keep
-// the two apart.
 func TestSessionCleanup_ReportsAlreadyGoneWorkspacesSeparately(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -708,16 +697,12 @@ func TestSessionCleanup_ReportsAlreadyGoneWorkspacesSeparately(t *testing.T) {
 	}
 }
 
-// TestSessionCleanup_DryRunListsWithoutPromptingOrDeleting: --dry-run must
-// preview the candidate sessions and stop there — no confirmation prompt and,
-// critically, no POST to the cleanup endpoint, so nothing is removed.
 func TestSessionCleanup_DryRunListsWithoutPromptingOrDeleting(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, log := sessionCommandServer(t)
 	writeRunFileFor(t, cfg, srv)
 
 	out, errOut, err := executeCLI(t, Deps{
-		// A prompt would block on empty input and fail; --dry-run must not read it.
 		In:           strings.NewReader(""),
 		ProcessAlive: func(int) bool { return true },
 	}, "session", "cleanup", "--project", "demo", "--dry-run")
@@ -735,17 +720,12 @@ func TestSessionCleanup_DryRunListsWithoutPromptingOrDeleting(t *testing.T) {
 	if strings.Contains(out, "Cleaned:") || strings.Contains(out, "sessions cleaned") {
 		t.Fatalf("--dry-run must not report removals:\n%s", out)
 	}
-	// Only the candidate listing GET is allowed; no cleanup POST may be sent.
 	want := []string{"GET /api/v1/sessions?active=false&project=demo"}
 	if got := log.all(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests = %#v, want %#v", got, want)
 	}
 }
 
-// TestSessionCleanup_ReportsSkippedWorkspaces: a session whose workspace was
-// preserved must be listed with its reason and counted in the summary —
-// previously the CLI printed "Would clean N" then "0 sessions cleaned" with no
-// explanation, leaking workspaces invisibly.
 func TestSessionCleanup_ReportsSkippedWorkspaces(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1002,9 +982,6 @@ func TestSessionClaimPR_JSONAndNoTakeoverError(t *testing.T) {
 	}
 }
 
-// TestSessionClaimPR_Draft covers #4171 from the CLI side: claiming a draft PR
-// succeeds and the draft state survives into `--json` output instead of the
-// daemon answering PR_NOT_OPEN.
 func TestSessionClaimPR_Draft(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1147,8 +1124,6 @@ func TestSessionClaimPR_GHFallbackWhenProjectRepoMissing(t *testing.T) {
 	}
 }
 
-// A spawn and a restore run the project's Setup, which the daemon bounds by
-// the Setup steps' own limits; a client timeout would cut a long Setup short.
 func TestSetupCallsHaveNoClientTimeout(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1203,8 +1178,6 @@ func TestSetupCallsHaveNoClientTimeout(t *testing.T) {
 	}
 }
 
-// The session that spawned the killed one shows the termination only when it
-// ran the kill, so the CLI names the AO session it runs in.
 func TestSessionKill_SendsCallerSession(t *testing.T) {
 	cfg := setConfigEnv(t)
 	t.Setenv("AO_SESSION_ID", "orchestrator-1")

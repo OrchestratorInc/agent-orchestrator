@@ -13,9 +13,6 @@ import (
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
 
-// newClaudeLoginCommand is an internal, trusted terminal entry point that
-// exposes every login mode supported by Claude Code without accepting raw
-// commands or credentials from the renderer.
 func newClaudeLoginCommand(ctx *commandContext) *cobra.Command {
 	var executable string
 	cmd := &cobra.Command{
@@ -62,11 +59,6 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	if err := c.deps.RunInteractiveCommand(ctx, claude, "", args, in, out, stderr); err != nil {
 		return fmt.Errorf("claude login failed: %w", err)
 	}
-	// The newest sign-in wins: the daemon stops passing Claude Code an API key
-	// saved from its AO panel and removes an earlier setup token, either of
-	// which would otherwise keep signing sessions in over this login. The key
-	// stays saved for other harnesses. The sign-in itself already succeeded,
-	// so a failure here is only a warning.
 	var recorded struct {
 		ReleasedKey string `json:"releasedKey"`
 	}
@@ -95,10 +87,6 @@ func (c *commandContext) saveClaudeSetupToken(ctx context.Context, in io.Reader,
 	if !claudeSetupTokenPattern.Match(secret) {
 		return usageError{fmt.Errorf("setup token must start with sk-ant-oat and contain no spaces")}
 	}
-	// The daemon saves the token as the Account panel's setup-token sign-in
-	// does: it stops passing Claude Code its saved ANTHROPIC_API_KEY, which
-	// would keep winning over the token, and gives it back if the token cannot
-	// be written, so a failure leaves the previous sign-in in place.
 	var login struct {
 		Status string `json:"status"`
 	}

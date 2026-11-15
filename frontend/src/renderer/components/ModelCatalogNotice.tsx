@@ -8,17 +8,11 @@ import { Button } from "./ui/button";
 export type ModelCatalogNoticeProps = {
 	agentLabel: string;
 	issue: ModelCatalogAuthIssue;
-	/** The daemon's own wording, kept out of the headline but one click away. */
 	detail?: string;
 	onLogin: () => void;
 	onRetry: () => Promise<void>;
 };
 
-/**
- * The model picker could not list an agent's models because of its login.
- * Says so in plain words and offers the fix (log in) and a retry in place,
- * instead of a raw provider error and a retry buried in the model menu.
- */
 export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry }: ModelCatalogNoticeProps) {
 	const { t } = useTranslation();
 	const detailId = useId();
@@ -33,15 +27,12 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 		try {
 			await onRetry();
 		} catch {
-			// The refreshed catalog carries any new failure as its own warning.
 		} finally {
 			setRetrying(false);
 		}
 	};
 	return (
 		<div
-			// Only a signed-out agent is a problem to fix here. An expired token
-			// renews on its own.
 			className={cn("flex flex-col gap-1 text-caption", issue === "expired" ? "text-muted-foreground" : "text-warning")}
 			data-testid="model-catalog-notice"
 			role="status"

@@ -98,7 +98,6 @@ func TestWorkspaceCacheInvalidatedFlightStillCoalesces(t *testing.T) {
 			t.Error("caller joining an invalidated flight started a separate load")
 			return workspaceCompareTarget{BaseRef: "separate"}
 		})
-		// Both callers must be blocked in the same flight before it completes.
 		synctest.Wait()
 		close(release)
 		for range 2 {
@@ -134,7 +133,6 @@ func TestWorkspaceCacheOldLoadCannotAffectReplacement(t *testing.T) {
 			*replacement = workspaceCacheEntry{at: c.now(), compare: workspaceCompareTarget{BaseRef: "replacement"}}
 			c.finishLoad(key, old, publishOld)
 			c.finishLoad(key, replacement, true)
-			// A late finish must also leave the replacement's cached result intact.
 			c.finishLoad(key, old, publishOld)
 			got, ok := c.get(key)
 			if !ok || got.compare.BaseRef != "replacement" {
@@ -153,7 +151,7 @@ func TestWorkspaceCacheOldLoadCannotAffectReplacement(t *testing.T) {
 }
 
 func TestWorkspaceCacheFailedLoadReleasesReservation(t *testing.T) {
-	root := t.TempDir() // Git must fail for a directory that is not a repository.
+	root := t.TempDir()
 	c := newWorkspaceCache(workspaceCacheTTL, nil)
 	s := &Service{workspaceCache: c}
 	_, _, err := s.resolveWorkspaceChanges(t.Context(), "session", root, func(context.Context) workspaceCompareTarget {

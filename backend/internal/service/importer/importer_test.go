@@ -60,8 +60,6 @@ func TestStatus_LegacyPresentStaysAvailableAfterImport(t *testing.T) {
 	if _, err := svc.Run(context.Background()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	// Availability is physical (legacy data still on disk), so it stays true; the
-	// app marker is what stops the prompt after a completed import.
 	st, _ = svc.Status(context.Background())
 	if !st.Available {
 		t.Fatal("availability must remain true after import (marker governs prompting)")

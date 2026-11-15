@@ -1,15 +1,9 @@
-/** The delimiter for a CSV or TSV path, or undefined for any other file. */
 export function tabularDelimiter(path: string): "," | "\t" | undefined {
 	if (/\.csv$/i.test(path)) return ",";
 	if (/\.tsv$/i.test(path)) return "\t";
 	return undefined;
 }
 
-/**
- * The leading rows of delimited text, each cut to maxColumns cells. Quoted
- * fields may contain the delimiter, doubled quotes, and line breaks; blank
- * lines are skipped.
- */
 export function csvPreviewRows(content: string, delimiter: string, maxRows: number, maxColumns: number): string[][] {
 	const rows: string[][] = [];
 	let row: string[] = [];

@@ -19,18 +19,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The package tests drive the real ACP transport. The test binary serves two
-// child roles: the detached persistent chat host (spawned by the driver as
-// os.Executable with `chat-host` argv) and a fake Hermes ACP agent (re-executed
-// through a shell fixture with `acp` argv), so the transition below exercises
-// the real driver, the real shared ACP conversation, and the real Hermes mode
-// mapping end to end.
 const (
 	fakeAgentEnv         = "AO_TEST_HERMES_ACP_FAKE_AGENT"
 	fakeAgentModeLog     = "AO_TEST_HERMES_ACP_MODE_LOG"
 	fakeAgentResponseLog = "AO_TEST_HERMES_ACP_RESPONSE_LOG"
-	// fakeAgentLiveReplies switches the fake into the replay-test persona: live
-	// prompts stream reply text, and a load_session replays the persisted shape.
 	fakeAgentLiveReplies = "AO_TEST_HERMES_ACP_LIVE_REPLIES"
 )
 
@@ -74,11 +66,6 @@ func TestHermesACPTransportSendsExplicitDefaultModeOnPermissiveToDefaultTransiti
 		nil,
 	)
 
-	// A session that starts permissive and is then moved to Default must reach
-	// Hermes as an explicit session/set_mode(default). With the old mapping an
-	// empty mode string skipped session/set_mode, so Hermes stayed in
-	// accept_edits and kept auto-allowing edits the new policy promises to
-	// prompt for (review comment 4349829023 on PR #6635).
 	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
 		SessionID: "hermes-acp", DataDir: t.TempDir(), WorkspacePath: t.TempDir(),
 		Permissions: ports.PermissionModeAcceptEdits,
@@ -113,10 +100,6 @@ func TestHermesACPTransportSendsExplicitDefaultModeOnPermissiveToDefaultTransiti
 	}
 }
 
-// A saved reasoning effort must not block a Hermes session. Hermes advertises
-// no effort option, so the driver ignores it; refusing it made every send and
-// every Resume fail, and AO's Hermes composer has no effort control to clear
-// the saved value with.
 func TestHermesACPTransportStartsAndResumesWithSavedEffort(t *testing.T) {
 	binary := writeHermesACPExecutable(t, filepath.Join(t.TempDir(), "modes.json"), "")
 	driver := newDriver(
@@ -159,10 +142,6 @@ func TestHermesACPTransportStartsAndResumesWithSavedEffort(t *testing.T) {
 	_ = resumed.(ports.ChatProviderTerminator).Terminate()
 }
 
-// finishTurn waits for the turn to settle, answering any approval the provider
-// parks for a person, acknowledges the durable receipt, and waits for the
-// controller to release the next turn: the persistent host rejects a
-// session/prompt sent before both happened.
 func finishTurn(
 	t *testing.T,
 	conversation ports.ChatConversation,
@@ -201,12 +180,6 @@ func finishTurn(
 	}
 }
 
-// An automatic bypass approval must answer allow_once. Hermes persists the
-// allow_session/allow_always kinds in a session cache that set_session_mode
-// (default) does not clear, so a command approved during bypass under those
-// kinds re-runs unattended after the user selects Default. The fake agent
-// reproduces that cache: after the mode switch, the same command must reach AO
-// as a fresh permission request instead of riding the earlier grant.
 func TestHermesACPTransportBypassApprovalAnswersAllowOnceAndRepromptsAfterDefault(t *testing.T) {
 	modeLog := filepath.Join(t.TempDir(), "modes.json")
 	responseLog := filepath.Join(t.TempDir(), "responses.json")
@@ -243,8 +216,6 @@ func TestHermesACPTransportBypassApprovalAnswersAllowOnceAndRepromptsAfterDefaul
 	startTurn(ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions})
 	finishTurn(t, conversation, conversation.Events(), domain.TurnStateCompleted)
 
-	// Move the session to Default; AO's policy no longer answers approvals, so
-	// the same command must re-prompt instead of riding the earlier grant.
 	startTurn(ports.ChatTurnSettings{Approval: ports.PermissionModeDefault})
 	finishTurn(t, conversation, conversation.Events(), domain.TurnStateCompleted)
 
@@ -260,11 +231,6 @@ func TestHermesACPTransportBypassApprovalAnswersAllowOnceAndRepromptsAfterDefaul
 	}
 }
 
-// Killing the chat host and resuming replays Hermes' persisted transcript in a
-// different shape than the live stream: id-less chunks, stripped reply text,
-// and the failed-turn boundary row on the interrupted turn. The reconciler
-// must produce the two stored turns without duplicating the reply or importing
-// the boundary notice as a reply.
 func TestHermesACPTransportReplayAfterHostDeathDoesNotDuplicateTurns(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
@@ -304,8 +270,6 @@ func TestHermesACPTransportReplayAfterHostDeathDoesNotDuplicateTurns(t *testing.
 	startTurn("What is X?")
 	finishTurn(t, conversation, conversation.Events(), domain.TurnStateCompleted)
 
-	// Interrupt the second turn once its partial reply streamed, the way a
-	// host kill or a user interrupt leaves it in Hermes' transcript.
 	ref := startTurn("Do turn two.")
 	deadline := time.After(30 * time.Second)
 events:
@@ -363,9 +327,6 @@ events:
 			deltas = append(deltas, event.Delta)
 		}
 	}
-	// The chat service rebuilds a reply from the replay's message.delta chunks,
-	// so the boundary notice must not survive in any delta chunk either —
-	// dropping only the item's completed event still reassembles the text.
 	wantDeltas := []string{"Answer one."}
 	if len(deltas) != len(wantDeltas) || deltas[0] != wantDeltas[0] {
 		t.Fatalf("replayed deltas = %q, want exactly %q with no boundary-notice chunks", deltas, wantDeltas)
@@ -387,8 +348,6 @@ events:
 	}
 }
 
-// writeHermesACPExecutable installs a fake `hermes` binary whose `acp`
-// entry point re-executes this test binary as the fake ACP agent.
 func writeHermesACPExecutable(t *testing.T, modeLog, responseLog string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -464,8 +423,6 @@ func readResponseLog(t *testing.T, path string) []string {
 	return responses
 }
 
-// ---- fake Hermes ACP agent (runs in the re-executed test binary) ----
-
 func serveFakeHermesAgent(modeLog, responseLog string) {
 	agent := &fakeHermesAgent{
 		modeLog: modeLog, responseLog: responseLog,
@@ -473,8 +430,6 @@ func serveFakeHermesAgent(modeLog, responseLog string) {
 		approved:    map[string]bool{},
 	}
 	agent.conn = acpsdk.NewAgentSideConnection(agent, os.Stdout, os.Stdin)
-	// Serve until the driver tears the process down; the SDK's pump goroutines
-	// keep the runtime alive off these channels.
 	block := make(chan struct{})
 	<-block
 }
@@ -495,8 +450,6 @@ type fakeHermesAgent struct {
 
 var _ acpsdk.Agent = (*fakeHermesAgent)(nil)
 
-// hermesAdvertisedModes mirrors the mode list the Hermes ACP server advertises
-// in session/new (acp_adapter/server.py _MODES).
 var hermesAdvertisedModes = []acpsdk.SessionMode{
 	{Id: hermesModeDefault, Name: "Default", Description: acpsdk.Ptr("Ask before edits.")},
 	{Id: hermesModeAcceptEdits, Name: "Accept Edits"},
@@ -510,7 +463,6 @@ func (a *fakeHermesAgent) Authenticate(context.Context, acpsdk.AuthenticateReque
 func (a *fakeHermesAgent) Initialize(context.Context, acpsdk.InitializeRequest) (acpsdk.InitializeResponse, error) {
 	return acpsdk.InitializeResponse{
 		ProtocolVersion: acpsdk.ProtocolVersionNumber,
-		// Hermes advertises load_session (acp_adapter/server.py initialize).
 		AgentCapabilities: acpsdk.AgentCapabilities{
 			LoadSession:         true,
 			SessionCapabilities: acpsdk.SessionCapabilities{Resume: &acpsdk.SessionResumeCapabilities{}},
@@ -547,13 +499,8 @@ func (a *fakeHermesAgent) record() error {
 	return os.WriteFile(a.modeLog, raw, 0o600)
 }
 
-// dangerousCommand is the prompt whose execution Hermes gates behind a
-// dangerous-command approval.
 const dangerousCommand = "rm -rf build"
 
-// hermesAdvertisedPermissionOptions mirrors acp_adapter/permissions.py
-// _build_permission_options: allow_once first, then the session-scoped and
-// permanent grants, all persistent kinds carrying the allow_always ACP kind.
 func hermesAdvertisedPermissionOptions() []acpsdk.PermissionOption {
 	return []acpsdk.PermissionOption{
 		{OptionId: "allow_once", Kind: acpsdk.PermissionOptionKindAllowOnce, Name: "Allow once"},
@@ -570,8 +517,6 @@ func (a *fakeHermesAgent) Prompt(ctx context.Context, params acpsdk.PromptReques
 	if a.responseLog == "" {
 		return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
 	}
-	// Emulates Hermes' approval cache (tools/approval.py is_approved): a
-	// persisted session/always grant suppresses the next request entirely.
 	a.mu.Lock()
 	approved := a.approved[dangerousCommand]
 	a.mu.Unlock()
@@ -594,8 +539,6 @@ func (a *fakeHermesAgent) Prompt(ctx context.Context, params acpsdk.PromptReques
 		if err := a.recordResponse(selected); err != nil {
 			return acpsdk.PromptResponse{}, err
 		}
-		// _persist_choice keeps only the session/always grants; allow_once asks
-		// again on the next identical command.
 		if selected == "allow_session" || selected == "allow_always" {
 			a.mu.Lock()
 			a.approved[dangerousCommand] = true
@@ -616,10 +559,6 @@ func (a *fakeHermesAgent) recordResponse(optionID string) error {
 	return os.WriteFile(a.responseLog, raw, 0o600)
 }
 
-// livePrompt streams replies the way Hermes' live session does: chunks carry
-// UUID-shaped message ids and the model's raw text, boundary whitespace
-// included. The second prompt never finishes, so the turn it belongs to
-// settles interrupted.
 func (a *fakeHermesAgent) livePrompt(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
 	a.mu.Lock()
 	n := a.prompts
@@ -649,12 +588,6 @@ func (a *fakeHermesAgent) livePrompt(ctx context.Context, params acpsdk.PromptRe
 	return acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil
 }
 
-// hermesReplayUpdates mirrors acp_adapter/server.py _history_replay_updates:
-// persisted text comes back as id-less user/agent chunks, flattened with a
-// string strip, and an interrupted turn carries the Hermes-authored boundary
-// row (agent/turn_failure_copy.py) as ordinary assistant text streamed in
-// several delta chunks — the shape the chat service would reassemble into a
-// reply if reconciliation dropped only the item's completed event.
 func (a *fakeHermesAgent) hermesReplayUpdates(ctx context.Context, sessionID acpsdk.SessionId) {
 	notice := hermesFailedTurnNotices[0]
 	prompt, err := os.ReadFile(a.modeLog + ".prompt")
@@ -678,8 +611,6 @@ func (a *fakeHermesAgent) ResumeSession(context.Context, acpsdk.ResumeSessionReq
 }
 
 func (a *fakeHermesAgent) LoadSession(ctx context.Context, params acpsdk.LoadSessionRequest) (acpsdk.LoadSessionResponse, error) {
-	// Per ACP spec Hermes streams the replayed transcript via session/update
-	// before responding (acp_adapter/server.py _session_response_fields).
 	if a.liveReplies {
 		a.hermesReplayUpdates(ctx, params.SessionId)
 	}

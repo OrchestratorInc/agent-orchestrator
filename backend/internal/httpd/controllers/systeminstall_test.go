@@ -298,9 +298,6 @@ func TestPostSystemInstall_UnknownTarget(t *testing.T) {
 	}, httpd.ControlDeps{}))
 	defer srv.Close()
 
-	// A junk single path segment (not one of the 6 known targets) must be
-	// rejected before ever reaching the service — same guard that stops a
-	// path-traversal-shaped value from being passed through.
 	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/system/install/rm-rf-everything", "")
 	if status != http.StatusBadRequest {
 		t.Fatalf("POST /system/install/<junk> = %d, want %d, body=%s", status, http.StatusBadRequest, body)
@@ -312,8 +309,6 @@ func TestPostSystemInstall_UnknownTarget(t *testing.T) {
 		t.Fatalf("startCalls = %d, want 0 (unknown target must never reach the service)", installer.startCalls)
 	}
 
-	// Harness-only targets belong to /agents/{agent}/install and must not widen
-	// the legacy /system/install contract beyond its documented enum.
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/system/install/cursor", "")
 	if status != http.StatusBadRequest {
 		t.Fatalf("POST /system/install/cursor = %d, want %d, body=%s", status, http.StatusBadRequest, body)

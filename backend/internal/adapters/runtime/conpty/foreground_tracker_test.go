@@ -57,7 +57,6 @@ func TestForegroundTrackerRechecksQuietScreenAfterEchoOrResize(t *testing.T) {
 			} else {
 				tracker.noteResize(now)
 			}
-			// A fast permission prompt is indistinguishable from echo here.
 			tracker.noteOutput(now.Add(20 * time.Millisecond))
 			next, _, state := tracker.evaluate(now.Add(100 * time.Millisecond))
 			if state.Busy || next <= 0 {
@@ -74,8 +73,6 @@ func TestForegroundTrackerRechecksQuietScreenAfterEchoOrResize(t *testing.T) {
 	}
 }
 
-// exec swaps the program inside the shell's process group; the new program's
-// first screen must get the same start grace as one launched normally.
 func TestForegroundTrackerRestartsGraceWhenExecSwapsProgram(t *testing.T) {
 	reader := &fakeForegroundReader{pgid: 42}
 	tracker := newForegroundTracker(reader)

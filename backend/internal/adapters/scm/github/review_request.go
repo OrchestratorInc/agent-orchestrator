@@ -12,7 +12,6 @@ import (
 
 var _ ports.SCMReviewRequester = (*Provider)(nil)
 
-// RequestReview asks GitHub to request another review from the supplied user.
 func (p *Provider) RequestReview(ctx context.Context, request ports.SCMReviewRequest) error {
 	if p == nil || p.client == nil {
 		return fmt.Errorf("github scm: review requester is not configured")

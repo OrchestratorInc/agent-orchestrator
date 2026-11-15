@@ -38,18 +38,11 @@ import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
 import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 
-/**
- * New task as a chat that has no session yet. The first send creates the
- * session; the page keeps the brief on screen and hands it to the session's own
- * chat, so starting a task reads as one continuous conversation.
- */
-// A page opened from Report a problem is `report`: its agent runs on Scratchpad only.
 export function NewChatPage({ projectId, hostId, report }: { projectId: string; hostId?: string; report?: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
 	const queryClient = useQueryClient();
-	// A Cloud task's session starts spinning up as the page opens (not Coder's).
 	const task = useTaskLaunch({ projectId, hostId });
 	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
@@ -60,17 +53,14 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		onPick: task.account.choose,
 		disabled: accountRows.length < 2,
 	} : undefined;
-	// Sends read the latest render's launch, not the one they started in.
 	const taskRef = useRef(task);
 	taskRef.current = task;
 	const stalePick = Boolean(task.account?.value && hostAccounts.data && !accountRows.some((row) => row.id === task.account?.value && row.signedIn));
 	useEffect(() => {
 		if (stalePick) taskRef.current.account?.choose(undefined);
 	}, [stalePick]);
-	// The page this render shows. A send is bound to the page it started on.
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
-	// The session's own composer shortcuts, before the session exists.
 	useSessionShortcut("model-picker", openComposerModelPicker);
 	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
@@ -80,22 +70,15 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			mounted.current = false;
 		};
 	}, []);
-	// One draft per host, so switching project keeps what was typed.
 	const hostKey = hostId ?? "local";
 	const draftId = `new-chat:${hostKey}`;
 	const draftRevision = useUiStore((state) => state.newChatDraftRevision);
 	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
-	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();
-	// A failed fallback start has no composer send to report it, so the page does.
 	const [fallbackFailed, setFallbackFailed] = useState(false);
-	// A load error a send already reported in the composer.
 	const [reportedLoadError, setReportedLoadError] = useState<string>();
-	// Why the daemon refused a retry of a send whose first answer was lost.
 	const [refusedRetry, setRefusedRetry] = useState<string>();
-	// A fallback start keeps its request id until it is answered, so a retry after a
-	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
 	const fallbackInFlight = useRef(false);
 	const [heldAttachments, setHeldAttachments] = useState<FileAttachmentPayload[]>([]);
@@ -104,19 +87,13 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		setHeldAttachments(attachments);
 		setAttachmentsPreparing(preparing);
 	}, []);
-	// Bumped when a saved launch is resolved, so the page re-reads it.
 	const [, setLaunchRevision] = useState(0);
-	// "@" files and attachments go through the prepared worktree's session, which
-	// becomes the task's session on send. Until it is ready, and in Scratchpad, which
-	// has none, attachments stay in the composer and are uploaded with the task.
 	const preparedId = task.preparedSessionId || undefined;
 	const workspaceFiles = useQuery({
 		queryKey: ["new-chat-files", hostKey, preparedId ?? ""],
 		enabled: Boolean(preparedId),
 		retry: false,
 		staleTime: 30_000,
-		// The worktree is still being created when the id arrives; ask again until it
-		// exists, backing off so a stalled preparation is not polled every 1.5s.
 		refetchInterval: (query) => (query.state.data ? 30_000 : Math.min(1_500 * 2 ** query.state.errorUpdateCount, 15_000)),
 		queryFn: async () => {
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
@@ -130,38 +107,27 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		},
 	});
 	const stagePrepared = useStageAttachments(preparedId, hostId);
-	// A Cloud task carries files when its control plane takes them: they ride
-	// the first message of its Chat session, up to the size one upload may be.
-	// A Cloud standalone agent starts without them (createCloudTask).
 	const cloudOffering = useCloudOffering(task.isCloudProject);
 	const cloudTaskTakesFiles = task.isCloudProject && projectId !== CLOUD_STANDALONE_WORKSPACE_ID;
 	const cloudFiles = useMemo(() => cloudTaskTakesFiles && cloudOffering.maxAttachmentBytes !== undefined
 		? { maxBytes: Math.min(cloudOffering.maxAttachmentBytes, MAX_CLOUD_CP_BINARY_BYTES) } : undefined,
 	[cloudOffering.maxAttachmentBytes, cloudTaskTakesFiles]);
-	// A draft keeps the files it brought from a target that takes them; here
-	// they stay with why this target takes none, until they are removed.
 	const attachmentsRefusal = projectId === CLOUD_STANDALONE_WORKSPACE_ID && task.isCloudProject
 		? t("newTask.cloudStandaloneNoFiles", { defaultValue: "Files can't start a standalone agent. Remove them to continue." })
 		: task.isCloudProject && cloudOffering.loaded && !cloudFiles
 			? t("newTask.cloudProjectNoFiles", { defaultValue: "Files can't start a task in this Cloud project yet. Remove them to continue." })
 			: undefined;
 	const workspaceReady = Boolean(preparedId && workspaceFiles.data);
-	// Files staged into one project's worktree do not exist in another's.
 	const attachmentsProject = useRef(projectId);
 	if (attachmentsProject.current !== projectId) {
 		attachmentsProject.current = projectId;
 		writeChatAttachments(draftScope, []);
 	}
-	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
 	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId), [hostId, task.agent.value, task.isCloudProject]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
 	);
-	// A session of this agent already reported its own settings: draw exactly those
-	// controls, holding this chat's choices, so the bar never changes on handoff.
-	// Those are this computer's agent's. A Cloud task's agent runs in its sandbox,
-	// and its session's bar lists Cloud's own models, so the bar here does too.
 	const harness = task.agent.value;
 	const template = useMemo(
 		() => task.isCloudProject ? undefined : readChatSettingsTemplate(harness, hostId),
@@ -178,20 +144,16 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			configOptions: providerOptions,
 			showApprovalMode: !task.approvalModes || task.approvalModes.length > 0,
 			approvalModes: task.approvalModes,
-			// A Cloud task with no model picked runs the project's or the agent's
-			// default, as the New Task picker words it; it needs no choice.
 			...(task.isCloudProject ? { unsetModelLabel: t("newTask.cloudConfiguredDefault") } : {}),
 		};
 	};
 	const barSettings = barFor(task.turnSettings);
 	const providerOptions = barSettings.configOptions;
-	// Sends capture the bar as it is once loading finishes, not as it was at Enter.
 	const barRef = useRef(barSettings);
 	barRef.current = barSettings;
 	const chooseProviderOption = (optionId: string, value: ChatConfigOptionValue) => {
 		const option = template?.options.find((candidate) => candidate.id === optionId);
 		if (!option || !("value" in value)) return;
-		// Partitioning returns copies of the options, so match them by id.
 		const grouped = partitionConfigOptions(template?.options ?? []);
 		const choice = option.choices.find((candidate) => candidate.value === value.value);
 		if (grouped.model.some((candidate) => candidate.id === optionId)) {
@@ -204,9 +166,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		}
 	};
 
-	// A send whose response was lost is retried with the same request id. It is saved
-	// with its project and request, so the retry repeats exactly that request, even
-	// after a reload; the page returns to that project until it is resolved.
 	const pendingLaunch = readPendingLaunch(hostKey, draftScope);
 	useEffect(() => {
 		if (!pendingLaunch || pendingLaunch.projectId === projectId) return;
@@ -216,11 +175,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			replace: true,
 		});
 	}, [hostId, navigate, pendingLaunch, projectId, report]);
-	// A request placed before the Cloud lists answered, or an old link, can name
-	// a Cloud standalone agent's project. An agent takes no new task: once the
-	// lists know it, the page moves to where one starts, another agent beside the
-	// person's own and the Scratchpad beside one shared with them. A report page
-	// already goes back to Scratchpad by itself (below), keeping its report flag.
 	const listedWorkspaces = useWorkspaceQuery({ enabled: !hostId }).data;
 	const agentWorkspace = hostId ? undefined : listedWorkspaces?.find((workspace) => workspace.id === projectId && workspace.standaloneAgent);
 	useEffect(() => {
@@ -236,8 +190,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		setLaunchRevision((revision) => revision + 1);
 	};
 
-	// Escape leaves, as closing the old dialog did; the draft is kept. Not while
-	// Settings (which closes on the same key) or an input method owns it.
 	const pendingRef = useRef(false);
 	useEffect(() => {
 		let settingsOwnsEscape = false;
@@ -258,15 +210,12 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		};
 	}, [router]);
 
-	// A Coder project keeps the New Task dialog and its own start-up: a link here hands over to it.
 	useEffect(() => {
 		if (!task.isCoderCloudProject) return;
 		void navigate({ to: "/new", search: { host: hostId }, replace: true });
 		useUiStore.getState().requestNewTask(projectId, hostId);
 	}, [hostId, navigate, projectId, task.isCoderCloudProject]);
 
-	// Load the session page's code now: a first visit otherwise renders the
-	// router's empty pending frame between this page and the session.
 	useEffect(() => {
 		void router.preloadRoute(sessionNavigateTarget(projectId, "preload", hostId)).catch(() => undefined);
 	}, [hostId, projectId, router]);
@@ -278,19 +227,13 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		interfaceMode: "chat" | "tui",
 		target: { projectId: string; hostId?: string },
 	) => {
-		// The session's chat shows the brief from its first frame; cloud and
-		// terminal sessions open on their own surfaces and need none of it.
 		if (!taskRef.current.isCloudProject && interfaceMode === "chat") {
 			seedOpeningLocalEcho(queryClient, sessionId, target.hostId, brief);
 			rememberLaunchSettings(queryClient, sessionId, target.hostId, settings);
 			rememberOpeningStart(queryClient, sessionId, target.hostId, brief.createdAt);
 		}
-		// A Cloud task is already on the board (the launch refreshed the Cloud list).
 		if (!taskRef.current.isCloudProject) await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
-		// A Cloud standalone agent opens in the project the control plane made for it.
 		const sessionProjectId = target.projectId === CLOUD_STANDALONE_WORKSPACE_ID ? standaloneAgentProjectId(sessionId) : target.projectId;
-		// After the composer settles this send, so its draft never outlives the page.
-		// Someone who has since left, or opened another new task, stays where they are.
 		setTimeout(() => {
 			if (!mounted.current) return;
 			const here = targetRef.current;
@@ -298,8 +241,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				void navigate({ ...sessionNavigateTarget(sessionProjectId, sessionId, target.hostId), replace: true });
 				return;
 			}
-			// The page now shows another project: the task is in the sidebar, and this
-			// page is a fresh new chat again.
 			setEcho(undefined);
 			setLaunched(undefined);
 		}, 0);
@@ -311,20 +252,13 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
 		setEcho(brief);
 		setRefusedRetry(undefined);
-		// Held still from Enter; replaced by the loaded bar once the page is ready.
 		setLaunched(saved?.settings ?? barRef.current);
 		try {
-			// A saved send belongs to its own project; the page is on its way back there.
 			if (saved && saved.projectId !== target.projectId) throw new Error(t("newTask.unableToStart"));
-			// A send right after opening waits for the project and agents to load,
-			// unless loading has already failed or the page has gone.
 			if (!(await until(() => !mounted.current || taskRef.current.canSubmit || Boolean(taskRef.current.remoteLoadError), 10_000)) || !mounted.current || !taskRef.current.canSubmit) {
-				// The composer shows this reason with the returned brief, so the notice below steps aside.
 				setReportedLoadError(taskRef.current.remoteLoadError);
 				throw Object.assign(new Error(taskRef.current.remoteLoadError ?? t("newTask.unableToStart")), { code: "TASK_NOT_READY" });
 			}
-			// Nothing was created yet, so a page that moved to another project or host
-			// returns the brief rather than starting it there.
 			const here = targetRef.current;
 			if (here.projectId !== target.projectId || here.hostId !== target.hostId) {
 				throw Object.assign(new Error(t("newTask.unableToStart")), { code: "TASK_RETARGETED" });
@@ -339,11 +273,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
 			setEcho(undefined);
-			// Only a refusal from the daemon is final: it returns the brief with the
-			// reason. A lost response, or a failure after the session may have started,
-			// stays uncertain, so the composer retries with the same request id. A refused
-			// retry says nothing about the attempt whose answer was lost: the composer
-			// still holds it, so it stays pinned to its project and settings.
 			if (saved && !sendIsUncertain(error)) setRefusedRetry(apiErrorMessage(error, t("newTask.unableToStart")));
 			if (sendIsUncertain(error) || saved) throw error;
 			resolveLaunch(clientMessageId);
@@ -351,10 +280,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		}
 	};
 
-	// The fallback starts what the composer holds now; a brief the user cleared stays cleared.
 	const sendFallback = async () => {
 		const text = readChatSessionDraft(draftScope).composer.text.trim();
-		// A second click before the page re-renders must not start it twice.
 		if (!text || fallbackInFlight.current || attachmentsPreparing) return;
 		fallbackInFlight.current = true;
 		const target = { ...targetRef.current };
@@ -362,7 +289,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		const clientMessageId = fallbackRequest.current;
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
 		const fallback = task.fallbackAction;
-		// The bar shows what the fallback actually sends.
 		const settings = fallback === "bypass-permissions"
 			? barFor({ ...task.turnSettings, approvalMode: "bypass-permissions" })
 			: barSettings;
@@ -378,7 +304,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			await openSession(sessionId, brief, settings, fallback === "tui" ? "tui" : task.effectiveInterface, target);
 		} catch (error) {
 			if (!sendIsUncertain(error)) fallbackRequest.current = undefined;
-			// The hook keeps the reason; the notice below shows it.
 			setFallbackFailed(true);
 			setEcho(undefined);
 		} finally {
@@ -389,7 +314,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const pending = Boolean(echo);
 	const frozen = pending || Boolean(pendingLaunch);
 	const frozenSettings = launched ?? pendingLaunch?.settings;
-	// A saved send took a report page to its project; once settled, the report goes back.
 	useEffect(() => {
 		if (!report || frozen || projectId === STANDALONE_WORKSPACE_ID) return;
 		void navigate({ to: "/new", search: { host: hostId, report }, replace: true });
@@ -398,8 +322,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		if (!report && !frozen) dropReportPrompt(draftScope);
 	}, [draftScope, frozen, report]);
 	pendingRef.current = pending;
-	// From the send on, the shell gives this page the session's top bar, before the
-	// first message paints, so the message sits where the session shows it.
 	useLayoutEffect(() => {
 		useUiStore.getState().setNewChatSending(pending);
 		return () => useUiStore.getState().setNewChatSending(false);
@@ -440,24 +362,15 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			{/* No session yet: the shared session frame with no tabs holds the header's
-			    place and surface, so nothing moves or changes colour at handoff. The
-			    divider is dropped (styles.css) so the bar reads as bare chrome. */}
 			<div aria-hidden="true" className="new-chat-topbar flex h-toolbar w-full shrink-0 overflow-hidden">
 				<SessionTabsTopbar hideActions tabs={null} />
 			</div>
-			{/* The placeholder bar above is its drag region; without it (bar-less panel) this keeps the top edge draggable. */}
 			<BareTopbarDragStrip />
 			<ChatWorkspace
-				// A different project is a different worktree: the composer reloads its
-				// draft (text kept, staged files dropped above). So does a draft written
-				// from outside this page.
 				key={`${projectId}:${draftRevision}`}
 				snapshot={snapshot}
 				uiSessionId={draftId}
-				// The pending launch below tracks its own unanswered send.
 				parkUnsentSends={false}
-				// The session is titled after its brief, so the tab already reads that way.
 				sessionTitle={echo ? sessionNameFromBrief(echo.text) : t("command.newTask")}
 				sessionRole="worker"
 				hideHeader
@@ -465,10 +378,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				welcomeHeading={report ? t("report.heading") : undefined}
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				// A Cloud task whose control plane takes no files offers none. A send
-				// whose answer was lost keeps the files it went with until its outcome
-				// is known: its retry carries them under the same request, and only a
-				// new send meets a target that takes none.
 				holdAttachments={!task.isCloudProject || Boolean(cloudFiles) || Boolean(pendingLaunch)}
 				cloudAttachments={cloudFiles}
 				attachmentsRefusal={pendingLaunch ? undefined : attachmentsRefusal}
@@ -485,9 +394,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 				}
 				onSend={send}
 				busy={pending}
-				// The Cloud session started for this task is still coming up.
-				// The session's own composer controls from the start: the same bar, held
-				// still once sent, with the agent at the top of the model menu.
 				draftSettings={frozen ? (frozenSettings ? <LaunchSettingsBar {...frozenSettings} /> : null) : (
 					<>
 						<TurnSettingsBar
@@ -500,8 +406,6 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 							showApprovalMode={barSettings.showApprovalMode}
 							unsetModelLabel={barSettings.unsetModelLabel}
 							approvalModes={barSettings.approvalModes}
-							// The session's own picker, so the bar is the one the chat keeps. With no
-							// session to switch yet, picking another agent changes it at once.
 							agentSwitch={{
 								projectId: task.catalogProjectId,
 								cloudOrgId: task.catalogCloudOrgId,
@@ -523,27 +427,15 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	);
 }
 
-/**
- * The agent's model, effort, and permission options, set to this chat's choices.
- * Undefined when they cannot show exactly what the task will start with; the page
- * then draws AO's own controls instead.
- */
 function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, approvalModes?: ApprovalMode[]): ChatConfigOption[] | undefined {
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
 	if (!model) return undefined;
-	// The agent's own rows, as its session's bar is given them. The bar folds a
-	// Default row into the model its description names; folded here as well, that
-	// model's row would be gone before the bar sees it (Fable, where it is this
-	// agent's default).
 	const rows = options.find((option) => option.id === model.id)?.choices ?? model.choices;
-	// A saved template predates the live catalog: a model it does not list means it
-	// can no longer show every choice, so AO's own controls take over.
 	const listed = (item: ChatModel) => rows.some((choice) =>
 		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
 	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
-	// Only choices a new task can start with: those AO's model list also has.
 	const modelChoices = rows.flatMap((choice) => {
 		const listed = catalogModelFor(choice, harness, models);
 		return listed ? [listed.hint ? { ...choice, hint: listed.hint } : choice] : [];
@@ -556,15 +448,12 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	out.push({ ...model, choices: modelChoices, currentValue: modelValue });
 	const effort = grouped.effort[0];
 	if (effort) {
-		// Efforts belong to a model; the template's list must match the chosen one's.
 		const offered = new Set(chosen?.efforts ?? []);
 		const listedEfforts = effort.choices.map((choice) => choice.value).filter((value) => value !== "default");
 		if (listedEfforts.length !== offered.size || listedEfforts.some((value) => !offered.has(value))) return undefined;
 		out.push({ ...effort, currentValue: settings.reasoningEffort || "default" });
 	}
-	// A Cloud task sends its permission choice with the opening prompt, as a local one does.
 	if (grouped.mode) {
-		// Only choices a new task can start with: those with an AO permission equivalent.
 		const choices = grouped.mode.choices.filter((choice) => choice.permissionMode && (!approvalModes || approvalModes.includes(choice.permissionMode)));
 		const value = choices.find((choice) => choice.permissionMode === settings.approvalMode)?.value;
 		if (!value) return undefined;
@@ -573,24 +462,16 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	return out;
 }
 
-// Errors raised after the daemon may have created the session: a retry with the
-// same request id must be possible, so these never count as a final refusal.
 const POST_START_ERRORS = new Set([
 	"SPAWN_COMMIT_FAILED", "SPAWN_INTERNAL", "SPAWN_PROMPT_DELIVERY_FAILED", "SPAWN_LAUNCH_COMMAND_FAILED",
 	"SPAWN_SUPERVISOR_FAILED", "SPAWN_PREPARE_LAUNCH_FAILED", "RUNTIME_CREATE_FAILED",
 ]);
 
-/**
- * A send whose outcome is unknown: no answer, a server error (the create may
- * have gone through before it failed), a rate limit that names no plan limit,
- * or a failure after the session may exist.
- */
 function sendIsUncertain(error: unknown): boolean {
 	if (!(error instanceof Error)) return true;
 	const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
 	const status = "status" in error && typeof error.status === "number" ? error.status : undefined;
 	if (status !== undefined && (status === 0 || status >= 500)) return true;
-	// A plan's limit has its own message and its Upgrade; any other 429 is retried.
 	if (status === 429) return !(code && PLAN_REFUSAL_CODES.has(code));
 	if (code) return POST_START_ERRORS.has(code);
 	return error.name !== "TaskCreateError";
@@ -608,10 +489,6 @@ function readPendingLaunches(): Record<string, PendingLaunch> {
 	}
 }
 
-/**
- * This host's unresolved send, while the composer still holds its delivery; a send
- * the composer no longer holds is dropped. With an id, only that send.
- */
 function readPendingLaunch(hostKey: string, scope: { sessionId: string; incarnation: string }, clientMessageId?: string): PendingLaunch | undefined {
 	const saved = readPendingLaunches()[hostKey];
 	if (!saved) return undefined;
@@ -626,11 +503,9 @@ function writePendingLaunch(hostKey: string, launch: PendingLaunch): void {
 	try {
 		window.localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify({ ...readPendingLaunches(), [hostKey]: launch }));
 	} catch {
-		// Without it a retry after a reload rebuilds the request from the current picks.
 	}
 }
 
-/** Drops this host's saved send; with an id, only when it is still that send. */
 function clearPendingLaunch(hostKey: string, clientMessageId?: string): void {
 	const all = readPendingLaunches();
 	if (!(hostKey in all)) return;
@@ -639,18 +514,15 @@ function clearPendingLaunch(hostKey: string, clientMessageId?: string): void {
 	try {
 		window.localStorage.setItem(PENDING_LAUNCH_KEY, JSON.stringify(all));
 	} catch {
-		// Nothing to undo: an unreadable entry is dropped on the next read.
 	}
 }
 
-/** Resolves once `ready` holds, or false when it has not within `ms`. */
 async function until(ready: () => boolean, ms: number): Promise<boolean> {
 	const deadline = Date.now() + ms;
 	while (!ready() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
 	return ready();
 }
 
-/** The catalog model a provider choice names, by id or by the name both show. */
 function catalogModelFor(choice: { value: string; name: string }, harness: string, models: ChatModel[]): ChatModel | undefined {
 	return models.find((item) => item.id === choice.value) ??
 		models.find((item) => agentModelDisplayLabel(harness, item.displayName) === choice.name);
@@ -661,15 +533,10 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	const localWorkspaces = useWorkspaceQuery().data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces().data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
-	// A Cloud standalone agent is offered beside the local scratchpad wherever
-	// this machine's Cloud workspace starts them.
 	const offering = useCloudOffering(!hostId);
 	const cloudStandalone = !hostId && offering.ready && Boolean(offering.org) && offering.features.includes(STANDALONE_AGENTS_FEATURE);
-	// A Cloud project's page lists Cloud projects beside local ones; a local
-	// project's page lists local projects only, as it always has.
 	const onCloudProject = projectId === CLOUD_STANDALONE_WORKSPACE_ID ||
 		workspaces.some((workspace) => workspace.id === projectId && workspace.kind === CLOUD_PROJECT_KIND);
-	// Scratchpads, the local one and Cloud standalone agents' projects, are not projects to pick.
 	const projects = workspaces.filter(
 		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && !isScratchpadWorkspace(workspace) &&
 			(onCloudProject || workspace.kind !== CLOUD_PROJECT_KIND),
@@ -685,8 +552,6 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 			: []),
 		...projects.map((project) => ({ value: project.id, label: project.name })),
 	];
-	// A project that is not (or not yet) listed, such as one still loading or deleted,
-	// reads as unselected rather than as the scratchpad.
 	const selectedProjectName = projectId === STANDALONE_WORKSPACE_ID
 		? t("standalone.workspaceName")
 		: projectId === CLOUD_STANDALONE_WORKSPACE_ID
@@ -706,9 +571,7 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 			triggerVariant="ghost"
 			triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
 			showCaret={false}
-			// Icon and label share the row's colour, so hover changes both together.
 			menuItemClassName="gap-2! [&_svg]:text-current!"
-			// Adding a project opens the local Add Project flow, so remote hosts skip it.
 			action={hostId ? undefined : {
 				label: t("newTask.createNew"),
 				icon: <Plus aria-hidden="true" className="size-icon-sm shrink-0" />,
@@ -736,7 +599,6 @@ function ProjectIcon({ projectId, cloud, className }: { projectId: string; cloud
 	return <Icon aria-hidden="true" className={cn("shrink-0", className)} />;
 }
 
-/** Shown while a paired phone has the app open, so a task started here can be followed there. */
 function MobileConnected() {
 	const { t } = useTranslation();
 	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);

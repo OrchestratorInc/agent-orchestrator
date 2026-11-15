@@ -7,15 +7,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Build metadata. Release tooling can override these with -ldflags.
 var (
 	Version = "dev"
 	Commit  = ""
 	Date    = ""
 )
 
-// VersionString renders the build metadata as "<version> commit <c> built <d>",
-// omitting the commit/date parts when they are unset.
 func VersionString() string {
 	parts := []string{Version}
 	if Commit != "" {

@@ -29,7 +29,6 @@ describe("buildSessionSearchCommands", () => {
 		expect(plain?.action).not.toHaveProperty("reviewId");
 	});
 
-	// resume-agent refuses a terminated session; ⌘↵ copies the command that works.
 	it("copies restore for a terminated session and resume-agent otherwise", () => {
 		const [terminated] = buildSessionSearchCommands([{ ...hit, sessionState: "terminated" }], "flaky");
 		expect(terminated?.secondaryAction).toEqual({ kind: "copy-resume-command", command: "ao session restore proj-1" });
@@ -44,7 +43,6 @@ describe("buildSessionSearchCommands", () => {
 		expect(command?.subtitle).toBe("you · 7 matches · proj · claude-code");
 		const [single] = buildSessionSearchCommands([{ ...hit, sessionMatches: 1 }], "flaky");
 		expect(single?.subtitle).toBe("you · 1 match · proj · claude-code");
-		// A row found only by its name or metadata has no matched message to count.
 		const [none] = buildSessionSearchCommands([{ ...hit, sessionMatches: 0 }], "flaky");
 		expect(none?.subtitle).toBe("you · proj · claude-code");
 	});
@@ -60,9 +58,7 @@ describe("buildSessionSearchCommands", () => {
 			sessionId: "proj-1",
 			messageId: "msg-1",
 			snippet: "the flaky login test",
-			// What matched decides whether the session opens find in chat.
 			matchKind: "user",
-			// The matched span, so the opened message highlights the matched word.
 			highlights: [{ start: 4, end: 9 }],
 		});
 	});
@@ -79,13 +75,11 @@ describe("buildSessionSearchCommands", () => {
 	it("keeps the matched text in the row so the palette marks it", () => {
 		const [command] = buildSessionSearchCommands([hit], "flaky");
 		expect(command?.snippet).toEqual({ text: "the flaky login test", highlights: [{ start: 4, end: 9 }] });
-		// The palette's snippet line walks the spans in order.
 		const [unordered] = buildSessionSearchCommands(
 			[{ ...hit, highlights: [{ start: 10, end: 15 }, { start: 4, end: 9 }] }],
 			"flaky login",
 		);
 		expect(unordered?.snippet?.highlights).toEqual([{ start: 4, end: 9 }, { start: 10, end: 15 }]);
-		// A recent session with nothing matched has no snippet line.
 		const [recent] = buildSessionSearchCommands([{ ...hit, snippet: "", highlights: undefined }], "");
 		expect(recent?.snippet).toBeUndefined();
 	});
@@ -131,8 +125,6 @@ describe("withoutChatHitsCoveredBySessionSearch", () => {
 	});
 
 	it("keeps one row per session, reviewer chats included", () => {
-		// The session-text row counts the reviewer chat's matches too, and the
-		// opened session's find in chat steps through them; a second row would repeat it.
 		const sessionRows = buildSessionSearchCommands([hit], "flaky");
 		const chatRows = buildChatSearchCommands([chatHit("proj-1", "m1", "review-1"), chatHit("proj-1", "m2"), chatHit("proj-9", "m3")] as never);
 		expect(withoutChatHitsCoveredBySessionSearch(chatRows, sessionRows).map((item) => item.id)).toEqual(["message:m3"]);

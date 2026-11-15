@@ -11,7 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// GetAgentModelCatalog loads the cached catalog for one agent/project scope.
 func (s *Store) GetAgentModelCatalog(ctx context.Context, agentID, projectID string) (ports.CachedAgentModelCatalog, bool, error) {
 	row, err := s.qr.GetAgentModelCatalog(ctx, gen.GetAgentModelCatalogParams{
 		AgentID:   agentID,
@@ -26,8 +25,6 @@ func (s *Store) GetAgentModelCatalog(ctx context.Context, agentID, projectID str
 	return cachedAgentModelCatalog(row), true, nil
 }
 
-// ListAgentModelCatalogsByAgent returns every previously discovered project
-// scope for one agent in stable project order.
 func (s *Store) ListAgentModelCatalogsByAgent(ctx context.Context, agentID string) ([]ports.CachedAgentModelCatalog, error) {
 	rows, err := s.qr.ListAgentModelCatalogsByAgent(ctx, agentID)
 	if err != nil {
@@ -40,8 +37,6 @@ func (s *Store) ListAgentModelCatalogsByAgent(ctx context.Context, agentID strin
 	return records, nil
 }
 
-// ListAgentModelCatalogs returns every known scope for prioritized startup
-// prefetch. It never creates speculative scopes.
 func (s *Store) ListAgentModelCatalogs(ctx context.Context) ([]ports.CachedAgentModelCatalog, error) {
 	rows, err := s.qr.ListAgentModelCatalogs(ctx)
 	if err != nil {
@@ -54,7 +49,6 @@ func (s *Store) ListAgentModelCatalogs(ctx context.Context) ([]ports.CachedAgent
 	return records, nil
 }
 
-// UpsertAgentModelCatalog stores the latest successfully discovered catalog.
 func (s *Store) UpsertAgentModelCatalog(ctx context.Context, record ports.CachedAgentModelCatalog) error {
 	legacyRecord := record.RefreshState == "" && record.Generation == 0
 	if record.MetadataJSON == "" {

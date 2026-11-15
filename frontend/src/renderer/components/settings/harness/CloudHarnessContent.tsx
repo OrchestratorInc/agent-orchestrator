@@ -25,7 +25,6 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 	const { org } = useCloudOrg();
 	const connections = useProviderConnections();
 	const versions = useCloudHarnessVersions();
-	// Each harness can hold several accounts: its options list them instead of one login.
 	const { agentAccounts } = useCloudOffering();
 	const [loginAgent, setLoginAgent] = useState<CloudHarness | null>(null);
 	const [expandedAgentId, setExpandedAgentId] = useState<CloudHarness | null>(null);
@@ -58,7 +57,6 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 					const cloudVersion = describeCloudHarness(versions.data, agentId)?.currentVersion;
 					const expanded = expandedAgentId === agentId;
 					const openLogin = () => {
-						// With accounts the list logs in: it opens on adding one while there is none.
 						if (!agentAccounts) setLoginAgent(agentId);
 						setExpandedAgentId(agentId);
 					};
@@ -89,21 +87,14 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 	</>;
 }
 
-/** A GitHub token saved for Cloud before it reached GitHub through the GitHub App, whatever its last check said. */
 function hasSavedGitHubToken(connections: CloudCpProviderConnection[] | undefined): boolean {
 	return (connections ?? []).some((connection) => connection.provider === "github" && connection.label === "default");
 }
 
-/** The control plane has no saved GitHub token for this person (DELETE /me/github-pat answered 404 not_found). */
 function isTokenAlreadyGone(error: unknown): boolean {
 	return error instanceof CloudCpError && error.status === 404 && error.code === "not_found";
 }
 
-/**
- * Nothing saves a GitHub token for Cloud any more, but the control plane keeps
- * one saved earlier and can still use it, so its owner can remove it here. The
- * row leaves once the token is gone.
- */
 function SavedGitHubTokenRow() {
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
@@ -113,11 +104,9 @@ function SavedGitHubTokenRow() {
 			try {
 				await client.deleteGitHubPAT();
 			} catch (error) {
-				// Already gone (removed from another device) is what Remove asked for.
 				if (!isTokenAlreadyGone(error)) throw error;
 			}
 		},
-		// Refetch either way, so the row matches what the control plane holds.
 		onSettled: () => queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
 	});
 	return <SettingsRow

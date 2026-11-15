@@ -10,7 +10,6 @@ describe("palette registry", () => {
 		const items = buildShortcutCommands(t);
 		const sidebar = items.find((item) => item.id === "shortcut:toggle-sidebar");
 		expect(sidebar).toMatchObject({ title: "Toggle sidebar", searchOnly: true, action: { kind: "run-shortcut", shortcut: "toggle-sidebar" } });
-		// The palette's own openers and actions it already lists are left out.
 		for (const id of ["command-palette", "quick-open-file", "jump-to-session", "open-settings", "new-session", "open-orchestrator"]) {
 			expect(items.some((item) => item.id === `shortcut:${id}`)).toBe(false);
 		}
@@ -24,11 +23,9 @@ describe("palette registry", () => {
 			expect(offSession).not.toContain(`shortcut:${id}`);
 			expect(local).toContain(`shortcut:${id}`);
 		}
-		// Only a session on this machine has a worktree path to copy.
 		expect(local).toContain("shortcut:copy-session-path");
 		expect(elsewhere).not.toContain("shortcut:copy-session-path");
 		expect(elsewhere).toContain("shortcut:toggle-diff");
-		// App-wide commands are always there.
 		expect(offSession).toContain("shortcut:toggle-sidebar");
 		expect(offSession).toContain("shortcut:previous-session");
 	});
@@ -68,7 +65,6 @@ describe("palette registry", () => {
 
 	it("lists only rows the settings pages still show", () => {
 		const ids = buildSettingsCommands(t, { developerMode: true, diagnostics: true, mac: true }).map((item) => item.id);
-		// Closed-lid keep awake is part of Keep this Mac awake.
 		expect(ids).not.toContain("setting:keep-awake-lid");
 		expect(ids).toContain("setting:color-theme");
 		expect(ids).toContain("setting:computer-use");
@@ -79,9 +75,7 @@ describe("palette registry", () => {
 		const logins = items.find((item) => item.id === "setting:harness-logins");
 		expect(logins?.subtitle).toBe(t("settings.harness"));
 		expect(logins?.action).toEqual({ kind: "open-settings-section", section: "harness", focus: t("settings.harness.viewLabel") });
-		// Accounts live on the Harness page, so an accounts search lands there.
 		expect(filterCommands(items, "codex accounts")[0]?.action).toMatchObject({ kind: "open-settings-section", section: "harness" });
-		// API keys are set from a harness's Account, so a key search lands there too.
 		expect(filterCommands(items, "api key")[0]?.action).toMatchObject({ kind: "open-settings-section", section: "harness" });
 		expect(filterCommands(items, "pair phone")[0]?.id).toBe("setting:mobile");
 		expect(filterCommands(items, "color theme")[0]?.id).toBe("setting:color-theme");

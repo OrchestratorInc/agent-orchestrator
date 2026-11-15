@@ -44,11 +44,8 @@ type timeoutProbeSessionService struct {
 	resumeSetup   time.Duration
 }
 
-// Spawn extends the request's budget by spawnSetup (none when negative), runs
-// past the ordinary budget, and reports whether its context was still live.
 func (s *timeoutProbeSessionService) Spawn(ctx context.Context, _ ports.SpawnConfig) (domain.Session, int, int, error) {
 	if s.spawnBudget != nil {
-		// A spawn with no Setup steps still extends: the base budget is then its whole budget.
 		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 0)
 		defer cancel()
 		s.spawnBudget <- remainingRequestBudget(ctx)
@@ -69,9 +66,6 @@ func (s *timeoutProbeSessionService) GetRecord(ctx context.Context, _ domain.Ses
 	return domain.SessionRecord{}, errors.New("probe only")
 }
 
-// recordBudget is the deadline GetRecord saw. The route has run by the time it
-// is read, so a route that never reached GetRecord fails here instead of
-// blocking the test.
 func (s *timeoutProbeSessionService) recordBudget(t *testing.T) time.Duration {
 	t.Helper()
 	select {
@@ -84,8 +78,6 @@ func (s *timeoutProbeSessionService) recordBudget(t *testing.T) time.Duration {
 }
 
 func (s *timeoutProbeSessionService) ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error) {
-	// An import's first open extends the budget by its Setup steps; with none
-	// the request keeps its base budget.
 	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, s.resumeSetup)
 	defer cancel()
 	s.resumeBudget <- remainingRequestBudget(ctx)
@@ -124,8 +116,6 @@ func TestAttachmentUploadRouteUsesExtendedTimeout(t *testing.T) {
 	}
 }
 
-// A managed preview carries the dev server's HMR socket and event streams; the
-// REST budget cut them at a minute (504) and reloaded the page.
 func TestManagedPreviewAppProxyHasNoRequestTimeout(t *testing.T) {
 	svc := &timeoutProbeSessionService{previewBudget: make(chan time.Duration, 1)}
 	router := NewRouterWithControl(
@@ -143,7 +133,6 @@ func TestManagedPreviewAppProxyHasNoRequestTimeout(t *testing.T) {
 	}
 }
 
-// The agent browser's stream socket stays open as long as its tab does.
 func TestAgentBrowserProxyHasNoRequestTimeout(t *testing.T) {
 	svc := &timeoutProbeSessionService{previewBudget: make(chan time.Duration, 1)}
 	router := NewRouterWithControl(
@@ -199,7 +188,6 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 	}
 }
 
-// timeoutProbePRs records the request budget a PR comment post runs under.
 type timeoutProbePRs struct {
 	prsvc.ActionManager
 	budget chan time.Duration
@@ -220,9 +208,6 @@ func (p *timeoutProbePRs) MergeStack(ctx context.Context, _ prsvc.StackMergeRequ
 	return prsvc.StackMergeResult{}, nil
 }
 
-// A stack merge waits up to two minutes for GitHub to land it; the one-minute
-// REST budget cancelled it, and the layers it landed went unrecorded. A plain
-// merge keeps the ordinary budget.
 func TestStackMergeRouteUsesExtendedTimeout(t *testing.T) {
 	const configuredTimeout = 250 * time.Millisecond
 	svc := &timeoutProbePRs{budget: make(chan time.Duration, 1)}
@@ -312,8 +297,6 @@ func (m *timeoutProbeProjectManager) Clone(ctx context.Context, _ projectsvc.Clo
 	return projectsvc.Project{}, errors.New("probe only")
 }
 
-// A clone downloads the whole repository inside the request; a ~500 MB
-// repository took longer than the one-minute REST budget and failed.
 func TestCloneRoutesUseExtendedTimeout(t *testing.T) {
 	mgr := &timeoutProbeProjectManager{budget: make(chan time.Duration, 1)}
 	router := NewRouterWithControl(
@@ -348,8 +331,6 @@ func (c *timeoutProbeComputerUse) Call(ctx context.Context, _ computeruse.CallRe
 	return computeruse.CallResult{}, nil
 }
 
-// A run_steps batch has the driver's 60 s plus its report and closing read;
-// the one-minute REST budget cut it off with a 503 and no step report.
 func TestComputerUseCallUsesExtendedTimeout(t *testing.T) {
 	svc := &timeoutProbeComputerUse{budget: make(chan time.Duration, 1)}
 	router := NewRouterWithControl(
@@ -373,9 +354,6 @@ func TestComputerUseCallUsesExtendedTimeout(t *testing.T) {
 	}
 }
 
-// A spawn runs the project's Setup inside the request; a Setup step longer than
-// one REST request used to die at the flat deadline ("signal: killed"). The
-// request keeps the ordinary budget until the spawn extends it.
 func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
 	const configuredTimeout = 200 * time.Millisecond
 	previous := setupRequestBudget
@@ -408,9 +386,6 @@ func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
 	}
 }
 
-// A cold spawn fetches, creates a worktree and starts the agent inside one
-// request: setup routes start from a 120s budget, every other route keeps the
-// configured REST timeout.
 func TestSetupRoutesStartFromTheSpawnBudget(t *testing.T) {
 	svc := &timeoutProbeSessionService{spawnBudget: make(chan time.Duration, 1), sendBudget: make(chan time.Duration, 1)}
 	router := NewRouterWithControl(config.Config{RequestTimeout: config.DefaultRequestTimeout}, discardLogger(), nil, APIDeps{Sessions: svc}, ControlDeps{})
@@ -464,8 +439,6 @@ func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	}
 }
 
-// Resuming reads the agent's whole native history; a large imported Codex
-// thread took over a minute, past the ordinary REST budget.
 func TestResumeAgentRouteUsesExtendedTimeout(t *testing.T) {
 	svc := &timeoutProbeSessionService{resumeBudget: make(chan time.Duration, 1)}
 	router := NewRouterWithControl(
@@ -486,8 +459,6 @@ func TestResumeAgentRouteUsesExtendedTimeout(t *testing.T) {
 	}
 }
 
-// The first open of an imported chat runs the project's Setup, which may be
-// allowed longer than the base resume budget.
 func TestResumeAgentRouteExtendsBudgetForSetup(t *testing.T) {
 	svc := &timeoutProbeSessionService{resumeBudget: make(chan time.Duration, 1), resumeSetup: 20 * time.Minute}
 	router := NewRouterWithControl(
@@ -521,7 +492,6 @@ func (p *scanBudgetProbe) Import(ctx context.Context, _ []string) ([]sessionimpo
 	return []sessionimport.Result{}, nil
 }
 
-// Scanning and importing both read every chosen history, so both get the long budget.
 func TestSessionImportUsesExtendedTimeout(t *testing.T) {
 	probe := &scanBudgetProbe{}
 	router := NewRouterWithControl(config.Config{RequestTimeout: 250 * time.Millisecond}, discardLogger(), nil, APIDeps{SessionImport: probe}, ControlDeps{})

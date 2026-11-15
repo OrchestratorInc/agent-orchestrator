@@ -10,8 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Cua Driver ships official per-user installers for all three platforms, so
-// the plan is the vendor script everywhere: no package manager, no root.
 func TestPlanForCuaDriver(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -55,9 +53,6 @@ func TestCuaDriverIsASystemTarget(t *testing.T) {
 	}
 }
 
-// The installer links cua-driver into ~/.local/bin, which a desktop-launched
-// daemon's PATH usually lacks. The registered resolver finds it there, so a
-// successful install is not reported as "still not in PATH".
 func TestStartCuaDriverRunsScriptAndConfirmsThroughResolver(t *testing.T) {
 	s := newTestService("darwin", "bash")
 	var ran ports.InstallScriptCommand

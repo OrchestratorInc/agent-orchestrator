@@ -57,9 +57,6 @@ func TestConPTYChildExitClosesOutputAndRejectsResize(t *testing.T) {
 	}
 }
 
-// TestConPTYStartsAtRequestedGrid is the Windows half of the early-start path:
-// a shell opened with a client grid (pty-host --size) starts its ConPTY at that
-// grid, and the child sees it from its first output.
 func TestConPTYStartsAtRequestedGrid(t *testing.T) {
 	cols, rows, deferred := hostStartGrid(HostOptions{StartOnAttach: true, Cols: 146, Rows: 37})
 	if deferred {

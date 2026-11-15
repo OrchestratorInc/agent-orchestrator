@@ -2,14 +2,10 @@ package telemetrymeta
 
 import "strings"
 
-// NormalizeCommandPath canonicalizes command paths received from current CLIs
-// and best-effort legacy loopback callers before cost-control classification.
 func NormalizeCommandPath(commandPath string) string {
 	return strings.ToLower(strings.Join(strings.Fields(commandPath), " "))
 }
 
-// IsRoutineInternalCLICommand reports whether a successful CLI invocation is
-// routine desktop/agent plumbing rather than product usage.
 func IsRoutineInternalCLICommand(commandPath string) bool {
 	normalized := NormalizeCommandPath(commandPath)
 	for _, routine := range routineInternalCLICommands {
@@ -37,9 +33,6 @@ var routineInternalCLICommands = []string{
 	"ao claude-login",
 }
 
-// CLIActorType infers the actor for legacy loopback CLI telemetry requests that
-// predate the explicit actor_type field. Unknown actor-less commands are treated
-// as system activity so foreign/local automation cannot inflate DAU by default.
 func CLIActorType(actorType, commandPath string) string {
 	normalized := NormalizeCommandPath(commandPath)
 	if _, ok := legacyActorlessSystemCLICommands[normalized]; ok {
@@ -189,25 +182,22 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao review ls":                              {},
 	"ao review submit":                          {},
 	"ao review trigger":                         {},
-	// ao search is a person searching their own history, or an agent searching
-	// its own past sessions through --json. It is not daemon-internal work.
-	"ao search":               {},
-	"ao send":                 {},
-	"ao session":              {},
-	"ao session claim-pr":     {},
-	"ao session cleanup":      {},
-	"ao session delete":       {},
-	"ao session exit-agent":   {},
-	"ao session fork":         {},
-	"ao session kill":         {},
-	"ao session rename":       {},
-	"ao session resume-agent": {},
-	"ao session restore":      {},
-	"ao spawn":                {},
-	"ao stop":                 {},
-	"ao version":              {},
+	"ao search":                                 {},
+	"ao send":                                   {},
+	"ao session":                                {},
+	"ao session claim-pr":                       {},
+	"ao session cleanup":                        {},
+	"ao session delete":                         {},
+	"ao session exit-agent":                     {},
+	"ao session fork":                           {},
+	"ao session kill":                           {},
+	"ao session rename":                         {},
+	"ao session resume-agent":                   {},
+	"ao session restore":                        {},
+	"ao spawn":                                  {},
+	"ao stop":                                   {},
+	"ao version":                                {},
 
-	// Legacy commands observed in PostHog's current billing-period data.
 	"ao handoff":                   {},
 	"ao project orchestration get": {},
 	"ao project orchestration set": {},

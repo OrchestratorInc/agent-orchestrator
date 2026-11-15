@@ -1,6 +1,3 @@
-// Public entry point for the cloud control-plane client. Import from
-// "lib/cloud-cp" rather than reaching into the individual modules.
-
 export { createCloudCpClient } from "./client";
 export type {
 	CloudCpClient,

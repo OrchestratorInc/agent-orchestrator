@@ -11,31 +11,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// mapPermission maps a legacy AgentPermissionMode to the rewrite PermissionMode
-// (issue #247 §3). ok=false means "unset" (no permission to carry); lossy=true
-// flags a remap that drops a distinction the rewrite cannot represent.
 func mapPermission(legacy string) (mode domain.PermissionMode, ok, lossy bool) {
 	switch legacy {
 	case "":
 		return "", false, false
 	case "permissionless", "skip":
-		// legacy already collapses skip→permissionless, but a hand-edited config
-		// could carry the raw value, so map it explicitly.
 		return domain.PermissionModeBypassPermissions, true, false
 	case "auto-edit":
 		return domain.PermissionModeAcceptEdits, true, false
 	case "default":
 		return domain.PermissionModeDefault, true, false
 	case "suggest":
-		// The rewrite has no suggest/plan mode (#247 G8).
 		return domain.PermissionModeDefault, true, true
 	default:
 		return domain.PermissionModeDefault, true, true
 	}
 }
 
-// mapHarness maps a legacy agent plugin id to a rewrite harness, or ok=false
-// when the rewrite has no such harness.
 func mapHarness(agent string) (domain.AgentHarness, bool) {
 	if agent == "" {
 		return "", false
@@ -80,15 +72,9 @@ func buildRoleOverride(src *legacyRole, notes *[]string, label string) domain.Ro
 	return out
 }
 
-// buildProjectConfig maps a legacy project block to the typed rewrite config
-// blob (issue #247 §3). It appends lossy/dropped notes and returns a config that
-// may be IsZero (the store persists SQL NULL for that).
 func buildProjectConfig(pc legacyProjectConfig, notes *[]string) domain.ProjectConfig {
 	var cfg domain.ProjectConfig
 
-	// Preserve every explicit legacy branch, including main. An omitted branch
-	// now means automatic remote-HEAD resolution, which is not equivalent to a
-	// legacy project explicitly pinned to main.
 	if b := strings.TrimSpace(pc.DefaultBranch); b != "" {
 		cfg.DefaultBranch = b
 	}
@@ -127,7 +113,6 @@ func buildProjectConfig(pc legacyProjectConfig, notes *[]string) domain.ProjectC
 		droppedRules = true
 	}
 
-	// Surface project-level fields the rewrite has no home for (#247 §4).
 	var dropped []string
 	if pc.Tracker != nil {
 		dropped = append(dropped, "tracker")
@@ -163,26 +148,18 @@ func legacyStringValue(node *yaml.Node) (string, bool) {
 	return node.Value, true
 }
 
-// projectRowDeps are the host effects the project mapper needs: git origin
-// resolution and the fallback "now" timestamp. Injected so the mapper is pure
-// and unit-testable.
 type projectRowDeps struct {
 	repoOriginURL func(path string) string
-	configMtime   string // ISO timestamp of config.yaml, or "" if unknown
+	configMtime   string
 	now           time.Time
 }
 
-// buildProjectRecord builds the rewrite projects row for one legacy project
-// (issue #247 §1). The rewrite no longer fills server-side fields, so the
-// importer computes repo_origin_url, registered_at, kind, display_name, config.
 func buildProjectRecord(id string, pc legacyProjectConfig, prefs preferences, reg registeredManifest, deps projectRowDeps) (domain.ProjectRecord, []string) {
 	var notes []string
 	cfg := buildProjectConfig(pc, &notes)
 
 	path := normalizePath(pc.Path)
 
-	// display_name: preferences.displayName → config name → "" (rewrite falls
-	// back to id on read, so only persist a real, non-id name).
 	displayName := ""
 	if p, ok := prefs.Projects[id]; ok && p.DisplayName != "" {
 		displayName = p.DisplayName
@@ -190,7 +167,6 @@ func buildProjectRecord(id string, pc legacyProjectConfig, prefs preferences, re
 		displayName = pc.Name
 	}
 
-	// registered_at: registered.json addedAt → config mtime → import time.
 	registeredAt := deps.now
 	if iso := reg.addedAt(id, pc.Path); iso != "" {
 		if t, err := time.Parse(time.RFC3339, iso); err == nil {
@@ -218,9 +194,6 @@ func buildProjectRecord(id string, pc legacyProjectConfig, prefs preferences, re
 	}, notes
 }
 
-// normalizePath ~-expands then absolutises+cleans a legacy project path, matching
-// the rewrite's normalizePath. A path that cannot be absolutised is returned
-// cleaned but relative (best effort; the rewrite re-derives worktrees anyway).
 func normalizePath(p string) string {
 	p = strings.TrimSpace(p)
 	if p == "" {

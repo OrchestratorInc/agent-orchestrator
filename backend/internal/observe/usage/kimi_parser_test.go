@@ -10,8 +10,6 @@ import (
 
 const testKimiWireSource domain.UsageSourceKind = "kimi_wire"
 
-// TestParseKimiUsageRecord catches dropping Kimi's cache buckets or counting
-// non-usage wire records as model usage.
 func TestParseKimiUsageRecord(t *testing.T) {
 	source := usageSource(testKimiWireSource)
 	source.NativeRootID = "kimi-session"
@@ -59,8 +57,6 @@ func TestParseKimiUsageRecordHasReplayStableKey(t *testing.T) {
 	}
 }
 
-// TestParseKimiUsageRecordWithEpochMilliseconds catches treating Kimi's
-// numeric time field as RFC3339 text and silently dropping CreatedAt.
 func TestParseKimiUsageRecordWithEpochMilliseconds(t *testing.T) {
 	source := usageSource(testKimiWireSource)
 	source.NativeRootID = "kimi-session"
@@ -76,8 +72,6 @@ func TestParseKimiUsageRecordWithEpochMilliseconds(t *testing.T) {
 	}
 }
 
-// TestDecodeKimiRecordTime catches timestamp identity and event time being
-// decoded by separate format rules.
 func TestDecodeKimiRecordTime(t *testing.T) {
 	tests := []struct {
 		name         string

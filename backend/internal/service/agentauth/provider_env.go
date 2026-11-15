@@ -8,13 +8,8 @@ import (
 
 var publishProviderKey = providerkeys.Publish
 
-// deviceSupported reports that publishProviderKey can reach programs started
-// outside AO on this platform.
 var deviceSupported = providerkeys.DeviceSupported
 
-// Environment methods are deliberately per harness. A key is offered only
-// where that CLI has a documented environment credential source. The same
-// provider key is device-wide for AO-launched sessions, regardless of project.
 var providerEnvironment = map[string][]LoginMethod{
 	"claude-code":  {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}},
 	"aider":        {{"env_GROQ_API_KEY", "Groq API key", true}, {"env_XAI_API_KEY", "xAI API key", true}, {"env_MISTRAL_API_KEY", "Mistral API key", true}},

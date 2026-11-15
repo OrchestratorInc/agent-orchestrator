@@ -13,17 +13,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// transitionAccounts is a fake account catalog: each account is a config
-// folder, and the device account launches with no folder variable.
 type transitionAccounts struct {
 	mu              sync.Mutex
 	log             *[]string
 	bound           map[domain.SessionID]string
 	homes           map[string]string
-	validateErrs    []error // consumed one per ValidateAccount call
+	validateErrs    []error
 	bindErr         error
 	launchOverrides []string
-	onLaunchWith    func() // runs as SessionLaunchEnvWith resolves, outside the lock
+	onLaunchWith    func()
 }
 
 func newTransitionAccounts(log *[]string) *transitionAccounts {
@@ -109,8 +107,6 @@ func newAccountTransitionManager(t *testing.T, mode domain.SessionMode) (*Manage
 	return manager, store, runtime, chat, accounts, log
 }
 
-// The move is a transaction: the agent restarts on the new account first, and
-// the session's binding changes only once that agent is live.
 func TestAccountTransitionMovesATerminalSessionAndCommitsAfterTheTargetStarts(t *testing.T) {
 	manager, store, runtime, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
 
@@ -168,10 +164,6 @@ func TestAccountTransitionResumesTheSameChatConversationOnTheNewAccount(t *testi
 	}
 }
 
-// A chat that was never messaged has no native conversation to name, yet its
-// session row still holds the reserved provider handle. The move must resume
-// (replacing that unpersisted provider) rather than start fresh, which blanked
-// the handle only in memory and failed the controller-owner fence.
 func TestAccountTransitionMovesANeverMessagedChat(t *testing.T) {
 	manager, store, _, chat, accounts, _ := newAccountTransitionManager(t, domain.SessionModeChat)
 	manager.agents = singleAgent{agent: emptyTransitionAgent{}}
@@ -197,8 +189,6 @@ func TestAccountTransitionMovesANeverMessagedChat(t *testing.T) {
 	}
 }
 
-// If the new account's agent fails to start, neither half happens: the old
-// agent restarts on the old account and the binding never changed.
 func TestAccountTransitionRollsBackToTheOldAccountWhenTheTargetFails(t *testing.T) {
 	manager, store, runtime, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
 	runtime.createErrSequence = []error{errors.New("claude exited: not logged in"), nil}
@@ -227,8 +217,6 @@ func TestAccountTransitionRollsBackToTheOldAccountWhenTheTargetFails(t *testing.
 	}
 }
 
-// Everything that can fail without touching the conversation is checked while
-// the old agent still runs, so a bad target never stops it.
 func TestAccountTransitionPreflightFailureLeavesTheAgentRunning(t *testing.T) {
 	manager, store, _, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
 	accounts.validateErrs = []error{nil, ports.ErrAgentAccountSignedOut}
@@ -267,8 +255,6 @@ func TestAccountTransitionRefusesAnUnusableOrUnchangedAccountBeforeClaiming(t *t
 	}
 }
 
-// A bind failure after the target is live is still before the commit point:
-// the target stops and the old account's agent comes back.
 func TestAccountTransitionRollsBackWhenTheCommitFails(t *testing.T) {
 	manager, store, runtime, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
 	accounts.bindErr = errors.New("database is locked")
@@ -293,8 +279,6 @@ func TestAccountTransitionRollsBackWhenTheCommitFails(t *testing.T) {
 	}
 }
 
-// A daemon exit after the target may have started but before the commit leaves
-// nothing running on an account the session does not name.
 func TestAccountTransitionRecoveryStopsAnUncommittedTarget(t *testing.T) {
 	manager, store, _, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
 	now := time.Now()
@@ -322,8 +306,6 @@ func TestAccountTransitionRecoveryStopsAnUncommittedTarget(t *testing.T) {
 	}
 }
 
-// A daemon exit after the binding committed but before the transition row
-// moved on leaves the target as the session's agent: recovery keeps it.
 func TestAccountTransitionRecoveryKeepsACommittedTarget(t *testing.T) {
 	manager, store, _, _, accounts, log := newAccountTransitionManager(t, domain.SessionModeTUI)
 	accounts.bound["session-1"] = "acct-b"
@@ -353,8 +335,6 @@ func TestAccountTransitionRecoveryKeepsACommittedTarget(t *testing.T) {
 	}
 }
 
-// The preflight resolves the target account's env while the source agent still
-// runs. A restart of that agent meanwhile must keep the session's own account.
 func TestAccountPreflightEnvLeavesOtherLaunchesOnTheBoundAccount(t *testing.T) {
 	manager, store, _, _, accounts, _ := newAccountTransitionManager(t, domain.SessionModeTUI)
 	rec, _, err := store.GetSession(context.Background(), "session-1")
@@ -378,8 +358,6 @@ func TestAccountPreflightEnvLeavesOtherLaunchesOnTheBoundAccount(t *testing.T) {
 	}
 }
 
-// TestAccountMoveFailuresSpeakOfTheAccount pins the wording an account move
-// shows: never "interface", and never an action the account switch hides.
 func TestAccountMoveFailuresSpeakOfTheAccount(t *testing.T) {
 	move := domain.SessionInterfaceTransition{SourceMode: domain.SessionModeTUI, TargetMode: domain.SessionModeTUI, TargetAccountID: "acct-b"}
 	for _, code := range []string{"DRAIN_QUIESCENCE_UNVERIFIED", "DRAIN_DECISION_PENDING", "TRANSITION_CANCELLED", "SESSION_CHANGED"} {
@@ -394,8 +372,6 @@ func TestAccountMoveFailuresSpeakOfTheAccount(t *testing.T) {
 	}
 }
 
-// Removing an account first stops the agents that run on it, and only those.
-// Their sessions stay, with the agent exited, so each can continue elsewhere.
 func TestExitAgentsOnAccountStopsOnlyThatAccountsRunningAgents(t *testing.T) {
 	m, st, runtime, _ := newManager()
 	session := func(id string, state domain.ActivityState) domain.SessionRecord {
@@ -430,8 +406,6 @@ func TestExitAgentsOnAccountStopsOnlyThatAccountsRunningAgents(t *testing.T) {
 	}
 }
 
-// An agent stopped by an account's removal continues on the account picked in
-// its session: the move finds nothing to drain and starts it there.
 func TestAccountTransitionContinuesAnExitedAgentOnTheNewAccount(t *testing.T) {
 	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, domain.SessionModeChat} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -462,9 +436,6 @@ func TestAccountTransitionContinuesAnExitedAgentOnTheNewAccount(t *testing.T) {
 	}
 }
 
-// A move that stops the turn tells the chat that the switch ended it, so the
-// conversation shows the switch rather than a failed turn. A drain lets the
-// turn finish, so there is nothing to explain.
 func TestAccountTransitionThatStopsTheTurnMarksTheSwitchInChat(t *testing.T) {
 	for _, tc := range []struct {
 		policy domain.SessionInterfaceTransitionPolicy
@@ -489,9 +460,6 @@ func TestAccountTransitionThatStopsTheTurnMarksTheSwitchInChat(t *testing.T) {
 	}
 }
 
-// A terminal move keeps its mode, so the reaper probes the session all through
-// it and finds the old terminal dead while the new one starts. The move must
-// fence it, or the session is ended (and its containers reaped) mid-move.
 func TestAccountTransitionFencesTheReaperWhileTheTargetStarts(t *testing.T) {
 	manager, store, runtime, _, _, _ := newAccountTransitionManager(t, domain.SessionModeTUI)
 	fenced := false
@@ -516,9 +484,6 @@ func TestAccountTransitionFencesTheReaperWhileTheTargetStarts(t *testing.T) {
 	}
 }
 
-// A resume already underway read the account's folder while the session still
-// reads as exited. Removing the account then refuses instead of deleting the
-// folder under it.
 func TestExitAgentsOnAccountRefusesWhileAResumeIsStarting(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.sessions["mer-1"] = domain.SessionRecord{

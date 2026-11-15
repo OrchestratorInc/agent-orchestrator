@@ -31,24 +31,6 @@ import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
-/**
- * Home landing layout contracts (do not regress without explicit design sign-off):
- * - One centered column (`max-w-[640px]`); no upward translate hack.
- * - "Star us" is a quiet text link with dashed underline on hover — NOT a
- *   filled button / accent pill / bordered card.
- * - Primary actions are always a 2×2 grid. The fourth cell is the
- *   standalone-agent action, or Clone to the cloud when Developer Mode and
- *   Cloud are both enabled (standalone stays reachable from the sidebar's
- *   Scratchpad "+"). Never add a fifth row. Connect Mobile is settings-only.
- * - Recent rows use shared {@link NavRowHighlight} (same as sidebar), not a
- *   flat `hover:bg-interactive-hover` wash.
- * - One heading ({@link HOME_SECTION_TITLE_CLASS}) above the grid: Get started
- *   with no projects, otherwise Jump back right in. Recent-project rows sit
- *   under the grid with no heading of their own; each is one compact line
- *   (name and time, no path). The Scratchpad (standalone agents) is not a
- *   project: it never appears in the recent rows or counts toward the
- *   heading — the grid's standalone action and the sidebar own it.
- */
 const GITHUB_REPOSITORY_URL = "https://github.com/Untrivial-ai/agent-orchestrator";
 const RECENT_PROJECT_LIMIT = 3;
 const HOME_BUTTON_CLASS =
@@ -70,8 +52,6 @@ function latestProjectTimestamp(project: WorkspaceSummary): string {
 		.at(-1) ?? "";
 }
 
-// Relative times must follow the app language (i18n catalogs), not the OS locale —
-// formatTimeCompact routes through appI18n like every other time surface.
 function relativeProjectTime(timestamp: string | undefined, emptyLabel: string): string {
 	if (!timestamp) return emptyLabel;
 	return formatTimeCompact(timestamp);
@@ -90,7 +70,6 @@ function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSu
 
 	return (
 		<Pressable
-			// Host must use NAV_ROW_HIGHLIGHT_HOST_CLASS — pill owns the fill.
 			className={cn(
 				"flex w-full items-center gap-3 rounded-lg px-4 py-1 text-muted-foreground",
 				NAV_ROW_HIGHLIGHT_HOST_CLASS,
@@ -144,8 +123,6 @@ function HomeActionCard({
 export function HomePage() {
 	return (
 		<div className="relative flex h-full min-h-0 flex-col">
-			{/* The welcome page has no header. On macOS an invisible strip keeps
-			    the top edge draggable without moving the content. */}
 			{dragStyle ? <div aria-hidden="true" className="absolute inset-x-0 top-0 z-chrome h-toolbar" style={dragStyle} /> : null}
 			<HomePageContent />
 		</div>
@@ -166,7 +143,6 @@ function HomePageContent() {
 	const [sourceSignal, setSourceSignal] = useState<{ source: ProjectSource | "cloud"; nonce: number } | null>(null);
 	const [firstRunStatus, setFirstRunStatus] = useState<"loading" | "pending" | "seen">("loading");
 	const [firstRunPromptOpen, setFirstRunPromptOpen] = useState(false);
-	// True once we know whether this launch shows the prompt, so the agent-updates notice only waits for that decision.
 	const [firstRunDecided, setFirstRunDecided] = useState(false);
 	const firstRunOfferedThisMount = useRef(false);
 	const firstRunVariant = useRef<FirstRunPromptVariant | null>(null);
@@ -227,9 +203,6 @@ function HomePageContent() {
 	}, [firstRunStatus, migrationOffer.data?.show, migrationOffer.isPending, projects.length, showStartup, workspaceQuery.isSuccess]);
 
 	const setFirstRunPromptActive = useUiStore((state) => state.setFirstRunPromptActive);
-	// Shell notices wait while the prompt is showing or still being decided. Once the
-	// user starts a clone the prompt closes, so a failed or abandoned clone cannot
-	// hold them back for the rest of the session.
 	const firstRunBlocksNotices = firstRunStatus === "loading" || firstRunPromptOpen || (firstRunStatus === "pending" && !firstRunDecided);
 	useEffect(() => {
 		setFirstRunPromptActive(firstRunBlocksNotices);
@@ -246,7 +219,6 @@ function HomePageContent() {
 		setFirstRunPromptOpen(false);
 		setFirstRunStatus("seen");
 		void aoBridge.appState.markFirstRunProjectPromptSeen().catch(() => {
-			// A failed write leaves the durable offer pending for the next launch.
 		});
 	};
 
@@ -279,7 +251,6 @@ function HomePageContent() {
 					<section className="space-y-3 px-3" style={firstRunPromptOpen ? { visibility: "hidden" } : undefined}>
 						<div className="flex items-baseline justify-between gap-4">
 							<h1 className={HOME_SECTION_TITLE_CLASS}>{recentProjects.length === 0 ? t("home.getStarted") : t("home.jumpBack")}</h1>
-							{/* Quiet text link — not filled button / accent. Dashed underline only on hover. */}
 							<Button
 								className="gap-1.5 rounded-none border-0 border-b border-dashed border-transparent pb-px text-sm text-muted-foreground no-underline hover:border-current"
 								onClick={() => void aoBridge.app.openExternal(GITHUB_REPOSITORY_URL)}
@@ -307,7 +278,6 @@ function HomePageContent() {
 								label={t("createProject.addWorkspace")}
 								onClick={() => requestSource("workspace")}
 							/>
-							{/* Cloud is on for everyone a control plane is configured for. */}
 							{cloudEnabled ? (
 								<HomeActionCard
 									icon={<Cloud />}
@@ -323,7 +293,6 @@ function HomePageContent() {
 							)}
 						</div>
 
-						{/* Same section as the grid so the gap matches the grid's gap-3. */}
 						{recentProjects.length > 0 && (
 							<div>
 								{recentProjects.map((project) => (

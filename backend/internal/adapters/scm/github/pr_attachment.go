@@ -18,16 +18,8 @@ import (
 
 var _ ports.SCMAttachmentStore = (*Provider)(nil)
 
-// attachmentsRefPrefix is the ref namespace, in the PR's own repository, that
-// holds files attached to PR comments. GitHub's public API cannot attach media
-// to a comment, so AO commits each comment's files and the comment links to
-// them. The refs are not branches: they start no workflow, raise no "recent
-// pushes" banner, fall outside branch rules, and a clone doesn't fetch them.
 const attachmentsRefPrefix = "refs/ao/attachments/"
 
-// AttachmentAccess reports whether the signed-in account can write to the PR's
-// repository, where its comments' attachments are stored. A repository the
-// account cannot see at all reads as no write access too.
 func (p *Provider) AttachmentAccess(ctx context.Context, ref ports.SCMPRRef) (ports.SCMAttachmentAccess, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMAttachmentAccess{}, fmt.Errorf("github scm: attachment provider is not configured")
@@ -57,11 +49,6 @@ func (p *Provider) AttachmentAccess(ctx context.Context, ref ports.SCMPRRef) (po
 	return ports.SCMAttachmentAccess{Allowed: true, Location: location}, nil
 }
 
-// StoreAttachments commits a comment's files, through the Git Data API, as one
-// commit with no parent under its own ref, refs/ao/attachments/pr-<n>/<id>.
-// Each file is linked by that commit's SHA, so its URL never moves, and one
-// comment's files never race another's. The commit message carries [skip ci]
-// for CI systems that listen to every pushed ref.
 func (p *Provider) StoreAttachments(ctx context.Context, batch ports.SCMAttachmentBatch) (ports.SCMStoredAttachments, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMStoredAttachments{}, fmt.Errorf("github scm: attachment provider is not configured")
@@ -110,10 +97,6 @@ func (p *Provider) StoreAttachments(ctx context.Context, batch ports.SCMAttachme
 	return ports.SCMStoredAttachments{URLs: urls, Handle: handle}, nil
 }
 
-// DiscardAttachments deletes a batch's ref, after the comment that would have
-// linked to it failed to post. GitHub then garbage-collects the unreachable
-// commit and files. It only ever deletes refs under the attachments namespace,
-// and one that is already gone is not an error.
 func (p *Provider) DiscardAttachments(ctx context.Context, ref ports.SCMPRRef, handle string) error {
 	if p == nil || p.client == nil {
 		return fmt.Errorf("github scm: attachment provider is not configured")
@@ -143,9 +126,6 @@ func validAttachmentRef(ref ports.SCMPRRef) error {
 	return nil
 }
 
-// attachmentStatus classifies a failed Git Data call. Without write access
-// GitHub answers 404 (or 403), which means "you can't write here", not "the PR
-// is unknown"; a repository rule refusing the ref is a rejection.
 func attachmentStatus(status int, err error) error {
 	switch status {
 	case http.StatusForbidden, http.StatusNotFound:
@@ -211,8 +191,6 @@ func decodeGitSHA(body []byte, kind string) (string, error) {
 	return out.SHA, nil
 }
 
-// attachmentPaths names each file in the batch's commit by its own name; a
-// name that repeats gets a numbered prefix, so every file keeps its own path.
 func attachmentPaths(files []ports.SCMAttachmentFile) []string {
 	paths := make([]string, len(files))
 	seen := map[string]bool{}
@@ -227,9 +205,6 @@ func attachmentPaths(files []ports.SCMAttachmentFile) []string {
 	return paths
 }
 
-// attachmentURL is the blob URL at the batch's commit, with ?raw=true, on the
-// PR's web host. GitHub renders it inline in comments, private repositories
-// included for viewers who can read the repository.
 func attachmentURL(ref ports.SCMPRRef, commitSHA, filePath string) string {
 	segments := strings.Split(filePath, "/")
 	for i, segment := range segments {
@@ -239,8 +214,6 @@ func attachmentURL(ref ports.SCMPRRef, commitSHA, filePath string) string {
 		"/blob/" + commitSHA + "/" + strings.Join(segments, "/") + "?raw=true"
 }
 
-// attachmentHost is the web host of the PR: the repository host the observer
-// recorded, else the PR URL's host, with API and www prefixes removed.
 func attachmentHost(ref ports.SCMPRRef) string {
 	host := strings.ToLower(strings.TrimSpace(ref.Repo.Host))
 	if host == "" {
@@ -262,8 +235,6 @@ func (p *Provider) attachmentTime() time.Time {
 	return time.Now()
 }
 
-// attachmentSuffix is a short random token that keeps two comments' refs in
-// the same second apart.
 func (p *Provider) attachmentSuffix() string {
 	if p.randomSuffix != nil {
 		return p.randomSuffix()

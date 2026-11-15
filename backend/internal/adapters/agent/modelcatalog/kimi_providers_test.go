@@ -41,7 +41,6 @@ api_key = ""
 		t.Fatalf("providers = %v, want %v", got, want)
 	}
 
-	// KIMI_SHARE_DIR replaces ~/.kimi; its config.json is read as well.
 	share := filepath.Join(home, "share")
 	writeProviderTestFile(t, filepath.Join(share, "config.json"), `{"providers":{"kimi-cli":{"api_key":"k"}}}`)
 	env["KIMI_SHARE_DIR"] = share

@@ -34,7 +34,6 @@ describe("captured chat excerpts", () => {
 		const buttons = container.querySelectorAll("button[data-excerpt-include]");
 		expect(buttons).toHaveLength(2);
 		const node = buttons[1].querySelector("code")!.firstChild!;
-		// Build from the DOM, independently of the projection under test.
 		const range = document.createRange();
 		range.setStart(node, 0); range.setEnd(node, filename.length);
 		const captured = captureExcerptSnapshot(container, range, source);

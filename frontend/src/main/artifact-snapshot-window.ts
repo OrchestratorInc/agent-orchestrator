@@ -1,13 +1,3 @@
-/**
- * Renders one artifact preview in a hidden, offscreen window and returns it as a WebP.
- *
- * The window loads the app's own snapshot page (artifact-snapshot.html), which
- * draws the same preview a card draws, so every kind of artifact looks the same
- * cached as live. Main waits until the page says the preview is complete, takes
- * the frame the window paints, and has the page encode it: Electron's images
- * encode PNG and JPEG only, and a WebP of a card is about half a JPEG's size.
- */
-
 import type { BrowserWindow, NativeImage } from "electron";
 import {
 	ARTIFACT_SNAPSHOT_HEIGHT,
@@ -17,27 +7,20 @@ import {
 } from "../shared/artifact-snapshot";
 import { SnapshotCancelledError, type SnapshotRenderer, SnapshotUnavailableError } from "./artifact-snapshots";
 
-/** The page reports one of these while it draws the preview. */
 type PageState = "loading" | "ready" | "unavailable" | "error";
 
-/** A page that has not finished by now is left uncached; some load slowly from the cloud. */
 const SNAPSHOT_DEADLINE_MS = 20_000;
-/** The whole render, from the page starting to the encoded bytes, may take this much longer than the preview's own deadline. */
 const SNAPSHOT_HARD_DEADLINE_MS = SNAPSHOT_DEADLINE_MS + 15_000;
-/** The snapshot page has this long to load before the window is given up on. */
 const PAGE_LOAD_DEADLINE_MS = 15_000;
 const POLL_MS = 100;
-/** A frame painted after the page settles: the compositor lags the DOM by a frame or two. */
 const PAINT_ATTEMPTS = 12;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type WindowDeps = {
 	BrowserWindow: typeof BrowserWindow;
-	/** The snapshot page's URL in the running renderer. */
 	pageUrl: () => string;
 	preload: string;
-	/** Whether the app's own window is open. The hidden window is only ever opened while it is: on macOS the app outlives its window, and a hidden window left open then breaks reopening it. */
 	shellOpen: () => boolean;
 };
 
@@ -48,7 +31,6 @@ function nextPaint(window: BrowserWindow): Promise<NativeImage> {
 	return painted;
 }
 
-/** The first painted frame that shows the whole preview, at any display scale. */
 async function paintedFrame(window: BrowserWindow): Promise<NativeImage> {
 	let image = await nextPaint(window);
 	for (let attempt = 0; attempt < PAINT_ATTEMPTS; attempt++) {
@@ -61,19 +43,11 @@ async function paintedFrame(window: BrowserWindow): Promise<NativeImage> {
 	throw new Error("the snapshot window never painted the whole preview");
 }
 
-/** A preview that failed to load, as opposed to one with nothing to show: asked again after the retry delay. */
 class PreviewLoadError extends Error {}
 
-/** The window stays warm between artifacts, so a screen of cards does not start a renderer process for each. */
 const WINDOW_IDLE_MS = 30_000;
-/** The window only paints when asked to (invalidate), so it never spends frames on its own. */
 const IDLE_FRAME_RATE = 4;
 
-/**
- * The renderer, and `close` for the window it keeps open. The window is a BaseWindow to
- * Electron, so it counts for `getAllWindows()` and `window-all-closed`: main closes it
- * with the shell window and on quit.
- */
 export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: SnapshotRenderer; close: () => void } {
 	let current: Promise<BrowserWindow> | undefined;
 	let idle: ReturnType<typeof setTimeout> | undefined;
@@ -96,14 +70,10 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 				},
 			});
 			const contents = window.webContents;
-			// The page is the app's own; it may not open a window or navigate away. The window shares the
-			// app's session on purpose (the artifacts need its daemon and cloud access), so it sets no
-			// session-wide handlers: a permission handler here would apply to the whole app.
 			contents.setWindowOpenHandler(() => ({ action: "deny" }));
 			contents.on("will-navigate", (event) => event.preventDefault());
 			contents.setAudioMuted(true);
 			contents.setFrameRate(IDLE_FRAME_RATE);
-			// Only the window that is current clears it: a stale one closing later must not unset its successor.
 			window.once("closed", () => {
 				if (current === opening) current = undefined;
 			});
@@ -123,7 +93,6 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 		return opening;
 	}
 
-	/** Closes one window, by default the current one. A render passes the window it opened, so one that timed out cannot close its successor's. */
 	function close(target: Promise<BrowserWindow> | undefined = current): void {
 		if (current === target) current = undefined;
 		void target?.then((opened) => {
@@ -157,8 +126,6 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 			if (bytes.length === 0) throw new Error("the preview could not be encoded");
 			return bytes;
 		} catch (error) {
-			// A page that failed or hung may be stuck; the next artifact gets a fresh one. A file with
-			// nothing to draw left the page healthy.
 			if (!(error instanceof SnapshotUnavailableError || error instanceof PreviewLoadError)) close(owned);
 			throw error;
 		} finally {
@@ -166,7 +133,6 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 				void read("window.__aoSnapshot.reset()").catch(() => undefined);
 				contents.stopPainting();
 			}
-			// Only the window in use keeps the idle timer: a stale render finishing late must not arm or clear its successor's.
 			if (current === owned) {
 				clearTimeout(idle);
 				idle = setTimeout(() => close(owned), WINDOW_IDLE_MS);
@@ -174,7 +140,6 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 		}
 	};
 
-	/** One end-to-end bound on a render: a page that never starts, paints or encodes must not hold up every later one. */
 	const render: SnapshotRenderer = async (job) => {
 		if (!deps.shellOpen()) throw new SnapshotCancelledError("the app window is closed");
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -190,7 +155,6 @@ export function createArtifactSnapshotRenderer(deps: WindowDeps): { render: Snap
 			return await Promise.race([work, stalled]);
 		} finally {
 			clearTimeout(timer);
-			// Once the window is closed under it, whatever the render was waiting on may reject later.
 			work.catch(() => undefined);
 		}
 	};

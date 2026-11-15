@@ -1,6 +1,3 @@
-// Package citation turns provider citation annotations into portable Markdown.
-// Provider adapters identify the cited spans; chat storage and renderers only
-// need to understand Markdown links.
 package citation
 
 import (
@@ -10,23 +7,18 @@ import (
 	"unicode"
 )
 
-// Source is a provider-verified destination for one citation.
 type Source struct {
 	ID    string
 	Title string
 	URL   string
 }
 
-// Reference replaces the half-open byte range [Start, End) in the raw message.
-// An empty range inserts a citation after a provider's cited text block.
 type Reference struct {
 	Start   int
 	End     int
 	Sources []Source
 }
 
-// Markdown replaces annotations with numbered links. Invalid or unavailable
-// destinations stay visible as an unavailable-source label, never a guessed URL.
 func Markdown(raw string, references []Reference) string {
 	var out strings.Builder
 	labels := make(map[string]int)

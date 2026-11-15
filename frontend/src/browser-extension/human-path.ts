@@ -1,6 +1,3 @@
-// Curved pointer paths for `--human` clicks and drags: a cubic Bezier from the
-// current point to the target with a little randomized bow and easing.
-
 export type Point = { x: number; y: number };
 
 export function humanPath(from: Point, to: Point, random: () => number = Math.random): Point[] {
@@ -8,7 +5,6 @@ export function humanPath(from: Point, to: Point, random: () => number = Math.ra
 	const dy = to.y - from.y;
 	const distance = Math.hypot(dx, dy);
 	const steps = Math.max(8, Math.min(40, Math.round(distance / 12)));
-	// Perpendicular bow, up to 20% of the distance, either side.
 	const bow = (random() - 0.5) * 0.4 * distance;
 	const nx = distance === 0 ? 0 : -dy / distance;
 	const ny = distance === 0 ? 0 : dx / distance;

@@ -11,6 +11,5 @@ func publishDirectory(source, target string) error {
 	if err != nil {
 		return err
 	}
-	// No MOVEFILE_REPLACE_EXISTING: an unrelated target must never be replaced.
 	return windows.MoveFileEx(from, to, 0)
 }

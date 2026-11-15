@@ -13,33 +13,17 @@ import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
-// Session fork. One
-// click forks the session at its latest finished turn and opens the fork.
-
-/** The session a chat timeline belongs to, so its turn rows can offer Fork. */
 export const ForkSessionContext = createContext<WorkspaceSession | null>(null);
-/** A finished turn's id, in a turn group that can be forked from. */
 export const ForkableTurnContext = createContext<string | null>(null);
-/**
- * The latest finished turn's id: every agent can fork that one. Both values
- * are strings, so a turn's Fork button re-renders only when they change.
- */
 export const LatestForkTurnContext = createContext<string | undefined>(undefined);
 
-/** Whether a session can be forked, where it came from, and its forks. */
 export function useSessionForkOptions(session: WorkspaceSession | undefined, enabled = true) {
 	const { t } = useTranslation();
-	// A remote host's connection is in the key too, so options that failed
-	// while it was offline are asked for again once it reconnects.
 	const host = useHostConnection(session?.hostId);
 	return useQuery({
 		enabled: enabled && Boolean(session),
-		// Status and setup state are in the key: a busy or still-setting-up
-		// session becomes forkable when it goes idle or its worktree is ready.
 		queryKey: ["session-fork-options", session?.hostId ?? "", host.isRemote ? host.baseUrl ?? "offline" : "", session?.id ?? "", session?.status, session?.provisionState ?? ""],
 		queryFn: async () => {
-			// Resolved here, not while rendering: a remote host that has
-			// disconnected throws, which becomes this query's error.
 			const client = clientForSessionHost(session?.hostId);
 			const { data, error } = await client.GET("/api/v1/sessions/{sessionId}/fork-options", {
 				params: { path: { sessionId: session?.id ?? "" } },
@@ -54,9 +38,7 @@ function useSessionFork(session: WorkspaceSession, turnId?: string) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
-	// One id per click, so a retried request returns the fork the first made.
 	const requestId = useRef<string | null>(null);
-	// Blocks a second click that lands before the pending state renders.
 	const inFlight = useRef(false);
 	const options = useSessionForkOptions(session);
 	const fork = useMutation({
@@ -87,10 +69,6 @@ function useSessionFork(session: WorkspaceSession, turnId?: string) {
 	return { refusal, unavailable, tooltip, start, pending: fork.isPending, error: fork.error, anyTurn: options.data?.anyTurn === true };
 }
 
-/**
- * Fork beside Copy and Roll back on the latest finished turn of a chat. It
- * renders nothing on any other turn.
- */
 export function TurnForkButton() {
 	const session = useContext(ForkSessionContext);
 	const turnId = useContext(ForkableTurnContext);
@@ -102,7 +80,6 @@ export function TurnForkButton() {
 function TurnForkButtonInner({ session, turnId, latest }: { session: WorkspaceSession; turnId: string; latest: boolean }) {
 	const { t } = useTranslation();
 	const fork = useSessionFork(session, turnId);
-	// Older turns fork only where the agent can cut its copy at a turn.
 	if (!latest && !fork.anyTurn) return null;
 	return (
 		<Tooltip>
@@ -126,11 +103,6 @@ function TurnForkButtonInner({ session, turnId, latest }: { session: WorkspaceSe
 	);
 }
 
-/**
- * Forks a session at its latest finished turn from a menu, and opens the
- * fork. The menu closes as the item is picked, so this runs independently of
- * any mounted component; a refusal or failure shows as a toast.
- */
 export function useForkSessionFromMenu() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
@@ -156,10 +128,6 @@ export function useForkSessionFromMenu() {
 	);
 }
 
-/**
- * In a fork whose agent was given its original's conversation as text, and
- * which has no messages yet, says so above the composer.
- */
 export function ForkTextCopyNotice() {
 	const session = useContext(ForkSessionContext);
 	if (!session) return null;

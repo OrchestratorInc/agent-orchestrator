@@ -59,7 +59,6 @@ beforeEach(() => {
 it("renders nothing at all while closed", () => {
 	renderDialog({ state: "downloaded" });
 	expect(screen.queryByTestId("restart-to-update-dialog")).toBeNull();
-	// Gated before the hooks run, so the status channel is never subscribed.
 	expect(updGetStatus).not.toHaveBeenCalled();
 	expect(updOnStatus).not.toHaveBeenCalled();
 });
@@ -210,11 +209,6 @@ it("opens release-note links in the system browser, never the Orchestrator Brows
 });
 
 it("renders the nightly build date from the UTC instant", async () => {
-	// The stamp 202609070300 encodes 03:00 UTC. Near the UTC day boundary the
-	// date-only dialog label must show the device-local calendar day of the
-	// correct instant, not the stamp digits re-read as local wall time
-	// (issue #5059). The expected label is derived from the absolute instant,
-	// so this holds in every timezone.
 	useUiStore.setState({ updateInstallPromptOpen: true });
 	renderDialog({ state: "downloaded", version: "0.12.11-nightly.202609070300" });
 	const expected = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(
@@ -233,7 +227,6 @@ it("names the sessions that would lose a turn and waits for confirmation", async
 	const warning = await screen.findByTestId("restart-sessions-warning");
 	expect(warning).toHaveTextContent("1 chat session will lose its current turn");
 	expect(warning).toHaveTextContent("agent-orchestrator · Fix the updater");
-	// The TUI session survives a quit, so naming it would be crying wolf.
 	expect(warning).not.toHaveTextContent("Terminal one");
 
 	expect(updInstall).not.toHaveBeenCalled();
@@ -298,7 +291,6 @@ it("keeps notes and session risks visible, blocks duplicate submits and dismissa
 	const confirm = screen.getByRole("button", { name: "Restart & install" });
 	act(() => { fireEvent.click(confirm); fireEvent.click(confirm); });
 	expect(updInstall).toHaveBeenCalledTimes(1);
-	// Minimal working state: the button relabels and disables; no progress bar.
 	expect(confirm).toBeDisabled();
 	expect(confirm).toHaveTextContent("Preparing update…");
 	expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
@@ -311,7 +303,6 @@ it("keeps notes and session risks visible, blocks duplicate submits and dismissa
 	fireEvent.click(overlay);
 	expect(useUiStore.getState().updateInstallPromptOpen).toBe(true);
 	expect(screen.getByTestId("restart-sessions-warning")).toBeVisible();
-	// Notes and version stay visible through a status change, still no progress bar.
 	act(() => updOnStatus.mock.calls[0][0]({ state: "downloading", percent: 42.5 }));
 	expect(screen.queryByRole("progressbar")).toBeNull();
 	expect(screen.getByText("Safer updates")).toBeVisible();
@@ -335,8 +326,6 @@ it("shows an inline failure and retries by relaunching AO", async () => {
 	expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
 	expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
 	expect(screen.queryByRole("progressbar")).toBeNull();
-	// The primary action becomes Relaunch AO, and retry restarts AO rather than
-	// re-invoking install() against a Squirrel that cannot be reset in-process.
 	await userEvent.click(screen.getByRole("button", { name: "Relaunch Orchestrator" }));
 	expect(updRelaunch).toHaveBeenCalledTimes(1);
 	expect(updInstall).toHaveBeenCalledTimes(1);
@@ -347,12 +336,9 @@ it("hides the install-on-quit line once preparation fails", async () => {
 	useUiStore.setState({ updateInstallPromptOpen: true });
 	renderDialog({ state: "downloaded", version: "1.2.3", releaseNotes: "Safer updates" });
 	await screen.findByText("Safer updates");
-	// Shown while nothing has failed: install-on-quit is still armed.
 	expect(screen.getByText(/installs on its own the next time you quit/)).toBeVisible();
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	await act(async () => install.reject(new Error("Couldn't finish preparing the update. AO stayed open, so nothing changed. Retry to try again.")));
-	// The main process turned off install-on-quit on failure, so the promise is
-	// gone rather than contradicting the error.
 	expect(screen.getByRole("alert")).toBeVisible();
 	expect(screen.queryByText(/installs on its own the next time you quit/)).toBeNull();
 });
@@ -397,7 +383,6 @@ it.each(["resolve", "reject"] as const)("ignores an install %s after unmount", a
 	await screen.findByText("v1.2.3");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	view.unmount();
-	// A subsequent dialog must not be closed by the previous mount's promise.
 	renderDialog({ state: "downloaded", version: "1.2.3" });
 	await act(async () => {
 		if (result === "resolve") install.resolve();
@@ -421,8 +406,6 @@ it("renders recovery details as plain text", async () => {
 	expect(alert.lastElementChild?.textContent).toBe(message);
 });
 
-// Settings treats text past 1000 characters as a dump; the dialog must not
-// truncate it first and show the first 1000 characters instead (#5755).
 it("keeps only the heading for overlong recovery details (#5755)", async () => {
 	updInstall.mockRejectedValue(new Error("Fix folder permissions " + "x".repeat(1500)));
 	useUiStore.setState({ updateInstallPromptOpen: true });

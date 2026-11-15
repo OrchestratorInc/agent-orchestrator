@@ -59,7 +59,6 @@ const doomed = project("proj-2", "doomed", {
 });
 const last = project("proj-3", "last");
 
-/** What the daemon lists. The fetch filters pending removals, as fetchWorkspaces does. */
 let serverLocal: WorkspaceSummary[];
 let serverReadFails: boolean;
 
@@ -73,7 +72,6 @@ function setup({ viewing = false, cloud = { client: {} as CloudCpClient, orgId: 
 	});
 	queryClient.setQueryData(workspaceQueryKey, serverLocal);
 	const isViewing = vi.fn(() => viewing);
-	// Matches the way the shell finds the row, so the kind tells local from cloud.
 	const findWorkspace = (projectId: string, hostId?: string, cloud?: boolean) =>
 		[...(queryClient.getQueryData<WorkspaceSummary[]>(workspaceQueryKey) ?? []),
 			...(queryClient.getQueryData<WorkspaceSummary[]>(remoteWorkspaceQueryKey("box-a")) ?? [])]
@@ -124,10 +122,8 @@ describe("useRemoveProject", () => {
 		await waitFor(() => expect(localIds(queryClient)).toEqual(["proj-1", "proj-3"]));
 		expect(deleteMock).toHaveBeenCalledWith("/api/v1/projects/{id}", { params: { path: { id: "proj-2" } } });
 		expect(toasts()).toEqual([expect.objectContaining({ title: "Removed doomed", tone: "success" })]);
-		// Not viewing the project: the route stays where it is.
 		expect(navigateMock).not.toHaveBeenCalled();
 
-		// A poll lands while the daemon is still tearing the project down.
 		await act(() => queryClient.refetchQueries({ queryKey: workspaceQueryKey, exact: true }));
 		expect(localIds(queryClient)).toEqual(["proj-1", "proj-3"]);
 
@@ -165,7 +161,6 @@ describe("useRemoveProject", () => {
 		expect(toasts()[0]?.body).toBe("Session kill failed: agent busy");
 		expect(localIds(queryClient)).toEqual(["proj-1", "proj-2", "proj-3"]);
 		expect(isOptimisticallyRemovedProject("proj-2")).toBe(false);
-		// The pin stays, so the project returns to its pinned place.
 		expect(useSidebarOrderStore.getState().pinnedProjectIds).toEqual(["proj-2"]);
 
 		deleteMock.mockReturnValueOnce(new Promise(() => undefined));
@@ -210,7 +205,6 @@ describe("useRemoveProject", () => {
 
 		await waitFor(() => expect(queryClient.getQueryState(workspaceQueryKey)?.status).toBe("error"));
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		// Nothing confirmed the removal, so a list requested before it cannot bring the row back.
 		expect(isOptimisticallyRemovedProject("proj-2")).toBe(true);
 		expect(localIds(queryClient)).toEqual(["proj-1", "proj-3"]);
 	});
@@ -218,7 +212,6 @@ describe("useRemoveProject", () => {
 	it("lets a remote host's project list, not its session list, decide a failed removal", async () => {
 		const remote = project("proj-2", "far", { hostId: "box-a" });
 		remoteDeleteMock.mockImplementationOnce(async () => {
-			// The host finished the teardown after the request gave up.
 			hostProjects = [];
 			return { error: { message: "context deadline exceeded" } };
 		});
@@ -245,7 +238,6 @@ describe("useRemoveProject", () => {
 		remoteDeleteMock.mockReturnValue(response.promise);
 		const { queryClient, remove } = setup();
 		let hostProjects = [{ id: "proj-2", name: "far", path: "/far" }];
-		// Defaults merge by key prefix in registration order: the host's list first, its raw projects list after.
 		queryClient.setQueryDefaults(remoteWorkspaceQueryKey("box-a"), {
 			queryFn: async () => applyOptimisticProjectRemovals(hostProjects.map((item) => ({ ...remote, id: item.id }))),
 		});
@@ -257,7 +249,6 @@ describe("useRemoveProject", () => {
 
 		await waitFor(() => expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toEqual([]));
 		expect(isOptimisticallyRemovedProject("proj-2", "box-a")).toBe(true);
-		// The local project with the same id is untouched.
 		expect(localIds(queryClient)).toEqual(["proj-1", "proj-2", "proj-3"]);
 		expect(remoteDeleteMock).toHaveBeenCalledWith("box-a", "/api/v1/projects/{id}", { params: { path: { id: "proj-2" } } });
 
@@ -273,8 +264,6 @@ describe("useRemoveProject", () => {
 		const deleteProject = vi.fn().mockResolvedValue({});
 		const { queryClient, remove } = setup({ cloud: { client: { deleteProject } as unknown as CloudCpClient, orgId: "org-1" } });
 		const rawKey = [...cloudProjectsQueryKey, "https://cp.example", "org-1"];
-		// The control plane archives after answering, so it still lists the
-		// project; the fetch filters pending removals, as useCloudProjectsQuery does.
 		queryClient.setQueryDefaults(cloudProjectsQueryKey, {
 			queryFn: async () => [{ id: "cloud-1", name: "cloudy" }].filter((item) => !isOptimisticallyRemovedProject(item.id, undefined, true)),
 		});
@@ -285,7 +274,6 @@ describe("useRemoveProject", () => {
 		expect(queryClient.getQueryData(rawKey)).toEqual([]);
 		await waitFor(() => expect(deleteProject).toHaveBeenCalledWith("org-1", "cloud-1"));
 		await waitFor(() => expect(toasts()).toEqual([expect.objectContaining({ title: "Deleted cloudy", tone: "success" })]));
-		// Cloud ids are never reused, so the tombstone outlives the async archive.
 		expect(isOptimisticallyRemovedProject("cloud-1", undefined, true)).toBe(true);
 		expect(queryClient.getQueryData(rawKey)).toEqual([]);
 	});
@@ -307,7 +295,6 @@ describe("useRemoveProject", () => {
 	});
 
 	it("puts a shared cloud project back when the control plane refuses to remove it", async () => {
-		// Shared with the user, so it is not in their own cloud project list.
 		const shared = project("cloud-1", "theirs", { kind: "cloud", shared: { sources: [] } as unknown as WorkspaceSummary["shared"] });
 		serverLocal = [first, shared];
 		const deleteProject = vi.fn().mockRejectedValue(new Error("Not the project owner"));
@@ -337,11 +324,9 @@ describe("useRemoveProject", () => {
 		await waitFor(() => expect(deleteProject).toHaveBeenCalledWith("org-1", "proj-2"));
 		expect(deleteMock).not.toHaveBeenCalled();
 		expect(isOptimisticallyRemovedProject("proj-2", undefined, true)).toBe(true);
-		// The local project keeps its row and its tombstone stays clear.
 		expect(isOptimisticallyRemovedProject("proj-2")).toBe(false);
 		expect(applyOptimisticProjectRemovals([doomed, cloudTwin])).toEqual([doomed]);
 		expect(localIds(queryClient)).toContain("proj-2");
-		// A Cloud project is deleted, not removed from a list.
 		expect(toasts()).toEqual([expect.objectContaining({ title: "Deleted cloud twin" })]);
 	});
 

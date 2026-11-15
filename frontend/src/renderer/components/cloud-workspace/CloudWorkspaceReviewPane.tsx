@@ -74,7 +74,6 @@ export function CloudWorkspaceReviewPane({
 	onBrowseAll: () => void;
 	onOpenFile?: (path: string, options?: CloudFileOpenOptions) => void;
 	orgId: string;
-	/** The sibling repository under review in a multi-repository session; undefined for the main one. */
 	repository?: string;
 	sessionId: string;
 	split: boolean;

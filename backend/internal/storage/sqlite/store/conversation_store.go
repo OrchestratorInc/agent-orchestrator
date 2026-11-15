@@ -17,30 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// Conversation persistence for Chat sessions.
-//
-// Two invariants live here rather than in the caller:
-//
-//   - Sequence allocation and the row that uses it commit together. Every write
-//     that mints a position runs inside one transaction that bumps
-//     conversations.latest_sequence and inserts the row, so two concurrent
-//     writers cannot land on the same position.
-//   - A projection and the raw provider event that produced it are written in the
-//     same transaction. If the process dies between them, neither survives — so
-//     the archive can never disagree with the timeline it explains.
-
-// ErrConversationNotFound reports a lookup for a session that has none. It
-// aliases the domain sentinel so a service can recognize it without importing the
-// storage layer.
 var ErrConversationNotFound = domain.ErrNoConversation
 
-// ErrNoQueuedTurn reports an empty send queue. It is an ordinary outcome of
-// draining, not a failure.
 var ErrNoQueuedTurn = domain.ErrNoQueuedTurn
 
-// ErrQueuedTurnNotAvailable means the selected turn cannot be reserved: it is
-// absent from this conversation, no longer queued, or another promotion already
-// owns it. The caller must not contact the provider after this outcome.
 var ErrQueuedTurnNotAvailable = errors.New("queued turn is not available for promotion")
 
 type conversationCreateOptions struct {
@@ -54,10 +34,6 @@ type conversationCreateOptions struct {
 	now           time.Time
 }
 
-// CreateConversation opens a worker's session-scoped conversation or rebinds an
-// orchestrator's project-scoped narrative to its current session. Returning the
-// existing row makes controller restart and clean orchestrator replacement
-// idempotent without splitting the project history.
 func (s *Store) CreateConversation(
 	ctx context.Context,
 	id string,
@@ -75,19 +51,12 @@ func (s *Store) CreateConversation(
 	})
 }
 
-// OpenNativeConversation opens the AO projection for an existing native
-// conversation without adopting another session's project narrative. A first
-// Terminal -> Chat handoff may create its root, but existing project ownership
-// must match; only a prepared provider handoff can transfer that ownership.
 func (s *Store) OpenNativeConversation(ctx context.Context, id string, scope domain.ConversationScope, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error) {
 	return s.createConversation(ctx, conversationCreateOptions{
 		id: id, scope: scope, project: project, session: session, now: now, preserveOwner: true,
 	})
 }
 
-// CreateReviewConversation opens the durable narrative for one Chat reviewer.
-// Reviewer identity, rather than the parent worker session, is the conversation
-// owner; a worker can therefore retain its own Chat narrative at the same time.
 func (s *Store) CreateReviewConversation(ctx context.Context, id, reviewID string, project domain.ProjectID, session domain.SessionID, now time.Time) (domain.ConversationRecord, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -134,10 +103,6 @@ func (s *Store) CreateReviewConversation(ctx context.Context, id, reviewID strin
 	return conversation, nil
 }
 
-// CreateProjectConversationWithContextReset rebinds an existing project
-// conversation and records the fresh-context boundary in the same transaction.
-// The boundary is written before provider startup so paged readers never expose
-// the previous orchestrator's rows under the replacement session.
 func (s *Store) CreateProjectConversationWithContextReset(
 	ctx context.Context,
 	id string,
@@ -156,12 +121,6 @@ func (s *Store) CreateProjectConversationWithContextReset(
 	})
 }
 
-// CreateProjectConversationAdoptingQueue opens the project conversation for an
-// orchestrator's first controller like CreateProjectConversationWithContextReset,
-// and in the same transaction moves everything the session queued in its
-// provisioning-time session row into it (#6523). Doing both in one write means a
-// prompt sent meanwhile lands either in the session row, and moves with the rest,
-// or in the project row after them.
 func (s *Store) CreateProjectConversationAdoptingQueue(
 	ctx context.Context,
 	id string,
@@ -210,9 +169,6 @@ func (s *Store) createConversation(
 					return fmt.Errorf("bind project conversation %s to %s: %w", existing.ID, options.session, err)
 				}
 				if existing.CurrentSessionID == nil || *existing.CurrentSessionID != options.session {
-					// The previous owner's reserved provider id dies with that owner.
-					// While the conversation is untouched, release it so the new owner
-					// starts on the same root instead of a child provider boundary.
 					if _, err := q.ReleaseUntouchedConversationProvider(ctx, gen.ReleaseUntouchedConversationProviderParams{
 						SessionID:       &options.session,
 						ProviderScopeID: uuid.NewString(),
@@ -363,12 +319,6 @@ func (s *Store) createConversation(
 	}, nil
 }
 
-// adoptProvisioningQueue moves the rows of every other session-scoped
-// conversation the session is bound to into targetID, then detaches those rows.
-// Turns, messages, and activities keep their IDs, so a turn id a client already
-// holds still resolves for edit and cancel. Messages and activities go after the
-// target's latest sequence, which is after any context boundary the caller just
-// recorded. It returns the target's new latest sequence.
 func adoptProvisioningQueue(
 	ctx context.Context,
 	q *gen.Queries,
@@ -416,8 +366,6 @@ func adoptProvisioningQueue(
 			return 0, fmt.Errorf("advance sequence of %s: %w", targetID, err)
 		}
 		latest += source.LatestSequence
-		// Only a turn whose prompt already reached the target stays behind. Settle
-		// it so nothing queued is left where no lookup can find it.
 		if err := q.CancelAllQueuedConversationTurns(ctx, gen.CancelAllQueuedConversationTurnsParams{
 			CompletedAt: timeToNullTime(now), ConversationID: source.ID,
 		}); err != nil {
@@ -432,9 +380,6 @@ func adoptProvisioningQueue(
 	return latest, nil
 }
 
-// retargetExcerptReferences points the excerpt references queued in sourceID at
-// targetID before the rows move, because drain checks each reference against the
-// conversation it runs in.
 func retargetExcerptReferences(ctx context.Context, q *gen.Queries, sourceID, targetID string) error {
 	rows, err := q.SelectConversationDeliveryContent(ctx, sourceID)
 	if err != nil {
@@ -443,7 +388,6 @@ func retargetExcerptReferences(ctx context.Context, q *gen.Queries, sourceID, ta
 	for _, row := range rows {
 		var content []ports.ChatContent
 		if err := json.Unmarshal([]byte(row.DeliveryContentJson), &content); err != nil {
-			// Drain fails a turn with corrupt content; moving it unchanged keeps that.
 			continue
 		}
 		changed := false
@@ -469,9 +413,6 @@ func retargetExcerptReferences(ctx context.Context, q *gen.Queries, sourceID, ta
 	return nil
 }
 
-// CreateConversationBranch records a provider-thread child without changing the
-// active controller. Activation is a separate transaction after the replacement
-// provider controller is ready.
 func (s *Store) CreateConversationBranch(
 	ctx context.Context,
 	branch domain.ConversationBranch,
@@ -553,9 +494,6 @@ func insertConversationBranchTx(
 	return nil
 }
 
-// CreateAndActivateConversationBranch publishes a ready provider branch and the
-// session controller generation in one transaction. The caller retains the
-// fenced source controller until this commit succeeds.
 func (s *Store) CreateAndActivateConversationBranch(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -586,9 +524,6 @@ func (s *Store) CreateAndActivateConversationBranch(
 	})
 }
 
-// CommitProviderSwitch atomically publishes the fresh provider branch and the
-// target harness/controller metadata. Provider startup happens before this
-// method; until it commits, the old branch remains the durable owner.
 func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionRecord, branch domain.ConversationBranch, generation string, settings domain.ConversationSettings, activity domain.ConversationActivity) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -632,9 +567,6 @@ func (s *Store) CommitProviderSwitch(ctx context.Context, rec domain.SessionReco
 	})
 }
 
-// CreateAndActivateReviewConversationBranch publishes a fresh provider branch
-// with the review's controller generation. Reviewer Chat does not own the
-// worker session controller, so its boundary must claim the review row.
 func (s *Store) CreateAndActivateReviewConversationBranch(
 	ctx context.Context,
 	reviewID string,
@@ -680,15 +612,9 @@ func insertAndActivateConversationBranchTx(ctx context.Context, q *gen.Queries, 
 	if rows != 1 {
 		return fmt.Errorf("move conversation head: conversation %s not found", branch.ConversationID)
 	}
-	// An edited branch's path drops the copies written after its fork.
 	return reconcileSpanningPlans(ctx, q, branch.ConversationID, now)
 }
 
-// CommitChatSpawn publishes a reserved fresh-provider boundary and the complete
-// lifecycle-owned session record in one transaction. It is intentionally
-// separate from CreateAndActivateConversationBranch: ordinary ControllerReady
-// must not commit MarkSpawned first and leave the previous provider branch
-// active if the boundary write fails.
 func (s *Store) CommitChatSpawn(
 	ctx context.Context,
 	rec domain.SessionRecord,
@@ -697,10 +623,6 @@ func (s *Store) CommitChatSpawn(
 	return s.commitChatSpawn(ctx, rec, branch, nil, nil)
 }
 
-// CommitChatSpawnPrepared stages the reserved boundary and controller generation,
-// projects a reconciled native replay onto that branch, then publishes the live
-// session as one transaction. The staged ownership is invisible outside the
-// transaction, so input cannot reach the controller before its history exists.
 func (s *Store) CommitChatSpawnPrepared(
 	ctx context.Context,
 	rec domain.SessionRecord,
@@ -805,10 +727,6 @@ func (s *Store) commitChatSpawn(
 			return err
 		}
 		if prepare != nil {
-			// Provider-event projection is fenced by controller generation. Stage
-			// that generation only inside this transaction, after the new branch is
-			// active, so the replay lands in the new provider namespace while the
-			// terminated target remains unavailable to every concurrent reader.
 			rows, err := q.ClaimChatControllerGeneration(ctx, gen.ClaimChatControllerGenerationParams{
 				ControllerGeneration: rec.Metadata.ControllerGeneration,
 				ID:                   rec.ID,
@@ -831,10 +749,6 @@ func (s *Store) commitChatSpawn(
 	})
 }
 
-// moveUndispatchedIntakeTx hands the session's queued, never-dispatched turns
-// to the fresh provider boundary. They will run on that provider, and native
-// replay only correlates turns inside the active provider scope; left on the
-// parent branch, a restart would import the replayed prompt a second time.
 func moveUndispatchedIntakeTx(ctx context.Context, q *gen.Queries, session domain.SessionID, branch domain.ConversationBranch) error {
 	if err := q.MoveUndispatchedTurnMessagesToBranch(ctx, gen.MoveUndispatchedTurnMessagesToBranchParams{
 		BranchID: branch.ID, ConversationID: branch.ConversationID, ParentBranchID: branch.ParentBranchID, SessionID: session,
@@ -854,7 +768,6 @@ func moveUndispatchedIntakeTx(ctx context.Context, q *gen.Queries, session domai
 	return nil
 }
 
-// ConversationBranch reads one branch and reports whether it is active.
 func (s *Store) ConversationBranch(
 	ctx context.Context,
 	conversationID, branchID string,
@@ -872,8 +785,6 @@ func (s *Store) ConversationBranch(
 	return conversationBranchToDomain(row), nil
 }
 
-// ConversationBranches lists every durable sibling and descendant in creation
-// order. Only the current head is marked active.
 func (s *Store) ConversationBranches(
 	ctx context.Context,
 	conversationID string,
@@ -889,8 +800,6 @@ func (s *Store) ConversationBranches(
 	return branches, nil
 }
 
-// ConversationEditAnchor resolves the active-lineage fork point and preserves
-// the original structured delivery content for the replacement send.
 func (s *Store) ConversationEditAnchor(
 	ctx context.Context,
 	conversationID, replacedTurnID string,
@@ -918,8 +827,6 @@ func (s *Store) ConversationEditAnchor(
 	}, nil
 }
 
-// UpdateConversationBranchReplacement attaches the first turn created on a
-// child branch to the source prompt it replaces.
 func (s *Store) UpdateConversationBranchReplacement(
 	ctx context.Context,
 	branchID, replacementTurnID string,
@@ -940,17 +847,6 @@ func (s *Store) UpdateConversationBranchReplacement(
 	return nil
 }
 
-// RepairIncompleteConversationEdit closes the only crash window in edit branch
-// creation. If the active edit child already owns a durable human prompt, that
-// earliest prompt becomes its replacement. If no prompt was recorded, the child
-// was never dispatched and the conversation plus session provider ownership move
-// back to the source branch in the same transaction.
-//
-// A non-empty returned branch means a repair was applied. restoredProviderOwner
-// is true only when the abandoned child belongs to the same AO session, so
-// startup may replace that session's stale child provider handle. A project
-// conversation can be rebound to a new orchestrator session; that new owner must
-// start its own provider boundary rather than inherit the prior agent's handle.
 func (s *Store) RepairIncompleteConversationEdit(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -1027,16 +923,12 @@ func (s *Store) RepairIncompleteConversationEdit(
 		if conversationRows != 1 {
 			return fmt.Errorf("restore source conversation head: conversation %s not found", conversationID)
 		}
-		// The source path holds the copies written after the abandoned fork again.
 		if reconcileErr := reconcileSpanningPlans(ctx, q, conversationID, now); reconcileErr != nil {
 			return reconcileErr
 		}
 		parent.Active = true
 		repaired = parent
 		if active.SessionID != sessionID {
-			// CreateConversation may have just rebound a project narrative to a new
-			// orchestrator. Repair the lineage, but never copy the prior agent's
-			// opaque provider handle into this new session.
 			return nil
 		}
 		sessionRows, updateErr := q.ActivateConversationBranchSession(
@@ -1061,9 +953,6 @@ func (s *Store) RepairIncompleteConversationEdit(
 	return repaired, restoredProviderOwner, nil
 }
 
-// ActivateConversationBranch moves the durable conversation head and the Chat
-// controller's provider handle/generation together. If the session is not a live
-// Chat session, the conversation update is rolled back.
 func (s *Store) ActivateConversationBranch(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -1122,13 +1011,10 @@ func (s *Store) ActivateConversationBranch(
 		if sessionRows != 1 {
 			return fmt.Errorf("move session controller: live chat session %s not found", sessionID)
 		}
-		// The new path holds its own copies of a list that spans turns.
 		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 }
 
-// ProjectConversation is a read-only lookup; unlike CreateConversation it does
-// not transfer ownership before a replacement provider has connected.
 func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectID) (domain.ConversationRecord, error) {
 	row, err := s.qr.SelectProjectConversation(ctx, optionalProjectID(project))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1140,7 +1026,6 @@ func (s *Store) ProjectConversation(ctx context.Context, project domain.ProjectI
 	return conversationToDomain(row), nil
 }
 
-// SessionForActivityProviderItem finds the session holding an action activity.
 func (s *Store) SessionForActivityProviderItem(ctx context.Context, providerItemID string) (domain.SessionID, bool, error) {
 	sessionID, err := s.qr.SelectSessionForActivityProviderItem(ctx, providerItemID)
 	if errors.Is(err, sql.ErrNoRows) || sessionID == nil {
@@ -1152,7 +1037,6 @@ func (s *Store) SessionForActivityProviderItem(ctx context.Context, providerItem
 	return *sessionID, true, nil
 }
 
-// ConversationForSession looks up a session's conversation.
 func (s *Store) ConversationForSession(
 	ctx context.Context,
 	session domain.SessionID,
@@ -1167,9 +1051,6 @@ func (s *Store) ConversationForSession(
 	return conversationToDomain(row), nil
 }
 
-// ListInterruptedSessions reports which of the given sessions had their latest
-// Chat turn interrupted by the person. Sessions without a Chat conversation are
-// absent from the result.
 func (s *Store) ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error) {
 	out := make(map[domain.SessionID]bool)
 	if len(ids) == 0 {
@@ -1189,8 +1070,6 @@ func (s *Store) ListInterruptedSessions(ctx context.Context, ids []domain.Sessio
 	return out, nil
 }
 
-// ConversationForReview looks up the durable conversation owned by a reviewer
-// row rather than by its parent worker session.
 func (s *Store) ConversationForReview(ctx context.Context, reviewID string) (domain.ConversationRecord, error) {
 	row, err := s.qr.SelectConversationByReview(ctx, nullableString(reviewID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1202,8 +1081,6 @@ func (s *Store) ConversationForReview(ctx context.Context, reviewID string) (dom
 	return conversationToDomain(row), nil
 }
 
-// HasConversationTurns includes hidden and settled turns: an empty visible
-// timeline is not proof that the provider conversation never started.
 func (s *Store) HasConversationTurns(ctx context.Context, conversationID string) (bool, error) {
 	hasTurns, err := s.qr.HasConversationTurns(ctx, conversationID)
 	if err != nil {
@@ -1212,8 +1089,6 @@ func (s *Store) HasConversationTurns(ctx context.Context, conversationID string)
 	return hasTurns, nil
 }
 
-// LatestConversationTurn reads the latest non-rolled-back turn on the active
-// branch lineage without loading messages or activities.
 func (s *Store) LatestConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
 	row, err := s.qr.SelectLatestConversationTurn(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1225,8 +1100,6 @@ func (s *Store) LatestConversationTurn(ctx context.Context, conversationID strin
 	return turnToDomain(row), nil
 }
 
-// TurnByProviderID is the conversation's turn the provider knows as
-// providerTurnID.
 func (s *Store) TurnByProviderID(ctx context.Context, conversationID, providerTurnID string) (domain.ConversationTurn, error) {
 	row, err := s.qr.SelectConversationTurnByProviderID(ctx, gen.SelectConversationTurnByProviderIDParams{
 		ConversationID: conversationID, ProviderTurnID: providerTurnID,
@@ -1240,8 +1113,6 @@ func (s *Store) TurnByProviderID(ctx context.Context, conversationID, providerTu
 	return turnToDomain(row), nil
 }
 
-// LatestVisibleUserTurnSettled checks the current branch's latest user prompt
-// without loading the full conversation history.
 func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID string, sessionID domain.SessionID) (bool, error) {
 	settled, err := s.qr.LatestVisibleUserTurnSettled(ctx, gen.LatestVisibleUserTurnSettledParams{
 		ConversationID: conversationID,
@@ -1253,11 +1124,6 @@ func (s *Store) LatestVisibleUserTurnSettled(ctx context.Context, conversationID
 	return settled, nil
 }
 
-// AppendUserMessage records an inbound message and the turn it opens.
-//
-// Idempotent on clientMessageID: a retried send returns the message and turn that
-// already exist instead of opening a second provider turn. The caller must not
-// dispatch to the provider when `created` is false.
 func (s *Store) AppendUserMessage(
 	ctx context.Context,
 	conversationID string,
@@ -1270,15 +1136,10 @@ func (s *Store) AppendUserMessage(
 	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, "", false, now)
 }
 
-// AppendReviewUserMessage preserves the worker session needed for lifecycle
-// projection while recording the typed reviewer that owns the turn.
 func (s *Store) AppendReviewUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID string, now time.Time) (bool, error) {
 	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, "", false, now)
 }
 
-// AppendRetryUserMessage records a retry and its source as one transaction.
-// Idempotency is owned by the explicit retry relation, not by caller-controlled
-// client message ids.
 func (s *Store) AppendRetryUserMessage(
 	ctx context.Context,
 	conversationID string,
@@ -1292,13 +1153,10 @@ func (s *Store) AppendRetryUserMessage(
 	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, false, now)
 }
 
-// AppendAutoResumeRetryUserMessage consumes due consent in the retry transaction.
-// Cancellation and account binding changes use the same writer boundary.
 func (s *Store) AppendAutoResumeRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
 	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, true, now)
 }
 
-// AppendReviewRetryUserMessage atomically persists a retry for a reviewer chat.
 func (s *Store) AppendReviewRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
 	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, retryOfTurnID, false, now)
 }
@@ -1318,8 +1176,6 @@ func (s *Store) appendUserMessage(
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if generation == "" && reviewID == "" {
-		// A Send may have read "provisioning" just before Kill or Ready.
-		// Session writes share writeMu, so this check and the append are atomic.
 		record, readErr := s.qw.GetSession(ctx, session)
 		if readErr != nil {
 			return false, fmt.Errorf("check queued session %s: %w", session, readErr)
@@ -1336,9 +1192,6 @@ func (s *Store) appendUserMessage(
 				return false, domain.ErrSessionNotProvisioning
 			}
 		}
-		// The caller read the conversation before taking writeMu. An orchestrator's
-		// first controller may have moved the queue out of it since then; a turn
-		// appended here would never drain or show.
 		conversation, readErr := s.qw.SelectConversationByID(ctx, conversationID)
 		if readErr != nil {
 			return false, fmt.Errorf("check queued conversation %s: %w", conversationID, readErr)
@@ -1367,8 +1220,6 @@ func (s *Store) appendUserMessage(
 				ClientMessageID: msg.ClientMessageID,
 			})
 		if lookupErr == nil {
-			// Older rows have no intake fingerprint. Compare their current
-			// persisted payload exactly; never guess through AO-added context.
 			if existing.ClientPayloadHash.Valid {
 				if msg.ClientPayloadHash == "" || existing.ClientPayloadHash.String != msg.ClientPayloadHash {
 					return false, domain.ErrClientMessageConflict
@@ -1489,8 +1340,6 @@ func (s *Store) appendUserMessage(
 	return true, nil
 }
 
-// ConversationMessageByClientID finds the durable normal-message outcome for an
-// idempotent client delivery handle.
 func (s *Store) ConversationMessageByClientID(
 	ctx context.Context,
 	conversationID, clientMessageID string,
@@ -1508,7 +1357,6 @@ func (s *Store) ConversationMessageByClientID(
 	return messageToDomain(row), true, nil
 }
 
-// ConversationMessages returns the durable transcript in sequence order.
 func (s *Store) ConversationMessages(ctx context.Context, conversationID string) ([]domain.ConversationMessage, error) {
 	rows, err := s.qr.SelectConversationMessages(ctx, conversationID)
 	if err != nil {
@@ -1521,13 +1369,6 @@ func (s *Store) ConversationMessages(ctx context.Context, conversationID string)
 	return messages, nil
 }
 
-// AdoptProviderTurn records a turn the provider started that AO never dispatched.
-//
-// A compaction runs as its own provider turn, and so does work the provider
-// resumes inside its own history. Without a row, every item those turns emit
-// correlates to no turn: the activities lose their turn id and the timeline stops
-// grouping them, which reads to a user as the conversation falling apart. Idempotent
-// because the provider re-announces a turn on resume.
 func (s *Store) AdoptProviderTurn(
 	ctx context.Context,
 	conversationID string,
@@ -1551,9 +1392,6 @@ func (s *Store) AdoptProviderTurn(
 	return nil
 }
 
-// AdoptReviewProviderTurn projects provider-initiated reviewer work with its
-// typed owner. The worker session remains present for the existing lifecycle
-// and CDC projection, but never substitutes for reviewer ownership.
 func (s *Store) AdoptReviewProviderTurn(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation, turnID, providerTurnID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -1566,14 +1404,6 @@ func (s *Store) AdoptReviewProviderTurn(ctx context.Context, conversationID stri
 	return nil
 }
 
-// AppendImportedUserMessage records a user prompt recovered from the provider's
-// native thread. The enclosing turn must already have been adopted from the
-// history's turn.started event.
-//
-// Idempotency is by provider turn rather than only by clientMessageID. A prompt AO
-// originally sent in Chat mode already belongs to that turn but may carry a
-// different client id from the history adapter; checking the turn is what keeps a
-// Chat -> TUI -> Chat round trip from duplicating it.
 func (s *Store) AppendImportedUserMessage(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -1629,9 +1459,6 @@ func (s *Store) AppendImportedUserMessage(
 	return nil
 }
 
-// MarkTurnDispatching removes a turn from automatic queue replay before any
-// provider call. If the later provider-ID binding fails, delivery is uncertain
-// but the prompt cannot be sent a second time by a reconnected controller.
 func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -1643,8 +1470,6 @@ func (s *Store) MarkTurnDispatching(ctx context.Context, turnID string) error {
 	return nil
 }
 
-// RecordProviderInput saves the exact combined text for native replay. A normal
-// send records it before provider I/O; an accepted steer records it afterward.
 func (s *Store) RecordProviderInput(ctx context.Context, turnID, text string) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -1664,8 +1489,6 @@ func expectBatchRow(action, id string, rows int64, err error) error {
 	return nil
 }
 
-// BindTurnToProvider records the provider's turn id once a send is accepted and
-// marks the turn running.
 func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -1685,8 +1508,6 @@ func (s *Store) BindTurnToProvider(ctx context.Context, turnID, providerTurnID s
 	return nil
 }
 
-// SettleTurn records a turn's terminal state. An interrupted turn is not an
-// error and carries no message.
 func (s *Store) SettleTurn(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -1697,8 +1518,6 @@ func (s *Store) SettleTurn(
 	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", time.Time{}, now)
 }
 
-// SettleTurnWithFailureCode retains a provider-classified cause beside the raw
-// error so recovery guidance survives a daemon or desktop restart.
 func (s *Store) SettleTurnWithFailureCode(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -1717,17 +1536,11 @@ func (s *Store) SettleTurnWithFailureCode(
 			ProviderTurnID: providerTurnID,
 		})
 	if errors.Is(err, sql.ErrNoRows) {
-		// A turn AO never recorded, e.g. one started by a previous controller
-		// before a restart. Not an error: there is nothing to settle.
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("select turn %s: %w", providerTurnID, err)
 	}
-	// A history replay re-settles a turn without its error, which is not
-	// portable. Keep the live reason: a usage limit is classified from it.
-	// A resumed Codex thread also replays a turn AO already failed as interrupted.
-	// The stored failure is what happened; nobody interrupted that turn.
 	if errMessage == "" && state == domain.TurnStateInterrupted &&
 		turn.State == domain.TurnStateFailed && turn.ErrorMessage != "" {
 		state = domain.TurnStateFailed
@@ -1776,9 +1589,6 @@ func (s *Store) SettleTurnWithFailureCode(
 	return nil
 }
 
-// finalizeCompletedTurnPlan reconciles the two durable plan projections when a
-// provider completes a turn without sending a final plan notification. The raw
-// provider event remains unchanged; this only records AO's terminal inference.
 func finalizeCompletedTurnPlan(
 	ctx context.Context,
 	q *gen.Queries,
@@ -1793,8 +1603,6 @@ func finalizeCompletedTurnPlan(
 		return fmt.Errorf("decode plan for completed turn %s: %w", turn.ID, err)
 	}
 	if plan.SpansTurns {
-		// The agent keeps this list across turns, so its open steps are still open
-		// work: the turn ending is not the list ending.
 		return nil
 	}
 	changed := false
@@ -1840,8 +1648,6 @@ func finalizeCompletedTurnPlan(
 	return nil
 }
 
-// terminalActivityStatus mirrors why the enclosing turn ended. Interrupted work
-// is neither successful nor failed: it stopped because the user asked it to.
 func terminalActivityStatus(state domain.TurnState) domain.ActivityStatus {
 	switch state {
 	case domain.TurnStateCompleted:
@@ -1855,9 +1661,6 @@ func terminalActivityStatus(state domain.TurnState) domain.ActivityStatus {
 	}
 }
 
-// SettleOrphanedTurns marks anything a dead controller left in flight. A turn the
-// controller was running is not evidence the work finished, so it settles as
-// failed rather than silently completing.
 func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionID, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -1878,8 +1681,6 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 	return nil
 }
 
-// SettleUnboundRunningTurn closes an ambiguous dispatch after live reconnect.
-// Recheck under the writer lock so a bound or queued turn is never settled.
 func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -1902,17 +1703,6 @@ func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID str
 	return nil
 }
 
-// CleanupOwnedControllerWork settles work only when the closing controller still
-// owns its session generation. Branch/interface handoffs start the replacement
-// before closing the source, so an unconditional stream-end cleanup would
-// otherwise fail the replacement's turns and requests. Project conversations can
-// be rebound to another session before the old stream ends; request cleanup is
-// therefore scoped through turns handled by this session, not current ownership
-// of the conversation.
-//
-// Startup deliberately uses SettleOrphanedTurns and FailPending* directly: no
-// controller owns the abandoned generation then, and that repair must remain
-// unconditional.
 func (s *Store) CleanupOwnedControllerWork(
 	ctx context.Context,
 	session domain.SessionID,
@@ -1973,9 +1763,6 @@ func cleanupOwnedControllerWork(
 	return true, nil
 }
 
-// CleanupOwnedReviewControllerWork uses the review's generation fence. Reviewer
-// Chat never claims the worker session's controller generation, so the session
-// cleanup above cannot settle its in-flight turn when the reviewer stops.
 func (s *Store) CleanupOwnedReviewControllerWork(
 	ctx context.Context,
 	reviewID, conversationID, generation string,
@@ -2005,10 +1792,6 @@ func cleanupOwnedReviewControllerWork(
 	if err != nil {
 		return false, fmt.Errorf("read reviewer controller generation for %s: %w", reviewID, err)
 	}
-	// The generation is the ownership fence. A Chat controller may be stopped
-	// after the review row has already switched to Terminal, so checking the
-	// current interface mode here would skip cleanup for the very transition
-	// this method is meant to settle.
 	if owner.ControllerGeneration != generation {
 		return false, nil
 	}
@@ -2031,10 +1814,6 @@ func cleanupOwnedReviewControllerWork(
 	return true, nil
 }
 
-// ListVisibleRunningTurnProviderIDs returns the same active-branch running turns,
-// in the same order, that a conversation snapshot exposes to clients. Interrupt
-// uses the full set because a root and nested provider turn may overlap; settling
-// only one would leave the UI's Working state behind.
 func (s *Store) ListVisibleRunningTurnProviderIDs(
 	ctx context.Context,
 	conversationID string,
@@ -2046,11 +1825,6 @@ func (s *Store) ListVisibleRunningTurnProviderIDs(
 	return providerTurnIDs, nil
 }
 
-// SetConversationSettings records the provider choices for the next turn.
-//
-// An empty field is stored as NULL rather than as an empty string, so "the user
-// cleared this" and "the user never chose" stay the same thing: fall back to the
-// provider's default.
 func (s *Store) SetConversationSettings(
 	ctx context.Context,
 	conversationID string,
@@ -2074,14 +1848,6 @@ func (s *Store) SetConversationSettings(
 	return nil
 }
 
-// MarkCompacted records that the conversation's history was summarized to reclaim
-// context.
-//
-// Separate from the timeline row the caller writes alongside it, and deliberately
-// not folded into UpsertActivity: this is conversation state ("has compaction ever
-// run"), the activity is the narrative ("here is where it happened"), and a
-// generic activity writer has no business knowing which kinds move a column on the
-// conversation.
 func (s *Store) MarkCompacted(ctx context.Context, conversationID string, at time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -2102,12 +1868,6 @@ func nullableString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: true}
 }
 
-// RecordUsage stores the conversation's current token position, overwriting the
-// previous one.
-//
-// Latest-wins on purpose. The provider reports usage after every tool call, and
-// the history of those reports is not information anyone wants: the question is
-// "how full is this conversation now", which has exactly one answer.
 func (s *Store) RecordUsage(
 	ctx context.Context,
 	conversationID string,
@@ -2131,8 +1891,6 @@ func (s *Store) RecordUsage(
 	return nil
 }
 
-// RecordRateLimits stores the account's current quota position, overwriting the
-// previous one.
 func (s *Store) RecordRateLimits(
 	ctx context.Context,
 	conversationID string,
@@ -2153,9 +1911,6 @@ func (s *Store) RecordRateLimits(
 	return nil
 }
 
-// nullablePositive stores zero as NULL. For every column that uses it, zero and
-// unreported are the same thing to a reader, and NULL is the honest encoding of
-// "the provider never said".
 func nullablePositive(value int64) sql.NullInt64 {
 	if value <= 0 {
 		return sql.NullInt64{}
@@ -2163,9 +1918,6 @@ func nullablePositive(value int64) sql.NullInt64 {
 	return sql.NullInt64{Int64: value, Valid: true}
 }
 
-// nullablePercent stores an unreported window as NULL. Negative is the port's
-// "not reported" signal, and it must not be written as a real percentage: a
-// reader seeing -1 as data would draw a meter running backwards.
 func nullablePercent(value float64) sql.NullFloat64 {
 	if value < 0 {
 		return sql.NullFloat64{}
@@ -2173,13 +1925,6 @@ func nullablePercent(value float64) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: value, Valid: true}
 }
 
-// RecordModelReroute stores the provider answering with a model other than the one
-// asked for, overwriting the previous report.
-//
-// Latest wins because there is one current answer to "which model is actually
-// replying". The earlier reroutes of a long conversation are not lost information a
-// reader wants: the turn each one happened on is recorded with it, and what a client
-// needs to say is what is answering now.
 func (s *Store) RecordModelReroute(
 	ctx context.Context,
 	conversationID string,
@@ -2202,13 +1947,6 @@ func (s *Store) RecordModelReroute(
 	return nil
 }
 
-// RecordAccount stores what the provider says about the account this conversation
-// runs under.
-//
-// The caller passes the whole account, not a patch: the provider reports auth mode
-// and plan together on account/updated and neither on a credential demand, so
-// merging is the caller's job and it needs the previous value to do it. Doing it
-// here would need a read inside the write lock for a field nothing queries.
 func (s *Store) RecordAccount(
 	ctx context.Context,
 	conversationID string,
@@ -2231,7 +1969,6 @@ func (s *Store) RecordAccount(
 	return nil
 }
 
-// ConversationAccount reads account facts through the projection transaction when present.
 func (s *Store) ConversationAccount(ctx context.Context, conversationID string) (*domain.ConversationAccount, error) {
 	row, err := s.conversationReader(ctx).SelectConversationByID(ctx, conversationID)
 	if err != nil {
@@ -2240,11 +1977,6 @@ func (s *Store) ConversationAccount(ctx context.Context, conversationID string) 
 	return conversationToDomain(row).Account, nil
 }
 
-// ReconcileConversationAuthentication clears a demand only from durable provider
-// success in the owning generation and active branch. Empty providerTurnID permits
-// bounded legacy reconciliation on reconnect/read, never a liveness inference.
-// The writer transaction makes evidence selection and demand clearing atomic with
-// newer failures, generation claims, and branch/account changes.
 func (s *Store) ReconcileConversationAuthentication(ctx context.Context, conversationID, generation, providerTurnID string, now time.Time) (*domain.ConversationAccount, error) {
 	if _, ok := ctx.Value(conversationProjectionTxKey{}).(*gen.Queries); !ok {
 		if account, verifiedAt, err := authenticationEvidence(ctx, s.qr, conversationID, generation, providerTurnID); err != nil || verifiedAt == nil {
@@ -2277,8 +2009,6 @@ func (s *Store) ReconcileConversationAuthentication(ctx context.Context, convers
 	return account, nil
 }
 
-// authenticationEvidence returns the conversation's account and, when a verified
-// turn would update it, that turn's completion time.
 func authenticationEvidence(ctx context.Context, q *gen.Queries, conversationID, generation, providerTurnID string) (*domain.ConversationAccount, *time.Time, error) {
 	row, err := q.SelectConversationByID(ctx, conversationID)
 	if err != nil {
@@ -2314,16 +2044,12 @@ func authenticationEvidence(ctx context.Context, q *gen.Queries, conversationID,
 	return account, &turn.CompletedAt.Time, nil
 }
 
-// ConversationAwaitingLogin is a session conversation whose provider asked for
-// credentials, and the harness its session runs.
 type ConversationAwaitingLogin struct {
 	ConversationID string
 	SessionID      domain.SessionID
 	Harness        domain.AgentHarness
 }
 
-// ConversationsAwaitingLogin lists session conversations with an unanswered
-// credential demand.
 func (s *Store) ConversationsAwaitingLogin(ctx context.Context) ([]ConversationAwaitingLogin, error) {
 	rows, err := s.qr.SelectConversationsAwaitingLogin(ctx)
 	if err != nil {
@@ -2336,10 +2062,6 @@ func (s *Store) ConversationsAwaitingLogin(ctx context.Context) ([]ConversationA
 	return out, nil
 }
 
-// ConfirmConversationLogin clears a credential demand that a later check of the
-// session's account answered: at is when a check began that found the account
-// signed in and read its limits from the provider with that login. A demand
-// recorded at or after at stays, since that check cannot speak for it.
 func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID string, at, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -2360,7 +2082,6 @@ func (s *Store) ConfirmConversationLogin(ctx context.Context, conversationID str
 	return cleared && err == nil, err
 }
 
-// RequireSessionLogin records a login demand on the session's chat unless one is pending.
 func (s *Store) RequireSessionLogin(ctx context.Context, id domain.SessionID, reason string, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -2385,8 +2106,6 @@ func (s *Store) RequireSessionLogin(ctx context.Context, id domain.SessionID, re
 	})
 }
 
-// markAuthenticated records provider success at verifiedAt. A demand it
-// answers is kept as the last failure.
 func markAuthenticated(account *domain.ConversationAccount, verifiedAt time.Time) {
 	if account.ReauthRequiredAt != nil && account.LastAuthFailureAt == nil {
 		account.LastAuthFailureAt = account.ReauthRequiredAt
@@ -2398,11 +2117,6 @@ func markAuthenticated(account *domain.ConversationAccount, verifiedAt time.Time
 	account.ReauthReason = ""
 }
 
-// RecordThreadState stores the provider's lifecycle view of the thread.
-//
-// updated_at is deliberately not bumped by the statement this runs: thread status
-// flips active/idle on every turn, and marking the conversation modified twice per
-// message would make every chat session look freshly active forever.
 func (s *Store) RecordThreadState(
 	ctx context.Context,
 	conversationID string,
@@ -2424,13 +2138,6 @@ func (s *Store) RecordThreadState(
 	return nil
 }
 
-// RecordMCPServers stores the tool servers' startup state.
-//
-// The whole list is written, not one server: the provider reports servers one at a
-// time and re-reports all of them on every turn, so the caller merges by name and
-// this stores the result. An empty list is stored as an empty array rather than
-// NULL, because "AO asked and there are none" is a different answer from "AO never
-// asked".
 func (s *Store) RecordMCPServers(
 	ctx context.Context,
 	conversationID string,
@@ -2455,19 +2162,12 @@ func (s *Store) RecordMCPServers(
 	return nil
 }
 
-// SetTurnPlan overwrites a turn's plan and reports whether the turn was found.
-//
-// A plan for a turn AO never recorded happens after a restart, when a controller
-// reattaches to a provider turn that predates it. There is nothing to update, and
-// that is not a failure.
 func (s *Store) SetTurnPlan(
 	ctx context.Context,
 	conversationID, providerTurnID string,
 	plan domain.ConversationPlan,
 ) (bool, error) {
 	if providerTurnID == "" {
-		// Without a turn id there is no row to attribute this to, and guessing the
-		// most recent turn would file one turn's plan under another.
 		return false, nil
 	}
 	encoded, err := json.Marshal(plan)
@@ -2488,10 +2188,6 @@ func (s *Store) SetTurnPlan(
 	return rows > 0, nil
 }
 
-// ReconcileSpanningPlans marks which copy of a list that spans turns is current
-// on the conversation's active path: the copy written last. Every other copy on
-// the path is superseded. Copies on other branches keep their marks until their
-// branch is active again, when this runs for that path.
 func (s *Store) ReconcileSpanningPlans(ctx context.Context, conversationID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -2507,7 +2203,6 @@ func reconcileSpanningPlans(ctx context.Context, q *gen.Queries, conversationID 
 	var currentAt time.Time
 	for index, planCopy := range copies {
 		at := spanningPlanWrittenAt(planCopy)
-		// Rows come in sequence order, so a tie goes to the later row.
 		if current < 0 || !at.Before(currentAt) {
 			current, currentAt = index, at
 		}
@@ -2521,7 +2216,6 @@ func reconcileSpanningPlans(ctx context.Context, q *gen.Queries, conversationID 
 		}); err != nil {
 			return fmt.Errorf("mark plan row %s: %w", planCopy.ID, err)
 		}
-		// A turn's plan and its plan row are one planCopy, written from one event.
 		if planCopy.TurnID.Valid {
 			if err := q.SetConversationTurnPlanSuperseded(ctx, gen.SetConversationTurnPlanSupersededParams{
 				Superseded: superseded,
@@ -2534,11 +2228,6 @@ func reconcileSpanningPlans(ctx context.Context, q *gen.Queries, conversationID 
 	return nil
 }
 
-// spanningPlanWrittenAt is when a planCopy's content was last written. The daemon
-// records it on each write. A planCopy from before that is dated as the upgrade
-// migration dates it: a turnless row was one revision, written when created,
-// and a turn's planCopy could change only until its turn ended. The row's updated_at
-// is no guide, since settling and recovery touch rows they do not rewrite.
 func spanningPlanWrittenAt(planCopy gen.SelectSpanningPlanCopiesOnActivePathRow) time.Time {
 	var detail struct {
 		WrittenAt time.Time `json:"writtenAt"`
@@ -2552,23 +2241,8 @@ func spanningPlanWrittenAt(planCopy gen.SelectSpanningPlanCopiesOnActivePathRow)
 	return planCopy.CreatedAt
 }
 
-// MaxStreamedTextChars caps the provider prose stored for one activity.
-//
-// Reasoning on a long turn is the case this bounds: a model reasoning at high
-// effort can emit tens of kilobytes of summary for one item, and this row is
-// re-read by every conversation snapshot poll. 32K is well past what a collapsed
-// card shows and past what anyone reads; half the command-output cap because
-// reasoning has a settled restatement to fall back on and a program's output does
-// not.
 const MaxStreamedTextChars = 32 * 1024
 
-// AppendActivityStreamedText folds a streamed provider-prose delta into its
-// activity.
-//
-// Reports whether a row was found. A delta for an activity AO has not recorded is
-// an ordinary race, not a failure: the provider can emit a reasoning delta before
-// the item/started that creates the row, and the settled summary on item/completed
-// still lands.
 func (s *Store) AppendActivityStreamedText(
 	ctx context.Context,
 	conversationID, providerItemID, delta string,
@@ -2605,12 +2279,6 @@ func (s *Store) AppendActivityStreamedText(
 	return found, nil
 }
 
-// SettleActivityStreamedText replaces streamed prose with the provider's settled
-// version, and reports whether the activity was there to update.
-//
-// Replacing rather than appending is what makes a dropped delta cosmetic: the
-// accumulated text is a preview of the settled text, so once the settled form
-// arrives it is the only account worth keeping.
 func (s *Store) SettleActivityStreamedText(
 	ctx context.Context,
 	conversationID, providerItemID, text string,
@@ -2635,12 +2303,6 @@ func (s *Store) SettleActivityStreamedText(
 	return rows > 0, nil
 }
 
-// NextQueuedTurn returns the oldest message recorded while the agent was busy,
-// or ErrNoQueuedTurn when the queue is empty.
-//
-// The queue is these rows, not a slice in a controller: a message the user typed
-// is durable before it is delivered, so a daemon that dies with one queued can
-// still account for it.
 func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error) {
 	row, err := s.qr.SelectNextQueuedConversationTurn(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2661,7 +2323,6 @@ func (s *Store) NextQueuedTurn(ctx context.Context, conversationID string) (doma
 	}, nil
 }
 
-// ListQueuedBatch previews the current queue without reserving any message.
 func (s *Store) ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error) {
 	rows, err := s.qr.SelectQueuedConversationBatch(ctx, conversationID)
 	if err != nil {
@@ -2685,9 +2346,6 @@ func (s *Store) ListQueuedBatch(ctx context.Context, conversationID string, limi
 	return batch, nil
 }
 
-// ClaimQueuedBatch fixes one delivery boundary before provider I/O. The first
-// row becomes the provider turn for a normal drain. Other rows are reserved as
-// members of that input. A steer reserves every row without starting a new turn.
 func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -2730,10 +2388,6 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 	return batch, nil
 }
 
-// CompleteQueuedBatch links each source receipt to the provider turn that took
-// its input. The original messages keep their own transcript metadata.
-// steerActivityID names the steer that carried the turns into a running turn;
-// empty means a queue drain, the turns joining the input providerTurnID started with.
 func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error {
 	if len(turnIDs) == 0 {
 		return nil
@@ -2763,7 +2417,6 @@ func (s *Store) CompleteQueuedBatch(ctx context.Context, conversationID string, 
 	})
 }
 
-// ReleaseQueuedBatch returns a definitively refused steer batch to its queue.
 func (s *Store) ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -2778,7 +2431,6 @@ func (s *Store) ReleaseQueuedBatch(ctx context.Context, conversationID string, t
 	})
 }
 
-// FailQueuedBatch retains uncertain source messages without replaying them.
 func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -2795,7 +2447,6 @@ func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turn
 	})
 }
 
-// FailReservedQueuedBatch closes stranded reservations during live reconnect.
 func (s *Store) FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -2804,8 +2455,6 @@ func (s *Store) FailReservedQueuedBatch(ctx context.Context, conversationID stri
 	})
 }
 
-// ReserveQueuedTurnForPromotion atomically removes one selected queued turn from
-// automatic drain and returns the durable content that must be steered.
 func (s *Store) ReserveQueuedTurnForPromotion(
 	ctx context.Context,
 	conversationID, turnID string,
@@ -2827,7 +2476,6 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	row, err := s.qw.SelectReservedConversationTurnForPromotion(ctx,
 		gen.SelectReservedConversationTurnForPromotionParams{ID: turnID, ConversationID: conversationID})
 	if err != nil {
-		// Do not strand a reservation when its message row is corrupt or absent.
 		_, _ = s.qw.ReleaseQueuedConversationTurnPromotion(ctx,
 			gen.ReleaseQueuedConversationTurnPromotionParams{ID: turnID, ConversationID: conversationID})
 		return domain.QueuedTurn{}, fmt.Errorf("load reserved queued turn %s: %w", turnID, err)
@@ -2839,8 +2487,6 @@ func (s *Store) ReserveQueuedTurnForPromotion(
 	}, nil
 }
 
-// ReleaseQueuedTurnPromotion restores a provider-refused reservation without
-// changing its immutable queue order.
 func (s *Store) ReleaseQueuedTurnPromotion(
 	ctx context.Context,
 	conversationID, turnID string,
@@ -2858,8 +2504,6 @@ func (s *Store) ReleaseQueuedTurnPromotion(
 	return nil
 }
 
-// CompleteQueuedTurnPromotion records the visible steer and retires its queued
-// source together, so snapshots can never show both copies or neither copy.
 func (s *Store) CompleteQueuedTurnPromotion(
 	ctx context.Context,
 	conversationID, sourceTurnID, providerTurnID string,
@@ -2897,11 +2541,6 @@ func (s *Store) CompleteQueuedTurnPromotion(
 	})
 }
 
-// CancelQueuedTurns closes out everything queued at or before cutoff.
-//
-// They settle as interrupted rather than failed: nothing went wrong, the user
-// stopped the agent, and a message that was never dispatched did not fail. The
-// cutoff keeps a message typed after the stop out of a cancellation it predates.
 func (s *Store) CancelQueuedTurns(
 	ctx context.Context,
 	conversationID string,
@@ -2919,9 +2558,6 @@ func (s *Store) CancelQueuedTurns(
 	return nil
 }
 
-// CancelAllQueuedTurns closes the whole durable queue after an interface
-// handoff has synchronously fenced intake and promotion. Unlike an ordinary Stop
-// action, there is no post-request message to preserve with a timestamp cutoff.
 func (s *Store) CancelAllQueuedTurns(
 	ctx context.Context,
 	conversationID string,
@@ -2938,8 +2574,6 @@ func (s *Store) CancelAllQueuedTurns(
 	return nil
 }
 
-// CancelQueuedTurnByID removes one undispatched queue item without disturbing
-// later queue items or the running turn.
 func (s *Store) CancelQueuedTurnByID(
 	ctx context.Context,
 	conversationID, turnID string,
@@ -2962,13 +2596,8 @@ func (s *Store) CancelQueuedTurnByID(
 	return nil
 }
 
-// ErrInvalidQueuedTurnOrder means the requested queue order does not match the
-// current undispatched queue exactly.
 var ErrInvalidQueuedTurnOrder = errors.New("invalid queued turn order")
 
-// ReorderQueuedTurns permutes the durable queue order by reassigning existing
-// requested_at values. The caller must pass every currently queued turn id in
-// the desired FIFO order.
 func (s *Store) ReorderQueuedTurns(
 	ctx context.Context,
 	conversationID string,
@@ -3037,8 +2666,6 @@ func (s *Store) ReorderQueuedTurns(
 	return nil
 }
 
-// QueuedTurnMessage reads the durable text and content without exposing image
-// bytes to the renderer.
 func (s *Store) QueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error) {
 	row, err := s.qr.SelectQueuedConversationMessage(ctx, gen.SelectQueuedConversationMessageParams{
 		ConversationID: conversationID, TurnID: nullableString(turnID),
@@ -3052,7 +2679,6 @@ func (s *Store) QueuedTurnMessage(ctx context.Context, conversationID, turnID st
 	return messageToDomain(row), nil
 }
 
-// UpdateQueuedTurnMessage commits the prompt and its retry receipt atomically.
 func (s *Store) UpdateQueuedTurnMessage(
 	ctx context.Context,
 	conversationID, turnID, text, contentJSON string,
@@ -3099,11 +2725,6 @@ func (s *Store) UpdateQueuedTurnMessage(
 	})
 }
 
-// SettleTurnByID records a terminal state for a turn AO can name directly.
-//
-// Needed for a turn that never reached the provider: it has no provider turn id,
-// so it cannot be found the way a running turn is. Settling those by the empty
-// provider id would match an arbitrary undispatched turn instead of this one.
 func (s *Store) SettleTurnByID(
 	ctx context.Context,
 	turnID string,
@@ -3125,9 +2746,6 @@ func (s *Store) SettleTurnByID(
 	return nil
 }
 
-// AppendAssistantDelta folds a streaming delta into its message, creating the
-// message on first sight. The provider item id is the correlation key because AO
-// does not choose the provider's message identity.
 func (s *Store) AppendAssistantDelta(
 	ctx context.Context,
 	conversationID, providerItemID, providerTurnID, delta, messageID string,
@@ -3199,9 +2817,6 @@ func (s *Store) AppendAssistantDelta(
 	}
 }
 
-// SettleAssistantMessage replaces streamed text with the provider's settled text
-// and stops the streaming marker. An empty settle means the provider settled
-// nothing, so it keeps the streamed text.
 func (s *Store) SettleAssistantMessage(
 	ctx context.Context,
 	conversationID, providerItemID, providerTurnID, text, messageID string,
@@ -3216,8 +2831,6 @@ func (s *Store) SettleAssistantMessage(
 			ProviderItemID: providerItemID,
 		})
 	if errors.Is(err, sql.ErrNoRows) {
-		// A message whose deltas AO never saw — possible if it completed inside a
-		// reconnect window. Record it whole rather than dropping it.
 		turnID := s.turnIDFor(ctx, conversationID, providerTurnID)
 		return s.inTx(ctx, "insert assistant message", func(q *gen.Queries) error {
 			sequence, seqErr := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
@@ -3259,8 +2872,6 @@ func (s *Store) SettleAssistantMessage(
 	return nil
 }
 
-// ActivityStatusByProviderItem reports the status of one provider item.
-// Missing rows return ok=false.
 func (s *Store) ActivityStatusByProviderItem(ctx context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
 	row, err := s.qr.SelectConversationActivityByProviderItem(ctx, gen.SelectConversationActivityByProviderItemParams{
 		ConversationID: conversationID,
@@ -3284,10 +2895,6 @@ func aoActionStatusSettled(status domain.ActivityStatus) bool {
 	}
 }
 
-// UpsertActivity records or updates a non-message timeline entry.
-// A running ao_action does not replace a completed, failed, cancelled, or
-// resolved row. The admission write and the terminal callback take this lock
-// separately, so the decision uses the row read in this call.
 func (s *Store) UpsertActivity(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -3329,17 +2936,6 @@ func (s *Store) UpsertActivity(
 		}
 	}
 
-	// A pending interaction that carries no provider item — an elicited
-	// question — can still be one AO already stored: the chat host replays the
-	// pending request after a reconnect. Refresh that row rather than inserting
-	// a duplicate the (conversation_id, request_id) index would refuse; a failed
-	// insert here is a fatal projection error and would leave the turn running
-	// with no recoverable controller (#7944). Only an in-flight row is
-	// refreshed: a row the user answered stays untouched so a late replay
-	// cannot reopen it, and so does a row a dead controller failed —
-	// settleOrphanedWork fails that question together with its turn, and
-	// revived it would sit pending on a failed turn, where the dock never
-	// shows it.
 	if activity.RequestID != "" {
 		if _, err := q.SelectConversationActivityByRequest(ctx,
 			gen.SelectConversationActivityByRequestParams{
@@ -3392,23 +2988,8 @@ func (s *Store) UpsertActivity(
 	})
 }
 
-// MaxCommandOutputChars caps the streamed output stored for one command.
-//
-// A command that prints without bound (a build, a test run with verbose logging, a
-// `yes`) must not put megabytes into a row that every conversation snapshot reads.
-// 64K is comfortably more than a person reads in a timeline card and is where the
-// full record belongs to a shell in the worktree instead.
-//
-// Exported so the truncation boundary is testable and so a caller can state the
-// limit rather than restating a magic number.
 const MaxCommandOutputChars = 64 * 1024
 
-// AppendCommandOutput folds a streamed output delta into its activity.
-//
-// Reports whether a row was found. A delta for an activity AO has not recorded is
-// an ordinary race, not a failure: the provider can emit a delta before the
-// item/started that creates the row, and the aggregate on item/completed still
-// lands. Silently dropping it is correct; claiming an error is not.
 func (s *Store) AppendCommandOutput(
 	ctx context.Context,
 	conversationID, providerItemID, delta string,
@@ -3445,11 +3026,6 @@ func (s *Store) AppendCommandOutput(
 	return found, nil
 }
 
-// SetTurnDiff overwrites a turn's changed-file summary.
-//
-// Reports whether the turn was found. A diff for a turn AO never recorded happens
-// after a restart, when a controller reattaches to a provider turn that predates
-// it, and there is nothing to update.
 func (s *Store) SetTurnDiff(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -3457,8 +3033,6 @@ func (s *Store) SetTurnDiff(
 	now time.Time,
 ) (bool, error) {
 	if providerTurnID == "" {
-		// Without a turn id there is no row to attribute this to, and guessing the
-		// most recent turn would attach one turn's edits to another.
 		return false, nil
 	}
 	encoded, err := json.Marshal(diff)
@@ -3479,8 +3053,6 @@ func (s *Store) SetTurnDiff(
 	return rows > 0, nil
 }
 
-// SetTurnArtifacts records the session artifacts a provider turn created or
-// edited, replacing any earlier list. It reports whether a turn matched.
 func (s *Store) SetTurnArtifacts(
 	ctx context.Context,
 	conversationID, providerTurnID string,
@@ -3510,8 +3082,6 @@ func (s *Store) SetTurnArtifacts(
 	return rows > 0, nil
 }
 
-// ResolveApproval marks an approval answered. It only matches a still-pending
-// row, so a card the user left on screen cannot answer a newer request.
 func (s *Store) ResolveApproval(
 	ctx context.Context,
 	conversationID, requestID, detailJSON string,
@@ -3530,8 +3100,6 @@ func (s *Store) ResolveApproval(
 	return nil
 }
 
-// HasPendingConversationInteractions reports whether the durable conversation
-// still contains an actionable approval or structured-input request.
 func (s *Store) HasPendingConversationInteractions(ctx context.Context, conversationID string) (bool, error) {
 	pending, err := s.qr.HasPendingConversationInteractions(ctx, conversationID)
 	if err != nil {
@@ -3540,8 +3108,6 @@ func (s *Store) HasPendingConversationInteractions(ctx context.Context, conversa
 	return pending, nil
 }
 
-// FailPendingApprovals closes out anything the user can no longer answer, because
-// the provider call it was blocking is gone.
 func (s *Store) FailPendingApprovals(ctx context.Context, conversationID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -3555,10 +3121,6 @@ func (s *Store) FailPendingApprovals(ctx context.Context, conversationID string,
 	return nil
 }
 
-// FailPendingInputs closes structured input requests after the provider call
-// waiting for them has gone away. Keeping this separate from approvals preserves
-// the activity-kind boundary even though both use the same pending/resolved state
-// machine.
 func (s *Store) FailPendingInputs(ctx context.Context, conversationID string, now time.Time) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
@@ -3572,9 +3134,6 @@ func (s *Store) FailPendingInputs(ctx context.Context, conversationID string, no
 	return nil
 }
 
-// ProjectProviderEvent commits a raw provider event and the durable projection
-// derived from it together. A real provider event identity deduplicates the
-// entire unit; an empty identity is deliberately never deduplicated.
 func (s *Store) ProjectProviderEvent(
 	ctx context.Context,
 	conversationID string,
@@ -3586,8 +3145,6 @@ func (s *Store) ProjectProviderEvent(
 	return s.projectProviderEvent(ctx, conversationID, session, "", generation, providerEventID, method, payloadJSON, now, project)
 }
 
-// ProjectReviewProviderEvent uses the review's controller generation. Reviewer
-// Chat shares the worker session but never owns its Chat controller fence.
 func (s *Store) ProjectReviewProviderEvent(
 	ctx context.Context,
 	conversationID string,
@@ -3682,15 +3239,8 @@ func projectProviderEventTx(
 	return true, nil
 }
 
-// ErrConversationTurnNotFound reports a turn id that is not in the conversation it
-// was named against. Distinct from a rollback the provider refused: the caller
-// pointed at nothing. It aliases the domain sentinel so a service can recognize it
-// without importing the storage layer.
 var ErrConversationTurnNotFound = domain.ErrNoConversationTurn
 
-// TurnByID reads one turn. It returns ErrConversationTurnNotFound rather than a
-// zero value, so a caller cannot mistake "no such turn" for "a turn with no
-// provider id".
 func (s *Store) TurnByID(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	row, err := s.qr.SelectConversationTurnByID(ctx, turnID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3702,8 +3252,6 @@ func (s *Store) TurnByID(ctx context.Context, turnID string) (domain.Conversatio
 	return turnToDomain(row), nil
 }
 
-// SetTurnAutoResume keeps user consent on the failed source, separate from the
-// new attempt. The retry transaction consumes it before provider dispatch.
 func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID string, resetsAt *time.Time, enabled bool, resumeError string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -3718,7 +3266,6 @@ func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID st
 		if turn.ConversationID != conversationID {
 			return domain.ErrNoConversationTurn
 		}
-		// A manual retry or cancellation may have consumed the scanned intent.
 		if !enabled && turn.UsageLimitAutoResume == 0 {
 			return nil
 		}
@@ -3763,7 +3310,6 @@ func (s *Store) SetTurnAutoResume(ctx context.Context, conversationID, turnID st
 	return nil
 }
 
-// PostponeTurnAutoResume moves an armed deadline without restoring consumed consent.
 func (s *Store) PostponeTurnAutoResume(ctx context.Context, conversationID, turnID string, resetAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -3776,8 +3322,6 @@ func (s *Store) PostponeTurnAutoResume(ctx context.Context, conversationID, turn
 	return n > 0, nil
 }
 
-// AutoResumeTurns reads durable intent and deadlines so a sweep can skip future
-// turns cheaply and validate their eligibility when due.
 func (s *Store) AutoResumeTurns(ctx context.Context) ([]domain.ConversationTurn, error) {
 	rows, err := s.qr.SelectAutoResumeConversationTurns(ctx)
 	if err != nil {
@@ -3790,7 +3334,6 @@ func (s *Store) AutoResumeTurns(ctx context.Context) ([]domain.ConversationTurn,
 	return turns, nil
 }
 
-// LatestAutoResumeTurn finds the latest visible turn that has left the queue.
 func (s *Store) LatestAutoResumeTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
 	row, err := s.qr.SelectLatestAutoResumeConversationTurn(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3802,17 +3345,6 @@ func (s *Store) LatestAutoResumeTurn(ctx context.Context, conversationID string)
 	return turnToDomain(row), nil
 }
 
-// RollbackTurns records that a rollback discarded the named turn and everything
-// after it, and returns how many turns that was.
-//
-// This is the AO half of an operation the provider has already performed: the agent
-// has forgotten those turns, and these rows are what stop the user being shown
-// prose the agent cannot recall. The three statements commit together because a
-// partial result is the one state that reintroduces the disagreement the whole
-// operation exists to prevent.
-//
-// Nothing is deleted. The turns keep their rows and their immutable sequence
-// positions, marked with when they were taken back.
 func (s *Store) RollbackTurns(
 	ctx context.Context,
 	conversationID, turnID string,
@@ -3829,8 +3361,6 @@ func (s *Store) RollbackTurns(
 		return 0, fmt.Errorf("select turn %s: %w", turnID, err)
 	}
 	if turn.ConversationID != conversationID {
-		// A turn from another conversation would otherwise anchor a rollback by
-		// rowid alone and discard an arbitrary range of this one.
 		return 0, fmt.Errorf("%w: %s is not in conversation %s",
 			ErrConversationTurnNotFound, turnID, conversationID)
 	}
@@ -3881,7 +3411,6 @@ func (s *Store) RollbackTurns(
 			}); err != nil {
 			return fmt.Errorf("fail rolled back approvals: %w", err)
 		}
-		// A rolled-back turn's copy of a list that spans turns is no longer current.
 		return reconcileSpanningPlans(ctx, q, conversationID, now)
 	})
 	if err != nil {
@@ -3890,7 +3419,6 @@ func (s *Store) RollbackTurns(
 	return int(discarded), nil
 }
 
-// SetProviderTitle records the title the provider reports for this conversation.
 func (s *Store) SetProviderTitle(
 	ctx context.Context,
 	conversationID, title string,
@@ -3909,18 +3437,6 @@ func (s *Store) SetProviderTitle(
 	return nil
 }
 
-// ApplyProviderTitle pushes a provider thread title into the session's display
-// name, and reports whether it landed.
-//
-// applied=false is the ordinary outcome, not a failure: it means the session
-// already carries a name a person chose, and that name wins. The check is the
-// UPDATE's own guard rather than a read followed by a write, because a manual
-// rename arriving between those two would be silently overwritten by whatever the
-// provider said a moment earlier.
-//
-// Writing display_name is what fans the new label out to every live surface: the
-// sessions_cdc_update trigger includes display_name in its guard, so the existing
-// session_updated event carries it without a second notification path.
 func (s *Store) ApplyProviderTitle(
 	ctx context.Context,
 	conversationID string,
@@ -3943,10 +3459,9 @@ func (s *Store) ApplyProviderTitle(
 	err = s.inTx(ctx, "apply provider title", func(q *gen.Queries) error {
 		rows, updateErr := q.ApplyConversationTitleToSession(ctx,
 			gen.ApplyConversationTitleToSessionParams{
-				DisplayName: title,
-				UpdatedAt:   now,
-				ID:          session,
-				// The witness: only a label AO itself last wrote may be replaced.
+				DisplayName:   title,
+				UpdatedAt:     now,
+				ID:            session,
 				DisplayName_2: conversation.AppliedTitle,
 			})
 		if updateErr != nil {
@@ -3968,7 +3483,6 @@ func (s *Store) ApplyProviderTitle(
 	return applied, nil
 }
 
-// ConversationSnapshot is the durable read model for one conversation.
 type ConversationSnapshot struct {
 	Conversation                     domain.ConversationRecord
 	ActiveBranch                     domain.ConversationBranch
@@ -3981,26 +3495,18 @@ type ConversationSnapshot struct {
 	BranchedFromEarlierMessage       bool
 	OldestSequence                   int64
 	HasMoreBefore                    bool
-	// AfterSequence is the floor a range read applied, or zero.
-	AfterSequence     int64
-	BatchedDeliveries []domain.ConversationBatchedDelivery
+	AfterSequence                    int64
+	BatchedDeliveries                []domain.ConversationBatchedDelivery
 }
 
-// DefaultConversationPageSize is the standard number of messages in a conversation page.
 const DefaultConversationPageSize = 200
 
-// Tool activity rides along with the messages around it and does not count toward
-// a page, so a long tool run cannot push its own prompt onto an older page. These
-// bounds only stop a pathological history, thousands of tool calls or megabytes of
-// output, from making one page unbounded. Reaching back to keep turns with their
-// prompts may cost one more page, so a page holds at most twice these.
 const (
 	conversationPageMaxActivities = 1000
 	conversationPageMaxBytes      = 4 << 20
 	conversationPageActivityChunk = 200
 )
 
-// conversationPageRow is one row of the merged timeline as the page walk sees it.
 type conversationPageRow struct {
 	sequence int64
 	turnID   sql.NullString
@@ -4008,8 +3514,6 @@ type conversationPageRow struct {
 	message  bool
 }
 
-// conversationPageRows reads one table newest-first, a chunk at a time, only as
-// far as the page walk reaches. Rows at or below the visibility floor end it.
 type conversationPageRows[T any] struct {
 	rows     []T
 	done     bool
@@ -4028,7 +3532,6 @@ func (r *conversationPageRows[T]) at(index int, before, visibleAfter int64) (*T,
 		if err != nil {
 			return nil, err
 		}
-		// A byte-bounded fetch can be shorter than the row limit without reaching EOF.
 		r.done = len(chunk) == 0
 		for _, row := range chunk {
 			if r.sequence(row) <= visibleAfter {
@@ -4044,8 +3547,6 @@ func (r *conversationPageRows[T]) at(index int, before, visibleAfter int64) (*T,
 	return nil, nil
 }
 
-// conversationPageWalk merges messages and activities newest-first. taken holds
-// the page so far; the walk always resumes at the first row it does not hold.
 type conversationPageWalk struct {
 	messages     *conversationPageRows[gen.ConversationMessage]
 	activities   *conversationPageRows[gen.ConversationActivity]
@@ -4091,7 +3592,6 @@ func (w *conversationPageWalk) take(row conversationPageRow) {
 	}
 }
 
-// truncate gives back every row after the first n.
 func (w *conversationPageWalk) truncate(n int) {
 	for _, row := range w.taken[n:] {
 		w.bytes -= row.size
@@ -4104,8 +3604,6 @@ func (w *conversationPageWalk) truncate(n int) {
 	w.taken = w.taken[:n]
 }
 
-// fits reports whether row stays inside pages times the activity and byte bounds.
-// The first row always fits, so every page moves back by at least one row.
 func (w *conversationPageWalk) fits(row *conversationPageRow, pages int) bool {
 	if !row.message && w.activityRows >= pages*conversationPageMaxActivities {
 		return false
@@ -4120,9 +3618,6 @@ func (w *conversationPageWalk) oldest() int64 {
 	return w.taken[len(w.taken)-1].sequence
 }
 
-// conversationPage walks back from beforeSequence and returns the rows it read,
-// newest-first, with the page's oldest sequence. Rows below oldest were read but
-// belong to the older page.
 func (s *Store) conversationPage(
 	ctx context.Context,
 	conversationID string,
@@ -4158,7 +3653,6 @@ func (s *Store) conversationPage(
 			},
 		},
 	}
-	// Walk until the next row would overflow the page.
 	var next *conversationPageRow
 	for {
 		row, err := walk.peek()
@@ -4176,8 +3670,6 @@ func (s *Store) conversationPage(
 	}
 	if next != nil {
 		if next.turnID.Valid {
-			// End between two turns rather than inside the one the page would
-			// split. A turn larger than a whole page is left split.
 			end := len(walk.taken)
 			for end > 0 && walk.taken[end-1].turnID == next.turnID {
 				end--
@@ -4197,13 +3689,6 @@ func (s *Store) conversationPage(
 	return walk.messages.rows, walk.activities.rows, oldest, next != nil && oldest > visibleAfterSequence, nil
 }
 
-// extendPageToTurnPrompts keeps interleaved turns with their prompts. A prompt
-// queued while another turn runs sits among that turn's rows, so a cut between
-// two different turns can still leave a turn on the page and its prompt below
-// it. The walk continues down to the earliest such prompt, checking the turns it
-// picks up on the way. Reaching back may cost one more page: if the page would
-// then hold more than twice limit messages or twice the activity and byte
-// bounds, it keeps its original end.
 func (s *Store) extendPageToTurnPrompts(ctx context.Context, conversationID string, walk *conversationPageWalk, limit int64) error {
 	kept := len(walk.taken)
 	from := 0
@@ -4246,11 +3731,6 @@ func (s *Store) extendPageToTurnPrompts(ctx context.Context, conversationID stri
 	}
 }
 
-// LoadConversationSnapshotPage reads a bounded slice ending immediately before
-// beforeSequence. Zero starts at the live edge. limit counts messages; activities
-// in between come along, within the bounds above. A page ends between two turns
-// and reaches back to the prompt of every turn on it, so a turn is not shown
-// without its prompt unless keeping them together would overflow the bounds.
 func (s *Store) LoadConversationSnapshotPage(
 	ctx context.Context,
 	conversationID string,
@@ -4260,12 +3740,6 @@ func (s *Store) LoadConversationSnapshotPage(
 	return s.loadConversationSnapshotRange(ctx, conversationID, beforeSequence, 0, limit, true)
 }
 
-// LoadConversationSnapshotRange is LoadConversationSnapshotPage with a floor:
-// rows at or below afterSequence are left out, so a client that holds them reads
-// only the tail. AfterSequence echoes the floor when it applied. A floor below
-// the visible history is not applied, because the client then holds rows the
-// conversation no longer shows and needs the whole page. HasMoreBefore with an
-// applied floor means rows between the floor and OldestSequence were left out.
 func (s *Store) LoadConversationSnapshotRange(
 	ctx context.Context,
 	conversationID string,
@@ -4275,8 +3749,6 @@ func (s *Store) LoadConversationSnapshotRange(
 	return s.loadConversationSnapshotRange(ctx, conversationID, beforeSequence, afterSequence, limit, true)
 }
 
-// loadConversationSnapshotRange skips the lazy auth reconciliation write when
-// reconcile is false, so read-only callers such as find stay off the writer lock.
 func (s *Store) loadConversationSnapshotRange(
 	ctx context.Context,
 	conversationID string,
@@ -4292,8 +3764,6 @@ func (s *Store) loadConversationSnapshotRange(
 		return ConversationSnapshot{}, fmt.Errorf("select conversation %s: %w", conversationID, err)
 	}
 
-	// Targeted lazy reconciliation of legacy demands, using durable provider
-	// evidence. Ordinary snapshots remain read-only and avoid the writer lock.
 	if account := conversationToDomain(conv).Account; reconcile && account != nil && account.ReauthRequiredAt != nil {
 		reconciled, reconcileErr := s.ReconcileConversationAuthentication(ctx, conversationID, "", "", time.Now())
 		if reconcileErr != nil {
@@ -4319,8 +3789,6 @@ func (s *Store) loadConversationSnapshotRange(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
-	// The floor bounds the rows; visibleAfterSequence alone still decides which
-	// turns are visible, because a positive value there means a context reset.
 	floor := visibleAfterSequence
 	if afterSequence <= 0 || afterSequence < visibleAfterSequence {
 		afterSequence = 0
@@ -4364,7 +3832,6 @@ func (s *Store) loadConversationSnapshotRange(
 		return ConversationSnapshot{}, err
 	}
 
-	// Only the batches this page's messages belong to, not the whole history.
 	batchedDeliveries := s.conversationBatchedDeliveriesInRange(ctx, conversationID, max(oldest, floor+1), beforeSequence)
 
 	snapshot := ConversationSnapshot{
@@ -4389,8 +3856,6 @@ func (s *Store) loadConversationSnapshotRange(
 		presentation.filterInactiveProviderTurn(&turn)
 		snapshot.Turns = append(snapshot.Turns, turn)
 	}
-	// SQL returns newest-first so LIMIT is useful; the API contract remains
-	// oldest-first inside each page.
 	for i := len(messageRows) - 1; i >= 0; i-- {
 		if messageRows[i].Sequence >= oldest && messageRows[i].Sequence > floor {
 			snapshot.Messages = append(snapshot.Messages, messageToDomain(messageRows[i]))
@@ -4409,8 +3874,6 @@ func (s *Store) conversationVisibleAfterSequence(
 	conv gen.Conversation,
 ) (int64, error) {
 	if conv.Scope == domain.ConversationScopeSession && conv.SessionID != nil {
-		// An adopted import hides the provider's partial replay; the chat service
-		// shows the import archive below it instead.
 		raw, err := s.qr.GetSessionImportSource(ctx, *conv.SessionID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, nil
@@ -4482,8 +3945,6 @@ func conversationTurnVisibleAfterSequence(row gen.ConversationTurn, conv gen.Con
 	return row.HandledBySessionID == *conv.CurrentSessionID
 }
 
-// LoadConversationSnapshot reads a whole conversation. Items come back ordered by
-// sequence so the caller never has to sort.
 func (s *Store) LoadConversationSnapshot(
 	ctx context.Context,
 	conversationID string,
@@ -4496,8 +3957,6 @@ func (s *Store) LoadConversationSnapshot(
 		return ConversationSnapshot{}, fmt.Errorf("select conversation %s: %w", conversationID, err)
 	}
 
-	// Targeted lazy reconciliation of legacy demands, using durable provider
-	// evidence. Ordinary snapshots remain read-only and avoid the writer lock.
 	if account := conversationToDomain(conv).Account; account != nil && account.ReauthRequiredAt != nil {
 		reconciled, reconcileErr := s.ReconcileConversationAuthentication(ctx, conversationID, "", "", time.Now())
 		if reconcileErr != nil {
@@ -4523,9 +3982,6 @@ func (s *Store) LoadConversationSnapshot(
 	if err != nil {
 		return ConversationSnapshot{}, err
 	}
-	// Messages and activities exclude anything attached to a rolled-back turn: the
-	// agent has forgotten those, and a timeline that still showed them would be
-	// describing a conversation the agent is not in.
 	messageRows, err := s.qr.SelectConversationMessages(ctx, conversationID)
 	if err != nil {
 		return ConversationSnapshot{}, fmt.Errorf("select messages: %w", err)
@@ -4604,16 +4060,10 @@ func (p conversationHistoryPresentation) filterInactiveProviderTurn(turn *domain
 	}
 	providerScopeID, known := p.branchProviderScopes[turn.BranchID]
 	if known && providerScopeID != p.activeProviderScopeID {
-		// The opaque id remains durable in SQLite, but exposing it on the active
-		// snapshot would draw rollback/edit controls that the current provider can
-		// never honor.
 		turn.ProviderTurnID = ""
 	}
 }
 
-// conversationHistoryPresentation scopes edit affordances to the provider that
-// currently owns the conversation. Provider boundaries are parented lineage
-// nodes, but unlike an edit branch they replace no human prompt.
 func (s *Store) conversationHistoryPresentation(
 	ctx context.Context,
 	conversationID string,
@@ -4700,11 +4150,6 @@ func conversationBranchPointsForProviderBinding(
 	return points
 }
 
-/* ---- helpers ---------------------------------------------------------- */
-
-// turnIDFor resolves a provider turn id to AO's turn id, or nil when the turn is
-// unknown. An item with no turn still belongs in the timeline, so an unresolved
-// lookup is not an error.
 func (s *Store) turnIDFor(ctx context.Context, conversationID, providerTurnID string) sql.NullString {
 	if providerTurnID == "" {
 		return sql.NullString{}
@@ -4810,12 +4255,6 @@ func conversationBranchListToDomain(row gen.SelectConversationBranchesRow) domai
 	}
 }
 
-// decodeJSONColumn reads one of the conversation's latest-wins JSON columns.
-//
-// A payload this build cannot parse yields nil rather than a zero value, which
-// matters because nil is how a reader learns the provider never reported. A
-// half-decoded account or thread state would be worse than none: only the first
-// looks authoritative.
 func decodeJSONColumn[T any](column sql.NullString) *T {
 	if !column.Valid || column.String == "" {
 		return nil
@@ -4827,10 +4266,6 @@ func decodeJSONColumn[T any](column sql.NullString) *T {
 	return &value
 }
 
-// usageFromRow returns nil when the provider never reported, so a client can tell
-// "no usage yet" from "a conversation using zero tokens" -- the second cannot
-// happen, and showing an empty meter for the first would be a claim AO has not
-// earned.
 func usageFromRow(row gen.Conversation) *domain.ConversationUsage {
 	if !row.ContextUsed.Valid && !row.UsageTotalTokens.Valid && !row.UsageCost.Valid {
 		return nil
@@ -4858,8 +4293,6 @@ func nullableCost(value *float64) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: *value, Valid: true}
 }
 
-// rateLimitsFromRow reconstitutes the quota position, restoring the port's
-// negative "not reported" convention for a window the provider omitted.
 func rateLimitsFromRow(row gen.Conversation) *domain.ConversationRateLimits {
 	if !row.RateLimitPrimaryPercent.Valid && !row.RateLimitSecondaryPercent.Valid {
 		return nil
@@ -4917,9 +4350,6 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 	}
 	if row.DiffJson != "" {
 		var diff domain.ConversationTurnDiff
-		// A payload this build cannot parse is dropped rather than surfaced half
-		// decoded: a diff summary that lists some of the files is worse than one
-		// that admits it has nothing, because only the first looks authoritative.
 		if err := json.Unmarshal([]byte(row.DiffJson), &diff); err == nil {
 			turn.Diff = &diff
 		}
@@ -4930,16 +4360,12 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 	}
 	if row.ArtifactsJson != "" {
 		var artifacts domain.ConversationTurnArtifacts
-		// Dropped whole when unreadable, like the diff: a partial list would look complete.
 		if err := json.Unmarshal([]byte(row.ArtifactsJson), &artifacts); err == nil && len(artifacts.Files) > 0 {
 			turn.Artifacts = &artifacts
 		}
 	}
 	if row.PlanJson != "" {
 		var plan domain.ConversationPlan
-		// Dropped rather than surfaced half decoded, the same rule the diff follows: a
-		// plan showing some of its steps is worse than one that admits it has nothing,
-		// because only the first looks like the agent's actual plan.
 		if err := json.Unmarshal([]byte(row.PlanJson), &plan); err == nil {
 			turn.Plan = &plan
 		}
@@ -5002,9 +4428,6 @@ func activityToDomain(row gen.ConversationActivity) domain.ConversationActivity 
 	return activity
 }
 
-// ProviderEventsSince reads the raw provider-event archive forward from an id.
-// This is the recovery path: when a projection turns out to be wrong, these rows
-// are the only account of what the provider actually said.
 func (s *Store) ProviderEventsSince(
 	ctx context.Context,
 	conversationID string,
@@ -5039,9 +4462,6 @@ type retryProviderInputItem struct {
 	ContentCount int    `json:"contentCount,omitempty"`
 }
 
-// RetryPrompt returns the durable human prompt of a failed turn, for
-// re-dispatching it as a new turn. The content is loaded from AO's own rows
-// rather than from a client request that could be stale or substituted.
 func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) (domain.RetryPrompt, error) {
 	row, err := s.qr.SelectRetryableConversationPrompt(ctx, gen.SelectRetryableConversationPromptParams{
 		ID: turnID, ConversationID: conversationID,
@@ -5082,8 +4502,6 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 			return domain.RetryPrompt{}, fmt.Errorf("decode steer input %s: %w", turnID, err)
 		}
 		if steer.ProviderInputStoredOnTurn && steer.ProviderInputText == prompt.ProviderInputText {
-			// Older turns could save the first batch steer in this field instead of
-			// the opening input. Its activity still identifies that steer.
 			initialText = prompt.Text
 			initialWasRendered = false
 		}
@@ -5149,7 +4567,6 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 	return prompt, nil
 }
 
-// RetryTurnIDForSource returns the retry attempt already linked to a source.
 func (s *Store) RetryTurnIDForSource(ctx context.Context, conversationID, sourceTurnID string) (string, bool, error) {
 	row, err := s.qr.SelectConversationRetryTurnIDBySource(ctx, gen.SelectConversationRetryTurnIDBySourceParams{
 		ConversationID: conversationID,
@@ -5164,10 +4581,8 @@ func (s *Store) RetryTurnIDForSource(ctx context.Context, conversationID, source
 	return row, true, nil
 }
 
-// ErrQueuedEditDeliveryConflict refuses reuse of a key for a different mutation.
 var ErrQueuedEditDeliveryConflict = errors.New("queued edit delivery key reused")
 
-// QueuedEditDelivery finds the fingerprint of an atomically accepted queue edit.
 func (s *Store) QueuedEditDelivery(ctx context.Context, conversationID, clientMessageID string) (string, bool, error) {
 	hash, err := s.conversationReader(ctx).SelectConversationQueuedEditDelivery(ctx,
 		gen.SelectConversationQueuedEditDeliveryParams{ConversationID: conversationID, ClientMessageID: clientMessageID})
@@ -5198,7 +4613,6 @@ func reserveConversationDelivery[Row, Delivery any](
 	return toDomain(row), rows == 1, nil
 }
 
-// EditDelivery loads the durable outcome for one caller-owned inline edit key.
 func (s *Store) EditDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID string,
@@ -5217,8 +4631,6 @@ func (s *Store) EditDelivery(
 	return editDeliveryToDomain(row), true, nil
 }
 
-// ReserveEditDelivery claims a client handle before anchor lookup or provider
-// I/O. created is false when another request already owns the handle.
 func (s *Store) ReserveEditDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID, requestJSON string,
@@ -5246,8 +4658,6 @@ func (s *Store) ReserveEditDelivery(
 	)
 }
 
-// RecoverCompletedEditDelivery uses provider completion as proof of acceptance.
-// A queued, bound, or failed turn alone does not prove provider execution.
 func (s *Store) RecoverCompletedEditDelivery(ctx context.Context, conversationID, clientMessageID string, now time.Time) error {
 	row, err := s.conversationReader(ctx).SelectCompletedEditReplacement(ctx, gen.SelectCompletedEditReplacementParams{
 		ConversationID: conversationID, ClientMessageID: clientMessageID,
@@ -5262,7 +4672,6 @@ func (s *Store) RecoverCompletedEditDelivery(ctx context.Context, conversationID
 	return s.CompleteEditDelivery(ctx, conversationID, clientMessageID, row.ParentBranchID.String, turn.BranchID, turn, now)
 }
 
-// BeginEditProviderWork fences retries before any provider operation can occur.
 func (s *Store) BeginEditProviderWork(ctx context.Context, conversationID, clientMessageID, generation string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -5278,9 +4687,6 @@ func (s *Store) BeginEditProviderWork(ctx context.Context, conversationID, clien
 	return nil
 }
 
-// CompleteEditDelivery attaches the replacement turn to its branch and records
-// the replayable accepted result in one transaction. A crash cannot publish one
-// fact without the other.
 func (s *Store) CompleteEditDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID, sourceBranchID, activeBranchID string,
@@ -5319,8 +4725,6 @@ func (s *Store) CompleteEditDelivery(
 	})
 }
 
-// RejectEditDelivery settles a definitive edit non-acceptance for replay after
-// active lineage changes or daemon restart.
 func (s *Store) RejectEditDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID string,
@@ -5369,7 +4773,6 @@ func editDeliveryToDomain(row gen.ConversationEditDelivery) domain.ConversationE
 	return delivery
 }
 
-// SteerDelivery loads the durable outcome for one caller-owned idempotency key.
 func (s *Store) SteerDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID string,
@@ -5388,9 +4791,6 @@ func (s *Store) SteerDelivery(
 	return steerDeliveryToDomain(row), true, nil
 }
 
-// ReserveSteerDelivery claims a client handle before provider I/O. created is
-// false when another controller or a previous process already owns the handle;
-// callers must interpret the returned durable state instead of dispatching.
 func (s *Store) ReserveSteerDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID, requestJSON string,
@@ -5418,9 +4818,6 @@ func (s *Store) ReserveSteerDelivery(
 	)
 }
 
-// CompleteSteerDelivery records the visible timeline row and accepted provider
-// result together. A crash can therefore leave either an accepted replay or an
-// unresolved reservation, never an accepted result without its visible cause.
 func (s *Store) CompleteSteerDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID, providerTurnID string,
@@ -5430,7 +4827,6 @@ func (s *Store) CompleteSteerDelivery(
 	return s.CompleteSteerBatchDelivery(ctx, conversationID, clientMessageID, providerTurnID, activity, nil, now)
 }
 
-// CompleteSteerBatchDelivery records the steer receipt and all source links together.
 func (s *Store) CompleteSteerBatchDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID, providerTurnID string,
@@ -5481,8 +4877,6 @@ func (s *Store) CompleteSteerBatchDelivery(
 	})
 }
 
-// RejectSteerDelivery settles a provider-declared non-acceptance. Retrying the
-// same handle replays this typed result without contacting the provider again.
 func (s *Store) RejectSteerDelivery(
 	ctx context.Context,
 	conversationID, clientMessageID string,
@@ -5522,8 +4916,6 @@ func steerDeliveryToDomain(row gen.ConversationSteerDelivery) domain.Conversatio
 	return delivery
 }
 
-// SettleReviewChatWork closes the previous review epoch before a downgrade or
-// configuration replacement. There may be durable work without a live process.
 func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -5546,8 +4938,6 @@ func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now t
 	})
 }
 
-// RebindUnansweredBranchProvider points a branch that never had a turn at the
-// provider conversation that replaced one its provider never saved.
 func (s *Store) RebindUnansweredBranchProvider(ctx context.Context, conversationID, branchID, previous, provider string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -5569,8 +4959,6 @@ WHERE id = ? AND conversation_id = ? AND provider_conversation_id = ?
 	return nil
 }
 
-// batchDeliveryKind is how a batch reached the provider: by the steer named,
-// or with no steer, in a queue drain.
 func batchDeliveryKind(steerActivityID string) string {
 	if steerActivityID != "" {
 		return "steer"
@@ -5578,9 +4966,6 @@ func batchDeliveryKind(steerActivityID string) string {
 	return "drain"
 }
 
-// conversationBatchedDeliveries reads where each batched queued turn was
-// delivered, as recorded when its batch completed. The links only place report
-// lines, so a failed read leaves them out rather than failing the snapshot.
 func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationID string) []domain.ConversationBatchedDelivery {
 	turns, err := s.qr.ListConversationBatchedTurns(ctx, conversationID)
 	if err != nil {
@@ -5594,9 +4979,6 @@ func (s *Store) conversationBatchedDeliveries(ctx context.Context, conversationI
 	return out
 }
 
-// conversationBatchedDeliveriesInRange reads the deliveries a page needs: every
-// member of a batch with a message in [from, before), siblings included, so a
-// drain finds its human message. A failed read leaves them out.
 func (s *Store) conversationBatchedDeliveriesInRange(ctx context.Context, conversationID string, from, before int64) []domain.ConversationBatchedDelivery {
 	turns, err := s.qr.ListConversationBatchedTurnsInRange(ctx, gen.ListConversationBatchedTurnsInRangeParams{
 		ConversationID: conversationID, FromSequence: from, BeforeSequence: before,

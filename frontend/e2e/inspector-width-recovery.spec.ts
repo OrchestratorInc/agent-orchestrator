@@ -1,16 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openInspector } from "./support/open-inspector";
 
-// Zoom or a narrow window caps the inspector at its 300px floor, which wraps
-// the top-bar field (Browser URL, Files filter) to a second row. Switching tabs
-// there re-runs the width restore against that cap; widening again must grow
-// the rail back and unwrap the field instead of leaving both pinned.
-
 async function inspectorWidth(page: Page) {
 	return (await page.locator("#inspector").boundingBox())?.width ?? 0;
 }
 
-// The rail springs between widths; wait until two reads agree.
 async function settledInspectorWidth(page: Page) {
 	let previous = -1;
 	await expect
@@ -30,7 +24,6 @@ async function isBelowTabs(page: Page, field: Locator) {
 	return Boolean(tabs && box && box.y >= tabs.y + tabs.height);
 }
 
-// Starts from a 1440px window, the width the spec widens back to.
 async function narrowSwitchAndWiden(page: Page, inspector: Locator, tab: string, field: Locator) {
 	await expect.poll(() => isBelowTabs(page, field)).toBe(false);
 	const wide = await settledInspectorWidth(page);
@@ -54,7 +47,6 @@ test("@P0 Browser grows back and unwraps its URL field after a narrow-window tab
 	await expect(address).toBeVisible();
 
 	const wide = await narrowSwitchAndWiden(page, inspector, "Browser", address);
-	// Pressing the resize handle without moving must not pin the narrow width either.
 	const handle = await page.getByTestId("inspector-resize-handle").boundingBox();
 	if (!handle) throw new Error("inspector resize handle not visible");
 	await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
@@ -91,9 +83,6 @@ test("@P0 Browser grows back when the sidebar collapses after the window narrowe
 	await expect(address).toBeVisible();
 	await settledInspectorWidth(page);
 
-	// Narrowing must not write the 300px cap into the width: collapsing the
-	// sidebar widens the split without a window resize, and the rail has to
-	// grow into that room on its own.
 	await page.setViewportSize({ width: 960, height: 720 });
 	await expect.poll(() => inspectorWidth(page)).toBeLessThan(301);
 	await expect.poll(() => isBelowTabs(page, address)).toBe(true);

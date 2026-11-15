@@ -638,7 +638,6 @@ func (s *duplicateFallbackStore) AppendUserMessage(ctx context.Context, conversa
 	session domain.SessionID, generation string, msg domain.ConversationMessage,
 	turnID string, now time.Time) (bool, error) {
 	if s.duplicate {
-		// Simulate a second writer winning after SteerOrSend's initial lookup.
 		return false, nil
 	}
 	return s.Store.AppendUserMessage(ctx, conversationID, session, generation, msg, turnID, now)

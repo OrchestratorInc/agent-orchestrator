@@ -187,7 +187,6 @@ func TestGeminiKeySaveAcceptsCommentedSettings(t *testing.T) {
 	if auth["selectedType"] != "gemini-api-key" || settings["ui"].(map[string]any)["theme"] != "custom" || settings["docs"] != "https://example.com/not//a-comment" {
 		t.Fatalf("settings not kept: %s", data)
 	}
-	// Only the selected type changes: comments and layout stay.
 	if want := strings.Replace(commented, `"oauth-personal"`, `"gemini-api-key"`, 1); string(data) != want {
 		t.Fatalf("settings rewritten:\n%s\nwant:\n%s", data, want)
 	}
@@ -210,7 +209,6 @@ func TestGeminiKeySaveFollowsGeminiCLIHomeAndReachesSessions(t *testing.T) {
 	if got := geminiEnv(t, home); !strings.Contains(got, "GEMINI_API_KEY=sk-gemini\n") {
 		t.Fatalf("key not saved under GEMINI_CLI_HOME: %q", got)
 	}
-	// Gemini skips ~/.gemini/.env in untrusted folders, so sessions get it too.
 	if inject, withhold, err := providerkeys.ForSession(dataDir, "gemini"); err != nil || len(withhold) != 0 || inject["GEMINI_API_KEY"] != "sk-gemini" {
 		t.Fatalf("Gemini sessions: inject=%v withhold=%v err=%v", inject, withhold, err)
 	}

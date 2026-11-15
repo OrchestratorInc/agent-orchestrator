@@ -10,12 +10,6 @@ import { PIERRE_HIGHLIGHTER } from "../components/diffs/pierreTheme";
 const PIERRE_FILE_THEMES = { dark: "github-dark", light: "github-light" } as const;
 const PIERRE_FILE_THEME_NAMES = [PIERRE_FILE_THEMES.dark, PIERRE_FILE_THEMES.light] as const;
 
-/**
- * Starts resolving the selected file's Shiki grammar while its contents are
- * still loading. Pierre can render plain text before its lazy highlighter is
- * ready; waiting for this signal prevents that first unhighlighted paint.
- * A failed grammar load still settles so unsupported files remain readable.
- */
 export function usePierreFileHighlightReady(path: string | null): boolean {
 	const language: SupportedLanguages | null = path ? getFiletypeFromFileName(path) : null;
 	const [settledLanguage, setSettledLanguage] = useState<SupportedLanguages | null>(null);

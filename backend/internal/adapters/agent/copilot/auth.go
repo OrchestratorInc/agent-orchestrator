@@ -15,7 +15,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -29,8 +28,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// gitHubCLITokenEnvVars take precedence over the GitHub CLI's stored
-// credentials for github.com, in this order.
 var gitHubCLITokenEnvVars = []string{"GH_TOKEN", "GITHUB_TOKEN"}
 
 var copilotTokenEnvVars = []string{
@@ -39,9 +36,6 @@ var copilotTokenEnvVars = []string{
 	"GITHUB_TOKEN",
 }
 
-// copilotLocalAuthStatus follows Copilot CLI's own credential order: token
-// environment variables first (one silently overrides a stored login), then
-// Copilot's stored login, then the GitHub CLI. A BYOK provider is the fallback.
 func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -57,7 +51,6 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 		return status, true, nil
 	}
 	if copilotBYOKConfigured() {
-		// A bring-your-own provider; its API key, if any, is optional.
 		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("COPILOT_PROVIDER_BASE_URL"))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
@@ -72,8 +65,6 @@ func copilotStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	if home == "" {
 		return ports.AgentAuthStatusUnknown, false, nil
 	}
-	// Copilot credentials can come from several independent sources. A corrupt
-	// config file must not prevent the documented GitHub CLI token fallback.
 	configPath := filepath.Join(copilotHomeDir(home), "config.json")
 	configStatus, configOK, _ := copilotConfigAuthStatus(configPath)
 	if configOK {
@@ -86,9 +77,6 @@ func copilotStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// copilotBYOKConfigured recognizes Copilot CLI's documented local BYOK setup.
-// An API key is optional because providers such as local Ollama do not require
-// one; the endpoint and model identify a usable provider configuration.
 func copilotBYOKConfigured() bool {
 	return strings.TrimSpace(os.Getenv("COPILOT_PROVIDER_BASE_URL")) != "" &&
 		strings.TrimSpace(os.Getenv("COPILOT_MODEL")) != ""
@@ -140,8 +128,6 @@ func copilotGHAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		return ports.AgentAuthStatusUnknown, false, probeCtx.Err()
 	}
 	if err == nil && copilotUsableToken(string(out)) {
-		// GH_TOKEN and GITHUB_TOKEN override the GitHub CLI's stored login, and
-		// `gh auth token` then prints that token; hosts.yml's user is not its owner.
 		for _, name := range gitHubCLITokenEnvVars {
 			if copilotUsableToken(os.Getenv(name)) {
 				ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodToken))
@@ -153,14 +139,9 @@ func copilotGHAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, erro
 		ports.RecordAuthEvidence(ctx, evidence)
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	// GitHub CLI state is only one Copilot credential source. A negative result
-	// cannot rule out Copilot's own stored OAuth or token credentials.
 	return ports.AgentAuthStatusUnknown, false, nil
 }
 
-// gitHubCLIUser returns the github.com login the GitHub CLI is signed in as,
-// read from its hosts.yml (GH_CONFIG_DIR, then XDG_CONFIG_HOME, then
-// ~/.config/gh). Tokens in the file are never read.
 func gitHubCLIUser(ctx context.Context) string {
 	if ctx.Err() != nil {
 		return ""
@@ -196,8 +177,6 @@ func gitHubCLIUser(ctx context.Context) string {
 		if !inGitHub {
 			continue
 		}
-		// The active account is the host's own "user:" entry, at the indent of
-		// the host's first child; logins listed under "users:" sit deeper.
 		if childIndent < 0 {
 			childIndent = indent
 		}

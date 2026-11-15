@@ -21,8 +21,6 @@ import { usePersistentGutterUtility } from "./usePersistentGutterUtility";
 
 const metadataCache = new Map<string, FileDiffMetadata>();
 const MAX_METADATA_CACHE_ENTRIES = 100;
-// Same bound as the review list: bigger files keep the "more context" row and
-// load on click instead of being fetched up front.
 const END_OF_FILE_PREFETCH_MAX_BYTES = 128 * 1024;
 
 function cachedMetadata(detail: WorkspaceFileDetail): FileDiffMetadata | null {
@@ -78,9 +76,7 @@ export function AoDiffFile({
 	split: boolean;
 	commitSha?: string;
 	source?: FilesSource;
-	/** Opt-in (Files panel preview): the caller's toolbar already names the file. */
 	hideFileHeader?: boolean;
-	/** Opt-in extra surface CSS appended after the shared surface CSS. */
 	extraCSS?: string;
 }) {
 	const { t } = useTranslation();
@@ -114,9 +110,6 @@ export function AoDiffFile({
     return fetchWorkspaceFileRevision({
      commitSha,sessionId,path:detail.path,side,hostId,
      scope:source.kind === "snapshot" ? "committed" : scope,
-     // Detail fingerprints and manifest versions are different fences. For
-     // annotation navigation verify fresh rendered rows instead of sending a
-     // detail hint to the manifest-fenced revision endpoint.
      workspaceVersion:source.kind === "snapshot" || annotationRange ? undefined : detail.workspaceVersion,
      view:source.kind === "snapshot" ? source.view : undefined,
      commitShas:source.kind === "snapshot" ? source.commitShas : undefined,
@@ -135,9 +128,6 @@ export function AoDiffFile({
 		},
 		[commitSha, detail.path, detail.previousPath, detail.workspaceVersion, scope, sessionId, hostId, source, t, annotationRange],
 	);
-	// The detail patch is git's --unified=3, which endsAtLastHunk assumes. When it
-	// proves the file ends at the last hunk, load the full contents up front so
-	// Pierre has no dead "More unchanged context may be available" row to draw.
 	const endsAtEndOfFile = metadata != null && detail.size <= END_OF_FILE_PREFETCH_MAX_BYTES && endsAtLastHunk(metadata);
 	const endOfFileContents = useQuery({
 		queryKey: hostId ? ["files-preview-end-of-file", hostId, sessionId, source.kind === "snapshot" ? JSON.stringify(source) : source.kind === "pull_request" ? source.url : "workspace", scope, commitSha ?? "", detail.path, detail.fileFingerprint ?? "", detail.workspaceVersion ?? "", source.kind === "pull_request" ? `${source.number}:${source.snapshot ?? ""}` : "", metadata && (endsAtEndOfFile || annotationRange) ? patchIdentity(metadata) : "", annotationRange?.requestKey ?? ""] as const
@@ -174,8 +164,6 @@ export function AoDiffFile({
 		});
 	}, [annotation, detail.fileFingerprint, detail.path, detail.previousPath, detail.workspaceVersion, rows, scope]);
 
-	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
-	// session has a Chat composer.
 	const askInChat = useAskInChat(sessionId, hostId);
 	const captureSource = fileReferenceSource(source, commitSha);
 	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, true), ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined);

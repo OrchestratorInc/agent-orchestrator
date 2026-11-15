@@ -3,7 +3,6 @@ import type { TFunction } from "i18next";
 import { appI18n } from "../i18n";
 
 export function daemonFailureMessage(status: DaemonStatus, t: TFunction = appI18n.t): string {
-	// Prefer the daemon-provided English diagnostic when present.
 	if (status.message) return status.message;
 	if (status.state === "starting") return t("daemon.message.starting");
 	return t("daemon.message.notReady");

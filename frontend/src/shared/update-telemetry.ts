@@ -1,25 +1,3 @@
-/**
- * Update-outcome telemetry, owned by the main process.
- *
- * The app downloads updates automatically and installs them on quit, yet a
- * large share of installs sit on an old version for weeks. A stuck install
- * looks identical whether the check failed, the download failed, or the user
- * simply never quits, so these outcomes separate the cases.
- *
- * This lives in the main process rather than the renderer because the renderer
- * only ever sees *broadcast* statuses, and `auto-updater.ts` deliberately
- * suppresses the UI status for automatic checks: on failure it logs, restores
- * the previous status, and returns. Automatic checks run hourly and are how
- * updates normally happen, so a renderer-side observer would miss precisely the
- * silent-failure case this exists to diagnose. Reporting at the operation
- * boundary also makes `phase` and `to_version` authoritative, since only the
- * main process knows which operation was running and what it was fetching.
- *
- * Only enum-like fields cross the wire. The updater's raw message can carry
- * feed URLs and local staging paths, so it is bucketed into a category here and
- * never forwarded.
- */
-
 export type UpdateFailureCategory =
 	| "network"
 	| "signature"
@@ -29,10 +7,8 @@ export type UpdateFailureCategory =
 	| "not_supported"
 	| "unknown";
 
-/** Which stage of the update was running when the outcome occurred. */
 export type UpdatePhase = "check" | "download";
 
-/** Whether the update ran on the hourly timer or because the user asked. */
 export type UpdateTrigger = "automatic" | "manual";
 
 export type UpdateOutcome = {
@@ -48,23 +24,10 @@ export type UpdateOutcome = {
 	target_bytes?: number;
 };
 
-/**
- * True when the error is a Chromium network-stack failure (`net::ERR_*`). A
- * wedged network stack makes every updater request fail this way until the app
- * restarts, so the updater keys user-facing restart guidance off this (#3526).
- * Anchored at the start: that is how Chromium surfaces these errors.
- */
 export function isNetErrorMessage(message: string | undefined): boolean {
 	return /^net::/i.test(message ?? "");
 }
 
-/**
- * Buckets an updater error into a safe category.
- *
- * electron-updater surfaces failures as free-text, so this matches on
- * substrings. Anything unrecognized becomes "unknown" rather than leaking the
- * original text.
- */
 export function updateFailureCategory(message: string | undefined): UpdateFailureCategory {
 	const text = (message ?? "").toLowerCase();
 	if (text === "") return "unknown";
@@ -81,7 +44,6 @@ export function updateFailureCategory(message: string | undefined): UpdateFailur
 	return "unknown";
 }
 
-/** Builds the failure outcome for an updater error. */
 export function updateFailureOutcome(
 	message: string | undefined,
 	phase: UpdatePhase,
@@ -97,10 +59,8 @@ export function updateFailureOutcome(
 	};
 }
 
-/** Longest release-note text worth pushing to the renderer. */
 export const RELEASE_NOTES_MAX_CHARS = 4000;
 
-/** Trims and bounds release notes that have already been flattened to text. */
 export function boundPlainReleaseNotes(notes: string | null | undefined): string | undefined {
 	const text = (notes ?? "").trim();
 	if (text === "") return undefined;
@@ -109,16 +69,10 @@ export function boundPlainReleaseNotes(notes: string | null | undefined): string
 		: text;
 }
 
-// Attribute values may themselves contain ">", so anchors are matched quote-aware.
 const HTML_ANCHOR_PATTERN = /<a\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/a>/gi;
-// Only notes rendered as HTML (releases.atom) are rewritten; a Markdown body
-// from the API must pass through unchanged.
 const HTML_BLOCK_PATTERN = /<(?:p|ul|ol|li|div|h[1-6])(?:\s[^>]*)?>/i;
 
-/** Rewrites an HTML anchor as a Markdown link; mentions and non-https links keep only their text. */
 function htmlAnchorToMarkdown(_match: string, attributes: string, inner: string): string {
-	// Escaped only once it becomes a link label: a mention such as
-	// "@dependabot[bot]" must stay intact for the attribution cleanup.
 	const text = inner.replace(/<[^>]*>/g, "").trim();
 	const href = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')/i.exec(attributes);
 	const url = (href?.[1] ?? href?.[2] ?? "").replace(/&amp;/gi, "&");
@@ -126,17 +80,6 @@ function htmlAnchorToMarkdown(_match: string, attributes: string, inner: string)
 	return `[${text.replace(/[[\]]/g, "\\$&")}](${url})`;
 }
 
-/**
- * Flattens electron-updater's release notes into Markdown text.
- *
- * The value comes from the release feed, so it is remote content: it arrives as
- * a string or a per-version array, and for the GitHub provider it is the
- * release body rendered by releases.atom as HTML. Links, list items, bold and
- * code are rewritten as Markdown so the notes render the same as the release
- * body fetched from the API; every other tag is stripped rather than forwarded
- * so no call site can be tempted to inject it as markup. The result is
- * length-capped because a release body has no size limit.
- */
 export function normalizeReleaseNotes(
 	notes: string | Array<{ version?: string; note?: string | null }> | null | undefined,
 ): string | undefined {
@@ -149,15 +92,12 @@ export function normalizeReleaseNotes(
 	const markdown = isHtml
 		? raw
 			.replace(HTML_ANCHOR_PATTERN, htmlAnchorToMarkdown)
-			// The leading break keeps a nested item off its parent's line.
 			.replace(/<li(?:\s[^>]*)?>/gi, "\n- ")
 			.replace(/<h[1-6](?:\s[^>]*)?>/gi, "\n### ")
 			.replace(/<\/?(?:strong|b)(?:\s[^>]*)?>/gi, "**")
 			.replace(/<\/?code(?:\s[^>]*)?>/gi, "`")
 		: raw;
 	const text = markdown
-		// Keep block boundaries as line breaks before tags are dropped, so
-		// "<li>a</li><li>b</li>" does not collapse into "ab".
 		.replace(/<\/(p|div|li|ul|ol|h[1-6]|tr)>/gi, "\n")
 		.replace(/<br\s*\/?>/gi, "\n")
 		.replace(/<[^>]*>/g, "")
@@ -173,6 +113,5 @@ export function normalizeReleaseNotes(
 		.map((line) => line.trim())
 		.join("\n")
 		.trim();
-	// "</li>\n<li>" leaves a blank line that would make the list loose.
 	return boundPlainReleaseNotes(isHtml ? text.replace(/^(- .*)\n\n(?=- )/gm, "$1\n") : text);
 }

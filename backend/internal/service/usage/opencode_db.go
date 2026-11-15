@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	_ "modernc.org/sqlite" // register sqlite driver
+	_ "modernc.org/sqlite"
 )
 
 var openCodeChannelPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._]*$`)

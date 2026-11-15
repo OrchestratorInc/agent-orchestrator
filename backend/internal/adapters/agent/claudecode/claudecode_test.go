@@ -119,8 +119,6 @@ func TestNativeConversationExistsRequiresPersistedClaudeTranscript(t *testing.T)
 		t.Fatal("persisted transcript was not found")
 	}
 
-	// Project/session env is the environment Claude itself receives and must win
-	// over the daemon's ambient configuration directory.
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	exists, err = p.NativeConversationExists(context.Background(), ports.SessionRef{}, id,
 		map[string]string{"CLAUDE_CONFIG_DIR": configDir})
@@ -309,7 +307,6 @@ func TestGetLaunchCommandInjectsSessionID(t *testing.T) {
 		t.Fatalf("command %#v missing --session-id %q", cmd, wantUUID)
 	}
 
-	// No SessionID → no --session-id flag.
 	cmd, err = p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Prompt: "x"})
 	if err != nil {
 		t.Fatal(err)
@@ -464,7 +461,6 @@ func TestGetAgentHooksInstallsClaudeHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	settingsPath := filepath.Join(settingsDir, "settings.local.json")
-	// Pre-seed a user's own Stop hook + an unrelated setting; both must survive.
 	existing := `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my own stop hook","timeout":5}]}]},"permissions":{"defaultMode":"plan"}}`
 	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
@@ -474,7 +470,6 @@ func TestGetAgentHooksInstallsClaudeHooks(t *testing.T) {
 	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	// A second install must not duplicate AO hook commands.
 	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -494,40 +489,29 @@ func TestGetAgentHooksInstallsClaudeHooks(t *testing.T) {
 		t.Fatalf("hooks object missing: %s", data)
 	}
 
-	// Every managed command is installed exactly once under its event.
 	for _, spec := range claudeManagedHooks {
 		if got := countClaudeHookCommand(config.Hooks[spec.Event], spec.Command); got != 1 {
 			t.Fatalf("%s command %q count = %d, want 1", spec.Event, spec.Command, got)
 		}
 	}
-	// Existing user hook preserved.
 	if countClaudeHookCommand(config.Hooks["Stop"], "my own stop hook") != 1 {
 		t.Fatalf("existing Stop hook not preserved: %#v", config.Hooks["Stop"])
 	}
-	// Unrelated settings preserved.
 	if len(config.Permissions) == 0 {
 		t.Fatalf("unrelated settings clobbered: %s", data)
 	}
-	// SessionStart must fire on resume (and clear/compact/fork) as well as a
-	// fresh startup: a --resume relaunch otherwise never confirms the native
-	// session id under the new RuntimeLaunchID until the user types again (#4122).
 	if m := matcherForCommand(config.Hooks["SessionStart"], "ao hooks claude-code session-start"); m == nil || *m != "startup|resume|clear|compact|fork" {
 		t.Fatalf("SessionStart matcher = %v, want startup|resume|clear|compact|fork", m)
 	}
 	if m := matcherForCommand(config.Hooks["UserPromptSubmit"], "ao hooks claude-code user-prompt-submit"); m != nil {
 		t.Fatalf("UserPromptSubmit matcher = %v, want none", m)
 	}
-	// Notification and SessionEnd install with no matcher (they fire for all
-	// sub-types; the handler filters on the payload).
 	if m := matcherForCommand(config.Hooks["Notification"], "ao hooks claude-code notification"); m != nil {
 		t.Fatalf("Notification matcher = %v, want none", m)
 	}
 	if m := matcherForCommand(config.Hooks["SessionEnd"], "ao hooks claude-code session-end"); m != nil {
 		t.Fatalf("SessionEnd matcher = %v, want none", m)
 	}
-	// A turn ended by an API error fires StopFailure instead of Stop. It must
-	// be installed for every error type (no matcher), or such a turn leaves
-	// the session active.
 	if got := countClaudeHookCommand(config.Hooks["StopFailure"], "ao hooks claude-code stop-failure"); got != 1 {
 		t.Fatalf("StopFailure command count = %d, want 1: %#v", got, config.Hooks["StopFailure"])
 	}
@@ -543,9 +527,6 @@ func TestGetAgentHooksMigratesSessionStartMatcher(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Workspaces installed before #4122 registered SessionStart only under
-	// "startup". Reconcile must move the AO command onto the broader matcher
-	// without duplicating it or dropping a user's own startup hook.
 	existing := `{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"ao hooks claude-code session-start","timeout":30},{"type":"command","command":"custom startup hook","timeout":5}]}]}}`
 	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
 		t.Fatal(err)
@@ -585,7 +566,6 @@ func TestUninstallHooksRemovesClaudeHooks(t *testing.T) {
 	ctx := context.Background()
 	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
 
-	// Pre-seed a user's own Stop hook + an unrelated setting; both must survive.
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -619,14 +599,11 @@ func TestUninstallHooksRemovesClaudeHooks(t *testing.T) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	// No managed command survives; the SessionStart/UserPromptSubmit events,
-	// which held only AO hooks, are removed entirely.
 	for _, spec := range claudeManagedHooks {
 		if got := countClaudeHookCommand(config.Hooks[spec.Event], spec.Command); got != 0 {
 			t.Fatalf("%s command %q count = %d after uninstall, want 0", spec.Event, spec.Command, got)
 		}
 	}
-	// The user's own Stop hook and unrelated settings are preserved.
 	if countClaudeHookCommand(config.Hooks["Stop"], "my own stop hook") != 1 {
 		t.Fatalf("user Stop hook not preserved: %#v", config.Hooks["Stop"])
 	}
@@ -634,7 +611,6 @@ func TestUninstallHooksRemovesClaudeHooks(t *testing.T) {
 		t.Fatalf("unrelated settings clobbered: %s", data)
 	}
 
-	// Uninstall is idempotent: a second call is a clean no-op.
 	if err := p.UninstallHooks(ctx, workspace); err != nil {
 		t.Fatalf("second uninstall: %v", err)
 	}
@@ -694,8 +670,6 @@ func TestSessionInfoFalseWhenNoHookMetadata(t *testing.T) {
 	}
 }
 
-// countClaudeHookCommand counts how many hook entries under one event register
-// the given command — used to prove no duplicate AO hooks.
 func countClaudeHookCommand(groups []hooksjson.MatcherGroup, command string) int {
 	count := 0
 	for _, group := range groups {
@@ -708,8 +682,6 @@ func countClaudeHookCommand(groups []hooksjson.MatcherGroup, command string) int
 	return count
 }
 
-// matcherForCommand returns the matcher on the group that registers the given
-// command (nil if the group has no matcher).
 func matcherForCommand(groups []hooksjson.MatcherGroup, command string) *string {
 	for _, group := range groups {
 		for _, hook := range group.Hooks {
@@ -733,7 +705,6 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	// The hook-captured native id wins over the derived fallback.
 	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", "claude-native-1", "--", "continue from AO"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
@@ -741,7 +712,6 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 }
 
 func TestGetRestoreCommandAppendsConfiguredModelAndEffort(t *testing.T) {
-	// The caller's per-session tuning must reach native resume (#3218).
 	cmd, ok, err := (&Plugin{resolvedBinary: "claude"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Config:      ports.AgentConfig{Model: "  claude-opus-4-5  ", Effort: "  high  "},
 		Permissions: ports.PermissionModeBypassPermissions,
@@ -778,8 +748,6 @@ func TestGetRestoreCommandOmitsBlankConfiguredModel(t *testing.T) {
 }
 
 func TestGetRestoreCommandReappendsSystemPrompt(t *testing.T) {
-	// --resume rebuilds the system prompt from flags, so standing instructions
-	// (e.g. the orchestrator role) must be re-appended on restore.
 	cmd, ok, err := (&Plugin{resolvedBinary: "claude"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Permissions:  ports.PermissionModeBypassPermissions,
 		SystemPrompt: "You are an orchestrator.",
@@ -840,8 +808,6 @@ func TestGetRestoreCommandRejectsNonRegularSystemPromptFile(t *testing.T) {
 }
 
 func TestGetRestoreCommandFallsBackToDerivedUUID(t *testing.T) {
-	// No agentSessionId captured (pre-hook session) → derive deterministically
-	// from the AO session id, the explicit fallback.
 	cmd, ok, err := (&Plugin{resolvedBinary: "claude"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
 		Permissions: ports.PermissionModeBypassPermissions,
 		Session:     ports.SessionRef{ID: "sess-r"},
@@ -926,8 +892,6 @@ func TestManifestID(t *testing.T) {
 func TestEnsureWorkspaceTrustedCreatesEntry(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, ".claude.json")
-	// Seed an existing config with another project + a top-level key, to
-	// prove we preserve unrelated state.
 	seed := `{"userID":"abc","projects":{"/existing/proj":{"hasTrustDialogAccepted":true,"lastCost":1.5}}}`
 	if err := os.WriteFile(cfgPath, []byte(seed), 0o600); err != nil {
 		t.Fatal(err)
@@ -941,17 +905,14 @@ func TestEnsureWorkspaceTrustedCreatesEntry(t *testing.T) {
 	root := readJSON(t, cfgPath)
 	projects := root["projects"].(map[string]any)
 
-	// New entry trusted.
 	newEntry := projects[work].(map[string]any)
 	if newEntry["hasTrustDialogAccepted"] != true {
 		t.Fatalf("new entry not trusted: %#v", newEntry)
 	}
-	// Existing project preserved (including its other fields).
 	existing := projects["/existing/proj"].(map[string]any)
 	if existing["hasTrustDialogAccepted"] != true || existing["lastCost"].(float64) != 1.5 {
 		t.Fatalf("existing project clobbered: %#v", existing)
 	}
-	// Top-level key preserved.
 	if root["userID"] != "abc" {
 		t.Fatalf("top-level key clobbered: %#v", root["userID"])
 	}
@@ -1017,7 +978,6 @@ func TestEnsureWorkspaceTrustedIsIdempotentAndNoWriteWhenAlreadyTrusted(t *testi
 		t.Fatalf("ensureWorkspaceTrusted: %v", err)
 	}
 
-	// Already trusted → no rewrite → mtime unchanged.
 	info2, err := os.Stat(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1029,7 +989,7 @@ func TestEnsureWorkspaceTrustedIsIdempotentAndNoWriteWhenAlreadyTrusted(t *testi
 
 func TestEnsureWorkspaceTrustedCreatesMissingConfig(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, ".claude.json") // does not exist yet
+	cfgPath := filepath.Join(dir, ".claude.json")
 	work := "/fresh/worktree"
 
 	if err := ensureWorkspaceTrusted(cfgPath, work); err != nil {
@@ -1047,8 +1007,6 @@ func TestEnsureWorkspaceTrustedCreatesMissingConfig(t *testing.T) {
 func TestEnsureWorkspaceTrustedRefusesZeroByteConfig(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, ".claude.json")
-	// Simulate catching some other writer mid-truncate: the file exists
-	// but reads back as zero bytes.
 	if err := os.WriteFile(cfgPath, []byte{}, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1091,7 +1049,6 @@ func TestGetLaunchCommandEmitsToolAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Each list is one comma-joined value so a rule with spaces stays intact.
 	if !containsSubsequence(cmd, []string{"--allowedTools", "Read,Grep,Bash(git diff:*)"}) {
 		t.Fatalf("missing joined --allowedTools value; got %#v", cmd)
 	}
@@ -1267,10 +1224,6 @@ func TestInspectTerminalSurfaceSeparatesClaudeWorkFromComposer(t *testing.T) {
 	}
 }
 
-// Fixtures captured from Claude Code 2.1.273 during a real drain failure
-// (issue #5482): the composer is empty, but Claude paints a multi-line
-// non-dim statusline below the lower rule and transient non-dim chrome
-// between the rules. Provider chrome must never read as a human draft.
 func TestInspectTerminalSurfaceClaude273DoesNotReadChromeAsDraft(t *testing.T) {
 	plugin := &Plugin{}
 	rule := "\x1b[38;2;136;136;136m" + strings.Repeat("─", 118) + "\x1b[m"
@@ -1291,9 +1244,6 @@ func TestInspectTerminalSurfaceClaude273DoesNotReadChromeAsDraft(t *testing.T) {
 			wantEditor: ports.TerminalComposerEmpty,
 		},
 		{
-			// Mismatched rules make the boxed layout unknown, but the footer-free
-			// fallback still closes the composer at the rule below the prompt:
-			// the statusline below it is provider chrome, not a draft.
 			name: "unmatched composer rules do not read status chrome as draft",
 			output: "\x1b[38;5;244m" + strings.Repeat("─", 48) + "\x1b[39m\n" +
 				"\x1b[39m❯ \x1b[7m \x1b[0m\n" +
@@ -1303,9 +1253,6 @@ func TestInspectTerminalSurfaceClaude273DoesNotReadChromeAsDraft(t *testing.T) {
 			wantEditor: ports.TerminalComposerEmpty,
 		},
 		{
-			// Captured live from a stuck session: a bare default-styled
-			// "Claude Code" product label sits on the composer prompt row
-			// between matching rules. It is provider chrome, not a draft.
 			name: "provider product label on the prompt row is not a draft",
 			output: rule + "\n❯  Claude Code\n" + rule + "\n" +
 				"  glm-5.3 low 40.1k [Rate limited]\n" +
@@ -1315,7 +1262,6 @@ func TestInspectTerminalSurfaceClaude273DoesNotReadChromeAsDraft(t *testing.T) {
 			wantEditor: ports.TerminalComposerEmpty,
 		},
 		{
-			// The same label followed by real typed text stays a draft.
 			name: "human text after the label is still a draft",
 			output: rule + "\n❯  Claude Code review please\n" + rule + "\n" +
 				"  ⏵⏵ auto mode on (shift+tab to cycle)",
@@ -1361,14 +1307,8 @@ func containsSubsequence(values, needle []string) bool {
 	return false
 }
 
-// bypassNudgeGuard is the per-session flag-settings defaultMode that keeps
-// Claude's auto-mode default dialog out of a bypassPermissions launch.
 const bypassNudgeGuard = `{"permissions":{"defaultMode":"bypassPermissions"}}`
 
-// An explicit AO permission mode also rides as the flag-settings defaultMode,
-// which suppresses Claude's "Make auto mode your default permission mode?"
-// dialog for this session only. The default mode passes neither: its starting
-// mode stays Claude's own resolution from the user's settings.
 func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
 	tests := []struct {
 		permission ports.PermissionMode
@@ -1412,8 +1352,6 @@ func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
 	}
 }
 
-// The session's launch settings and the dialog guard go in one --settings
-// flag, so neither is dropped for the other.
 func TestLaunchSettingsShareOneSettingsFlagWithTheNudgeGuard(t *testing.T) {
 	p := &Plugin{resolvedBinary: "claude"}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -1435,9 +1373,6 @@ func TestLaunchSettingsShareOneSettingsFlagWithTheNudgeGuard(t *testing.T) {
 	}
 }
 
-// PreLaunch marks the dialog seen in the global config only for a launch in
-// AO's default mode whose user settings would make Claude offer it, and never
-// touches the user's settings or permission mode.
 func TestPreLaunchMarksAutoDefaultNudgeSeenOnlyWhenOffered(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1516,8 +1451,6 @@ func TestPreLaunchMarksAutoDefaultNudgeSeenOnlyWhenOffered(t *testing.T) {
 	}
 }
 
-// A workspace that is already trusted still gets the nudge flag, and a second
-// PreLaunch with nothing left to record does not rewrite the config.
 func TestPreLaunchMarksAutoDefaultNudgeSeenForTrustedWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, ".claude.json")
@@ -1551,10 +1484,6 @@ func TestPreLaunchMarksAutoDefaultNudgeSeenForTrustedWorkspace(t *testing.T) {
 	}
 }
 
-// Claude reads its settings and its global config from one directory: a
-// CLAUDE_CONFIG_DIR the launch environment sets, else the daemon's, else the
-// home directory (with settings in ~/.claude). A non-empty legacy .config.json
-// in the config directory is preferred over the global config path.
 func TestClaudeLaunchConfigPathsFollowTheLaunchConfigDir(t *testing.T) {
 	home := t.TempDir()
 	daemonDir := filepath.Join(t.TempDir(), "daemon-claude")
@@ -1602,10 +1531,6 @@ func TestClaudeLaunchConfigPathsFollowTheLaunchConfigDir(t *testing.T) {
 	}
 }
 
-// With a project CLAUDE_CONFIG_DIR, PreLaunch reads that directory's settings
-// and records trust and the nudge flag in its .claude.json, creating the
-// directory when Claude has not used it yet. The home and daemon configs are
-// left alone.
 func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 	home := t.TempDir()
 	daemonDir := t.TempDir()
@@ -1664,8 +1589,6 @@ func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 		t.Fatalf("daemon config dir written: %v", err)
 	}
 
-	// A profile Claude has not used yet is created, trusted, and, since its
-	// settings do not exist, left without the nudge flag.
 	fresh := filepath.Join(t.TempDir(), "new-profile")
 	if err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
 		WorkspacePath: workspace,
@@ -1682,8 +1605,6 @@ func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 		t.Fatalf("workspace not trusted in the fresh profile: %v", root)
 	}
 
-	// Without a launch override the daemon's CLAUDE_CONFIG_DIR is used: its
-	// settings already default to auto, so only trust is recorded.
 	if err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
 		WorkspacePath: workspace,
 		Permissions:   ports.PermissionModeDefault,

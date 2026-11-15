@@ -142,9 +142,6 @@ describe("buildRankedAgentOptions", () => {
 });
 
 describe("configured but unverified credentials", () => {
-	// The whole point of the "configured" state is that it must not look like
-	// a working credential. Falling through to the known-good branch would
-	// paint an unvalidated — possibly revoked — credential green.
 	it.each(["mimo-code", "hermes", "claude-code"])("omits the verification badge for %s while keeping a neutral tone", (id) => {
 		const [option] = buildRankedAgentOptions({
 			agents: [agent(id, "installed", "configured")],
@@ -155,7 +152,6 @@ describe("configured but unverified credentials", () => {
 		expect(option.status).toBe("");
 	});
 
-	// I1: never block. An unverified credential is not a disproved one.
 	it("keeps an unverified agent selectable and ranked with unknown, not below it", () => {
 		const options = buildRankedAgentOptions({
 			agents: [
@@ -334,7 +330,6 @@ describe("defaultProjectAgents", () => {
 			orchestratorAgent: "cursor",
 			reviewerAgent: "opencode",
 		});
-		// A ready reviewer outranks one AO has not checked yet.
 		expect(defaultProjectAgents([agent("cursor"), agent("opencode", "unknown", "unknown"), agent("kimchi")]).reviewerAgent).toBe("kimchi");
 	});
 

@@ -1,7 +1,3 @@
-// Package artifacts polls sessions for artifact files written outside the SCM
-// observation path (there is no filesystem watcher on a session's artifact
-// directory), reconciles each one's persisted OutputType accordingly, and
-// captures new versions of its artifact files.
 package artifacts
 
 import (
@@ -13,10 +9,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
 )
 
-// DefaultTickInterval is the artifact reconciliation cadence.
 const DefaultTickInterval = 30 * time.Second
 
-// Config controls artifact-output reconciliation polling.
 type Config struct {
 	Tick   time.Duration
 	Logger *slog.Logger
@@ -34,9 +28,6 @@ type versionSink interface {
 	CaptureSession(ctx context.Context, sess domain.SessionRecord) error
 }
 
-// Observer periodically rescans each live session's artifact directory,
-// persists a resulting OutputType change through the sink, and hands the
-// session to the version sink.
 type Observer struct {
 	sessions sessionSource
 	sink     outputTypeSink
@@ -45,8 +36,6 @@ type Observer struct {
 	logger   *slog.Logger
 }
 
-// New builds an artifact-output observer. A nil versions sink captures no
-// versions.
 func New(sessions sessionSource, sink outputTypeSink, versions versionSink, cfg Config) *Observer {
 	o := &Observer{
 		sessions: sessions,
@@ -64,17 +53,10 @@ func New(sessions sessionSource, sink outputTypeSink, versions versionSink, cfg 
 	return o
 }
 
-// Start runs polling until the context is canceled.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
 	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "artifact output observer")
 }
 
-// Poll reconciles every non-terminated session so a session whose agent
-// writes an artifact file gets its OutputType (and therefore its Kanban
-// column) updated, and one whose last artifact was deleted drops back. PR
-// observation and claim only reconcile the PR side of OutputType, so this
-// poll is what notices artifact additions and removals. Version capture runs
-// after the reconcile, outside the lifecycle reconcile lock.
 func (o *Observer) Poll(ctx context.Context) error {
 	sessions, err := o.sessions.ListAllSessions(ctx)
 	if err != nil {

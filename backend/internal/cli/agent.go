@@ -13,14 +13,12 @@ type agentListOptions struct {
 	json    bool
 }
 
-// agentInfo mirrors the daemon's agent Info body for the CLI client.
 type agentInfo struct {
 	ID         string `json:"id"`
 	Label      string `json:"label"`
 	AuthStatus string `json:"authStatus,omitempty"`
 }
 
-// agentInventory mirrors GET /api/v1/agents and POST /api/v1/agents/refresh.
 type agentInventory struct {
 	Supported  []agentInfo `json:"supported"`
 	Installed  []agentInfo `json:"installed"`
@@ -132,7 +130,6 @@ func writeAgentList(cmd *cobra.Command, inv agentInventory) error {
 			case "unauthorized":
 				authLabel = "needs auth"
 			case "configured":
-				// A credential exists; nothing has proven it works.
 				authLabel = "configured (unverified)"
 			default:
 				authLabel = "auth unknown"

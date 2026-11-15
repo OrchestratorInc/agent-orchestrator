@@ -6,13 +6,9 @@ import { repositoryOwnerAvatar } from "../lib/repository-avatar";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, type WorkspaceSummary } from "../types/workspace";
 
-// Avatar URL -> the image as a data URL, so a launch paints known avatars with
-// no network request.
 type AvatarCache = Record<string, string>;
 
 const cacheKey = "ao.projectAvatarCache";
-// Project id -> its last avatar URL, so the first paint does not wait for
-// project details.
 const urlsKey = "ao.projectAvatarUrls";
 
 function readStrings(key: string): Record<string, string> {
@@ -29,7 +25,6 @@ function writeStrings(key: string, value: Record<string, string>) {
 	try {
 		window.localStorage.setItem(key, JSON.stringify(value));
 	} catch {
-		// A full localStorage only costs the instant first paint.
 	}
 }
 
@@ -37,9 +32,6 @@ function readCache(): AvatarCache {
 	return Object.fromEntries(Object.entries(readStrings(cacheKey)).filter(([, src]) => src.startsWith("data:image/")));
 }
 
-// Draws the avatar through a CORS image and a canvas. Loading it as an image
-// keeps it under the renderer's img-src policy (fetch would need connect-src),
-// and a redirect to a sign-in page fails to decode instead of being cached.
 function loadAsDataUrl(url: string): Promise<string | null> {
 	return new Promise((resolve) => {
 		const image = new Image();
@@ -62,14 +54,8 @@ function loadAsDataUrl(url: string): Promise<string | null> {
 	});
 }
 
-// Refreshed once per launch, so an owner's new avatar replaces the cached one.
 const refreshedUrls = new Set<string>();
 
-// The image source for each local project's repository owner avatar, keyed by
-// project id. Cached images come from localStorage on first render, so the
-// sidebar paints them instantly; project details then confirm the owner and
-// refresh the cache in the background. A failed refresh keeps the cached
-// image. Empty when the setting is off.
 export function useProjectAvatars(workspaces: readonly WorkspaceSummary[]): Map<string, string> {
 	const enabled = useUiStore((state) => state.projectAvatars);
 	const [cache, setCache] = useState(readCache);
@@ -105,8 +91,6 @@ export function useProjectAvatars(workspaces: readonly WorkspaceSummary[]): Map<
 			const detail = query.data;
 			const ownRepo = detail && "repo" in detail && typeof detail.repo === "string" && detail.repo ? detail.repo : undefined;
 			const repo = ownRepo ?? project.workspaceRepos?.[0]?.repo;
-			// After a GitHub rename or transfer the remote's owner is stale; the
-			// avatar URL then changes, so the old cached image is not reused.
 			const canonical = ownRepo && detail && "canonicalRepo" in detail
 				? { repo: detail.canonicalRepo, ownerAvatarUrl: detail.canonicalOwnerAvatarUrl }
 				: undefined;
@@ -123,7 +107,6 @@ export function useProjectAvatars(workspaces: readonly WorkspaceSummary[]): Map<
 		try {
 			window.localStorage.setItem(urlsKey, urlsJson);
 		} catch {
-			// A full localStorage only costs the instant first paint.
 		}
 	}, [enabled, settled, urlsJson]);
 
@@ -137,7 +120,6 @@ export function useProjectAvatars(workspaces: readonly WorkspaceSummary[]): Map<
 				if (!src) return;
 				setCache((previous) => {
 					if (previous[url] === src) return previous;
-					// Keep only avatars still in use, so removed projects drop out.
 					const next: AvatarCache = { [url]: src };
 					for (const [key, value] of Object.entries(previous)) if (current.has(key) && key !== url) next[key] = value;
 					writeStrings(cacheKey, next);

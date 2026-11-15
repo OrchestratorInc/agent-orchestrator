@@ -19,8 +19,6 @@ const (
 	claudeOperationsPath = "/api/v1/agents/claude-code/auth/operations"
 )
 
-// claudeLoginDaemon stands in for the daemon `ao claude-login` reports to.
-// failing lists the paths that answer with a store error.
 type claudeLoginDaemon struct {
 	mu       sync.Mutex
 	requests []string
@@ -113,8 +111,6 @@ func TestClaudeLoginRunsEverySupportedLoginMethod(t *testing.T) {
 			if !slices.Equal(gotArgs, tt.wantArgs) {
 				t.Errorf("args = %q, want %q", gotArgs, tt.wantArgs)
 			}
-			// The newest sign-in wins over an earlier setup token and an API key
-			// saved from Claude Code's AO panel; the daemon owns both changes.
 			if got := daemon.sent(); !slices.Equal(got, []string{"POST " + claudeSignedInPath}) {
 				t.Errorf("daemon requests = %q, want the sign-in recorded", got)
 			}
@@ -177,8 +173,6 @@ func TestClaudeLoginRejectsInvalidSetupToken(t *testing.T) {
 	}
 }
 
-// The sign-in already succeeded by the time AO records it, so a failure to
-// update AO's state is reported as a warning, not a failed sign-in.
 func TestClaudeLoginSucceedsWhenRecordingTheSignInFails(t *testing.T) {
 	startClaudeLoginDaemon(t, claudeSignedInPath)
 	var stdout, stderr bytes.Buffer

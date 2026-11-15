@@ -1,21 +1,3 @@
-/**
- * AO's automation messages, each drawn as what it is instead of one generic
- * "automation" card.
- *
- * - What the user did through AO (file feedback, a diff selection, a git button,
- *   browser annotations) is the user's own message: their words under a chip
- *   naming what they pointed at.
- * - What GitHub reported on the session's PR (failing CI, a review comment, a
- *   changes-requested review, merge conflicts) is a row in the PR's glyph,
- *   tinted by what it means, with the detail beneath.
- * - AO's own notices are one quiet line.
- *
- * Each is read back from the fixed text AO writes for it, in that text's order,
- * so what a reviewer or a CI log wrote inside it cannot pose as AO's structure.
- * Text that matches none of them, or a message an agent sent, keeps the card.
- */
-// ponytail: reads AO's own message templates, so changing one means changing its reader here, and a direct API send without a sender can still pass as the user's action. Persisting the daemon's AuthoredByUser and the nudge kind on the message would end both.
-
 import {
 	ArrowLeftRight,
 	ArrowUpFromLine,
@@ -50,11 +32,8 @@ export type PullRequestRef = { number: number; title?: string; url?: string };
 export type FileFeedback = {
 	path: string;
 	line?: number;
-	/** The commented line's code, when the comment was on one. */
 	code?: string;
-	/** Text selected in a rendered view, when the comment was on a selection. */
 	quote?: string;
-	/** The comment was on the whole file, not a line. */
 	wholeFile?: boolean;
 	feedback: string;
 };
@@ -74,14 +53,8 @@ export type Automation =
 	| { kind: "mergeConflict"; pr: PullRequestRef }
 	| { kind: "notice"; notice: AutomationNotice };
 
-/* -------------------------------------------------------------------------- */
-/* reading                                                                     */
-/* -------------------------------------------------------------------------- */
-
-// `PR #12 "title" (source → target)`, as lifecycle's prIdentity writes it.
 const PR_IDENTITY = /PR #(\d+)(?: ("(?:[^"\\\n]|\\.)*"))?(?: \([^\n]*? → [^\n]*?\))?/;
 const PR_LINE = /\nPR: (\S+)\s*$/;
-// A GitHub or GitLab login, or the daemon's stand-in. Never markup: it is interpolated into a translation.
 const LOGIN = String.raw`[\w.-]+(?:\[bot\])?|unknown reviewer`;
 
 function pullRequest(text: string, url?: string): PullRequestRef | undefined {
@@ -98,8 +71,6 @@ function pullRequest(text: string, url?: string): PullRequestRef | undefined {
 	return { number: Number(match[1]), title, url };
 }
 
-// One check as lifecycle's formatCIFailureMessage writes it. The log tail's fence is
-// longer than any backtick run inside it, so a log line cannot end the section.
 const FAILED_CHECK = /\nFailed: ([^\n]*) \(([^()\n]*)\)(?:\nFailure URL: (\S+))?(?:\n\nLog tail \(last \d+ lines?\):\n(`{3,})\n([\s\S]*?)\n\4)?\n/y;
 
 function failedChecks(text: string): FailedCheck[] | null {
@@ -115,9 +86,6 @@ function failedChecks(text: string): FailedCheck[] | null {
 	return checks.length > 0 && text.startsWith("\nUse the included log tail", at) ? checks : null;
 }
 
-// Comment bodies are free text, so a body line can look like the next comment's
-// heading. Headings must number 1..N for the N the message announces; anything
-// else is not read as comments.
 function reviewComments(text: string, announced: number): ReviewComment[] | null {
 	const closing = text.lastIndexOf("\n\nAddress each comment and push fixes.");
 	const headings = [...text.matchAll(new RegExp(String.raw`\n\n(\d+)\. ([^\n]+) \(@(${LOGIN})\):\n`, "g"))];
@@ -131,7 +99,6 @@ function reviewComments(text: string, announced: number): ReviewComment[] | null
 	});
 }
 
-// Read from the end: the review URL and ID follow the free-text body.
 function changesRequested(text: string): { body: string; url?: string } | null {
 	const closing = text.lastIndexOf("\n\nAddress the requested changes and push.");
 	if (closing < 0) return null;
@@ -167,7 +134,6 @@ function readPullRequestNudge(text: string): Automation | null {
 		const pr = review ? pullRequest(text, review.url ?? prURL) : undefined;
 		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body } : null;
 	}
-	// AO's own reviewer, before its findings became GitHub reviews; only old history carries these.
 	if (text.startsWith("[AO reviewer] ")) {
 		const url = /^PR: (\S+)$/m.exec(text)?.[1];
 		const number = Number(/\/pull\/(\d+)/.exec(url ?? "")?.[1]);
@@ -178,7 +144,6 @@ function readPullRequestNudge(text: string): Automation | null {
 	return null;
 }
 
-// The "- Key: value" lines file-annotations' commentLines writes under "File context:".
 function fileFeedback(block: string): FileFeedback | null {
 	const feedback = /^Feedback:\n([\s\S]*?)\n\nFile context:\n/.exec(block.trim());
 	if (!feedback) return null;
@@ -189,7 +154,6 @@ function fileFeedback(block: string): FileFeedback | null {
 	}
 	const path = fields.get("Path");
 	if (!path) return null;
-	// Only a new-side line exists in the file Files opens; a deleted line has none.
 	const location = fields.get("Location");
 	const line = Number(fields.get("New line") ?? /^New side, line (\d+)$/.exec(location ?? "")?.[1]);
 	const code = fields.get("Code");
@@ -203,7 +167,6 @@ function fileFeedback(block: string): FileFeedback | null {
 	};
 }
 
-// diff-selection's message; its instruction and path are each one line.
 const DIFF_SELECTION = /^The user selected lines in the diff viewer and asked for a change\.\n\nInstruction:\n([^\n]*)\n\nFile: ([^\n]+)\n(?:(?:Comparison scope|Workspace version|File fingerprint): [^\n]*\n)*Selected lines (?:(\d+)-(\d+)|[^\n]*):\n\n/;
 
 function readUserAction(text: string): Automation | null {
@@ -219,8 +182,6 @@ function readUserAction(text: string): Automation | null {
 	const selection = DIFF_SELECTION.exec(text);
 	if (selection) {
 		const [, instruction, path, start, end] = selection;
-		// diff-selection numbers the range by the new side unless an end of it is a
-		// deleted line ("- " row); only new-side numbers name a line in the file.
 		const rows = text.slice(selection[0].length).split("\n");
 		const truncated = rows.at(-1) === "[truncated]";
 		const newSide = rows.some((row) => !row.startsWith("-"));
@@ -234,7 +195,6 @@ function readUserAction(text: string): Automation | null {
 			instruction: instruction === "(empty)" ? "" : instruction!,
 		};
 	}
-	// The instructions SessionBranchSummary's git buttons send.
 	const createPR = /^Commit any uncommitted changes with a clear message, push this branch, and open a (draft )?pull request against (?:`([^`]+)`|the default branch)\. Give it a descriptive title and summary\.$/.exec(text);
 	if (createPR) return { kind: "gitAction", action: createPR[1] ? "createDraftPR" : "createPR", base: createPR[2] };
 	if (text === "Commit all uncommitted changes with a clear message. Do not push.") return { kind: "gitAction", action: "commit" };
@@ -266,25 +226,18 @@ function readNotice(text: string): Automation | null {
 	return null;
 }
 
-/** What an automation message is, read from the text AO wrote for it; null when it is none of the known kinds. */
 export function readAutomation(text: string): Automation | null {
 	const trimmed = text.trim();
 	return readUserAction(trimmed) ?? readPullRequestNudge(trimmed) ?? readNotice(trimmed);
 }
 
-// A message an agent sent is the agent's, whatever its text says.
 const automationOf = cachedBy((item) =>
 	item.kind === "message" && !item.senderSessionId && !/^\s*\[from /.test(item.text) ? readAutomation(item.text) : null,
 );
 
-/* -------------------------------------------------------------------------- */
-/* drawing                                                                     */
-/* -------------------------------------------------------------------------- */
-
 type UserAction = Extract<Automation, { kind: "fileFeedback" | "diffSelection" | "gitAction" | "browserFeedback" }>;
 type PullRequestAutomation = Extract<Automation, { pr: PullRequestRef }>;
 
-/** An automation message drawn as what it is, or `fallback` when AO cannot tell. */
 export function AutomationMessage({ message, queued, fallback }: { message: ConversationMessage; queued?: boolean; fallback: ReactNode }) {
 	const automation = automationOf(message);
 	if (!automation) return <>{fallback}</>;
@@ -297,15 +250,10 @@ export function AutomationMessage({ message, queued, fallback }: { message: Conv
 	);
 }
 
-/** The Browser annotations a steer carried, or null for any other steer. */
 export function steeredBrowserFeedback(activity: ConversationActivity): ParsedBrowserAnnotationMessage | null {
 	return parseBrowserAnnotationMessage(activity.detail?.text ?? "");
 }
 
-/**
- * A queued annotation batch the user steered into the running turn. It keeps
- * the card it had while queued instead of exposing the agent-facing transport.
- */
 export function SteeredBrowserFeedback({ annotations }: { annotations: ParsedBrowserAnnotationMessage }) {
 	const { t } = useTranslation();
 	return (
@@ -321,11 +269,9 @@ export function SteeredBrowserFeedback({ annotations }: { annotations: ParsedBro
 	);
 }
 
-/** Something the user did through AO, drawn as the user's own message: queued until sent, with its time on hover. */
 function YourAction({ queued, createdAt, children }: { queued?: boolean; createdAt: string; children: ReactNode }) {
 	return (
 		<div className="group/message flex flex-col items-end gap-1" data-testid="your-action">
-			{/* Themes draw sent and queued differently; light theme tells them apart in CSS. */}
 			<div data-queued={queued ? "" : undefined} className={cn(humanBubbleClass(queued), "min-w-0")}>
 				{children}
 			</div>
@@ -468,8 +414,6 @@ function NoticeLine({ notice }: { notice: AutomationNotice }) {
 	);
 }
 
-// The forges AO reads PRs from. A URL in the message's text is a link only to
-// these, so a message that merely looks like AO's cannot send the user elsewhere.
 const FORGE_HOSTS = new Set(["github.com", "gitlab.com"]);
 
 function forgeURL(url: string | undefined): string | undefined {
@@ -482,7 +426,6 @@ function forgeURL(url: string | undefined): string | undefined {
 	}
 }
 
-/** `children` linked to `url` when it is on a known forge; plain text otherwise. */
 function ForgeLink({ url, className, children }: { url?: string; className?: string; children?: ReactNode }) {
 	const href = forgeURL(url);
 	if (!href) return <span className={className}>{children}</span>;
@@ -495,7 +438,6 @@ function ForgeLink({ url, className, children }: { url?: string; className?: str
 
 const GITHUB_HTML = GITHUB_HTML_REHYPE_NO_IMAGES;
 
-/** What GitHub reported on the session's PR, in the PR glyph tinted by what it means. */
 function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {
 	const { t, i18n } = useTranslation();
 	const { pr } = automation;
@@ -503,7 +445,6 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 		strong: <span className="font-medium text-foreground" />,
 		pr: <ForgeLink url={pr.url} className="font-medium text-foreground" />,
 	};
-	// A narrow key keeps Trans's typing tractable; the full MessageKey union is too complex for it (TS2590).
 	const lead = (key: `chat.automation.${"ciFailing" | "reviewComment" | "changesRequested" | "mergeConflict"}`, author?: string) => (
 		<Trans t={t} i18nKey={key} values={{ number: pr.number, author }} components={components} />
 	);
@@ -527,7 +468,6 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 				<div key={index} className="min-w-0">
 					{comment.path || authors.length > 1 ? (
 						<div className="mb-1 flex min-w-0 items-center gap-2">
-							{/* Several reviewers: each comment says whose it is. */}
 							{authors.length > 1 ? <span className="shrink-0 text-xs font-medium text-foreground">{`@${comment.author}`}</span> : null}
 							{comment.path ? <FileChip path={comment.path} line={comment.line} /> : null}
 						</div>
@@ -548,7 +488,6 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 			) : null;
 			break;
 		case "mergeConflict":
-			// The PR cannot merge until the agent rebases: a failure, like failing CI.
 			tone = "text-status-exited";
 			heading = lead("chat.automation.mergeConflict");
 			break;

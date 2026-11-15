@@ -10,26 +10,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// branchStateWriter is the narrow store write for observed branch facts.
 type branchStateWriter interface {
 	SetSessionBranchState(ctx context.Context, id domain.SessionID, state domain.SessionBranchState) (bool, error)
 }
 
-// branchStateRemote is the remote AO pushes session branches to.
 const branchStateRemote = "origin"
 
 type branchTarget struct {
 	rec      domain.SessionRecord
-	branch   string // empty on a detached HEAD
-	head     string // detached HEAD commit
+	branch   string
+	head     string
 	baseRefs []string
 	baseSHA  string
 }
 
-// ReconcileBranchStates refreshes every live session's persisted branch facts.
-// It runs on the SCM observer's tick: one git for-each-ref per repository reads
-// every session's branch, remote, and base tips, and git counts commits only
-// for sessions whose tips moved since the last pass.
 func (s *Service) ReconcileBranchStates(ctx context.Context) error {
 	writer, ok := s.store.(branchStateWriter)
 	if !ok {
@@ -42,8 +36,6 @@ func (s *Service) ReconcileBranchStates(ctx context.Context) error {
 	return s.reconcileBranchStates(ctx, writer, recs, true)
 }
 
-// ReconcileSessionBranchState is the single-session pass a workspace watch
-// runs when it sees a change.
 func (s *Service) ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error {
 	writer, ok := s.store.(branchStateWriter)
 	if !ok {
@@ -57,8 +49,6 @@ func (s *Service) ReconcileSessionBranchState(ctx context.Context, id domain.Ses
 }
 
 func (s *Service) reconcileBranchStates(ctx context.Context, writer branchStateWriter, recs []domain.SessionRecord, full bool) error {
-	// Serialized so an older read can never persist over a newer one when the
-	// tick and a workspace change reconcile the same session at once.
 	s.branchStateMu.Lock()
 	defer s.branchStateMu.Unlock()
 	if s.branchTips == nil {
@@ -131,7 +121,7 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		remote = tips["refs/remotes/"+branchStateRemote+"/"+target.branch]
 	}
 	if local == "" {
-		return nil // unborn branch
+		return nil
 	}
 	base := target.baseSHA
 	baseRef := ""
@@ -151,25 +141,17 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 	state := domain.SessionBranchState{Branch: target.branch, Head: local}
 	switch {
 	case base != "" && baseRef != "":
-		// One call counts both sides, so reading how far behind the base the
-		// branch is costs no extra git process.
 		ahead, behind, ok := gitLeftRightCount(ctx, root, local, base)
 		if !ok {
-			// A failed read is not evidence that nothing was committed.
 			return nil
 		}
 		state.Commits, state.Behind = ahead, behind
 		state.Base, state.BaseRef = branchBaseNames(baseRef)
-		// Both sides must have moved since they split for a merge to conflict.
-		// merge-tree needs git 2.38; an older git leaves conflicts unreported
-		// rather than dropping the other facts. The tips fingerprint above keeps
-		// this to one in-memory merge per new commit on either side.
 		if ahead > 0 && behind > 0 {
 			files, ok := gitMergeConflictFiles(ctx, root, base, local)
 			state.Conflicts = ok && len(files) > 0
 		}
 	case base != "":
-		// Only a recorded commit: there is no base branch to be behind.
 		commits, ok := gitRevListCount(ctx, root, base+".."+local)
 		if !ok {
 			return nil
@@ -200,8 +182,6 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 	return nil
 }
 
-// readRefTips lists the branch, remote, and base tips of every target in one
-// repository with a single git process.
 func readRefTips(ctx context.Context, targets []branchTarget) (map[string]string, bool) {
 	args := []string{"for-each-ref", "--format=%(objectname) %(refname)"}
 	seen := map[string]bool{}
@@ -233,8 +213,6 @@ func readRefTips(ctx context.Context, targets []branchTarget) (map[string]string
 	return tips, true
 }
 
-// branchBaseRefs returns the full ref names the session's diff base resolves
-// from, in the same preference order the Files tab uses.
 func branchBaseRefs(recordedRef, defaultBranch string) []string {
 	ref := strings.TrimSpace(recordedRef)
 	if ref == "" || ref == "HEAD" {
@@ -255,9 +233,6 @@ func branchBaseRefs(recordedRef, defaultBranch string) []string {
 	return refs
 }
 
-// branchBaseNames splits a full base ref into its short branch name and the
-// ref as shown to people: "refs/remotes/origin/main" is "main" read as
-// "origin/main", and "refs/heads/main" is "main" read as "main".
 func branchBaseNames(ref string) (name, display string) {
 	if rest, ok := strings.CutPrefix(ref, "refs/remotes/"); ok {
 		if _, branch, ok := strings.Cut(rest, "/"); ok {
@@ -269,8 +244,6 @@ func branchBaseNames(ref string) (name, display string) {
 	return name, name
 }
 
-// readGitHead reads a worktree's common git dir and HEAD from the files git
-// itself reads, so finding them costs no git process.
 func readGitHead(root string) (commonDir, branch, head string, ok bool) {
 	gitDir := filepath.Join(root, ".git")
 	info, err := os.Stat(gitDir)
@@ -319,8 +292,6 @@ func gitRevListCount(ctx context.Context, root, rangeSpec string) (int, bool) {
 	return count, err == nil
 }
 
-// gitLeftRightCount counts the commits on head that base lacks and the commits
-// on base that head lacks.
 func gitLeftRightCount(ctx context.Context, root, head, base string) (ahead, behind int, ok bool) {
 	out, err := gitWorkspaceOutput(ctx, root, "rev-list", "--left-right", "--count", head+"..."+base)
 	if err != nil {

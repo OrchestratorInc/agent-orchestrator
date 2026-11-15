@@ -26,9 +26,6 @@ func writeLoginShellFixture(t *testing.T, path string) string {
 	return path
 }
 
-// linkDevLauncher reproduces the launcher scripts/daemon-build.sh leaves on
-// PATH: a link named ao into its build cache, with XDG_CACHE_HOME at
-// root/cache.
 func linkDevLauncher(t *testing.T, root string) string {
 	t.Helper()
 	build := writeLoginShellFixture(t, filepath.Join(root, "cache", "aoagents", "agent-orchestrator", "bin", "ao"))
@@ -42,9 +39,6 @@ func linkDevLauncher(t *testing.T, root string) string {
 	return link
 }
 
-// TestDoctorLoginShellReportsWhichAOItRuns covers the ao-login-shell check:
-// a login shell starts with the app's ao first on PATH, as every session
-// does, and doctor reports whether startup files left it there (#3562).
 func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 	root := t.TempDir()
 	app := writeLoginShellFixture(t, filepath.Join(root, "app", "ao"))
@@ -58,7 +52,6 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 	cases := []struct {
 		name      string
 		daemonExe string
-		// answer is what the shell writes; nil means it never got to answer.
 		answer    *string
 		err       error
 		wantLevel doctorLevel
@@ -68,9 +61,7 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 		{"app binary still wins", "", ptr(app + "\n"), nil, doctorPass, []string{"still runs this binary (" + app + ")"}, ""},
 		{"running daemon is the authority", daemon, ptr(daemon + "\n"), nil, doctorPass, []string{"the running daemon's binary (" + daemon + ")"}, ""},
 		{"startup file prepends another ao", "", ptr(other + "\n"), nil, doctorWarn, []string{"runs " + other + ", not this binary " + app, "Codex"}, "daemon-build.sh"},
-		// This app is not an installed desktop, so nothing will repoint the link.
 		{"AO dev launcher is named with its fix", "", ptr(devLink + "\n"), nil, doctorWarn, []string{"runs " + devLink, "scripts/daemon-build.sh", "rm '" + devLink + "'"}, "repoints"},
-		// command -v exits 1 when nothing resolves.
 		{"startup file replaces PATH", "", ptr(""), errors.New("exit status 1"), doctorWarn, []string{"finds no ao even with " + filepath.Dir(app) + " first"}, ""},
 		{"alias shadows ao", "", ptr("alias ao=/opt/old/ao\n"), nil, doctorWarn, []string{`"alias ao=/opt/old/ao"`, "alias or function"}, ""},
 		{"shell fails before answering", "", nil, errors.New("exit status 1"), doctorWarn, []string{"could not run a zsh login shell", "exit status 1"}, ""},
@@ -117,8 +108,6 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 			if tc.daemonExe != "" {
 				pinned = filepath.Dir(tc.daemonExe)
 			}
-			// The shell starts as a session's does: the pin first, plus the
-			// wrappers that restore it after the user's startup files.
 			head := []string{"-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh", "/usr/bin/env", "PATH=" + pinned + ":/usr/bin:/bin"}
 			tail := []string{"/bin/zsh", "-l", "-c", `command -v ao >"$1"`, "zsh"}
 			wrappers := filepath.Join(dataDir, "runtime", "login-shell")
@@ -145,7 +134,6 @@ func TestDoctorLoginShellSkipsWhatItCannotProbe(t *testing.T) {
 		{"shell without POSIX command -v", "/opt/homebrew/bin/fish", app},
 		{"SHELL unset", "", app},
 		{"relative SHELL", "zsh", app},
-		// Sessions only pin a binary named ao, so there is nothing to compare.
 		{"binary not named ao", "/bin/zsh", dev},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,9 +154,6 @@ func TestDoctorLoginShellSkipsWhatItCannotProbe(t *testing.T) {
 	}
 }
 
-// TestDoctorLoginShellCatchesStartupFilePrepend runs a real login shell with
-// an isolated HOME, the reproduction from #3562: the app's ao starts first on
-// PATH, then ~/.profile prepends the directory holding AO's old dev launcher.
 func TestDoctorLoginShellCatchesStartupFilePrepend(t *testing.T) {
 	root := t.TempDir()
 	app := writeLoginShellFixture(t, filepath.Join(root, "app", "ao"))
@@ -192,16 +177,12 @@ func TestDoctorLoginShellCatchesStartupFilePrepend(t *testing.T) {
 		t.Fatal("check skipped, want a result")
 	}
 	if check.Level != doctorPass {
-		// macOS path_helper moves /etc/paths ahead of the pin; a machine with
-		// an ao there already shadows the app, which this test cannot undo.
 		if strings.Contains(check.Message, root) || !strings.Contains(check.Message, " runs /") {
 			t.Fatalf("clean login shell check = %+v, want PASS", check)
 		}
 		t.Skipf("system login PATH already holds an ao: %s", check.Message)
 	}
 
-	// The background sleep keeps the shell's stdout open after it exits; doctor
-	// must still answer as soon as the shell itself is done.
 	profile := "export PATH='" + filepath.Dir(devLink) + "':\"$PATH\"\nsleep 5 &\n"
 	if err := os.WriteFile(filepath.Join(home, ".profile"), []byte(profile), 0o600); err != nil {
 		t.Fatal(err)
@@ -217,10 +198,6 @@ func TestDoctorLoginShellCatchesStartupFilePrepend(t *testing.T) {
 	}
 }
 
-// TestDoctorLoginShellPassesWhereAORepins runs real zsh and bash login shells
-// with an isolated HOME whose startup files prepend AO's old dev launcher, the
-// #3562 reproduction: the wrappers sessions use put the app's ao back, so
-// doctor reports what those sessions now run.
 func TestDoctorLoginShellPassesWhereAORepins(t *testing.T) {
 	for _, tc := range []struct{ shell, profile string }{
 		{"/bin/zsh", ".zprofile"},
@@ -258,9 +235,6 @@ func TestDoctorLoginShellPassesWhereAORepins(t *testing.T) {
 	}
 }
 
-// TestDoctorLoginShellPinsWhatSessionsPin covers an app directory that also
-// holds other tools: sessions pin an ao shim under the data dir instead, and
-// the probe must start its shell the same way.
 func TestDoctorLoginShellPinsWhatSessionsPin(t *testing.T) {
 	root := t.TempDir()
 	app := writeLoginShellFixture(t, filepath.Join(root, "app", "ao"))
@@ -277,7 +251,6 @@ func TestDoctorLoginShellPinsWhatSessionsPin(t *testing.T) {
 		Executable: func() (string, error) { return app, nil },
 		CommandOutput: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			gotArgs = args
-			// With nothing reordering PATH, the shell finds the shim itself.
 			return nil, os.WriteFile(args[len(args)-1], []byte(filepath.Join(shim, "ao")+"\n"), 0o600)
 		},
 		ProcessAlive: func(int) bool { return false },
@@ -291,9 +264,6 @@ func TestDoctorLoginShellPinsWhatSessionsPin(t *testing.T) {
 	}
 }
 
-// TestDoctorLoginShellPassesThroughTheShim runs a real login shell for an ao
-// that shares its directory with other tools, as Homebrew, npm and go install
-// leave it: the shell finds the shim sessions pin, which is still this binary.
 func TestDoctorLoginShellPassesThroughTheShim(t *testing.T) {
 	root := t.TempDir()
 	app := writeLoginShellFixture(t, filepath.Join(root, "bin", "ao"))
@@ -315,8 +285,6 @@ func TestDoctorLoginShellPassesThroughTheShim(t *testing.T) {
 		t.Fatal("check skipped, want a result")
 	}
 	if check.Level != doctorPass {
-		// See TestDoctorLoginShellCatchesStartupFilePrepend: an ao in the
-		// system login PATH already shadows the app on this machine.
 		if strings.Contains(check.Message, root) || !strings.Contains(check.Message, " runs /") {
 			t.Fatalf("check through the shim = %+v, want PASS", check)
 		}

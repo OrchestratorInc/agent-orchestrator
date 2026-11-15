@@ -33,8 +33,6 @@ function infos(): UpdateErrorInfo[] {
 }
 
 describe("localizedUpdateError", () => {
-	// The main process sends the English sentence as the fallback, so the English
-	// catalog must say exactly the same thing.
 	it("matches the main process's English sentence for every failure", () => {
 		const { t } = createFullAppI18n("en");
 		for (const info of infos()) {

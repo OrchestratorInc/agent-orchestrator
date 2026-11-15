@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
 
-// cuaDaemon serves the computer-use routes `ao mcp` uses. A nil tools body
-// answers agent-tools the way a daemon without Cua Driver does.
 func cuaDaemon(t *testing.T, tools *string, call func(request cuaCallRequest) string) {
 	t.Helper()
 	cfg := setConfigEnv(t)
@@ -84,8 +82,6 @@ func TestMCPHasNoComputerUseToolsWithoutIt(t *testing.T) {
 	}
 }
 
-// A call goes to the daemon for this AO session and comes back as text plus
-// the screenshot itself.
 func TestMCPComputerUseCallReturnsTextAndTheScreenshot(t *testing.T) {
 	t.Setenv(config.EnvComputerUse, "1")
 	t.Setenv("AO_SESSION_ID", "aa-47")
@@ -130,7 +126,6 @@ func TestMCPComputerUseFailureIsAToolResult(t *testing.T) {
 		return `{"tool":"list_windows","result":{"windows":[{"pid":7}]},"images":[]}`
 	})
 	reply := runMCP(t, mcpCall("get_window_state", map[string]any{"pid": 7, "window_id": 9}))[0]
-	// A tool without a text layout comes back as its JSON.
 	if reply.Result.IsError || !strings.Contains(reply.Result.Content[0].Text, `"windows"`) {
 		t.Fatalf("result = %+v", reply.Result)
 	}

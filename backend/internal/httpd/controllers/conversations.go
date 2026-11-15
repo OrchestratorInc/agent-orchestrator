@@ -23,19 +23,12 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// Native chat images are sent to the provider and retained in conversation
-// history. Workspace file attachments use separate, larger spawn limits. The
-// body limit also fits a 25 MiB render page as a JSON string, but only because
-// the page's HTML source is capped at 1 MiB: json.Marshal writes each <, > and
-// & as a 6-byte escape, so the source can grow sixfold. Inlined images are
-// base64 and do not grow.
 const (
 	maxConversationImageBytes  = 10 << 20
 	maxConversationImagesBytes = 25 << 20
 	maxConversationBody        = maxConversationImagesBytes*4/3 + (2 << 20)
 )
 
-// ConversationService is the controller-facing Chat contract.
 type ConversationService interface {
 	Snapshot(ctx context.Context, session domain.SessionID) (chatsvc.Snapshot, error)
 	Send(ctx context.Context, session domain.SessionID, msg ports.ChatUserMessage) (domain.ConversationTurn, error)
@@ -88,23 +81,13 @@ type turnAutoResumeService interface {
 	SetTurnAutoResume(context.Context, domain.SessionID, string, bool) error
 }
 
-// ConversationsController owns the Chat routes for a session.
-//
-// Every route dispatches from the session's persisted mode inside the service, so
-// a client cannot reach the Chat path for a session that was created in TUI mode
-// even by calling these URLs directly. UI visibility is not the boundary.
 type ConversationsController struct {
-	Svc ConversationService
-	// UserMessages counts accepted human steers for product telemetry. Nil
-	// counts nothing.
+	Svc          ConversationService
 	UserMessages UserMessageRecorder
-	// Renders serves agent HTML renders. Nil answers the render route 501.
-	Renders *attachmentstore.Store
-	// Search serves chat search. Nil answers the search route 501.
-	Search ConversationSearch
+	Renders      *attachmentstore.Store
+	Search       ConversationSearch
 }
 
-// Register mounts the conversation routes under a session.
 func (c *ConversationsController) Register(r chi.Router) {
 	r.Get("/conversations/{conversationId}/find", c.findConversation)
 	r.Get("/conversations/{conversationId}/find-window", c.findConversationWindow)
@@ -401,9 +384,6 @@ func (c *ConversationsController) editMessage(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// retryTurn re-dispatches a failed turn's durable prompt as a new turn. The
-// content is read from AO's rows rather than the request, so the daemon owns
-// what gets sent again and the original failed turn stays failed.
 func (c *ConversationsController) retryTurn(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST",
@@ -445,7 +425,6 @@ func (c *ConversationsController) setTurnAutoResume(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeConversationRetryError maps retry refusals to their HTTP meanings.
 func writeConversationRetryError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, chatsvc.ErrTurnNotRetryable):
@@ -545,9 +524,6 @@ func writeConversationEditError(w http.ResponseWriter, r *http.Request, err erro
 	}
 }
 
-// configOptions serves every live control the provider advertises. Empty is a
-// real capability answer and keeps native drivers free to use AO's older typed
-// model/settings surface.
 func (c *ConversationsController) configOptions(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/conversation/config-options")
@@ -567,9 +543,6 @@ func (c *ConversationsController) configOptions(w http.ResponseWriter, r *http.R
 	envelope.WriteJSON(w, http.StatusOK, configOptionsPayload(options))
 }
 
-// setConfigOption applies one advertised provider value and returns the complete
-// rebuilt catalog. This is immediate session state, not a preference to infer on
-// the next turn: changing models can alter the other available controls now.
 func (c *ConversationsController) setConfigOption(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "PATCH", "/api/v1/sessions/{sessionId}/conversation/config-options/{configId}")
@@ -598,12 +571,6 @@ func (c *ConversationsController) setConfigOption(w http.ResponseWriter, r *http
 	envelope.WriteJSON(w, http.StatusOK, configOptionsPayload(options))
 }
 
-// reloadMCPServers restarts the provider's tool servers for a session.
-//
-// A write, not a read, and the only recovery there is for the failure it addresses:
-// a tool server that failed to start stays failed for the life of the provider
-// process, so without this a session loses a tool permanently and the alternative is
-// throwing the conversation away.
 func (c *ConversationsController) reloadMCPServers(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/mcp/reload")
@@ -612,9 +579,6 @@ func (c *ConversationsController) reloadMCPServers(w http.ResponseWriter, r *htt
 	session := domain.SessionID(chi.URLParam(r, "sessionId"))
 	servers, err := c.Svc.ReloadMCPServers(r.Context(), session)
 	if errors.Is(err, chatsvc.ErrTurnRunning) {
-		// Answered here rather than in writeConversationError, whose CHAT_TURN_RUNNING
-		// message names rolling back. Same code and same retryable meaning; a reader
-		// of this one is not undoing anything.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_TURN_RUNNING",
 			"stop the agent before reloading its tool servers: it is in the middle of a turn", nil)
@@ -629,8 +593,6 @@ func (c *ConversationsController) reloadMCPServers(w http.ResponseWriter, r *htt
 	})
 }
 
-// rollbackPreview lists every worktree file rolling back to a turn would
-// restore, so the confirmation can show them all before anything changes.
 func (c *ConversationsController) rollbackPreview(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET",
@@ -657,8 +619,6 @@ func (c *ConversationsController) rollbackPreview(w http.ResponseWriter, r *http
 	})
 }
 
-// rollback discards a turn and everything after it, from the agent's memory as well
-// as from the timeline, and restores the worktree too when the body asks for it.
 func (c *ConversationsController) rollback(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST",
@@ -689,11 +649,6 @@ func (c *ConversationsController) rollback(w http.ResponseWriter, r *http.Reques
 	envelope.WriteJSON(w, http.StatusOK, RollbackConversationResponse{TurnsDiscarded: discarded})
 }
 
-// setTitle names the provider's thread.
-//
-// 202 rather than 200: the provider accepts the name and then reports it back on its
-// own event, and that report is what moves AO's session label. Claiming 200 would
-// promise a change that has not happened yet.
 func (c *ConversationsController) setTitle(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "PUT", "/api/v1/sessions/{sessionId}/conversation/title")
@@ -712,11 +667,6 @@ func (c *ConversationsController) setTitle(w http.ResponseWriter, r *http.Reques
 	envelope.WriteJSON(w, http.StatusAccepted, SetConversationTitleResponse{Title: title})
 }
 
-// compact asks the provider to summarize earlier history and reclaim context.
-//
-// 202 rather than 200: the provider accepts the request and does the work as its
-// own turn afterwards, so this reports acceptance and the reclaim lands on the
-// timeline. Claiming 200 would say the compaction is done.
 func (c *ConversationsController) compact(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/compact")
@@ -733,13 +683,10 @@ func (c *ConversationsController) compact(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// chatPrewarmer runs an agent's Chat readiness check ahead of need.
 type chatPrewarmer interface {
 	PrewarmChat(harness domain.AgentHarness)
 }
 
-// prewarmAgent starts an agent's Chat readiness check in the background when it
-// is picked, so the switch the next send makes does not wait on it.
 func (c *ConversationsController) prewarmAgent(w http.ResponseWriter, r *http.Request) {
 	prewarmer, ok := c.Svc.(chatPrewarmer)
 	if c.Svc == nil || !ok {
@@ -751,12 +698,10 @@ func (c *ConversationsController) prewarmAgent(w http.ResponseWriter, r *http.Re
 	envelope.WriteJSON(w, http.StatusAccepted, PrewarmChatAgentResponse{Agent: agent})
 }
 
-// chatAvailability reports agents whose chat adapter is missing.
 type chatAvailability interface {
 	ChatUnavailable(ctx context.Context, harnesses []domain.AgentHarness) map[domain.AgentHarness]string
 }
 
-// unavailableChatAgents lists the asked agents missing a chat adapter. It starts nothing.
 func (c *ConversationsController) unavailableChatAgents(w http.ResponseWriter, r *http.Request) {
 	checker, ok := c.Svc.(chatAvailability)
 	if c.Svc == nil || !ok {
@@ -774,7 +719,6 @@ func (c *ConversationsController) unavailableChatAgents(w http.ResponseWriter, r
 	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
-// queryHarnesses reads the comma-separated agents query, at most 64 of them.
 func queryHarnesses(r *http.Request) []domain.AgentHarness {
 	var harnesses []domain.AgentHarness
 	for _, agent := range strings.Split(r.URL.Query().Get("agents"), ",") {
@@ -785,13 +729,10 @@ func queryHarnesses(r *http.Request) []domain.AgentHarness {
 	return harnesses
 }
 
-// chatPermissionModesLister reports the permission modes a harness runs a chat in.
 type chatPermissionModesLister interface {
 	PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error)
 }
 
-// chatPermissionModes lists the modes each asked agent runs a chat in, so a
-// picker can show the one a switch starts it in. Agents with no chat are left out.
 func (c *ConversationsController) chatPermissionModes(w http.ResponseWriter, r *http.Request) {
 	lister, ok := c.Svc.(chatPermissionModesLister)
 	if c.Svc == nil || !ok {
@@ -813,7 +754,6 @@ func (c *ConversationsController) chatPermissionModes(w http.ResponseWriter, r *
 	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
-// models serves the provider's catalog for this session plus the current choice.
 func (c *ConversationsController) models(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/conversation/models")
@@ -823,9 +763,6 @@ func (c *ConversationsController) models(w http.ResponseWriter, r *http.Request)
 	models, selected, err := c.Svc.Models(r.Context(), session)
 	if err != nil {
 		if errors.Is(err, chatsvc.ErrModelsUnsupported) {
-			// Not a failure: this agent simply offers no choice. An empty list with
-			// the current selection lets the client hide the picker rather than
-			// show an error the user cannot act on.
 			envelope.WriteJSON(w, http.StatusOK, ConversationModelsResponse{
 				Models:   []ConversationModelResponse{},
 				Selected: turnSettingsPayload(selected),
@@ -838,7 +775,6 @@ func (c *ConversationsController) models(w http.ResponseWriter, r *http.Request)
 	envelope.WriteJSON(w, http.StatusOK, conversationModelsResponse(models, selected))
 }
 
-// setSettings records the provider choices for the next turn.
 func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "PATCH", "/api/v1/sessions/{sessionId}/conversation/settings")
@@ -848,9 +784,6 @@ func (c *ConversationsController) setSettings(w http.ResponseWriter, r *http.Req
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	// An unknown approval mode is refused rather than normalized: silently
-	// downgrading a permission choice is the one direction that must never happen
-	// by accident.
 	approval := domain.PermissionMode(req.ApprovalMode)
 	if req.ApprovalMode != "" && !approval.Valid() {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
@@ -989,20 +922,13 @@ func (c *ConversationsController) snapshot(w http.ResponseWriter, r *http.Reques
 			capActivityOutput(activity.Detail, int(outputLimit))
 		}
 	}
-	// Excerpt verification is owned by AO, independently of provider capabilities.
-	// Older daemons ignore this request field, so clients must negotiate support.
 	response.SupportsExcerpts = true
 	response.SupportsFileReferences = true
 	envelope.WriteJSON(w, http.StatusOK, response)
 }
 
-// outputElision joins the head and tail of a cut command output.
 const outputElision = "\n…\n"
 
-// capActivityOutput keeps the head and tail of a long command output, so a page
-// stays small while the first lines and the result line both stay readable.
-// outputBytes is the full size; a client reads the whole output with a page that
-// holds only this activity and no outputLimit.
 func capActivityOutput(detail map[string]any, limit int) {
 	output, ok := detail["output"].(string)
 	if !ok || len(output) <= limit {
@@ -1053,8 +979,6 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusAccepted, sendConversationMessageResponse(turn))
 }
 
-// chatUserMessage validates a send request and turns it into the message the
-// agent receives.
 func chatUserMessage(req SendConversationMessageRequest, sessionID string) (ports.ChatUserMessage, *attachmentError) {
 	for _, ref := range req.FileReferences {
 		if ref.SessionID != sessionID {
@@ -1062,8 +986,6 @@ func chatUserMessage(req SendConversationMessageRequest, sessionID string) (port
 		}
 	}
 	if req.Text == "" && len(req.Attachments) == 0 && len(req.Resources) == 0 && len(req.Excerpts) == 0 && len(req.FileReferences) == 0 {
-		// There is no keystroke concept in Chat mode: an empty body is a client
-		// bug, not a way to nudge the agent.
 		return ports.ChatUserMessage{}, &attachmentError{code: "CHAT_MESSAGE_EMPTY", message: "message text is required"}
 	}
 	content, attachmentErr := conversationContent(req)
@@ -1097,9 +1019,6 @@ func chatUserMessage(req SendConversationMessageRequest, sessionID string) (port
 	}, nil
 }
 
-// sendConversationMessageResponse reports an accepted send. An empty turn means
-// the client message id was already delivered. Reporting the duplicate
-// explicitly lets a retrying client stop rather than assume a new turn began.
 func sendConversationMessageResponse(turn domain.ConversationTurn) SendConversationMessageResponse {
 	return SendConversationMessageResponse{
 		TurnID:         turn.ID,
@@ -1236,10 +1155,6 @@ func (c *ConversationsController) interrupt(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// conversationRequestID decodes the path id the Electron client percent-encodes.
-// ACP persistent hosts mint ids such as `acp-request:<host>:<n>`; openapi-fetch
-// turns the colons into %3A, and chi.URLParam leaves that encoding in place —
-// the same trap ActivateBranch already handles for `conversation-1:root`.
 func conversationRequestID(w http.ResponseWriter, r *http.Request) (string, bool) {
 	requestID, err := url.PathUnescape(chi.URLParam(r, "requestId"))
 	if err != nil {
@@ -1269,8 +1184,6 @@ func decodeConversationBodyLimit(w http.ResponseWriter, r *http.Request, into an
 	return true
 }
 
-// writeConversationError maps the Chat service's typed failures onto stable
-// codes, so a client can tell a permanent answer from a retryable one.
 func writeConversationError(w http.ResponseWriter, r *http.Request, err error) {
 	writeConversationErrorWithCode(w, r, err, "", "")
 }
@@ -1286,7 +1199,6 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 			"SESSION_NOT_FOUND", "session not found", nil)
 
 	case errors.Is(err, chatsvc.ErrNotChatMode):
-		// Permanent for this request: retry only after an explicit interface switch.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"SESSION_MODE_MISMATCH",
 			"this session was created in Terminal UI mode and has no chat conversation", nil)
@@ -1318,16 +1230,11 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 			"the session is switching interfaces; send again after the handoff completes", nil)
 
 	case errors.Is(err, chatsvc.ErrCompactionUnsupported):
-		// Permanent for this harness, and a 409 rather than a 500 because nothing
-		// failed: the provider simply has no way to reclaim context. A client should
-		// stop offering the control instead of retrying.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_COMPACTION_UNSUPPORTED",
 			"this agent cannot compact its conversation history", nil)
 
 	case errors.Is(err, chatsvc.ErrCompactionWhileBusy):
-		// Retryable once the turn ends, and refused rather than forwarded: the
-		// provider would silently interrupt the running turn to make room.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_COMPACTION_BUSY",
 			"finish or stop the current turn before compacting", nil)
@@ -1345,10 +1252,6 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 			"CHAT_MESSAGE_IDEMPOTENCY_CONFLICT", "clientMessageId belongs to a different message", nil)
 
 	case errors.Is(err, chatsvc.ErrTurnRunning):
-		// Retryable, unlike every other refusal here: the same request works once
-		// the agent finishes. Rolling back mid-turn is refused rather than raced,
-		// because discarding history the agent is still writing into would leave
-		// AO's timeline and the agent's memory describing different conversations.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_TURN_RUNNING",
 			"stop the agent before rolling back: it is in the middle of a turn", nil)
@@ -1368,13 +1271,10 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 			"CHAT_ROLLBACK_UNSUPPORTED", "this agent cannot discard conversation history", nil)
 
 	case errors.Is(err, chatsvc.ErrFilesNotRestorable):
-		// Nothing changed, files or conversation. The reason names what is missing,
-		// and a rollback without restoreFiles still works.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_ROLLBACK_FILES_UNAVAILABLE", err.Error(), nil)
 
 	case errors.Is(err, chatsvc.ErrFilesChanged):
-		// Nothing changed. A fresh preview lists what a restore would do now.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_ROLLBACK_FILES_CHANGED", err.Error(), nil)
 
@@ -1398,32 +1298,21 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_TITLE_REQUIRED", "title is required", nil)
 
-	// Checked before ErrProviderRefused: a steer into a lost session is wrapped
-	// as a refusal so its delivery handle settles, but the conversation is not
-	// fine, and the client needs the resume guidance.
 	case errors.Is(err, ports.ErrChatProviderSessionLost):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_PROVIDER_SESSION_LOST",
 			"the agent's process lost this conversation and was stopped; resume the agent to continue", nil)
 
 	case errors.Is(err, chatsvc.ErrProviderRefused):
-		// The provider declined and the conversation is fine. Its own explanation is
-		// carried through: it says something the user can act on, which a generic
-		// conflict message would throw away.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_PROVIDER_REFUSED", err.Error(), nil)
 
 	case errors.Is(err, ports.ErrChatRequestNotPending):
-		// Two clients can watch the same approval, so arriving second is ordinary.
-		// The card is stale; the client should refresh rather than retry.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_REQUEST_NOT_PENDING",
 			"this request has already been answered or is no longer waiting", nil)
 
 	case errors.Is(err, ports.ErrChatDecisionNotOffered):
-		// A client asking for an option the provider never offered is a bug in the
-		// client, not a server failure — and the request is still pending, so the
-		// user can still answer it.
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
 			"CHAT_DECISION_NOT_OFFERED", err.Error(), nil)
 
@@ -1452,8 +1341,6 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 			"CHAT_AUTH_REQUIRED", "the agent is installed but not authenticated", nil)
 
 	case errors.Is(err, ports.ErrChatResumeFailed):
-		// Deliberately not a silent recovery: the client must offer the user a
-		// choice rather than have AO invent a fresh conversation.
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
 			"CHAT_RESUME_FAILED",
 			"the stored provider conversation could not be resumed", nil)
@@ -1467,8 +1354,6 @@ func writeConversationErrorWithCode(w http.ResponseWriter, r *http.Request, err 
 	}
 }
 
-// conversationSnapshotResponse maps the service snapshot onto the wire shape.
-// Items arrive already ordered by sequence, so nothing is re-sorted here.
 func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotResponse {
 	out := ConversationSnapshotResponse{
 		ContinueTurnID:                   chatsvc.ContinuableTurnID(s.Turns),
@@ -1602,9 +1487,6 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 	}
 	summaries := make([]ConversationContentSummaryResponse, 0, len(content))
 	for _, block := range content {
-		// AO's reconstructed-history seed is provider context, not content the
-		// person attached. Keeping it out of this public summary prevents it from
-		// appearing as a user resource when the edited message is rendered again.
 		if block.Type == "text" || ports.IsInternalReplayContent(block) {
 			continue
 		}
@@ -1621,10 +1503,6 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 			summary.AnnotationOrder = ref.Order
 		}
 		if block.Type == "excerpt" {
-			// Excerpts written by current versions carry captured structured
-			// context. Older durable messages only have the excerpt resource URI
-			// and selected text; keep those navigable without exposing the
-			// internal URI in the public content summary.
 			summary.Name = "Chat excerpt"
 			if block.Excerpt != nil {
 				summary.Snapshot = excerptSnapshotSummary(block.Excerpt.Reference.Snapshot)
@@ -1649,10 +1527,6 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 	return summaries, true
 }
 
-// usagePayload maps the conversation's token position onto the wire shape. A nil
-// snapshot value stays nil: the field being absent is how a client learns the
-// provider has not reported yet, which is not the same as a conversation that has
-// used nothing.
 func usagePayload(usage *domain.ConversationUsage) *ConversationUsagePayload {
 	if usage == nil {
 		return nil
@@ -1669,7 +1543,6 @@ func usagePayload(usage *domain.ConversationUsage) *ConversationUsagePayload {
 	}
 }
 
-// rateLimitsPayload maps the account's quota position onto the wire shape.
 func rateLimitsPayload(limits *domain.ConversationRateLimits) *ConversationRateLimitsPayload {
 	if limits == nil {
 		return nil
@@ -1683,7 +1556,6 @@ func rateLimitsPayload(limits *domain.ConversationRateLimits) *ConversationRateL
 	}
 }
 
-// turnDiffPayload maps a turn's changed-file summary onto the wire shape.
 func turnDiffPayload(diff *domain.ConversationTurnDiff) *ConversationTurnDiffResponse {
 	if diff == nil {
 		return nil
@@ -1704,7 +1576,6 @@ func turnDiffPayload(diff *domain.ConversationTurnDiff) *ConversationTurnDiffRes
 	return out
 }
 
-// turnArtifactsPayload maps the artifacts a turn changed onto the wire shape.
 func turnArtifactsPayload(artifacts *domain.ConversationTurnArtifacts) *ConversationTurnArtifactsResponse {
 	if artifacts == nil || len(artifacts.Files) == 0 {
 		return nil
@@ -1716,8 +1587,6 @@ func turnArtifactsPayload(artifacts *domain.ConversationTurnArtifacts) *Conversa
 	return out
 }
 
-// turnPlanPayload maps a turn's plan onto the wire shape. A nil plan stays nil: the
-// agent made none, which is not the same as making an empty one.
 func turnPlanPayload(plan *domain.ConversationPlan) *ConversationPlanResponse {
 	if plan == nil {
 		return nil
@@ -1737,12 +1606,6 @@ func turnPlanPayload(plan *domain.ConversationPlan) *ConversationPlanResponse {
 	return out
 }
 
-// modelReroutePayload maps a model substitution onto the wire shape.
-//
-// Absent means the provider never swapped the model, which is why it is not folded
-// into the settings payload: settings say what AO asked for, and this says what
-// answered. Collapsing them would leave a client unable to tell "I chose this" from
-// "this replied".
 func modelReroutePayload(reroute *domain.ConversationModelReroute) *ConversationModelReroutePayload {
 	if reroute == nil {
 		return nil
@@ -1756,7 +1619,6 @@ func modelReroutePayload(reroute *domain.ConversationModelReroute) *Conversation
 	}
 }
 
-// accountPayload maps the provider account onto the wire shape.
 func accountPayload(account *domain.ConversationAccount) *ConversationAccountPayload {
 	if account == nil {
 		return nil
@@ -1781,7 +1643,6 @@ func accountPayload(account *domain.ConversationAccount) *ConversationAccountPay
 	}
 }
 
-// threadStatePayload maps the provider's thread lifecycle onto the wire shape.
 func threadStatePayload(state *domain.ConversationThreadState) *ConversationThreadStatePayload {
 	if state == nil {
 		return nil
@@ -1794,8 +1655,6 @@ func threadStatePayload(state *domain.ConversationThreadState) *ConversationThre
 	}
 }
 
-// mcpServersPayload maps the tool servers onto the wire shape, preserving the order
-// the daemon holds them in so a client's list does not reshuffle between polls.
 func mcpServersPayload(servers []domain.ConversationMCPServer) []ConversationMCPServerPayload {
 	if len(servers) == 0 {
 		return nil
@@ -1812,23 +1671,12 @@ func mcpServersPayload(servers []domain.ConversationMCPServer) []ConversationMCP
 	return out
 }
 
-// activityDetailPayload folds accumulated command output into the typed payload.
-//
-// The two output sources are not equivalent and the client is told which it has.
-// The streamed accumulation exists while the command runs and survives a command
-// that never completes; the provider's own aggregate only appears on completion.
-// Neither is complete -- measured on codex-cli 0.146.0, a command printing
-// tick-1..tick-8 lost tick-1 from the delta stream and from the aggregate alike --
-// so outputMayBePartial stays set either way. `outputSource` exists so the UI can
-// explain WHY it is partial instead of hedging identically about both.
 func activityDetailPayload(activity domain.ConversationActivity) map[string]any {
 	detail := decodeDetail(activity.Detail)
 	if activity.CommandOutput != "" {
 		if detail == nil {
 			detail = map[string]any{}
 		}
-		// The stream wins over the separately capped aggregate, including its
-		// own truncation state.
 		detail["output"] = activity.CommandOutput
 		detail["outputSource"] = "stream"
 		detail["outputMayBePartial"] = true
@@ -1851,19 +1699,9 @@ func activityDetailPayload(activity domain.ConversationActivity) map[string]any 
 	return detail
 }
 
-// streamedTextKeys names the accumulated provider prose for the kind of activity it
-// belongs to.
-//
-// One column, several meanings, because each activity kind has exactly one such
-// stream: a command's is the keystrokes the agent sent into its terminal, a
-// reasoning item's is the model's own summary. Naming them apart on the wire is what
-// keeps a client from having to guess which it is looking at -- and specifically
-// keeps terminalInput out of `output`, which the PTY already echoes.
 func streamedTextKeys(kind domain.ActivityKind) (key, truncatedKey string) {
 	switch kind {
 	case domain.ActivityKindReasoning:
-		// The same key the settled summary lands under, so a client reads one field
-		// whether the item is still streaming or already finished.
 		return "text", "textTruncated"
 	case domain.ActivityKindCommand:
 		return "terminalInput", "terminalInputTruncated"
@@ -1876,9 +1714,6 @@ func streamedTextKeys(kind domain.ActivityKind) (key, truncatedKey string) {
 	}
 }
 
-// decodeDetail turns the stored payload into a JSON object. A payload this build
-// cannot parse is dropped rather than emitted as a string the client would have
-// to guess at.
 func decodeDetail(raw []byte) map[string]any {
 	if len(raw) == 0 {
 		return nil

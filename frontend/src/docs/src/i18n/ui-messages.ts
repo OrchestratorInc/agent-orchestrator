@@ -1,8 +1,6 @@
 import type { I18n, MessageDescriptor } from "@lingui/core";
 import { msg } from "@lingui/core/macro";
 
-// Strings rendered by the docs framework's own components, keyed the way its
-// translation provider looks them up: the English text, then its notes.
 const FRAMEWORK_MESSAGES: Record<string, MessageDescriptor> = {
   "Close Search(search dialog)(aria-label)": msg({ message: "Close search", context: "search dialog" }),
   "Close Sidebar(aria-label)": msg({ message: "Close sidebar", context: "sidebar" }),
@@ -34,8 +32,6 @@ export function frameworkTranslations(i18n: I18n): Record<string, string> {
   return translations;
 }
 
-// Sidebar section and folder titles from the content's meta.json files. Page
-// titles come from each article and stay in the article's language.
 const NAV_LABELS: Record<string, MessageDescriptor> = {
   "Getting Started": msg({ message: "Getting Started", context: "sidebar section" }),
   "Using Orchestrator": msg({ message: "Using Orchestrator", context: "sidebar section" }),
@@ -52,7 +48,6 @@ const NAV_LABELS: Record<string, MessageDescriptor> = {
   Workspaces: msg({ message: "Workspaces", context: "sidebar section" }),
 };
 
-/** Translates a sidebar label when it is one we know. Others pass through. */
 export function navLabel(i18n: I18n, label: string): string {
   const descriptor = NAV_LABELS[label];
   return descriptor ? i18n._(descriptor) : label;

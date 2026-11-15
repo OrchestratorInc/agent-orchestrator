@@ -28,9 +28,6 @@ func TestIsACPAuthRequiredRecognizesProtocolAuthCodes(t *testing.T) {
 	}
 }
 
-// A reauth prompt shown to a user whose credentials are fine is its own bug,
-// so the match stays phrase-based: a turn that merely mentions auth, or a tool
-// echoing a status code from the user's own program, is not a rejection.
 func TestIsACPAuthRequiredIgnoresUnrelatedFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -78,14 +75,10 @@ func TestNormalizeACPErrorMarksAuthRejectionsForReauth(t *testing.T) {
 	}
 }
 
-// The driver must carry the binding's invalidation hook onto every
-// conversation, or the runtime catch is wired to nothing.
 func TestDriverPropagatesTheAuthRejectionHook(t *testing.T) {
 	called := 0
 	cfg := Config{OnAuthRejected: func() { called++ }}
 	conv := &conversation{}
-	// This mirrors the single assignment in newACPConversation; if that line
-	// is removed, the hook silently stops reaching live turns.
 	conv.onAuthRejected = cfg.OnAuthRejected
 	if conv.onAuthRejected == nil {
 		t.Fatal("the configured hook must reach the conversation")
@@ -96,7 +89,6 @@ func TestDriverPropagatesTheAuthRejectionHook(t *testing.T) {
 	}
 }
 
-// The hook is optional: a binding that supplies none must not panic.
 func TestNoAuthRejectionHookIsSafe(t *testing.T) {
 	conv := &conversation{}
 	conv.onAuthRejected = Config{}.OnAuthRejected

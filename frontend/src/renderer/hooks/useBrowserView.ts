@@ -30,10 +30,6 @@ export type ClosedBrowserTab = {
 
 const MAX_CLOSED_TABS = 5;
 
-// Mirrors the main process's isBlankBrowserEntry (browser-view-host.ts):
-// a freshly-opened tab reports its URL as the literal string "about:blank"
-// once its initial load settles, not an empty string — a plain truthiness
-// check on `url` treats that as "real" content worth remembering.
 function isBlankTabUrl(url: string): boolean {
 	return !url || url === "about:blank";
 }
@@ -62,31 +58,13 @@ function sameBrowserOrigin(left: string, right: string): boolean {
 
 type UseBrowserViewOptions = {
 	sessionId: string;
-	/** Source daemon for preview URLs; omitted for the local daemon. */
 	origin?: { hostId: string; sessionId: string; proxyBase: string };
-	/** A cloud session, whose agent browser the control plane serves. */
 	cloudAgentBrowser?: { baseUrl: string; orgId: string; sessionId: string };
 	active: boolean;
 	poppedOut: boolean;
-	/**
-	 * When true, the view is cleared and the daemon-driven preview is suppressed.
-	 * Use when the session is terminated: the old preview content should not
-	 * remain visible even if the DB still carries a preview_url.
-	 */
 	terminated?: boolean;
-	/** The daemon tears down native targets when the session ends, even for durable artifacts. */
 	sessionEnded?: boolean;
-	/**
-	 * Preview target driven by the daemon (via `ao preview`, streamed over CDC).
-	 * When set, the view navigates here automatically; an empty value clears it.
-	 */
 	previewUrl?: string;
-	/**
-	 * Monotonic counter the daemon bumps on every `ao preview` call, even when
-	 * previewUrl is unchanged. The view re-navigates whenever it advances, so a
-	 * repeated `ao preview <same-url>` still refreshes (and CDC replays of an
-	 * unrelated session update, which leave it unchanged, are ignored).
-	 */
 	previewRevision?: number;
 };
 
@@ -169,26 +147,14 @@ const EMPTY_PROFILE_STATE: BrowserProfileViewState = {
 
 type PreviewTrigger = { revision: number | null; target: string; origin: string; sessionEnded: boolean };
 
-// The native view survives React session switches, so remember which preview
-// trigger was already consumed for each session. This prevents switching back
-// from reasserting previewUrl over a URL the user manually navigated to.
 const consumedPreviewTriggers = new Map<string, PreviewTrigger>();
 
 export function resetConsumedPreviewTriggersForTest(): void {
 	consumedPreviewTriggers.clear();
 }
 
-// Recently Closed has no main-process backing (unlike live tabs, which
-// survive a session switch because they're kept alive in the main process
-// and simply re-fetched) — it's built up purely from this hook's own
-// bookkeeping. Without this, switching sessions and back lost the list for
-// good, even though nothing about it actually changed.
 const closedTabsBySession = new Map<string, ClosedBrowserTab[]>();
 
-// The last native view, page and tabs each session showed. A native view
-// outlives a session switch, so switching back can show it in the same frame
-// instead of waiting for `ensure` to answer: the panel is transparent over a
-// live page, so that wait painted the bare window (black) for 100-150 ms.
 type CachedNativeView = { viewId: string; navState: BrowserNavState; tabsState: BrowserTabsState };
 const nativeViewBySession = new Map<string, CachedNativeView>();
 
@@ -196,9 +162,6 @@ export function resetNativeViewCacheForTest(): void {
 	nativeViewBySession.clear();
 }
 
-// Main reports every view's navigation and tabs, including sessions that are
-// not on screen. Keep their cached state current so switching back never shows
-// an address bar or tab list from before an agent navigated that page.
 function refreshCachedNativeView(viewId: string, update: Partial<Omit<CachedNativeView, "viewId">>): void {
 	for (const [sessionId, cached] of nativeViewBySession) {
 		if (cached.viewId === viewId) nativeViewBySession.set(sessionId, { ...cached, ...update });
@@ -211,8 +174,6 @@ export function resetClosedTabsForTest(): void {
 
 const HIDDEN_RECT: BrowserRect = { x: 0, y: 0, width: 0, height: 0 };
 
-// Keep revisions monotonic across hook remounts. performance.timeOrigin gives a
-// newly loaded shell a newer range while staying below Number.MAX_SAFE_INTEGER.
 let nextLayoutRevision = Math.floor(globalThis.performance?.timeOrigin ?? Date.now()) * 1_000;
 
 function sameRect(a: BrowserRect, b: BrowserRect): boolean {
@@ -230,14 +191,10 @@ function claimLayoutRevision(): number {
 	return nextLayoutRevision;
 }
 
-// The macOS translucent window tints the shell over the vibrancy blur. The live
-// page sits below the shell, so styles.css cuts the tint out over this rect
-// rather than tinting the page. Last visible view owns the hole.
 let browserHoleOwner: string | null = null;
 
 function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	const root = document.documentElement;
-	// Only the translucent window needs the hole.
 	if (rect && root.dataset.windowTranslucent !== "true") rect = null;
 	if (!rect) {
 		if (browserHoleOwner !== viewId) return;
@@ -247,10 +204,6 @@ function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	}
 	browserHoleOwner = viewId;
 	root.dataset.browserHole = "true";
-	// This runs on every frame of an inspector slide. The hole properties are
-	// registered non-inheriting (styles.css) and live on the shell root, whose
-	// tint pseudo-element alone reads them, so a write restyles that one element
-	// instead of the whole document, as :root custom properties did.
 	const shell = document.querySelector<HTMLElement>(".app-shell-root");
 	if (!shell) return;
 	shell.style.setProperty("--browser-hole-x", `${rect.x}px`);
@@ -259,20 +212,8 @@ function publishBrowserHole(viewId: string, rect: BrowserRect | null): void {
 	shell.style.setProperty("--browser-hole-h", `${rect.height}px`);
 }
 
-// ResizeHandle.tsx sits at the inspector panel's left edge with a
-// `--size-resize-handle-offset` (6px) negative inset, so only its right half
-// (0 to 6px, inside the panel) survives the panel's `overflow-hidden` — the
-// left half is clipped away. That surviving 6px is inside `[data-panel]`, the
-// same territory the browser view fills, so without this reserve the native
-// view covers the handle at rest and a drag can never start once a page is
-// loaded (only continuing an already-started drag is handled elsewhere, via
-// the `is-resizing-x` watcher below). Keep in sync with tokens.css.
 const RESIZE_HANDLE_RESERVE_PX = 6;
 
-// The native WebContentsView is a window-level overlay, so DOM `overflow:
-// hidden` never clips it — it paints wherever the slot's bounding box lands.
-// Keep the inspector's full viewport width while it slides beyond the right
-// window edge. The native window clips that edge without reflowing the page.
 function visibleSlotRect(node: HTMLElement): BrowserRect {
 	const rect = node.getBoundingClientRect();
 	let { left, top, right, bottom } = rect;
@@ -300,24 +241,11 @@ function visibleSlotRect(node: HTMLElement): BrowserRect {
 	};
 }
 
-// `requestFullscreen` (the terminal pane's fullscreen button) promotes an element
-// into the DOM top layer, which covers every other DOM node — but not the native
-// view, which Chromium composites above the page regardless. The transition also
-// leaves the slot's own box untouched, since the top layer does not reflow
-// normal-flow siblings, so neither the ResizeObserver nor `resize` fires and the
-// view would keep painting at its pre-fullscreen bounds, over the fullscreen
-// element and without its own (now hidden) toolbar. Nothing outside the
-// fullscreen subtree is visible, so hide the view unless the slot is inside it.
 function hiddenByFullscreen(node: HTMLElement): boolean {
-	// Truthy, not `!== null`: the spec says null, but jsdom (and older engines)
-	// leave `fullscreenElement` undefined when nothing is fullscreen.
 	const fullscreen = document.fullscreenElement;
 	return Boolean(fullscreen) && !fullscreen!.contains(node);
 }
 
-/** An agent command event, marked with whether its start arrived while this
- *  session's view was the one on screen. A command that began while the user
- *  was elsewhere and finishes after they switch in is not theirs to reveal. */
 export type ObservedBrowserAgentActivity = BrowserAgentActivityState & { startObserved: boolean };
 
 export function useBrowserView({
@@ -338,9 +266,6 @@ export function useBrowserView({
 	const [annotationMode, setAnnotationModeState] = useState(false);
 	const [annotationState, setAnnotationState] = useState({ count: 0, screenshotCount: 0, hasDraft: false });
 	const [tabsState, setTabsState] = useState<BrowserTabsState>(EMPTY_TABS_STATE);
-	// Display-only tab order (drag-to-reorder). Re-projected onto every incoming
-	// tabsState push below, since the main process's own tab order is not
-	// authoritative and browser:tabsState pushes on every nav/title event.
 	const [tabOrder, setTabOrder] = useState<string[]>([]);
 	const [devtoolsState, setDevtoolsState] = useState<BrowserDevToolsState>(EMPTY_DEVTOOLS_STATE);
 	const [findState, setFindState] = useState<BrowserFindState>(EMPTY_FIND_STATE);
@@ -360,9 +285,7 @@ export function useBrowserView({
 	const frameRef = useRef<number | null>(null);
 	const appliedLayoutRevisionRef = useRef(0);
 	const settleTimerRef = useRef<number | null>(null);
-	// What the last setBounds told main, so a scroll that moved nothing sends nothing.
 	const lastSentBoundsRef = useRef<{ viewId: string; rect: BrowserRect; visible: boolean } | null>(null);
-	// The queued measure came only from scrolling; any other trigger clears it.
 	const scrollOnlyMeasureRef = useRef(false);
 	const observerRef = useRef<ResizeObserver | null>(null);
 	const previewTriggerRef = useRef<PreviewTrigger | null>(null);
@@ -391,9 +314,6 @@ export function useBrowserView({
 		}, 3_000);
 	}, []);
 
-	// Single choke point for every closedTabs mutation, so the module-level
-	// per-session cache (closedTabsBySession) can never drift from what's
-	// actually shown.
 	const updateClosedTabs = useCallback(
 		(updater: (current: ClosedBrowserTab[]) => ClosedBrowserTab[]) => {
 			const current = closedTabsBySession.get(sessionId) ?? [];
@@ -416,16 +336,7 @@ export function useBrowserView({
 		});
 	}, []);
 
-	// onlyIfChanged is for scroll-driven measures alone. Main can hide a view on
-	// its own (clearing the page, closing the last tab), so every other trigger
-	// always re-sends the geometry.
 	const measureAndSend = useCallback((onlyIfChanged = false) => {
-		// measureAndSend runs both from the scheduleMeasure() rAF callback and as a
-		// direct synchronous call (parking on overlay open, the settle timer). A
-		// direct call may land while a scheduled frame is still queued, so cancel
-		// that live handle rather than blindly nulling it — otherwise the
-		// scheduleMeasure() dedupe guard and cancelScheduledMeasure() cleanup would
-		// both trust a frameRef that no longer reflects the pending frame.
 		if (frameRef.current !== null) {
 			if (window.cancelAnimationFrame) window.cancelAnimationFrame(frameRef.current);
 			window.clearTimeout(frameRef.current);
@@ -435,7 +346,6 @@ export function useBrowserView({
 		const node = slotNodeRef.current;
 		if (!id) return;
 		if (!activeRef.current || !node || !node.isConnected || hiddenByFullscreen(node)) {
-			// A hidden view stays hidden while the page scrolls: say so once.
 			const last = lastSentBoundsRef.current;
 			if (onlyIfChanged && last?.viewId === id && !last.visible) return;
 			sendHiddenBounds(id);
@@ -468,8 +378,6 @@ export function useBrowserView({
 			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
 	}, [measureAndSend]);
 
-	// Scrolling only moves the slot when the document or an element containing
-	// it scrolls; chat, terminal and list scrolling beside it cannot.
 	const scheduleScrollMeasure = useCallback((event: Event) => {
 		if (!scrollCanMoveSlot(event.target, slotNodeRef.current)) return;
 		if (frameRef.current !== null) return;
@@ -479,14 +387,6 @@ export function useBrowserView({
 			: window.setTimeout(() => measureAndSend(scrollOnlyMeasureRef.current), 16);
 	}, [measureAndSend]);
 
-	// A ResizeObserver only fires on size changes, so a position-only layout shift
-	// leaves the native overlay at stale bounds: entering/leaving pop-out moves the
-	// slot into a different panel, and opening the inspector (what `ao preview`
-	// does) reflows the slot's x without changing the observed node's box size.
-	// Neither fires the observer, so the view visibly spills over the sidebar/
-	// terminal until an unrelated window resize re-measures it. Re-measure now and
-	// again once the panel transition has settled (~240ms) so the final geometry
-	// always wins.
 	const scheduleSettleMeasure = useCallback(() => {
 		scheduleMeasure();
 		if (settleTimerRef.current !== null) window.clearTimeout(settleTimerRef.current);
@@ -506,18 +406,11 @@ export function useBrowserView({
 			}
 			const observer = new ResizeObserver(scheduleMeasure);
 			observer.observe(node);
-			// The inspector column keeps a stable width and slides on `x`; the
-			// layout gap's width is what actually changes every spring frame.
-			// Observing it re-measures through the whole animation so the native
-			// view tracks the sliding rail instead of lagging at the last size.
 			const column = node.closest("[data-panel]");
 			if (column) observer.observe(column);
 			const gap = node.closest(".session-split")?.querySelector("[data-slot='inspector-gap']");
 			if (gap) observer.observe(gap);
 			observerRef.current = observer;
-			// Ref handoffs run old-node -> null -> new-node in one React commit. Send
-			// the replacement geometry immediately so the native view is restored in
-			// the same event-loop turn instead of remaining parked for a painted frame.
 			measureAndSend();
 			scheduleMeasure();
 		},
@@ -533,30 +426,20 @@ export function useBrowserView({
 
 	useEffect(() => {
 		let disposed = false;
-		// Preview revisions are scoped to a session. A native view survives session
-		// switches, so seed from the per-session consumed trigger to avoid
-		// reasserting previewUrl over manual navigation on switch-back.
 		previewTriggerRef.current = hasNativeBrowser ? (consumedPreviewTriggers.get(sessionId) ?? null) : null;
 		const cached = hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
-		// The view this run owns, so its cleanup never hides or clears the next
-		// session's view, which the switch below may already have shown.
 		let ownViewId = cached?.viewId ?? "";
 		if (cached) viewIdRef.current = cached.viewId;
 		setStateSessionId(sessionId);
 		setViewId(cached?.viewId ?? "");
 		setNavState(cached?.navState ?? EMPTY_NAV_STATE);
 		setTabsState(cached?.tabsState ?? EMPTY_TABS_STATE);
-		// Tab ids (`t1`, `t2`, ...) restart per session, so a stale order from the
-		// previous session could otherwise silently reapply to the new one.
 		setTabOrder([]);
 		setDevtoolsState(EMPTY_DEVTOOLS_STATE);
 		setFindState(EMPTY_FIND_STATE);
 		setFindOpenRequest(0);
 		setProfileState(EMPTY_PROFILE_STATE);
 		setTabNotice("");
-		// Restore this session's own Recently Closed list rather than wiping it —
-		// switching away and back should find it exactly as it was, same as the
-		// live tabs the native view already keeps.
 		setClosedTabs(closedTabsBySession.get(sessionId) ?? []);
 		setAgentBrowserActive(false);
 		setAgentBrowserActivity(null);
@@ -641,8 +524,6 @@ export function useBrowserView({
 				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
 					window.ao?.browser.destroy(id);
 				} else if (viewIdRef.current === id) {
-					// Otherwise a session switch already took over this view and
-					// hides it once the destination's view is shown.
 					sendHiddenBounds(id);
 				}
 			}
@@ -657,11 +538,6 @@ export function useBrowserView({
 		sessionId,
 	]);
 
-	// Swap native views as the destination session first paints: show its
-	// cached view, then hide the departing one, so no frame shows neither.
-	// Measure in that first frame, not at commit: the commit's layout is not
-	// final (the address bar renders inline until its top-bar host is known),
-	// and measuring there placed the page 36 px low for ~100 ms.
 	const shownSessionRef = useRef(sessionId);
 	useLayoutEffect(() => {
 		if (shownSessionRef.current === sessionId) return;
@@ -673,8 +549,6 @@ export function useBrowserView({
 		activeRef.current = active;
 		let frame: number | null = window.requestAnimationFrame(() => {
 			frame = null;
-			// `ensure` may already have answered with a new view for this session;
-			// it shows that one. Either way the departing view must go.
 			if (viewIdRef.current === cached.viewId) measureAndSend();
 			if (previous && previous !== viewIdRef.current) sendHiddenBounds(previous);
 		});
@@ -736,10 +610,6 @@ export function useBrowserView({
 		});
 	}, [showTabNotice, updateClosedTabs]);
 
-	// Re-project the persisted display order onto every incoming tabsState push:
-	// browser:tabsState fires on every nav/title-update/loading-state change for
-	// any tab, so a one-shot local reorder would otherwise be clobbered by the
-	// very next push. New tabs (via "+", popups, agent tab-new) append at the end.
 	useEffect(() => {
 		const incomingIds = tabsState.tabs.map((tab) => tab.id);
 		setTabOrder((prev) => {
@@ -779,7 +649,6 @@ export function useBrowserView({
 				if (state.phase === "started") starts.add(state.commandId);
 				startObserved = starts.has(state.commandId);
 				if (state.phase === "finished") starts.delete(state.commandId);
-				// Bound memory if a finish is ever lost.
 				if (starts.size > 64) starts.delete(starts.values().next().value!);
 			}
 			setAgentBrowserActive(state.active);
@@ -826,12 +695,6 @@ export function useBrowserView({
 		};
 		const unsubscribeOverlay = subscribeBrowserOverlaySync();
 		updateResize();
-		// useResizable.ts toggles `is-resizing-x` on <body> (outside React) while the
-		// inspector's own drag handle is held. The handle captures its pointer in
-		// useResizable, so we only need to keep the native bounds synchronized here.
-		// A dedicated, non-subtree observer keeps this cheap: unlike the overlay observer's `data-state`,
-		// `class` churns on nearly every render throughout the app, so watching it
-		// subtree-wide would run `update()` far more often than the dialog/menu case.
 		const resizeObserver = new MutationObserver(updateResize);
 		resizeObserver.observe(document.body, {
 			attributes: true,
@@ -843,11 +706,6 @@ export function useBrowserView({
 		};
 	}, [hasNativeBrowser, scheduleSettleMeasure]);
 
-	// The inspector opens and closes as a CSS slide: the rail's gap animates its
-	// width and the panel its transform. The native page is not a DOM node, so it
-	// follows only through setBounds. Resize observers miss the transform, and on
-	// open they reached the page only ~110 ms into a 300 ms slide, so the page
-	// jumped in behind the panel. Track every frame of the slide instead.
 	useEffect(() => {
 		if (!hasNativeBrowser) return;
 		const running = new Set<string>();
@@ -858,8 +716,6 @@ export function useBrowserView({
 			return (slot === "inspector-gap" || slot === "inspector-container") &&
 				(event.propertyName === "width" || event.propertyName === "transform");
 		};
-		// Only while the page is on screen: a hidden view would otherwise be
-		// re-parked through IPC on every frame of a Summary or Files slide.
 		const step = () => {
 			frame = null;
 			if (!activeRef.current) return;
@@ -869,7 +725,6 @@ export function useBrowserView({
 		const onRun = (event: TransitionEvent) => {
 			if (!isInspectorSlide(event) || !activeRef.current) return;
 			running.add(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
-			// Backstop for a transition whose end event never arrives (hidden window).
 			deadline = performance.now() + 1_000;
 			if (frame === null) frame = window.requestAnimationFrame(step);
 		};
@@ -877,8 +732,6 @@ export function useBrowserView({
 			if (!isInspectorSlide(event)) return;
 			running.delete(`${(event.target as Element).getAttribute("data-slot")}:${event.propertyName}`);
 			if (running.size > 0) return;
-			// The slide has landed: send the final rect now and drop the frame
-			// already queued for it.
 			if (frame !== null) {
 				window.cancelAnimationFrame(frame);
 				frame = null;
@@ -898,8 +751,6 @@ export function useBrowserView({
 
 	useEffect(() => {
 		const handle = () => scheduleMeasure();
-		// Fullscreen animates on macOS, so settle-measure: hiding lands on the
-		// leading edge, and the restore on exit waits for the final geometry.
 		const handleFullscreenChange = () => scheduleSettleMeasure();
 		window.addEventListener("resize", handle);
 		window.addEventListener("scroll", scheduleScrollMeasure, true);
@@ -921,7 +772,6 @@ export function useBrowserView({
 			const next = await fn(id);
 			if (next) setNavState(next);
 		} catch {
-			// navigation errors are handled by the did-fail-load event channel
 		}
 	}, []);
 
@@ -969,9 +819,6 @@ export function useBrowserView({
 				const state = await window.ao!.browser.selectTab({ viewId, tabId });
 				if (viewIdRef.current === state.viewId) setTabsState(state);
 			} catch {
-				// The native view may already have switched before automation
-				// synchronization fails. Read the actual selection back instead of
-				// showing a misleading switch-failure notice in the toolbar.
 				const state = await window.ao!.browser.getTabs(viewId).catch(() => undefined);
 				if (state && viewIdRef.current === state.viewId) setTabsState(state);
 			}
@@ -983,22 +830,11 @@ export function useBrowserView({
 		async (tabId: string) => {
 			const viewId = viewIdRef.current;
 			if (!viewId || !hasNativeBrowser) return;
-			// Read from the ref, not the tabsState closure, so this callback's
-			// identity stays stable across tab updates instead of churning on
-			// every nav/title-update/loading-state push (it cascades into
-			// handleCloseTab in BrowserPanel.tsx otherwise).
 			const closing = tabsStateRef.current.tabs.find((tab) => tab.id === tabId);
 			try {
 				const state = await window.ao!.browser.closeTab({ viewId, tabId });
 				if (viewIdRef.current !== state.viewId) return;
 				setTabsState(state);
-				// Only remember it once the main process confirms it's actually gone —
-				// closeTab can silently no-op (the tab stays in state.tabs), and
-				// recording it as "closed" anyway would show it in Recently Closed
-				// while it's still sitting right there in the live tab list. Only real,
-				// distinguishable tabs are worth keeping — a blank tab has nothing to
-				// reopen.
-				// An agent tab's page lives on the remote host, so it is not the person's to reopen.
 				const stillOpen = state.tabs.some((tab) => tab.id === tabId);
 				if (closing && !stillOpen && !closing.remote && !isBlankTabUrl(closing.url)) {
 					const { id, title, url, favicon } = closing;
@@ -1006,12 +842,6 @@ export function useBrowserView({
 				}
 			} catch {
 				showTabNotice("Couldn't close that tab");
-				// The main process can mutate its own tab state before reporting a
-				// close as failed (e.g. the automation runtime's own closeTarget
-				// callback already removed the tab, then the overall command still
-				// reports failure) — resync instead of leaving this tab's row
-				// showing in the rail after it's genuinely gone, which just
-				// re-fails identically on every retry.
 				window.ao?.browser
 					.getTabs(viewId)
 					.then((state) => {
@@ -1051,18 +881,12 @@ export function useBrowserView({
 				setNavState(ensured);
 			}
 			let tabs = tabsStateRef.current.tabs;
-			// The native tab host is authoritative. The renderer cache can lag after
-			// navigation/title updates, so refresh it before deciding whether this URL
-			// already has a tab and should be selected instead of duplicated.
 			try {
 				const next = await window.ao!.browser.getTabs(id);
 				tabs = next.tabs;
 				if (viewIdRef.current === id) setTabsState(next);
 			} catch {
-				// Keep the last known tabs as a fallback if the native host is briefly
-				// unavailable; opening the link remains better than dropping the click.
 			}
-			// A link is the person's: it never selects or loads into an agent tab.
 			const existingTab = tabs.find((tab) => !tab.remote && !isBlankTabUrl(tab.url) && sameBrowserURL(tab.url, url));
 			if (existingTab) {
 				await selectTab(existingTab.id);
@@ -1088,7 +912,6 @@ export function useBrowserView({
 			try {
 				await openTab(entry.url);
 			} catch {
-				// Restore the entry instead of losing it when tab creation fails.
 				updateClosedTabs((tabs) => [entry, ...tabs.filter((tab) => tab.id !== entry.id)].slice(0, MAX_CLOSED_TABS));
 				showTabNotice("Couldn't reopen that tab");
 			}
@@ -1108,9 +931,6 @@ export function useBrowserView({
 				});
 				if (viewIdRef.current === next.viewId) setDevtoolsState(next);
 			} catch {
-				// The main process reports the unavailable state through the normal
-				// browser lifecycle; a failed optional DevTools action should not
-				// become an unhandled renderer rejection.
 			}
 		},
 		[hasNativeBrowser],
@@ -1163,8 +983,6 @@ export function useBrowserView({
 		[hasNativeBrowser, withView],
 	);
 
-	// A preview never lands in an agent tab: it goes to the person's preview
-	// tab (one on its origin or another preview's), else to a new tab.
 	const showPreview = useCallback(
 		async (url: string) => {
 			const id = viewIdRef.current;
@@ -1179,13 +997,6 @@ export function useBrowserView({
 		[hasNativeBrowser, navigate, openTab, selectTab],
 	);
 
-	// A remote or cloud session's agent browser (the host's or sandbox's
-	// Chromium its agent drives, streamed) is part of the session's surface:
-	// main shows it as one tab per agent page. It is derived from the host
-	// whenever the view is built or the host reconnects, not remembered: a
-	// reopened window brings it back. A host with no agent browser to show yet
-	// (starting, asleep, redeploying, not set up, or an agent that has not
-	// used it) is asked again, backing off, for as long as the view stays.
 	useEffect(() => {
 		const agentBrowserUrl = origin
 			? () => aoBridge.remotes.agentBrowserUrl(origin.hostId, origin.sessionId)
@@ -1195,8 +1006,6 @@ export function useBrowserView({
 		if (!hasNativeBrowser || !agentBrowserUrl || !viewId || viewIdRef.current !== viewId || terminated) return;
 		let cancelled = false;
 		let retry = 0;
-		// ponytail: polls every 15 s at most while nothing shows; main could
-		// instead say when the agent browser comes up.
 		const again = (attempt: number) => {
 			if (!cancelled) retry = window.setTimeout(() => ask(attempt + 1), Math.min(2_000 * 2 ** attempt, 15_000));
 		};
@@ -1259,30 +1068,19 @@ export function useBrowserView({
 		[hasNativeBrowser, withView],
 	);
 
-	// Clearing or terminating a remote preview must also retire its viewer-only
-	// origin, even when the native browser view has already been destroyed.
 	useEffect(() => {
 		if (!origin || (!terminated && previewUrl?.trim())) return;
 		void aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, "").catch(() => {
-			// A disconnected proxy is already closed, so there is nothing to revoke.
 		});
 		return undefined;
 	}, [origin?.hostId, origin?.sessionId, origin?.proxyBase, previewUrl, terminated]);
 
-	// Drive the view from the daemon-set preview target. Current daemons key
-	// this on previewRevision (bumped on every `ao preview` call); older daemons
-	// did not send it, so fall back to URL changes for compatibility.
 	useEffect(() => {
-		// During a session switch React still renders once with the prior
-		// viewId state, while the cleanup has already cleared viewIdRef. Do not
-		// consume the new session's preview revision against that stale view.
 		if (!viewId || viewIdRef.current !== viewId || terminated) return;
 		const target = previewUrl?.trim() ?? "";
 		const source = origin ? `${origin.hostId}:${origin.sessionId}:${origin.proxyBase}` : "local";
 		const revision = typeof previewRevision === "number" ? previewRevision : null;
 		const previous = previewTriggerRef.current;
-		// Reassert once after daemon teardown, but preserve manual navigation when
-		// revisiting an already-ended artifact session.
 		const sameLifecycle = previous?.sessionEnded === Boolean(sessionEnded);
 		if (sameLifecycle && previous?.revision === revision && previous.target === target && previous.origin === source) return;
 		if (sameLifecycle && revision !== null && previous?.revision === revision && previous.origin === source) return;
@@ -1321,13 +1119,7 @@ export function useBrowserView({
 		setClosedTabs([]);
 	}, [sendHiddenBounds]);
 
-	// Hook state survives a `sessionId` prop change until the reset effect above
-	// commits. Keep navigation, tab, and activity state hidden during that
-	// intervening render so consumers can never interpret the departed session's
-	// state as belonging to the destination session.
 	const stateBelongsToSession = stateSessionId === sessionId;
-	// That render may still show the destination's own cached page, which is
-	// already on screen, so the panel stays transparent over it.
 	const switchingTo = !stateBelongsToSession && hasNativeBrowser && !terminated ? nativeViewBySession.get(sessionId) : undefined;
 
 	const modelViewId = stateBelongsToSession ? viewId : (switchingTo?.viewId ?? "");
@@ -1350,9 +1142,6 @@ export function useBrowserView({
 	const closeDevTools = useCallback(() => runDevtools("close"), [runDevtools]);
 	const setDevToolsPlacement = useCallback((placement: BrowserDevToolsPlacement) => runDevtools("setPlacement", placement), [runDevtools]);
 
-	// One object per distinct state, so the panel and other consumers skip
-	// renders their parent makes for unrelated reasons (a session switch renders
-	// SessionView several times while this state settles once).
 	return useMemo<BrowserViewModel>(
 		() => ({
 			viewId: modelViewId,

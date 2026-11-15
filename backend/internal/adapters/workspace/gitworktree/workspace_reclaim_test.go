@@ -9,13 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestDestroyReclaimReportsAlreadyAbsentWorktree covers the accounting half of
-// teardown. A worktree directory that is already gone leaves `git worktree
-// remove` nothing to act on; the prune still clears the stale registration and
-// the final os.RemoveAll is a documented no-op on a missing path, so Destroy
-// returns nil having reclaimed nothing. Callers that count reclaimed
-// workspaces from that nil report space they never freed, so DestroyReclaim
-// has to name the two cases apart.
 func TestDestroyReclaimReportsAlreadyAbsentWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
@@ -33,8 +26,6 @@ func TestDestroyReclaimReportsAlreadyAbsentWorktree(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// The directory disappears behind AO's back while git still has it
-	// registered: an external `rm -rf`, a wiped scratch disk, a restored backup.
 	if err := os.RemoveAll(info.Path); err != nil {
 		t.Fatalf("remove worktree dir: %v", err)
 	}
@@ -47,8 +38,6 @@ func TestDestroyReclaimReportsAlreadyAbsentWorktree(t *testing.T) {
 		t.Fatalf("reclaim = %q, want %q", reclaim, ports.WorkspaceReclaimAlreadyAbsent)
 	}
 
-	// The stale registration is still reconciled, so the post-state matches a
-	// real removal; only the accounting differs.
 	records, err := ws.listRecords(ctx, repo)
 	if err != nil {
 		t.Fatalf("list records: %v", err)
@@ -58,9 +47,6 @@ func TestDestroyReclaimReportsAlreadyAbsentWorktree(t *testing.T) {
 	}
 }
 
-// TestDestroyReclaimReportsRemovedWorktree pins the other side: a workspace
-// that was really there must not be reported as already absent, or the fix
-// would trade one wrong count for another.
 func TestDestroyReclaimReportsRemovedWorktree(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()

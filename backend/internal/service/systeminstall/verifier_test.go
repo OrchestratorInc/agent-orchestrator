@@ -100,8 +100,6 @@ func TestVerifierBoundsVersionProbe(t *testing.T) {
 	t.Parallel()
 	runner := &recordingCommandRunner{run: func(ctx context.Context, _ []string, _, _ io.Writer) error {
 		<-ctx.Done()
-		// The host runner kills the probe's process group at the deadline, so
-		// its error is the child's exit status rather than ctx.Err().
 		return errors.New("signal: killed")
 	}}
 	verifier := NewVerifier(verifierResolver{
@@ -164,9 +162,6 @@ func TestVerifierKeepsNonTimeoutProbeFailure(t *testing.T) {
 	}
 }
 
-// A freshly installed Cursor CLI took ~12s to answer its first --version on an
-// Intel Mac while macOS assessed the new binary (#5887). The default bound must
-// let that first post-install verification succeed instead of killing it.
 func TestVerifierDefaultTimeoutAllowsSlowFirstLaunch(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

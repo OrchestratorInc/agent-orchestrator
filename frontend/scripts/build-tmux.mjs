@@ -48,9 +48,6 @@ const UTF8PROC = {
 	license: "LICENSE.md",
 };
 const SOURCES = [TMUX, LIBEVENT, NCURSES, UTF8PROC];
-// Linux intentionally links glibc dynamically. A fully static glibc tmux can
-// enter __libc_early_init with an unset page size and SIGFPE on new-session
-// even though `tmux -V` succeeds (#4616).
 const BUILD_REVISION = 5;
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -66,9 +63,6 @@ if (process.platform !== "darwin" && process.platform !== "linux") {
 }
 
 const cacheKey = `${process.platform}-${process.arch}-r${BUILD_REVISION}-${SOURCES.map((source) => source.version).join("-")}`;
-// Keep source/build caches outside frontend/: Electron Packager treats that
-// directory as the app root and would otherwise copy hundreds of megabytes of
-// intermediate objects into app.asar in addition to the tiny extraResource.
 const cacheRoot = join(repoRoot, ".cache", "bundled-tmux", cacheKey);
 const downloadsRoot = join(repoRoot, ".cache", "bundled-tmux", "downloads");
 const sourceRoot = join(cacheRoot, "src");
@@ -159,10 +153,6 @@ async function build() {
 		{ cwd: ncursesDir, env: commonEnv },
 	);
 	run("make", ["-j", jobs], { cwd: ncursesDir, env: commonEnv });
-	// Runtime.Attach always presents xterm-256color. Generate its fallback
-	// with the matching pinned tic/infocmp we just built: macOS's older host
-	// tools cannot compile the ncurses 6.5 entry. Rebuilding embeds the entry
-	// into libtinfo so the shipped binary needs no host terminfo database.
 	const ncursesBuildDir = join(ncursesDir, "ncurses");
 	const fallback = run(
 		"sh",

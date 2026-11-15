@@ -14,19 +14,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestMain shortens the timings once: goroutines from an earlier test can
-// still read them while a later test starts, so tests never write them.
 func TestMain(m *testing.M) {
 	minWriteInterval, readRetryDelay = 200*time.Millisecond, 10*time.Millisecond
 	os.Exit(m.Run())
 }
 
 type fakeStore struct {
-	mu       sync.Mutex
-	sessions map[domain.SessionID]domain.SessionRecord
-	gets     int
-	titles   map[string][]string // key: session id or shell handle
-	// listFails and getFails fail that many reads before succeeding.
+	mu                  sync.Mutex
+	sessions            map[domain.SessionID]domain.SessionRecord
+	gets                int
+	titles              map[string][]string
 	listFails, getFails int
 }
 
@@ -102,7 +99,6 @@ func (s *fakeStore) getCount() int {
 	return s.gets
 }
 
-// fakeRuntime holds a watch open per handle and lets the test push titles.
 type fakeRuntime struct {
 	mu          sync.Mutex
 	dials       map[string]int
@@ -110,8 +106,6 @@ type fakeRuntime struct {
 	unavailable map[string]bool
 }
 
-// liveWatch is one open watch; a pointer so a replaced watch on the same
-// handle cannot remove its successor.
 type liveWatch struct{ fn func(string) }
 
 func newFakeRuntime() *fakeRuntime {
@@ -237,7 +231,6 @@ func TestManagerFollowsSessionsFromChangeEvents(t *testing.T) {
 	events.send(t, updated("s1", map[string]any{"id": "s1", "activity": "active"}))
 	waitFor(t, "a watch after spawn", func() bool { return rt.watching("h1") })
 
-	// Moving to another terminal replaces the watch.
 	store.put(tuiSession("s1", "h2"))
 	events.send(t, updated("s1", map[string]any{"id": "s1"}))
 	waitFor(t, "the watch to move to the new terminal", func() bool { return rt.watching("h2") && !rt.watching("h1") })
@@ -316,8 +309,6 @@ func TestManagerDoesNotRedialAnUnavailableTerminal(t *testing.T) {
 	}
 }
 
-// Restore keeps the session's handle but starts a new host; a watch that ended
-// because the old host was gone must start again.
 func TestManagerRestartsAnEndedWatchWhenTheSessionIsRestored(t *testing.T) {
 	store := newFakeStore(tuiSession("s1", "s1"))
 	_, rt, events := startManager(t, store, "s1")
@@ -351,14 +342,12 @@ func TestManagerRetriesAFailedSessionRead(t *testing.T) {
 	waitFor(t, "the watch after the read succeeds", func() bool { return rt.watching("h1") })
 }
 
-// A restored session's new run owns its title; the old run's pending title
-// must not be written after it.
 func TestManagerDropsAReplacedRunsPendingTitle(t *testing.T) {
 	store := newFakeStore(tuiSession("s1", "s1"))
 	_, rt, events := startManager(t, store)
 	rt.emit(t, "s1", "old task")
 	waitFor(t, "the first write", func() bool { return len(store.written("s1")) == 1 })
-	rt.emit(t, "s1", "old task, renamed") // held by the write limit
+	rt.emit(t, "s1", "old task, renamed")
 
 	restored := tuiSession("s1", "s1")
 	restored.Metadata.RuntimeLaunchID = "launch-2"

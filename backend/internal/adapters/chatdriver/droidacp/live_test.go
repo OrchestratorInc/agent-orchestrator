@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Run explicitly with AO_LIVE_DROID_ACP=1. It uses the user's existing Droid
-// executable, settings, and account; CI never depends on any of them.
 func TestLiveDroidACP(t *testing.T) {
 	if os.Getenv("AO_LIVE_DROID_ACP") != "1" {
 		t.Skip("set AO_LIVE_DROID_ACP=1 to run against the local Droid account")

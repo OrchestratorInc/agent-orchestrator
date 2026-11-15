@@ -2,7 +2,6 @@ import { vi } from "vitest";
 import type { CloudHarnessVersions } from "../hooks/useCloudHarnessVersions";
 import type { CloudCpHarnessVersion, CloudCpHarnessVersionsResponse, CloudCpManagedHarness } from "../lib/cloud-cp";
 
-/** One harness as AO Cloud runs it: on `current`, with `latest` the newest release. */
 export function cloudHarnessEntry(agentId: CloudCpManagedHarness, options: {
 	current: string;
 	latest?: string;
@@ -32,7 +31,6 @@ export function cloudHarnessEntry(agentId: CloudCpManagedHarness, options: {
 	};
 }
 
-/** What useCloudHarnessVersions returns, with spies for its actions. */
 export function cloudHarnessVersions(data: CloudCpHarnessVersionsResponse | null | undefined, overrides: Partial<CloudHarnessVersions> = {}): CloudHarnessVersions {
 	return {
 		expected: true,

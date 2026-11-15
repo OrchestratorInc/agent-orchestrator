@@ -16,26 +16,17 @@ import (
 	"syscall"
 )
 
-// Darwin's sockaddr_un.sun_path is 104 bytes including the trailing NUL. Keep
-// the address at or below 103 bytes so the same path is valid on macOS and
-// Linux regardless of the user's home/data-directory length.
 const maxUnixSocketPathBytes = 103
 
 var runtimeAliasPattern = regexp.MustCompile(`^ao-brd-(\d+)-[0-9a-f]{16}$`)
 
-// Listen creates the local daemon-to-Electron browser bridge listener.
 func Listen(runFilePath string) (net.Listener, string, error) {
 	return ListenNamed(runFilePath, "browser")
 }
 
-// ListenNamed creates a browser bridge listener whose socket is named after
-// the runtime it serves, so several runtimes can share one run directory.
 func ListenNamed(runFilePath, name string) (net.Listener, string, error) {
 	aliasRoot := os.TempDir()
 	if info, err := os.Stat("/tmp"); err == nil && info.IsDir() {
-		// os.TempDir can inherit an arbitrarily long TMPDIR. /tmp is the stable,
-		// short spelling needed for sockaddr_un (including on macOS, where it is
-		// normally a symlink to /private/tmp).
 		aliasRoot = "/tmp"
 	}
 	return listenUnix(runFilePath, aliasRoot, name+".sock")

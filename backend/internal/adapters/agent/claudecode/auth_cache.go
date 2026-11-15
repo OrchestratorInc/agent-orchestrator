@@ -57,9 +57,6 @@ func (c *authCache) put(result agentcreds.Result) {
 	if c == nil || result.Fingerprint == "" {
 		return
 	}
-	// A probe its caller abandoned says nothing about the credential or the
-	// network. Cached, it would answer every other caller (model discovery
-	// among them) with "context canceled" until the negative TTL ran out.
 	if errors.Is(result.Err, context.Canceled) {
 		return
 	}
@@ -78,10 +75,6 @@ func (c *authCache) invalidate() {
 	claudeAuthReports.invalidate()
 }
 
-// authReportCache remembers what `claude auth status` printed, keyed by
-// authReportCacheKey, so chat starts do not run the CLI once for the launch
-// check and again for model discovery. It shares the verdict cache's TTL and
-// is dropped with it.
 type authReportCache struct {
 	mu      sync.Mutex
 	entries map[string]authReportEntry

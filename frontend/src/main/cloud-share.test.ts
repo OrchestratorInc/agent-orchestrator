@@ -82,7 +82,6 @@ describe("share file fingerprint", () => {
 		expect(fingerprint).toBe(`${stat.size}:${Math.trunc(stat.mtimeMs)}`);
 		expect(read).not.toHaveBeenCalled();
 		read.mockRestore();
-		// The snapshot of the same file has it; a rewritten file does not.
 		const snapshot = await snapshotShareFile(file, path.join(dataDir, "snapshots"));
 		expect(snapshot.fingerprint).toBe(fingerprint);
 		const later = new Date(Date.now() + 60_000);
@@ -122,7 +121,6 @@ describe("snapshotShareFile", () => {
 	});
 
 	it("refuses a file rewritten while it is copied, though its size stays the same", async () => {
-		// 2 MiB, last written long ago: a write during the copy moves its times.
 		const big = path.join(artifacts, "big.bin");
 		await fs.writeFile(big, Buffer.alloc(2 << 20, 1));
 		const past = new Date("2020-01-01T00:00:00Z");
@@ -131,7 +129,6 @@ describe("snapshotShareFile", () => {
 		const inspected = await statShareFile(file);
 		let rewritten = false;
 		const snapshot = snapshotShareFile(file, path.join(dataDir, "snapshots"), {
-			// After the first MiB is copied, an agent rewrites the second one.
 			onProgress: () => {
 				if (rewritten) return;
 				rewritten = true;
@@ -143,7 +140,6 @@ describe("snapshotShareFile", () => {
 		await expect(snapshot).rejects.toMatchObject({ code: "source_changed" });
 		expect(rewritten).toBe(true);
 		expect(await fs.readdir(path.join(dataDir, "snapshots"))).toEqual([]);
-		// Left alone, the same file copies, and names its new version.
 		const again = await snapshotShareFile(await resolveShareFile(dataDir, "sess-1", "big.bin"), path.join(dataDir, "snapshots"));
 		expect(again.fingerprint).not.toBe(inspected);
 		expect(again.size).toBe(2 << 20);
@@ -216,14 +212,11 @@ async function snapshotOf(content: string) {
 	return snapshotShareFile(file, path.join(dataDir, "snapshots"));
 }
 
-// A connection that dropped answers nothing: the request only ends when its
-// signal aborts.
 function silentControlPlane(): CloudShareApi {
 	return {
 		getToken: async () => "token-1",
 		fetch: vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
 			const fail = () => reject(init.signal?.reason ?? new DOMException("Aborted", "AbortError"));
-			// Like fetch, a request cancelled before it starts fails at once.
 			if (init.signal?.aborted) return fail();
 			init.signal?.addEventListener("abort", fail, { once: true });
 		})),
@@ -280,7 +273,6 @@ describe("uploadShare", () => {
 		const progress: number[] = [];
 		const result = await uploadShare(api, { baseUrl: "https://cp.test", snapshot, name: "upload.txt", project: "p", feature: "sess-1" }, (sent) => progress.push(sent));
 		expect(result.share.id).toBe("s-1");
-		// Parts upload concurrently, so they can arrive in any order.
 		expect([...stored.entries()].sort(([a], [b]) => a - b).map(([number, body]) => [number, Buffer.from(body).toString()])).toEqual([[1, "0123"], [2, "4567"], [3, "89"]]);
 		expect(progress.at(-1)).toBe(10);
 
@@ -291,13 +283,10 @@ describe("uploadShare", () => {
 		const finalize = JSON.parse(calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
 		expect(finalize.parts.map((part: { partNumber: number; etag: string }) => [part.partNumber, part.etag])).toEqual([[1, '"etag-1"'], [2, '"etag-2"'], [3, '"etag-3"']]);
 
-		// Chromium sets Content-Length and Host itself and refuses a request
-		// that names them; the other signed headers go with each part.
 		for (const call of calls.filter((candidate) => candidate.url.startsWith("https://s3.test/"))) {
 			expect(call.headers).toEqual({ "x-amz-checksum-sha256": "sig" });
 		}
 
-		// The token goes only to the control plane, never to storage.
 		for (const call of calls) {
 			expect(call.headers.authorization === "Bearer token-1").toBe(call.url.startsWith("https://cp.test/api/cloud/v1/"));
 		}
@@ -328,7 +317,6 @@ describe("uploadShare", () => {
 		const abort = failing.calls.findIndex((call) => call.url.endsWith("/uploads/abort"));
 		expect(abort).toBeGreaterThan(0);
 		expect(failing.calls.slice(abort).filter((call) => call.url.startsWith("https://s3.test/"))).toEqual([]);
-		// Not every part was sent: the second worker stopped.
 		expect(failing.calls.filter((call) => call.url.startsWith("https://s3.test/")).length).toBeLessThan(5);
 	});
 
@@ -355,13 +343,11 @@ describe("cloud control-plane proxy", () => {
 			["POST", "/api/cloud/v1/me/artifact-shares"],
 			["post", "/api/cloud/v1/me/./artifact-shares/uploads"],
 			["POST", "/api/cloud/v1/orgs/../me/artifact-shares/finalize"],
-			// A cloud session's file is shared only through the main process too.
 			["POST", "/api/cloud/v1/orgs/a1a1a1a1-0000-4000-8000-000000000001/sessions/a1a1a1a1-0000-4000-8000-0000000000a1/artifacts/share"],
 			["POST", "/api/cloud/v1/orgs/o/sessions/s/artifacts%2Fshare"],
 		]) {
 			await expect(request(method, path), `${method} ${path}`).rejects.toThrow("share links can only be changed");
 		}
-		// Reading a session's files is still allowed.
 		await expect(request("GET", "/api/cloud/v1/orgs/o/sessions/s/artifacts")).resolves.toMatchObject({ status: 200 });
 		expect(fetchImpl).toHaveBeenCalledTimes(2);
 	});

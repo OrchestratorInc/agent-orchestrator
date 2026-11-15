@@ -13,8 +13,6 @@ import (
 const crashingNodeScript = "#!/bin/sh\necho '# Fatal error in , line 0' >&2\necho '# Check failed: 12 == (*__error()).' >&2\nexit 133\n"
 const healthyNodeScript = "#!/bin/sh\necho ok\n"
 
-// withIntelMac points the repair seams at a fake Intel Mac and returns the
-// repair root and a counter of codesign calls.
 func withIntelMac(t *testing.T, codesign func(context.Context, string, string) error) (string, *int) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -50,7 +48,6 @@ func writeFakeNode(t *testing.T, script string) string {
 	return path
 }
 
-// fixingCodesign stands in for a codesign that adds the missing entitlement.
 func fixingCodesign(_ context.Context, node, entitlements string) error {
 	plist, err := os.ReadFile(entitlements) //nolint:gosec // Test path.
 	if err != nil {
@@ -102,13 +99,11 @@ func TestJITCapableNodeRepairsEntitlementCrash(t *testing.T) {
 		t.Fatalf("repair root holds %d entries, want only the installed copy", len(entries))
 	}
 
-	// Cached for the daemon's lifetime.
 	again, err := jitCapableNode(context.Background(), node)
 	if err != nil || again != got || *calls != 1 {
 		t.Fatalf("second call = %q, %v with %d codesign calls; want cached %q", again, err, *calls, got)
 	}
 
-	// A new daemon reuses the installed copy without re-signing.
 	jitNodesMu.Lock()
 	jitNodes = map[string]string{}
 	jitNodesMu.Unlock()

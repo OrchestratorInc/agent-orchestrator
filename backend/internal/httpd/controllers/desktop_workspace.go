@@ -11,19 +11,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
-// DesktopWorkspaceService is the narrow read boundary Electron main uses to
-// resolve a session handoff without teaching the renderer about local paths.
 type DesktopWorkspaceService interface {
 	WorkspaceLocation(ctx context.Context, id domain.SessionID) (string, error)
 	ArtifactLocation(ctx context.Context, id domain.SessionID) (string, error)
 }
 
-// DesktopWorkspaceController owns the loopback-only desktop handoff route.
 type DesktopWorkspaceController struct {
 	Svc DesktopWorkspaceService
 }
 
-// Register mounts the desktop-only workspace- and artifact-location routes.
 func (c *DesktopWorkspaceController) Register(r chi.Router) {
 	r.Get("/desktop/sessions/{sessionId}/workspace", c.location)
 	r.Get("/desktop/sessions/{sessionId}/artifacts", c.artifactLocation)

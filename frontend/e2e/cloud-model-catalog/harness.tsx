@@ -16,7 +16,6 @@ setApiDaemonStatus({ state: "ready", port: 8080 });
 const baseUrl = "https://catalog-fixture.example.test";
 const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
 client.setQueryData(["settings"], { defaultSessionMode: "tui", chatHarnesses: ["codex"], cloudEnabled: false, localEnabled: true, cloudControlPlaneUrl: baseUrl });
-// Signed out of the fixture's control plane, so the cached org and projects are what the composer reads.
 client.setQueryData(["cloud-org", baseUrl, ""], { id: "fixture-org" });
 client.setQueryData(["cloud-projects", baseUrl, "fixture-org"], [{ id: "fixture-project", displayName: "Fixture project", config: { worker: { agent: "codex", agentConfig: variant === "unavailable" ? { model: "configured-model", effort: "high" } : {} } } }]);
 client.setQueryData(["cloud-provider-connections"], [{ id: "fixture-connection", provider: "codex", label: "default", validationState: "valid", updatedAt: "2026-10-29T00:00:00Z", config: {} }]);

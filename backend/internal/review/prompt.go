@@ -5,15 +5,6 @@ import (
 	"strings"
 )
 
-// reviewTexts returns the user-facing prompt and the system prompt to deliver to
-// a reviewer, authored in one place — the reviewer analogue of
-// session_manager.buildSpawnTexts. The standing reviewer role lives in the
-// system prompt; the per-pass task (which PR/commit, and the exact submit
-// command carrying the ids) lives in the prompt, so it is also what AO injects
-// into an already-running reviewer to review a new commit.
-//
-// The texts are self-contained — they carry the ids the reviewer needs to
-// submit — so no environment variables are required.
 func reviewTexts(spec LaunchSpec) (prompt, systemPrompt string) {
 	systemPrompt = reviewSystemPrompt()
 

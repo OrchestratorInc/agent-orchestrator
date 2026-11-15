@@ -22,8 +22,6 @@ func (f managedBinaryInstallerFunc) InstallManagedBinary(ctx context.Context, do
 	return f(ctx, download)
 }
 
-// newDownloadService is a Service that can download AO's pinned cloudflared.
-// install counts every download attempt.
 func newDownloadService(goos, goarch string, install func(ports.ManagedBinaryDownload) (string, error), found ...string) (*Service, *atomic.Int32) {
 	s := newTestService(goos, found...)
 	s.goarch = goarch
@@ -47,7 +45,6 @@ func TestPlanCloudflaredDownloadsThePinnedRelease(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.goos+"/"+tt.goarch, func(t *testing.T) {
-			// A package manager on PATH must not win over the download.
 			s, _ := newDownloadService(tt.goos, tt.goarch, nil, "brew", "winget", "apt-get")
 			plan := s.planFor(TargetCloudflared)
 			if plan.Unsupported || plan.download == nil {
@@ -64,7 +61,6 @@ func TestPlanCloudflaredDownloadsThePinnedRelease(t *testing.T) {
 	}
 }
 
-// No pinned asset means today's package-manager route, unchanged.
 func TestPlanCloudflaredWithoutAPinnedAssetUsesThePackageManager(t *testing.T) {
 	s, _ := newDownloadService("windows", "arm64", nil, "winget")
 	plan := s.planFor(TargetCloudflared)
@@ -99,9 +95,6 @@ func TestCloudflaredDownloadLandsAndReportsSuccess(t *testing.T) {
 	}
 }
 
-// A download that fails every try must not leave remote access stuck: the
-// user's next Start hands them today's package-manager route instead of the
-// same download again.
 func TestCloudflaredDownloadFailureFallsBackToThePackageManager(t *testing.T) {
 	s, calls := newDownloadService("linux", "amd64", func(ports.ManagedBinaryDownload) (string, error) {
 		return "", errors.New("cloudflared checksum mismatch")
@@ -129,8 +122,6 @@ func TestCloudflaredDownloadFailureFallsBackToThePackageManager(t *testing.T) {
 	}
 }
 
-// The wrong bytes would be the same on every try, so they are not fetched
-// again.
 func TestCloudflaredDownloadDoesNotRetryWrongBytes(t *testing.T) {
 	s, calls := newDownloadService("linux", "amd64", func(ports.ManagedBinaryDownload) (string, error) {
 		return "", fmt.Errorf("%w: cloudflared checksum mismatch", ports.ErrDownloadRejected)
@@ -140,16 +131,12 @@ func TestCloudflaredDownloadDoesNotRetryWrongBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForStatus(t, s, TargetCloudflared, StatusFailed)
-	// Nor does remote access fetch them again when it next finds no connector.
 	s.DownloadCloudflaredInBackground(nil)
 	if s.CloudflaredInstalling() || calls.Load() != 1 {
 		t.Fatalf("download attempts = %d, want 1", calls.Load())
 	}
 }
 
-// The macOS app bundles cloudflared too (frontend/scripts/prepare-cloudflared.mjs).
-// The runner reads its log format, so both copies are one release, and the
-// darwin archives are the same bytes.
 func TestCloudflaredPinMatchesTheMacOSBundle(t *testing.T) {
 	script, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "frontend", "scripts", "prepare-cloudflared.mjs"))
 	if err != nil {
@@ -168,10 +155,6 @@ func TestCloudflaredPinMatchesTheMacOSBundle(t *testing.T) {
 	}
 }
 
-// A laptop that turns remote access back on at boot can ask before its
-// network is up. The download is tried again, and the connector starts
-// before the job reads as done, so the desktop never sees "finished" with no
-// connector.
 func TestCloudflaredDownloadRecoversFromATransientFailure(t *testing.T) {
 	var tries atomic.Int32
 	s, _ := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
@@ -197,8 +180,6 @@ func TestCloudflaredDownloadRecoversFromATransientFailure(t *testing.T) {
 	}
 }
 
-// A download that failed every try is started again the next time remote
-// access looks for a connector, not only after a daemon restart.
 func TestDownloadCloudflaredInBackgroundTriesAgainAfterAFailure(t *testing.T) {
 	var tries atomic.Int32
 	s, calls := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
@@ -217,14 +198,11 @@ func TestDownloadCloudflaredInBackgroundTriesAgainAfterAFailure(t *testing.T) {
 	if calls.Load() != 2 {
 		t.Fatalf("downloads = %d, want one per trigger", calls.Load())
 	}
-	// It works again, so it is what the user is offered again.
 	if s.planFor(TargetCloudflared).download == nil || s.CloudflaredInstalling() {
 		t.Fatal("a download that worked is not offered again")
 	}
 }
 
-// Remote access asks for the connector every time it finds none. That must
-// start one download, not one per request, and report its landing once.
 func TestDownloadCloudflaredInBackgroundRunsOnce(t *testing.T) {
 	release := make(chan struct{})
 	s, calls := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
@@ -256,13 +234,11 @@ func TestDownloadCloudflaredInBackgroundRunsOnce(t *testing.T) {
 	}
 }
 
-// Remote access that asks while the user's own package-manager install runs
-// only waits on it. When that install fails, the next ask still downloads.
 func TestDownloadCloudflaredInBackgroundAfterAFailedUserInstall(t *testing.T) {
 	s, calls := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
 		return "/Users/test/.ao/bin/cloudflared", nil
 	}, "brew")
-	s.cloudflaredDownloadFailed.Store(true) // the user is offered brew
+	s.cloudflaredDownloadFailed.Store(true)
 	s.commands = testCommandRunner(func(ctx context.Context, _ []string) *exec.Cmd {
 		return exec.CommandContext(ctx, "sh", "-c", "sleep 0.3; exit 1")
 	})
@@ -278,8 +254,6 @@ func TestDownloadCloudflaredInBackgroundAfterAFailedUserInstall(t *testing.T) {
 	}
 }
 
-// Only the download runs unasked. Where there is nothing to download, the
-// trigger must not fall through to running a package manager.
 func TestDownloadCloudflaredInBackgroundNeverRunsAPackageManager(t *testing.T) {
 	s, _ := newDownloadService("darwin", "386", nil, "brew")
 	s.DownloadCloudflaredInBackground(func() { t.Error("onInstalled ran without a download") })
@@ -291,8 +265,6 @@ func TestDownloadCloudflaredInBackgroundNeverRunsAPackageManager(t *testing.T) {
 	}
 }
 
-// Where there is nothing to download, remote access waits on the install the
-// user starts instead, and that install must start the connector as well.
 func TestPackageManagerCloudflaredStartsTheWaitingConnector(t *testing.T) {
 	s, _ := newDownloadService("darwin", "386", nil, "brew", "cloudflared")
 	s.commands = testCommandRunner(func(ctx context.Context, _ []string) *exec.Cmd {

@@ -14,21 +14,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 
-	_ "modernc.org/sqlite" // register sqlite driver for KiloCode auth database probes
+	_ "modernc.org/sqlite"
 )
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status. Missing
-// credentials remain unknown because Kilo can still run eligible public free
-// models without a provider login.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	// Kilo's own stored credentials decide first, then its `auth list`, and
-	// only then a key in the environment.
 	status, ok, storedErr := kilocodeStoredAuthStatus(ctx)
 	if storedErr == nil && ok {
 		return status, nil
@@ -98,7 +93,6 @@ func kilocodeEnvAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool) {
 	return ports.AgentAuthStatusUnknown, false
 }
 
-// kilocodeStoredAuthStatus reads Kilo's auth.json, then its database.
 func kilocodeStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -144,8 +138,6 @@ func kilocodeDataDir() (string, bool) {
 	return filepath.Join(home, ".local", "share", "kilo"), true
 }
 
-// kilocodeAuthJSONStatus also returns the file's contents, so callers parse
-// it without reading it again.
 func kilocodeAuthJSONStatus(ctx context.Context, path string) (authorized, known bool, data []byte, err error) {
 	data, err = authprobe.ReadCredentialFile(ctx, path)
 	if os.IsNotExist(err) {

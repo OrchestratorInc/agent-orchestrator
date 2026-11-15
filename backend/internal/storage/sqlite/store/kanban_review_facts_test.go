@@ -9,8 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The Kanban column may only be decided by a review pass against the PR's
-// CURRENT head, so the SQL drops passes recorded for an earlier commit.
 func TestListCurrentHeadReviewRunsForSessionDropsStaleSHAs(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -100,9 +98,6 @@ func TestListCurrentHeadReviewRunsForSessionKeepsLatestRunPerHarness(t *testing.
 	}
 }
 
-// The aggregate review_decision mixes AO's own provider reviews with everyone
-// else's, so the PR facts must expose the human-only verdicts separately. AO's
-// review is matched by the review id it recorded when it posted.
 func TestListPRFactsForSessionSplitsExternalReviewVerdicts(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -125,7 +120,6 @@ func TestListPRFactsForSessionSplitsExternalReviewVerdicts(t *testing.T) {
 	write("pr/ao-only", nil)
 	write("pr/human", []domain.PullRequestReview{{ID: "gh-human", Author: "maintainer", State: domain.ReviewChangesRequest, SubmittedAt: now}})
 
-	// AO's own provider review, recorded by id on its review run.
 	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: r.ID, ProjectID: "mer", Harness: "claude-code", PRURL: "pr/ao-only", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
@@ -153,10 +147,6 @@ func TestListPRFactsForSessionSplitsExternalReviewVerdicts(t *testing.T) {
 	}
 }
 
-// A reviewer who requests changes and later approves leaves both rows in
-// pr_reviews. Only their latest verdict may count: the superseded changes
-// request must not outlive it, or an auto-inject-review session stays pinned to
-// "validating" forever while nobody is actually waiting on the worker.
 func TestListPRFactsForSessionUsesEachReviewerLatestVerdict(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -167,8 +157,6 @@ func TestListPRFactsForSessionUsesEachReviewerLatestVerdict(t *testing.T) {
 	write := func(url string, reviews []domain.PullRequestReview) {
 		t.Helper()
 		if err := s.WriteSCMObservation(ctx, domain.PullRequest{
-			// review_required, not approved: the aggregate decision cannot mask a
-			// stale changes request here (e.g. a second approval is still required).
 			URL: url, SessionID: r.ID, Number: 1, Review: domain.ReviewRequired,
 			HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
 		}, nil, reviews, nil, nil, ports.ReviewWriteReplace); err != nil {
@@ -184,7 +172,6 @@ func TestListPRFactsForSessionUsesEachReviewerLatestVerdict(t *testing.T) {
 		{ID: "gh-3", Author: "maintainer", State: domain.ReviewApproved, SubmittedAt: now},
 		{ID: "gh-4", Author: "maintainer", State: domain.ReviewChangesRequest, SubmittedAt: now.Add(time.Hour)},
 	})
-	// Two reviewers disagreeing: each still speaks for themselves.
 	write("pr/split", []domain.PullRequestReview{
 		{ID: "gh-5", Author: "maintainer", State: domain.ReviewApproved, SubmittedAt: now},
 		{ID: "gh-6", Author: "second-reviewer", State: domain.ReviewChangesRequest, SubmittedAt: now},
@@ -209,8 +196,6 @@ func TestListPRFactsForSessionUsesEachReviewerLatestVerdict(t *testing.T) {
 	}
 }
 
-// AO's own provider review must not dismiss a human verdict, even though it is
-// posted under a GitHub account AO cannot distinguish from a person by name.
 func TestListPRFactsForSessionKeepsHumanVerdictOverLaterAOReview(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

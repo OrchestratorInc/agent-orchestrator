@@ -49,12 +49,10 @@ it("edits a Cloud project's Setup and Cleanup and saves only the two lists", asy
 	fireEvent.change(screen.getByLabelText("Step 2"), { target: { value: "docker compose -p \"ao-$AO_SESSION_ID\" up -d" } });
 	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
 	expect(screen.getByLabelText("Step 1")).toHaveValue("docker compose -p \"ao-$AO_SESSION_ID\" down");
-	// The local daemon's retry has no Cloud equivalent, and Coder runs Cleanup.
 	expect(screen.queryByRole("button", { name: "Retry cleanup" })).toBeNull();
 	expect(screen.queryByText(/deleted without it/)).toBeNull();
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	await waitFor(() => expect(mocks.patch).toHaveBeenCalledOnce());
-	// Settings merge objects but replace arrays: coder, worker and the rest stay as stored.
 	expect(mocks.patch).toHaveBeenCalledWith("org-1", "p", {
 		config: {
 			postCreate: ["npm ci", "docker compose -p \"ao-$AO_SESSION_ID\" up -d"],
@@ -86,8 +84,6 @@ it("does not say Cleanup is skipped for a project on Freestyle or Docker, which 
 });
 
 it("says Cleanup does not run for a project on a provider without it", async () => {
-	// A project pinned to a provider that has no Cleanup run, with no Coder
-	// config, is deleted without it whatever the org default is.
 	mocks.defaultProvider = "coder";
 	const { coder: _coder, ...withoutCoder } = stored;
 	mocks.get.mockResolvedValue({ project: project({ ...withoutCoder, sandboxProvider: "createos" }) });
@@ -107,12 +103,9 @@ it("reports unsaved edits as dirty without the autosave Saving state, and lists 
 	expect(screen.getByText("$AO_SESSION_ID")).toBeInTheDocument();
 	expect(screen.getByText(/a unique ID for the session/)).toBeInTheDocument();
 	expect(screen.queryByText(/AO_SOURCE_TREE_PATH/)).toBeNull();
-	// The app is unselectable by default; the names are meant to be copied.
 	expect(screen.getByText("$AO_SESSION_ID").closest("dl")).toHaveClass("select-text");
 	expect(screen.getByRole("button", { name: "Copy $AO_SESSION_ID" })).toBeInTheDocument();
-	// A single-repository project has no folder of repositories to name.
 	expect(screen.queryByText("$AO_REPOS_ROOT")).toBeNull();
-	// Save stays pinned in view however many steps the page lists.
 	expect(screen.getByRole("button", { name: "Save changes" }).closest("[data-settings-save-footer]")).toHaveClass("sticky");
 });
 
@@ -129,8 +122,6 @@ it("copies a variable and names the folder of every repository for a multi-repos
 	writeText.mockRestore();
 });
 
-// Setup and Cleanup run in every member's later sessions, so a member sees
-// them but only an owner or admin can change them.
 it("shows a member the scripts read-only", async () => {
 	mocks.org = { id: "org-1", role: "member" };
 	renderScripts();
@@ -171,7 +162,6 @@ it("keeps a step in a folder that is no longer a project repository, and reads t
 	mocks.get.mockResolvedValue({ project: project(legacy) });
 	renderScripts();
 	expect(await screen.findByLabelText("Step 1")).toHaveValue("make dev-up");
-	// A non-canonical legacy URL still matches its repository.
 	expect(screen.getByRole("button", { name: "Repository for step 1" })).toHaveTextContent("acme/11x");
 	expect(screen.getByRole("button", { name: "Repository for step 2" })).toHaveTextContent("gone (not a project repository)");
 	fireEvent.change(screen.getByLabelText("Step 1"), { target: { value: "make dev-up --fast" } });
@@ -195,11 +185,9 @@ it("reads, edits and saves each step's own time limit in the stored form", async
 	expect(await screen.findByLabelText("Step 2")).toHaveValue("make seed");
 	const first = screen.getByLabelText("Time limit for step 1, in minutes");
 	const second = screen.getByLabelText("Time limit for step 2, in minutes");
-	// Empty is Setup's 30-minute default, shown as its placeholder.
 	expect(first).toHaveValue("");
 	expect(first).toHaveAttribute("placeholder", "30");
 	expect(second).toHaveValue("45");
-	// Only digits are kept; the arrow keys step by one minute.
 	await userEvent.type(first, "9x0");
 	expect(first).toHaveValue("90");
 	fireEvent.keyDown(second, { key: "ArrowUp" });
@@ -217,7 +205,6 @@ it("shows a step's time limit hint, with what empty means, on keyboard focus", a
 	act(() => field.focus());
 	const tooltip = await screen.findByRole("tooltip");
 	expect(tooltip).toHaveTextContent("Time limit in minutes (1 to 120). Leave empty for 30 minutes.");
-	// Beside the field, so it covers neither the Scripts description above nor the step's command below.
 	expect(tooltip.closest("[data-side]")).toHaveAttribute("data-side", "left");
 });
 
@@ -235,11 +222,9 @@ it("does not mark the time limit of an empty step, which saving drops", async ()
 	fireEvent.change(await screen.findByLabelText("Step 1"), { target: { value: "" } });
 	const field = screen.getByLabelText("Time limit for step 1, in minutes");
 	fireEvent.change(field, { target: { value: "0" } });
-	// Saving keeps no empty step, so its limit cannot block it, and is not marked either.
 	expect(field).not.toHaveAttribute("aria-invalid");
 	expect(screen.queryByRole("alert")).toBeNull();
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
-	// Once it has a command, the same limit is marked and keeps the form from saving.
 	fireEvent.change(screen.getByLabelText("Step 1"), { target: { value: "npm ci" } });
 	expect(field).toHaveAttribute("aria-invalid", "true");
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
@@ -252,16 +237,13 @@ it("marks an out-of-range time limit at once and keeps the form from saving", as
 	expect(field).toHaveAttribute("aria-invalid", "true");
 	expect(screen.getByRole("alert")).toHaveTextContent("Setup step 1: the time limit must be a whole number of minutes from 1 to 120.");
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
-	// The message sits beside Save, clamped to its height, so the footer does not grow.
 	expect(screen.getByRole("alert").parentElement).toContainElement(screen.getByRole("button", { name: "Save changes" }));
 	expect(screen.getByRole("alert")).toHaveClass("line-clamp-2", "leading-4");
 	fireEvent.submit(document.getElementById("project-settings-form")!);
 	expect(mocks.patch).not.toHaveBeenCalled();
-	// Clearing it goes back to the default, which saves the plain command.
 	fireEvent.change(field, { target: { value: "" } });
 	expect(field).not.toHaveAttribute("aria-invalid");
 	expect(screen.queryByRole("alert")).toBeNull();
-	// A typed default's value is kept as the step's own limit.
 	fireEvent.change(field, { target: { value: "30" } });
 	await userEvent.click(screen.getByRole("tab", { name: "Cleanup" }));
 	fireEvent.change(screen.getByLabelText("Time limit for step 1, in minutes"), { target: { value: "0" } });

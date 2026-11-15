@@ -121,14 +121,12 @@ test("a pasted image sits inline in the prose, in the composer and in history @T
 	});
 	await page.goto(`/#/projects/fake-proj/sessions/${id}`);
 
-	// History: the path in the prose is a chip that opens the image.
 	const bubble = page.locator(".cursor-chat-human-message");
 	await expect(bubble.locator("p")).toHaveText("The header in Image 1 is too tall");
 	await bubble.locator("p").getByRole("button", { name: "Open image: Image 1" }).click();
 	await expect(page.getByRole("dialog")).toBeVisible();
 	await page.keyboard.press("Escape");
 
-	// Composer: paste at the caret, keep typing, send.
 	const field = page.getByRole("combobox", { name: "Message the agent" });
 	await field.click();
 	await page.keyboard.type("Make this one");

@@ -1,8 +1,5 @@
 import { cn } from "../../lib/utils";
 
-/**
- * Keys as small caps (⇧ ⌘ O), used in the Cmd+K footer.
- */
 function ShortcutCaps({ keys, className }: { keys: readonly string[]; className?: string }) {
 	return (
 		<span data-slot="shortcut-caps" className={cn("inline-flex shrink-0 items-center gap-1", className)} aria-hidden="true">

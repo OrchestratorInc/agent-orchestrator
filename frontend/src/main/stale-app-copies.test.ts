@@ -280,8 +280,6 @@ describe("retireStaleAppCopies", () => {
 	});
 
 	it("trashes only the staged bundle even if the original path is swapped after revalidation", async () => {
-		// The whole point of staging: once revalidation passes, a replacement
-		// renamed back into the original path cannot become what gets trashed.
 		let originalPath = DOWNLOADS_COPY;
 		const trashItem = vi.fn(async () => undefined);
 		await retireStaleAppCopies({
@@ -289,7 +287,6 @@ describe("retireStaleAppCopies", () => {
 			confirm: async () => true,
 			stage: async () => STAGED_PATH,
 			revalidate: async () => {
-				// A replacement lands at the original path after we validate.
 				originalPath = `${DOWNLOADS_COPY}#replacement`;
 				return true;
 			},

@@ -18,16 +18,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// recordedReq captures one inbound HTTP request so tests can assert against
-// the exact GitLab API surface the adapter touched.
 type recordedReq struct {
 	Method string
 	Path   string
 	Body   string
 }
 
-// fakeGL is a programmable httptest.Server that matches requests by
-// "METHOD path" and records every call. Unmatched requests fail the test.
 type fakeGL struct {
 	t        *testing.T
 	server   *httptest.Server
@@ -74,8 +70,6 @@ func (f *fakeGL) calls() []recordedReq {
 	return out
 }
 
-// newTrackerForTest constructs an adapter pointed at the fake server with a
-// static dev token.
 func newTrackerForTest(t *testing.T, f *fakeGL) *Tracker {
 	t.Helper()
 	tr, err := New(Options{
@@ -91,10 +85,6 @@ func newTrackerForTest(t *testing.T, f *fakeGL) *Tracker {
 
 func ctx() context.Context { return context.Background() }
 
-// ---------------------------------------------------------------------------
-// New / construction
-// ---------------------------------------------------------------------------
-
 func TestNewRejectsMissingToken(t *testing.T) {
 	if _, err := New(Options{Token: scmgitlab.StaticTokenSource("")}); !errors.Is(err, scmgitlab.ErrNoToken) {
 		t.Fatalf("New with empty token = %v, want ErrNoToken", err)
@@ -103,10 +93,6 @@ func TestNewRejectsMissingToken(t *testing.T) {
 		t.Fatalf("New with no source = %v, want ErrNoToken", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ID parsing
-// ---------------------------------------------------------------------------
 
 func TestParseID(t *testing.T) {
 	cases := []struct {
@@ -171,10 +157,6 @@ func TestParseRepo(t *testing.T) {
 		})
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Get
-// ---------------------------------------------------------------------------
 
 func TestGet_HappyPath(t *testing.T) {
 	f := newFakeGL(t)
@@ -380,10 +362,6 @@ func TestGet_EmptyLabelsAndAssigneesAreNil(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Preflight
-// ---------------------------------------------------------------------------
-
 func TestPreflight_HappyPath(t *testing.T) {
 	f := newFakeGL(t)
 	f.on("GET", "/user", func(w http.ResponseWriter, r *http.Request) {
@@ -448,10 +426,6 @@ func TestPreflight_RetriesAfterFailure(t *testing.T) {
 		t.Fatalf("HTTP calls = %d, want 2 (first fail not cached)", got)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// List
-// ---------------------------------------------------------------------------
 
 func TestList_HappyPath(t *testing.T) {
 	f := newFakeGL(t)
@@ -602,12 +576,12 @@ func TestList_RejectsWrongProvider(t *testing.T) {
 
 func TestList_RejectsBadRepo(t *testing.T) {
 	cases := []string{
-		"",            // empty
-		"noseparator", // missing /
-		" owner/repo", // leading whitespace
-		"owner/repo ", // trailing whitespace
-		"own er/repo", // embedded space
-		"owner/re#po", // embedded #
+		"",
+		"noseparator",
+		" owner/repo",
+		"owner/repo ",
+		"own er/repo",
+		"owner/re#po",
 	}
 	for _, native := range cases {
 		t.Run(native, func(t *testing.T) {
@@ -632,14 +606,6 @@ func TestList_NotFound(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ParseLinkNext
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Domain validation
-// ---------------------------------------------------------------------------
 
 func TestTrackerIntakeConfig_ValidateAcceptsGitLab(t *testing.T) {
 	c := domain.TrackerIntakeConfig{
@@ -685,13 +651,6 @@ func TestTrackerIntakeConfig_WithDefaultsLeavesProviderEmpty(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Host-aware tracker (ticket 09)
-// ---------------------------------------------------------------------------
-
-// newHostAwareTrackerForTest constructs a host-aware tracker with a default
-// (gitlab.com) fake server and an optional self-managed host fake server.
-// The self-managed host's base URL is wired via AllowedHosts + HostTokens.
 func newHostAwareTrackerForTest(t *testing.T, defaultSrv *fakeGL, hostEntries map[string]struct {
 	server *fakeGL
 	token  string
@@ -715,9 +674,6 @@ func newHostAwareTrackerForTest(t *testing.T, defaultSrv *fakeGL, hostEntries ma
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	// Override the per-host base URL to point at the fake server.
-	// The tracker derives self-managed base URLs as https://<host>/api/v4,
-	// but for testing we need to point at the httptest server URL.
 	for host, he := range hostEntries {
 		lh := strings.ToLower(strings.TrimSpace(host))
 		entry := tr.hosts[lh]
@@ -738,7 +694,6 @@ func TestGet_SelfManagedHost_RoutesToCorrectBaseURLAndToken(t *testing.T) {
 		"gitlab.internal": {server: selfManagedSrv, token: "tkn-internal"},
 	})
 
-	// Register handler on the self-managed server only.
 	selfManagedSrv.on("GET", "/projects/group/project/issues/42", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer tkn-internal" {
 			t.Errorf("Authorization = %q, want Bearer tkn-internal", got)
@@ -767,7 +722,6 @@ func TestGet_SelfManagedHost_RoutesToCorrectBaseURLAndToken(t *testing.T) {
 	if issue.ID.Host != "gitlab.internal" {
 		t.Fatalf("issue.ID.Host = %q, want %q", issue.ID.Host, "gitlab.internal")
 	}
-	// Ensure the default server was NOT hit.
 	if calls := defaultSrv.calls(); len(calls) != 0 {
 		t.Fatalf("default server received unexpected calls: %#v", calls)
 	}
@@ -784,7 +738,6 @@ func TestGet_DefaultHost_BackwardCompat(t *testing.T) {
 		_, _ = w.Write([]byte(`{"iid":1,"title":"default","description":"","state":"opened","web_url":"https://gitlab.com/o/r/-/issues/1"}`))
 	})
 
-	// Host: "" routes to the default (gitlab.com) server.
 	issue, err := tr.Get(ctx(), domain.TrackerID{
 		Provider: domain.TrackerProviderGitLab,
 		Native:   "o/r#1",
@@ -805,7 +758,6 @@ func TestGet_GitLabComExplicit_RoutesToDefault(t *testing.T) {
 		_, _ = w.Write([]byte(`{"iid":1,"title":"t","description":"","state":"opened","web_url":"https://gitlab.com/o/r/-/issues/1"}`))
 	})
 
-	// Host: "gitlab.com" should route to the default, same as Host: "".
 	issue, err := tr.Get(ctx(), domain.TrackerID{
 		Provider: domain.TrackerProviderGitLab,
 		Host:     "gitlab.com",
@@ -831,7 +783,6 @@ func TestGet_UnconfiguredHost_Rejected(t *testing.T) {
 	if !errors.Is(err, ErrHostNotAllowed) {
 		t.Fatalf("err = %v, want ErrHostNotAllowed", err)
 	}
-	// No HTTP call should have been made to any server.
 	if calls := defaultSrv.calls(); len(calls) != 0 {
 		t.Fatalf("unexpected HTTP calls: %#v", calls)
 	}
@@ -895,8 +846,6 @@ func TestGet_SelfManagedHost_FallsBackToDefaultToken(t *testing.T) {
 	defaultSrv := newFakeGL(t)
 	selfManagedSrv := newFakeGL(t)
 
-	// Register the self-managed host in AllowedHosts but do NOT provide a
-	// HostTokens entry — the default token should be used.
 	tr := newHostAwareTrackerForTest(t, defaultSrv, map[string]struct {
 		server *fakeGL
 		token  string
@@ -905,7 +854,6 @@ func TestGet_SelfManagedHost_FallsBackToDefaultToken(t *testing.T) {
 	})
 
 	selfManagedSrv.on("GET", "/projects/o/r/issues/1", func(w http.ResponseWriter, r *http.Request) {
-		// Should use the default token since no per-host token was configured.
 		if got := r.Header.Get("Authorization"); got != "Bearer tkn-default" {
 			t.Errorf("Authorization = %q, want Bearer tkn-default", got)
 		}
@@ -937,7 +885,6 @@ func TestGet_HostCaseInsensitive(t *testing.T) {
 		_, _ = w.Write([]byte(`{"iid":1,"title":"t","description":"","state":"opened","web_url":"https://gitlab.internal/o/r/-/issues/1"}`))
 	})
 
-	// Upper-case host should match the lower-cased allowlist entry.
 	_, err := tr.Get(ctx(), domain.TrackerID{
 		Provider: domain.TrackerProviderGitLab,
 		Host:     "GitLab.Internal",

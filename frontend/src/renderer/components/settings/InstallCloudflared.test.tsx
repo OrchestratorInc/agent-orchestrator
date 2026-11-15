@@ -17,8 +17,6 @@ beforeEach(() => {
 	vi.mocked(apiClient.GET).mockResolvedValue({ data: { target: "cloudflared", status: "idle" }, error: undefined } as never);
 });
 
-// The daemon starts its own download when remote access needs the connector;
-// offering a second install beside it would invite a pointless click.
 test("shows the daemon's own download instead of an install button", async () => {
 	vi.mocked(apiClient.GET).mockResolvedValue({
 		data: { target: "cloudflared", status: "running", method: "download" },

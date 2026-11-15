@@ -26,16 +26,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 type Mode = "signIn" | "register";
 type Phase = "idle" | "submitting";
 
-// Matches the control plane's local-auth minimum (password >= 12 chars). The CP
-// re-validates; this is only immediate feedback so the register button stays
-// disabled until the rule is met.
 const MIN_PASSWORD_LENGTH = 12;
 
-// Dev-only email/password sign-in against a loopback Docker control plane
-// running AO_CLOUD_LOCAL_AUTH. Mounted once (CloudOnboardingGate) and driven by
-// the shared store from the sidebar entry points. On success the main process
-// pushes the session over cloud:sessionChanged, so useCloudSession flips to
-// "authenticated" and this dialog simply closes.
 export function CloudLocalSignInDialog() {
 	const { t } = useTranslation();
 	const { available, login, register } = useCloudLocalAuth();
@@ -52,8 +44,6 @@ export function CloudLocalSignInDialog() {
 	const [phase, setPhase] = useState<Phase>("idle");
 	const [error, setError] = useState<string | null>(null);
 
-	// Reset the whole form each time the dialog opens so a reopen never shows a
-	// stale password or a previous error.
 	useEffect(() => {
 		if (!open) return;
 		setMode("signIn");
@@ -66,8 +56,6 @@ export function CloudLocalSignInDialog() {
 		setError(null);
 	}, [open]);
 
-	// If the dev+loopback gate stops applying while the dialog is open (e.g. the
-	// control-plane URL changed), close it rather than leave a dead form.
 	useEffect(() => {
 		if (open && !available) closeDialog();
 	}, [open, available, closeDialog]);

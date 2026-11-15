@@ -9,9 +9,6 @@ import (
 	"time"
 )
 
-// Records written by Claude Code 2.1.287 (fields AO does not read trimmed):
-// a prompt, Esc while the reply streamed, and Esc while a Bash tool ran or
-// waited at its permission prompt (the rejected tool result, then the marker).
 const (
 	transcriptPrompt      = `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"SLOW please"},"uuid":"c777b312-76d9-4292-b9d2-b81f4db98933","timestamp":"2026-10-19T04:32:29.535Z","sessionId":"511e68be-f634-4b26-b7c7-7f4d258144c6","version":"2.1.287"}`
 	transcriptAssistant   = `{"parentUuid":"c777b312-76d9-4292-b9d2-b81f4db98933","isSidechain":false,"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"tick 0 tick 1 "}]},"timestamp":"2026-10-19T04:32:34.621Z"}`
@@ -72,14 +69,12 @@ func TestLastTurnFailureIgnoresTurnsThatWereNotInterrupted(t *testing.T) {
 		"interrupt, then a prompt":  {transcriptPrompt, transcriptInterrupted, transcriptPrompt, transcriptAssistant},
 		"tool result after a reply": {transcriptPrompt, transcriptInterrupted, transcriptRejected},
 		"marker quoted in a prompt": {strings.Replace(transcriptPrompt, `"SLOW please"`, `"what does [Request interrupted by user] mean?"`, 1)},
-		// A typed prompt is recorded as a string, however it reads.
 		"prompt that is the marker": {transcriptPrompt, transcriptInterrupted,
 			strings.Replace(transcriptPrompt, `"SLOW please"`, `"[Request interrupted by user]"`, 1)},
 		"prompt that is the tool use marker": {transcriptPrompt, transcriptInterrupted,
 			strings.Replace(transcriptPrompt, `"SLOW please"`, `"[Request interrupted by user for tool use]"`, 1)},
 		"marker beside another block": {transcriptPrompt, strings.Replace(transcriptInterrupted, `"text":"[Request interrupted by user]"}]`,
 			`"text":"[Request interrupted by user]"},{"type":"text","text":"more"}]`, 1)},
-		// A subagent's interrupt is not the conversation's turn end.
 		"subagent interrupt": {transcriptPrompt, strings.Replace(transcriptInterrupted, `"isSidechain":false`, `"isSidechain":true`, 1)},
 		"marker without a timestamp": {transcriptPrompt,
 			strings.Replace(transcriptInterrupted, `"timestamp":"2026-10-19T04:32:34.624Z",`, ``, 1)},

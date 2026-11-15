@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// clientPayloadHash binds a client message ID to the request as received,
-// before AO may append worker reports or edit a queued message.
 func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 	if msg.ClientMessageID == "" {
 		return "", nil
@@ -37,8 +35,6 @@ func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 	return fmt.Sprintf("%x", sha256.Sum256(payload)), nil
 }
 
-// Prompt formatting is server-owned, so changing it must not change the identity
-// of the client request. Copy only when normalizing, preserving durable content.
 func clientPayloadContent(content []ports.ChatContent) []ports.ChatContent {
 	for i, block := range content {
 		if block.Type == "file_reference" && block.Text == FileReferenceQuotedPath {

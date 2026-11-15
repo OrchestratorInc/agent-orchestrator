@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// Auth probes run npm `#!/usr/bin/env node` launchers. CmdRunner must give
-// them a Node manager's runtime when the daemon PATH omits it.
 func TestCmdRunnerFindsNodeOutsideDaemonPATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("npm env-node launcher is Unix-specific")

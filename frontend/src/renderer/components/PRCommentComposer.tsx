@@ -5,23 +5,18 @@ import { markdownCodeRanges } from "../lib/markdown-code";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 
-/** Largest file the daemon takes for a comment attachment. */
 export const PR_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-/** Largest a comment's files can be together. */
 export const PR_ATTACHMENTS_TOTAL_MAX_BYTES = 25 * 1024 * 1024;
-/** What the file picker offers; the daemon checks the bytes again. */
 const PR_ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,video/mp4,video/quicktime,video/webm,application/pdf,text/plain,application/json,text/csv,application/zip,.log,.txt,.csv,.json,.zip,.mov";
 
 type Edit = { text: string; selectionStart: number; selectionEnd: number };
 
-/** Wraps the selection (or a placeholder) in a marker, like **bold**. */
 export function wrapSelection(value: string, start: number, end: number, marker: string, placeholder: string): Edit {
 	const selected = value.slice(start, end) || placeholder;
 	const text = value.slice(0, start) + marker + selected + marker + value.slice(end);
 	return { text, selectionStart: start + marker.length, selectionEnd: start + marker.length + selected.length };
 }
 
-/** A link around the selection, with the URL selected to type over. */
 export function insertLink(value: string, start: number, end: number, placeholder: string): Edit {
 	const label = value.slice(start, end) || placeholder;
 	const url = "url";
@@ -39,12 +34,9 @@ export function readAsBase64(file: File): Promise<string> {
 	});
 }
 
-/** A comment body's link to one of its files: "](attachment:0)". */
 const ATTACHMENT_LINK = /\]\(attachment:(\d+)\)/g;
-/** Most files one comment takes, as the daemon counts them. */
 export const PR_ATTACHMENTS_MAX_FILES = 10;
 
-/** The text's attachment links outside code (an example there is not a file), as the daemon reads them. */
 function attachmentLinks(text: string): { start: number; end: number; index: number }[] {
 	const code = markdownCodeRanges(text);
 	return [...text.matchAll(ATTACHMENT_LINK)]
@@ -52,11 +44,6 @@ function attachmentLinks(text: string): { start: number; end: number; index: num
 		.filter((link) => !code.some(([start, end]) => link.start >= start && link.end <= end));
 }
 
-/**
- * The files a comment links, in the order the text first links them, with the
- * text renumbered to match. A file whose link was deleted is left out, so it
- * never leaves this machine.
- */
 export function linkedAttachments(text: string, files: ReadonlyMap<number, File>): { body: string; files: File[] } {
 	const links = attachmentLinks(text);
 	const order: number[] = [];
@@ -74,49 +61,30 @@ export function linkedAttachments(text: string, files: ReadonlyMap<number, File>
 	return { body, files: order.map((index) => files.get(index)!) };
 }
 
-/** A file's link label: its name, without what would end the markdown link early. */
 const linkLabel = (name: string) => name.replace(/[[\]()]/g, "_");
 
-/**
- * The box a PR comment or reply is written in: text that grows as it is
- * written, and attachments (picked, pasted or dropped). A file stays on this
- * machine, linked from the text as "![name](attachment:0)", until the comment
- * posts: it goes with the comment then, so a cancelled draft uploads nothing.
- * ⌘B, ⌘I, ⌘K and ⌘E format the selection; ⌘↵ posts and Escape cancels.
- */
 export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error, initial = "", onCancel, onEdit, onSubmit, placeholder, roomy, submitLabel }: {
-	/**
-	 * Files can be attached. Without it there is no Attach; with blockedReason,
-	 * Attach is off and that says why (no write access to the repository).
-	 */
 	attachments?: { blockedReason?: string };
-	/** Takes focus as it opens, with the caret after any text it starts with. */
 	autoFocus?: boolean;
-	/** Who is writing, beside the text. */
 	avatar?: ReactNode;
 	busy: boolean;
 	error?: string | null;
 	initial?: string;
 	onCancel?: () => void;
-	/** The draft changed (typed, formatted or given a file), so an error about the last post no longer applies. */
 	onEdit?: () => void;
-	/** Posts the text with the files it links, in the order it links them. */
 	onSubmit: (body: string, files: File[]) => Promise<unknown>;
 	placeholder: string;
-	/** Reading size, for the PR's tab; the sidebar stays compact. */
 	roomy?: boolean;
 	submitLabel: string;
 }) {
 	const { t } = useTranslation();
 	const [value, setValue] = useState(initial);
-	// The files the text links, by the number in their link.
 	const [files, setFiles] = useState<ReadonlyMap<number, File>>(() => new Map());
 	const nextFile = useRef(0);
 	const [uploadError, setUploadError] = useState<string | null>(null);
 	const [dragging, setDragging] = useState(false);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const fileRef = useRef<HTMLInputElement>(null);
-	// Opened to write, with the caret after any text it starts with (a quote and @mention).
 	useEffect(() => {
 		if (!autoFocus) return;
 		const element = textareaRef.current;
@@ -141,20 +109,16 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 	const code = () => apply((v, s, e) => (v.slice(s, e).includes("\n") ? wrapSelection(v, s, e, "\n```\n", "") : wrapSelection(v, s, e, "`", t("pr.comments.format.codePlaceholder"))));
 	const link = () => apply((v, s, e) => insertLink(v, s, e, t("pr.comments.format.linkPlaceholder")));
 
-	// Set before the first await, so a second click or ⌘↵ can't post twice
-	// while the parent is still asking or posting.
 	const submittingRef = useRef(false);
 	const [submitting, setSubmitting] = useState(false);
 	const posting = busy || submitting;
 	const attach = (picked: File[]) => {
-		// While a comment posts, its text is already sent: a file added now would be lost.
 		if (!attachments || picked.length === 0 || posting) return;
 		if (attachments.blockedReason) {
 			setUploadError(attachments.blockedReason);
 			return;
 		}
 		setUploadError(null);
-		// Only files the text still links count: a deleted link frees its room.
 		const linked = linkedAttachments(value, files).files;
 		let total = linked.reduce((sum, file) => sum + file.size, 0);
 		let count = linked.length;
@@ -201,7 +165,6 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 			setFiles(new Map());
 			nextFile.current = 0;
 		} catch {
-			// The mutation shows the error; the draft stays so nothing typed is lost.
 		} finally {
 			submittingRef.current = false;
 			setSubmitting(false);
@@ -269,7 +232,6 @@ export function PRCommentComposer({ attachments, autoFocus, avatar, busy, error,
 				<div className="flex min-w-0 flex-1 flex-col gap-2">
 					<textarea
 						aria-label={placeholder}
-						// Grows with what is written, up to a cap, then scrolls.
 						className="max-h-64 min-h-6 min-w-0 resize-none border-0 bg-transparent p-0 leading-6 text-foreground [field-sizing:content] placeholder:text-muted-foreground focus-visible:outline-none"
 						disabled={posting}
 						onChange={(event) => { setValue(event.target.value); onEdit?.(); }}

@@ -31,14 +31,9 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWriteOverwritesExisting is the cross-platform overwrite check: a stale
-// running.json from a crashed predecessor must be replaced cleanly. POSIX
-// rename(2) handles this natively; Windows needs MoveFileEx with
-// MOVEFILE_REPLACE_EXISTING — atomicReplace gives us both.
 func TestWriteReadRoundTripOwner(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "running.json")
 
-	// app-owned daemon: Owner round-trips as "app".
 	want := Info{PID: 1, Port: 3001, Owner: "app"}
 	if err := Write(path, want); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -55,7 +50,6 @@ func TestWriteReadRoundTripOwner(t *testing.T) {
 		t.Errorf("Owner round trip: got %q, want %q", got.Owner, "app")
 	}
 
-	// headless daemon: Owner is empty (omitempty), round-trips as "".
 	headless := Info{PID: 2, Port: 3002}
 	if err := Write(path, headless); err != nil {
 		t.Fatalf("Write headless: %v", err)
@@ -146,7 +140,6 @@ func TestRemoveIfOwnedDoesNotDeleteSuccessorRunfile(t *testing.T) {
 
 func TestCheckStaleDeadPID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "running.json")
-	// PID 0x7FFFFFFF is effectively guaranteed not to exist.
 	if err := Write(path, Info{PID: 0x7FFFFFFF, Port: 3001}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -161,7 +154,6 @@ func TestCheckStaleDeadPID(t *testing.T) {
 
 func TestCheckStaleLivePID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "running.json")
-	// This test process is unquestionably alive.
 	if err := Write(path, Info{PID: os.Getpid(), Port: 3001}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}

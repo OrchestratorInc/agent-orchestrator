@@ -14,15 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
-// errCapture is a request-scoped slot WriteError records the raw service error
-// into. The wire envelope deliberately hides internals behind "Internal server
-// error", which previously meant a 500's cause was lost entirely — the access
-// log reads the captured error back so the daemon log keeps the diagnosis.
 type errCapture struct{ captured CapturedError }
 
-// CapturedError is request-local observability metadata recorded when an error
-// is rendered. Err remains available for structured logging; ReportingOwner
-// decides which layer owns the Sentry report.
 type CapturedError struct {
 	Err            error
 	Code           string
@@ -38,16 +31,12 @@ var safeTelemetryFields = map[string]struct{}{
 	"runtime_link_state": {},
 }
 
-// WithErrorCapture returns a copy of the request whose context carries an
-// error-capture slot, plus a getter for the error recorded by WriteError while
-// handling it. The request logger installs it and reads it after the handler.
 func WithErrorCapture(r *http.Request) (*http.Request, func() CapturedError) {
 	capture := &errCapture{}
 	req := r.WithContext(context.WithValue(r.Context(), errCaptureKey{}, capture))
 	return req, func() CapturedError { return capture.captured }
 }
 
-// captureError records err for the request if a capture slot is present.
 func captureError(r *http.Request, err error) {
 	if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok {
 		c.captured.Err = err
@@ -56,15 +45,10 @@ func captureError(r *http.Request, err error) {
 	}
 }
 
-// CaptureError records a safe, structured error for request telemetry before a
-// controller writes a response directly with WriteAPIError.
 func CaptureError(r *http.Request, err error) {
 	captureError(r, err)
 }
 
-// SetTelemetryField records a bounded, privacy-safe field for the request's
-// structured telemetry. Callers must only pass values that are already safe to
-// export; request bodies, URLs, and page content must never be stored here.
 func SetTelemetryField(r *http.Request, key string, value any) {
 	c, ok := r.Context().Value(errCaptureKey{}).(*errCapture)
 	if !ok || c == nil {
@@ -79,7 +63,6 @@ func SetTelemetryField(r *http.Request, key string, value any) {
 	c.captured.Fields[key] = value
 }
 
-// APIError is the locked wire shape for every non-2xx response.
 type APIError struct {
 	Error          string          `json:"error"`
 	Code           string          `json:"code"`
@@ -89,14 +72,12 @@ type APIError struct {
 	ReportingOwner ownership.Owner `json:"reporting_owner,omitempty" enum:"http"`
 }
 
-// WriteJSON serialises v as JSON with the given status.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// WriteAPIError emits the locked envelope for any non-2xx response.
 func WriteAPIError(w http.ResponseWriter, r *http.Request, status int, kind, code, message string, details map[string]any) {
 	if status >= http.StatusInternalServerError {
 		if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok {
@@ -124,18 +105,11 @@ func newAPIError(r *http.Request, kind, code, message string, details map[string
 	}
 }
 
-// WriteError is the single path from any service error to the wire envelope. It
-// renders an *apierr.Error (anywhere in the chain) using its Kind, and falls
-// back to a 500 for any other error so internal details never leak. This is the
-// only place an apierr.Kind is translated into an HTTP status and wire word.
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	status, body := errorEnvelope(r, err)
 	WriteJSON(w, status, body)
 }
 
-// StreamError is WriteError for a stream that has already sent its 200
-// status line: it records the failure the same way and returns the envelope
-// for the stream to send as its last event.
 func StreamError(r *http.Request, err error) APIError {
 	_, body := errorEnvelope(r, err)
 	return body
@@ -152,21 +126,10 @@ func errorEnvelope(r *http.Request, err error) (int, APIError) {
 		status, kind := httpStatus(e.Kind)
 		return body(status, kind, e.Code, e.Message, e.Details)
 	}
-	// A transient failure (the database was momentarily busy/locked, or a
-	// server-side deadline elapsed) is retryable, not a server fault. Map it to
-	// 503 with a stable code so it is not counted or alerted as an
-	// INTERNAL_ERROR 500 and so clients can back off and retry.
 	if isTransient(err) {
 		return body(http.StatusServiceUnavailable, "unavailable", "SERVICE_UNAVAILABLE",
 			"The service is momentarily unavailable, please retry.", nil)
 	}
-	// A project whose source repository has been deleted from disk turns any
-	// subsequent filesystem/git operation that reaches it into a raw,
-	// unclassified failure. Map that single, well-defined condition to a clean
-	// 404 before the generic 500 fallthrough so clients can tell "the project
-	// its folder is gone" apart from an internal server fault. Adapters wrap
-	// the same sentinel (ports.ErrWorkspaceRepoUnavailable) with %w, so
-	// errors.Is matches it through any wrapping.
 	if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
 		return body(http.StatusNotFound, "not_found", "PROJECT_FOLDER_MISSING",
 			"Project repository is missing from disk", nil)
@@ -174,8 +137,6 @@ func errorEnvelope(r *http.Request, err error) (int, APIError) {
 	return body(http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil)
 }
 
-// WriteErrorWithCode gives an unclassified failure a stable operation code.
-// Classified failures retain their existing status and client envelope.
 func WriteErrorWithCode(w http.ResponseWriter, r *http.Request, err error, code, message string) {
 	var typed *apierr.Error
 	if errors.As(err, &typed) || isTransient(err) || errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
@@ -185,20 +146,11 @@ func WriteErrorWithCode(w http.ResponseWriter, r *http.Request, err error, code,
 	WriteError(w, r, apierr.InternalCause(code, message, err))
 }
 
-// SQLite primary result codes for a busy/locked database. Extended codes (e.g.
-// SQLITE_BUSY_SNAPSHOT) carry these in their low byte. Declared here rather
-// than imported so the envelope layer does not depend on the DB driver; the
-// modernc.org/sqlite error type is matched structurally by its Code() method.
 const (
 	sqliteBusy   = 5
 	sqliteLocked = 6
 )
 
-// isTransient reports whether err is a retryable contention/timeout condition
-// rather than a genuine server fault. It matches the SQLite driver's error via
-// a Code() method (no driver import), plus server-side context deadlines.
-// Context cancellation (the client went away) is deliberately excluded — the
-// response never reaches that caller, and it is not retryable.
 func isTransient(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -211,7 +163,6 @@ func isTransient(err error) bool {
 	return false
 }
 
-// httpStatus maps a semantic failure Kind to its HTTP status and wire word.
 func httpStatus(k apierr.Kind) (int, string) {
 	switch k {
 	case apierr.KindInvalid:

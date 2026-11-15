@@ -15,7 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// harnessHeld probes the launch gate without waiting the way a launch does.
 func harnessHeld(s *Service, harness domain.AgentHarness) bool {
 	gate := s.harnessGate(harness)
 	if gate.TryRLock() {
@@ -66,7 +65,6 @@ func TestOMPUpdateIgnoresArchivedAndExitedSessions(t *testing.T) {
 	if _, err := s.gateRunningSessions(context.Background(), TargetOMP, AgentOperationUpdate, plan); err != nil {
 		t.Fatalf("archived or exited OMP session blocked update: %v", err)
 	}
-	// A live idle process still uses the executable and must be counted.
 	s.sessions = sessionListerStub{sessions: append(records,
 		domain.SessionRecord{ID: "live", Harness: domain.HarnessOMP, Activity: domain.Activity{State: domain.ActivityIdle}})}
 	_, err := s.gateRunningSessions(context.Background(), TargetOMP, AgentOperationUpdate, plan)
@@ -96,7 +94,6 @@ func TestUpdateWhileRunningLevelMatrix(t *testing.T) {
 		{"darwin", TargetClaudeCode, "homebrew", true, "claude-code", UpdateWhileRunningSafe},
 		{"darwin", TargetCopilot, "homebrew", true, "copilot-cli", UpdateWhileRunningSafe},
 		{"darwin", TargetDroid, "homebrew", true, "droid", UpdateWhileRunningSafe},
-		// Only the audited cask is known to ship a single binary.
 		{"darwin", TargetClaudeCode, "homebrew", true, "claude-code@latest", UpdateWhileRunningWarn},
 		{"darwin", TargetCopilot, "homebrew", true, "someone/tap/copilot-cli", UpdateWhileRunningWarn},
 		{"darwin", TargetDroid, "homebrew", true, "", UpdateWhileRunningWarn},
@@ -135,8 +132,6 @@ func TestUpdatePlansCarryTheirLevel(t *testing.T) {
 	}
 }
 
-// updateWhileRunningService returns a darwin service whose Kimi Homebrew
-// formula update succeeds, with live sessions given by sessions.
 func updateWhileRunningService(t *testing.T, sessions []domain.SessionRecord) (*Service, *[]ports.InstallCommand) {
 	t.Helper()
 	s := newTestService("darwin", "bash", "brew", "npm")
@@ -194,7 +189,6 @@ func TestUpdateWhileRunningDecisionTable(t *testing.T) {
 			s, _ := updateWhileRunningService(t, tt.sessions)
 			s.updateWhileRunningDisabled = tt.disabled
 			if tt.method == "npm" {
-				// Kimi has no npm method; Auggie's npm update is the blocked case.
 				s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "auggie-1", Harness: domain.AgentHarness(TargetAuggie)}}}
 			}
 			if tt.starting {
@@ -236,7 +230,6 @@ func TestSleepingSessionsDoNotBlockUpdates(t *testing.T) {
 		{ID: "hibernated", Harness: domain.AgentHarness(TargetKimi), HibernatedAt: &now},
 		{ID: "exited", Harness: domain.AgentHarness(TargetKimi), Activity: domain.Activity{State: domain.ActivityExited}},
 	})
-	// Even with the switch off, sessions without a process never block.
 	s.updateWhileRunningDisabled = true
 	if _, err := s.StartAgentOperation(context.Background(), TargetKimi, "homebrew", AgentOperationUpdate, ""); err != nil {
 		t.Fatalf("update with only sleeping sessions = %v", err)
@@ -391,7 +384,6 @@ func TestLaunchDropsAdvisoryForBinaryReplacedOutsideAO(t *testing.T) {
 		t.Fatal("unchanged binary dropped its advisory")
 	}
 
-	// `claude update` in a terminal installs a new release and moves the link.
 	newer := filepath.Join(versions, "2.1.1")
 	if err := os.WriteFile(newer, []byte("newer"), 0o755); err != nil {
 		t.Fatal(err)
@@ -481,7 +473,6 @@ func TestInPlaceUpdatesNeverRewriteLiveProcesses(t *testing.T) {
 			if withSessions || !errors.As(err, &active) || active.Level != UpdateWhileRunningBlocked {
 				t.Fatalf("in-place update can remove files a live process needs: %t, %v", withSessions, err)
 			}
-			// Once no process uses the executable, ordinary in-place updates remain valid.
 			s.sessions = sessionListerStub{}
 			if _, err := s.gateRunningSessions(context.Background(), TargetCodex, AgentOperationUpdate, plan); err != nil {
 				t.Fatal(err)

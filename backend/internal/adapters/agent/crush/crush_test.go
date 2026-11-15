@@ -28,8 +28,6 @@ func TestGetLaunchCommandBuildsCrossPlatformArgv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// cfg.SessionID is the AO-internal id and must NOT be passed as --session on
-	// launch; Crush mints its own native id, which GetRestoreCommand resumes by.
 	want := []string{
 		"crush",
 		"--cwd", "/tmp/workspace",
@@ -55,13 +53,13 @@ func TestGetLaunchCommandMapsPermissionModes(t *testing.T) {
 		{
 			name:        "accept-edits",
 			permission:  ports.PermissionModeAcceptEdits,
-			want:        nil, // Crush doesn't have granular permission modes
+			want:        nil,
 			notExpected: "--yolo",
 		},
 		{
 			name:        "auto",
 			permission:  ports.PermissionModeAuto,
-			want:        nil, // Crush doesn't have granular permission modes
+			want:        nil,
 			notExpected: "--yolo",
 		},
 		{
@@ -486,13 +484,6 @@ func TestGetAgentHooksGitignoresManagedCrushFiles(t *testing.T) {
 		t.Fatalf(".gitignore should not ignore project config %q:\n%s", crushConfigFileName, text)
 	}
 
-	// AO must not write/own a repo-root .gitignore: EnsureWorkspaceGitignore
-	// is a no-op when a root .gitignore already exists without AO's
-	// sentinel, and unconditionally overwrites one that does carry it on
-	// every subsequent call — neither is safe for a directory the user (or
-	// their repo) already owns. .crush.json churn in the agent's worktree
-	// is a known, pre-existing limitation left to a future AddExclude-based
-	// fix (writing to .git/info/exclude instead).
 	if _, err := os.Stat(filepath.Join(workspace, ".gitignore")); !os.IsNotExist(err) {
 		t.Fatalf("workspace root .gitignore should not be created by crush's adapter, stat err = %v", err)
 	}
@@ -632,8 +623,6 @@ func TestAreHooksInstalledReportsManagedSystemPrompt(t *testing.T) {
 		t.Fatal("installed = false after install, want true")
 	}
 }
-
-// Helper functions from codex_test.go
 
 func contains(haystack []string, needle string) bool {
 	for _, s := range haystack {

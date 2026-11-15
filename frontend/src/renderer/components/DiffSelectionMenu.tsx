@@ -16,12 +16,9 @@ import { Pressable } from "./ui/pressable";
 export type DiffSelectionMenuProps = {
 	sessionId: string;
 	filePath: string;
-	/** Ordered lines from `frontend/src/shared/diff-selection.ts`. */
 	lines: DiffSelectionLine[];
-	/** Raw `window.getSelection().toString()` — used by Copy only. */
 	selectedText: string;
 	open: boolean;
-	/** Viewport coordinates for the fixed, cursor-positioned trigger. */
 	position: { x: number; y: number };
 	onOpenChange: (open: boolean) => void;
 	scope?: string;
@@ -32,7 +29,6 @@ export type DiffSelectionMenuProps = {
 type Mode = "actions" | "input";
 type SendStatus = "idle" | "sending" | "sent" | "error";
 
-// Mirrors BrowserPanel's ~2s "Sent" confirmation window before auto-close.
 const SENT_AUTO_CLOSE_MS = 2_000;
 
 export function DiffSelectionMenu({
@@ -63,22 +59,12 @@ export function DiffSelectionMenu({
 		}
 	}, []);
 
-	// Shared by every transition away from a prior send's outcome (Copy,
-	// Explain-then-Make-changes, and both Escape-from-input paths below): a
-	// still-armed "sent" auto-close timer or leftover status/error must never
-	// leak into the next action — otherwise a stale "Sent"/error label renders
-	// under the new state, and the old timer can later close the whole menu
-	// out from under the user with no action on their part.
 	const resetSendState = useCallback(() => {
 		clearSentTimer();
 		setStatus("idle");
 		setErrorMessage("");
 	}, [clearSentTimer]);
 
-	// One active selection at a time: a fresh open always starts at the action
-	// list, even if the previous open ended in the input state or an error.
-	// This effect's dependency is only `open`, so it fires on mount and on every
-	// false -> true transition, but not on unrelated re-renders while open.
 	useEffect(() => {
 		openGenerationRef.current += 1;
 		if (!open) return;
@@ -140,12 +126,8 @@ export function DiffSelectionMenu({
 
 	const handleInputKeyDown = useCallback(
 		(event: KeyboardEvent<HTMLInputElement>) => {
-			// Defensive: DropdownMenuContent has its own roving-focus/typeahead
-			// keyboard handling that a plain text input shouldn't feed into.
 			event.stopPropagation();
 			if (event.key === "Escape") {
-				// A step back to the action list, not a dismiss — must not let
-				// DropdownMenuContent's own Escape handling close the whole menu.
 				event.preventDefault();
 				resetSendState();
 				setMode("actions");
@@ -191,13 +173,6 @@ export function DiffSelectionMenu({
 				align="start"
 				className="min-w-56"
 				onCloseAutoFocus={(event) => event.preventDefault()}
-				// DismissableLayer listens for Escape on `document` in the capture
-				// phase, which runs before the input's own onKeyDown (a bubble-phase
-				// React handler) ever sees the event — so stopPropagation() there is
-				// too late to stop the auto-close. This prop fires synchronously
-				// inside that same capture-phase handler, before Radix checks
-				// `defaultPrevented`, so it's the only hook that can actually cancel
-				// the dismiss for input mode's "step back" behavior.
 				onEscapeKeyDown={(event) => {
 					if (mode !== "input") return;
 					event.preventDefault();
@@ -213,9 +188,6 @@ export function DiffSelectionMenu({
 							disabled={selectedText.length === 0}
 							onSelect={(event) => {
 								event.preventDefault();
-								// Guards against a stale "sent" auto-close timer (armed by a
-								// prior Explain/Make changes send) firing after Copy has
-								// already closed the menu itself — see resetSendState above.
 								resetSendState();
 								handleCopy();
 							}}
@@ -236,13 +208,6 @@ export function DiffSelectionMenu({
 							disabled={status === "sending"}
 							onSelect={(event) => {
 								event.preventDefault();
-								// Unlike Explain/Enter-to-send, this path doesn't go through
-								// send(), so it must clear a still-armed "sent" auto-close
-								// timer (e.g. Explain succeeded, then the user immediately
-								// clicked Make changes) and reset the leftover status/error
-								// itself — otherwise the stale "Sent" label renders under the
-								// fresh input, and the old timer later closes the whole menu
-								// out from under the user's in-progress draft.
 								resetSendState();
 								setMode("input");
 							}}

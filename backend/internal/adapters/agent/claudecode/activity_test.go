@@ -15,14 +15,11 @@ func TestDeriveActivityState(t *testing.T) {
 		wantOK  bool
 	}{
 		{"user prompt -> active", "user-prompt-submit", `{}`, domain.ActivityActive, true},
-		// The tool-use trio reports active; lifecycle's precedence rule (not
-		// this deriver) decides whether it may demote a sticky state.
 		{"pre-tool-use -> active", "pre-tool-use", `{"tool_name":"Bash","tool_use_id":"toolu_1"}`, domain.ActivityActive, true},
 		{"post-tool-use -> active", "post-tool-use", `{"tool_name":"Bash","tool_use_id":"toolu_1"}`, domain.ActivityActive, true},
 		{"post-tool-use-failure -> active", "post-tool-use-failure", `{"tool_name":"Bash","tool_use_id":"toolu_1"}`, domain.ActivityActive, true},
 		{"permission-request -> blocked", "permission-request", `{"tool_name":"Bash"}`, domain.ActivityBlocked, true},
 		{"stop -> idle", "stop", `{}`, domain.ActivityIdle, true},
-		// StopFailure replaces Stop when an API error ends the turn.
 		{"stop-failure -> idle", "stop-failure", `{"error":"rate_limit","error_details":"429"}`, domain.ActivityIdle, true},
 		{"notification idle_prompt -> idle", "notification", `{"notification_type":"idle_prompt"}`, domain.ActivityIdle, true},
 		{"notification permission_prompt -> blocked", "notification", `{"notification_type":"permission_prompt"}`, domain.ActivityBlocked, true},

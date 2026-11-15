@@ -79,7 +79,6 @@ func TestProviderHelper(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 	}
 	if os.Getenv("AO_CHAT_HOST_IGNORE_STDIN") == "1" {
-		// Like Cursor and Grok: only a signal ends it.
 		time.Sleep(10 * time.Second)
 	}
 	os.Exit(0)
@@ -144,7 +143,7 @@ func TestACPHostReplaysAcceptedInteractionAfterAttachmentDies(t *testing.T) {
 	first := awaitAttach(t, d)
 	reader := bufio.NewReader(first.Stdout)
 	sendFrame(t, first, `{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{"sessionId":"acp-session-live","prompt":[]}}`)
-	_ = readFrame(t, reader) // prompt update
+	_ = readFrame(t, reader)
 	permission := readFrame(t, reader)
 	requestID := frameMetaString(t, permission, ACPRequestIDMetaKey)
 	if requestID == "" {
@@ -163,7 +162,7 @@ func TestACPHostReplaysAcceptedInteractionAfterAttachmentDies(t *testing.T) {
 	if !bytes.Contains(accepted, []byte(`"id":99`)) || !bytes.Contains(accepted, []byte(`"eventId"`)) {
 		t.Fatalf("command acceptance = %s", accepted)
 	}
-	_ = first.Stdin.Close() // daemon dies before its SDK answers the provider request
+	_ = first.Stdin.Close()
 
 	second := awaitAttach(t, d)
 	secondReader := bufio.NewReader(second.Stdout)

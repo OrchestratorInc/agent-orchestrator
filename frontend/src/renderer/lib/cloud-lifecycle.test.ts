@@ -74,7 +74,6 @@ describe("cloudChatStartingInPlace", () => {
 	it("lets go once the worker connects, and while the session is paused", () => {
 		expect(cloudChatStartingInPlace(freestyleChat("running", "bootstrapping", true))).toBe(false);
 		expect(cloudChatStartingInPlace(freestyleChat("paused", "stopped"))).toBe(false);
-		// A session being deleted or archived is going away, not getting ready.
 		expect(cloudChatStartingInPlace(freestyleChat("deleted", "stopped"))).toBe(false);
 		expect(cloudChatStartingInPlace(freestyleChat("deleted", "running"))).toBe(false);
 	});
@@ -108,7 +107,6 @@ describe("cloudStartupProblem", () => {
 			detail: "missing secret",
 			at: "2026-10-13T18:31:39Z",
 		});
-		// A control-plane startup error still disappears once the worker connects.
 		expect(cloudStartupProblem(withRuntime("running", { startupError }, true))).toBeUndefined();
 	});
 
@@ -187,7 +185,6 @@ describe("resumeCloudSession", () => {
 		expect(other).not.toBe(first);
 		answers.forEach((answer) => answer({}));
 		await first;
-		// Once it answered, a later open asks again.
 		void resumeCloudSession(client, "org", "session-a");
 		expect(resumeSession).toHaveBeenCalledTimes(3);
 	});

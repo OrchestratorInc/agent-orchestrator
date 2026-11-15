@@ -12,8 +12,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// conptyConn is the real ptyConn implementation backed by go-pty's ConPty
-// (Windows ConPTY API). Only compiled on Windows.
 type conptyConn struct {
 	pty gopty.ConPty
 	cmd *gopty.Cmd
@@ -29,10 +27,7 @@ type conptyConn struct {
 	exitMu        sync.Mutex
 }
 
-// newConPTY creates a ConPTY session running shellCmd in cwd with shellArgs.
-// It starts the process and returns a ptyConn ready for use.
 func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (ptyConn, error) {
-	// go-pty's New() returns a ConPty on Windows.
 	p, err := gopty.New()
 	if err != nil {
 		return nil, fmt.Errorf("conpty: create pty: %w", err)
@@ -50,7 +45,6 @@ func newConPTY(cwd, shellCmd string, shellArgs []string, cols, rows uint16) (pty
 
 	cmd := cp.Command(shellCmd, shellArgs...)
 	cmd.Dir = cwd
-	// Inherit parent env so PATH, HOME, etc. are available.
 	cmd.Env = os.Environ()
 
 	if err := cmd.Start(); err != nil {
@@ -80,10 +74,6 @@ func (c *conptyConn) wait() {
 	c.exitMu.Unlock()
 	c.doneOnce.Do(func() { close(c.doneC) })
 
-	// Unlike Unix PTYs, ConPTY can keep its output pipe open after the child
-	// exits. Close only the pseudoconsole handle here so buffered output can
-	// still drain before Read returns EOF. The shared host then follows the
-	// same exit path as macOS and Linux and broadcasts the completed status.
 	c.closeConsole()
 }
 
@@ -97,8 +87,6 @@ func (c *conptyConn) Close() error {
 			c.pty.OutputPipe().Close(),
 		)
 	})
-	// Best-effort kill: a child that ignores ConPTY EOF still gets terminated
-	// so Done() fires. Mirrors pty.kill() in pty-host.ts.
 	if c.cmd.Process != nil {
 		_ = c.cmd.Process.Kill()
 	}

@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDesktopLogWriter, initializeDesktopLog } from "./desktop-log";
 
-// Windows reports no separate owner, group and other permission bits.
 const posix = process.platform !== "win32";
 const dirs: string[] = [];
 const dataDir = () => { const dir = mkdtempSync(path.join(os.tmpdir(), "desktop-log-test-")); dirs.push(dir); return dir; };

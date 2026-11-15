@@ -104,9 +104,6 @@ func (b *lockedBuffer) String() string {
 
 var _ io.Writer = (*lockedBuffer)(nil)
 
-// An isolated installer runs in its own directory and sees only the
-// environment it was given plus proxy, temp and locale settings. A variable
-// it was given, such as SHELL, wins over the user's.
 func TestRunInstallIsolatedKeepsUserVariablesOut(t *testing.T) {
 	t.Setenv("KIMI_CODE_HOME", "/Users/me/.kimi-code")
 	t.Setenv("HTTPS_PROXY", "http://proxy:8080")

@@ -18,8 +18,6 @@ type commandRunner func(context.Context, string, ...string) ([]byte, error)
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus runs fx's documented status probe. A named, non-expired credential
-// source is the CLI's successful authentication verdict.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err

@@ -248,7 +248,6 @@ describe("TeamsSection", () => {
 		expect(platformRow.textContent).toContain("4 people · 2 sessions and 1 project shared");
 		expect(platformRow.textContent).toContain("Owner");
 		expect(screen.getByText("Data infra").closest("[data-team-row]")!.textContent).not.toContain("Owner");
-		// The workspace's own team isn't repeated under the other workspaces.
 		expect(screen.getAllByText("Platform")).toHaveLength(1);
 		expect(screen.getByText("Teams you're in · other workspaces")).toBeInTheDocument();
 		expect(screen.getByText("Acme · 9 people")).toBeInTheDocument();
@@ -277,7 +276,6 @@ describe("TeamsSection", () => {
 		expect(rows[0]!.textContent).toContain("(you)");
 		expect(rows[3]!.textContent).toContain("sam@contractor.io");
 		expect(rows[3]!.textContent).toContain("Added by email");
-		// You don't remove yourself from here; you leave.
 		expect(rows[0]!.querySelector("[data-member-actions]")).toBeNull();
 		await userEvent.click(within(rows[0] as HTMLElement).getByRole("button", { name: "Role for Asha Rao" }));
 		expect(await screen.findByRole("menuitem", { name: /^Member/ })).toHaveAttribute("aria-disabled", "true");
@@ -340,7 +338,6 @@ describe("TeamsSection", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Role for Farah Nasser" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Owner" }));
 		await waitFor(() => expect(mocks.calls.find((call) => call[0] === "updateTeamMember")).toEqual(["updateTeamMember", "org-north", "t-platform", "m-farah", "owner"]));
-		// Before the answer.
 		expect(screen.getByRole("button", { name: "Role for Farah Nasser" })).toHaveTextContent("Owner");
 		await act(async () => answer.open());
 		expect(screen.getByRole("button", { name: "Role for Farah Nasser" })).toHaveTextContent("Owner");
@@ -418,7 +415,6 @@ describe("TeamsSection", () => {
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Delete team" }));
 		const dialog = await screen.findByRole("dialog");
 		expect(await within(dialog).findByText("3 people lose what was shared with Platform: 4 sessions. Anything shared with them another way stays. This can't be undone.")).toBeInTheDocument();
-		// The lists aren't read again, so what shows is what the cache holds.
 		mocks.gates.listTeams = [gate()];
 		mocks.gates.listMyTeams = [gate()];
 		await userEvent.click(within(dialog).getByRole("button", { name: "Delete team" }));
@@ -432,7 +428,6 @@ describe("TeamsSection", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "New team" }));
 		const dialog = document.querySelector<HTMLElement>("[data-new-team-dialog]")!;
 		const close = within(dialog).getByRole("button", { name: "Close dialog" });
-		// The settings close-button utilities it used are gone from the stylesheet.
 		expect(close).toHaveClass("absolute", "top-3", "right-3");
 		await userEvent.click(close);
 		await waitFor(() => expect(document.querySelector("[data-new-team-dialog]")).toBeNull());
@@ -442,7 +437,6 @@ describe("TeamsSection", () => {
 		renderSection();
 		await userEvent.click(await screen.findByRole("button", { name: "New team" }));
 		await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "Release");
-		// Its own read never answers: the page shows what creating it returned.
 		mocks.gates.getTeam = [gate()];
 		await userEvent.click(screen.getByRole("button", { name: "Create team" }));
 		const page = await teamPage();
@@ -461,7 +455,6 @@ describe("TeamsSection", () => {
 		await userEvent.click(within(row).getByRole("button", { name: /Change access/ }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: /Can watch/ }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't change access.");
-		// Back to what it was.
 		expect(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ })).toHaveTextContent("Can write");
 
 		await userEvent.click(within(await shareRow("Fix checkout")).getByRole("button", { name: /Change access/ }));

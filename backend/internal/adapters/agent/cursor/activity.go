@@ -8,21 +8,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// EnvPermissionMode carries the AO permission mode for hook-time evaluation.
-// session_manager pins it into the runtime env at spawn/restore.
 const EnvPermissionMode = "AO_PERMISSION_MODE"
 
-// PermissionDecision is the outcome of evaluating a Cursor before-execution hook
-// against AO's permission policy.
 type PermissionDecision struct {
 	Permission     string
 	State          domain.ActivityState
 	ReportActivity bool
 }
 
-// DeriveActivityState maps a Cursor hook sub-command onto an AO activity state.
-// Before-execution hooks carry no fixed mapping — the CLI evaluates them via
-// EvaluatePermission and posts the resulting state separately.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	switch event {
 	case "session-start", "user-prompt-submit":
@@ -38,10 +31,6 @@ func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
 	}
 }
 
-// EvaluatePermission decides whether a Cursor shell/MCP attempt needs user
-// approval under AO's permission mode. A native permission dialog is blocked:
-// ordinary input must not be delivered while Cursor is waiting for the user's
-// decision.
 func EvaluatePermission(mode ports.PermissionMode, _ string, _ []byte) PermissionDecision {
 	if permissionRequired(mode) {
 		return PermissionDecision{
@@ -66,7 +55,6 @@ func permissionRequired(mode ports.PermissionMode) bool {
 	}
 }
 
-// HookToolName extracts a display/correlation name from a Cursor hook payload.
 func HookToolName(event string, payload []byte) string {
 	var p struct {
 		Command  string `json:"command"`
@@ -81,10 +69,6 @@ func HookToolName(event string, payload []byte) string {
 	}
 }
 
-// TerminalFailureCorrelation converts Cursor's generic postToolUseFailure
-// payload into the same execution family/name pair captured by the specialized
-// before-execution hook. Missing correlation stays unresolved so lifecycle
-// tracking fails closed.
 func TerminalFailureCorrelation(payload []byte) (event, toolName string, ok bool) {
 	var p struct {
 		ToolName    string `json:"tool_name"`

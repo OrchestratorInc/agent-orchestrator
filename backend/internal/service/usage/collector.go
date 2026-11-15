@@ -39,7 +39,6 @@ const (
 
 var nativeUsageIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// ErrUsageSessionNotFound reports that hook metadata targeted no durable AO session.
 var ErrUsageSessionNotFound = errors.New("usage session not found")
 
 type validatedSourceArtifact struct {
@@ -48,7 +47,6 @@ type validatedSourceArtifact struct {
 	size     int64
 }
 
-// HookSignal is the usage-specific metadata carried by an AO agent hook.
 type HookSignal struct {
 	Harness                domain.AgentHarness
 	ProviderHint           string
@@ -61,8 +59,6 @@ type HookSignal struct {
 	SubagentTranscriptPath string
 }
 
-// SourceRoots are the provider-owned directories from which AO may read usage
-// transcripts.
 type SourceRoots struct {
 	ClaudeProjects      string
 	CodexSessions       string
@@ -83,8 +79,6 @@ type SourceRoots struct {
 	AgyACPConversations string
 }
 
-// DefaultSourceRoots resolves provider-owned transcript directories. dataDir
-// is AO's already-resolved durable data directory.
 func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error) {
 	if err := ctx.Err(); err != nil {
 		return SourceRoots{}, err
@@ -97,8 +91,6 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	if codexHome == "" {
 		codexHome = filepath.Join(home, ".codex")
 	}
-	// Like the CLI and the accounts' shared history, a custom config folder
-	// moves Claude's transcripts.
 	claudeHome := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR"))
 	if claudeHome == "" {
 		claudeHome = filepath.Join(home, ".claude")
@@ -299,8 +291,6 @@ type collectorStore interface {
 	ReactivateUsageSource(context.Context, int64, time.Time) (bool, error)
 }
 
-// Collector registers provider transcript files and coordinates their source
-// lifecycle. Parsing and cursor advancement remain in the usage ingestor.
 type Collector struct {
 	store                   collectorStore
 	roots                   SourceRoots
@@ -310,12 +300,8 @@ type Collector struct {
 	now                     func() time.Time
 	logger                  *slog.Logger
 	mu                      *semaphore.Weighted
-	// discoveryAfterID is where the next bounded reconcile pass resumes,
-	// guarded by mu. Unchanged bindings are not rewritten, so their updated_at
-	// cannot rotate the pass through more bindings than one limit holds.
-	discoveryAfterID int64
-	// Guarded separately from mu, which RecordHook holds across the whole hook.
-	routeMu sync.RWMutex
+	discoveryAfterID        int64
+	routeMu                 sync.RWMutex
 }
 
 func (c *Collector) qwenUsageRoot(ctx context.Context, sessionID domain.SessionID) (string, error) {
@@ -329,7 +315,6 @@ func (c *Collector) qwenUsageRoot(ctx context.Context, sessionID domain.SessionI
 	return c.qwenUsageRootForSession(ctx, session)
 }
 
-// QwenWatchRoots makes registered workspace sources eligible for exact-file watches, including when the workspace differs from the global Qwen root.
 func (c *Collector) QwenWatchRoots(ctx context.Context) ([]string, error) {
 	sessions, err := c.store.ListAllSessions(ctx)
 	if err != nil {
@@ -377,10 +362,6 @@ func (c *Collector) qwenUsageRootForSession(ctx context.Context, session domain.
 	return filepath.Join(runtimeDir, "usage"), nil
 }
 
-// OnRouteResolved registers the handler called the first time a binding learns
-// its billing route. Only Claude needs it: a Claude transcript names no
-// provider, so events collected before the first hook are unattributed, and
-// this is the moment the evidence to repair them finally exists.
 func (c *Collector) OnRouteResolved(handler func()) {
 	if c == nil {
 		return
@@ -396,7 +377,6 @@ func (c *Collector) routeResolvedHandler() func() {
 	return c.notifyRouteResolved
 }
 
-// NewCollector constructs a transcript source registrar.
 func NewCollector(store collectorStore, roots SourceRoots, notifySourcesChanged func(reconcile bool)) *Collector {
 	return newCollectorWithCodexSourceLimit(store, roots, notifySourcesChanged, defaultCodexLogicalSourceLimit)
 }
@@ -421,10 +401,6 @@ func newCollectorWithCodexSourceLimit(
 	}
 }
 
-// FinalizeSession moves every known native binding for one observed runtime
-// generation and session revision into finalization, then asks the ingestion
-// pipeline to collect a stable final cursor. It is idempotent and safe to call
-// before the session is terminated.
 func (c *Collector) FinalizeSession(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -458,9 +434,6 @@ func (c *Collector) FinalizeSession(
 	return nil
 }
 
-// ReactivateSession resumes collection for the native session relaunched by AO.
-// Existing cursors and events remain untouched; the source inventory is merely
-// made watchable again so hooks are not required for continued accounting.
 func (c *Collector) ReactivateSession(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -523,8 +496,6 @@ func (c *Collector) reactivateSessionLocked(
 	return nil
 }
 
-// RecordHook registers transcript metadata and updates collection lifecycle for
-// one native hook callback.
 func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, signal HookSignal) error {
 	signal.LaunchID = boundedUsageMetadata(signal.LaunchID)
 	finalizing := finalizingEvent(signal.Event)
@@ -629,8 +600,6 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 		strings.TrimSpace(signal.TranscriptPath) == "" {
 		lastErrorCode = domain.UsageErrorSourceDiscoveryPending
 	}
-	// A binding that existed without a billable route, and now has one, owns
-	// history whose inferred or unavailable price can be corrected immediately.
 	routeResolved := exists && signal.ProviderHint != "" &&
 		(existing.ProviderHint == "" || existing.ProviderHint == pricing.UnidentifiedBillingRoute) &&
 		existing.ProviderHint != signal.ProviderHint
@@ -751,10 +720,8 @@ func trustedClaudeProviderHint(harness domain.AgentHarness, raw string) string {
 	return pricing.TrustedClaudeRoute(boundedUsageMetadata(raw))
 }
 
-// BackgroundTaskEvent records a provider call AO made for a session, such as a title or a prompt suggestion.
 const BackgroundTaskEvent = "background-task"
 
-// RecordBackgroundTask counts a finished background call against the session it served.
 func (c *Collector) RecordBackgroundTask(
 	ctx context.Context,
 	sessionID domain.SessionID,
@@ -863,8 +830,6 @@ func (c *Collector) validateHookArtifact(
 	return &validatedSourceArtifact{path: resolved, identity: identity, size: size}, nil
 }
 
-// BackfillActive discovers transcript files only for live/resumable AO
-// sessions. It deliberately does not import terminated session history.
 func (c *Collector) BackfillActive(ctx context.Context) error {
 	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
@@ -901,12 +866,6 @@ func (c *Collector) BackfillActive(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// usageNativeSessionID returns the provider transcript identity for the
-// session's committed interface. Chat controllers persist that identity as the
-// provider conversation id because they have no terminal hook to populate the
-// agent session id. TUI controllers populate the agent session id through their
-// native hook pipeline. Prefer the Chat field only when it is present so older
-// migrated records can still fall back to their hook-derived identity.
 func usageNativeSessionID(session domain.SessionRecord) string {
 	nativeID := session.Metadata.AgentSessionID
 	if domain.NormalizeSessionMode(session.Mode) == domain.SessionModeChat &&
@@ -1053,10 +1012,6 @@ func (c *Collector) backfillSession(ctx context.Context, session domain.SessionR
 	return nil
 }
 
-// ReconcileSources discovers provider artifacts that hooks could not name,
-// appeared after their hook, or moved between provider-owned directories.
-// A negative limit reconciles every eligible binding; zero uses the bounded
-// default.
 func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
 	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
@@ -1113,8 +1068,6 @@ func (c *Collector) ReconcileSources(ctx context.Context, limit int64) error {
 	return errors.Join(errs...)
 }
 
-// ReconcilePath uses Codex rollout metadata to validate replacements and reach
-// newly-created child bindings independently of the bounded discovery queue.
 func (c *Collector) ReconcilePath(ctx context.Context, path string) error {
 	if err := c.mu.Acquire(ctx, 1); err != nil {
 		return err
@@ -1949,26 +1902,12 @@ func (c *Collector) codexSourceBudgetExceeded(
 	return len(inventory.codexLogicalIDs) >= c.codexLogicalSourceLimit
 }
 
-// maxClaudeContinuationScanBytes bounds the size of one transcript record that
-// is parsed while extracting its session id and cwd.
 const maxClaudeContinuationScanBytes = 256 << 10
 
-// maxClaudeContinuationScanTotalBytes bounds the total bytes read per
-// candidate, so a pathological run-on record cannot make the scan unbounded.
 const maxClaudeContinuationScanTotalBytes = 8 << 20
 
-// maxClaudeContinuationScanRecords bounds the leading-record window.
 const maxClaudeContinuationScanRecords = 128
 
-// discoverClaudeContinuations registers resume transcripts that Claude Code
-// wrote beside an already-registered transcript without ever emitting an AO
-// hook: `claude --resume` continues the conversation in a new native session
-// file inside the same project directory, and nothing else in the pipeline
-// learns about it, so all post-resume usage would stay invisible forever. AO
-// gives every session its own worktree, so a transcript's recorded cwd
-// identifies its AO session; two live AO sessions never share one workspace by
-// design. If that invariant ever changes, cwd alone no longer attributes a
-// continuation and this scan needs a stronger discriminator.
 func (c *Collector) discoverClaudeContinuations(
 	ctx context.Context,
 	binding domain.UsageBindingRecord,
@@ -2003,8 +1942,6 @@ func (c *Collector) discoverClaudeContinuations(
 		if _, ok := knownPaths[candidate]; ok {
 			continue
 		}
-		// registerSource re-validates authoritatively; this pre-check only
-		// keeps one unreadable candidate from aborting the whole scan.
 		resolved, _, _, err := c.validateSourcePath(ctx, domain.HarnessClaudeCode, "", candidate)
 		if err != nil {
 			continue
@@ -2022,9 +1959,6 @@ func (c *Collector) discoverClaudeContinuations(
 			continue
 		}
 		if filepath.Base(resolved) != nativeID+".jsonl" {
-			// validateSourceAttribution rejects a claude_main source whose file
-			// name does not carry the native id, so upserting the binding first
-			// would strand a zero-source binding and fail every reconcile pass.
 			continue
 		}
 		newBinding, err := c.upsertContinuationBinding(ctx, session, binding.Harness, nativeID, now)
@@ -2072,8 +2006,6 @@ func (c *Collector) upsertContinuationBinding(
 		return domain.UsageBindingRecord{}, err
 	}
 	if exists {
-		// Preserve state and provider evidence already recorded for this
-		// native session; only the source registration below matters here.
 		return existing, nil
 	}
 	state := domain.UsageBindingActive
@@ -2094,12 +2026,6 @@ type claudeTranscriptMetaRecord struct {
 	Cwd       string `json:"cwd"`
 }
 
-// readClaudeTranscriptMeta extracts the native session id and working directory
-// from a bounded window of leading records. sessionId is present on every
-// transcript record but cwd first appears on user/assistant records, so the
-// first line alone is not enough. A record larger than maxClaudeContinuationScanBytes
-// is drained and skipped instead of aborting the scan: a transcript that opens
-// with a large paste or tool result must not become permanently undiscoverable.
 func readClaudeTranscriptMeta(ctx context.Context, path string) (string, string, bool) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -2136,9 +2062,6 @@ func readClaudeTranscriptMeta(ctx context.Context, path string) (string, string,
 	return "", "", false
 }
 
-// sameWorkspacePath compares the transcript's recorded cwd with the session
-// workspace after cleaning, falling back to symlink resolution when the direct
-// comparison misses.
 func sameWorkspacePath(cwd, workspace string) bool {
 	cwd = strings.TrimSpace(cwd)
 	workspace = strings.TrimSpace(workspace)
@@ -3291,9 +3214,6 @@ func boundedUsageMetadata(value string) string {
 	return value
 }
 
-// SourceIdentity returns the filesystem's stable file id. Transcript contents
-// are append-only and therefore cannot participate in identity without making a
-// newly created or partially written first record look like file replacement.
 func SourceIdentity(ctx context.Context, path string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -3309,8 +3229,6 @@ func SourceIdentity(ctx context.Context, path string) (string, error) {
 	return SourceIdentityFromFile(file)
 }
 
-// SourceIdentityFromFile returns the filesystem's stable id for an already
-// opened transcript descriptor.
 func SourceIdentityFromFile(file *os.File) (string, error) {
 	fileID, err := sourceFileID(file)
 	if err != nil {

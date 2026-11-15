@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
 
-// Installer is the controller-facing contract for real, async install runs
-// against the fixed systeminstall.Target allowlist.
 type Installer interface {
 	Start(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string) (systeminstall.Job, error)
@@ -27,12 +25,10 @@ type Installer interface {
 	CancelAgentOperation(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 }
 
-// SystemInstallController owns the system prerequisite and agent harness install routes.
 type SystemInstallController struct {
 	Installer Installer
 }
 
-// Register mounts the system install routes on the supplied router.
 func (c *SystemInstallController) Register(r chi.Router) {
 	r.Post("/system/install/{target}", c.start)
 	r.Get("/system/install/{target}", c.status)
@@ -257,10 +253,6 @@ func (c *SystemInstallController) status(w http.ResponseWriter, r *http.Request)
 	envelope.WriteJSON(w, http.StatusOK, job)
 }
 
-// parseInstallTarget reads and validates the {target} path param against the
-// fixed systeminstall allowlist before it ever reaches the service, so a path
-// traversal attempt or other junk value gets a clean 400 here rather than
-// being passed through.
 func parseInstallTarget(w http.ResponseWriter, r *http.Request) (systeminstall.Target, bool) {
 	target := systeminstall.Target(chi.URLParam(r, "target"))
 	if !systeminstall.IsSystemTarget(target) {

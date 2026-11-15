@@ -5,8 +5,6 @@ import (
 	"sort"
 )
 
-// registeredDiscoveryRoots is an inventory, never a filesystem search. A home
-// project must not turn repo-local discovery into a scan of every repository.
 func (s *Service) registeredDiscoveryRoots(dests *destinations) []string {
 	seen := make(map[string]bool, len(dests.projects))
 	roots := make([]string, 0, len(dests.projects))

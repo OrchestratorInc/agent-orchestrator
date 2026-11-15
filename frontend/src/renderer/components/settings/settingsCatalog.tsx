@@ -20,8 +20,6 @@ import { SettingsSection } from "./SettingsSection";
 import { teamsUnavailable } from "../../hooks/useTeams";
 import { TeamsSection } from "./TeamsSection";
 
-/** The memory window's own blocks, loaded only when the page is opened: it
- * samples the machine every two seconds while it is on screen. */
 const MemoryDiagnostics = lazy(async () => {
 	const module = await import("../SessionMemoryPanel");
 	return { default: module.MemoryDiagnostics };
@@ -32,15 +30,8 @@ const UpdatesSection = lazy(async () => {
 	return { default: module.UpdatesSection };
 });
 
-/** What Settings › Teams offers; see `teams` below. */
 export type TeamsPage = "manage" | "member" | "none";
 
-/**
- * Teams in a workspace that can share; only the person's teams in other
- * workspaces where it can't; nothing until their teams are known (so the
- * rail never shows an item that then goes away) or against a control plane
- * from before teams.
- */
 export function teamsPageFor({ share, orgId, mine }: {
 	share: boolean;
 	orgId: string | undefined;
@@ -53,25 +44,15 @@ export function teamsPageFor({ share, orgId, mine }: {
 
 type CatalogContext = {
 	cloudEnabled: boolean;
-	/** Developer mode with the Diagnostics toggle on — gates the memory and CPU page. */
 	diagnostics: boolean;
-	/** The org holds the coder capability: gates the bring-your-own-Coder page. */
 	customCoder: boolean;
-	/** The org is on self-serve billing: gates the Upgrade (plans and usage) page. */
 	selfServeBilling: boolean;
-	/**
-	 * Teams: "manage" in a workspace with sharing on, "member" when it is off
-	 * but the person is in teams of other workspaces (to see or leave them),
-	 * "none" otherwise (also against a control plane from before teams).
-	 */
 	teams?: TeamsPage;
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
 	showDiagnostics?: HarnessDiagnosticsRequest;
-	/** One page is shown, under its own title: a first heading that only
-	 * rewords that title ("Keyboard shortcuts" on Shortcuts) is hidden. */
 	singlePage?: boolean;
 };
 
@@ -80,9 +61,6 @@ export type SettingsCatalogItem = {
 	icon: AppIcon;
 	label: (t: TFunction) => string;
 	visible?: (context: CatalogContext) => boolean;
-	/** Left out of the single-page "all" view; it has its own page in the nav.
-	 * Diagnostics is a live monitor, not a preference: rendering it inside the
-	 * whole-settings page would sample the machine whenever settings opens. */
 	pageOnly?: boolean;
 	render: (t: TFunction, titleHidden: boolean, context: CatalogContext) => ReactNode;
 };
@@ -104,8 +82,6 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "teams",
 		icon: Users,
 		label: (t) => t("settings.teams"),
-		// Teams share cloud sessions and projects, so they need AO Cloud and an
-		// org that can share, like the Share button.
 		visible: ({ cloudEnabled, teams }) => cloudEnabled && (teams === "manage" || teams === "member"),
 		pageOnly: true,
 		render: (_t, titleHidden, { teams }) => <TeamsSection titleHidden={titleHidden} manage={teams === "manage"} />,
@@ -155,10 +131,8 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		render: (t, titleHidden) => (
 			<>
 				<SettingsSection titleHidden={titleHidden} title={t("settings.mobile")} grouped>
-					{/* Its own card rows: the pairing content row, then Keep awake. */}
 					<ConnectMobileContent active />
 				</SettingsSection>
-				{/* Its own section (and card) when devices are paired; renders nothing otherwise. */}
 				<MobileDevicesSection />
 			</>
 		),

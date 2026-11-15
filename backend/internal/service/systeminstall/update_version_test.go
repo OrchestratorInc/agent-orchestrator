@@ -164,7 +164,6 @@ func TestInstalledVersionTextSelectsHermesRelease(t *testing.T) {
 	if got, ok := versionSemver.find(installedVersionText(TargetHermes, "/missing/hermes", banner)); !ok || got.display != "0.21.6" {
 		t.Fatalf("banner version = %+v, %v; want 0.21.6", got, ok)
 	}
-	// Homebrew's 0.22.2 build prints a stale built-in version; its Cellar wins.
 	root := t.TempDir()
 	cellar := filepath.Join(root, "Cellar", "hermes-agent", "0.22.2", "bin")
 	if err := os.MkdirAll(cellar, 0o755); err != nil {

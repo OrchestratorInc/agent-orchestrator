@@ -11,10 +11,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// ShareLinksFile is where the desktop records the links it published.
 const ShareLinksFile = "share-links.json"
 
-// ShareLinks reads the public links of published artifacts.
 type ShareLinks struct {
 	path    string
 	baseURL string
@@ -26,25 +24,20 @@ type ShareLinks struct {
 	urls    map[domain.SessionID]sessionShareLinks
 }
 
-// sessionShareLinks are one session's links, by artifact ID and, for records
-// written before artifacts had one, by path.
 type sessionShareLinks struct {
 	byID   map[string]shareLink
 	byPath map[string]shareLink
 }
 
-// shareLink is one recorded link: its URL and, when recorded, who it opens for.
 type shareLink struct {
 	url    string
 	access string
 }
 
-// NewShareLinks reads dataDir's share links for one control plane.
 func NewShareLinks(dataDir, controlPlaneURL string) *ShareLinks {
 	return &ShareLinks{path: filepath.Join(dataDir, ShareLinksFile), baseURL: controlPlaneURL}
 }
 
-// Apply sets ShareURL, and ShareAccess where recorded, on each file that has a link.
 func (l *ShareLinks) Apply(id domain.SessionID, files []domain.SessionArtifactFile) {
 	if l == nil || l.baseURL == "" || len(files) == 0 {
 		return
@@ -87,7 +80,6 @@ func parseShareLinks(data []byte, baseURL string) map[domain.SessionID]sessionSh
 	}
 	urls := map[domain.SessionID]sessionShareLinks{}
 	for key, raw := range records {
-		// [baseURL, session, path] or [baseURL, session, "", artifact ID].
 		var parts []string
 		if json.Unmarshal([]byte(key), &parts) != nil || len(parts) < 3 || len(parts) > 4 || parts[0] != baseURL {
 			continue

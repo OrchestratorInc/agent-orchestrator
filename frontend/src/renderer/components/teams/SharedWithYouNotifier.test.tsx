@@ -90,7 +90,6 @@ describe("SharedWithYouNotifier", () => {
 		expect(toasts.map((toast) => toast.title)).toEqual(["Asha shared storefront with Platform"]);
 		toasts[0]!.action!.run();
 		expect(mocks.navigate).toHaveBeenCalledWith("p-store", "orch");
-		// The same list again says nothing.
 		await act(async () => {
 			await queryClient.fetchQuery({ queryKey: KEY, queryFn: async () => [next], staleTime: 0 });
 		});
@@ -108,7 +107,6 @@ describe("SharedWithYouNotifier", () => {
 		const toasts = useUiStore.getState().globalToasts;
 		expect(toasts).toHaveLength(3);
 		expect(toasts[0]!.title).toBe("Someone shared Session 0 with you");
-		// All five are remembered, so the two not shown don't pop up later.
 		expect(JSON.parse(window.localStorage.getItem(STORAGE) ?? "[]")).toHaveLength(5);
 	});
 
@@ -117,7 +115,6 @@ describe("SharedWithYouNotifier", () => {
 		const queryClient = new QueryClient();
 		mount(queryClient);
 		const redeemed = workspace("p-store", "storefront", { sessions: { "s-fix": { byName: "Asha", grantId: "g-link", source: "link" } } }, [{ id: "s-fix", title: "Fix checkout" }]);
-		// A control plane from before teams says nothing about how; it had only links.
 		const older = workspace("p-old", "legacy", { sessions: { "s-old": { byName: "Asha", grantId: "g-old" } } }, [{ id: "s-old", title: "Old" }]);
 		await act(async () => {
 			await queryClient.fetchQuery({ queryKey: KEY, queryFn: async () => [redeemed, older] });
@@ -205,13 +202,10 @@ describe("SessionAccessTag", () => {
 		const session = { id: "s1", cloud: { orgId: "org", shared: true, sharedVia: "Recipient QA" } as never };
 		const { container, rerender } = render(tag(session));
 		expect(container.textContent).toBe("Can watch · via Recipient QA");
-		// A direct share raises the role above the team's; the list still says
-		// the team until it is read again.
 		mocks.live = { you: "me", viewers: [{ userId: "me", role: "editor" }] };
 		rerender(tag(session));
 		expect(container.textContent).toBe("Can write");
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-shared-workspaces"] });
-		// Once the list answers after the change, its team shows again.
 		await act(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 5));
 			queryClient.setQueryData(SHARED_LIST, []);

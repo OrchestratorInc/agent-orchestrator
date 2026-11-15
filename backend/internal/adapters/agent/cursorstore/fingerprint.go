@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 )
 
-// Fingerprint captures every native input used by discovery and preparation.
-// SQLite's main file alone does not identify a live WAL snapshot.
 func Fingerprint(ctx context.Context, root, path string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err

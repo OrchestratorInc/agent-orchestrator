@@ -7,20 +7,10 @@ import (
 )
 
 const (
-	adapterLogName = "adapter.log"
-	// adapterLogMaxBytes bounds one log file. A rotation keeps the previous file
-	// beside it, so a host keeps at most twice this on disk.
+	adapterLogName           = "adapter.log"
 	adapterLogMaxBytes int64 = 1 << 20
 )
 
-// adapterLog keeps the provider adapter's stderr in the host's directory. The
-// adapter owns turn settlement, so when a turn goes silent its stderr is the
-// only record of why. The file is owner-only and rotates once, so a host that
-// lives for days cannot fill the disk.
-//
-// Logging is best effort: Write never fails, because an error from the provider's
-// stderr writer would otherwise surface from the process wait and look like a
-// provider failure.
 type adapterLog struct {
 	mu       sync.Mutex
 	path     string
@@ -35,8 +25,6 @@ func openAdapterLog(dir string, maxBytes int64) *adapterLog {
 	return l
 }
 
-// open attaches the log file, appending to what an earlier host left unless
-// truncate is set. A failure leaves the log disabled.
 func (l *adapterLog) open(truncate bool) {
 	flags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	if truncate {
@@ -61,8 +49,6 @@ func (l *adapterLog) Write(p []byte) (int, error) {
 	if l.file == nil {
 		return len(p), nil
 	}
-	// One write larger than a whole file keeps only its newest bytes, so a file
-	// never exceeds the limit. The caller still sees the full length written.
 	chunk := p
 	if int64(len(chunk)) > l.maxBytes {
 		chunk = chunk[int64(len(chunk))-l.maxBytes:]
@@ -85,10 +71,8 @@ func (l *adapterLog) Write(p []byte) (int, error) {
 func (l *adapterLog) rotate() {
 	_ = l.file.Close()
 	previous := l.path + ".1"
-	// Windows refuses to rename over an existing file.
 	_ = os.Remove(previous)
 	if err := os.Rename(l.path, previous); err != nil {
-		// Truncating now would destroy the only copy. Stop logging and keep it.
 		l.file = nil
 		return
 	}

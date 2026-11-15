@@ -9,12 +9,9 @@ import { ProductExternalLink } from "./ProductExternalLink";
 
 type Check = SessionPRSummary["ci"]["checks"][number];
 
-/** Checks listed in one group; the rest are a link to the provider's checks page. */
 const PR_CHECKS_SHOWN = 8;
-/** More passes than this fold behind their group's heading. */
 const PR_PASSED_SHOWN = 3;
 
-// Failures first, then what is still running, then the settled rest.
 const checkOrder: Record<Check["status"], number> = {
 	failed: 0,
 	cancelled: 1,
@@ -39,13 +36,8 @@ export function sortedChecks(checks: Check[]): Check[] {
 	return [...checks].sort((a, b) => checkOrder[a.status] - checkOrder[b.status] || a.name.localeCompare(b.name));
 }
 
-/**
- * Labels and the people asked to review, as text under the PR's author and
- * diff stats. A label keeps its provider colour as a dot, not a pill.
- */
 export function PRLabelsAndReviewers({ pr }: { pr: SessionPRSummary }) {
 	const { t } = useTranslation();
-	// Details are absent until the observer loads them, and from older daemons.
 	const labels = pr.labels ?? [];
 	const reviewers = pr.requestedReviewers ?? [];
 	if (labels.length === 0 && reviewers.length === 0) return null;
@@ -74,11 +66,6 @@ export function PRLabelsAndReviewers({ pr }: { pr: SessionPRSummary }) {
 	);
 }
 
-/**
- * A PR's checks grouped by where they stand, failing first, each linked to its
- * run. Passes fold away when there are many and skipped checks always do; a
- * long group lists a few and links the rest to the provider.
- */
 export function PRChecksGroups({ pr }: { pr: SessionPRSummary }) {
 	const checks = pr.ci.checks ?? [];
 	const checksUrl = prChecksUrl(pr);

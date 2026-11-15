@@ -86,8 +86,6 @@ func boundedPrimeOutput(output []byte) string {
 	return strings.TrimSpace(string(output))
 }
 
-// TerminateNativeSession stops the live Prime worker that owns session's
-// transcript. An inactive transcript is already safe and remains resumable.
 func (p *Plugin) TerminateNativeSession(ctx context.Context, session ports.SessionRef) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -91,8 +91,6 @@ export function useProjectOrchestratorAction({
 		mutationFn: async (mode?: "tui") => {
 			if (!projectId) return;
 			setStartupError(projectId, null, hostId);
-			// A known orchestrator opens at once; its composer shows the startup
-			// shimmer while the resume runs, instead of the click waiting for it.
 			const earlyResume = !hostId && resumableOrchestrator ? resumeOrchestrator(resumableOrchestrator.id) : undefined;
 			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
@@ -108,13 +106,8 @@ export function useProjectOrchestratorAction({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),
 			});
 			setStartupError(projectId, null, hostId);
-			// A completed request belongs to its original route, even if this
-			// component survived a project or session change while it was pending.
 			if (!earlyResume && activeRoute.current === routeKey) {
 				const opening = navigate(sessionNavigateTarget(projectId, openedSessionId, hostId));
-				// A Freestyle orchestrator starts in place: the open stays pending
-				// until its route has rendered, so the board's starting view hands
-				// straight over to the session instead of showing the board between.
 				if (project?.kind === CLOUD_PROJECT_KIND && isCachedFreestyleSession(queryClient, openedSessionId)) await opening;
 			}
 		},
@@ -127,8 +120,6 @@ export function useProjectOrchestratorAction({
 	});
 	const openOrchestrator = (mode?: "tui") => {
 		if (!projectId || !hostConnected || isProjectRestarting || isProvisioning) return;
-		// Read the cache synchronously as well as disabling both rendered copies.
-		// Two clicks in the same render must still produce just one request.
 		if (queryClient.isMutating({ mutationKey, exact: true })) return;
 		void addRendererExceptionStep("Orchestrator open requested", {
 			source: "orchestrator-open", operation: "open_orchestrator",

@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// openDescriptors counts this process's open file descriptors. Readdirnames
-// avoids stat'ing each entry, which trips over descriptors closed mid-scan.
 func openDescriptors(t *testing.T) (int, bool) {
 	t.Helper()
 	dir, err := os.Open("/dev/fd")
@@ -27,15 +25,6 @@ func openDescriptors(t *testing.T) (int, bool) {
 	return len(names), true
 }
 
-// TestWatchReleasesDescriptorsOnCancel pins the descriptor accounting of a
-// cancelled watch. The kqueue backend keeps one descriptor per watched file, so
-// a workspace watcher that does not release them on teardown costs roughly two
-// thousand descriptors per stream against a 61,440 per-process cap on macOS:
-// a handful of workspace views wedge the whole daemon, and every later
-// operation that needs a descriptor (spawning git, opening the next watcher)
-// fails with a bare 500. fsnotify v1.9.0 leaked exactly this way, because
-// kqueue.Close marked the watcher closed before its removal loop ran, which
-// made every removal a no-op.
 func TestWatchReleasesDescriptorsOnCancel(t *testing.T) {
 	baseline, ok := openDescriptors(t)
 	if !ok {
@@ -71,7 +60,6 @@ func TestWatchReleasesDescriptorsOnCancel(t *testing.T) {
 	for range changes { //nolint:revive // drain until the watcher closes the channel
 	}
 
-	// Teardown is asynchronous; poll rather than sleep a fixed interval.
 	deadline := time.Now().Add(10 * time.Second)
 	var after int
 	for time.Now().Before(deadline) {
@@ -85,13 +73,10 @@ func TestWatchReleasesDescriptorsOnCancel(t *testing.T) {
 		after, baseline, after-baseline, watching-baseline)
 }
 
-// skipsNodeModules is a WatchSkipping filter for a tree of generated files.
 func skipsNodeModules(rel string) bool {
 	return slices.Contains(strings.Split(rel, "/"), "node_modules")
 }
 
-// writeGeneratedTree writes 2,000 files under root/node_modules, about what a
-// small npm install writes.
 func writeGeneratedTree(t *testing.T, root string) {
 	t.Helper()
 	for d := range 50 {
@@ -107,8 +92,6 @@ func writeGeneratedTree(t *testing.T, root string) {
 	}
 }
 
-// assertFewDescriptors fails when the watch holds a descriptor for each
-// generated file, as the kqueue backend does for a watched directory.
 func assertFewDescriptors(t *testing.T, baseline int) {
 	t.Helper()
 	count, _ := openDescriptors(t)
@@ -133,8 +116,6 @@ func TestWatchSkippingHoldsNoDescriptorsForASkippedTree(t *testing.T) {
 	assertFewDescriptors(t, baseline)
 }
 
-// An install usually runs while the artifact is open, so the tree appears
-// under a live watch.
 func TestWatchSkippingLeavesOutATreeCreatedWhileWatching(t *testing.T) {
 	baseline, ok := openDescriptors(t)
 	if !ok {

@@ -19,9 +19,7 @@ type sessionForkMode int
 
 const (
 	forkUnsupported sessionForkMode = iota
-	// forkIntoHost forks in a temporary provider host in the fork's worktree.
 	forkIntoHost
-	// forkIntoWorkspace copies the provider's session files without a host.
 	forkIntoWorkspace
 )
 
@@ -35,17 +33,11 @@ func sessionForkStrategy(driver ports.ChatDriver) sessionForkMode {
 	return forkUnsupported
 }
 
-// SessionForkSource reports how a Chat session can be forked at turnID, or at
-// its latest finished turn when turnID is empty. It never wakes or changes the
-// source.
 func (s *Service) SessionForkSource(ctx context.Context, rec domain.SessionRecord, turnID string) (sessionfork.Source, error) {
 	driver, err := s.drivers.Driver(rec.Harness)
 	if err != nil {
-		// No driver for this agent: a refusal the desktop shows, not a failure.
 		return sessionfork.Source{Refusal: sessionfork.CodeAgentUnsupported}, nil //nolint:nilerr // reported as a refusal
 	}
-	// An agent that can't copy its own conversation is forked with AO's copy,
-	// as text.
 	mode := sessionForkStrategy(driver)
 	if mode == forkUnsupported {
 		return s.textHandoffForkSource(ctx, rec, turnID)
@@ -106,13 +98,9 @@ func (s *Service) SessionForkSource(ctx context.Context, rec domain.SessionRecor
 		return sessionfork.Source{Refusal: sessionfork.CodeNativeMissing}, nil
 	}
 	source := sessionfork.Source{LatestTurnID: turn.ID, ContextMode: domain.ForkContextNativeTurn, AnyTurn: anyTurn, PrepareChat: plan.prepare}
-	// Attachments sent after this turn aren't the fork's.
 	source.LimitAttachments, source.AttachmentNames = true, attachmentsUpToTurn(rows, turn.ID)
 	if next.ID != "" {
-		// The files as this turn left them are the ones saved before the
-		// next turn started, for rollback.
 		source.FilesSnapshotRef, source.FilesTurnID = filesnapshot.Ref(rec.ID, next.ID), next.ID
-		// The snapshot is taken as the next turn starts.
 		source.FilesAsOf = next.RequestedAt
 		if next.StartedAt != nil {
 			source.FilesAsOf = *next.StartedAt
@@ -121,8 +109,6 @@ func (s *Service) SessionForkSource(ctx context.Context, rec domain.SessionRecor
 	return source, nil
 }
 
-// olderForkPoint finds turnID if it is a finished turn that wasn't rolled
-// back, and the turn after it, whose saved snapshot holds turnID's files.
 func olderForkPoint(rows ConversationRows, turnID string) (turn, next domain.ConversationTurn, ok bool) {
 	for i, candidate := range rows.Turns {
 		if candidate.ID != turnID {
@@ -144,8 +130,6 @@ func olderForkPoint(rows ConversationRows, turnID string) (turn, next domain.Con
 
 var anthropicMessageID = regexp.MustCompile(`msg_[A-Za-z0-9]+`)
 
-// lastAssistantAPIMessageID is the API message id of turnID's last assistant
-// message, which names where to cut a Claude session.
 func lastAssistantAPIMessageID(rows ConversationRows, turnID string) string {
 	id := ""
 	for _, message := range rows.Messages {
@@ -159,10 +143,6 @@ func lastAssistantAPIMessageID(rows ConversationRows, turnID string) string {
 	return id
 }
 
-// latestForkTurn finds the turn a fork copies through. It reads only the
-// latest turn when it can: the agent's copy always includes it, so it must be
-// settled. A latest turn the agent never accepted carries no provider id for
-// Codex to anchor on, so the last finished one is used instead.
 func (s *Service) latestForkTurn(ctx context.Context, conversationID string, mode sessionForkMode) (domain.ConversationTurn, bool, error) {
 	if reader, ok := s.store.(promptSuggestionTurnReader); ok {
 		latest, err := reader.LatestConversationTurn(ctx, conversationID)
@@ -198,8 +178,6 @@ func settledForkTurn(turn domain.ConversationTurn) bool {
 	return false
 }
 
-// latestFinishedTurn is the last finished turn that wasn't rolled back. A
-// recovered turn is one imported from the agent's own history, as in a fork.
 func latestFinishedTurn(rows ConversationRows) (domain.ConversationTurn, bool) {
 	for i := len(rows.Turns) - 1; i >= 0; i-- {
 		turn := rows.Turns[i]
@@ -211,8 +189,6 @@ func latestFinishedTurn(rows ConversationRows) (domain.ConversationTurn, bool) {
 	return domain.ConversationTurn{}, false
 }
 
-// knownForkCapabilities is what the session's agent is known to support: the
-// live controller's, else the last probe for its agent. It never starts one.
 func (s *Service) knownForkCapabilities(rec domain.SessionRecord) (ports.ChatCapabilities, bool) {
 	if controller, err := s.Controller(rec.ID); err == nil {
 		if caps := controller.Capabilities(); caps != nil {
@@ -225,8 +201,6 @@ func (s *Service) knownForkCapabilities(rec domain.SessionRecord) (ports.ChatCap
 	return caps, ok
 }
 
-// forkCapable is false only when the agent is known to lack a native fork.
-// Claude's workspace fork copies files and needs no ACP capability.
 func forkCapable(mode sessionForkMode, caps ports.ChatCapabilities, known bool) bool {
 	if mode == forkIntoWorkspace || !known {
 		return true
@@ -234,8 +208,6 @@ func forkCapable(mode sessionForkMode, caps ports.ChatCapabilities, known bool) 
 	return caps.Has(ports.ChatCapabilityFork) || caps.Has(ports.ChatCapabilityForkCurrent)
 }
 
-// codexNativeTurnID strips the "codex:<len>:<scope>" prefix AO adds to Codex
-// turn ids, giving the id Codex knows.
 func codexNativeTurnID(id string) string {
 	rest, ok := strings.CutPrefix(id, "codex:")
 	if !ok {
@@ -257,25 +229,16 @@ type sessionForkPlan struct {
 	sourceProviderID string
 	sourceWorkspace  string
 	nativeAnchor     string
-	// upToMessage is the provider's id for the last message to keep when a
-	// workspace fork copies an older turn; empty copies everything.
-	upToMessage string
-	// cutTurnID, for a workspace fork of the latest turn, is the turn to stop
-	// the copy after: the original may start another turn while the fork is
-	// being made. The cut is read only when the fork is made.
-	cutTurnID      string
-	conversationID string
-	reader         SnapshotReader
-	model, effort  string
-	permissions    ports.PermissionMode
+	upToMessage      string
+	cutTurnID        string
+	conversationID   string
+	reader           SnapshotReader
+	model, effort    string
+	permissions      ports.PermissionMode
 }
 
-// prepare makes the agent's native copy of the conversation for the fork's
-// worktree and returns its id. The fork's controller then starts from it.
 func (p sessionForkPlan) prepare(ctx context.Context, target ports.ForkTarget) (string, error) {
 	cfg := ports.ChatStartConfig{
-		// A separate host id, so the temporary fork host never collides with
-		// the fork's own controller.
 		SessionID: domain.SessionID("fork-" + string(target.SessionID)),
 		DataDir:   target.DataDir, WorkspacePath: target.WorkspacePath, Env: target.Env,
 		Model: p.model, Effort: p.effort, Permissions: p.permissions,
@@ -287,8 +250,6 @@ func (p sessionForkPlan) prepare(ctx context.Context, target ports.ForkTarget) (
 			if err != nil {
 				return "", fmt.Errorf("session fork: load turns: %w", err)
 			}
-			// Without an id for the turn's last reply, the whole session is
-			// copied, as before.
 			upTo = lastAssistantAPIMessageID(rows, p.cutTurnID)
 		}
 		return forker.ForkIntoWorkspace(ctx, p.sourceProviderID, p.sourceWorkspace, upTo, cfg)
@@ -299,16 +260,12 @@ func (p sessionForkPlan) prepare(ctx context.Context, target ports.ForkTarget) (
 	}
 	conv, err := forker.ForkIntoHost(ctx, p.sourceProviderID, p.nativeAnchor, cfg)
 	if errors.Is(err, ports.ErrChatCapabilityUnavailable) && p.nativeAnchor != "" {
-		// ACP agents copy current context only. The source is idle at its
-		// latest turn, so current context is that turn.
 		conv, err = forker.ForkIntoHost(ctx, p.sourceProviderID, "", cfg)
 	}
 	if err != nil {
 		return "", err
 	}
 	id := conv.ProviderConversationID()
-	// Stop the temporary host; Close alone may only detach from it. The
-	// native copy stays on disk for the fork's controller to resume.
 	if terminator, ok := conv.(ports.ChatProviderTerminator); ok {
 		_ = terminator.Terminate()
 	} else {
@@ -320,18 +277,10 @@ func (p sessionForkPlan) prepare(ctx context.Context, target ports.ForkTarget) (
 	return id, nil
 }
 
-// forksOlderTurns reports whether a session fork of this agent can start
-// from an older turn: Claude cuts its copy at any message and Codex at any
-// turn, while other agents copy their current context only. Only such a fork
-// reads the snapshot saved as each turn starts, so only these agents' turns
-// take one for forks.
 func forksOlderTurns(harness domain.AgentHarness) bool {
 	return harness == domain.HarnessClaudeCode || harness == domain.HarnessCodex
 }
 
-// textHandoffForkSource forks a session whose agent can't copy its own
-// conversation: a fresh agent starts with AO's record of it, as text. Only
-// the latest turn can be forked, since the record isn't cut at a turn.
 func (s *Service) textHandoffForkSource(ctx context.Context, rec domain.SessionRecord, turnID string) (sessionfork.Source, error) {
 	conversation, err := s.store.ConversationForSession(ctx, rec.ID)
 	if errors.Is(err, domain.ErrNoConversation) {
@@ -351,8 +300,6 @@ func (s *Service) textHandoffForkSource(ctx context.Context, rec domain.SessionR
 		return sessionfork.Source{Refusal: sessionfork.CodeOlderTurn}, nil
 	}
 	source := rec
-	// The note stops at this turn: the original may finish another while the
-	// fork is being made.
 	upTo := latest.RequestedAt
 	if latest.CompletedAt != nil {
 		upTo = *latest.CompletedAt
@@ -365,12 +312,8 @@ func (s *Service) textHandoffForkSource(ctx context.Context, rec domain.SessionR
 	}, nil
 }
 
-// attachmentPath matches a message's reference to one of its session's
-// attachments, as the worktree path agents read it from.
 var attachmentPath = regexp.MustCompile(`\.ao/attachments/([A-Za-z0-9][A-Za-z0-9._-]*)`)
 
-// attachmentsUpToTurn names the attachments referenced by messages of turnID
-// and the turns before it, sorted. A rolled-back turn's messages don't count.
 func attachmentsUpToTurn(rows ConversationRows, turnID string) []string {
 	inPrefix := map[string]bool{}
 	for _, turn := range rows.Turns {

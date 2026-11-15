@@ -1,9 +1,5 @@
 import type { KeyboardEvent } from "react";
 
-/**
- * Implements the arrow/Home/End behavior expected of a horizontal tablist.
- * Selection follows focus so terminal tabs remain fast to switch by keyboard.
- */
 export function handleTabListKeyDown(event: KeyboardEvent<HTMLDivElement>) {
 	if (!(event.target instanceof HTMLElement) || event.target.getAttribute("role") !== "tab") return;
 	if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;

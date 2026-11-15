@@ -11,9 +11,6 @@ import (
 	"testing"
 )
 
-// A daemon whose own Node is too old for a harness says nothing about the
-// Node that owns the installed copy. An update validates the runtime that
-// will run it; a fresh install still needs the daemon's.
 func TestNPMUpdateValidatesOwningNodeNotDaemonNode(t *testing.T) {
 	const pkg = "@anthropic-ai/claude-code"
 	type layout struct {
@@ -43,7 +40,6 @@ func TestNPMUpdateValidatesOwningNodeNotDaemonNode(t *testing.T) {
 		}
 		resolvedPrefix, _ := filepath.EvalSymlinks(prefix)
 		s := newTestService("darwin", "npm")
-		// The daemon's Node is 20; Claude Code's npm recipe needs 22.
 		s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true, nodeVersion: "v20.0.0"}
 		s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
 			return path == resolvedPrefix || path == "/Users/test/.npm", nil

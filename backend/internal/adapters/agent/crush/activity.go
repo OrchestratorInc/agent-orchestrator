@@ -10,20 +10,6 @@ import (
 
 var crushTerminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07]*(?:\x07|\x1b\\))`)
 
-// Real Crush v0.80.0 captures from tmux show the active composer as:
-//
-//	> Ready...  or  > Ready?
-//	:::
-//	:::
-//
-// and an active turn as:
-//
-//	> Working!
-//	:::
-//	:::
-//
-// Permission prompts are backed by Crush's permissions dialog, whose title is
-// "Permission Required" with Allow / Allow for Session / Deny actions.
 var crushReadyPlaceholders = []string{
 	"ready!",
 	"ready...",
@@ -44,26 +30,12 @@ const crushPermissionDialogLookahead = 24
 
 const crushQuestionLookahead = 4
 
-// DeriveActivityState maps a Crush hook event onto an AO activity state.
-// Currently a no-op since Crush doesn't have full hooks support like Claude Code and Codex.
-// The bool is false to indicate no activity signal is available.
-//
-// TODO(crush): Implement activity state mapping once Crush has native hook support.
-// Until then, runtime exit falls back to the reaper.
 func DeriveActivityState(event string, _ []byte) (domain.ActivityState, bool) {
-	// No-op for now since Crush doesn't have full hooks support
 	return "", false
 }
 
-// ContinuouslyDetectTerminalActivity remains disabled because Crush's Yolo
-// completion signal is delivered through desktop notifications, not pane text.
-// Enabling reconciliation without a pane-visible idle edge can leave sessions
-// stuck active after a Yolo turn completes.
 func (p *Plugin) ContinuouslyDetectTerminalActivity() bool { return false }
 
-// DetectTerminalActivity recognizes authoritative states in Crush's TUI. The
-// newest marker wins so stale prompt or permission text in scrollback cannot
-// override the current terminal state.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
 	lines := crushTerminalLines(output)
 	if len(lines) == 0 {
@@ -137,8 +109,6 @@ func crushQuestionAnswerRow(line string) bool {
 	return len(line) >= 3 && line[0] >= '1' && line[0] <= '9' && line[1] == '.' && line[2] == ' '
 }
 
-// ContinuouslyDetectTerminalActivityWhileWaiting opts Crush into terminal
-// reconciliation after AO has recorded a waiting-input state.
 func (p *Plugin) ContinuouslyDetectTerminalActivityWhileWaiting() bool { return true }
 
 func crushDialogLineText(line string) string {

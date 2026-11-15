@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Run with AO_LIVE_QWEN_ACP=1. Covers resume and interrupt against the local
-// Qwen Code account. CI never depends on this.
 func TestLiveQwenACPResumeAndInterrupt(t *testing.T) {
 	if os.Getenv("AO_LIVE_QWEN_ACP") != "1" {
 		t.Skip("set AO_LIVE_QWEN_ACP=1 to run against the local Qwen Code account")

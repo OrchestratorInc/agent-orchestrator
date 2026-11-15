@@ -62,7 +62,6 @@ test("diagram annotations navigate to the selected repeated block and fall back 
 		return rect.top >= view.top && rect.bottom <= view.bottom;
 	});
 	const scrollAway = async () => {
-		// Reader scroll intent cancels source-anchor following before moving away.
 		await scroller.dispatchEvent("wheel");
 		await scroller.evaluate(element => { element.scrollTop = 0; });
 		await expect.poll(targetVisible).toBe(false);
@@ -71,7 +70,6 @@ test("diagram annotations navigate to the selected repeated block and fall back 
 	await page.getByRole("button", { name: "1 annotation", exact: true }).click();
 	await page.getByRole("button", { name: "Flowchart attached", exact: true }).click();
 	await expect.poll(targetVisible).toBe(true);
-	// Simulate the late layout shift caused by diagrams above the target rendering.
 	await target.evaluate(element => {
 		const spacer = document.createElement("div"); spacer.style.height = "800px";
 		element.before(spacer);
@@ -79,7 +77,6 @@ test("diagram annotations navigate to the selected repeated block and fall back 
 	await expect.poll(targetVisible).toBe(true);
 	expect(await page.evaluate(() => CSS.highlights.has("chat-annotation"))).toBe(false);
 	await expect(page.locator(".chat-annotation-target")).toHaveCount(0);
-	// Once the user scrolls, later layout changes must not pull them back.
 	await scroller.dispatchEvent("wheel");
 	await target.evaluate(element => {
 		const spacer = document.createElement("div"); spacer.style.height = "800px";

@@ -18,19 +18,15 @@ import { REVIEW_MENU_LIST, REVIEW_MENU_MORE, REVIEW_MENU_PAGE, REVIEW_MENU_ROW, 
 
 export type ReviewBranchRow = {
 	id: string;
-	/** A `pull_request` row is a PR whose source branch is not local. */
 	kind: "local" | "remote" | "pull_request";
-	/** The branch name, a PR's source branch, or "" for a detached HEAD. */
 	name: string;
 	prNumber?: number;
 	checkedOut: boolean;
 	detached?: boolean;
-	/** ISO timestamp of the tip commit, or of the PR's last update. */
 	updatedAt?: string;
 	selected: boolean;
 };
 
-/** What the trigger names; it is known before the branch list loads. */
 export type ReviewBranchTrigger =
 	| { kind: "checked_out"; name?: string; detached?: boolean }
 	| { kind: "branch"; name: string }
@@ -39,11 +35,8 @@ export type ReviewBranchTrigger =
 export type ReviewBranchMenuProps = {
 	trigger: ReviewBranchTrigger;
 	state: "loading" | "error" | "ready";
-	/** The checked-out row first, then newest first. */
 	rows: readonly ReviewBranchRow[];
-	/** The daemon capped the list. */
 	truncated: boolean;
-	/** Called when a row other than the selected one is picked. */
 	onSelect: (id: string) => void;
 	onRetry: () => void;
 	onOpenChange?: (open: boolean) => void;
@@ -51,7 +44,6 @@ export type ReviewBranchMenuProps = {
 };
 
 const BRANCH_PAGE = REVIEW_MENU_PAGE;
-/** A lone branch has nothing to search; two or more get it. */
 const SEARCH_THRESHOLD = 1;
 
 export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, onRetry, onOpenChange, className }: ReviewBranchMenuProps) {
@@ -74,7 +66,6 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 	} else if (trigger.name) {
 		triggerLabel = trigger.name.replace(/^refs\/remotes\//, "");
 	} else {
-		// The checked-out branch's name arrives with the list.
 		triggerLabel = t("files.branches.checkedOut");
 		monoLabel = false;
 	}
@@ -94,7 +85,6 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 		? rows.filter((row) => `${rowLabel(row)} ${row.prNumber ? `#${row.prNumber}` : ""}`.toLocaleLowerCase().includes(query))
 		: rows;
 	const selectedId = rows.find((row) => row.selected)?.id ?? "";
-	// A picked branch further down than the first page stays in reach without paging to it.
 	const selectedIndex = visibleRows.findIndex((row) => row.selected);
 	const shownCount = visibleRows.length <= REVIEW_MENU_VISIBLE_ROWS
 		? visibleRows.length
@@ -136,8 +126,6 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 				) : (
 					<>
 						{searchable ? (
-							// Typing must not reach the menu's typeahead; ArrowDown moves into
-							// the list and Escape still closes the menu.
 							<div
 								className="shrink-0 pb-1"
 								onKeyDown={(event) => {
@@ -159,7 +147,6 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 								/>
 							</div>
 						) : null}
-						{/* The box shows seven 36px rows and their 1px gaps; Show more ends the scroll, as in the commits list. */}
 						<DropdownMenuRadioGroup
 							className={cn(REVIEW_MENU_LIST, "max-h-[16.125rem]")}
 							ref={listRef}
@@ -212,7 +199,6 @@ export function ReviewBranchMenu({ trigger, state, rows, truncated, onSelect, on
 	);
 }
 
-/** A name cut off by the menu's width shows in full on hover. */
 function BranchRowLabel({ label, mono }: { label: string; mono: boolean }) {
 	const { ref, isTruncated } = useTruncatedText<HTMLSpanElement>(label);
 	return (

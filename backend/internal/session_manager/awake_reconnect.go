@@ -8,10 +8,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ReconnectAwakeAgent can only attach to an existing native chat provider. It
-// cannot restore a worktree, start a replacement process, send a prompt, or
-// resume an intentionally stopped/hibernated session. The normal per-session
-// mutation and controller-owner fences still protect user changes.
 func (m *Manager) ReconnectAwakeAgent(ctx context.Context, target domain.AwakeAgentTarget) error {
 	if err := m.beginAgentResume(ctx, target.SessionID); err != nil {
 		return err

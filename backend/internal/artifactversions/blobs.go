@@ -14,26 +14,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
-// incomingPrefix names a blob being written. A file with this prefix left in
-// the blobs directory is the remainder of an interrupted write.
 const incomingPrefix = "incoming-"
 
-// ErrTooLarge reports a file over the version size limit.
 var ErrTooLarge = errors.New("artifact file exceeds the version size limit")
 
-// blobsDir is the blob store's directory, relative to the artifact directory.
 var blobsDir = filepath.Join(sessionartifacts.VersionsDir, "blobs")
 
-// blobStore holds a session's snapshots as immutable files named by the
-// sha256 of their content, at .versions/blobs/<sha[0:2]>/<sha> inside the
-// artifact directory. Every operation goes through an os.Root at the artifact
-// directory, so ".." and symlinks cannot redirect it outside.
 type blobStore struct {
 	root *os.Root
 }
 
-// stagedBlob is content written to a temporary file and hashed, not yet
-// placed in the store.
 type stagedBlob struct {
 	tmp  string
 	sum  string
@@ -44,9 +34,6 @@ func blobPath(sum string) string {
 	return filepath.Join(blobsDir, sum[:2], sum)
 }
 
-// stage copies src into a temporary file in the store while hashing it, so
-// the stored bytes are exactly the hashed ones. Content larger than limit is
-// discarded and reported as ErrTooLarge.
 func (b blobStore) stage(src io.Reader, limit int64) (stagedBlob, error) {
 	if err := b.root.MkdirAll(blobsDir, 0o755); err != nil {
 		return stagedBlob{}, err
@@ -86,8 +73,6 @@ func (b blobStore) createIncoming() (string, *os.File, error) {
 	return "", nil, fs.ErrExist
 }
 
-// commit moves a staged blob into place. When the store already holds that
-// content the staged copy is dropped instead.
 func (b blobStore) commit(s stagedBlob) error {
 	target := blobPath(s.sum)
 	if _, err := b.root.Stat(target); err == nil {
@@ -108,8 +93,6 @@ func (b blobStore) discard(s stagedBlob) {
 	_ = b.root.Remove(s.tmp)
 }
 
-// remove deletes the blob named by sum. A blob that is already gone is not an
-// error.
 func (b blobStore) remove(sum string) error {
 	if err := b.root.Remove(blobPath(sum)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -117,7 +100,6 @@ func (b blobStore) remove(sum string) error {
 	return nil
 }
 
-// sweep removes temporary files left by interrupted writes.
 func (b blobStore) sweep() error {
 	dir, err := b.root.Open(blobsDir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -141,7 +123,6 @@ func (b blobStore) sweep() error {
 	return nil
 }
 
-// read returns the blob named by sum, refusing one larger than limit.
 func (b blobStore) read(sum string, limit int64) ([]byte, error) {
 	if len(sum) != sha256.Size*2 {
 		return nil, fs.ErrNotExist

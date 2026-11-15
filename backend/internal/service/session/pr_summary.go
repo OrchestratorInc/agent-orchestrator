@@ -12,36 +12,24 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 )
 
-// PRSummary is the user-facing SCM read model for one PR owned by a session.
 type PRSummary = contract.PullRequestSummary
 
-// PRCISummary describes the latest CI status and failing checks for a PR.
 type PRCISummary = contract.PullRequestCISummary
 
-// PRFailingCheck is one failed or cancelled CI check for a PR.
 type PRFailingCheck = contract.PullRequestFailingCheck
 
-// PRReviewSummary describes the latest review decision and unresolved comments.
 type PRReviewSummary = contract.PullRequestReviewSummary
 
-// PRReviewEntry is one submitted provider review summary: a reviewer's decisive
-// verdict and the body they submitted with it.
 type PRReviewEntry = contract.PullRequestSubmittedReview
 
-// PRUnresolvedReviewer groups unresolved human comments by reviewer.
 type PRUnresolvedReviewer = contract.PullRequestUnresolvedReviewer
 
-// PRReviewCommentLink points to one unresolved review comment.
 type PRReviewCommentLink = contract.PullRequestReviewCommentLink
 
-// PRMergeabilitySummary describes whether a PR can be merged and why.
 type PRMergeabilitySummary = contract.PullRequestMergeabilitySummary
 
-// PRConflictFile is one file involved in a PR merge conflict.
 type PRConflictFile = contract.PullRequestConflictFile
 
-// ListPRSummaries returns all PRs owned by a session with concise SCM details
-// assembled from persisted PR/check/review facts.
 func (s *Service) ListPRSummaries(ctx context.Context, id domain.SessionID) ([]PRSummary, error) {
 	rec, ok, err := s.store.GetSession(ctx, id)
 	if err != nil {
@@ -83,10 +71,6 @@ func (s *Service) ListPRSummaries(ctx context.Context, id domain.SessionID) ([]P
 				return nil, err
 			}
 			comments = append(comments, prComments...)
-			// The thread count is only exact when the stored rows are a complete
-			// observation: never-fetched reviews leave no rows at all, and a
-			// partial fetch (provider thread-window cap) both misses rows outside
-			// the window and preserves stale unresolved rows via the merge write.
 			if pr.ReviewPartial || pr.ReviewObservedAt.IsZero() {
 				threadsExact = false
 			}
@@ -107,15 +91,11 @@ func (s *Service) ListPRSummaries(ctx context.Context, id domain.SessionID) ([]P
 	return out, nil
 }
 
-// PRListing keeps reported references separate from SCM facts and actions.
 type PRListing struct {
 	Tracked []PRSummary
 	Linked  []domain.ChangeRequestReference
 }
 
-// ListPRListing combines tracked PRs with created PRs reported by the worker.
-// A reported PR the session already tracks is left out, also when the worker
-// linked it under a renamed repository's old name.
 func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRListing, error) {
 	tracked, err := s.ListPRSummaries(ctx, id)
 	if err != nil {
@@ -161,15 +141,10 @@ func (s *Service) ListPRListing(ctx context.Context, id domain.SessionID) (PRLis
 	return PRListing{Tracked: tracked, Linked: linked}, nil
 }
 
-// prDetailsReader is the optional store read for a PR's description, labels,
-// requested reviewers, commits and conversation comments.
 type prDetailsReader interface {
 	GetPRDetails(ctx context.Context, prURL string) (domain.PullRequestDetails, bool, error)
 }
 
-// addPRDetails fills the summary's view-only fields from the stored details.
-// A PR whose details were never observed keeps empty lists and a zero
-// DetailsObservedAt, so the view can tell "not loaded" from "none".
 func (s *Service) addPRDetails(ctx context.Context, summary *PRSummary, prURL string) error {
 	summary.Labels = []contract.PullRequestLabel{}
 	summary.RequestedReviewers = []contract.PullRequestRequestedReviewer{}
@@ -209,11 +184,6 @@ func (s *Service) addPRDetails(ctx context.Context, summary *PRSummary, prURL st
 	return nil
 }
 
-// summarizeThreads groups stored review comments by provider thread, each
-// thread's comments oldest first and threads by their first comment. Thread
-// rows supply the anchor and resolution; a thread without stored comments has
-// nothing to show and is left out, as are legacy comments with no thread id.
-// Comments repeated across URL aliases appear once.
 func summarizeThreads(threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment) []contract.PullRequestThread {
 	rows := map[string]domain.PullRequestReviewThread{}
 	for _, th := range dedupeReviewThreads(threads) {
@@ -319,10 +289,6 @@ func summarizePRStateChangedAt(pr domain.PullRequest) time.Time {
 	}
 }
 
-// summarizeChecks lists the head commit's checks by name, failing first, then
-// unfinished, then passed or skipped, each group by name. Checks recorded for
-// an older head are history, not the PR's current state. A check repeated
-// across the PR's URL aliases appears once, as its latest record.
 func summarizeChecks(pr domain.PullRequest, checks []domain.PullRequestCheck) []contract.PullRequestCheckEntry {
 	latest := map[string]domain.PullRequestCheck{}
 	for _, ch := range checks {
@@ -363,8 +329,6 @@ func checkStatusRank(status domain.PRCheckStatus) int {
 func summarizeCI(pr domain.PullRequest, checks []domain.PullRequestCheck) PRCISummary {
 	state := ciOrUnknown(pr.CI)
 	out := PRCISummary{State: state, AutoInjectCI: pr.AutoInjectCI, Checks: summarizeChecks(pr, checks)}
-	// Failing lists what failed. Unknown lists cancelled checks, so clients can
-	// show a run cancelled with no replacement as settled rather than loading.
 	var listed domain.PRCheckStatus
 	switch state {
 	case domain.CIFailing:
@@ -395,19 +359,12 @@ func summarizeCI(pr domain.PullRequest, checks []domain.PullRequestCheck) PRCISu
 }
 
 func summarizeReview(pr domain.PullRequest, comments []domain.PullRequestComment, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, threadsExact bool) PRReviewSummary {
-	// A nil count means "unknown", not zero: it must stay absent on the wire
-	// rather than present-as-zero. It is only published when the stored thread
-	// rows are a complete observation.
 	var unresolvedThreadCount *int
 	if threadsExact {
 		count := unresolvedHumanThreadCount(dedupeReviewThreads(threads))
 		unresolvedThreadCount = &count
 	}
 	out := PRReviewSummary{Decision: reviewOrNone(pr.Review), UnresolvedThreadCount: unresolvedThreadCount}
-	// Reviews carries every reviewer's latest submitted review, including
-	// non-decisive COMMENTED reviews normalized as ReviewNone. A finished PR
-	// keeps them (who approved is part of its record); the unresolved-comment
-	// grouping below is for PRs that can still be acted on.
 	for reviewer, review := range latestReviewSummaries(reviews) {
 		out.Reviews = append(out.Reviews, PRReviewEntry{
 			Reviewer:         reviewer,
@@ -501,9 +458,6 @@ func summarizeReview(pr domain.PullRequest, comments []domain.PullRequestComment
 	return out
 }
 
-// latestReviewSummaries returns each reviewer's newest submitted review.
-// Providers normalize non-decisive COMMENTED reviews as ReviewNone; a
-// ReviewRequired value is an aggregate PR decision, not a submitted review.
 func latestReviewSummaries(reviews []domain.PullRequestReview) map[string]domain.PullRequestReview {
 	latestByReviewer := map[string]domain.PullRequestReview{}
 	for _, review := range reviews {
@@ -532,11 +486,6 @@ func unresolvedHumanThreadCount(threads []domain.PullRequestReviewThread) int {
 	return count
 }
 
-// dedupeReviewThreads collapses provider thread rows that describe the same
-// thread under different PR URL aliases of one canonical PR. Thread identity is
-// the provider thread id; a row without one keeps its own identity. When alias
-// records disagree, the most recently updated row wins, and an unresolved row
-// wins a tie so a stale alias cannot silently hide active feedback.
 func dedupeReviewThreads(threads []domain.PullRequestReviewThread) []domain.PullRequestReviewThread {
 	type identity struct {
 		threadID string
@@ -547,7 +496,6 @@ func dedupeReviewThreads(threads []domain.PullRequestReviewThread) []domain.Pull
 	for i, thread := range threads {
 		var id identity
 		if thread.ThreadID == "" {
-			// No provider identity: count the row as its own thread.
 			id = identity{fallback: i}
 			winner[id] = thread
 			order = append(order, id)
@@ -569,8 +517,6 @@ func dedupeReviewThreads(threads []domain.PullRequestReviewThread) []domain.Pull
 	return out
 }
 
-// threadAfter reports whether a is the fresher of two records of the same
-// provider thread; an unresolved record wins an exact tie.
 func threadAfter(a, b domain.PullRequestReviewThread) bool {
 	if !a.UpdatedAt.Equal(b.UpdatedAt) {
 		return a.UpdatedAt.After(b.UpdatedAt)
@@ -578,8 +524,6 @@ func threadAfter(a, b domain.PullRequestReviewThread) bool {
 	return !a.Resolved && b.Resolved
 }
 
-// latestDecisiveReviews returns each reviewer's most recent decisive review —
-// the latest one whose verdict is approved or changes_requested.
 func latestDecisiveReviews(reviews []domain.PullRequestReview) map[string]domain.PullRequestReview {
 	latestByReviewer := map[string]domain.PullRequestReview{}
 	for _, review := range reviews {
@@ -598,9 +542,6 @@ func latestDecisiveReviews(reviews []domain.PullRequestReview) map[string]domain
 	return latestByReviewer
 }
 
-// latestChangesRequestedReviews narrows latestDecisiveReviews to reviewers whose
-// latest decisive verdict is changes_requested — used to attach a review link to
-// the unresolved-comment grouping.
 func latestChangesRequestedReviews(reviews []domain.PullRequestReview) map[string]domain.PullRequestReview {
 	out := map[string]domain.PullRequestReview{}
 	for reviewer, review := range latestDecisiveReviews(reviews) {

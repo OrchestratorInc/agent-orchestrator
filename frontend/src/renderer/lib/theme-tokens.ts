@@ -3,31 +3,21 @@ import { THEMES, type ThemeDefinition, type ThemePalette } from "./theme-palette
 
 type Mode = "dark" | "light";
 
-/** Match the selected 22% lighter label bias, also used by button.css. */
 function textOn(fill: string): string {
 	const automatic = Math.sqrt(0.05 * 1.05) - 0.05;
 	const cutoff = automatic + (1 - automatic) * 0.22;
 	return relativeLuminance(fill) < cutoff ? "#ffffff" : "#000000";
 }
 
-/**
- * Resolve a palette into its theme-dependent color tokens, as concrete
- * hex. Covers the shadcn base, status, links, brand mark, charts/passive text
- * and terminal ANSI slots. Destructive colors stay shared in tokens.css.
- */
 export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, string> {
 	const dark = mode === "dark";
 	const primary = p.primary ?? p.accent;
 	const onPrimary = textOn(primary);
 	const onAccent = textOn(p.accent);
-	// Lift popovers off the canvas: lighter than panels in dark, near-white in light.
 	const popover = dark ? mixColor(p.panel, p.element, 0.6) : mixColor(p.panel, "#ffffff", 0.6);
 	const fade = (amount: number) => mixColor(p.bg, p.text, amount);
 	const bright = (color: string) => mixColor(color, dark ? "#ffffff" : p.text, 0.22);
 	const inReview = mixColor(p.orange, p.yellow, 0.5);
-	// Pink, as in Orchestrate: a red/purple mix stays apart from Building, Ready
-	// and In review. Palettes have no pink role, and `p.cyan` would not do: it
-	// equals blue in Dracula and Monokai and green in Rosé Pine.
 	const validating = mixColor(p.red, p.purple, 0.5);
 
 	return {
@@ -77,8 +67,6 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 		"--color-status-merged": p.purple,
 		"--color-project-accent-violet": p.purple,
 
-		// ANSI black collapses into the plate in terminal-themes.ts; white is the
-		// muted gray so light plates keep it visible.
 		"--color-term-black": p.bg,
 		"--color-term-red": p.red,
 		"--color-term-green": p.green,
@@ -109,12 +97,6 @@ function block(selector: string, tokens: Record<string, string>, colorScheme: Mo
 	return `${selector} {\n\tcolor-scheme: ${colorScheme};\n${body}\n}`;
 }
 
-/**
- * CSS for every named theme. Selectors match the old hand-written blocks:
- * dark `:root[data-style-theme=x]` (0,2,0) and light
- * `:root[data-style-theme=x][data-theme=light]` (0,3,0), so both beat the
- * base `:root` / `:root[data-theme=light]` tokens regardless of load order.
- */
 export function buildThemeStylesheet(themes: readonly ThemeDefinition[] = THEMES): string {
 	return themes
 		.filter((theme) => theme.id !== "orchestrate")
@@ -130,7 +112,6 @@ export function buildThemeStylesheet(themes: readonly ThemeDefinition[] = THEMES
 
 const STYLE_ELEMENT_ID = "ao-theme-catalog";
 
-/** Inject the named-theme stylesheet once; safe to call repeatedly. */
 export function installThemeStylesheet(): void {
 	if (typeof document === "undefined" || document.getElementById(STYLE_ELEMENT_ID)) return;
 	const style = document.createElement("style");

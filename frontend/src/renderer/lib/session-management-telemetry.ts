@@ -83,7 +83,6 @@ function loadState(storage: Storage, now: number): PersistedState {
 			};
 		}
 	} catch {
-		// Replace malformed local state.
 	}
 	return freshState(now);
 }
@@ -288,7 +287,6 @@ export class SessionManagementAccumulator {
 		try {
 			this.storage.setItem(STORAGE_KEY, JSON.stringify(this.state));
 		} catch {
-			// Telemetry must never affect the product action.
 		}
 	}
 }

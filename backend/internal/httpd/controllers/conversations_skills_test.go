@@ -52,9 +52,6 @@ func TestSkillsRouteReturnsTheProvidersList(t *testing.T) {
 	}
 }
 
-// A driver that cannot enumerate skills is not a failure. The composer keys `/` off
-// an empty list, so an error here would leave the slash looking broken rather than
-// simply unavailable.
 func TestSkillsRouteAnswersEmptyWhenTheDriverCannotList(t *testing.T) {
 	status, body := skillsRequest(t, &fakeConversationService{skillErr: chatsvc.ErrSkillsUnsupported})
 	if status != http.StatusOK {
@@ -69,7 +66,6 @@ func TestSkillsRouteAnswersEmptyWhenTheDriverCannotList(t *testing.T) {
 	}
 }
 
-// A session with no controller is a state to explain, not an empty menu to show.
 func TestSkillsRouteReportsAMissingController(t *testing.T) {
 	status, body := skillsRequest(t, &fakeConversationService{skillErr: chatsvc.ErrNoController})
 	if status != http.StatusConflict {
@@ -84,8 +80,6 @@ func TestSkillsRouteReportsAMissingController(t *testing.T) {
 	}
 }
 
-// A nil service keeps the route registered and answers from the spec, so the
-// OpenAPI contract and the router never disagree about which paths exist.
 func TestSkillsRouteIsNotImplementedWithoutAService(t *testing.T) {
 	status, _ := skillsRequest(t, nil)
 	if status != http.StatusNotImplemented {

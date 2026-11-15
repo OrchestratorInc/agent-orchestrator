@@ -97,14 +97,12 @@ describe("content operations", () => {
 		document.body.insertAdjacentHTML("beforeend", `<div id="panel" style="display:none">Ready</div><div id="ghost" style="visibility:hidden">Boo</div>`);
 		const panel = document.getElementById("panel")!;
 		const ghost = document.getElementById("ghost")!;
-		// jsdom has no layout; give elements a box only when they are displayed.
 		const rects = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
 			return getComputedStyle(this).display === "none" ? box(0, 0) : box(100, 20);
 		});
 		try {
 			const wait = (kind: string, value: string, timeoutMs = 150) =>
 				handleContentRequest(document, registry, request("wait", { kind, value, timeoutMs })) as Promise<{ satisfied: boolean }>;
-			// Attached but display:none, or visibility:hidden: not satisfied.
 			await expect(wait("selector", "#panel")).resolves.toEqual({ satisfied: false });
 			await expect(wait("selector", "#ghost")).resolves.toEqual({ satisfied: false });
 			await expect(wait("selector-gone", "#panel")).resolves.toEqual({ satisfied: false });

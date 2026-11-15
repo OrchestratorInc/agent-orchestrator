@@ -25,8 +25,6 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	// A message sent with the switch is checked before anything stops, so a
-	// malformed one refuses the switch instead of following it.
 	var message ports.ChatUserMessage
 	if req.Message != nil {
 		var invalid *attachmentError
@@ -36,8 +34,6 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		}
 	}
 	sessionID := domain.SessionID(chi.URLParam(r, "sessionId"))
-	// The switch and its message finish within the request's time limit even if
-	// the client goes away (a restarted app); its retry of the message is a duplicate.
 	ctx, cancel := withoutClientCancel(r.Context())
 	defer cancel()
 	request := domain.ProviderSwitchRequest{
@@ -58,10 +54,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	turn, switched, err := c.Svc.SwitchProviderAndSend(ctx, sessionID, request, message)
 	if err != nil {
 		if switched {
-			// A send that fails now is not a switch failure: the header tells the
-			// client the switch went through.
 			w.Header().Set(providerSwitchedHeader, "1")
-			// The renderer calls the daemon cross-origin, so it reads the header only if exposed.
 			w.Header().Set("Access-Control-Expose-Headers", providerSwitchedHeader)
 			writeConversationError(w, r, err)
 			return
@@ -89,8 +82,6 @@ func writeProviderSwitchError(w http.ResponseWriter, r *http.Request, err error)
 	envelope.WriteAPIError(w, r, status, category, "PROVIDER_SWITCH_"+string(refusal.Kind), refusal.Error(), providerSwitchRefusalDetails(refusal))
 }
 
-// providerSwitchRefusalDetails names, as a new task's refusal does, what an agent
-// refused for the chat's permission mode lacks and the modes it runs in (Pi).
 func providerSwitchRefusalDetails(refusal *domain.ProviderSwitchError) map[string]any {
 	var capabilityErr *ports.ChatCapabilityError
 	if !errors.As(refusal, &capabilityErr) {
@@ -107,12 +98,8 @@ func providerSwitchRefusalDetails(refusal *domain.ProviderSwitchError) map[strin
 	return map[string]any{"missingCapabilities": missing, "allowedApprovalModes": allowed}
 }
 
-// providerSwitchedHeader marks an error response to a switch that carried a
-// message: the switch completed, and only the message's send failed.
 const providerSwitchedHeader = "X-AO-Provider-Switched"
 
-// sessionHistory serves `ao session history`: a session's turns in full, newest
-// first, for what a handoff note left out.
 func (c *ConversationsController) sessionHistory(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, r.Method, r.URL.Path)
@@ -133,8 +120,6 @@ func (c *ConversationsController) sessionHistory(w http.ResponseWriter, r *http.
 	envelope.WriteJSON(w, http.StatusOK, SessionHistoryResponse{Turns: turns, Total: total, Offset: offset})
 }
 
-// withoutClientCancel keeps the request's deadline but not its cancellation
-// when the client disconnects.
 func withoutClientCancel(parent context.Context) (context.Context, context.CancelFunc) {
 	detached := context.WithoutCancel(parent)
 	if deadline, ok := parent.Deadline(); ok {

@@ -11,12 +11,6 @@ import (
 	"time"
 )
 
-// Tests for a browser runtime that is attached but unresponsive: it accepts
-// the command frame and never answers. This is the wedge behind the
-// connected-but-timed-out 503 bursts tracked in #5369 — the desktop main
-// process can be wedged (busy event loop, system sleep, wedged network stack)
-// while its socket to the broker stays open.
-
 type wedgeHarness struct {
 	broker *Broker
 	addr   string
@@ -29,8 +23,6 @@ func newWedgeHarness(t *testing.T) *wedgeHarness {
 	return newTunedWedgeHarness(t, nil)
 }
 
-// newTunedWedgeHarness builds the standard harness while letting liveness
-// tests tune broker knobs before Serve starts.
 func newTunedWedgeHarness(t *testing.T, tune func(*Broker)) *wedgeHarness {
 	t.Helper()
 	broker := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -54,8 +46,6 @@ func newTunedWedgeHarness(t *testing.T, tune func(*Broker)) *wedgeHarness {
 		t.Fatal(err)
 	}
 	dec := json.NewDecoder(conn)
-	// The broker answers an accepted hello explicitly (#6466); consume that
-	// reply so later frame reads see commands and pings, not the handshake.
 	expectHelloOK(t, dec)
 	waitConnected(t, broker)
 	return &wedgeHarness{
@@ -67,7 +57,6 @@ func newTunedWedgeHarness(t *testing.T, tune func(*Broker)) *wedgeHarness {
 	}
 }
 
-// expectHelloOK consumes the broker's hello-ok reply to an accepted hello.
 func expectHelloOK(t *testing.T, dec *json.Decoder) {
 	t.Helper()
 	var reply wireMessage
@@ -84,9 +73,6 @@ type executeOutcome struct {
 	err    error
 }
 
-// startWedgeCommand issues one command whose context expires after timeout
-// while the harness runtime stays silent, and returns its outcome channel plus
-// the command frame the broker wrote.
 func startWedgeCommand(t *testing.T, h *wedgeHarness, action string, timeout time.Duration) (<-chan executeOutcome, wireMessage, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -104,9 +90,6 @@ func startWedgeCommand(t *testing.T, h *wedgeHarness, action string, timeout tim
 	return outcomes, command, cancel
 }
 
-// expectWedgeTimeout asserts the bounded failure for a silent runtime: the
-// broker answers the expired request with a cancel frame on the same socket,
-// returns context.DeadlineExceeded to the caller, and cleans the registry.
 func expectWedgeTimeout(t *testing.T, h *wedgeHarness, outcomes <-chan executeOutcome, command wireMessage) {
 	t.Helper()
 	var cancelMessage wireMessage
@@ -147,13 +130,10 @@ func TestBrokerExecuteDeadlineWithSilentRuntime(t *testing.T) {
 func TestBrokerNextCommandBoundedAfterWedge(t *testing.T) {
 	h := newWedgeHarness(t)
 
-	// The first command wedges and times out.
 	outcomes1, command1, cancel1 := startWedgeCommand(t, h, "open", 100*time.Millisecond)
 	defer cancel1()
 	expectWedgeTimeout(t, h, outcomes1, command1)
 
-	// The next command on the same connection is bounded the same way and gets
-	// a fresh request id.
 	outcomes2, command2, cancel2 := startWedgeCommand(t, h, "snapshot", 100*time.Millisecond)
 	defer cancel2()
 	if command2.RequestID == command1.RequestID {
@@ -161,8 +141,6 @@ func TestBrokerNextCommandBoundedAfterWedge(t *testing.T) {
 	}
 	expectWedgeTimeout(t, h, outcomes2, command2)
 
-	// A late result for the expired request must be ignored without disturbing
-	// the registry, and the broker keeps serving commands afterwards.
 	if err := h.enc.Encode(wireMessage{
 		Type:      "result",
 		RequestID: command1.RequestID,
@@ -197,9 +175,6 @@ func TestBrokerStatusReportsConnectedDuringWedge(t *testing.T) {
 	outcomes, command, cancel := startWedgeCommand(t, h, "open", 2*browserRuntimeTestTimeout())
 	defer cancel()
 
-	// #5369: Status() reports transport connectivity only (conn != nil), so the
-	// desktop keeps showing "connected" while a command is wedged inside the
-	// runtime. Pin that contract here; surfacing degradation is left to the fix.
 	status := h.broker.Status()
 	if !status.Connected {
 		t.Fatal("status dropped connected while the runtime socket is attached")
@@ -208,7 +183,6 @@ func TestBrokerStatusReportsConnectedDuringWedge(t *testing.T) {
 		t.Fatal("connectedAt is zero while the runtime socket is attached")
 	}
 
-	// The runtime eventually answers, and the wedged command completes.
 	if err := h.enc.Encode(wireMessage{
 		Type:      "result",
 		RequestID: command.RequestID,
@@ -232,9 +206,6 @@ func TestBrokerNewConnectionFailsStalePending(t *testing.T) {
 	outcomes, _, cancel := startWedgeCommand(t, h, "open", 2*browserRuntimeTestTimeout())
 	defer cancel()
 
-	// A replacement runtime connection — the desktop app recovering from a
-	// wedge — takes over the broker and fails everything still in flight on
-	// the stale socket.
 	replacement, err := net.Dial("tcp", h.addr)
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +231,6 @@ func TestBrokerNewConnectionFailsStalePending(t *testing.T) {
 		t.Fatal("replacement connection did not keep the broker connected")
 	}
 
-	// The replacement connection carries new commands end to end.
 	resultCh := make(chan executeOutcome, 1)
 	go func() {
 		result, err := h.broker.Execute(context.Background(), "session-1", "snapshot", nil)
@@ -289,9 +259,6 @@ func TestBrokerNewConnectionFailsStalePending(t *testing.T) {
 	}
 }
 
-// startPonger takes over reading the runtime side of the harness connection:
-// it answers ping frames out of band and forwards every other frame to the
-// returned channel. Do not use h.dec once the ponger is running.
 func startPonger(t *testing.T, h *wedgeHarness) <-chan wireMessage {
 	t.Helper()
 	frames := make(chan wireMessage, 16)
@@ -316,10 +283,6 @@ func startPonger(t *testing.T, h *wedgeHarness) <-chan wireMessage {
 	return frames
 }
 
-// The liveness tests below cover #5369's wedge: an attached runtime whose
-// desktop process stopped scheduling never answers pings, and the broker must
-// notice instead of reporting "connected" forever.
-
 func TestBrokerUnresponsiveRuntimeFailsPendingFast(t *testing.T) {
 	h := newTunedWedgeHarness(t, func(b *Broker) {
 		b.liveness = livenessConfig{interval: 20 * time.Millisecond, stallLimit: 80 * time.Millisecond}
@@ -338,8 +301,6 @@ func TestBrokerUnresponsiveRuntimeFailsPendingFast(t *testing.T) {
 	}
 	waitPendingRequest(t, h.broker, command.RequestID)
 
-	// The runtime never answers. Liveness detection must tear the connection
-	// down and fail the command long before the request context expires.
 	select {
 	case outcome := <-outcomes:
 		if !errors.Is(outcome.err, ErrUnavailable) {
@@ -367,8 +328,6 @@ func TestBrokerResponsiveRuntimeSurvivesLiveness(t *testing.T) {
 		outcomes <- executeOutcome{result: result, err: err}
 	}()
 
-	// Hold the command open across several liveness windows while the runtime
-	// answers every ping, then let it complete.
 	var command wireMessage
 	select {
 	case command = <-frames:
@@ -411,7 +370,6 @@ func TestBrokerHelloVersionNegotiation(t *testing.T) {
 	}
 	go func() { _ = broker.Serve(ctx, ln) }()
 
-	// v1 is refused outright.
 	stale, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -420,8 +378,6 @@ func TestBrokerHelloVersionNegotiation(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = stale.SetReadDeadline(time.Now().Add(time.Second))
-	// A refused hello is answered with hello-rejected (#6466); the broker then
-	// closes the socket and never accepts the runtime.
 	var rejection wireMessage
 	if err := json.NewDecoder(stale).Decode(&rejection); err != nil {
 		t.Fatalf("read hello reply: %v", err)
@@ -437,8 +393,6 @@ func TestBrokerHelloVersionNegotiation(t *testing.T) {
 		t.Fatal("protocol v1 runtime was accepted")
 	}
 
-	// v3 hellos are accepted even though the wire contract moved from v2, so
-	// a freshly built desktop app can talk to a not-yet-upgraded daemon.
 	current, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
@@ -482,14 +436,10 @@ func TestBrokerLegacyRuntimeGetsNoPings(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	// The accepted hello is answered explicitly (#6466); consume that reply
-	// before asserting that a v2 runtime is never probed afterward.
 	dec := json.NewDecoder(conn)
 	_ = conn.SetReadDeadline(time.Now().Add(browserRuntimeTestTimeout()))
 	expectHelloOK(t, dec)
 
-	// Several liveness windows pass: a legacy runtime must not see a single
-	// ping frame, and the broker must keep treating it as connected.
 	_ = conn.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
 	var frame wireMessage
 	if err := dec.Decode(&frame); err == nil {

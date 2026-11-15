@@ -1,7 +1,6 @@
 import type { BaseWindow, WebContents } from "electron";
 import { MAC_TRAFFIC_LIGHT_ROW_HEIGHT, MAC_WINDOW_BUTTON_RADIUS, MAC_WINDOW_BUTTON_X } from "../shared/window-chrome";
 
-/** Native buttons use points, while the shell header scales with Chromium zoom. */
 export function syncMacWindowButtons(
 	window: Pick<BaseWindow, "isDestroyed" | "isFullScreen" | "setWindowButtonPosition" | "getWindowButtonPosition">,
 	shell: Pick<WebContents, "isDestroyed" | "getZoomFactor">,

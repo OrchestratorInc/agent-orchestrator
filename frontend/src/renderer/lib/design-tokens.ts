@@ -1,4 +1,3 @@
-/** Mirrors `--font-size-sm` (12px) in `src/styles/tokens.css`. */
 export const TERMINAL_FONT_SIZE_DEFAULT = 12;
 
 export const TERMINAL_FONT_SIZE_MIN = 10;

@@ -11,9 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// resolveRealOpenCode finds an opencode binary the way the daemon would, so the
-// integration tests run the user's actual CLI. It skips (never fails) when no
-// opencode is installed, keeping CI green on machines without it.
 func resolveRealOpenCode(t *testing.T) string {
 	t.Helper()
 	if path, err := exec.LookPath("opencode"); err == nil && path != "" {
@@ -29,9 +26,6 @@ func resolveRealOpenCode(t *testing.T) string {
 	return ""
 }
 
-// TestOpenCodeDiscoveryRunsAgainstRealBinary is the regression guard for the
-// "Unrecognized flag: --pure" failure: it runs the exact command the daemon
-// builds against the installed opencode and asserts a non-empty catalog.
 func TestOpenCodeDiscoveryRunsAgainstRealBinary(t *testing.T) {
 	binary := resolveRealOpenCode(t)
 	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
@@ -46,9 +40,6 @@ func TestOpenCodeDiscoveryRunsAgainstRealBinary(t *testing.T) {
 	}
 }
 
-// TestOpenCodeCredentialScopeListsProviderModels proves the cloud path
-// end-to-end: a credential type marks that provider's env var present, so the
-// real `opencode models` lists that provider's catalog (what the cloud VM runs).
 func TestOpenCodeCredentialScopeListsProviderModels(t *testing.T) {
 	binary := resolveRealOpenCode(t)
 	catalog, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{

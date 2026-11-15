@@ -10,15 +10,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// DeviceSupported reports that Publish can reach programs started outside AO.
 const DeviceSupported = true
 
-// Publish updates the systemd user manager, which reaches processes it starts
-// from now until the user logs out; AO reapplies saved keys when it starts
-// again. Nothing is written outside AO's data directory. A shell started by
-// another parent continues to inherit that parent's environment. A value
-// already set there that is neither value nor previous, AO's earlier copy, is
-// the user's own: Publish leaves it and returns ErrUserValue.
 func Publish(ctx context.Context, name, value, previous string) error {
 	if !validName(name) || !validValue(value) || value == "" {
 		return errors.New("invalid provider credential")
@@ -38,9 +31,6 @@ func Publish(ctx context.Context, name, value, previous string) error {
 	return cmd.Run()
 }
 
-// Unpublish removes name from the systemd user manager while it still holds
-// value, AO's copy; a value the user set since is left alone. Processes that
-// already inherited it keep it.
 func Unpublish(ctx context.Context, name, value string) error {
 	if !validName(name) {
 		return errors.New("invalid provider credential")
@@ -63,8 +53,6 @@ func systemdValue(ctx context.Context, name string) (string, error) {
 	return environmentValue(string(out), name), nil
 }
 
-// environmentValue finds name in systemctl show-environment output. systemd
-// prints a value that needs shell quoting as $'…' with C escapes.
 func environmentValue(out, name string) string {
 	for _, line := range strings.Split(out, "\n") {
 		raw, ok := strings.CutPrefix(line, name+"=")
@@ -119,7 +107,6 @@ func unescapeC(s string) string {
 					continue
 				}
 			}
-			// \\, \' and \" stand for the character itself.
 			b.WriteByte(c)
 		}
 	}

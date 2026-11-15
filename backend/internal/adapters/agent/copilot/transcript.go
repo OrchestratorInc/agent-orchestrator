@@ -11,14 +11,10 @@ import (
 )
 
 const (
-	copilotTranscriptName = "events.jsonl"
-	// A model snapshot line can run to a few hundred kilobytes.
+	copilotTranscriptName      = "events.jsonl"
 	copilotTranscriptTailBytes = 4 << 20
 )
 
-// Copilot writes its event log in ~100ms batches, so the answer is normally not
-// on disk yet when the stop hook starts. The idle report waits for it, so a few
-// batches at most. Variables so tests do not wait.
 var (
 	copilotTranscriptWait = 400 * time.Millisecond
 	copilotTranscriptPoll = 40 * time.Millisecond
@@ -33,11 +29,6 @@ type copilotTranscriptEvent struct {
 	} `json:"data"`
 }
 
-// FinalAssistantMessage returns the answer that closed the turn an agentStop
-// hook reports, read from the event log the hook input names: the newest
-// assistant.message of that turn, never an earlier turn's. The log also records
-// the hook call with the hook's timestamp; once that line is on disk all before
-// it is too, so the read waits for it up to copilotTranscriptWait.
 func FinalAssistantMessage(payload []byte) string {
 	var input struct {
 		TranscriptPath string  `json:"transcriptPath"`
@@ -53,7 +44,6 @@ func FinalAssistantMessage(payload []byte) string {
 	deadline := time.Now().Add(copilotTranscriptWait)
 	text, size := "", int64(-1)
 	for {
-		// The log is read again only once it has grown.
 		if info, err := os.Stat(path); err == nil && info.Size() != size {
 			size = info.Size()
 			var settled bool
@@ -68,8 +58,6 @@ func FinalAssistantMessage(payload []byte) string {
 	}
 }
 
-// readCopilotFinalMessage reads the answer of the turn the stop at
-// stopTimestamp ended. settled reports whether the log holds that stop's record.
 func readCopilotFinalMessage(path string, stopTimestamp float64) (text string, settled bool) {
 	lines := copilotTranscriptTail(path)
 	end := len(lines)
@@ -126,7 +114,6 @@ func copilotTranscriptTail(path string) [][]byte {
 	}
 	lines := bytes.Split(tail, []byte("\n"))
 	if offset > 0 {
-		// The window starts mid-line.
 		lines = lines[1:]
 	}
 	return lines

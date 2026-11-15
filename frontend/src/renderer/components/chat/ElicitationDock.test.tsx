@@ -21,7 +21,6 @@ function activity(detail: ConversationActivity["detail"]): ConversationActivity 
 	};
 }
 
-/** The marker claude-agent-acp puts on the Other field it adds after each question. */
 function otherAnswerFor(questionId: string) {
 	return { _askUserQuestionCustomAnswer: { questionId, isCustomAnswer: true } };
 }
@@ -247,7 +246,6 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		// Each question is answered once: by a choice or by its Other field.
 		await user.click(screen.getByRole("radio", { name: /Native/ }));
 		await user.click(screen.getByRole("button", { name: "Next" }));
 		await user.type(screen.getByLabelText("Other language"), "Rust");
@@ -301,7 +299,6 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		// Without the adapter's marker, name_custom never stands in for name.
 		await user.type(screen.getByLabelText("Alias"), "Al");
 		await user.click(screen.getByRole("button", { name: "Continue" }));
 		expect(screen.getByText("This field is required.")).toBeInTheDocument();
@@ -357,8 +354,6 @@ describe("ElicitationDock", () => {
 		await user.click(screen.getByRole("button", { name: "Continue" }));
 		expect(onResolve).not.toHaveBeenCalled();
 
-		// A description that points at nothing reads as an unlabelled error to a
-		// screen reader, so the target has to exist and carry the wording.
 		const describedBy = checkbox.getAttribute("aria-describedby") ?? "";
 		expect(describedBy).not.toBe("");
 		expect(document.getElementById(describedBy)).toHaveTextContent("This field is required.");
@@ -372,7 +367,6 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		// The hidden label keeps the accessible name; the placeholder is what shows.
 		const other = screen.getByLabelText("Other approach");
 		expect(other).toHaveAttribute("placeholder", "Other approach…");
 	});
@@ -420,8 +414,6 @@ describe("ElicitationDock", () => {
 			/>,
 		);
 
-		// Focus is placed once; Enter swaps the question under it, and the next
-		// number key still has to land in the card.
 		screen.getAllByRole("radio")[0]?.focus();
 		await user.keyboard("1{Enter}");
 		expect(screen.getByRole("radio", { name: /Go/ })).toHaveFocus();

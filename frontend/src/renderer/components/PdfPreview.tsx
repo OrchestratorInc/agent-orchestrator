@@ -10,24 +10,16 @@ type Pdfjs = typeof import("pdfjs-dist");
 type PageSize = { width: number; height: number };
 
 const PAGE_GAP = 12;
-/** pdf.js's viewer cap: past it a page draws at lower resolution and CSS stretches it. */
 const MAX_CANVAS_PIXELS = 2 ** 25;
-/** Chromium refuses a canvas side longer than this. */
 const MAX_CANVAS_SIDE = 16_384;
 
-/**
- * The bitmap scale for a page of this CSS size: the display's pixel ratio,
- * lowered so the canvas stays within MAX_CANVAS_PIXELS and MAX_CANVAS_SIDE.
- */
 export function pdfOutputScale(width: number, height: number, pixelRatio: number): number {
 	if (width <= 0 || height <= 0) return pixelRatio;
 	return Math.min(pixelRatio, Math.sqrt(MAX_CANVAS_PIXELS / (width * height)), MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height);
 }
 const PADDING = 12;
 const MAX_SCALE = 2;
-/** How long a zoom settles before pages redraw at the new scale; until then the last drawing stretches. */
 const REDRAW_DELAY_MS = 150;
-/** The largest PDF read into memory for preview. */
 const MAX_PDF_BYTES = 100 * 1024 * 1024;
 
 class PdfTooLargeError extends Error {
@@ -36,11 +28,6 @@ class PdfTooLargeError extends Error {
 	}
 }
 
-/**
- * The scroll offset that keeps a point of the page stack under the anchor as
- * the pages resize from before to after. Pages scale but the gaps between
- * them do not, so the point keeps its page and its relative place within it.
- */
 export function anchoredPdfScrollTop(scrollTop: number, anchorY: number, before: readonly number[], after: readonly number[], gap = PAGE_GAP, padding = PADDING): number {
 	const y = scrollTop + anchorY - padding;
 	let top = 0;
@@ -52,7 +39,6 @@ export function anchoredPdfScrollTop(scrollTop: number, anchorY: number, before:
 		page += 1;
 	}
 	const height = before[page] ?? 0;
-	// Within the page it scales with the page; in the gap below it, it does not.
 	const within = Math.min(y - top, height);
 	const scaled = height > 0 ? within * (after[page] ?? 0) / height : within;
 	return nextTop + scaled + (y - top - within) + padding - anchorY;
@@ -60,7 +46,6 @@ export function anchoredPdfScrollTop(scrollTop: number, anchorY: number, before:
 
 let pdfjsModule: Promise<Pdfjs> | null = null;
 
-/** Loads pdf.js and its worker on first use. */
 function loadPdfjs(): Promise<Pdfjs> {
 	pdfjsModule ??= Promise.all([import("pdfjs-dist"), import("pdfjs-dist/build/pdf.worker.min.mjs?url")]).then(([pdfjs, worker]) => {
 		pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
@@ -69,20 +54,10 @@ function loadPdfjs(): Promise<Pdfjs> {
 	return pdfjsModule;
 }
 
-/**
- * A PDF's pages, fit to the pane width, with a text layer over each page so
- * its text can be selected. In the artifact viewer the zoom multiplies that
- * fit, anchored at the pinch point. Pages draw as they near the viewport and release
- * their drawing once they are far from it. A file over MAX_PDF_BYTES is not read.
- * A cloud file is cross-origin to the renderer, so its bytes are read through
- * the main process.
- */
 export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false, load, onError, path, src }: {
 	cloud?: boolean;
-	/** A tiny tile: the first page fills the box edge to edge and is cropped, with no padding, backdrop or loading text. */
 	cover?: boolean;
 	firstPageOnly?: boolean;
-	/** Reads the document's bytes itself (a cloud attachment); src then only keys it. */
 	load?: () => Promise<Uint8Array>;
 	onError: () => void;
 	path: string;
@@ -101,7 +76,6 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 	const { controller: zoomController, zoom } = useArtifactZoomTarget(!firstPageOnly);
 	const zoomRef = useRef(zoom);
 
-	// Keeps the point under the pinch (or the pane's center) in place as the pages resize.
 	useLayoutEffect(() => {
 		const previous = zoomRef.current;
 		zoomRef.current = zoom;
@@ -113,7 +87,6 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 		const ay = anchor ? anchor.clientY - rect.top : element.clientHeight / 2;
 		const ratio = zoom / previous;
 		element.scrollLeft = (element.scrollLeft + ax - PADDING) * ratio + PADDING - ax;
-		// Matches the page heights PdfPage lays out, at the old and new zoom.
 		const heights = (level: number) => loaded && width > 0 ? loaded.sizes.map((size) => Math.floor(size.height * (Math.min(width / size.width, MAX_SCALE) * level))) : [];
 		const before = heights(previous);
 		element.scrollTop = before.length > 0
@@ -156,7 +129,6 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 		let measured = false;
 		const observer = new ResizeObserver(([entry]) => {
 			if (timer !== null) window.clearTimeout(timer);
-			// A drag-resize settles before the pages redraw at the new width.
 			timer = window.setTimeout(() => {
 				setWidth(Math.floor(entry.contentRect.width));
 				setHeight(Math.floor(entry.contentRect.height));
@@ -174,7 +146,6 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 		if (tooLarge !== null) return null;
 		const page = loaded?.sizes[0];
 		return (
-			// Centered both ways, so a page wider or taller than the box crops evenly; a portrait page shows its top.
 			<div aria-label={path} className="flex min-h-0 min-w-0 flex-1 items-start justify-center overflow-hidden" ref={scrollRef} role="document">
 				{loaded && page && width > 0 && height > 0 ? (
 					<PdfPage pageNumber={1} pdf={loaded.pdf} pdfjs={loaded.pdfjs} root={scrollRef} scale={Math.max(width / page.width, height / page.height)} size={page} />
@@ -188,7 +159,6 @@ export function PdfPreview({ cloud = false, cover = false, firstPageOnly = false
 			{!loaded ? (
 				<PanelMessage>{t("files.loading")}</PanelMessage>
 			) : width > 0 ? (
-				// w-max keeps pages wider than the pane scrollable from their left edge.
 				<div className="mx-auto flex w-max min-w-full flex-col items-center" data-selection-feedback="" style={{ gap: PAGE_GAP }}>
 					{loaded.sizes.map((size, index) => (
 						<PdfPage key={index} pageNumber={index + 1} pdf={loaded.pdf} pdfjs={loaded.pdfjs} root={scrollRef} scale={Math.min(width / size.width, MAX_SCALE) * zoom} size={size} />
@@ -223,7 +193,6 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 	const textRef = useRef<HTMLDivElement>(null);
 	const [near, setNear] = useState(false);
 	const drawnRef = useRef(false);
-	// The page resizes with every zoom step; it redraws once the zoom settles.
 	const [drawScale, setDrawScale] = useState(scale);
 	useEffect(() => {
 		if (scale === drawScale) return;
@@ -245,7 +214,6 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 		return () => observer.disconnect();
 	}, [root]);
 
-	// A page far from the viewport drops its bitmap, text layer and parsed page data.
 	useEffect(() => {
 		const canvas = canvasRef.current;
 		const text = textRef.current;
@@ -257,8 +225,6 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 		void pdf.getPage(pageNumber).then((page) => page.cleanup()).catch(() => {});
 	}, [near, pageNumber, pdf]);
 
-	// pdf.js's end-of-content marker: while a drag selection is in progress it
-	// covers the page so the selection doesn't jump to the end of the text.
 	useEffect(() => {
 		const text = textRef.current;
 		if (!text) return;
@@ -283,9 +249,7 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 			const page = await pdf.getPage(pageNumber);
 			if (cancelled) return;
 			const viewport = page.getViewport({ scale: drawScale });
-			// A deep zoom draws at a capped resolution; the canvas's CSS size stretches it to the page.
 			const ratio = pdfOutputScale(viewport.width, viewport.height, window.devicePixelRatio || 1);
-			// A redraw paints offscreen and swaps in one step, so a zoomed page never blanks.
 			const target = drawnRef.current ? document.createElement("canvas") : canvas;
 			target.width = Math.floor(viewport.width * ratio);
 			target.height = Math.floor(viewport.height * ratio);
@@ -305,7 +269,6 @@ function PdfPage({ pageNumber, pdf, pdfjs, root, scale, size }: {
 			endOfContent.className = "endOfContent";
 			text.append(endOfContent);
 		})().catch(() => {
-			// A cancelled or failed page keeps its blank sheet; the others still draw.
 		});
 		return () => {
 			cancelled = true;

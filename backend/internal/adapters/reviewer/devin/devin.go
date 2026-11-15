@@ -1,5 +1,3 @@
-// Package devin adapts Devin for Terminal as an experimental host-trusted AO
-// reviewer. It always runs Devin's visible, long-lived interactive TUI.
 package devin
 
 import (
@@ -15,30 +13,22 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// HostTrustWarning describes the authority retained by Devin's interactive
-// terminal. AO deliberately does not add Devin's --sandbox flag.
 const HostTrustWarning = "experimental host-trusted reviewer: Devin runs its interactive TUI without OS isolation; terminal users can change modes, invoke shell features, or open an external editor"
 
-// Reviewer builds Devin's persistent interactive reviewer command.
 type Reviewer struct {
 	resolveBinary func(context.Context) (string, error)
 }
 
-// New returns the production Devin reviewer adapter.
 func New() *Reviewer {
 	return &Reviewer{resolveBinary: workerdevin.ResolveDevinBinary}
 }
 
-// Harness returns Devin's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerDevin }
 
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)
 
-// ReviewCommand starts only Devin's normal interactive TUI. The initial task
-// is injected after the pane starts; print mode, prompt argv, ACP, cloud
-// handoff, and sandbox mode are never emitted.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ReviewCommandSpec{}, err
@@ -60,15 +50,11 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Devin reviewer pane by relaunching
-// the reviewer command with the current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
 }
 
-// ReviewPromptReadinessHints gives Devin's startup screen enough time to accept
-// pasted task input before AO submits the initial review reference.
 func (*Reviewer) ReviewPromptReadinessHints(ctx context.Context) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -77,7 +63,6 @@ func (*Reviewer) ReviewPromptReadinessHints(ctx context.Context) (ports.PromptRe
 }
 
 func initialMessage(inv ports.ReviewInvocation) (string, error) {
-	// Preflight builds the command without request-scoped prompt files.
 	if strings.TrimSpace(inv.TaskPromptRoot) == "" {
 		return "", nil
 	}
@@ -91,7 +76,6 @@ func initialMessage(inv ports.ReviewInvocation) (string, error) {
 	), nil
 }
 
-// ReviewMessage reuses the same Devin TUI for subsequent review passes.
 func (*Reviewer) ReviewMessage(ctx context.Context, inv ports.ReviewInvocation) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -99,7 +83,6 @@ func (*Reviewer) ReviewMessage(ctx context.Context, inv ports.ReviewInvocation) 
 	return inv.Prompt, nil
 }
 
-// ReviewCancel sends Devin's active-operation Ctrl-C once, preserving the pane.
 func (*Reviewer) ReviewCancel(ctx context.Context) (ports.ReviewCancelSpec, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.ReviewCancelSpec{}, err

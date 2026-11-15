@@ -23,17 +23,10 @@ const (
 	defaultBaseURL   = "https://gitlab.com/api/v4"
 	defaultUserAgent = "ao-agent-orchestrator/tracker-gitlab"
 
-	// GitLab's per_page maxes at 100. ListFilter.Limit is an optional
-	// total-result cap; page size stays at the provider max.
 	listPageSize = 100
-	// Guard against a pathological Link cycle. At GitLab's max page size
-	// this still permits a 5k-issue intake sweep before failing loud.
 	maxListPages = 50
 )
 
-// Sentinel errors. Adapter-level callers should match on these via
-// errors.Is; the orchestrator's lifecycle code is intentionally insulated
-// from raw HTTP status codes.
 var (
 	ErrNotFound       = errors.New("gitlab tracker: issue not found")
 	ErrRateLimited    = errors.New("gitlab tracker: rate limited")
@@ -43,24 +36,8 @@ var (
 	ErrHostNotAllowed = errors.New("gitlab tracker: host not in allowlist")
 )
 
-// RateLimitError is an alias for httpkit.RateLimitError so existing callers
-// that use errors.As with *RateLimitError continue to work. The sentinel
-// field is set to ErrRateLimited by the adapter's classifyError.
 type RateLimitError = httpkit.RateLimitError
 
-// Options configures a Tracker. All fields except Token are optional —
-// production code typically sets Token alone; tests inject HTTPClient and
-// BaseURL to point at an httptest fake.
-//
-// AllowedHosts is the list of self-managed GitLab hosts the tracker is
-// permitted to talk to. gitlab.com (Host: "") is always allowed and does
-// not need to appear here. A host not in this list and not gitlab.com is
-// rejected before any credential is attached.
-//
-// HostTokens maps a self-managed host to a token override. Hosts in
-// AllowedHosts without an explicit entry fall back to the default Token.
-// The per-host selection ensures the gitlab.com token is not attached to a
-// self-managed host and vice versa.
 type Options struct {
 	Token        scmgitlab.TokenSource
 	HTTPClient   *http.Client
@@ -70,45 +47,22 @@ type Options struct {
 	HostTokens   map[string]scmgitlab.TokenSource
 }
 
-// hostEntry holds the per-host base URL and token source. The default
-// entry (for gitlab.com / Host: "") uses Options.BaseURL and Options.Token.
-// Self-managed hosts get a derived base URL (https://<host>/api/v4) and
-// either the per-host token from HostTokens or the default token.
 type hostEntry struct {
 	baseURL string
 	tokens  scmgitlab.TokenSource
 }
 
-// Tracker implements ports.Tracker against the GitLab REST API v4.
-//
-// Construction performs a fail-fast token presence check (no network call).
-// The first Preflight call validates the token against GitLab itself; a
-// successful preflight is cached for the lifetime of the Tracker so repeat
-// calls are free, while failures are intentionally NOT cached so a
-// transient startup glitch doesn't permanently brick the adapter.
-//
-// The tracker is host-aware: it maintains a per-host base URL + token map,
-// mirroring the SCM provider's clientForHost pattern. gitlab.com (zero-value
-// Host: "") uses the default base URL and default token. Self-managed hosts
-// must be in AllowedHosts; unconfigured hosts are rejected before any
-// credential is attached.
 type Tracker struct {
 	http      *http.Client
 	userAgent string
 
-	// defaultHost is the config for gitlab.com (Host: "").
 	defaultHost hostEntry
 
-	// hosts maps each allowed self-managed host to its config (base URL +
-	// token). Hosts in AllowedHosts without an explicit HostTokens entry fall
-	// back to the default token.
 	hosts map[string]hostEntry
 
 	preflight httpkit.PreflightCache
 }
 
-// New returns a Tracker. It fails fast when no token can be obtained so
-// daemons crash at startup rather than at first issue lookup.
 func New(opts Options) (*Tracker, error) {
 	src := opts.Token
 	if src == nil {
@@ -126,7 +80,6 @@ func New(opts Options) (*Tracker, error) {
 		ua = defaultUserAgent
 	}
 
-	// Build per-host config for self-managed hosts.
 	hosts := make(map[string]hostEntry, len(opts.AllowedHosts))
 	for _, raw := range opts.AllowedHosts {
 		h := scmgitlab.NormalizeHost(raw)
@@ -135,7 +88,7 @@ func New(opts Options) (*Tracker, error) {
 		}
 		he := hostEntry{
 			baseURL: "https://" + h + "/api/v4",
-			tokens:  src, // fall back to default token
+			tokens:  src,
 		}
 		if ts, ok := opts.HostTokens[h]; ok && ts != nil {
 			he.tokens = ts
@@ -155,10 +108,6 @@ func New(opts Options) (*Tracker, error) {
 	return t, nil
 }
 
-// configForHost returns the per-host config (base URL + token) for the given
-// host. Host "" and "gitlab.com" use the default config (gitlab.com).
-// Self-managed hosts must be in the allowlist; unconfigured hosts return an
-// error so callers fail closed before any credential is attached.
 func (t *Tracker) configForHost(host string) (hostEntry, error) {
 	host = scmgitlab.NormalizeHost(host)
 	if scmgitlab.IsGitLabDotCom(host) {
@@ -170,24 +119,13 @@ func (t *Tracker) configForHost(host string) (hostEntry, error) {
 	return hostEntry{}, fmt.Errorf("gitlab tracker: host %q not in allowlist: %w", host, ErrHostNotAllowed)
 }
 
-// ConfigForHost returns nil if the given host is allowed by the tracker
-// (gitlab.com or in AllowedHosts), or ErrHostNotAllowed otherwise. No
-// network call is made — this is safe for use in wiring tests that need to
-// assert host routing without DNS resolution.
 func (t *Tracker) ConfigForHost(host string) error {
 	_, err := t.configForHost(host)
 	return err
 }
 
-// Statically assert Tracker satisfies the port. If this stops compiling, the
-// port shape changed and the adapter needs to follow.
 var _ ports.Tracker = (*Tracker)(nil)
 
-// ---------------------------------------------------------------------------
-// Get
-// ---------------------------------------------------------------------------
-
-// glIssue is the subset of fields we read off the GitLab issue payload.
 type glIssue struct {
 	IID         int      `json:"iid"`
 	Title       string   `json:"title"`
@@ -202,7 +140,6 @@ type glUser struct {
 	Username string `json:"username"`
 }
 
-// Get fetches a single issue by id and maps it onto the normalized domain.Issue.
 func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, error) {
 	projectPath, iid, err := t.parseID(id)
 	if err != nil {
@@ -223,15 +160,10 @@ func (t *Tracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, e
 		return domain.Issue{}, fmt.Errorf("gitlab tracker: decode issue: %w", err)
 	}
 	issue := issueFromGitLab(projectPath, raw)
-	issue.ID.Host = id.Host // preserve host for round-trip
+	issue.ID.Host = id.Host
 	return issue, nil
 }
 
-// issueFromGitLab projects a raw GitLab issue payload into the normalized
-// domain.Issue. projectPath is passed in because the TrackerID.Native
-// shape is "path/to/project#iid" and we want the returned ID to round-trip
-// through the same adapter. The caller sets Host on the returned Issue after
-// this function returns.
 func issueFromGitLab(projectPath string, raw glIssue) domain.Issue {
 	assignees := make([]string, 0, len(raw.Assignees))
 	for _, a := range raw.Assignees {
@@ -258,8 +190,6 @@ func issueFromGitLab(projectPath string, raw glIssue) domain.Issue {
 	return out
 }
 
-// mapStateFromGitLab projects GitLab's opened/closed state onto the
-// normalized state vocabulary.
 func mapStateFromGitLab(state string) domain.NormalizedIssueState {
 	if strings.EqualFold(state, "closed") {
 		return domain.IssueDone
@@ -267,14 +197,6 @@ func mapStateFromGitLab(state string) domain.NormalizedIssueState {
 	return domain.IssueOpen
 }
 
-// ---------------------------------------------------------------------------
-// List
-// ---------------------------------------------------------------------------
-
-// List returns issues for a project, filtered by state/labels/assignee.
-// Pagination is followed via GitLab's Link-header (rel="next") until no next
-// link remains; ListFilter.Limit, when set, caps the total accumulated
-// issue count.
 func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter domain.ListFilter) ([]domain.Issue, error) {
 	if repo.Provider != domain.TrackerProviderGitLab {
 		return nil, fmt.Errorf("%w: provider=%q", ErrWrongProvider, repo.Provider)
@@ -325,7 +247,7 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 		pageIssues := make([]domain.Issue, 0, len(raw))
 		for _, r := range raw {
 			issue := issueFromGitLab(projectPath, r)
-			issue.ID.Host = repo.Host // preserve host for round-trip
+			issue.ID.Host = repo.Host
 			pageIssues = append(pageIssues, issue)
 		}
 		var done bool
@@ -338,30 +260,12 @@ func (t *Tracker) List(ctx context.Context, repo domain.TrackerRepo, filter doma
 	return out, nil
 }
 
-// ---------------------------------------------------------------------------
-// Preflight
-// ---------------------------------------------------------------------------
-
-// Preflight verifies the configured token is currently accepted by GitLab
-// (one GET /user). It does NOT prove the token has the scope or visibility
-// needed for any specific Get/List call — those may still fail with
-// ErrAuthFailed even after a successful Preflight.
-//
-// Successful checks are cached via httpkit.PreflightCache (double-checked
-// atomic+mutex). Failures are intentionally NOT cached so a transient
-// startup glitch is recoverable on a subsequent call.
 func (t *Tracker) Preflight(ctx context.Context) error {
 	return t.preflight.Run(ctx, func(ctx context.Context) error {
-		// Preflight checks the default (gitlab.com) token. Self-managed host
-		// tokens are validated on first use.
 		_, err := t.do(ctx, t.defaultHost, http.MethodGet, "/user", nil)
 		return err
 	})
 }
-
-// ---------------------------------------------------------------------------
-// HTTP plumbing
-// ---------------------------------------------------------------------------
 
 func (t *Tracker) do(ctx context.Context, he hostEntry, method, path string, body any) ([]byte, error) {
 	respBody, _, err := t.roundTrip(ctx, he, method, path, body)
@@ -421,10 +325,6 @@ func classifyError(resp *http.Response, body []byte) error {
 	return fmt.Errorf("gitlab tracker: %d %s", resp.StatusCode, msg)
 }
 
-// ---------------------------------------------------------------------------
-// ID parsing
-// ---------------------------------------------------------------------------
-
 func (t *Tracker) parseID(id domain.TrackerID) (projectPath string, iid int, err error) {
 	if id.Provider != domain.TrackerProviderGitLab {
 		return "", 0, fmt.Errorf("%w: provider=%q", ErrWrongProvider, id.Provider)
@@ -432,9 +332,6 @@ func (t *Tracker) parseID(id domain.TrackerID) (projectPath string, iid int, err
 	return parseGitLabID(id.Native)
 }
 
-// parseGitLabID accepts "path/to/project#IID" and returns the project path
-// and issue iid. The project path may contain multiple segments for nested
-// groups (e.g. "group/subgroup/project").
 func parseGitLabID(native string) (projectPath string, iid int, err error) {
 	hash := strings.IndexByte(native, '#')
 	if hash < 0 {
@@ -452,8 +349,6 @@ func parseGitLabID(native string) (projectPath string, iid int, err error) {
 	return projectPath, n, nil
 }
 
-// parseGitLabRepo accepts "path/to/project" and rejects empty strings,
-// paths without a slash, and paths containing whitespace or "#".
 func parseGitLabRepo(native string) (string, error) {
 	if native == "" {
 		return "", fmt.Errorf("%w: empty repo", ErrBadID)
@@ -464,9 +359,6 @@ func parseGitLabRepo(native string) (string, error) {
 	return native, nil
 }
 
-// validateProjectPath checks that a project path is non-empty, contains at
-// least one "/" separator, and has no whitespace or "#" characters. It
-// accepts paths with multiple segments (nested groups).
 func validateProjectPath(path string) error {
 	if path == "" {
 		return fmt.Errorf("%w: empty project path", ErrBadID)

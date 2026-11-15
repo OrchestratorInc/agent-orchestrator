@@ -57,7 +57,6 @@ func TestHooks_StopFinalMessageFeedsTurnHistoryForEveryAgent(t *testing.T) {
 		agent, payload               string
 		wantFinal, wantReplayAnswers bool
 	}{
-		// Codex reports its final message without making it a replay checkpoint.
 		{"codex", payload, true, false},
 		{"claude-code", payload, true, true},
 		{"codex", `{"agent_id":"child","last_assistant_message":"all done"}`, false, false},
@@ -132,12 +131,9 @@ func TestHooks_OpenCodeAndGrokPromptsReachTurnHistoryOnly(t *testing.T) {
 			if !strings.Contains(capture.body, `"turnUserRequest":"fix this"`) {
 				t.Fatalf("the prompt did not reach the turn history field: %s", capture.body)
 			}
-			// The daemon drops a signal whose agent is not the one the session
-			// runs, so a previous agent's leftover hooks cannot speak for it.
 			if !strings.Contains(capture.body, `"harness":"`+agent+`"`) {
 				t.Fatalf("the hook did not name its agent: %s", capture.body)
 			}
-			// The replay-checkpoint field stays empty for these agents.
 			if strings.Contains(capture.body, `"latestUserPrompt"`) {
 				t.Fatalf("the prompt leaked into the replay checkpoint: %s", capture.body)
 			}

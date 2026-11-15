@@ -1,7 +1,5 @@
 //go:build windows
 
-// Package processalive probes whether an operating-system process id still
-// maps to a live process.
 package processalive
 
 import (
@@ -10,8 +8,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Alive reports whether pid exists. Access denied counts as alive: the process
-// exists even if the current user cannot wait on it.
 func Alive(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -29,9 +25,6 @@ func Alive(pid int) bool {
 	return status == uint32(windows.WAIT_TIMEOUT)
 }
 
-// Exited reports that pid is proven gone, as for Node's process.kill(pid, 0):
-// no such process, or one that has already finished. Access denied means it
-// still exists.
 func Exited(pid int) bool {
 	if pid <= 0 {
 		return false

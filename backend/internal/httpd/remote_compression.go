@@ -12,12 +12,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
-// remoteJSONCompression compresses only remote JSON. Chi retains responsibility
-// for content types, existing encodings and streaming/upgrade writer interfaces;
-// its pinned version does not negotiate Accept-Encoding quality values.
 func remoteJSONCompression(next http.Handler) http.Handler {
 	compressor := middleware.NewCompressor(flate.BestSpeed, "application/json")
-	// HTTP deflate requires zlib framing; chi's default encoder emits raw DEFLATE.
 	compressor.SetEncoder("deflate", func(w io.Writer, level int) io.Writer {
 		writer, err := zlib.NewWriterLevel(w, level)
 		if err != nil {
@@ -26,8 +22,6 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 		return writer
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Apply Vary at the final header boundary, including identity responses
-		// and 304s that bypass chi's encoder.
 		w = &remoteJSONResponseWriter{ResponseWriter: w}
 		encoding := preferredRemoteEncoding(r.Header.Values("Accept-Encoding"))
 		if encoding == "" || r.Header.Get("Range") != "" {
@@ -35,8 +29,6 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 			return
 		}
 
-		// Give chi only the negotiated encoding, while the actual handler (which
-		// may proxy the request) still sees the original, unmodified headers.
 		negotiated := r.Clone(r.Context())
 		negotiated.Header.Set("Accept-Encoding", encoding)
 		compressor.Handler(http.HandlerFunc(func(encoded http.ResponseWriter, _ *http.Request) {
@@ -45,10 +37,6 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 	})
 }
 
-// Decide before chi commits headers: a partial response must bypass its encoder,
-// and a strong validator cannot describe both the original and encoded bytes.
-// The outer instance has no uncompressed writer and preserves Vary after any
-// handler or encoder header changes; the inner instance enforces encoding rules.
 type remoteJSONResponseWriter struct {
 	http.ResponseWriter
 	uncompressed http.ResponseWriter
@@ -75,16 +63,13 @@ func (w *remoteJSONResponseWriter) WriteHeader(status int) {
 			w.ResponseWriter = w.uncompressed
 		} else {
 			contentType, _, _ := strings.Cut(w.Header().Get("Content-Type"), ";")
-			// ServeContent removes Content-Type on 304. Without that type, use a
-			// weak validator conservatively: compression was negotiated, and a
-			// cached encoded representation must not acquire a strong raw tag.
 			if (contentType == "application/json" || (status == http.StatusNotModified && contentType == "")) && w.Header().Get("Content-Encoding") == "" {
 				if etag := w.Header().Get("ETag"); strings.HasPrefix(etag, `"`) {
 					w.Header().Set("ETag", "W/"+etag)
 				}
 			}
 			if status == http.StatusNotModified {
-				w.ResponseWriter = w.uncompressed // A 304 never has an encoded body.
+				w.ResponseWriter = w.uncompressed
 			}
 		}
 	}
@@ -139,7 +124,6 @@ func preferredRemoteEncoding(fields []string) string {
 					quality = remoteEncodingQuality(strings.TrimSpace(value))
 				}
 			}
-			// Conflicting duplicates are ambiguous; never override a rejection.
 			if previous, ok := qualities[coding]; !ok || quality < previous {
 				qualities[coding] = quality
 			}
@@ -163,8 +147,6 @@ func preferredRemoteEncoding(fields []string) string {
 	return selected
 }
 
-// RFC 9110 section 12.4.2: 0..1, at most three fractional digits. Invalid
-// weights are treated as rejections rather than permission to compress.
 func remoteEncodingQuality(value string) int {
 	if value == "0" {
 		return 0

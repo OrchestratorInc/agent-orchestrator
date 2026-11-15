@@ -54,9 +54,6 @@ func TestAgentAccountsListNamesTheSameLogin(t *testing.T) {
 	}
 }
 
-// The app words a failed check from its kind; the error text rides along as
-// detail. The identity check's problem comes first, and a limits problem is
-// shown only for a signed-in account.
 func TestAgentAccountsListCarriesTheProblemKind(t *testing.T) {
 	account := func(id string) domain.AgentAccount {
 		return domain.AgentAccount{ID: id, Provider: domain.AgentAccountProviderClaude, Home: "/ao/claude/" + id}

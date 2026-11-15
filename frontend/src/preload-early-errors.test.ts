@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({ invoke: vi.fn(), listeners: new Map<string, (.
 vi.mock("electron", () => ({
 	contextBridge: {
 		exposeInMainWorld: (key: string, value: unknown) => Object.defineProperty(window, key, { value, configurable: true }),
-		// Exercise the serialized function, which must have no module closures.
 		executeInMainWorld: ({ func }: { func: () => void }) => { Function(`(${func.toString()})()`)(); },
 	},
 	ipcRenderer: { invoke: (...args: unknown[]) => mocks.invoke(...args), on: (key: string, fn: (...args: unknown[]) => void) => mocks.listeners.set(key, fn), send: vi.fn() },
@@ -56,8 +55,6 @@ it("captures an entry-module failure before the renderer runs, using main-owned 
 	await vi.waitFor(() => expect(capture).toHaveBeenCalledOnce());
 	expect(capture.mock.calls[0][0]).toMatchObject({ consentGeneration: "generation-1", kind: "exception", message: "Renderer startup error", exception: { type: "TypeError" } });
 	expect(JSON.stringify(capture.mock.calls)).not.toMatch(/private|token|project|Users/);
-	// Runtime and preload use one listener. Re-observing the same early error
-	// through another boundary cannot send it a second time.
 	const { bindRendererErrorHandlers, captureRendererException } = await import("./renderer/lib/telemetry");
 	bindRendererErrorHandlers();
 	await captureRendererException(error);

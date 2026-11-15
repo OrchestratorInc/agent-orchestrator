@@ -12,10 +12,6 @@ function displayDescription(description: ReactNode): ReactNode {
   return typeof description === "string" ? visibleProductName(description) : description;
 }
 
-/**
- * Maps each page node, including folder index pages, and shows the product
- * name the way readers know it.
- */
 function mapTree(tree: Tree, mapPage: (node: PageNode) => PageNode): Tree {
   const page = (node: PageNode): PageNode => mapPage({ ...node, description: displayDescription(node.description) });
   const visit = (node: Node): Node => {
@@ -36,10 +32,6 @@ function mapTree(tree: Tree, mapPage: (node: PageNode) => PageNode): Tree {
   };
 }
 
-/**
- * The sidebar for a language. It lists every article: translated ones by
- * their translated title and URL, the rest by their English title and URL.
- */
 export function docsTree(locale: SupportedLocale): Tree {
   const tree = source.getPageTree(DEFAULT_LOCALE);
   if (locale === DEFAULT_LOCALE) return mapTree(tree, (node) => node);

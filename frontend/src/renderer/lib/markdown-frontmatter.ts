@@ -1,5 +1,3 @@
-/** Plain-text name and description from a Markdown file's opening YAML frontmatter. */
-
 const MAX_PREVIEW_CHARS = 280;
 
 export type MarkdownFrontmatterStatus = "ok" | "absent" | "malformed";
@@ -12,7 +10,6 @@ export type MarkdownFrontmatter = {
 
 const OPENING = /^(?:\uFEFF)?---[ \t]*\r?\n/;
 
-/** Hide opening YAML metadata in rendered documents, leaving incomplete blocks intact. */
 export function stripMarkdownFrontmatter(content: string): string {
 	const opening = OPENING.exec(content);
 	if (!opening) return content;

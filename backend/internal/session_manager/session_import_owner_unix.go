@@ -15,7 +15,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// providerLockHeld probes a provider writer lock without waiting for it.
 func providerLockHeld(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -29,12 +28,10 @@ func providerLockHeld(path string) bool {
 	return false
 }
 
-// processStart reads a live process's executable name and start time.
 func processStart(ctx context.Context, pid int) (string, time.Time, bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	cmd := process.CommandContext(probeCtx, "ps", "-o", "lstart=", "-o", "comm=", "-p", strconv.Itoa(pid))
-	// Claude records the start in this format; the C locale keeps ps from translating it.
 	cmd.Env = append(os.Environ(), "TZ=UTC", "LC_ALL=C")
 	out, err := cmd.Output()
 	fields := strings.Fields(string(out))

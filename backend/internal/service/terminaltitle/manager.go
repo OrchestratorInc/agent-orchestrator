@@ -1,14 +1,3 @@
-// Package terminaltitle retains the title each terminal's program last set, for
-// as long as the terminal runs and whether or not any UI is attached.
-//
-// The runtime parses and normalizes titles; this package follows the live
-// terminals and stores what they report. A title is a fact about the running
-// program: it never changes a session's name or identity, and read models decide
-// whether to show it.
-//
-// Nothing polls. Agent sessions are read once at start, then one at a time when
-// a change event names them; shell terminals are tracked by the shell terminal
-// service as they open and close.
 package terminaltitle
 
 import (
@@ -25,24 +14,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Variables so tests can shorten them.
 var (
-	// minWriteInterval limits one terminal's durable writes, however often its
-	// program changes its title. The newest title is written when it elapses.
 	minWriteInterval       = 2 * time.Second
 	initialWatchRetryDelay = 500 * time.Millisecond
 	watchRetryMax          = 30 * time.Second
-	// maxWatchFailures ends a watch whose host refuses that many connections in
-	// a row. The watch restarts when its session gets a new terminal.
-	maxWatchFailures = 6
-	// readRetryDelay is how soon a failed session read is tried again. Nothing
-	// rescans, so a read that failed must not be dropped.
-	readRetryDelay = 5 * time.Second
+	maxWatchFailures       = 6
+	readRetryDelay         = 5 * time.Second
 )
 
 const flushTimeout = 5 * time.Second
 
-// Store is the persistence the manager needs.
 type Store interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
@@ -50,18 +31,15 @@ type Store interface {
 	UpdateShellTerminalAppTitle(ctx context.Context, handleID, title string) error
 }
 
-// Events delivers session change events. Callbacks must not block.
 type Events interface {
 	Subscribe(fn func(cdc.Event)) (unsubscribe func())
 }
 
 type terminalKey struct {
-	session domain.SessionID // set for an agent session's terminal
-	shell   string           // set for a shell terminal
+	session domain.SessionID
+	shell   string
 }
 
-// terminal is one run of a terminal host. A restored session keeps its handle
-// but gets a new launch, so both name the run.
 type terminal struct {
 	handle string
 	launch string
@@ -72,7 +50,6 @@ type watch struct {
 	term   terminal
 	cancel context.CancelFunc
 
-	// Guarded by Manager.mu.
 	stopped   bool
 	seen      bool
 	latest    string
@@ -82,26 +59,20 @@ type watch struct {
 	timer     *time.Timer
 }
 
-// Manager keeps one title watch open per live terminal.
 type Manager struct {
 	rt    ports.TerminalTitleWatcher
 	store Store
 	log   *slog.Logger
 	base  context.Context
 
-	// writeMu orders title writes, so a replaced run's late write cannot land
-	// after its successor's. Taken before mu, never while holding it.
 	writeMu sync.Mutex
 
 	mu      sync.Mutex
 	watches map[terminalKey]*watch
-	// pending holds sessions named by change events, read by Run.
 	pending map[domain.SessionID]struct{}
 	poke    chan struct{}
 }
 
-// NewManager builds a manager whose watches live while ctx is active. Shell
-// terminals can be tracked at once; call Run to follow agent sessions.
 func NewManager(ctx context.Context, rt ports.TerminalTitleWatcher, store Store, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
@@ -114,7 +85,6 @@ func NewManager(ctx context.Context, rt ports.TerminalTitleWatcher, store Store,
 	}
 }
 
-// TrackShellTerminal starts following a shell terminal's title.
 func (m *Manager) TrackShellTerminal(handleID string) {
 	if handleID != "" {
 		m.mu.Lock()
@@ -123,17 +93,12 @@ func (m *Manager) TrackShellTerminal(handleID string) {
 	}
 }
 
-// UntrackShellTerminal stops following a shell terminal, storing a title that
-// was still waiting on the write limit.
 func (m *Manager) UntrackShellTerminal(handleID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.setLocked(terminalKey{shell: handleID}, terminal{})
 }
 
-// Run follows agent sessions until ctx ends: every live session once, then each
-// session a change event names. A session's spawn, restore and termination
-// all write fields that emit an event, so no rescan is needed.
 func (m *Manager) Run(ctx context.Context, events Events) {
 	if events != nil {
 		unsubscribe := events.Subscribe(m.observeEvent)
@@ -175,8 +140,6 @@ func (m *Manager) Run(ctx context.Context, events Events) {
 	}
 }
 
-// observeEvent queues the session an event names. It runs on the change
-// poller's goroutine, so it only records the id.
 func (m *Manager) observeEvent(e cdc.Event) {
 	if e.Type != cdc.EventSessionCreated && e.Type != cdc.EventSessionUpdated {
 		return
@@ -187,7 +150,6 @@ func (m *Manager) observeEvent(e cdc.Event) {
 		ShellTerminalHandleID *string `json:"shellTerminalHandleId"`
 	}
 	_ = json.Unmarshal(e.Payload, &payload)
-	// This manager's own title writes emit events; they change no terminal.
 	if payload.TerminalTitle != nil || payload.ShellTerminalHandleID != nil {
 		return
 	}
@@ -221,7 +183,6 @@ func (m *Manager) loadSessions(ctx context.Context) bool {
 	return true
 }
 
-// refreshSession reports false when the read failed and must be retried.
 func (m *Manager) refreshSession(ctx context.Context, id domain.SessionID) bool {
 	rec, found, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -238,8 +199,6 @@ func (m *Manager) refreshSession(ctx context.Context, id domain.SessionID) bool 
 	return true
 }
 
-// sessionTerminal is the terminal to follow for a session, or none. Chat
-// sessions have no terminal program, so they never get a title.
 func sessionTerminal(rec domain.SessionRecord) terminal {
 	if rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || rec.Metadata.RuntimeHandleID == "" {
 		return terminal{}
@@ -247,9 +206,6 @@ func sessionTerminal(rec domain.SessionRecord) terminal {
 	return terminal{handle: rec.Metadata.RuntimeHandleID, launch: rec.Metadata.RuntimeLaunchID}
 }
 
-// setLocked makes key follow term, or nothing when term has no handle. A
-// watch that ended on its own stays in place so the same run is not dialed
-// again; a new run replaces it.
 func (m *Manager) setLocked(key terminalKey, term terminal) {
 	if w, ok := m.watches[key]; ok {
 		if w.term == term {
@@ -276,10 +232,6 @@ func (m *Manager) stopAll() {
 	}
 }
 
-// follow reconnects while the host is reachable. It ends, leaving the watch
-// parked, when the runtime cannot report titles for the terminal (it is gone,
-// or predates titles) or the host refuses repeated connections. A host that
-// was replaced reports its own title on reconnect, clearing the previous one.
 func (m *Manager) follow(ctx context.Context, w *watch) {
 	handle := ports.RuntimeHandle{ID: w.term.handle}
 	failures := 0
@@ -361,9 +313,6 @@ func (m *Manager) flush(w *watch) {
 	}
 }
 
-// save stores w's title unless a newer run of the same terminal replaced w;
-// the newer run owns the title from then on. A watch that only stopped (its
-// session ended or its shell closed) still stores its last title.
 func (m *Manager) save(ctx context.Context, w *watch, title string) error {
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
@@ -379,8 +328,6 @@ func (m *Manager) save(ctx context.Context, w *watch, title string) error {
 	return m.store.UpsertSessionTerminalTitle(ctx, w.key.session, title, time.Now().UTC())
 }
 
-// stopLocked ends a watch and stores a title still waiting on the write limit.
-// The stored title stays after the terminal ends, as its last known title.
 func (m *Manager) stopLocked(w *watch) {
 	if w.stopped {
 		return

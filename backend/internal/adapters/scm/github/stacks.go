@@ -16,10 +16,6 @@ import (
 
 var _ ports.SCMStacker = (*Provider)(nil)
 
-// How long a stack merge is waited on, and the gaps between looks at it.
-// Variables so tests don't sleep through them. The wait stays under the stack
-// merge route's three-minute budget (httpd/api.go), which also covers the
-// layers' readiness reads before the merge.
 var (
 	stackMergeWait      = 2 * time.Minute
 	stackMergeFirstPoll = time.Second
@@ -69,8 +65,6 @@ func scmStack(repo ports.SCMRepo, in restStack) ports.SCMStack {
 	return stack
 }
 
-// PullRequestStack reads the stack holding ref. GitHub answers 404 where stacks
-// don't exist, such as an Enterprise Server without them, which is not an error.
 func (p *Provider) PullRequestStack(ctx context.Context, ref ports.SCMPRRef) (ports.SCMStack, bool, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMStack{}, false, fmt.Errorf("github scm: stack provider is not configured")
@@ -93,8 +87,6 @@ func (p *Provider) PullRequestStack(ctx context.Context, ref ports.SCMPRRef) (po
 	return scmStack(ref.Repo, stacks[0]), true, nil
 }
 
-// FindOpenPullRequest looks a branch up in the base repository, where a stack's
-// layers all live. Two open pull requests from one branch name no single parent.
 func (p *Provider) FindOpenPullRequest(ctx context.Context, repo ports.SCMRepo, branch string) (ports.SCMPRRef, bool, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMPRRef{}, false, fmt.Errorf("github scm: stack provider is not configured")
@@ -120,8 +112,6 @@ func (p *Provider) FindOpenPullRequest(ctx context.Context, repo ports.SCMRepo, 
 	return ports.SCMPRRef{Repo: repo, Number: pulls[0].Number, URL: pulls[0].HTMLURL}, true, nil
 }
 
-// RegisterStacked starts a stack from Parent and Child, or adds Child to the
-// stack Parent tops. GitHub checks that each base follows the head below it.
 func (p *Provider) RegisterStacked(ctx context.Context, request ports.SCMStackRegisterRequest) (ports.SCMStack, error) {
 	if p == nil || p.client == nil {
 		return ports.SCMStack{}, fmt.Errorf("github scm: stack provider is not configured")
@@ -165,10 +155,6 @@ type asyncMerge struct {
 	} `json:"details"`
 }
 
-// MergeStack starts GitHub's asynchronous merge, the only way to land a stack:
-// it takes PR and every unmerged layer below it, all or nothing, and joins a
-// merge queue if the base has one. Plain PUT /merge would land a middle layer
-// on its parent's branch instead of the stack's base.
 func (p *Provider) MergeStack(ctx context.Context, request ports.SCMStackMergeRequest) (ports.SCMStackMergeStatus, error) {
 	if p == nil || p.client == nil {
 		return "", fmt.Errorf("github scm: stack provider is not configured")
@@ -207,7 +193,6 @@ func (p *Provider) MergeStack(ctx context.Context, request ports.SCMStackMergeRe
 		case <-time.After(delay):
 		}
 		delay = min(delay*2, stackMergeMaxPoll)
-		// A look that fails says nothing about the merge, so the next one decides.
 		poll, err := p.client.doREST(ctx, http.MethodGet, path+"/"+url.PathEscape(result.Details.UUID), nil, nil)
 		if err != nil {
 			continue

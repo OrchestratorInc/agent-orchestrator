@@ -35,7 +35,6 @@ func TestGetLaunchCommand(t *testing.T) {
 		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
 		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
 		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
-		// NormalizePermissionMode collapses unknown and empty modes to default.
 		{name: "unknown", mode: ports.PermissionMode("bogus")},
 		{name: "empty", mode: ports.PermissionMode("")},
 	} {
@@ -112,7 +111,6 @@ func TestGetRestoreCommand(t *testing.T) {
 		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
 		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
 		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
-		// NormalizePermissionMode collapses unknown and empty modes to default.
 		{name: "unknown", mode: ports.PermissionMode("bogus")},
 		{name: "empty", mode: ports.PermissionMode("")},
 	} {
@@ -514,7 +512,6 @@ func TestNativeConversationExistsModeScoped(t *testing.T) {
 	plugin := New()
 	env := map[string]string{"GEMINI_HOME": home}
 
-	// Create a DB only in antigravity-acp.
 	acpPath := filepath.Join(home, "antigravity-acp", "conversations", "conv-1.db")
 	if err := os.MkdirAll(filepath.Dir(acpPath), 0700); err != nil {
 		t.Fatal(err)
@@ -529,21 +526,18 @@ func TestNativeConversationExistsModeScoped(t *testing.T) {
 	}
 	_ = db.Close()
 
-	// TUI probe must NOT find the ACP-only database.
 	tuiRef := ports.SessionRef{Metadata: map[string]string{ports.MetadataKeySessionMode: "tui"}}
 	exists, err := plugin.NativeConversationExists(context.Background(), tuiRef, "conv-1", env)
 	if err != nil || exists {
 		t.Fatalf("tui probe found ACP database: exists = %v, err = %v; want false, nil", exists, err)
 	}
 
-	// Chat probe MUST find the ACP database.
 	chatRef := ports.SessionRef{Metadata: map[string]string{ports.MetadataKeySessionMode: "chat"}}
 	exists, err = plugin.NativeConversationExists(context.Background(), chatRef, "conv-1", env)
 	if err != nil || !exists {
 		t.Fatalf("chat probe failed to find ACP database: exists = %v, err = %v; want true, nil", exists, err)
 	}
 
-	// Create a DB only in antigravity-cli.
 	cliPath := filepath.Join(home, "antigravity-cli", "conversations", "conv-2.db")
 	if err := os.MkdirAll(filepath.Dir(cliPath), 0700); err != nil {
 		t.Fatal(err)
@@ -558,13 +552,11 @@ func TestNativeConversationExistsModeScoped(t *testing.T) {
 	}
 	_ = db.Close()
 
-	// Chat probe must NOT find the CLI-only database.
 	exists, err = plugin.NativeConversationExists(context.Background(), chatRef, "conv-2", env)
 	if err != nil || exists {
 		t.Fatalf("chat probe found CLI database: exists = %v, err = %v; want false, nil", exists, err)
 	}
 
-	// TUI probe MUST find the CLI database.
 	exists, err = plugin.NativeConversationExists(context.Background(), tuiRef, "conv-2", env)
 	if err != nil || !exists {
 		t.Fatalf("tui probe failed to find CLI database: exists = %v, err = %v; want true, nil", exists, err)

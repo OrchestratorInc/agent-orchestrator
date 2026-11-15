@@ -25,11 +25,7 @@ func (failingEpochLifecycle) CommitControllerEpoch(
 	return false, errors.New("commit controller epoch failed")
 }
 
-// When the controller epoch never commits, the Chat source still owns its
-// provider id durably. Rollback must restore that owner, not present a
-// memory-only fresh owner that the browser capability check then rejects.
 func TestInterfaceTransitionRollbackRestoresUncommittedChatSource(t *testing.T) {
-	// The fake runtime never executes Claude, but preflight uses its real adapter.
 	binDir := t.TempDir()
 	binary := "claude"
 	if runtime.GOOS == "windows" {
@@ -110,8 +106,6 @@ func TestInterfaceTransitionRollbackRestoresUncommittedChatSource(t *testing.T) 
 	}
 	if chat.start.ExpectedControllerOwner.ProviderConversationID != "92fadfcb-3d31-4dd6-93c1-097bf823cc19" ||
 		!chat.start.FreshIfProviderConversationMissing {
-		// Rollback resumes the durable owner and lets the driver start fresh only
-		// if the provider cannot find the unpersisted id.
 		t.Fatalf("restored Chat owner = %+v fresh-if-missing=%v",
 			chat.start.ExpectedControllerOwner, chat.start.FreshIfProviderConversationMissing)
 	}

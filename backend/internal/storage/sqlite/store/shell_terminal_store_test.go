@@ -8,9 +8,6 @@ import (
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
-// TestSelectShellTerminalsBySessionID: Session Manager uses this to find and
-// close every shell terminal scoped to a session before its worktree is torn
-// down, so it must return only that session's rows.
 func TestSelectShellTerminalsBySessionID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -88,8 +85,6 @@ func TestInsertAndSelectShellTerminalsByAppRunID(t *testing.T) {
 	}
 }
 
-// A shell opened with no project stores NULL, not "" — an empty string would
-// violate the projects foreign key.
 func TestInsertShellTerminalWithoutProjectStoresNullProjectID(t *testing.T) {
 	s := newTestStore(t)
 	if err := s.InsertShellTerminal(context.Background(), shellTerminalRecord("shellterm-noproject", "run-1")); err != nil {
@@ -117,8 +112,6 @@ func TestInsertShellTerminalWithProjectRoundTrips(t *testing.T) {
 	}
 }
 
-// TestSelectShellTerminalByHandleID: CloseShellTerminal uses this to learn a
-// shell's session id before taking that session's teardown gate.
 func TestSelectShellTerminalByHandleID(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

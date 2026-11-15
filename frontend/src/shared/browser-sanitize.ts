@@ -1,9 +1,3 @@
-// URL and title projections that are safe to keep in agent output, tool logs,
-// and transcripts. Shared by the Electron browser host and the AO Chrome
-// extension so both runtimes redact the same way.
-
-// Safe-to-retain URL form: keep the location useful while removing values that
-// commonly carry credentials or one-time handoff material.
 export function sanitizeBrowserURL(raw: string): string {
 	if (!raw) return "";
 	if (raw === "about:blank") return raw;

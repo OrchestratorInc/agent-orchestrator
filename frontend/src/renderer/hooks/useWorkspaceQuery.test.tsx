@@ -34,7 +34,6 @@ vi.mock("./useCloudCp", () => ({
 	useCloudCp: () => ({
 		client: {
 			getSession: getSessionMock,
-			// The projects list and the standalone agents list are read apart.
 			listProjects: (orgId: string, query?: { standaloneAgents?: string }) =>
 				query?.standaloneAgents === "only" ? listStandaloneAgentsMock(orgId, query) : listProjectsMock(orgId, query),
 			listSessionArtifacts: listSessionArtifactsMock,
@@ -62,7 +61,6 @@ it("preserves the existing local and remote workspace cache keys", () => {
 });
 
 function wrapper({ children }: { children: ReactNode }) {
-	// The hook pins its own retry policy; retryDelay 0 keeps the error tests fast.
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
 	return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
@@ -241,7 +239,6 @@ describe("useWorkspaceQuery", () => {
 		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
 		await waitFor(() => expect(result.current.isSuccess).toBe(true));
 		const [published, unshared] = result.current.data?.[0].sessions[0].artifactFiles ?? [];
-		// With who it opens for, as recorded, so its mark is right before the link list is read.
 		expect(published).toMatchObject({ path: "poem.html", shareUrl, shareAccess: "anyone" });
 		expect(unshared).not.toHaveProperty("shareUrl");
 		expect(unshared).not.toHaveProperty("shareAccess");
@@ -315,8 +312,6 @@ describe("useWorkspaceQuery", () => {
 							updatedAt: "2026-06-10T16:15:04Z",
 						},
 						{
-							// Unknown harness/status and no displayName/issueId: falls back
-							// to codex / unknown / the session id.
 							id: "sess-2",
 							projectId: "proj-1",
 							harness: "mystery-agent",
@@ -325,7 +320,6 @@ describe("useWorkspaceQuery", () => {
 							isTerminated: false,
 							updatedAt: "2026-06-10T16:15:04Z",
 						},
-						// Belongs to another project; must not leak into proj-1.
 						{ id: "sess-3", projectId: "proj-2", isTerminated: false, updatedAt: "2026-06-10T16:15:04Z" },
 					],
 				},
@@ -539,8 +533,6 @@ describe("useWorkspaceQuery", () => {
 		});
 	});
 
-	// Imported chats that were never opened have no workspace; the session
-	// surfaces rely on this flag to skip workspace requests.
 	it("keeps needsResume on imported chats in projects and in Scratchpad", async () => {
 		respondWith({
 			projects: { data: { projects: [{ id: "proj-1", name: "my-app", path: "/p" }] }, error: undefined },
@@ -649,7 +641,6 @@ describe("useWorkspaceQuery", () => {
 				updatedAt: "2026-06-10T16:15:04Z",
 			},
 		]);
-		// A session with no PRs maps to an empty stack, so the empty states render.
 		expect(sessions[1].prs).toEqual([]);
 	});
 
@@ -803,7 +794,6 @@ describe("useWorkspaceQuery", () => {
 			id, orgId: "org-1", displayName: id, repositoryUrl: `https://scratch.ao.local/${id}`, defaultBranch: "main",
 			config: {}, createdAt: "2026-08-01T00:00:00Z", updatedAt: "2026-08-01T00:00:00Z", ...extra,
 		});
-		// A control plane without standalone agents lists every project in both.
 		listProjectsMock.mockResolvedValue({ items: [project("cp-1")], page: { hasMore: false } });
 		listStandaloneAgentsMock.mockResolvedValue({ items: [project("cp-1"), project("agent-1", { standalone: true, standaloneAgent: true })], page: { hasMore: false } });
 		listSessionsMock.mockResolvedValue({ items: [{
@@ -1020,8 +1010,6 @@ describe("cloud projects made elsewhere", () => {
 	});
 
 	it("refetches the project list once when the session list has a session of an unknown project", async () => {
-		// The project was made through the API after the list was fetched: the
-		// list is refetched so the project and its session show up.
 		listProjectsMock
 			.mockResolvedValueOnce({ items: [cloudProject("cp-1", "known")], page: { hasMore: false } })
 			.mockResolvedValue({ items: [cloudProject("cp-1", "known"), cloudProject("cp-new", "made-elsewhere")], page: { hasMore: false } });
@@ -1033,14 +1021,12 @@ describe("cloud projects made elsewhere", () => {
 		await waitFor(() => expect(result.current.data?.find((workspace) => workspace.id === "cp-new")?.sessions.map((session) => session.id)).toEqual(["s-new"]), { timeout: 3000 });
 		expect(listProjectsMock).toHaveBeenCalledTimes(2);
 
-		// Seen again (the next poll), it is not asked for again.
 		await queryClient.refetchQueries({ queryKey: cloudSessionsQueryKey });
 		await new Promise((resolve) => setTimeout(resolve, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS + 100));
 		expect(listProjectsMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("refetches the project list when a session lookup finds a session of an unknown project", async () => {
-		// A session opened straight from a link or right after the API made it.
 		listProjectsMock.mockResolvedValue({ items: [cloudProject("cp-1", "known")], page: { hasMore: false } });
 		getSessionMock.mockResolvedValue({ session: cloudSession("s-new", "cp-new") });
 		const { Wrapper } = clientWrapper();
@@ -1052,9 +1038,6 @@ describe("cloud projects made elsewhere", () => {
 	});
 
 	describe("polling a session lookup", () => {
-		// The view polls the direct lookup while the list does not have the
-		// session. It stops once the session is gone (404), the lookup fails, or
-		// the session is terminated.
 		async function pollFor(milliseconds: number) {
 			await act(async () => {
 				await vi.advanceTimersByTimeAsync(milliseconds);
@@ -1101,7 +1084,6 @@ describe("cloud projects made elsewhere", () => {
 			const { result, unmount } = renderHook(() => useCloudSessionQuery("org-1", "s-1", true, true), { wrapper: Wrapper });
 			await pollFor(0);
 			expect(result.current.isError).toBe(false);
-			// The next poll fails, and its one retry too.
 			await pollFor(5_100);
 			expect(result.current.isError).toBe(true);
 			const calls = getSessionMock.mock.calls.length;
@@ -1146,7 +1128,6 @@ describe("cloud projects made elsewhere", () => {
 
 			queryClient.setQueryData(key, [cloudProject("cp-1", "known")]);
 			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-1" }])).toBe(false);
-			// A session lookup and an event see two new projects in the same moment.
 			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-a" }])).toBe(true);
 			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-b" }])).toBe(true);
 			expect(refetchCloudProjectsForUnknownSessions(queryClient, "https://cp.example.com", "org-1", [{ projectId: "cp-a" }])).toBe(false);
@@ -1183,7 +1164,6 @@ describe("refreshCloudSessionLifecycle", () => {
 		await refreshCloudSessionLifecycle(queryClient);
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: cloudSessionsQueryKey });
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cloud-session"] });
-		// A shared session reads as connected from its own list, polled every 15 s.
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: sharedCloudWorkspacesQueryKey });
 	});
 });

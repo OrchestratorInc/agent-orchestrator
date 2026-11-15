@@ -108,10 +108,8 @@ describe("HumanMessageEditor", () => {
 
 		const editor = screen.getByRole("textbox", { name: "Edit message" });
 		expect(editor).toHaveValue("rename the terminal");
-		// The native image block is the same picture as the image chip.
 		expect(screen.queryByText("image/png")).not.toBeInTheDocument();
 		const chips = screen.getByRole("list", { name: "Attached files" });
-		// As in the bubble, the attachments sit above the text.
 		expect(chips.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(chips.querySelector("img")).toHaveAttribute("alt", "Image 1");
 		expect(chips).toHaveTextContent("attachment-cd34.pdf");
@@ -119,7 +117,6 @@ describe("HumanMessageEditor", () => {
 			"src",
 			"http://127.0.0.1:3002/api/v1/sessions/session-1/preview/files/.ao/attachments/attachment-ab12.png",
 		);
-		// An edit resends the original image data, so only a path-only file can go.
 		expect(screen.queryByRole("button", { name: "Remove Image 1" })).not.toBeInTheDocument();
 
 		await user.type(editor, " now");
@@ -157,8 +154,6 @@ describe("HumanMessageEditor", () => {
 		}
 		render(<Harness />);
 		const editor = screen.getByRole("textbox", { name: "Edit message" });
-		// Whitespace alone publishes as just the attachment block; splitting that echo
-		// again would wipe the space out from under the cursor.
 		fireEvent.change(editor, { target: { value: " " } });
 		expect(editor).toHaveValue(" ");
 		await user.type(editor, "a");
@@ -199,7 +194,6 @@ describe("HumanMessageEditor", () => {
 		expect(send).toBeEnabled();
 		await user.type(editor, "{backspace}");
 		expect(send).toBeDisabled();
-		// Dropping a file is a change too.
 		await user.click(screen.getByRole("button", { name: "Remove attachment-cd34.pdf" }));
 		expect(send).toBeEnabled();
 		await user.click(send);
@@ -249,7 +243,6 @@ describe("HumanMessageEditor", () => {
 				/>
 			</TooltipProvider>,
 		);
-		// With no asset URL the image has no preview, but the edit still resends it.
 		expect(screen.getByRole("list", { name: "Attached files" })).toHaveTextContent("attachment-ab12.png");
 		expect(screen.queryByRole("button", { name: "Remove attachment-ab12.png" })).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Remove attachment-cd34.pdf" })).toBeInTheDocument();
@@ -270,7 +263,6 @@ describe("HumanMessageEditor", () => {
 				<HumanMessageEditor {...props} pending={false} />
 			</TooltipProvider>,
 		);
-		// Delivery records the edit for recovery as it starts, which brings a Retry label.
 		rerender(
 			<TooltipProvider>
 				<HumanMessageEditor {...props} pending locked recoveryLabel="Retry edit safely" />
@@ -279,14 +271,12 @@ describe("HumanMessageEditor", () => {
 		const send = screen.getByRole("button", { name: "Send edited message" });
 		expect(send).toHaveTextContent("Send");
 		expect(send).not.toHaveTextContent("Retry");
-		// Retry shows only once the send has stalled.
 		rerender(
 			<TooltipProvider>
 				<HumanMessageEditor {...props} pending={false} locked recoveryLabel="Retry edit safely" />
 			</TooltipProvider>,
 		);
 		expect(screen.getByRole("button", { name: "Retry edit safely" })).toHaveTextContent("Retry edit safely");
-		// A retry keeps its own label while it runs.
 		rerender(
 			<TooltipProvider>
 				<HumanMessageEditor {...props} pending locked recoveryLabel="Retry edit safely" />
@@ -297,7 +287,6 @@ describe("HumanMessageEditor", () => {
 
 	it("opens a long message folded, as its bubble was, and scrolls inside the fold", () => {
 		const long = "a long message";
-		// The bubble measured the message and folded it (see CollapsibleHumanBody.test).
 		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(900);
 		render(<CollapsibleHumanBody stateKey={long}><p>{long}</p></CollapsibleHumanBody>).unmount();
 		vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(0);
@@ -367,7 +356,6 @@ describe("HumanMessageEditor", () => {
 		);
 		expect(screen.getByRole("textbox", { name: "Edit message" })).toHaveValue("prompt");
 		expect(screen.getByRole("alert")).toHaveTextContent("branch failed");
-		// On its own line in the box, under the field, not squeezed into the button row.
 		expect(screen.getByRole("alert").parentElement).toContainElement(screen.getByRole("textbox", { name: "Edit message" }));
 		expect(screen.getByRole("alert").parentElement).not.toContainElement(screen.getByRole("button", { name: "Send edited message" }));
 	});

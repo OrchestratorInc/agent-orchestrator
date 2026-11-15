@@ -34,9 +34,6 @@ export function resolveDaemonLaunch(
 	}
 
 	if (!isPackaged) {
-		// Run the daemon predev already built rather than `go run`, so the daemon's
-		// parent is Electron itself, as in the packaged app; the diagnostics view
-		// counts the daemon's parent tree as the rest of AO.
 		return {
 			command: env.AO_DEV_DAEMON_BINARY?.trim() || joinPath(appPath, "daemon", bundledDaemonBinaryName(platform)),
 			args: ["daemon"],
@@ -60,16 +57,6 @@ export type BundledDaemonProbe = {
 	appImagePath?: string;
 };
 
-/**
- * Identity check for a bundled daemon. Under AppImage the executable path is a
- * random /tmp/.mount_* path regenerated on every launch, so identity is the
- * stable outer .AppImage file path the daemon reports (AO_APPIMAGE, echoed as
- * appImagePath) — compared against this process's own APPIMAGE. Outside
- * AppImage the packaged executable path is stable and compared directly.
- *
- * Returns an error message, or null when the probed daemon belongs to this
- * install. A probe that cannot prove its identity (missing field) fails closed.
- */
 export function bundledDaemonIdentityError(
 	probe: BundledDaemonProbe,
 	expectedCommand: string,

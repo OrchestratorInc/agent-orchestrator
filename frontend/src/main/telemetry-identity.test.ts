@@ -68,11 +68,11 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 	it("replays the user to a restarted daemon, even on the same port", async () => {
 		const { ctl, fetcher } = await controller();
 		await ctl.setCloudUser("user_1");
-		await ctl.flush(); // ready again, nothing changed: no replay
+		await ctl.flush();
 		expect(fetcher).toHaveBeenCalledTimes(1);
 
-		ctl.invalidate(); // daemon left ready (restart)
-		await ctl.flush(); // same origin comes back
+		ctl.invalidate();
+		await ctl.flush();
 		expect(fetcher).toHaveBeenCalledTimes(2);
 		expect(JSON.parse((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).toEqual({ cloudUserId: "user_1", sequence: expect.any(Number) });
 	});
@@ -81,20 +81,20 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		let release!: () => void;
 		const gate = new Promise<void>((resolve) => (release = resolve));
 		const fetcher = vi.fn(async () => {
-			if (fetcher.mock.calls.length === 1) await gate; // daemon A's request hangs
+			if (fetcher.mock.calls.length === 1) await gate;
 			return new Response(null, { status: 204 });
 		});
 		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
-		const setUser = ctl.setCloudUser("user_1"); // in flight to daemon A
+		const setUser = ctl.setCloudUser("user_1");
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		ctl.invalidate(); // A leaves ready
-		release(); // A's late 204 arrives before daemon B is ready
+		ctl.invalidate();
+		release();
 		await setUser;
-		await ctl.flush(); // B ready: must still replay the user
+		await ctl.flush();
 		expect(fetcher).toHaveBeenCalledTimes(2);
-		await ctl.flush(); // and B is now synced
+		await ctl.flush();
 		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 
@@ -103,13 +103,12 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		const gate = new Promise<void>((resolve) => (release = resolve));
 		let started!: () => void;
 		const firstStarted = new Promise<void>((resolve) => (started = resolve));
-		// A fake daemon that records the order identities were committed in.
 		const committed: string[] = [];
 		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
 			const user = JSON.parse(init.body as string).cloudUserId as string;
 			if (fetcher.mock.calls.length === 1) {
 				started();
-				await gate; // user_1's request hangs in flight
+				await gate;
 			}
 			committed.push(user);
 			return new Response(null, { status: 204 });
@@ -118,22 +117,20 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
 		const first = ctl.setCloudUser("user_1");
-		await firstStarted; // user_1's request is genuinely in flight before user_2 arrives
+		await firstStarted;
 		const second = ctl.setCloudUser("user_2");
 		await Promise.resolve();
-		expect(fetcher).toHaveBeenCalledTimes(1); // user_2 waits its turn
+		expect(fetcher).toHaveBeenCalledTimes(1);
 		release();
 		await Promise.all([first, second]);
 
 		expect(fetcher).toHaveBeenCalledTimes(2);
 		expect(committed).toEqual(["user_1", "user_2"]);
-		await ctl.flush(); // already synced to user_2: nothing more to send
+		await ctl.flush();
 		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 
 	it("a request delayed past the timeout cannot overwrite a newer identity on the daemon", async () => {
-		// A fake daemon that enforces the same rule as the real route: refuse a
-		// sequence older than the newest one applied.
 		let daemonUser = "";
 		let lastSeq = 0;
 		const deliver = (init: RequestInit): Response => {
@@ -146,7 +143,6 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		let deliverLate!: () => void;
 		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
 			if (fetcher.mock.calls.length === 1) {
-				// The client gives up (timeout) but the request is still on its way.
 				deliverLate = () => void deliver(init);
 				throw new Error("aborted");
 			}
@@ -155,12 +151,12 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
-		await ctl.setCloudUser("user_A"); // times out client side
-		await ctl.setCloudUser("user_B"); // commits on the daemon
+		await ctl.setCloudUser("user_A");
+		await ctl.setCloudUser("user_B");
 		expect(daemonUser).toBe("user_B");
-		deliverLate(); // A finally reaches the daemon
-		expect(daemonUser).toBe("user_B"); // the daemon refused it
-		await ctl.flush(); // B was acknowledged: nothing to correct
+		deliverLate();
+		expect(daemonUser).toBe("user_B");
+		await ctl.flush();
 		expect(fetcher).toHaveBeenCalledTimes(2);
 	});
 
@@ -194,14 +190,12 @@ describe("TelemetryIdentityController cloud user hand-off", () => {
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
 		const a = ctl.setCloudUser("user_A");
-		await firstStarted; // A is in flight; B and the sign-out queue behind it
+		await firstStarted;
 		const b = ctl.setCloudUser("user_B");
 		const out = ctl.setCloudUser(null);
 		release();
 		await Promise.all([a, b, out]);
 
-		// A went out first; B was superseded before its turn, so only the newest
-		// state (signed out) follows.
 		expect(committed).toEqual(["user_A", ""]);
 	});
 
@@ -237,7 +231,6 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		expect(await unreachable.ctl.setCloudUser("user_A")).toBe(false);
 		const noDaemon = await controller(undefined, null);
 		expect(await noDaemon.ctl.setCloudUser("user_A")).toBe(false);
-		// An older daemon without the route cannot record a binding either.
 		const old = await controller(vi.fn(async () => new Response(null, { status: 404 })));
 		expect(await old.ctl.setCloudUser("user_A")).toBe("unsupported");
 	});
@@ -253,10 +246,10 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
 		const ctl = new TelemetryIdentityController(dir, () => ORIGIN, fetcher as never);
 
-		expect(await ctl.setCloudUser("user_A")).toBe(false); // renderer must not identify
-		expect(await ctl.setCloudUser(null)).toBe(false); // still down
+		expect(await ctl.setCloudUser("user_A")).toBe(false);
+		expect(await ctl.setCloudUser(null)).toBe(false);
 		daemonUp = true;
-		await ctl.flush(); // recovery replays the newest state only
+		await ctl.flush();
 		expect(daemonUser).toBe("");
 	});
 
@@ -267,10 +260,10 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		const aApplied = new Promise<void>((resolve) => (applied = resolve));
 		let daemonUser = "";
 		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
-			daemonUser = JSON.parse(init.body as string).cloudUserId; // the daemon applies the state...
+			daemonUser = JSON.parse(init.body as string).cloudUserId;
 			if (fetcher.mock.calls.length === 1) {
 				applied();
-				await held; // ...but A's response is still on its way back
+				await held;
 			}
 			return new Response(null, { status: 204 });
 		});
@@ -280,10 +273,10 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		const first = ctl.setCloudUser("user_A");
 		await aApplied;
 		expect(daemonUser).toBe("user_A");
-		const second = ctl.setCloudUser("user_B"); // supersedes A while A's response is held
+		const second = ctl.setCloudUser("user_B");
 		releaseResponse();
 
-		expect(await first).toBe(false); // A's late 204 must not count: the state moved on
+		expect(await first).toBe(false);
 		expect(await second).toBe(true);
 		expect(daemonUser).toBe("user_B");
 		expect(fetcher).toHaveBeenCalledTimes(2);
@@ -298,7 +291,7 @@ describe("TelemetryIdentityController acknowledgement", () => {
 		const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
 			if (fetcher.mock.calls.length === 1) {
 				started();
-				await gate; // the anonymous request is still in flight
+				await gate;
 			}
 			sent.push(JSON.parse(init.body as string).cloudUserId);
 			return new Response(null, { status: 204 });
@@ -308,14 +301,14 @@ describe("TelemetryIdentityController acknowledgement", () => {
 
 		const anonymous = ctl.setCloudUser(null);
 		await firstStarted;
-		const signIn = ctl.setCloudUser("user_A"); // queued behind it
-		const signOut = ctl.setCloudUser(null); // replaces A before the queue drains
+		const signIn = ctl.setCloudUser("user_A");
+		const signOut = ctl.setCloudUser(null);
 		release();
 
 		expect(await anonymous).toBe(false);
-		expect(await signIn).toBe(false); // the renderer must not identify A
+		expect(await signIn).toBe(false);
 		expect(await signOut).toBe(true);
-		expect(sent).toEqual(["", ""]); // the original request, then only the newest state
+		expect(sent).toEqual(["", ""]);
 		expect(sent).not.toContain("user_A");
 	});
 });
@@ -326,7 +319,6 @@ describe("TelemetryIdentityController across app restarts", () => {
 	});
 
 	it("a new controller whose clock is behind the daemon's sequence catches up instead of being refused", async () => {
-		// A daemon that outlived the previous app process and enforces ordering.
 		let daemonUser = "";
 		let lastSeq = 0;
 		const daemon = vi.fn(async (_url: string, init: RequestInit) => {
@@ -346,13 +338,12 @@ describe("TelemetryIdentityController across app restarts", () => {
 		expect(await before.setCloudUser("user_A")).toBe(true);
 		expect(daemonUser).toBe("user_A");
 
-		// Electron restarts after the system clock was corrected backward.
 		vi.setSystemTime(new Date("2026-10-14T11:00:00Z"));
 		const after = new TelemetryIdentityController(dir, () => ORIGIN, daemon as never);
 		expect(await after.setCloudUser("user_B")).toBe(true);
 		expect(daemonUser).toBe("user_B");
-		expect(daemon).toHaveBeenCalledTimes(3); // A, B refused, B accepted
-		await after.flush(); // acknowledged: nothing left to send
+		expect(daemon).toHaveBeenCalledTimes(3);
+		await after.flush();
 		expect(daemon).toHaveBeenCalledTimes(3);
 	});
 
@@ -366,7 +357,6 @@ describe("TelemetryIdentityController across app restarts", () => {
 describe("TelemetryIdentityController sign-out without the daemon", () => {
 	it("retires the binding itself, rotating the anonymous ID first", async () => {
 		const { mkdir, writeFile, access } = await import("node:fs/promises");
-		// The daemon is down: nothing answers the hand-off.
 		const { ctl, dir } = await controller(vi.fn(async () => { throw new Error("connection refused"); }));
 		await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
 		await writeFile(path.join(dir, "telemetry_anonymous_id"), "anon_linked\n");
@@ -398,7 +388,6 @@ describe("TelemetryIdentityController sign-out then sign-in", () => {
 		await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
 		const signOut = ctl.setCloudUser(null);
 		const signIn = ctl.setCloudUser("user_B");
-		// The daemon records B's binding when it applies B's hand-off.
 		await writeFile(path.join(dir, "telemetry_bound_user"), "user_B\n");
 		await Promise.all([signOut, signIn]);
 		await expect(access(path.join(dir, "telemetry_bound_user"))).resolves.toBeUndefined();
@@ -409,7 +398,6 @@ describe("TelemetryIdentityController after the app quit mid sign-out", () => {
   it("a fresh controller retires a binding the daemon never cleared", async () => {
     const { writeFile, access } = await import("node:fs/promises");
     const { dir } = await controller(vi.fn(async () => { throw new Error("connection refused"); }));
-    // Left behind: signed out while the daemon was down, then the app quit.
     await writeFile(path.join(dir, "telemetry_bound_user"), "user_A\n");
     await writeFile(path.join(dir, "telemetry_anonymous_id"), "anon_linked\n");
     const relaunched = new TelemetryIdentityController(dir, () => null);

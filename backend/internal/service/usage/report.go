@@ -21,14 +21,12 @@ type pricingSnapshots interface {
 	Snapshot() *pricing.Snapshot
 }
 
-// ReportReader builds the usage page's report: tokens and estimated cost over a window, bucketed by day or hour in the reader's time zone.
 type ReportReader struct {
 	store   usageReportStore
 	pricing pricingSnapshots
 	now     func() time.Time
 }
 
-// NewReportReader constructs a report reader.
 func NewReportReader(store usageReportStore, prices pricingSnapshots) *ReportReader {
 	return &ReportReader{store: store, pricing: prices, now: time.Now}
 }
@@ -38,7 +36,6 @@ const (
 	reportHourLayout = "2006-01-02T15:00"
 )
 
-// Report reads the last days of usage.
 func (r *ReportReader) Report(ctx context.Context, days, offset int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error) {
 	if r == nil || r.store == nil {
 		return domain.UsageReport{}, fmt.Errorf("usage report store is unavailable")

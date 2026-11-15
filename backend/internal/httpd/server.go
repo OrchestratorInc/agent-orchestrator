@@ -18,16 +18,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
-// Server is the daemon's HTTP server together with its lifecycle: bind the
-// loopback port, publish the running.json handshake, serve until the context
-// is cancelled, then shut down gracefully and clean up the handshake file.
 type Server struct {
-	cfg    config.Config
-	log    *slog.Logger
-	http   *http.Server
-	listen net.Listener
-	// listen6 serves the same router on [::1] at the loopback port; nil when
-	// that address could not be bound (see bindIPv6Loopback).
+	cfg     config.Config
+	log     *slog.Logger
+	http    *http.Server
+	listen  net.Listener
 	listen6 net.Listener
 
 	shutdownRequested chan struct{}
@@ -35,18 +30,6 @@ type Server struct {
 	stopAgents        atomic.Bool
 }
 
-// NewWithDeps constructs a Server with API dependencies supplied by the daemon
-// and binds the listener immediately, before any running.json is written. The
-// caller owns the returned Server's lifecycle via Run. termMgr may be nil, in
-// which case the /mux terminal surface is not mounted.
-//
-// If the configured port is already held, it falls back to an OS-assigned
-// ephemeral port rather than failing. A genuine peer AO daemon is ruled out
-// upstream (the running.json + /healthz check in daemon.Run), so a conflict here
-// means a non-AO process owns the port; exiting would only leave the desktop
-// supervisor stuck on "daemon not ready". The actual bound port is logged
-// ("daemon listening") and written to running.json, both of which the supervisor
-// reads, so the fallback propagates to the renderer with no UI changes.
 func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps) (*Server, error) {
 	log = loggerOrDefault(log)
 	ln, err := net.Listen("tcp", cfg.Addr())
@@ -54,7 +37,6 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 		if !isAddrInUse(err) {
 			return nil, fmt.Errorf("bind %s: %w", cfg.Addr(), err)
 		}
-		// Configured port is taken by a non-AO process: retry on an ephemeral port.
 		fallback, ferr := net.Listen("tcp", net.JoinHostPort(cfg.Host, "0"))
 		if ferr != nil {
 			return nil, fmt.Errorf("bind %s (in use) and ephemeral fallback: %w", cfg.Addr(), ferr)
@@ -77,21 +59,11 @@ func NewWithDeps(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager,
 			RequestAgentShutdown: srv.requestAgentShutdown,
 			IPv6Loopback:         srv.listen6 != nil,
 		}),
-		// ReadHeaderTimeout guards against slow-loris even on loopback;
-		// per-request body/handler timeouts are applied per-surface.
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return srv, nil
 }
 
-// bindIPv6Loopback also binds [::1] at the primary listener's port. The
-// desktop opens its event streams on a *.localhost name so they get their own
-// browser connections, and Chromium resolves such a name to ::1 first: with
-// this listener up, ::1 at that port is this daemon and never another
-// process. It is loopback like the primary listener and serves the same
-// router. Without IPv6, or with the address taken, the daemon serves
-// 127.0.0.1 alone; the health probes report which (ipv6Loopback), and the
-// desktop uses the name only while this listener is up.
 func bindIPv6Loopback(cfg config.Config, primary net.Listener, log *slog.Logger) net.Listener {
 	if cfg.Host != config.LoopbackHost {
 		return nil
@@ -108,12 +80,8 @@ func bindIPv6Loopback(cfg config.Config, primary net.Listener, log *slog.Logger)
 	return ln
 }
 
-// Addr returns the actual bound address (useful when the configured port was 0
-// and the OS chose one — primarily in tests).
 func (s *Server) Addr() net.Addr { return s.listen.Addr() }
 
-// IPv6LoopbackAddr returns the [::1] listener's address, or nil when the
-// daemon serves 127.0.0.1 alone.
 func (s *Server) IPv6LoopbackAddr() net.Addr {
 	if s.listen6 == nil {
 		return nil
@@ -121,23 +89,12 @@ func (s *Server) IPv6LoopbackAddr() net.Addr {
 	return s.listen6.Addr()
 }
 
-// Handler returns the loopback server's built router so the daemon can share
-// the exact same handler instance with the LAN listener (via NewMobileLAN),
-// keeping the loopback and LAN surfaces identical.
 func (s *Server) Handler() http.Handler { return s.http.Handler }
 
-// Run serves until ctx is cancelled (SIGINT/SIGTERM via signal.NotifyContext),
-// then performs a graceful shutdown bounded by cfg.ShutdownTimeout. It writes
-// running.json before serving and removes it on the way out. Run blocks until
-// shutdown is complete.
 func (s *Server) Run(ctx context.Context) error {
 	return s.run(ctx, nil)
 }
 
-// RunWithReady is Run with a callback invoked after the listener has been
-// published and its serving goroutine has started. The callback must return
-// promptly; it is intended for boot work that can safely continue while the
-// daemon serves read-only durable state.
 func (s *Server) RunWithReady(ctx context.Context, onReady func()) error {
 	return s.run(ctx, onReady)
 }
@@ -168,7 +125,6 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 	serveErr := make(chan error, 1)
 	go func() {
 		s.log.Info("daemon listening", "addr", s.Addr().String(), "pid", info.PID)
-		// Serve returns ErrServerClosed on a clean Shutdown; that is success.
 		if err := s.http.Serve(s.listen); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 			return
@@ -177,8 +133,6 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 	}()
 	if s.listen6 != nil {
 		go func() {
-			// Shutdown closes this listener too. Losing it otherwise leaves the
-			// daemon serving 127.0.0.1, so it is logged, not fatal.
 			if err := s.http.Serve(s.listen6); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				s.log.Warn("IPv6 loopback listener stopped", "addr", s.listen6.Addr().String(), "err", err)
 			}
@@ -190,14 +144,10 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 
 	select {
 	case err := <-serveErr:
-		// Serve died on its own (bind already happened, so this is a real
-		// runtime failure) before any shutdown signal.
 		return err
 	case <-s.shutdownRequested:
 		s.log.Info("shutdown requested over HTTP", "timeout", s.cfg.ShutdownTimeout)
 	case <-ctx.Done():
-		// A signal means daemon replacement. Take the shutdown once so a later
-		// supervisor drop during teardown cannot turn it into an agent stop.
 		s.requestShutdown()
 		s.log.Info("shutdown signal received, draining connections", "timeout", s.cfg.ShutdownTimeout)
 	}
@@ -206,7 +156,6 @@ func (s *Server) run(ctx context.Context, onReady func()) error {
 	defer cancel()
 
 	if err := s.http.Shutdown(shutdownCtx); err != nil {
-		// The deadline elapsed with connections still open; force them closed.
 		s.log.Warn("graceful shutdown timed out, forcing close", "err", err)
 		_ = s.http.Close()
 		return fmt.Errorf("graceful shutdown exceeded %s: %w", s.cfg.ShutdownTimeout, err)
@@ -229,12 +178,8 @@ func (s *Server) requestShutdown() {
 	})
 }
 
-// RequestShutdown triggers the same clean shutdown as POST /shutdown: it makes
-// Run return so the daemon exits without tearing down sessions. Idempotent.
 func (s *Server) RequestShutdown() { s.requestShutdown() }
 
-// RequestShutdownAfterDesktopExit handles loss of the desktop supervisor,
-// including Force Quit. A shutdown already requested for replacement wins.
 func (s *Server) RequestShutdownAfterDesktopExit() {
 	s.shutdownOnce.Do(func() {
 		if os.Getenv("AO_OWNER") == "app" && s.cfg.AppRunID != "" {
@@ -252,5 +197,4 @@ func (s *Server) requestAgentShutdown(appRunID string) bool {
 	return true
 }
 
-// StopAgentsRequested distinguishes desktop exit from daemon replacement.
 func (s *Server) StopAgentsRequested() bool { return s.stopAgents.Load() }

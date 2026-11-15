@@ -14,9 +14,6 @@ import (
 
 var verifyConnection = authprobe.VerifyConnection
 
-// selectedConnection supports the native Z.AI chat-completions route. Other
-// providers and ambiguous pool/config overrides stay unverified rather than
-// validating an unrelated account or guessing a provider's wire protocol.
 func selectedConnection(home string) (authprobe.Connection, domain.AgentAccountIdentity, bool) {
 	var route authprobe.Connection
 	var identity domain.AgentAccountIdentity
@@ -75,8 +72,6 @@ func selectedConnection(home string) (authprobe.Connection, domain.AgentAccountI
 	if route.Model == "" {
 		route.Model = text("model")
 	}
-	// Hermes may auto-detect a different Z.AI billing/region endpoint when
-	// none is explicitly selected. Do not substitute the general API route.
 	if route.BaseURL == "" {
 		route.BaseURL = lookup("GLM_BASE_URL")
 	}
@@ -121,8 +116,6 @@ func verifyAuthentication(ctx context.Context, status ports.AgentAuthStatus, ide
 		if route, selected, ok := selectedConnection(home); ok {
 			status, step := verifyConnection(ctx, route, nil)
 			ports.RecordAuthEvidence(ctx, selected)
-			// Credentials are already established. Verification interruption is
-			// inconclusive and is carried by the provider diagnostic.
 			return status, selected, append(steps, step), nil
 		}
 	}

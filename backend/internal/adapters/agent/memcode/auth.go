@@ -17,9 +17,6 @@ var memcodeAuthEnvNames = []string{
 	"MEMCODE_ENDPOINT_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
 }
 
-// AuthStatus asks the native CLI about the selected local auth route. Memcode's
-// auth status command does not load its global .env, although interactive runs
-// do, so supply only the documented auth settings missing from our environment.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if errors.Is(err, ports.ErrAgentBinaryNotFound) {
@@ -33,8 +30,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		return ports.AgentAuthStatusUnknown, err
 	}
 	env := os.Environ()
-	// Catalog refresh is read-only; the native CLI otherwise checks for a
-	// background self-update when invoked.
 	env = append(env, "MEMCODE_AUTO_UPDATE=off")
 	for _, name := range memcodeAuthEnvNames {
 		if _, present := os.LookupEnv(name); !present && settings[name] != "" {

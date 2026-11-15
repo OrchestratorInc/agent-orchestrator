@@ -10,15 +10,6 @@ import (
 	"time"
 )
 
-// Scenarios for "what AO shows is what actually happened".
-//
-// The provider is the authority on model context; these rows are the authority on
-// what AO renders and on delivery state. So the failure this file is looking for
-// is disagreement: a timeline that claims work the provider never did, an ordering
-// that cannot have happened, or a message the UI shows as sent that never left.
-
-// chatSession spawns a chat session and waits for it to be idle and ready, so a
-// scenario starts from a known state rather than racing the spawn turn.
 func chatSession(t *testing.T, d *daemon, project, prompt string) string {
 	t.Helper()
 	id := spawn(t, d, map[string]any{
@@ -64,8 +55,6 @@ func TestChatTurnIsProjectedAndArchived(t *testing.T) {
 		t.Errorf("agent's answer missing from the timeline:\n%s", describe(snap))
 	}
 
-	// Ordering has a single writer. A duplicate position means two writers raced
-	// for it, which would make the timeline's order unreproducible.
 	seen := map[int64]string{}
 	var previous int64 = -1
 	for _, m := range snap.Messages {
@@ -85,7 +74,6 @@ func TestChatTurnIsProjectedAndArchived(t *testing.T) {
 		seen[a.Sequence] = "activity " + a.ID
 	}
 
-	// Streaming must fold into one message rather than leaving a row per delta.
 	for _, m := range snap.Messages {
 		if m.Role != "assistant" {
 			continue
@@ -95,9 +83,6 @@ func TestChatTurnIsProjectedAndArchived(t *testing.T) {
 		}
 	}
 
-	// At least one tool call should have been recorded for a prompt that required
-	// looking at the repo. Without this the timeline would show an answer with no
-	// account of how it was reached.
 	commands := 0
 	for _, a := range snap.Activities {
 		if a.Kind == "command" {
@@ -109,8 +94,6 @@ func TestChatTurnIsProjectedAndArchived(t *testing.T) {
 	}
 }
 
-// A retried send must not run the work twice. This is the difference between a
-// flaky network and a double commit.
 func TestChatSendIsIdempotentOnClientMessageID(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -151,16 +134,12 @@ func TestChatSendIsIdempotentOnClientMessageID(t *testing.T) {
 	}
 }
 
-// The composer tells the user a mid-turn message is held until the agent
-// finishes. The provider cannot run two turns on one conversation, so this has to
-// be true of the daemon and not just of the placeholder text.
 func TestChatQueueHoldsMidTurnMessagesAndDrainsInOrder(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
 	project := seedProject(t, d, "queue")
 	session := chatSession(t, d, project, "Reply with exactly: READY")
 
-	// Something slow enough to type behind.
 	send(t, d, session, "Sleep for 30 seconds using a shell command, then reply with exactly: SLEPT", "q-slow")
 	d.awaitConversation(session, 90*time.Second, "the slow turn to start running", func(s snapshot) bool {
 		return s.Turns[len(s.Turns)-1].State == "running"
@@ -172,8 +151,6 @@ func TestChatQueueHoldsMidTurnMessagesAndDrainsInOrder(t *testing.T) {
 		t.Fatalf("mid-turn sends reported states %q and %q, want queued", stateA, stateB)
 	}
 
-	// The order the user typed is the order the agent sees. FIFO is the only
-	// ordering that matches what the timeline already showed them.
 	snap := d.awaitConversation(session, 5*time.Minute, "the queue to drain", func(s snapshot) bool {
 		states := s.userTurnStates()
 		return terminal(states["Reply with exactly: SECOND"]) && terminal(states["Reply with exactly: THIRD"])
@@ -201,8 +178,6 @@ func TestChatQueueHoldsMidTurnMessagesAndDrainsInOrder(t *testing.T) {
 	}
 }
 
-// Stop is the user's brake. Releasing the queue when they press it would be the
-// opposite of what the button says.
 func TestChatInterruptCancelsTheQueueWithTheTurn(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -227,7 +202,6 @@ func TestChatInterruptCancelsTheQueueWithTheTurn(t *testing.T) {
 	if got := states["Sleep for 60 seconds using a shell command, then reply with exactly: NEVER"]; got != "interrupted" {
 		t.Errorf("interrupted turn state = %q, want interrupted", got)
 	}
-	// A message that was never dispatched did not fail; it was cancelled.
 	if got := states["Reply with exactly: ALSO-NEVER"]; got != "interrupted" {
 		t.Errorf("queued turn state = %q, want interrupted", got)
 	}
@@ -236,8 +210,6 @@ func TestChatInterruptCancelsTheQueueWithTheTurn(t *testing.T) {
 	}
 }
 
-// Interrupting nothing is a client mistake, not a server failure. It must come
-// back as a typed refusal a client can branch on.
 func TestChatInterruptWithNoActiveTurnIsRefusedNotAnError(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -256,18 +228,12 @@ func TestChatInterruptWithNoActiveTurnIsRefusedNotAnError(t *testing.T) {
 	}
 }
 
-// `ao send` and orchestrator-to-worker relay both go through this endpoint. A
-// chat session has no pane to type into, so without a mode branch the send is
-// refused as "missing runtime handles" and chat workers are unreachable by AO's
-// own automation.
 func TestChatRelayThroughTheSendEndpointIsAttributedToAutomation(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
 	project := seedProject(t, d, "relay")
 	session := chatSession(t, d, project, "Reply with exactly: READY")
 
-	// The endpoint answers 200 with an echo, the same shape `ao send` already
-	// depends on for a terminal session.
 	d.mustCall("POST", "/sessions/"+session+"/send", http.StatusOK,
 		map[string]any{"message": "Reply with exactly: RELAYED"}, nil)
 
@@ -286,29 +252,19 @@ func TestChatRelayThroughTheSendEndpointIsAttributedToAutomation(t *testing.T) {
 		t.Fatalf("the relayed message is not in the timeline:\n%s", describe(snap))
 		return
 	}
-	// AO carried this on someone else's behalf; the timeline must say so rather
-	// than passing it off as something the user typed here.
 	if relayed.Origin != "automation" {
 		t.Errorf("relay origin = %q, want automation", relayed.Origin)
 	}
 }
 
-// Approvals are the one place the provider blocks on AO: it holds its turn until
-// the client answers a server-to-client request. Everything about it is
-// unforgiving — correlation is by the request's own id, the offered decisions vary
-// per request, and an unanswered request stalls the agent.
 func TestChatApprovalRoundTrip(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
 	project := seedProject(t, d, "approvals")
-	// The default posture deliberately never asks. Approvals are only reachable
-	// through a permission mode that maps onto an on-request approval policy.
 	setPermissions(t, d, project, "accept-edits")
 
 	session := chatSession(t, d, project, "Reply with exactly: READY")
 	send(t, d, session,
-		// /tmp is inside the workspace-write sandbox on macOS, so it does not
-		// escalate. A write to the home directory does.
 		`Run this exact shell command and tell me its exit code: touch "$HOME/.ao-e2e-approval-probe"`,
 		"approval-1")
 
@@ -325,9 +281,6 @@ func TestChatApprovalRoundTrip(t *testing.T) {
 	if len(offeredDecisions) == 0 {
 		t.Fatalf("approval offered no decisions, so the UI has no buttons to render:\n%s", describe(snap))
 	}
-	// The provider varies what it offers and does not always include a decline.
-	// AO must render that list rather than a fixed set, or it invents consent the
-	// provider never offered.
 	offered := map[string]bool{}
 	for _, option := range offeredDecisions {
 		if option.Label == "" {
@@ -339,8 +292,6 @@ func TestChatApprovalRoundTrip(t *testing.T) {
 		t.Fatalf("no accept option offered: %+v", offeredDecisions)
 	}
 
-	// Blocked on a person is its own state: not working, not idle. The board has
-	// to surface it as needing attention.
 	var read struct {
 		Session struct{ Status string } `json:"session"`
 	}
@@ -349,7 +300,6 @@ func TestChatApprovalRoundTrip(t *testing.T) {
 		t.Errorf("session status while blocked on an approval = %q, want needs_input", read.Session.Status)
 	}
 
-	// A decision the provider never offered must be refused rather than forwarded.
 	status, body := d.callExpectingError("POST",
 		"/sessions/"+session+"/conversation/approvals/"+approval.RequestID+"/resolve",
 		map[string]any{"decisionId": "definitely-not-a-real-decision"})
@@ -359,7 +309,6 @@ func TestChatApprovalRoundTrip(t *testing.T) {
 		t.Errorf("refusal carried no error code: %+v", body)
 	}
 
-	// A stale card must not answer a request that replaced it.
 	status, _ = d.callExpectingError("POST",
 		"/sessions/"+session+"/conversation/approvals/does-not-exist/resolve",
 		map[string]any{"decisionId": "accept"})
@@ -367,7 +316,6 @@ func TestChatApprovalRoundTrip(t *testing.T) {
 		t.Errorf("resolving an unknown request id was accepted (status %d)", status)
 	}
 
-	// The real answer unblocks the provider's turn.
 	d.mustCall("POST",
 		"/sessions/"+session+"/conversation/approvals/"+approval.RequestID+"/resolve",
 		http.StatusNoContent, map[string]any{"decisionId": "accept"}, nil)
@@ -386,15 +334,11 @@ func TestChatApprovalRoundTrip(t *testing.T) {
 		}
 	}
 
-	// And the turn it was blocking gets to finish.
 	d.awaitConversation(session, 3*time.Minute, "the approved turn to settle", func(s snapshot) bool {
 		return terminal(s.Turns[len(s.Turns)-1].State)
 	})
 }
 
-// The agent must be able to reach AO's own CLI from inside a chat session. This is
-// what makes chat orchestration possible at all: an orchestrator that cannot run
-// `ao` can only talk, not delegate.
 func TestChatAgentCanRunTheAOCLI(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -414,9 +358,6 @@ func TestChatAgentCanRunTheAOCLI(t *testing.T) {
 	}
 }
 
-// Every projected item must have a raw provider event behind it. Without the
-// archive, a wrong projection is the only surviving account of what happened and
-// there is nothing to repair it from.
 func TestChatProviderEventsAreArchived(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -428,10 +369,6 @@ func TestChatProviderEventsAreArchived(t *testing.T) {
 		t.Fatal("conversation has no items to check the archive against")
 	}
 
-	// The archive is not exposed over HTTP, so this asserts the property the
-	// archive exists to protect: nothing in the timeline is unaccounted for. A
-	// detail payload that will not decode means AO stored something it cannot read
-	// back, which is the same failure with a different symptom.
 	for _, a := range snap.Activities {
 		if len(a.DetailJSON) == 0 {
 			continue
@@ -447,9 +384,6 @@ func contains(haystack, needle string) bool {
 	return strings.Contains(haystack, needle)
 }
 
-// Model selection has to reach the provider, not just be accepted by AO. The
-// catalog comes from the provider — models are added, renamed and gated per
-// account — and the choice applies per turn, so nothing restarts.
 func TestChatModelSelectionComesFromTheProviderAndAppliesToTheNextTurn(t *testing.T) {
 	requireE2E(t)
 	d := startDaemon(t, t.TempDir())
@@ -474,7 +408,6 @@ func TestChatModelSelectionComesFromTheProviderAndAppliesToTheNextTurn(t *testin
 	if len(catalog.Models) == 0 {
 		t.Fatal("the provider offered no models; a chat session cannot expose a choice")
 	}
-	// Nothing is chosen until the user chooses, so the provider's default applies.
 	if catalog.Selected.Model != "" {
 		t.Errorf("a fresh conversation already has model %q selected", catalog.Selected.Model)
 	}
@@ -491,8 +424,6 @@ func TestChatModelSelectionComesFromTheProviderAndAppliesToTheNextTurn(t *testin
 		t.Errorf("provider reported %d default models, want exactly 1", defaults)
 	}
 
-	// Pick something that is NOT the default, so the assertion cannot pass by
-	// accident when the choice is ignored.
 	var chosen string
 	var effort string
 	for _, model := range catalog.Models {
@@ -519,15 +450,11 @@ func TestChatModelSelectionComesFromTheProviderAndAppliesToTheNextTurn(t *testin
 		t.Fatalf("settings echoed model %q, want %q", applied.Model, chosen)
 	}
 
-	// The snapshot is what the composer labels itself from, so the choice has to be
-	// visible there rather than only in the PATCH response.
 	snap := d.conversation(session)
 	if snap.Settings.Model != chosen {
 		t.Errorf("snapshot reports model %q, want %q", snap.Settings.Model, chosen)
 	}
 
-	// And the next turn actually runs. A model the provider rejects fails the turn,
-	// which is what makes this more than an echo test.
 	send(t, d, session, "Reply with exactly: SWITCHED", "model-switch")
 	answered := d.awaitConversation(session, 3*time.Minute, "a turn on the chosen model",
 		func(s snapshot) bool { return terminal(s.Turns[len(s.Turns)-1].State) })
@@ -539,9 +466,6 @@ func TestChatModelSelectionComesFromTheProviderAndAppliesToTheNextTurn(t *testin
 		t.Errorf("the agent did not answer on the chosen model:\n%s", describe(answered))
 	}
 
-	// An approval mode outside AO's vocabulary is refused rather than normalized:
-	// silently downgrading a permission choice is the one direction that must never
-	// happen by accident.
 	status, body := d.callExpectingError("PATCH", "/sessions/"+session+"/conversation/settings",
 		map[string]any{"approvalMode": "acceptEdits"})
 	if status != http.StatusBadRequest {

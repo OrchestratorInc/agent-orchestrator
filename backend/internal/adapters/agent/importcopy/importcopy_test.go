@@ -64,8 +64,6 @@ func TestCopyOnceRewritesRecordsAndLeavesSourceUntouched(t *testing.T) {
 	}
 }
 
-// After the first resume the copy holds the provider's later turns, so a
-// second open must never replace it with the original.
 func TestCopyOnceKeepsAnExistingCopy(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "chat.jsonl")
@@ -130,8 +128,6 @@ func TestStringFieldAndSetStringField(t *testing.T) {
 	}
 }
 
-// An adapter refuses a transcript without the record its provider needs, and
-// nothing is left behind for the provider to load.
 func TestCopyOnceCheckRefusesTheCopy(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "chat.jsonl")

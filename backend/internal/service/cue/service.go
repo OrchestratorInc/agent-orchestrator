@@ -12,9 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// Service owns the project-scoped Cue lifecycle: create, read, list, update,
-// and delete. Validation rejects malformed definitions up front; uniqueness and
-// project existence are enforced by the store and surfaced as API errors.
 type Service struct {
 	store     Store
 	sessions  Sessions
@@ -23,21 +20,14 @@ type Service struct {
 	now       func() time.Time
 }
 
-// Deps configures a Service.
 type Deps struct {
-	Store Store
-	// Sessions is the session side of cue invocation: messaging an active
-	// session or spawning a worker when no session was requested.
-	Sessions Sessions
-	// Terminals executes trusted command Cues without involving an agent.
+	Store     Store
+	Sessions  Sessions
 	Terminals CommandTerminals
-	// NewID overrides the cue id generator in tests.
-	NewID func() string
-	// Now overrides the clock in tests.
-	Now func() time.Time
+	NewID     func() string
+	Now       func() time.Time
 }
 
-// New constructs the cue service.
 func New(d Deps) *Service {
 	if d.NewID == nil {
 		d.NewID = func() string { return "cue_" + uuid.NewString() }
@@ -48,10 +38,6 @@ func New(d Deps) *Service {
 	return &Service{store: d.Store, sessions: d.Sessions, terminals: d.Terminals, newID: d.NewID, now: d.Now}
 }
 
-// Create persists a new cue for a project. It reports INVALID_PROJECT_ID for a
-// missing project id, the definition-level INVALID_CUE_* errors for malformed
-// input, CUE_NAME_EXISTS for a duplicate name within the project, and
-// PROJECT_NOT_FOUND for an unregistered project.
 func (s *Service) Create(ctx context.Context, projectID domain.ProjectID, input Input) (domain.Cue, error) {
 	if s == nil || s.store == nil {
 		return domain.Cue{}, errors.New("cue: store is required")
@@ -75,7 +61,6 @@ func (s *Service) Create(ctx context.Context, projectID domain.ProjectID, input 
 	return cue, nil
 }
 
-// List returns one project's cues in name order.
 func (s *Service) List(ctx context.Context, projectID domain.ProjectID) ([]domain.Cue, error) {
 	if s == nil || s.store == nil {
 		return nil, errors.New("cue: store is required")
@@ -86,7 +71,6 @@ func (s *Service) List(ctx context.Context, projectID domain.ProjectID) ([]domai
 	return s.store.SelectCuesByProject(ctx, projectID)
 }
 
-// Get returns a cue by id, preserving the same not-found contract as updates.
 func (s *Service) Get(ctx context.Context, cueID domain.CueID) (domain.Cue, error) {
 	if s == nil || s.store == nil {
 		return domain.Cue{}, errors.New("cue: store is required")
@@ -104,8 +88,6 @@ func (s *Service) Get(ctx context.Context, cueID domain.CueID) (domain.Cue, erro
 	return cue, nil
 }
 
-// Update replaces a cue's whole definition, reporting CUE_NOT_FOUND for an
-// unknown id and CUE_NAME_EXISTS for a rename that collides within the project.
 func (s *Service) Update(ctx context.Context, cueID domain.CueID, input Input) (domain.Cue, error) {
 	if s == nil || s.store == nil {
 		return domain.Cue{}, errors.New("cue: store is required")
@@ -130,7 +112,6 @@ func (s *Service) Update(ctx context.Context, cueID domain.CueID, input Input) (
 	return cue, nil
 }
 
-// Delete forgets one cue, reporting CUE_NOT_FOUND for an unknown id.
 func (s *Service) Delete(ctx context.Context, cueID domain.CueID) error {
 	if s == nil || s.store == nil {
 		return errors.New("cue: store is required")

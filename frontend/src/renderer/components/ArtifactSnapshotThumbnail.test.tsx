@@ -30,7 +30,6 @@ function row(overrides: Partial<ArtifactRow> = {}): ArtifactRow {
 	};
 }
 
-/** The card's <img> reports the snapshot as not cached, as main's 404 does. */
 function miss(container: HTMLElement) {
 	fireEvent.error(container.querySelector("img")!);
 }
@@ -72,7 +71,6 @@ describe("ArtifactSnapshotThumbnail", () => {
 		expect(mocks.request).toHaveBeenCalledTimes(1);
 		expect(mocks.request.mock.calls[0]?.[0]).toMatchObject({ path: "new.md", theme: "dark" });
 		unmount();
-		// The next card for the file loads the image just rendered, with a fresh URL.
 		const next = render(<ArtifactSnapshotThumbnail row={row({ path: "new.md" })} />);
 		expect(next.container.querySelector("img")?.getAttribute("src")).toMatch(/&r=1$/);
 	});

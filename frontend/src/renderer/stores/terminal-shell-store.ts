@@ -33,7 +33,6 @@ export const useTerminalShellStore = create<TerminalShellState>((set, get) => ({
 				const settings = await aoBridge.uiSettings.get();
 				preference = coerceTerminalShell(settings.terminalShell);
 			} catch {
-				// A missing bridge or unreadable setting must not prevent terminals from opening.
 			}
 			if (revisionAtStart === settingRevision) set({ preference, loaded: true });
 		})();

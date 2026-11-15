@@ -16,7 +16,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	_, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -33,13 +32,10 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 var kimiAPIKeyEnvVars = []string{
 	"KIMI_API_KEY",
 	"OPENAI_API_KEY",
-	// Legacy Kimi Code distributions also accepted these names.
 	"KIMI_CODE_API_KEY",
 	"MOONSHOT_API_KEY",
 }
 
-// kimiLocalAuthStatus checks Kimi's own config and stored logins first; a key
-// in the environment is the fallback when they hold no usable credential.
 func kimiLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -69,7 +65,6 @@ func kimiStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 				return status, found, err
 			}
 		}
-		// Legacy Kimi Code stored its hosted OAuth token at this fixed path.
 		legacyPath := filepath.Join(home, "credentials", "kimi-code.json")
 		status, found, err := kimiCredentialsAuthStatus(legacyPath)
 		if err != nil || found {
@@ -116,8 +111,6 @@ func kimiAuthHomes() ([]string, bool) {
 	return homes, len(homes) > 0
 }
 
-// kimiCodeHome retains the legacy KIMI_CODE_HOME lookup used by runtime hook
-// isolation. Auth detection additionally checks the current KIMI_SHARE_DIR.
 func kimiCodeHome() (string, bool) {
 	if home := strings.TrimSpace(os.Getenv(kimiCodeHomeEnv)); home != "" {
 		return home, true
@@ -190,7 +183,6 @@ func kimiConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 	return status, found, err
 }
 
-// kimiConfigAuth also names the file that holds the deciding credential.
 func kimiConfigAuth(path string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, bool, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {

@@ -22,22 +22,9 @@ export function getApiBaseUrl(): string {
 	return runtimeApiBaseUrl ?? "";
 }
 
-// Chromium allows six HTTP/1.1 connections per host, and every EventSource
-// holds one for its whole life. The renderer keeps three to five streams open
-// on the daemon, which left two or three connections for every other request,
-// so one slow request queued the rest (Settings among them). A *.localhost name
-// resolves to loopback in Chromium but is a separate host, so streams opened on
-// it get their own connections. Only the loopback daemon address is remapped.
-//
-// Chromium resolves a *.localhost name to ::1 first, and the daemon's main
-// listener is 127.0.0.1, so another process on [::1] at the daemon's port (or
-// on a dual-stack ::) would receive these streams. The name is used only while
-// the daemon reports that it serves [::1] at its port too (ipv6Loopback in its
-// status); otherwise streams stay on 127.0.0.1.
 const eventStreamHostname = "ao-events.localhost";
 let daemonServesIPv6Loopback = false;
 
-/** The base URL a daemon EventSource connects to; see eventStreamHostname. */
 export function eventStreamBaseUrl(baseUrl: string, ipv6Loopback = daemonServesIPv6Loopback): string {
 	try {
 		const url = new URL(baseUrl);
@@ -53,11 +40,6 @@ export function hasTrustedApiBaseUrl(): boolean {
 	return runtimeApiBaseUrl !== null;
 }
 
-/**
- * Subscribe to base-URL changes (useSyncExternalStore-compatible). Long-lived
- * connections bound to a specific port — the terminal mux WebSocket, the SSE
- * stream — use this to rebind when the daemon comes back on a different port.
- */
 export function subscribeApiBaseUrl(listener: () => void): () => void {
 	baseUrlListeners.add(listener);
 	return () => {
@@ -72,22 +54,11 @@ export function setApiBaseUrl(nextBaseUrl: string | null): void {
 	baseUrlListeners.forEach((listener) => listener());
 }
 
-// The renderer records every supervisor status here so API requests made while
-// no daemon URL is trusted can return the actual startup failure, not a generic
-// availability message.
 export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 	daemonStatus = nextStatus;
 	daemonServesIPv6Loopback = nextStatus.state === "ready" && nextStatus.ipv6Loopback === true;
 }
 
-// Route templates from the generated OpenAPI schema (frontend/src/api/schema.ts).
-// Operation strings sent to telemetry must never contain raw IDs (project IDs
-// are user-chosen strings), so we match each request path against these
-// templates and report the template — collapsing `{param}` to `:id` — rather
-// than guessing which segments are identifiers. Matching from the schema keeps
-// static child routes (notifications/read-all, sessions/cleanup) intact and
-// still normalizes IDs for every resource, including ones a segment heuristic
-// would miss (orchestrators/{id}). Keep in sync with schema.ts.
 const ROUTE_TEMPLATES = [
     "/api/v1/awake/observations", "/api/v1/awake", "/api/v1/awake/sessions", "/api/v1/awake/settings",
     "/api/v1/awake/rules", "/api/v1/awake/stop", "/api/v1/awake/resume",
@@ -187,9 +158,6 @@ const ROUTE_TEMPLATES = [
 	"/api/v1/sessions/cleanup",
 ] as const;
 
-// Resource collections whose next path segment is an identifier. Only used as a
-// defensive fallback for paths not covered by ROUTE_TEMPLATES; keeps IDs out of
-// telemetry for known collections even if a route is ever missed above.
 const RESOURCE_SEGMENTS = new Set([
 	"agents",
 	"projects",
@@ -200,11 +168,6 @@ const RESOURCE_SEGMENTS = new Set([
 	"orchestrators",
 ]);
 
-// Match a path against one template. `{param}` matches any single segment
-// (reported as `:id`), a trailing `*` matches the remaining path, and every
-// other segment must match literally. Returns the normalized template plus a
-// score = number of literal segments matched, so the most specific template
-// wins when several match (e.g. `read-all` beats `{id}`).
 function matchRouteTemplate(pathname: string, template: string): { normalized: string; score: number } | null {
 	const pathSegs = pathname.split("/");
 	const tmplSegs = template.split("/");
@@ -239,8 +202,6 @@ function fallbackNormalize(pathname: string): string {
 			i += 1;
 		}
 	}
-	// Route words never contain a digit, apart from the API version; any other
-	// segment with one is an identifier (a side-chat UUID, a shell terminal ID).
 	return segments.map((segment) => (/\d/.test(segment) && !/^v\d+$/.test(segment) ? ":id" : segment)).join("/");
 }
 
@@ -255,13 +216,7 @@ export function normalizeApiOperation(method: string, pathname: string): string 
 
 type ApiErrorCategory = "daemon_unavailable" | "network_error" | "http_4xx" | "http_5xx";
 
-// One event per (operation, category, status) per window: a daemon outage
-// makes every polling query fail at once and on every retry — the failure
-// signal matters, the storm does not.
 const API_ERROR_DEDUPE_MS = 30_000;
-// These codes are the successful or expected outcome of a probe: Codex is not
-// wired in this process, or a shell the user already closed. Other 401 and
-// 404 responses still report, including an expired GitHub token.
 const EXPECTED_API_ERROR_CODES = new Set([
 	"UPSTREAM_UNAVAILABLE",
 	"HOST_IDENTITY_UNVERIFIED",
@@ -269,9 +224,6 @@ const EXPECTED_API_ERROR_CODES = new Set([
 	"SHELL_TERMINAL_NOT_FOUND",
 ]);
 
-// Conversation probes that 409 while the chat controller is not ready.
-// Exact normalized operations only, so a later 409 on another skills or
-// models route still reports.
 const EXPECTED_PROBE_CONFLICTS = new Set([
 	"POST /api/v1/sessions/:id/workspace/diffs",
 	"GET /api/v1/sessions/:id/conversation/config-options",
@@ -307,8 +259,6 @@ function reportApiError(
 	}
 }
 
-// Reads the daemon error envelope's `code` (via a clone so the caller still
-// gets an unconsumed body) and reports the failure unless it is expected.
 async function reportResponseError(operation: string, response: Response): Promise<void> {
 	let code: string | undefined;
 	let requestId: string | undefined;
@@ -317,7 +267,6 @@ async function reportResponseError(operation: string, response: Response): Promi
 		if (typeof body?.code === "string" && body.code !== "") code = body.code;
 		if (typeof body?.requestId === "string" && body.requestId !== "") requestId = body.requestId;
 	} catch {
-		// Non-JSON or empty body: fall back to status-only classification.
 	}
 	if (!(code && EXPECTED_API_ERROR_CODES.has(code)) && !expectedProbeConflict(operation, response.status)) reportApiError(
 		operation,
@@ -328,16 +277,13 @@ async function reportResponseError(operation: string, response: Response): Promi
 	);
 }
 
-// Agent prompts name the user's time zone. The daemon may run on a remote host
-// in another zone, so the app reports its own. Only writes carry it: spawns are
-// POSTs, and a custom header on GETs would add a CORS preflight per polled URL.
 export const CLIENT_TIME_ZONE_HEADER = "X-AO-Client-Time-Zone";
 let clientTimeZone: { value: string; at: number } | undefined;
 function currentTimeZone(): string {
 	const now = Date.now();
 	if (!clientTimeZone || now - clientTimeZone.at > 60_000) {
 		let value = "";
-		try { value = Intl.DateTimeFormat().resolvedOptions().timeZone ?? ""; } catch { /* unsupported */ }
+		try { value = Intl.DateTimeFormat().resolvedOptions().timeZone ?? ""; } catch { }
 		clientTimeZone = { value, at: now };
 	}
 	return clientTimeZone.value;
@@ -346,12 +292,9 @@ export function tagClientTimeZone(input: Request): void {
 	if (input.method === "GET" || input.method === "HEAD" || input.method === "OPTIONS") return;
 	const zone = currentTimeZone();
 	if (!zone || input.headers.has(CLIENT_TIME_ZONE_HEADER)) return;
-	try { input.headers.set(CLIENT_TIME_ZONE_HEADER, zone); } catch { /* immutable headers: send without it */ }
+	try { input.headers.set(CLIENT_TIME_ZONE_HEADER, zone); } catch { }
 }
 
-// A fetch for clients that talk to a daemon directly (a connected remote host)
-// rather than through runtimeFetch's rebasing. Failures are reported the same
-// way the local client reports them; they used to be invisible.
 export async function reportingFetch(input: Request): Promise<Response> {
 	tagClientTimeZone(input);
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
@@ -390,12 +333,6 @@ async function runtimeFetch(input: Request): Promise<Response> {
 			return fetch(input);
 		}
 
-		// Rebase onto the runtime base URL by copying fields explicitly and
-		// buffering the body. `new Request(target, input)` reads the source
-		// request's `duplex` getter, which Electron's Chromium lacks — it throws
-		// "The duplex member must be specified" for any request with a body, so
-		// every POST would fail in the packaged app. API bodies are small JSON;
-		// buffering sidesteps streaming-duplex semantics entirely.
 		const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
 		return fetch(target, {
 			method: input.method,
@@ -416,7 +353,6 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		response = await send();
 	} catch (error) {
 		markApiError(error);
-		// Caller-initiated aborts (unmounted components cancelling queries) are not failures.
 		if (!(error instanceof DOMException && error.name === "AbortError")) {
 			reportApiError(operation, "network_error");
 		}
@@ -431,18 +367,10 @@ export const apiClient = withApiErrorOwnership(createClient<paths>({
 	fetch: runtimeFetch,
 }));
 
-// Build each request against the daemon's current address, so runtimeFetch
-// passes it straight to fetch. Rebasing a request built against the
-// placeholder base has to buffer its body asynchronously, which held every
-// POST back behind whatever React rendered in the same click (a new terminal
-// waited ~20 ms for its own tab to render). runtimeFetch still rebases a
-// request built before the daemon's address changed.
 type RequestInit = { baseUrl?: string } | undefined;
 const withRuntimeBase = (init: RequestInit): RequestInit =>
 	runtimeApiBaseUrl && !init?.baseUrl ? { ...init, baseUrl: runtimeApiBaseUrl } : init;
 const HTTP_METHODS = ["GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"] as const;
-// The client's methods are generic over every path; this untyped view only
-// forwards their arguments, so callers keep the client's own signatures.
 const clientMethods = apiClient as unknown as Record<
 	(typeof HTTP_METHODS)[number],
 	(url: unknown, init?: RequestInit) => unknown
@@ -454,12 +382,6 @@ for (const method of HTTP_METHODS) {
 const sendRequest = clientMethods.request;
 clientMethods.request = (method, url, init) => sendRequest(method, url, withRuntimeBase(init));
 
-/**
- * Human-readable message from an openapi-fetch `error` value. The daemon's
- * error body is `{ error, code, message, requestId }` (backend apierr) — a
- * plain object, so `String(error)` renders "[object Object]". Falls back
- * through Error instances and strings.
- */
 export function apiErrorCode(error: unknown): string | undefined {
 	if (typeof error === "object" && error !== null) {
 		const body = error as { code?: unknown };
@@ -468,7 +390,6 @@ export function apiErrorCode(error: unknown): string | undefined {
 	return undefined;
 }
 
-/** Structured recovery metadata from the daemon's stable error envelope. */
 export function apiErrorDetails(error: unknown): Record<string, unknown> | undefined {
 	if (typeof error !== "object" || error === null) return undefined;
 	const details = (error as { details?: unknown }).details;
@@ -477,7 +398,6 @@ export function apiErrorDetails(error: unknown): Record<string, unknown> | undef
 		: undefined;
 }
 
-/** Correlation id from the daemon's stable error envelope. */
 export function apiErrorRequestId(error: unknown): string | undefined {
 	if (typeof error === "object" && error !== null) {
 		const body = error as { requestId?: unknown };

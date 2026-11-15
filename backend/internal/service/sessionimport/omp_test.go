@@ -13,15 +13,11 @@ import (
 
 const ompSession = "01a17cf3-99d0-76cd-b084-4cdce17a0fec"
 
-// ompFile names a transcript the way OMP does: <ISO-time>_<uuid>.jsonl under a
-// dashed-cwd folder. Shapes below are synthetic but mirror a real session v3.
 func ompFile(root string) string {
 	return filepath.Join(root, "sessions", "-work-repo", "2026-10-27T10-41-41-840Z_"+ompSession+".jsonl")
 }
 
 func TestOMPTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
-	// A linear chain (b1 -> m1 -> m2 -> m3 -> m4 -> c2); non-message entries
-	// (model_change, custom) keep the parent chain connected but show nothing.
 	body := `{"type":"session","version":3,"id":"` + ompSession + `","timestamp":"2026-10-27T10:41:41.840Z","cwd":"/work/repo"}
 {"type":"title","v":1,"title":"","updatedAt":"2026-10-27T10:41:41.840Z"}
 {"type":"model_change","id":"b1","parentId":null,"timestamp":"2026-10-27T10:41:41.913Z","model":"zai/glm-5"}
@@ -54,8 +50,6 @@ func TestOMPTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	}
 }
 
-// A rewind appends a replacement under an earlier parent, so one parent has two
-// children. Only the branch reachable from the last entry (the leaf) is shown.
 func TestOMPShowsOnlyActiveBranch(t *testing.T) {
 	body := `{"type":"session","version":3,"id":"` + ompSession + `","timestamp":"2026-10-27T10:41:41.840Z","cwd":"/work/repo"}
 {"type":"message","id":"m1","parentId":null,"timestamp":"2026-10-27T10:41:42.000Z","message":{"role":"user","content":[{"type":"text","text":"keep this"}]}}
@@ -68,7 +62,6 @@ func TestOMPShowsOnlyActiveBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// a1 ("abandoned answer") is a sibling of m2 off the active path and must not show.
 	wantTexts(t, got.messages, "user: keep this", "user: redo it", "assistant: active answer")
 }
 
@@ -89,14 +82,12 @@ func TestOMPTitleFallsBackToFirstPrompt(t *testing.T) {
 
 func TestOMPRejectsIdentityMismatchAndPromptlessSessions(t *testing.T) {
 	root := t.TempDir()
-	// The session header's id must match the id in the file name.
 	mismatch := `{"type":"session","version":3,"id":"00000000-0000-7000-8000-000000000000","cwd":"/work/repo"}
 {"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
 `
 	if _, err := readTranscript(context.Background(), domain.HarnessOMP, root, writeFile(t, ompFile(root), mismatch)); err == nil {
 		t.Fatal("expected native identity mismatch")
 	}
-	// A session with no user prompt is not a conversation to continue.
 	noPrompt := `{"type":"session","version":3,"id":"` + ompSession + `","cwd":"/work/repo"}
 {"type":"message","id":"a1","parentId":null,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}
 `
@@ -115,7 +106,6 @@ func TestOMPNativeIDFromPath(t *testing.T) {
 	if got := piFamilyNativeID("noseparator.jsonl"); got != "noseparator" {
 		t.Fatalf("no separator: got %q, want %q", got, "noseparator")
 	}
-	// sourceFiles derives the same grouping id from the file name.
 	f := sourceFiles{harness: domain.HarnessOMP, paths: []string{ompFile("/root")}}
 	if got := f.nativeID(); got != ompSession {
 		t.Fatalf("sourceFiles.nativeID() = %q, want %q", got, ompSession)
@@ -161,8 +151,6 @@ func TestOMPDiscoverImportAndRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTexts(t, st.messages, "user: original prompt", "assistant: later reply")
-	// A failed first load leaves the relocation checkpoint pending. Its
-	// private native copy and archive must not absorb later original turns.
 	privatePath := writeFile(t, filepath.Join(root, "sessions", "-ao-copy", filepath.Base(path)), body)
 	rec.Metadata.ImportSource.ResumeCwd = t.TempDir()
 	body += `{"type":"message","id":"m3","parentId":"m2","message":{"role":"user","content":"original-only turn after failed load"}}` + "\n"

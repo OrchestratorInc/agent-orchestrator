@@ -14,7 +14,6 @@ func TestLatestConversationTurnUsesRowOrderAndSkipsRollback(t *testing.T) {
 	if _, err := s.LatestConversationTurn(ctx, conversation.ID); !errors.Is(err, domain.ErrNoConversationTurn) {
 		t.Fatalf("empty conversation: %v", err)
 	}
-	// Both prompts share RequestedAt; SQLite row order must decide the latest.
 	appendBranchPrompt(t, s, session, conversation, "generation-root", "a", "A")
 	appendBranchPrompt(t, s, session, conversation, "generation-root", "b", "B")
 	turn, err := s.LatestConversationTurn(ctx, conversation.ID)
@@ -53,7 +52,6 @@ func TestLatestConversationTurnFollowsActiveBranchAndNestedCutoffs(t *testing.T)
 	if err != nil || turn.ID != "turn-child" {
 		t.Fatalf("latest child turn: %+v, %v", turn, err)
 	}
-	// A narrower nested cutoff must hide every turn on both ancestor branches.
 	nested := domain.ConversationBranch{
 		ID: "latest-nested", ConversationID: conversation.ID, SessionID: session.ID,
 		ProviderConversationID: "thread-latest-nested", ParentBranchID: child.ID,
@@ -92,7 +90,6 @@ func TestListInterruptedSessionsReadsLatestTurn(t *testing.T) {
 	if !interrupted() {
 		t.Fatal("interrupted latest turn not reported")
 	}
-	// A prompt the user queued and then withdrew does not end the interruption.
 	appendBranchPrompt(t, s, session, conversation, "generation-root", "b", "B")
 	if err := s.CancelQueuedTurnByID(ctx, conversation.ID, "turn-b", testNow); err != nil {
 		t.Fatal(err)
@@ -100,7 +97,6 @@ func TestListInterruptedSessionsReadsLatestTurn(t *testing.T) {
 	if !interrupted() {
 		t.Fatal("withdrawn queued turn cleared the interruption")
 	}
-	// The next real turn supersedes it.
 	appendBranchPrompt(t, s, session, conversation, "generation-root", "c", "C")
 	if interrupted() {
 		t.Fatal("a newer turn still reported as interrupted")

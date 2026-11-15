@@ -10,32 +10,22 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// staleBinaryStore is the durable stale-release mark. It is optional so stores
-// without it simply never move sessions to a new release.
 type staleBinaryStore interface {
 	MarkHarnessSessionsStale(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) (int64, error)
 	ListVersionRefreshChatCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error)
 	CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error)
 }
 
-// ChatVersionRefresher is the Chat side of a move to a new harness release.
 type ChatVersionRefresher interface {
 	SwitchToInstalledRelease(ctx context.Context, id domain.SessionID, minIdle time.Duration) (bool, error)
 }
 
-// ChatWakeWaiter waits for the provider start a version move set off, so the
-// move keeps its permit until the new process is up.
 type ChatWakeWaiter interface {
 	WaitForWake(ctx context.Context, id domain.SessionID) error
 }
 
-// versionMoveWakeTimeout bounds how long a move waits for its provider to
-// start: the wake's own limit plus delivering what queued meanwhile.
 const versionMoveWakeTimeout = 2 * time.Minute
 
-// MarkHarnessUpdated records that an update to version replaced the release
-// every live launch of harness started from. The installer calls it while it
-// still holds the harness, so no launch on the new release is marked.
 func (m *Manager) MarkHarnessUpdated(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) error {
 	store, ok := m.store.(staleBinaryStore)
 	if !ok {
@@ -51,7 +41,6 @@ func (m *Manager) MarkHarnessUpdated(ctx context.Context, harness domain.AgentHa
 	return nil
 }
 
-// CountStaleBinarySessions counts live launches still on a replaced release, per harness.
 func (m *Manager) CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error) {
 	store, ok := m.store.(staleBinaryStore)
 	if !ok {
@@ -60,13 +49,6 @@ func (m *Manager) CountStaleBinarySessions(ctx context.Context) (map[domain.Agen
 	return store.CountStaleBinarySessions(ctx)
 }
 
-// RefreshStaleChats moves idle Chat sessions that still run a replaced harness
-// release to the installed one. Each is stopped only under the same checks as
-// idle hibernation (no turn, queued message, pending approval, open view or
-// background work, and no interface transition), after minIdle of quiet so a
-// warm prompt cache is not thrown away, and started again right away, as
-// Account Manager moves its chats (#6274): the user finds it ready on the new
-// release and never has to restart it, whatever the hibernation setting.
 func (m *Manager) RefreshStaleChats(ctx context.Context, minIdle time.Duration) error {
 	store, ok := m.store.(staleBinaryStore)
 	if !ok {
@@ -93,9 +75,6 @@ func (m *Manager) refreshStaleChat(ctx context.Context, refresher ChatVersionRef
 	if err != nil || !stopped {
 		return err
 	}
-	// The provider starts in the background once the claim above is released.
-	// Wait for it here, still holding the caller's permit, so no more than
-	// maxConcurrentVersionMoves providers start at once.
 	waiter, ok := m.chat.(ChatWakeWaiter)
 	if !ok {
 		return nil
@@ -108,13 +87,9 @@ func (m *Manager) refreshStaleChat(ctx context.Context, refresher ChatVersionRef
 	return nil
 }
 
-// stopStaleChat stops the provider under the hibernation claim and sets off
-// its start on the installed release. It reports whether it stopped it.
 func (m *Manager) stopStaleChat(ctx context.Context, refresher ChatVersionRefresher, id domain.SessionID, minIdle time.Duration) (bool, error) {
 	operationCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	// The same claim idle hibernation takes: a restore, kill or switch in
-	// progress keeps the session as it is until the next sweep.
 	if err := m.beginAgentOperation(operationCtx, id, agentOperationHibernate); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			return false, nil
@@ -126,22 +101,16 @@ func (m *Manager) stopStaleChat(ctx context.Context, refresher ChatVersionRefres
 	if err != nil || active {
 		return false, err
 	}
-	// The wake runs in the background and waits for this claim.
 	return refresher.SwitchToInstalledRelease(operationCtx, id, minIdle)
 }
 
-// maxConcurrentVersionMoves bounds sessions restarted at once, as Account
-// Manager's session moves do (#6274): each restart starts a provider process.
 const maxConcurrentVersionMoves = 4
 
-// versionMoveSlots is the permit every move to a new release holds, from a
-// sweep or a turn end alike, until the session's new process has started.
 type versionMoveSlots struct {
 	once  sync.Once
 	slots chan struct{}
 }
 
-// acquire takes a permit, waiting while maxConcurrentVersionMoves are held.
 func (v *versionMoveSlots) acquire(ctx context.Context) (func(), error) {
 	v.once.Do(func() { v.slots = make(chan struct{}, maxConcurrentVersionMoves) })
 	select {
@@ -152,8 +121,6 @@ func (v *versionMoveSlots) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-// forEachVersionMove runs move for each session, at most four at a time
-// across every move in flight.
 func (m *Manager) forEachVersionMove(ctx context.Context, ids []domain.SessionID, move func(context.Context, domain.SessionID) error) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -179,16 +146,11 @@ func (m *Manager) forEachVersionMove(ctx context.Context, ids []domain.SessionID
 	return errors.Join(errs...)
 }
 
-// versionRetries remembers sessions a version move stopped but could not
-// start again, so every sweep tries to resume them, as #6274 does for its
-// moves, instead of leaving them stopped until the user notices.
 type versionRetries struct {
 	mu       sync.Mutex
 	attempts map[domain.SessionID]int
 }
 
-// maxVersionResumeAttempts gives up on a session whose resume keeps failing;
-// its switchFailedAt notice then asks the user to resume it.
 const maxVersionResumeAttempts = 10
 
 func (r *versionRetries) note(id domain.SessionID) {
@@ -212,7 +174,6 @@ func (r *versionRetries) pending() []domain.SessionID {
 	return ids
 }
 
-// attempt counts one try and reports whether another is allowed.
 func (r *versionRetries) attempt(id domain.SessionID) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -230,9 +191,6 @@ func (r *versionRetries) done(id domain.SessionID) {
 	delete(r.attempts, id)
 }
 
-// RetryVersionMoves resumes sessions a version move stopped but could not
-// start again. A session that came back on its own, was resumed by the user,
-// or was ended no longer needs it.
 func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 	var errs []error
 	for _, id := range m.versionRetries.pending() {
@@ -242,10 +200,6 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 			continue
 		}
 		if !versionMoveStopped(rec, m.chat) {
-			// A failed terminal move can still have inconclusive liveness. Keep
-			// the retry intent until stopped state is proven or a successful
-			// native resume clears the failure; never replace a possibly live
-			// child merely because its startup probe was unknown.
 			if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI &&
 				rec.StaleBinary != nil && rec.StaleBinary.SwitchFailedAt != nil {
 				continue
@@ -261,8 +215,6 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 			release()
 			continue
 		}
-		// Automatic terminal restarts must never replace missing native history
-		// with a fresh task, even when an update stop has no stale-binary mark.
 		if _, err := m.resumeAgentWithMode(ctx, id, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI); err != nil {
 			release()
 			errs = append(errs, fmt.Errorf("resume %s after a failed version move: %w", id, err))
@@ -279,7 +231,6 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 					continue
 				}
 			}
-			// Messages sent while it was stopped stayed queued for this start.
 			if err := m.chat.DrainChatQueue(ctx, id); err != nil {
 				m.logger.Warn("could not deliver messages queued while the session was stopped", "sessionID", id, "error", err)
 			}
@@ -290,10 +241,6 @@ func (m *Manager) RetryVersionMoves(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// versionMoveStopped reports whether a failed version move left rec without
-// its agent. A terminal agent exits. A Chat provider that failed to wake keeps
-// its idle activity, since hibernation suppresses the stop, so it counts as
-// stopped while no controller runs it.
 func versionMoveStopped(rec domain.SessionRecord, chat ChatLauncher) bool {
 	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 		return rec.Activity.State == domain.ActivityExited

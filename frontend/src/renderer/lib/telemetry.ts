@@ -16,7 +16,6 @@ import { installRendererErrorHandlers } from "../../shared/renderer-error-handle
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
 const RELEASE_TAG = "2026-01-30";
-// 3 marks the renamed events; 2 used the ao.v2.* names. Matches the daemon.
 const TELEMETRY_SCHEMA_VERSION = 3;
 const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
@@ -25,14 +24,9 @@ const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
 const EMBEDDED_LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
-// session_management_summary keeps its shipped exported name; every other
-// event is exported under the name it is captured with.
 const POSTHOG_EVENT_NAME_ALIASES: Record<string, string> = {
 	"ao.renderer.session_management_summary": "ao.v2.renderer.session_management_summary",
 };
-// Names a renderer event was exported under before the
-// {product}.{object}.{past_tense_verb} rename. Only the kill switch reads these,
-// so a deny entry written against an old name still silences the renamed stream.
 export const LEGACY_EVENT_NAMES: Record<string, string[]> = {
 	"ao.app.active": ["ao.v2.app.active"],
 	"ao.app.loaded": ["ao.renderer.loaded", "ao.v2.renderer.loaded"],
@@ -62,7 +56,6 @@ export const LEGACY_EVENT_NAMES: Record<string, string[]> = {
 	"ao.mobile.connect_opened": ["ao.renderer.mobile_connect_opened"],
 	"ao.mobile.bridge_toggled": ["ao.renderer.mobile_bridge_toggled"],
 };
-// Removed from PostHog by the rename; written to the renderer log instead.
 const LOG_ONLY_EVENTS = new Set(["ao.renderer.agents_available", "ao.renderer.cloud_offering_resolved"]);
 
 let initPromise: Promise<boolean> | null = null;
@@ -74,12 +67,6 @@ let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
 
-// Bounds how many captures of a single event or exception name leave the
-// renderer. Mirrors the daemon-side RateLimitedSink: a re-render loop or
-// repeatedly-thrown exception must not create an unbounded error stream.
-// A per-minute cap alone doesn't bound the daily total. A loop paced just
-// under it would sit under the ceiling forever, so this pairs a small burst
-// allowance with a hard daily ceiling per name.
 const EVENTS_PER_NAME_PER_MINUTE = 5;
 const EVENTS_PER_NAME_PER_DAY = 200;
 const MINUTE_MS = 60_000;
@@ -140,8 +127,6 @@ function readUpdateFailureState(storage: DailyActiveStorage): UpdateFailureState
 	}
 }
 
-// One streak event until a successful download of that target clears it, plus
-// one daily count after the UTC day that accumulated the retries has ended.
 export function claimUpdateFailure(
 	storage: DailyActiveStorage,
 	properties: TelemetryProperties,
@@ -219,7 +204,6 @@ export function clearUpdateFailures(storage: DailyActiveStorage, version: unknow
 		}
 		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
 	} catch {
-		// A storage failure cannot affect the updater.
 	}
 }
 
@@ -231,7 +215,6 @@ export function clearCheckUpdateFailures(storage: DailyActiveStorage): void {
 		}
 		storage.setItem(UPDATE_FAILURE_STORAGE_KEY, JSON.stringify(state));
 	} catch {
-		// A storage failure cannot affect the updater.
 	}
 }
 
@@ -250,14 +233,6 @@ export type DailyActiveHeartbeatOptions = {
 	document: DailyActiveEventTarget & Pick<Document, "visibilityState">;
 };
 
-/**
- * Release channel, read from the user's own Updates setting.
- *
- * Previously this had to be inferred by looking for "-nightly." inside the
- * version string, which broke for anyone pinned to a feature build and told you
- * nothing about someone who had switched channels but not yet updated. The
- * setting is the truth; the version is a consequence of it.
- */
 export type ReleaseChannel = "stable" | "nightly" | "feature" | "unknown";
 
 export function releaseChannelFrom(settings: { channel?: unknown; feature?: unknown } | null | undefined): ReleaseChannel {
@@ -268,15 +243,6 @@ export function releaseChannelFrom(settings: { channel?: unknown; feature?: unkn
 	return "unknown";
 }
 
-/**
- * Channel of the build actually running, read from the version string.
- *
- * Distinct from release_channel, which is what the user opted into. A nightly
- * build carries "-nightly." in its version (CI stamps 0.11.3-nightly.5); a plain
- * semver is stable. This is "what am I running", release_channel is "what did I
- * choose". The two disagree exactly when someone switched channels but has not
- * updated yet, and that gap is the adoption-lag signal.
- */
 export type VersionChannel = "stable" | "nightly" | "unknown";
 
 export function versionChannelFrom(appVersion: string): VersionChannel {
@@ -294,16 +260,10 @@ export function buildTelemetryContext(
 ): TelemetryProperties {
 	const version = appVersion.trim() || "unknown";
 	return {
-		// The install's fixed 0-99 bucket, shared with the daemon, so an
-		// onboarding test can split installs by range without feature flags.
 		...(experimentCohort === undefined ? {} : { experiment_cohort: experimentCohort }),
-		// Same names and values as the daemon stamps (backend/internal/adapters/
-		// telemetry/environment.go), so desktop and CLI events segment alike.
 		...(install
 			? {
 					arch: install.arch,
-					// posthog-js reads the OS version from Chromium's user agent,
-					// which freezes macOS at 10.15.7; the real one replaces it.
 					...(install.osVersion ? { $os_version: install.osVersion } : {}),
 					install_source: install.installSource,
 					...(install.installedAt ? { installed_at: install.installedAt } : {}),
@@ -311,34 +271,21 @@ export function buildTelemetryContext(
 					is_container: install.isContainer,
 				}
 			: {}),
-		// Classifies this install as the desktop app across every event, so a
-		// shared event like ao.app.active splits cleanly by `client` alongside
-		// the mobile app (client="mobile") and the CLI (client="cli"), rather
-		// than by inferring from the platform value set.
 		client: "desktop",
 		app_version: version,
 		ao_version: version,
 		platform,
-		// What they opted into.
 		release_channel: channel,
-		// What they are actually running.
 		version_channel: versionChannelFrom(version),
 		build_mode: import.meta.env.DEV ? "dev" : "packaged",
 		telemetry_schema_version: TELEMETRY_SCHEMA_VERSION,
 	};
 }
 
-/** Refreshes the channel in context after the user changes it, without a restart. */
 export function setReleaseChannelContext(channel: ReleaseChannel): void {
 	telemetryContext = { ...telemetryContext, release_channel: channel };
 }
 
-/**
- * Best-effort read of the Updates setting for the initial context.
- *
- * Never throws and never blocks startup: if the bridge is unavailable the
- * channel reports "unknown" rather than delaying the first heartbeat.
- */
 async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; feature?: unknown } | null> {
 	try {
 		return (await aoBridge.updateSettings.get()) as { channel?: unknown; feature?: unknown };
@@ -348,20 +295,13 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 }
 
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
-	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
-	// the flag is left to the SDK, which processes the identified person.
 	const currentAge = installTimestampMs === undefined ? undefined : Math.floor((Date.now() - installTimestampMs) / 86_400_000);
 	return { ...telemetryContext, ...cloudContext, ...properties, ...(currentAge === undefined || currentAge < 0 ? {} : { days_since_install: currentAge }), is_signed_in: cloudUser !== null, ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
 }
 
-// Who this install is. The GitHub login and AO Cloud user ID ride every event as
-// super properties; email is only ever a person property set at identify time.
 let cloudUser: { id: string; email: string } | null = null;
 let signInKnown = false;
 let githubLogin: string | null = null;
-// The ID the SDK is identified as, and the account identify() last ran for.
-// A launch that boots identified (bootstrap.cloudUserId) has the first but not
-// the second, so the person properties are still set once that launch.
 let identifiedId: string | null = null;
 let identifyCalledFor: string | null = null;
 let posthogReady = false;
@@ -376,20 +316,11 @@ function registerBaseProperties(): void {
 	});
 }
 
-/**
- * Identifies the signed-in AO Cloud user with the AO Cloud user ID. Email is a
- * person property only. An unlinked install starts with its ins_ ID and can be
- * merged into the Cloud person; a linked install starts with a fresh anon_ ID.
- * The signed-in daemon sends events under the Cloud user ID directly.
- */
 export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
 	cloudUser = user;
 	signInKnown = true;
 	if (analyticsOptedOut || identifyCalledFor === user.id || !(await initTelemetry())) return;
-	// A sign-out, a different account or an opt-out may have landed while init
-	// was pending; this continuation must not identify who is no longer current.
 	if (analyticsOptedOut || cloudUser?.id !== user.id) return;
-	// Switching accounts without a sign-out: never layer B onto A's person.
 	if (identifiedId !== null && identifiedId !== user.id) posthog.reset();
 	registerBaseProperties();
 	posthog.identify(user.id, {
@@ -402,23 +333,9 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
 	linkPendingWebVisitor(user.id);
 }
 
-// A website visit to link to the account a sign-in just completed. The
-// orchestrator.inc return page adds the visitor's website PostHog id only for
-// visitors who accepted analytics there, and main hands it over once, with that
-// sign-in's notification. Held in memory only, and spent by the first identify
-// of that account, or at once when the account is already identified.
 let pendingWebVisitor: { userId: string; webDistinctId: string } | null = null;
-// alias() queues $create_alias; PostHog can still refuse the merge (the
-// website id already belongs to an identified person), so this records that
-// the link was asked for, not that it happened.
 const WEB_VISITOR_LINK_REQUESTED_EVENT = "ao.renderer.cloud_web_visitor_link_requested";
 
-/**
- * Notes a cloud session notification: the signed-in WorkOS user (null when
- * signed out or local) and the website visitor id a new sign-in carried. Another
- * account or a sign-out drops a visit not yet linked; a token refresh of the
- * same account keeps it.
- */
 export function noteCloudSignInWebVisitor(userId: string | null, webDistinctId?: unknown): void {
 	if (pendingWebVisitor && pendingWebVisitor.userId !== userId) pendingWebVisitor = null;
 	if (!userId || webDistinctId === undefined) return;
@@ -434,18 +351,11 @@ function linkPendingWebVisitor(userId: string): void {
 	pendingWebVisitor = null;
 	if (analyticsOptedOut || !posthogReady) return;
 	if (isDeniedEvent("$create_alias") || isDeniedEvent(WEB_VISITOR_LINK_REQUESTED_EVENT)) return;
-	// alias(alias, original) sends $create_alias, which merges the website
-	// visitor's distinct id into the person already identified as this user.
 	const aliased = posthog.alias(pending.webDistinctId, userId);
 	if (typeof aliased !== "object" || aliased === null) return;
 	void captureRendererEvent(WEB_VISITOR_LINK_REQUESTED_EVENT, { website_distinct_id: pending.webDistinctId });
 }
 
-/**
- * Sign-out: stop attributing renderer events to the user.
- * ponytail: reset() mints a random anonymous ID that lasts until the next
- * launch, when the bootstrap restores the ins_ install ID.
- */
 export function clearCloudUser(): void {
 	cloudUser = null;
 	signInKnown = true;
@@ -457,28 +367,14 @@ export function clearCloudUser(): void {
 	registerBaseProperties();
 }
 
-/**
- * Applies the in-app analytics opt-out. Opting out stops capture and calls
- * posthog.reset() so no identity survives in the SDK. Opting back in resumes
- * capture, initializing the client first if this launch started opted out.
- * ponytail: after an in-session opt-in the SDK uses a fresh anonymous ID until
- * the next launch chooses an install ID or a fresh anonymous ID from the
- * durable binding state.
- */
 type PostHogFlagControls = Pick<PostHogClient, "set_config" | "opt_out_capturing" | "opt_in_capturing" | "reset" | "reloadFeatureFlags">;
 
-/**
- * Stops capture and flag requests for an in-session opt-out. reset() reloads
- * feature flags, and opt_out_capturing does not stop /flags, so flags are
- * disabled through configuration first.
- */
 export function stopPostHogForOptOut(client: PostHogFlagControls): void {
 	client.set_config({ advanced_disable_flags: true });
 	client.opt_out_capturing();
 	client.reset();
 }
 
-/** Resumes capture and feature flags after an in-session opt-in. */
 export function resumePostHogAfterOptIn(client: PostHogFlagControls): void {
 	client.set_config({ advanced_disable_flags: false });
 	client.opt_in_capturing({ captureEventName: false });
@@ -488,14 +384,10 @@ export function resumePostHogAfterOptIn(client: PostHogFlagControls): void {
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	if (optedOut) {
-		// A website visit not linked yet is dropped, not kept for a later opt-in.
 		pendingWebVisitor = null;
-		// Updater failures counted before the opt-out must not be exported
-		// after a later opt-in, so the streak and pending daily counts go too.
 		try {
 			telemetryStorage()?.removeItem?.(UPDATE_FAILURE_STORAGE_KEY);
 		} catch {
-			// Storage is best-effort; capture is already gated on the flag.
 		}
 		if (posthogReady) stopPostHogForOptOut(posthog);
 		identifiedId = null;
@@ -512,8 +404,6 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	if (cloudUser) await identifyCloudUser(cloudUser);
 }
 
-// A fresh install often has no GitHub token yet, so the daemon-resolved login is
-// polled on a short bounded schedule rather than read once.
 const GITHUB_LOGIN_RETRY_MS = [2_000, 30_000, 120_000, 600_000];
 
 async function syncGithubLogin(): Promise<void> {
@@ -525,8 +415,6 @@ async function syncGithubLogin(): Promise<void> {
 			.catch(() => null);
 		if (!login) continue;
 		githubLogin = login;
-		// A resolved login means GitHub sign-in is done, even when it happened
-		// outside the app or after the onboarding step was closed.
 		void import("./onboarding-telemetry").then((onboarding) => onboarding.completeOnboardingStepIfViewed("github_auth"));
 		registerBaseProperties();
 		if (identifiedId) posthog.setPersonProperties({ github_login: login });
@@ -534,9 +422,6 @@ async function syncGithubLogin(): Promise<void> {
 	}
 }
 
-// The bootstrap usually runs before the daemon is ready, which leaves
-// lifetime_sessions off every renderer event for the launch. Fill it in once
-// the daemon answers, on the same bounded schedule.
 async function syncLifetimeSessions(): Promise<void> {
 	for (const delay of GITHUB_LOGIN_RETRY_MS.slice(0, 3)) {
 		await new Promise((resolve) => setTimeout(resolve, delay));
@@ -545,7 +430,6 @@ async function syncLifetimeSessions(): Promise<void> {
 	}
 }
 
-/** Reads the daemon's lifetime session count into the event context. */
 async function refreshLifetimeSessions(): Promise<boolean> {
 	const count = await Promise.resolve()
 		.then(() => aoBridge.telemetry.getLifetimeSessions())
@@ -556,12 +440,8 @@ async function refreshLifetimeSessions(): Promise<boolean> {
 	return true;
 }
 
-// The desktop just created a session: the count it reports has moved.
 const LIFETIME_SESSION_REFRESH_EVENTS = new Set(["ao.tasks.created", "ao.orchestrators.spawned"]);
 
-// ao.app.first_opened is claimed from main only when it is about to be sent,
-// so an opt-out or a kill-switch entry never spends the one-time marker. Main
-// answers "unknown" until the daemon can say whether a session already exists.
 async function sendFirstOpen(): Promise<void> {
 	for (const delay of [0, ...GITHUB_LOGIN_RETRY_MS.slice(0, 3)]) {
 		if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
@@ -577,9 +457,6 @@ async function sendFirstOpen(): Promise<void> {
 	}
 }
 
-// The signed-in cloud org, tagged on every event and exception once /me has
-// resolved: the org id only as a hash, plus the offering's kind and billing
-// mode from a fixed vocabulary.
 let cloudContext: TelemetryProperties = {};
 const CLOUD_ORG_KINDS = new Set(["b2b", "b2c", "both", "none", "unknown"]);
 const CLOUD_BILLING_MODES = new Set(["self_serve", "contract", "off", "unknown"]);
@@ -604,7 +481,6 @@ function omitKey(properties: TelemetryProperties, key: string): TelemetryPropert
 	return rest;
 }
 
-/** Test seam. */
 export function resetCloudTelemetryContextForTest(): void {
 	cloudContext = {};
 }
@@ -613,19 +489,8 @@ export function postHogEventName(event: string): string {
 	return POSTHOG_EVENT_NAME_ALIASES[event] ?? event;
 }
 
-// Streams the supervisor has silenced, delivered on the telemetry bootstrap.
-// The daemon enforces the same list on its own sink, but renderer events go
-// straight to PostHog, so without this the kill switch would only cover half
-// the producers.
 let disabledEventMatchers: string[] = [];
 
-/**
- * Whether a stream is silenced.
- *
- * Mirrors the daemon's DenylistSink: case-insensitive, `*` matches by prefix,
- * and the current, exported and pre-rename names are all checked, so a deny
- * entry written before the rename keeps working.
- */
 export function isDeniedEvent(event: string, denied: string[] = disabledEventMatchers): boolean {
 	if (denied.length === 0) return false;
 	const candidates = [event, postHogEventName(event), ...(LEGACY_EVENT_NAMES[event] ?? [])].map((name) => name.trim().toLowerCase());
@@ -640,7 +505,6 @@ export function isDeniedEvent(event: string, denied: string[] = disabledEventMat
 	});
 }
 
-/** Test seam: the real value arrives with the bootstrap in initTelemetry. */
 export function setDisabledEventsForTest(denied: string[]): void {
 	disabledEventMatchers = denied;
 }
@@ -657,10 +521,6 @@ export function reserveDailyActiveCapture(storage?: DailyActiveStorage, now = ne
 	try {
 		const raw = storage.getItem(ACTIVE_STORAGE_KEY);
 		const parsed = raw ? (JSON.parse(raw) as { date?: unknown }) : {};
-		// Any record carrying today's date counts as reserved, which includes the
-		// older { date, slots } shape written by builds that emitted four times a
-		// day. That is what stops an install upgrading mid-day from emitting a
-		// second time on a day it has already reported.
 		if (parsed.date === utcDate) return false;
 		storage.setItem(ACTIVE_STORAGE_KEY, JSON.stringify({ date: utcDate }));
 		return true;
@@ -678,11 +538,8 @@ function releaseDailyActiveCapture(storage?: DailyActiveStorage, now = new Date(
 		const raw = storage.getItem(ACTIVE_STORAGE_KEY);
 		const parsed = raw ? (JSON.parse(raw) as { date?: unknown }) : {};
 		if (parsed.date !== utcDate) return;
-		// DailyActiveStorage is deliberately narrow (getItem/setItem only), so the
-		// reservation is cleared by blanking the date rather than widening it.
 		storage.setItem(ACTIVE_STORAGE_KEY, JSON.stringify({ date: "" }));
 	} catch {
-		// The fallback reservation was already released above.
 	}
 }
 
@@ -804,11 +661,6 @@ function routeSurface(pathname: string): string {
 const AUTOMATION_SCHEDULE_PRESET_SET = new Set(["daily", "weekly", "custom"]);
 const AUTOMATION_PROMPT_LENGTH_BUCKET_SET = new Set(["xs", "s", "m", "l", "xl"]);
 
-/**
- * Coarse size of an automation prompt, never the prompt itself. Measured in
- * bytes because that is what the daemon's 4096 cap counts; counting UTF-16
- * units instead would compress the bands for non-Latin prompts.
- */
 export function automationPromptLengthBucket(prompt: string): string {
 	const length = new TextEncoder().encode(prompt).length;
 	if (length <= 80) return "xs";
@@ -912,8 +764,6 @@ async function sanitizeRendererContextProperties(properties?: TelemetryPropertie
 	return safe;
 }
 
-// Values the cloud funnel events may carry. Anything outside a vocabulary is
-// reported as "other" so a free-form string can never leak through.
 const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "docker", "nodeops", "ecs", "daytona", "default"]);
 const CLOUD_SIGN_IN_METHODS = new Set(["workos", "local"]);
 const CLOUD_SESSION_KINDS = new Set(["worker", "orchestrator"]);
@@ -941,7 +791,6 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
 			break;
 		case "ao.renderer.cloud_web_visitor_link_requested":
-			// The website's own pseudonymous PostHog id, never anything typed.
 			if (isWebDistinctId(properties?.website_distinct_id)) safe.website_distinct_id = properties.website_distinct_id;
 			break;
 		case "ao.renderer.cloud_offering_resolved": {
@@ -1088,20 +937,14 @@ export async function sanitizeRendererProperties(
 		}
 		case "ao.renderer.cloud_orchestrator_spawn_succeeded":
 		case "ao.renderer.cloud_orchestrator_spawn_failed": {
-			// Cloud orchestrator spawns are the adoption signal for the hosted
-			// offering's core loop; only a hashed project id rides along.
 			const cloudProjectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (cloudProjectIDHash) safe.project_id_hash = cloudProjectIDHash;
 			break;
 		}
 		case "ao.renderer.cloud_workers_viewed":
-			// How many workers an orchestrator is coordinating when the human
-			// looks: the count alone answers "do people use one worker or many".
 			if (typeof properties?.worker_count === "number") safe.worker_count = properties.worker_count;
 			break;
 		case "ao.renderer.cloud_worker_opened":
-			// Whether the click-through happens before or after a PR exists
-			// separates "checking on a worker" from "reviewing its output".
 			if (typeof properties?.has_pr === "boolean") safe.has_pr = properties.has_pr;
 			break;
 		case "ao.orchestrators.spawned":
@@ -1119,8 +962,6 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.renderer.automation_create_succeeded":
 		case "ao.renderer.automation_create_failed": {
-			// Which kind of automation a prompt describes stays on the machine;
-			// only the schedule shape and a size band ride along.
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
 			if (typeof properties?.schedule_preset === "string" && AUTOMATION_SCHEDULE_PRESET_SET.has(properties.schedule_preset)) {
@@ -1133,7 +974,6 @@ export async function sanitizeRendererProperties(
 		}
 		case "ao.renderer.artifact_create_succeeded":
 		case "ao.renderer.artifact_create_failed":
-			// Where the session lives, never which project.
 			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
 			break;
 		case "ao.session_imports.offer_shown":
@@ -1185,8 +1025,6 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.operation === "string") safe.operation = properties.operation;
 			if (typeof properties?.error_category === "string") safe.error_category = properties.error_category;
 			if (typeof properties?.status === "number") safe.status = properties.status;
-			// The daemon's stable error code, so expected states and real bugs at
-			// the same status can be told apart. Never a message.
 			if (typeof properties?.error_code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(properties.error_code)) safe.error_code = properties.error_code;
 			break;
 		case "ao.terminals.attach_failed":
@@ -1195,7 +1033,6 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		case "ao.renderer.agents_available": {
-			// Agent ids come from AO's registry, never from user input.
 			for (const key of ["installed_count", "authorized_count", "supported_count"] as const) {
 				if (typeof properties?.[key] === "number") safe[key] = properties[key];
 			}
@@ -1237,9 +1074,6 @@ export async function sanitizeRendererProperties(
 		case "ao.updates.failed":
 		case "ao.updates.downloaded":
 		case "ao.renderer.update_unsupported":
-			// Version strings are release identifiers, not user data. The updater's
-			// raw error message is deliberately absent: it can carry feed URLs and
-			// local paths, so update-telemetry.ts maps it to error_category first.
 			if (properties?.report === "daily") safe.report = "daily";
 			if (typeof properties?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(properties.day)) safe.day = properties.day;
 			if (typeof properties?.failure_count === "number" && Number.isFinite(properties.failure_count) && properties.failure_count >= 0) {
@@ -1261,13 +1095,9 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		case "ao.mobile.connect_opened":
-			// Whether the bridge was already on when the modal opened separates
-			// "came to set this up" from "came back to re-scan the QR".
 			if (typeof properties?.bridge_enabled === "boolean") safe.bridge_enabled = properties.bridge_enabled;
 			break;
 		case "ao.renderer.update_channel_changed":
-			// Closed vocabulary on both ends. A feature build's PR number or branch
-			// name is deliberately absent: it names unreleased work.
 			for (const key of ["from_channel", "to_channel"] as const) {
 				const value = properties?.[key];
 				if (value === "stable" || value === "nightly" || value === "feature" || value === "unknown") {
@@ -1278,22 +1108,15 @@ export async function sanitizeRendererProperties(
 		case "ao.support.opened":
 			break;
 		case "ao.renderer.support_submitted":
-			// The report's summary, details, and diagnostics block are the user's own
-			// words and machine state. Only the chosen destination and whether the
-			// hand-off worked are reported.
 			if (properties?.destination === "agent" || properties?.destination === "terminal" || properties?.destination === "github" || properties?.destination === "discord" || properties?.destination === "email") {
 				safe.destination = properties.destination;
 			}
 			if (properties?.outcome === "succeeded" || properties?.outcome === "failed") safe.outcome = properties.outcome;
 			break;
 		case "ao.renderer.review_auto_review_toggled":
-			// The session-scoped switch duplicates a project-level setting, so
-			// whether anyone reaches for it decides if it stays a separate control.
 			if (typeof properties?.enabled === "boolean") safe.enabled = properties.enabled;
 			break;
 		case "ao.mobile.bridge_toggled":
-			// The host, port, and connection password in the QR never leave the
-			// machine: only the direction of the switch and whether it worked.
 			if (typeof properties?.enabled === "boolean") safe.enabled = properties.enabled;
 			if (properties?.outcome === "succeeded" || properties?.outcome === "failed") safe.outcome = properties.outcome;
 			break;
@@ -1357,9 +1180,6 @@ export function bindRendererErrorHandlers() {
 type PostHogClient = typeof posthogModule;
 type PostHogInitOptions = NonNullable<Parameters<PostHogClient["init"]>[1]>;
 
-// The SDK (~650 KB) is loaded inside initTelemetry instead of at module load, so
-// it stays off the renderer's first-paint path. Every use below runs after
-// initTelemetry() resolved true, which is where this is assigned.
 let posthog!: PostHogClient;
 
 async function loadPostHog(): Promise<PostHogClient> {
@@ -1374,33 +1194,12 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 		capture_pageview: false,
 		capture_exceptions: false,
 		capture_performance: false,
-		// Session replay is billed per recording, not per event, so it bypasses
-		// every limiter in this file. AO never watches replays, so keep the
-		// recorder off in the client instead of relying on the project-side
-		// toggle staying off.
 		disable_session_recording: true,
-		// Feature flags load (the SDK default) so experiments can target
-		// installs. advanced_disable_flags is deliberately left out: an explicit
-		// init value would override the set_config an in-session opt-out uses to
-		// stop /flags (stopPostHogForOptOut). An opted-out launch never creates
-		// the client. AO ships no surveys.
 		disable_surveys: true,
-		// The SDK otherwise stores the first URL and referrer as $initial_*
-		// person properties and sends them in /flags, which before_send never
-		// sees: the raw route would carry project and session identifiers.
 		save_campaign_params: false,
 		save_referrer: false,
-		// AO owns the stable random installation ID. Memory-only SDK
-		// persistence prevents legacy identified state from replacing it after
-		// an upgrade; the AO-owned heartbeat and route reservations continue to
-		// use window.localStorage independently.
 		persistence: "memory",
-		// Anonymous (no profile) until identifyCloudUser() runs on an AO Cloud
-		// sign-in; only then does PostHog process a person.
 		person_profiles: "identified_only",
-		// The SDK flags a localhost page as an internal user, which turns person
-		// processing on for every event; a dev build driving the real export path
-		// would otherwise bill anonymous events as identified.
 		internal_or_test_user_hostname: null,
 		bootstrap: {
 			distinctID: distinctId,
@@ -1423,26 +1222,17 @@ export async function initTelemetry(): Promise<boolean> {
 	const attempt = (async () => {
 		if (!POSTHOG_KEY) return false;
 		const bootstrap = await aoBridge.telemetry.getBootstrap();
-		// Null means the supervisor withheld it: no key, no data dir, or an
-		// unpackaged build that has not opted in. The client is never created.
 		if (!bootstrap) return false;
 		installId = bootstrap.installId;
 		disabledEventMatchers = bootstrap.disabledEvents ?? [];
 		const channel = releaseChannelFrom(await readUpdateSettingsForTelemetry());
-		// The user may have opted out while the awaits above were pending; applyAnalyticsOptOut
-		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install, bootstrap.experimentCohort);
 		installTimestampMs = bootstrap.installTimestampMs;
 		if (bootstrap.daysSinceInstall !== undefined) telemetryContext.days_since_install = bootstrap.daysSinceInstall;
 		if (bootstrap.lifetimeSessions !== undefined) telemetryContext.lifetime_sessions = bootstrap.lifetimeSessions;
 		posthog = await loadPostHog();
-		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
-		// both SDK initialization and the unconditional opt-in below.
 		if (analyticsOptedOut) return false;
-		// Boot as the signed-in Cloud user main verified against the daemon's
-		// binding, unless this launch already learned of a sign-out or a
-		// different account (the runtime can resolve while init is pending).
 		const bootCloudId = bootstrap.cloudUserId && !(signInKnown && cloudUser?.id !== bootstrap.cloudUserId) ? bootstrap.cloudUserId : null;
 		if (bootCloudId) {
 			cloudUser ??= { id: bootCloudId, email: "" };
@@ -1450,15 +1240,11 @@ export async function initTelemetry(): Promise<boolean> {
 			identifiedId = bootCloudId;
 		}
 		posthog.init(POSTHOG_KEY, buildPostHogConfig(bootCloudId ?? bootstrap.distinctId, bootCloudId !== null));
-		// A previous launch's opt-out is remembered by the SDK; the AO marker is the
-		// source of truth and the bootstrap is only handed out when it is absent.
 		posthog.opt_in_capturing({ captureEventName: false });
 		posthogReady = true;
 		registerBaseProperties();
 		void syncGithubLogin();
 		if (bootstrap.lifetimeSessions === undefined) void syncLifetimeSessions();
-		// Typed renderer fault intake has its own main-owned policy gate. PostHog
-		// product analytics are intentionally independent of that preference.
 		void initSentry({
 			release: bootstrap.appVersion,
 			channel,
@@ -1472,11 +1258,6 @@ export async function initTelemetry(): Promise<boolean> {
 			storage,
 			window,
 			document,
-			// Ride the batched request queue like every other renderer event
-			// (loaded, route_viewed). An earlier `send_instantly: true` here
-			// fired an immediate, un-retried send during init that never
-			// reached PostHog in packaged builds, so renderer app-active
-			// dropped to zero while batched events kept landing.
 			capture: async () =>
 				isDeniedEvent("ao.app.active")
 					? true
@@ -1495,12 +1276,6 @@ export async function initTelemetry(): Promise<boolean> {
 		}
 		return true;
 	})().catch(() => {
-		// A thrown error is transient (the bridge not ready yet, or a hiccup in
-		// posthog.init): drop the memoized promise so the next captured event
-		// retries init rather than the whole session going dark after one bad
-		// moment. A deliberate `return false` above (no key, not opted in) is
-		// not an error and stays cached, so an intentionally-withheld client is
-		// not retried forever.
 		if (initPromise === attempt) initPromise = null;
 		return false;
 	});
@@ -1508,24 +1283,12 @@ export async function initTelemetry(): Promise<boolean> {
 	return attempt;
 }
 
-/**
- * Acknowledges the renderer part of failure-reporting cleanup. Renderer fault
- * intake forwards directly through preload and owns no durable or retry queue;
- * PostHog product-analytics queues are deliberately outside this policy.
- */
 export function clearRendererTelemetryQueues(): void {}
 
-// Failure-reporting enablement is enforced in preload/main. It never opts the
-// independent PostHog client in or out.
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
 export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
-	// An opted-out renderer must not touch rate-limit slots or the persisted
-	// updater counts, which would otherwise be exported after an opt-in.
 	if (analyticsOptedOut) return false;
-	// Checked before the reservations so a silenced stream does not consume a
-	// rate-limit slot on its way to being discarded, matching the daemon, where
-	// the denylist sits outermost.
 	if (isDeniedEvent(event)) return false;
 	const sanitizedProperties = await sanitizeRendererProperties(event, properties);
 	if (LOG_ONLY_EVENTS.has(event)) {
@@ -1546,7 +1309,6 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 		if (storage) {
 			const decision = claimUpdateFailure(storage, sanitizedProperties, Date.now());
 			if (!decision.emit) return false;
-			// A rollback after an opt-out would restore the counts the opt-out discarded.
 			releaseUpdateFailureClaim = () => {
 				if (!analyticsOptedOut) decision.rollback();
 			};
@@ -1589,12 +1351,8 @@ export async function captureRendererException(error: unknown, properties?: Reco
 	try {
 		await initTelemetry();
 	} catch {
-		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
 	}
 	if (isDeniedEvent("$exception")) return;
-	// The main-owned policy gate decides whether this reaches Sentry, and
-	// Electron main samples and budgets it per install on the final scrubbed
-	// fingerprint. Renderer exceptions no longer enter the PostHog path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
 	captureExceptionToSentry(normalizeException(error), {
 		category: source === "react-error-boundary" ? "render_crash" : undefined,

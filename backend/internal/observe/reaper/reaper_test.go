@@ -139,8 +139,6 @@ func TestTick_SkipsTerminatedSession(t *testing.T) {
 	}
 }
 
-// perHandleRuntime probes per-handle so one pass can mix alive and dead
-// sessions; handles absent from the map read as dead.
 type perHandleRuntime struct{ alive map[string]bool }
 
 func (r perHandleRuntime) IsAlive(_ context.Context, h ports.RuntimeHandle) (bool, error) {
@@ -153,10 +151,6 @@ func handledSession(id domain.SessionID) domain.SessionRecord {
 	return rec
 }
 
-// A pass where (nearly) every session probes dead is one infrastructure
-// outage, not N independent exits (issue #3475: a killed tmux server read as
-// 28 session deaths archived the whole board). The breaker must downgrade
-// every dead conclusion of that pass to a failed probe.
 func TestTick_MassDeathPassIsReportedAsInconclusive(t *testing.T) {
 	lcm := &fakeLCM{}
 	var rows []domain.SessionRecord
@@ -178,15 +172,13 @@ func TestTick_MassDeathPassIsReportedAsInconclusive(t *testing.T) {
 	}
 }
 
-// Below the breaker threshold the reaper keeps reporting genuine deaths: a
-// minority of dead sessions in a large pass passes through as ProbeDead.
 func TestTick_MinorityDeadPassesThroughBreaker(t *testing.T) {
 	lcm := &fakeLCM{}
 	alive := map[string]bool{}
 	var rows []domain.SessionRecord
 	for i, id := range []domain.SessionID{"mer-1", "mer-2", "mer-3", "mer-4", "mer-5", "mer-6"} {
 		rows = append(rows, handledSession(id))
-		alive["h-"+string(id)] = i >= 2 // mer-1, mer-2 dead; rest alive
+		alive["h-"+string(id)] = i >= 2
 	}
 	r := New(lcm, fakeSessions{rows: rows}, perHandleRuntime{alive: alive}, Config{Logger: quietLogger()})
 	if err := r.Tick(ctx); err != nil {
@@ -204,10 +196,6 @@ func TestTick_MinorityDeadPassesThroughBreaker(t *testing.T) {
 	}
 }
 
-// A session whose launch AO ended on purpose (an agent exit, or a runtime found
-// gone at startup) keeps its dead handle until it is resumed. Probing it would
-// count it as dead on every pass: enough stopped sessions then trip the breaker
-// for good and every real crash is downgraded to an inconclusive probe.
 func TestTick_SkipsReleasedLaunchSoStoppedSessionsDoNotTripBreaker(t *testing.T) {
 	lcm := &fakeLCM{}
 	alive := map[string]bool{}
@@ -237,8 +225,6 @@ func TestTick_SkipsReleasedLaunchSoStoppedSessionsDoNotTripBreaker(t *testing.T)
 	}
 }
 
-// Small boards never trip the breaker: two agents finishing together is
-// normal, and both are genuinely dead.
 func TestTick_SmallBoardMassDeathStillConcludes(t *testing.T) {
 	lcm := &fakeLCM{}
 	rows := []domain.SessionRecord{handledSession("mer-1"), handledSession("mer-2")}
@@ -255,7 +241,7 @@ func TestTick_SmallBoardMassDeathStillConcludes(t *testing.T) {
 
 func TestTick_SkipsSessionWithoutHandle(t *testing.T) {
 	lcm := &fakeLCM{}
-	noHandle := domain.SessionRecord{ID: "mer-1"} // no runtime metadata
+	noHandle := domain.SessionRecord{ID: "mer-1"}
 	sessions := fakeSessions{rows: []domain.SessionRecord{noHandle}}
 	if err := newReaper(lcm, sessions, fakeRuntime{alive: true}).Tick(ctx); err != nil {
 		t.Fatal(err)

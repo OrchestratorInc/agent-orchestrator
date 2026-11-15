@@ -1,5 +1,4 @@
 /// <reference path="../../src/renderer/global.d.ts" />
-// Browser fixture for native decoding/playback through the real artifact viewer.
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";

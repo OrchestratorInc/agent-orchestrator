@@ -31,7 +31,6 @@ func TestDiscoverEntryPrefersIndexOverNewerFile(t *testing.T) {
 	ws := t.TempDir()
 	base := time.Now()
 	writeEntryFile(t, filepath.Join(ws, "index.html"), "<main>app</main>", base)
-	// A newer report must not win against the conventional index.html anchor.
 	writeEntryFile(t, filepath.Join(ws, "report.html"), "<main>report</main>", base.Add(time.Hour))
 
 	entry, ok := DiscoverEntry(ws)
@@ -75,7 +74,6 @@ func TestDiscoverEntryFallsBackToMarkdown(t *testing.T) {
 func TestDiscoverEntrySkipsHiddenAndNodeModules(t *testing.T) {
 	ws := t.TempDir()
 	base := time.Now()
-	// Newest files live in skipped dirs; the visible one must win.
 	writeEntryFile(t, filepath.Join(ws, "node_modules", "pkg", "index.html"), "x", base.Add(time.Hour))
 	writeEntryFile(t, filepath.Join(ws, ".cache", "cached.html"), "x", base.Add(2*time.Hour))
 	writeEntryFile(t, filepath.Join(ws, "visible.html"), "ok", base)
@@ -171,8 +169,6 @@ func TestArtifactFileURLUsesADistinctHostFromFileURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse ArtifactFileURL: %v", err)
 	}
-	// The artifact path carries no __ao_artifacts__ marker: scope lives in
-	// the host, so the path can never collide with a real workspace path.
 	if parsedArtifact.Path != "/site/index.html" {
 		t.Fatalf("ArtifactFileURL path = %q, want /site/index.html", parsedArtifact.Path)
 	}
@@ -183,8 +179,6 @@ func TestArtifactFileURLUsesADistinctHostFromFileURL(t *testing.T) {
 		t.Fatalf("ArtifactFileURL host = %q, want %q label", parsedArtifact.Hostname(), previewArtifactHostLabel)
 	}
 
-	// Each host decodes only under its own function: an artifact host is not
-	// a workspace preview host and vice versa.
 	if decoded, ok := SessionIDFromHost(parsedArtifact.Host); ok {
 		t.Fatalf("SessionIDFromHost(artifact host) = %q, true; want false", decoded)
 	}

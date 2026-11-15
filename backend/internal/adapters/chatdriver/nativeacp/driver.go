@@ -1,6 +1,3 @@
-// Package nativeacp binds a user-installed AO agent plugin to the reusable ACP
-// transport. It contains the invariant shared by native ACP harnesses: AO never
-// downloads, packages, or substitutes the provider CLI.
 package nativeacp
 
 import (
@@ -16,88 +13,52 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Plugin is the existing agent-plugin surface native ACP bindings reuse for
-// installation discovery and authentication.
 type Plugin interface {
 	ResolveBinary(context.Context) (string, error)
 	AuthStatus(context.Context) (ports.AgentAuthStatus, error)
 }
 
-// runtimeEnvAugmenter is the existing optional agent-plugin hook for provider
-// profile isolation and other launch environment policy. Native ACP launches
-// use it too, so Chat and TUI sessions do not acquire different answers for
-// where a provider keeps its state.
 type runtimeEnvAugmenter interface {
 	AugmentRuntimeEnv(env map[string]string, dataDir string)
 }
 
-// Configure adds provider-native arguments and environment overlays to one ACP
-// launch. The returned environment is merged over the session environment.
 type Configure func(context.Context, acpdriver.LaunchConfig) (args []string, env map[string]string, err error)
 
-// VersionProbe checks the resolved binary's version. If set, the probe runs
-// after binary resolution and before auth status; a returned error fails the
-// probe with ErrChatDriverIncompatible. The string argument is the resolved
-// binary path.
 type VersionProbe func(ctx context.Context, bin string) error
 
-// Config describes the small provider-specific portion of a native ACP binding.
 type Config struct {
-	Harness           domain.AgentHarness
-	Capabilities      ports.ChatCapabilities
-	Configure         Configure
-	SessionMode       func(ports.PermissionMode) string
-	SessionOptions    func(ports.ChatTurnSettings) []acpdriver.SessionOption
-	PromptFailureCode func(error) domain.ConversationFailureCode
-	// LaunchSessionOptions, RequireAdvertisedOptions, and
-	// CloseSessionBeforeReload: see acpdriver.Config.
-	LaunchSessionOptions     func(acpdriver.LaunchConfig) []acpdriver.SessionOption
-	RequireAdvertisedOptions bool
-	CloseSessionBeforeReload bool
-	// ValidateInitialize optionally admits only the ACP agent and version the
-	// handshake identifies. See acpdriver.Config.ValidateInitialize.
-	ValidateInitialize func(acpsdk.InitializeResponse) error
-	// SessionMeta carries provider-defined extensions on session/new, load, and
-	// resume. See acpdriver.Config.SessionMeta.
-	SessionMeta func(acpdriver.LaunchConfig) map[string]any
-	// SessionPreamble delivers standing context on the first prompt. See
-	// acpdriver.Config.SessionPreamble for when a binding needs it.
-	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
-	// ResetsConversation: see acpdriver.Config.ResetsConversation.
-	ResetsConversation func([]acpsdk.ContentBlock) bool
-	// SuppressSessionModes: see acpdriver.Config.SuppressSessionModes.
-	SuppressSessionModes bool
-	// ImplicitWorkspaceDirectories: see acpdriver.Config.
+	Harness                      domain.AgentHarness
+	Capabilities                 ports.ChatCapabilities
+	Configure                    Configure
+	SessionMode                  func(ports.PermissionMode) string
+	SessionOptions               func(ports.ChatTurnSettings) []acpdriver.SessionOption
+	PromptFailureCode            func(error) domain.ConversationFailureCode
+	LaunchSessionOptions         func(acpdriver.LaunchConfig) []acpdriver.SessionOption
+	RequireAdvertisedOptions     bool
+	CloseSessionBeforeReload     bool
+	ValidateInitialize           func(acpsdk.InitializeResponse) error
+	SessionMeta                  func(acpdriver.LaunchConfig) map[string]any
+	SessionPreamble              func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	ResetsConversation           func([]acpsdk.ContentBlock) bool
+	SuppressSessionModes         bool
 	ImplicitWorkspaceDirectories bool
-	// PromptErrorFailure restates a session/prompt error. See
-	// acpdriver.Config.PromptErrorFailure.
-	PromptErrorFailure func(error, bool) error
-	// HistoryReconciler rewrites a completed session/load replay. See
-	// acpdriver.Config.HistoryReconciler.
-	HistoryReconciler      func([]ports.ChatEvent) []ports.ChatEvent
-	PermissionPolicy       acpdriver.PermissionPolicy
-	ClientExtension        acpdriver.ClientExtensionHandler
-	ClientExtensionAliases map[string]string
-	// SteerRequest, SteerDrain and SteerPrompt: see acpdriver.Config.
+	PromptErrorFailure           func(error, bool) error
+	HistoryReconciler            func([]ports.ChatEvent) []ports.ChatEvent
+	PermissionPolicy             acpdriver.PermissionPolicy
+	ClientExtension              acpdriver.ClientExtensionHandler
+	ClientExtensionAliases       map[string]string
 	SteerRequest                 *acpdriver.SteerRequest
 	SteerDrain                   *acpdriver.SteerDrain
 	SteerPrompt                  *acpdriver.SteerPrompt
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
-	// VersionProbe optionally gates admission on a minimum binary version.
-	VersionProbe VersionProbe
-	// Preflight checks provider prerequisites that do not depend on session environment.
-	Preflight func(context.Context) error
-	// ValidateEnvironment checks required native configuration using launch overrides.
-	ValidateEnvironment func(context.Context, map[string]string) error
-	// QuickStop: see acpdriver.Config.QuickStop.
-	QuickStop bool
+	VersionProbe                 VersionProbe
+	Preflight                    func(context.Context) error
+	ValidateEnvironment          func(context.Context, map[string]string) error
+	QuickStop                    bool
 }
 
-// New creates a Chat driver that launches the exact executable resolved by the
-// supplied agent plugin. There is deliberately no command override or fallback
-// download path in this package.
 func New(plugin Plugin, cfg Config, log *slog.Logger) ports.ChatDriver {
 	return acpdriver.New(buildConfig(plugin, cfg, log), log)
 }
@@ -145,8 +106,6 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 				return ports.ErrChatAuthRequired
 			}
 			if err != nil && log != nil {
-				// An inconclusive local probe is not evidence that a user-installed
-				// agent cannot run. The ACP handshake remains authoritative.
 				log.Debug("native ACP auth probe inconclusive; continuing",
 					"harness", cfg.Harness, "error", err)
 			}

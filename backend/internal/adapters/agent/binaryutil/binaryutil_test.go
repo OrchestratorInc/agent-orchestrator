@@ -43,8 +43,6 @@ func TestResolveBinaryReturnsPathBeforeFallbackDiscoveryDeadline(t *testing.T) {
 	t.Setenv("PATH", dir)
 	t.Setenv("HOME", t.TempDir())
 
-	// A valid ordinary PATH hit must return before the slower fallback
-	// enumeration gets a chance to consume the caller's remaining deadline.
 	ctx := &deadlineAfterChecksContext{Context: context.Background(), remaining: 2}
 	got, err := ResolveBinary(ctx, BinarySpec{
 		Label:       "widget",
@@ -130,7 +128,7 @@ func TestResolveBinaryFallsBackToHomeCandidate(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PATH", t.TempDir()) // empty of the binary
+	t.Setenv("PATH", t.TempDir())
 	bin := filepath.Join(home, ".local", "bin", "widget")
 	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
 		t.Fatal(err)
@@ -267,7 +265,7 @@ func TestResolveBinaryFallsBackToNodeManagerCandidate(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PATH", t.TempDir()) // empty of the binary
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("VOLTA_HOME", "")
 	t.Setenv("FNM_DIR", "")
 	bin := filepath.Join(home, ".nvm", "versions", "node", "v22.23.1", "bin", "widget")
@@ -297,7 +295,7 @@ func TestResolveBinarySkipsNodeManagerCandidatesUnlessExplicit(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PATH", t.TempDir()) // empty of the binary
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("VOLTA_HOME", "")
 	t.Setenv("FNM_DIR", "")
 	bin := filepath.Join(home, ".nvm", "versions", "node", "v22.23.1", "bin", "widget")
@@ -323,7 +321,7 @@ func TestResolveBinaryPrefersHomeCandidateOverNodeManagerCandidate(t *testing.T)
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("PATH", t.TempDir()) // empty of the binary
+	t.Setenv("PATH", t.TempDir())
 	t.Setenv("VOLTA_HOME", "")
 	t.Setenv("FNM_DIR", "")
 	homeBin := filepath.Join(home, ".local", "bin", "widget")

@@ -39,7 +39,6 @@ func TestAwakeStartupFailureDisablesOnlyOptionalService(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := &unreadableAwakeStore{raw: tt.raw, err: tt.err, saveErr: tt.saveErr}
 			var logs bytes.Buffer
-			// Failed initialization must not touch a host or start a policy loop.
 			svc, stop := startAwake(context.Background(), store, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
 			defer stop()
 			if svc != nil {

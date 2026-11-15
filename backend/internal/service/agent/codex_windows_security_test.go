@@ -85,11 +85,6 @@ func TestWindowsPathMetadataPolicyRejectsReparseOwnerACLTypeAndHardLinks(t *test
 }
 
 func TestWindowsAncestorACLPolicyAcceptsDefaultSystemDriveRoot(t *testing.T) {
-	// Stock Windows grants Authenticated Users FILE_ADD_SUBDIRECTORY on the
-	// system drive root ("Authenticated Users:(AD)"). Creating a new entry
-	// beside the vault chain cannot redirect an ancestor that already exists,
-	// so the ancestor walk must accept it or no Windows machine can ever hold
-	// Codex account storage. The vault policy stays strict.
 	for name, mask := range map[string]uint32{
 		"add subdirectory": codexWindowsAppendData,
 		"add file":         codexWindowsWriteData,
@@ -121,10 +116,6 @@ func TestWindowsAncestorACLPolicyAcceptsDefaultSystemDriveRoot(t *testing.T) {
 }
 
 func TestWindowsAncestorACLPolicyAcceptsInheritedStandardWrite(t *testing.T) {
-	// This is the exact access mask inherited by the two unresolved SIDs on the
-	// affected Windows profile. It contains only specific read/write/execute and
-	// synchronize rights; it does not contain delete, ACL, owner, generic-write,
-	// or full-control rights.
 	const inheritedStandardWriteMask uint32 = 0x001201BF
 	aces := []codexWindowsACE{{Allowed: true, PrincipalTrusted: false, Mask: inheritedStandardWriteMask}}
 	if !codexWindowsAncestorACLIsSafe(aces) {

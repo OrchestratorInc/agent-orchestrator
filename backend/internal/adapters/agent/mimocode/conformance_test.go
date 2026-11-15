@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// TestReleasedMiMoCodeConformance is opt-in because it executes a real released
-// provider binary. It always isolates MiMo's profile and workspace.
 func TestReleasedMiMoCodeConformance(t *testing.T) {
 	binary := strings.TrimSpace(os.Getenv("AO_MIMOCODE_BINARY"))
 	if binary == "" {

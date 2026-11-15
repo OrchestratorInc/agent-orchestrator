@@ -31,7 +31,6 @@ func TestKimchiConfiguredProvidersReadsKimchiHarnessStore(t *testing.T) {
 		"kimchi-dev/anthropic":{"models":[]},
 		"custom":{"apiKey":"KIMCHI_CUSTOM_KEY","models":[]}
 	}}`)
-	// Pi's own store is not Kimchi's: Kimchi overrides PI_CODING_AGENT_DIR.
 	writeProviderTestFile(t, filepath.Join(home, ".pi", "agent", "auth.json"), `{"zai":{"type":"api_key","key":"k"}}`)
 	env := map[string]string{"HOME": home}
 
@@ -39,8 +38,6 @@ func TestKimchiConfiguredProvidersReadsKimchiHarnessStore(t *testing.T) {
 		t.Fatalf("providers = %v, want %v", got, want)
 	}
 
-	// The Kimchi key in its config unlocks kimchi-dev and its sub-providers;
-	// a models.json variable counts once it is set.
 	writeProviderTestFile(t, filepath.Join(home, ".config", "kimchi", "config.json"), `{"apiKey":"kimchi"}`)
 	env["KIMCHI_CUSTOM_KEY"] = "custom"
 	want := []string{"custom", "kimchi-dev", "kimchi-dev/anthropic", "openai-codex"}
@@ -48,7 +45,6 @@ func TestKimchiConfiguredProvidersReadsKimchiHarnessStore(t *testing.T) {
 		t.Fatalf("providers = %v, want %v", got, want)
 	}
 
-	// KIMCHI_API_KEY alone is enough too.
 	if err := os.Remove(filepath.Join(home, ".config", "kimchi", "config.json")); err != nil {
 		t.Fatal(err)
 	}

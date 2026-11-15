@@ -12,8 +12,6 @@ import (
 )
 
 func TestLoadDefaults(t *testing.T) {
-	// Clear every recognised var so we observe pure defaults regardless of the
-	// surrounding environment.
 	for _, k := range []string{"AO_TELEMETRY_RETENTION", "AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_INSTALLER_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
 		t.Setenv(k, "")
 	}
@@ -67,9 +65,6 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadAbsolutizesRelativeOverrides(t *testing.T) {
-	// A relative override must be resolved to absolute at Load time. The daemon
-	// chdir's into its data dir at startup, so a relative path left as-is would
-	// be re-resolved against the new cwd and double-nest state.
 	t.Setenv("AO_RUN_FILE", "rel-running.json")
 	t.Setenv("AO_DATA_DIR", "rel-data")
 
@@ -220,9 +215,6 @@ func TestLoadAllowedOrigins(t *testing.T) {
 	})
 }
 
-// The kill switch and the supervisor-supplied version are user-visible
-// boundaries: the daemon reads them from the environment the desktop app hands
-// it, so a parsing regression here silently disables the switch.
 func TestLoadTelemetryDisabledEventsAndAppVersion(t *testing.T) {
 	t.Setenv("AO_TELEMETRY_DISABLED_EVENTS", " ao.v2.app.active , ao.renderer.* ,, ")
 	t.Setenv("AO_TELEMETRY_APP_VERSION", "  0.11.2  ")
@@ -245,8 +237,6 @@ func TestLoadTelemetryDisabledEventsAndAppVersion(t *testing.T) {
 	}
 }
 
-// An unparseable or blank list must never stop the daemon booting: the switch
-// has to be usable in a hurry, so a bad entry is inert rather than fatal.
 func TestLoadTelemetryDisabledEventsBlankIsInert(t *testing.T) {
 	t.Setenv("AO_TELEMETRY_DISABLED_EVENTS", " , , ")
 	t.Setenv("AO_TELEMETRY_APP_VERSION", "")
@@ -279,8 +269,6 @@ func TestLoadAppVersionOnlyFromEnvironment(t *testing.T) {
 }
 
 func TestLoadOfferingDefaults(t *testing.T) {
-	// Clear the offering vars so we observe pure defaults: no client identity,
-	// cloud on, local on.
 	for _, k := range []string{"AO_CLIENT", "AO_CLOUD_OFFERING", "AO_LOCAL_OFFERING", "AO_CLOUD_CONTROL_PLANE_URL"} {
 		t.Setenv(k, "")
 	}
@@ -326,8 +314,6 @@ func TestLoadOfferingOverrides(t *testing.T) {
 	}
 }
 
-// The offering toggles must accept the numeric spellings the supervisor may
-// hand down: 0 is the only way either offering goes off.
 func TestLoadOfferingNumericToggles(t *testing.T) {
 	t.Setenv("AO_CLOUD_OFFERING", "0")
 	t.Setenv("AO_LOCAL_OFFERING", "0")
@@ -368,7 +354,6 @@ func TestLoadOfferingInvalid(t *testing.T) {
 }
 
 func TestLoadGitLabDefaults(t *testing.T) {
-	// Clear the GitLab config vars so we observe pure defaults.
 	for _, k := range []string{"AO_GITLAB_ALLOWED_HOSTS", "AO_GITLAB_HOST_TOKENS"} {
 		t.Setenv(k, "")
 	}
@@ -501,9 +486,6 @@ func TestLoadGitLabInvalidHostTokens(t *testing.T) {
 }
 
 func TestLoadTrackerIntakeDefaultsOff(t *testing.T) {
-	// A blank-but-present value counts as unset. Load() feeds every ao
-	// command, so treating it as malformed would fail `ao status`/`ao stop`
-	// over an empty export rather than just leaving intake off.
 	for _, raw := range []string{"", " ", "\t"} {
 		t.Run(fmt.Sprintf("%q", raw), func(t *testing.T) {
 			t.Setenv("AO_TRACKER_INTAKE", raw)
@@ -554,8 +536,6 @@ func TestLoadTrackerIntakeRejectsGarbage(t *testing.T) {
 	}
 }
 
-// The daemon proxies desktop requests to the agent browser, so it may only
-// ever point at this host.
 func TestLoadAgentBrowserURL(t *testing.T) {
 	for _, tc := range []struct {
 		raw  string
@@ -584,9 +564,6 @@ func TestLoadAgentBrowserURL(t *testing.T) {
 	}
 }
 
-// The agent browser refuses every request without its exact token: a padded
-// one would never match, and a missing one must stop the daemon with a reason
-// rather than leave the agent tab silently empty.
 func TestLoadAgentBrowserToken(t *testing.T) {
 	t.Setenv("AO_AGENT_BROWSER_URL", "http://127.0.0.1:8080")
 	t.Setenv("AO_AGENT_BROWSER_TOKEN", " rb-secret\n")
@@ -670,7 +647,6 @@ func TestLoadPhaseThreeToggles(t *testing.T) {
 	if cfg, err = Load(); err != nil || cfg.TUIVersionRefresh || cfg.UpdateWhenIdle {
 		t.Fatalf("off: tui=%t idle=%t err=%v", cfg.TUIVersionRefresh, cfg.UpdateWhenIdle, err)
 	}
-	// The older Windows-only name still turns it off.
 	t.Setenv("AO_UPDATE_WHEN_IDLE", "")
 	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "off")
 	if cfg, err = Load(); err != nil || cfg.UpdateWhenIdle {
@@ -715,7 +691,6 @@ func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
 	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.13.7")
 	t.Setenv("AO_SENTRY_DSN", "https://k@o.ingest.sentry.io/1")
 	t.Setenv("AO_PORT", "3123")
-	// Desktop-only, documented opt-out the daemon never reads: must survive.
 	t.Setenv("AO_TELEMETRY_RENDERER", "off")
 
 	cfg, err := Load()
@@ -732,8 +707,6 @@ func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
 			t.Fatalf("%s still set in process env after scrub", key)
 		}
 	}
-	// A child started from os.Environ() after the scrub sees none of the
-	// scrubbed keys, and still sees everything else.
 	for _, entry := range os.Environ() {
 		if isScrubbedTelemetryEntry(entry) {
 			t.Fatalf("child environment would inherit %q", entry)
@@ -742,8 +715,6 @@ func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
 	if os.Getenv("AO_PORT") != "3123" || os.Getenv("AO_TELEMETRY_RENDERER") != "off" {
 		t.Fatal("scrub must leave variables outside telemetryEnvKeys alone")
 	}
-	// The real check: a child process started the way the daemon starts every
-	// child (exec with the inherited environment) must not see the settings.
 	if runtime.GOOS == "windows" {
 		return
 	}

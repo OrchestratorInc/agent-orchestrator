@@ -14,8 +14,6 @@ import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 
-// Cloud sign-in state for the cloud login rows. Signed out by default, which
-// leaves every row on its local-only controls.
 const cloudMocks = vi.hoisted(() => ({
 	cloudEnabled: false,
 	org: undefined as { id: string } | undefined,
@@ -34,12 +32,9 @@ vi.mock("../../hooks/useProviderConnections", () => ({
 	useProviderConnections: () => ({ data: cloudMocks.connections, isSuccess: true }),
 }));
 
-// A connected remote host, off by default; the remote diagnostics test turns it on.
 const hostMocks = vi.hoisted(() => {
 	const remoteGET = vi.fn();
 	const remotePOST = vi.fn();
-	// One object, like the real per-host client cache: a fresh one each call
-	// would change the component's client every render.
 	return { connected: [] as string[], remoteGET, remotePOST, remote: { GET: remoteGET, POST: remotePOST } };
 });
 vi.mock("../../hooks/useHostConnection", async (importOriginal) => ({
@@ -55,9 +50,6 @@ vi.mock("../../lib/host-clients", async (importOriginal) => {
 	};
 });
 
-// Claude Code and Codex list their subscription accounts on the Account tab.
-// Most tests here use them as sample harnesses for the Account card every
-// other harness shows, so no harness has accounts unless a test turns them on.
 const accountMocks = vi.hoisted(() => ({ enabled: false }));
 vi.mock("../../hooks/useAgentAccounts", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useAgentAccounts")>();
@@ -102,7 +94,6 @@ function catalogWithInstalled(...installed: string[]) {
 }
 
 const catalog = catalogWithInstalled("claude-code");
-// Login workflows require a confirmed logged-out observation, not "unknown".
 catalog.agents[0].authentication.state = "unauthorized";
 catalog.agents[0].effectiveReadiness = "not_ready";
 
@@ -154,7 +145,6 @@ function ReadinessSelector({ agentId }: { agentId: string }) {
 	);
 }
 
-/** The list row for a harness. The first render shows bare labels before the rows mount; wait for the row itself. */
 async function findListRow(agentId: string): Promise<HTMLElement> {
 	return waitFor(() => {
 		const row = document.querySelector<HTMLElement>(`button[data-agent="${agentId}"]`);
@@ -163,7 +153,6 @@ async function findListRow(agentId: string): Promise<HTMLElement> {
 	});
 }
 
-/** Opens a harness from the list (unless its page is already open) and returns its page. */
 async function findAgentRow(agentId: string): Promise<HTMLElement> {
 	const page = document.querySelector<HTMLElement>(`div[data-agent="${agentId}"]`);
 	if (page) return page;
@@ -176,7 +165,6 @@ async function findAgentRow(agentId: string): Promise<HTMLElement> {
 	});
 }
 
-/** Returns from a harness page to the list. */
 function backToList() {
 	fireEvent.click(screen.getByRole("button", { name: "All harnesses" }));
 }
@@ -306,8 +294,6 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
-	// A chat refused for its login opened this page: the inline sign-in that
-	// takes sends the user back to that chat.
 	it("returns to the chat waiting on this agent's login once an inline sign-in takes", async () => {
 		act(() => useUiStore.setState({
 			settingsModal: { scope: "global", section: "harness", focusAgentId: "codex" },
@@ -340,8 +326,6 @@ describe("HarnessSettingsSection", () => {
 		}
 	});
 
-	// The CLI's login is the computer's own account: a chat on another saved
-	// account is not fixed by it, so it keeps waiting.
 	it("keeps the chat waiting when the inline sign-in is not the session's account", async () => {
 		act(() => useUiStore.setState({
 			settingsModal: { scope: "global", section: "harness", focusAgentId: "codex" },
@@ -377,8 +361,6 @@ describe("HarnessSettingsSection", () => {
 		}
 	});
 
-	// Gemini's Account has no env_ method, but its own key method saves
-	// GEMINI_API_KEY in AO's store, so a fresh visit still loads saved keys.
 	it("loads saved keys for Gemini's key method and reloads them after a save", async () => {
 		const readiness = { agents: [agentReadiness("gemini", "Gemini CLI", { authentication: "unauthorized" })] };
 		let keyLoads = 0;
@@ -414,8 +396,6 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(keyLoads).toBe(2));
 	});
 
-	// Without the harness there is no sign-in panel, so a key saved for it is
-	// listed on its page, where it can still be removed.
 	it("removes a key saved for a harness that is not installed", async () => {
 		const readiness = { agents: [agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" })] };
 		let removed = false;
@@ -464,7 +444,6 @@ describe("HarnessSettingsSection", () => {
 			const page = await findAgentRow("codex");
 			const update = await within(page).findByRole("button", { name: "Update" });
 			expect(update).toBeEnabled();
-			// Also exercise the handler before React replaces the old Update control.
 			act(() => {
 				fireEvent.click(within(page).getByRole("button", { name: "Log in again" }));
 				fireEvent.click(update);
@@ -510,10 +489,8 @@ describe("HarnessSettingsSection", () => {
 		expect(listRow).toHaveAccessibleName("Open Codex details");
 		expect(await within(listRow).findByRole("img", { name: "v1.3.0 available" })).toBeInTheDocument();
 		expect(listRow).toHaveAccessibleDescription("Connected");
-		// Versions live on the harness page, not in the list.
 		expect(within(listRow).queryByText("v1.2.3")).toBeNull();
 		expect(within(listRow).queryByText("v1.3.0 available")).toBeNull();
-		// The list only navigates; actions live on the harness page.
 		expect(within(listRow).queryByRole("button")).toBeNull();
 		listRow.focus();
 		await userEvent.keyboard("{Enter}");
@@ -522,7 +499,6 @@ describe("HarnessSettingsSection", () => {
 		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
 		expect(within(page).getByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(page).getByText("Installed version")).toBeInTheDocument();
-		// A historical install/check date is not a verified update date.
 		expect(within(page).queryByText("Last updated")).toBeNull();
 		expect(within(page).queryByRole("combobox")).toBeNull();
 		expect(within(page).queryByRole("button", { name: "Refresh login" })).toBeNull();
@@ -554,9 +530,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(list).queryByText("gpt-5.3-codex")).toBeNull();
 		expect(within(list).getByText("Default")).toBeInTheDocument();
 		expect(within(list).getByText("Effort: low · medium · high")).toBeInTheDocument();
-		// A model without effort levels shows nothing in their place.
 		expect(within(list).queryByText("No effort control")).toBeNull();
-		// Context remains visible; duplicate IDs and input types are omitted.
 		expect(within(list).getAllByText(/Context/)).toHaveLength(1);
 		expect(within(list).queryByText(/Inputs/)).toBeNull();
 		const unreported = within(list).getByText("gpt-5.3-mini").closest("li") as HTMLElement;
@@ -591,7 +565,6 @@ describe("HarnessSettingsSection", () => {
 		const page = await findAgentRow("codex");
 		const refreshCalls = () => vi.mocked(apiClient.POST).mock.calls.filter((call: readonly unknown[]) => call[0] === "/api/v1/agents/{agent}/models/refresh");
 		await waitFor(() => expect(refreshCalls()).toHaveLength(1));
-		// Opening Account already requests refresh; Models never waits for it.
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
 		expect(await within(page).findByText("Cached model")).toBeInTheDocument();
 		if (source === "database") expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/{agent}/models", {
@@ -615,7 +588,6 @@ describe("HarnessSettingsSection", () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
 			if (path !== "/api/v1/agents/{agent}/models") return (get as (path: string, options: unknown) => Promise<never>)(path, options);
 			reads += 1;
-			// The daemon serves its cache while it refreshes, then the new catalog.
 			return { data: reads === 1
 				? { agentId: "codex", refreshState: "refreshing", models: [{ id: "gpt-cached", label: "GPT Cached", isDefault: true }] }
 				: { agentId: "codex", models: [{ id: "gpt-fresh", label: "GPT Fresh", isDefault: true }] } } as never;
@@ -737,7 +709,6 @@ describe("HarnessSettingsSection", () => {
 		const patch = mockModelSwitches(["gpt-a", "gpt-c"]);
 		const page = await openModels();
 		expect(await within(page).findByText("1 of 3 shown in model pickers")).toBeInTheDocument();
-		// The last model left on cannot be switched off.
 		expect(within(page).getByRole("switch", { name: "Show GPT B in model pickers" })).toBeDisabled();
 		await userEvent.click(within(page).getByRole("button", { name: "Enable all" }));
 		await waitFor(() => expect(patch).toHaveBeenLastCalledWith("/api/v1/settings/harness-defaults/{agent}", { params: { path: { agent: "codex" } }, body: { disabledModels: [] } }));
@@ -796,7 +767,6 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(screen.getByRole("menuitem", { name: "alpha · 12 · Configured" }));
 		expect(within(list).getByText("Alpha 0")).toBeInTheDocument();
 		expect(within(page).getByText("1–10 of 12")).toBeInTheDocument();
-		// A reported provider with no models has nothing to choose, so it is not offered.
 		await userEvent.click(within(page).getByRole("button", { name: "Provider" }));
 		expect(screen.queryByRole("menuitem", { name: "empty · 0" })).toBeNull();
 	});
@@ -830,8 +800,6 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
-		// No saved list here, so readiness explains the empty panel. The saved list
-		// may be read without readiness; refreshing it waits for login.
 		expect(within(page).getByText("Log in to Codex to load its models.")).toBeInTheDocument();
 		expect((vi.mocked(apiClient.POST).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/models/refresh")).toBe(false);
 		await userEvent.click(within(page).getByRole("button", { name: "Account" }));
@@ -844,14 +812,12 @@ describe("HarnessSettingsSection", () => {
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
 		expect(await within(page).findByText("v1.2.3")).toBeInTheDocument();
-		// One version row: the installed release with the newer one beside it.
 		expect(within(page).getAllByText("v1.3.0 available").length).toBeGreaterThan(0);
 		expect(within(page).queryByText("Latest version")).toBeNull();
 		expect(within(page).getByText("npm")).toBeInTheDocument();
 		expect(within(page).getByText("Authentication")).toBeInTheDocument();
 		expect(within(page).getByText("Executable")).toBeInTheDocument();
 		expect(within(page).getByText("~/.local/bin/codex")).toBeInTheDocument();
-		// Health never changes the harness: no install, update or login here.
 		for (const name of ["Install", "Update", "Login"]) expect(within(page).queryByRole("button", { name })).toBeNull();
 		await userEvent.click(within(page).getByRole("button", { name: "Check again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/probe", { params: { path: { agent: "codex" } } });
@@ -994,8 +960,6 @@ describe("HarnessSettingsSection", () => {
 		await userEvent.click(within(page).getByRole("button", { name: "Log out" }));
 		await userEvent.click(within(screen.getByRole("dialog", { name: "Log out of Codex?" })).getByRole("button", { name: "Log out" }));
 		expect(await within(page).findByText("Log out of Codex")).toBeInTheDocument();
-		// A short-lived logout must bypass the retained shell cache, which prunes
-		// exited handles before the panel can attach and observe completion.
 		expect(terminalMuxFactory.value).toBeTypeOf("function");
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/logout", { params: { path: { agent: "codex" } } });
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
@@ -1092,8 +1056,6 @@ describe("HarnessSettingsSection", () => {
 			await waitFor(() => expect(requests.some((request) => request.method === "POST" && request.path.endsWith("/auth/operations"))).toBe(true));
 			expect(await within(page).findByRole("button", { name: "Open sign-in page" })).toBeVisible();
 			await act(async () => {
-				// disconnectHost removes the real client synchronously, before
-				// the panel's cleanup attempts to resolve it and send DELETE.
 				const disconnected = disconnectHost(hostId);
 				first.unmount();
 				await disconnected;
@@ -1144,15 +1106,12 @@ describe("HarnessSettingsSection", () => {
 			return account;
 		});
 		expect(within(row).getByText("Codex CLI login")).toBeInTheDocument();
-		// The CLI's own login is a row of the accounts list, not a card of its own.
 		expect(within(page).queryByRole("button", { name: "Login" })).toBeNull();
 		await userEvent.click(within(row).getByRole("button", { name: "Sign in again" }));
 		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", { params: { path: { agent: "codex" } } });
 		expect(await screen.findByRole("button", { name: "Complete login terminal" })).toBeInTheDocument();
 	});
 
-	// The CLI login does not depend on the accounts list: when it fails, the
-	// panel says so and still offers the CLI's own login.
 	it("shows a failed accounts list and keeps the CLI login on the Account tab", async () => {
 		accountMocks.enabled = true;
 		const readiness = readyCatalog();
@@ -1199,7 +1158,6 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		expect(await within(await findAgentRow("codex")).findByText("Signed in as dev@example.com · Pro · Acme")).toBeInTheDocument();
 		backToList();
-		// The credential's source is never shown, only who and how.
 		expect(await within(await findAgentRow("cursor")).findByText("Using an API key · zai")).toBeInTheDocument();
 	});
 
@@ -1214,7 +1172,6 @@ describe("HarnessSettingsSection", () => {
 		} as unknown as typeof ResizeObserver;
 		try {
 			renderSection();
-			// The first harness in the sorted list opens without a click.
 			const first = await findListRow("claude-code");
 			await waitFor(() => expect(first).toHaveAttribute("aria-current", "true"));
 			expect(document.querySelector('div[data-agent="claude-code"]')).not.toBeNull();
@@ -1251,7 +1208,6 @@ describe("HarnessSettingsSection", () => {
 			);
 			const body = screen.getByTestId("settings-body");
 			const row = await findListRow("codex");
-			// A search that matches nothing leaves no harness open beside the list.
 			await userEvent.type(screen.getByRole("textbox", { name: "Search harnesses" }), "no-such-harness");
 			await waitFor(() => expect(screen.queryByRole("button", { name: /codex/i })).toBeNull());
 			expect(document.querySelector("[data-harness-detail]")).not.toBeNull();
@@ -1346,7 +1302,6 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		if (authentication === "unknown") expect(within(row).getByRole("button", { name: "Login" })).toBeEnabled();
 		else expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-		// Credential presence alone does not imply a failed provider check.
 		if (authentication === "configured") expect(within(row).getByText("Installed")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
 	});
@@ -1729,11 +1684,9 @@ describe("HarnessSettingsSection", () => {
 		await screen.findByText("Goose");
 
 		await user.click(screen.getByRole("radio", { name: "Cloud" }));
-		// Only cloud-supported harnesses, with no local install or login controls.
 		expect(screen.queryByText("Goose")).toBeNull();
 		const claudeRow = screen.getByText("Claude Code").closest('[data-agent="claude-code"]') as HTMLElement;
 		expect(within(claudeRow).getByText("Not connected")).toBeInTheDocument();
-		// A disclosure and one cloud login action; no local install controls.
 		expect(within(claudeRow).getAllByRole("button")).toHaveLength(2);
 		expect(within(claudeRow).getByText("API version not reported")).toBeInTheDocument();
 		await user.click(within(claudeRow).getByRole("button", { name: "Login" }));
@@ -1754,7 +1707,6 @@ describe("HarnessSettingsSection", () => {
 	it("reads a harness as connected only from its valid default connection", async () => {
 		cloudMocks.cloudEnabled = true;
 		cloudMocks.org = { id: "org-1" };
-		// Several connections for one provider: whichever comes last must not decide.
 		cloudMocks.connections = [
 			{ provider: "codex", label: "default", validationState: "valid" },
 			{ provider: "codex", label: "secondary", validationState: "invalid" },
@@ -1889,14 +1841,12 @@ describe("HarnessSettingsSection", () => {
 			</QueryClientProvider>,
 		);
 		const body = screen.getByTestId("settings-body");
-		// The list scrolls inside its own box, before and after a page opens.
 		await findListRow("codex");
 		expect(document.querySelector("[data-harness-detail]")).not.toBeNull();
 		body.scrollTop = 300;
 		fireEvent.scroll(body);
 		expect(body.scrollTop).toBe(0);
 		await findAgentRow("codex");
-		// Focus or scrollIntoView can still move an overflow: hidden body.
 		body.scrollTop = 120;
 		fireEvent.scroll(body);
 		expect(body.scrollTop).toBe(0);
@@ -1911,10 +1861,8 @@ describe("HarnessSettingsSection", () => {
 		const install = await within(row).findByRole("button", { name: "Install" });
 
 		await waitFor(() => expect(document.activeElement).toBe(install));
-		// The dialog body does not scroll while a page is open; scrolling it shifted the page out of view.
 		expect(scrollIntoView).not.toHaveBeenCalled();
 		expect(row).toHaveAttribute("data-focus-highlighted");
-		// The page replaces the list, so its search steps aside.
 		expect(screen.queryByRole("textbox", { name: "Search harnesses" })).toBeNull();
 
 		const highlightTimeout = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 2_000)?.[0];
@@ -1972,7 +1920,6 @@ describe("HarnessSettingsSection", () => {
 
 	it("shows installed harnesses and install actions without authentication UI", async () => {
 		renderSection();
-		// The list carries status as a tooltip; the harness page states it.
 		await waitFor(async () => expect(await findListRow("claude-code")).toHaveAccessibleDescription("Installed"), { timeout: 10_000 });
 		expect(await findListRow("codex")).toBeInTheDocument();
 		const page = await findAgentRow("claude-code");
@@ -2196,8 +2143,6 @@ describe("HarnessSettingsSection", () => {
 		return calls;
 	}
 
-	// The task composer's "Log in" shortcut opens this page asking it to start
-	// the login, so the user lands in the same flow the row's button runs.
 	it("starts the focused harness login once when opened from a login shortcut", async () => {
 		const calls = mockClaudeLogin();
 		Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
@@ -2214,8 +2159,6 @@ describe("HarnessSettingsSection", () => {
 		expect(calls.auth).toBe(1);
 	});
 
-	// A login fixed here must clear a stale model-discovery error in an open
-	// task composer without the user pressing refresh.
 	it("invalidates the harness's cached model catalogs after a login check", async () => {
 		const calls = mockClaudeLogin();
 		const user = userEvent.setup();
@@ -2235,8 +2178,6 @@ describe("HarnessSettingsSection", () => {
 		expect(client.getQueryState(otherAgent)?.isInvalidated).toBe(false);
 	});
 
-	// The first check right after a login terminal exits can fail transiently;
-	// the panel must not report a completed login as signed out.
 	async function loginWithProbeResults(statuses: string[], readinessAfterProbes: number, terminalInput?: string) {
 		const authorized = catalogWithInstalled("claude-code");
 		authorized.agents[0].authentication.state = "authorized";
@@ -2283,8 +2224,6 @@ describe("HarnessSettingsSection", () => {
 		expect(within(withAction.row).getByText("Complete login in the terminal.")).toBeInTheDocument();
 	});
 
-	// A chat turn refused for its login opened this page: the login that takes
-	// sends the user back to that chat.
 	it("returns to the chat turn waiting on this agent's login once it takes", async () => {
 		act(() => useUiStore.setState({
 			settingsModal: { scope: "global", section: "harness", focusAgentId: "claude-code", startLogin: true },
@@ -2310,8 +2249,6 @@ describe("HarnessSettingsSection", () => {
 	});
 
 	it("closes a login panel it could not confirm once the harness reads as logged in", async () => {
-		// Every post-login probe misses, but the daemon's readiness later reports
-		// the harness logged in.
 		const { row, probeCalls, exit } = await loginWithProbeResults(["unauthorized"], 4);
 		exit();
 
@@ -2319,8 +2256,6 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(within(row).queryByTestId("inline-terminal-body")).not.toBeInTheDocument(), { timeout: 5_000 });
 	}, 15_000);
 
-	// `claude auth status` confirms the login, but AO's own provider check can be
-	// inconclusive (offline, a proxy): nothing is left for the terminal to do.
 	it("closes the Claude Code login terminal when the login reads as configured", async () => {
 		const initial = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "unauthorized" })] };
 		const configured = { agents: [agentReadiness("claude-code", "Claude Code", { authentication: "configured" })] };
@@ -2562,7 +2497,6 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("codex");
-		// The readiness query retries once before surfacing its error.
 		expect(await within(row).findByRole("button", { name: "Install" }, { timeout: 5_000 })).toBeInTheDocument();
 		expect(within(row).queryByText("Installation status unknown")).not.toBeInTheDocument();
 	});
@@ -2630,7 +2564,6 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const codexRow = await findAgentRow("codex");
 		const install = await within(codexRow as HTMLElement).findByRole("button", { name: "Install" });
-		// The first install is one click; a method picker appears only after a failure.
 		expect(within(codexRow as HTMLElement).queryByRole("button", { name: "Installation method" })).toBeNull();
 		await user.click(install);
 
@@ -2998,7 +2931,6 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const page = await findAgentRow("codex");
-		// No phase named, so the label stays the generic one for a job this page did not start.
 		expect(await within(page).findByRole("status")).toHaveTextContent("Working…");
 		const bar = within(page).getByRole("progressbar", { name: "Working…" });
 		expect(bar).toHaveAttribute("aria-valuenow", "45");
@@ -3067,7 +2999,6 @@ describe("HarnessSettingsSection", () => {
 		await user.click(within(row).getByRole("button", { name: "Copy diagnostics" }));
 		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalled());
 		const copied = vi.mocked(window.ao!.clipboard.writeText).mock.calls.at(-1)![0] as string;
-		// The machine the install died on is part of the report.
 		expect(copied).toContain("permission denied");
 		expect(copied).toContain("Memory: Orchestrator 2.0 GB · available 4.0 GB of 32.0 GB");
 		expect(copied).toContain("CPU: 30% of 8 cores · load 1.25");
@@ -3089,7 +3020,6 @@ describe("HarnessSettingsSection", () => {
 				if (path === "/api/v1/usage/sessions/memory") return memory(48, 32);
 				return { data: undefined };
 			});
-			// Readiness refreshes and installs answer the same as this computer's.
 			hostMocks.remotePOST.mockImplementation((path: never, init: never) => apiClient.POST(path, init));
 			vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 				if (path === "/api/v1/usage/sessions/memory") return memory(3, 8) as never;
@@ -3129,7 +3059,6 @@ describe("HarnessSettingsSection", () => {
 				return { data: {
 					sessions: [],
 					app: { rssBytes: 2 * 1024 ** 3, processCount: 20, cpuPercent: 12 },
-					// Windows reports load1 = -1 to mean "no such concept here", not 0.
 					system: { totalBytes: 32 * 1024 ** 3, availableBytes: 4 * 1024 ** 3, swapTotalBytes: 0, swapUsedBytes: 0, swapBytesPerSec: 0, cpuCount: 8, load1: -1, cpuPercent: 30, pressureRaw: 5, pressureSource: "available_pct" },
 				} } as never;
 			}

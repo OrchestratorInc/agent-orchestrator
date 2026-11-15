@@ -1,9 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { installFakeBridge } from "./support/fake-bridge";
 
-// Opt-in full daemon integration. Start TestUsageLimitDaemonBrowserFixture in
-// backend/e2e, then supply its coordinator URL. No conversation routes or SSE
-// are mocked; only the native desktop bridge and provider processes are controlled.
 const fixtureBaseUrl = process.env.AO_USAGE_LIMIT_FIXTURE_URL;
 
 interface FixtureMetadata {
@@ -50,8 +47,6 @@ test.describe("usage-limit recovery through the real daemon @connected", () => {
 			expect((await consentResponse).status()).toBe(204);
 			await expect(page.getByText("Auto-resume is scheduled.", { exact: true })).toBeVisible();
 
-			// Real wall-clock time and the production daemon ticker dispatch the retry.
-			// Consent stays cancellable until the daemon records the retry.
 			await expect(completedMessages).toHaveCount(completedBefore + 1, { timeout: 15_000 });
 			await expect(completedMessages.last()).toBeVisible();
 			await expect(recoveryNotice).toHaveCount(0);

@@ -13,19 +13,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionfork"
 )
 
-// SessionForkService forks a session into a new one.
 type SessionForkService interface {
 	Enabled() bool
 	Options(ctx context.Context, id domain.SessionID) (sessionfork.Options, error)
 	ForkTurn(ctx context.Context, id domain.SessionID, clientRequestID, turnID string) (domain.SessionRecord, error)
 }
 
-// SessionForksController serves the session fork routes.
 type SessionForksController struct {
 	Svc SessionForkService
 }
 
-// Register mounts the fork routes.
 func (c *SessionForksController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/fork-options", c.options)
 	r.Post("/sessions/{sessionId}/fork", c.fork)

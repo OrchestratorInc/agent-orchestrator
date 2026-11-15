@@ -12,9 +12,6 @@ import * as agentViewer from "./agent-viewer";
 import { previewCertificate } from "./preview-certificate";
 import { startRemoteProxy, webSocketTunnelStream, type ActiveProxy } from "./remote-proxy";
 
-// App previews are HTTPS. Trust exactly the proxy's preview certificate; its
-// "*.localhost" name is a TLD wildcard Node won't match, which Electron's
-// verify proc accepts by certificate instead (preview-certificate.ts).
 const trustPreview = (preview: URL): ConnectionOptions => ({
 	servername: preview.hostname,
 	ca: previewCertificate().cert,
@@ -43,9 +40,6 @@ type Seen = {
 
 let upstream: Server | undefined;
 let proxy: ActiveProxy | undefined;
-// Lifecycle logging is the point of these spies, not a side effect to silence:
-// every assertion below reads them, and swallowing the output keeps the suite
-// readable while the proxy narrates itself.
 let logged: string[];
 let warned: string[];
 
@@ -214,7 +208,6 @@ describe("startRemoteProxy", () => {
 		expect(await request(html)).toBe(200);
 		expect(await request(new URL("chart.png", raw).href)).toBe(200);
 		expect(await request(new URL("/assets/chart.png", raw).href)).toBe(200);
-		// A saved version's request must reach the host: dropping it would show the live file.
 		expect(await request(new URL("chart.png?raw=true&artifactVersion=3", raw).href)).toBe(200);
 		expect(await request(raw, "POST")).toBe(404);
 		expect(seen.map((entry) => entry.url)).toEqual([
@@ -225,27 +218,23 @@ describe("startRemoteProxy", () => {
 			"/ao/api/v1/sessions/ao-1/preview/files/docs/chart.png?raw=true&artifactVersion=3&source=artifact",
 		]);
 		expect(seen.every((entry) => entry.auth === "Bearer pw" && !entry.appAuth)).toBe(true);
-		// Clearing Browser's app preview does not invalidate raw artifact reads.
 		expect(proxy.previewUrl("ao-1", "http://localhost:5173/")).toBe(app);
 		proxy.previewUrl("ao-1", "");
 		expect(await request(raw)).toBe(200);
 	});
 
 	it("keeps an app preview's origin across restarts with the same preview port", async () => {
-		// Port contention permits a different origin; isolate stable-port URL mapping.
 		vi.spyOn(agentViewer, "listenOnStablePort").mockResolvedValue(44000);
 		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		const entry = { label: "box", url: `http://127.0.0.1:${port}/ao`, password: "pw" };
 		proxy = await startRemoteProxy(entry);
 		const first = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
-		// A restarted dev server comes back on another port: same origin, so cookies and storage survive.
 		expect(new URL(proxy.previewUrl("ao-1", "http://localhost:5174/")).origin).toBe(first.origin);
 		expect(new URL(proxy.previewUrl("ao-2", "http://localhost:5173/")).hostname).not.toBe(first.hostname);
 		await proxy.close();
 		proxy = await startRemoteProxy(entry);
 		expect(new URL(proxy.previewUrl("ao-1", "http://localhost:5173/")).origin).toBe(first.origin);
 		await proxy.close();
-		// Without the host's password the origin cannot be guessed.
 		proxy = await startRemoteProxy({ ...entry, password: "other" });
 		expect(new URL(proxy.previewUrl("ao-1", "http://localhost:5173/")).hostname).not.toBe(first.hostname);
 	});
@@ -408,7 +397,6 @@ describe("startRemoteProxy", () => {
 		expect(proxy.isAgentBrowserUrl(agent.href)).toBe(true);
 		expect(proxy.isAgentBrowserUrl(proxy.previewUrl("ao-1", "http://localhost:5173/v/cdp"))).toBe(false);
 		expect(seen.at(-1)).toMatchObject({ url: "/api/v1/sessions/ao-1/agent-browser/stats", auth: "Bearer host-password" });
-		// Never the app's origin, and the same one again for the same session.
 		expect(agent.origin).not.toBe(new URL(proxy.previewUrl("ao-1", "http://localhost:5173/")).origin);
 		expect(new URL(await proxy.agentBrowserUrl("ao-1")).origin).toBe(agent.origin);
 		const send = (method: string, path: string, origin?: string) => new Promise<number>((resolve, reject) => {
@@ -439,14 +427,12 @@ describe("startRemoteProxy", () => {
 			req.end();
 		});
 		const preview = new URL(proxy.previewUrl("ao-1", "http://localhost:5173/"));
-		// Same host, path, query and hash, on the plain server: no certificate for the system browser to refuse.
 		const external = proxy.externalUrl(`${preview.origin}/dash?x=1#top`);
 		expect(external).toBe(`http://${preview.hostname}:${plainPort}/dash?x=1#top`);
 		expect(proxy.externalUrl(external)).toBe(external);
 		expect(await get(external)).toBe(200);
 		expect(seen.at(-1)).toMatchObject({ url: "/api/v1/sessions/ao-1/preview/app/dash?x=1", auth: "Bearer pw" });
 		expect(proxy.externalUrl("https://github.com/x")).toBe("https://github.com/x");
-		// The agent viewer is the Browser panel's alone, whatever port its Host names.
 		const agent = await proxy.agentBrowserUrl("ao-1");
 		expect(proxy.externalUrl(agent)).toBe(agent);
 		const count = seen.length;
@@ -616,15 +602,12 @@ describe("startRemoteProxy", () => {
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ ok: true });
 		expect(seen).toHaveLength(1);
-		expect(seen[0].url).toBe("/api/v1/projects"); // token gone
+		expect(seen[0].url).toBe("/api/v1/projects");
 		expect(seen[0].auth).toBe("Bearer pw");
-		expect(seen[0].origin).toBeUndefined(); // app://renderer never reaches the daemon
+		expect(seen[0].origin).toBeUndefined();
 		expect(seen[0].body).toBe('{"path":"/srv/repo"}');
 	});
 
-	// The add-host dialog accepts https://, so this is what a Tailscale Serve or
-	// reverse-proxy address does today: the upstream is a TLS endpoint and the
-	// proxy must not put the connection password on the wire in the clear.
 	it("never sends the credential in the clear to an https host", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		proxy = await startRemoteProxy({
@@ -633,8 +616,6 @@ describe("startRemoteProxy", () => {
 			password: "pw",
 		});
 
-		// A cleartext listener cannot complete a TLS handshake, so the honest
-		// outcome is a failed request — never a plaintext one that succeeds.
 		const res = await fetch(`${proxy.base}/api/v1/projects`);
 		expect(res.status).toBe(502);
 		expect(await res.json()).toEqual({
@@ -645,9 +626,6 @@ describe("startRemoteProxy", () => {
 		expect(seen).toHaveLength(0);
 	});
 
-	// A daemon can live behind a reverse proxy at a path. The renderer's base is
-	// the loopback proxy's own root, so the upstream prefix is restored here or
-	// every credentialled request lands on whatever else that vhost serves.
 	it("restores the host's path prefix upstream", async () => {
 		const { port, seen } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		proxy = await startRemoteProxy({
@@ -688,8 +666,6 @@ describe("startRemoteProxy", () => {
 			password: "pw",
 		});
 
-		// A path that merely starts with the token's characters is not the token:
-		// /<token>x/... must not authorize, or the token stops being a boundary.
 		const bare = new URL(proxy.base);
 		const res = await fetch(`${bare.origin}${bare.pathname}x/api/v1/projects`);
 		expect(res.status).toBe(404);
@@ -720,7 +696,7 @@ describe("startRemoteProxy", () => {
 		expect(res.headers.get("access-control-allow-origin")).toBe("app://renderer");
 		expect(res.headers.get("access-control-allow-headers")).toMatch(/content-type/i);
 		expect(res.headers.get("access-control-allow-private-network")).toBe("true");
-		expect(seen).toHaveLength(0); // preflight never leaves the machine
+		expect(seen).toHaveLength(0);
 	});
 
 	it("adds the renderer origin to real responses so cross-origin fetch succeeds", async () => {
@@ -737,12 +713,10 @@ describe("startRemoteProxy", () => {
 		const res = await fetch(`${proxy.base}/api/v1/projects`, {
 			headers: { origin: "app://renderer" },
 		});
-		expect(res.status).toBe(400); // errors pass through untouched…
-		expect(res.headers.get("access-control-allow-origin")).toBe("app://renderer"); // …but stay readable
+		expect(res.status).toBe(400);
+		expect(res.headers.get("access-control-allow-origin")).toBe("app://renderer");
 	});
 
-	// "The app can't reach my host" had no answer anywhere before this, and the
-	// only thing that could make these lines unshippable is a secret in one.
 	it("logs its own lifecycle without the token or the password", async () => {
 		const { port } = await startUpstream(() => ({ status: 200, body: "{}" }));
 		proxy = await startRemoteProxy({ label: "workbox", url: `http://127.0.0.1:${port}`, password: "hunter2secret" });
@@ -769,7 +743,6 @@ describe("startRemoteProxy", () => {
 		expect(res.status).toBe(502);
 		const warning = warned.find((line) => line.includes("answering 502"));
 		expect(warning).toContain(`127.0.0.1:${port}`);
-		// The post-strip path, which is the useful half; req.url starts with the token.
 		expect(warning).toContain("/api/v1/projects");
 		expect(warning).not.toContain("hunter2secret");
 		expect(warning).not.toContain(token);
@@ -893,24 +866,12 @@ describe("startRemoteProxy streams", () => {
 		expect(result).toBe("closed");
 	});
 
-	// Regression for the connection-status hang: the previous test's upstream
-	// writes its first chunk synchronously, so headers and that chunk reach the
-	// client together even without an explicit flush — it never exercised the
-	// gap. A real SSE upstream (GET /api/v1/events) can hold its first byte
-	// indefinitely; a client's EventSource must still see the response headers
-	// right away; otherwise it reports CONNECTING forever, which is exactly what
-	// "not receiving live updates" looked like before this was found.
 	it("flushes response headers before the first SSE byte arrives", async () => {
 		let upstreamClosed = false;
 		upstream = createServer((_req, res) => {
 			res.once("close", () => { upstreamClosed = true; });
 			res.writeHead(200, { "content-type": "text/event-stream" });
-			// The real daemon flushes its own headers immediately (confirmed by a
-			// direct curl against it) — this upstream must too, or the test would
-			// measure the fake upstream's header delay instead of the proxy's.
 			res.flushHeaders();
-			// The body is what's withheld for 500ms, like a daemon with nothing to
-			// say yet.
 			setTimeout(() => {
 				res.write("data: first\n\n");
 				res.end();
@@ -944,9 +905,6 @@ describe("startRemoteProxy streams", () => {
 
 		expect(head).toContain("200");
 		expect(head.toLowerCase()).toContain("content-type: text/event-stream");
-		// The upstream withholds its first byte for 500ms; seeing the header
-		// block well before that proves the proxy flushes headers on their own
-		// rather than only when they can piggyback on the first body write.
 		expect(headersArrivedAfterMs).toBeLessThan(300);
 		await vi.waitFor(() => expect(upstreamClosed).toBe(true), { timeout: 1_000 });
 	});
@@ -975,8 +933,6 @@ describe("startRemoteProxy streams", () => {
 		const firstArrivedAfterMs = Date.now() - started;
 
 		expect(first).toContain("data: first");
-		// The second chunk is written 500ms later; receiving the first well before
-		// that proves streaming rather than buffer-until-close.
 		expect(firstArrivedAfterMs).toBeLessThan(300);
 		let rest = "";
 		for (;;) {
@@ -995,8 +951,7 @@ describe("startRemoteProxy streams", () => {
 			sawAuth.push(req.headers.authorization);
 			sawFetchSite.push(req.headers["sec-fetch-site"]);
 			socket.write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
-			socket.on("data", (d) => socket.write(d)); // echo frames back verbatim
-			// Upgraded sockets are half-open by default and would hold close() open.
+			socket.on("data", (d) => socket.write(d));
 			socket.on("end", () => socket.destroy());
 		});
 		await new Promise<void>((resolve) => upstream?.listen(0, "127.0.0.1", resolve));
@@ -1022,7 +977,7 @@ describe("startRemoteProxy streams", () => {
 
 		const all = Buffer.concat(received).toString();
 		expect(all).toContain("101 Switching Protocols");
-		expect(all).toContain("payload-bytes"); // echoed through both pipes
+		expect(all).toContain("payload-bytes");
 		expect(sawAuth).toEqual(["Bearer pw"]);
 		expect(sawFetchSite).toEqual([undefined]);
 	});
@@ -1060,7 +1015,6 @@ describe("startRemoteProxy over HTTP/2", () => {
 		h2upstream = undefined;
 	});
 
-	// A daemon whose listener speaks HTTP/2 without TLS, as AO's remote listener does.
 	async function startHttp2Upstream(hostId: string): Promise<{ port: number; seen: Seen[]; sessions: ServerHttp2Session[] }> {
 		const seen: Seen[] = [];
 		const sessions: ServerHttp2Session[] = [];
@@ -1096,7 +1050,6 @@ describe("startRemoteProxy over HTTP/2", () => {
 			stream.on("end", () => resolve(body));
 			stream.on("error", reject);
 		});
-		// Many module requests at once, on one connection.
 		const bodies = await Promise.all(Array.from({ length: 20 }, (_, i) => get(`/src/m${i}.ts`)));
 		client.close();
 		expect(client.alpnProtocol).toBe("h2");
@@ -1120,7 +1073,6 @@ describe("startRemoteProxy over HTTP/2", () => {
 		expect(await status("//:x")).toBe(200);
 		client.close();
 		expect(seen.map((entry) => entry.url)).toEqual(["/api/v1/sessions/ao-1/preview/app/", "/api/v1/sessions/ao-1/preview/app/:x"]);
-		// An upgrade it cannot serve is dropped, not thrown on.
 		const artifact = new URL(proxy.previewUrl("ao-1", `http://ao-preview-artifact.mfxs2mi.localhost:${port}/index.html`));
 		const socket = netConnect(Number(new URL(proxy.base).port), "127.0.0.1");
 		socket.on("error", () => undefined);
@@ -1158,7 +1110,6 @@ describe("startRemoteProxy through an HTTPS host's tunnel", () => {
 	let rejectUnauthorized: string | undefined;
 
 	beforeEach(() => {
-		// The test host's certificate is self-signed.
 		rejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 		process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 	});
@@ -1172,10 +1123,6 @@ describe("startRemoteProxy through an HTTPS host's tunnel", () => {
 		secureUpstream = undefined;
 	});
 
-	// An HTTPS daemon (as behind a Cloudflare tunnel). With tunnel=true it serves
-	// HTTP/2 inside a WebSocket at /api/v1/tunnel, as the AO daemon does. With a
-	// prefix it sits behind a reverse proxy that serves it there, stripped; the
-	// tunnel still ends at the daemon itself.
 	async function startSecureUpstream(tunnel: boolean, prefix = ""): Promise<{ port: number; direct: string[]; tunneled: Seen[]; tunnels: number }> {
 		const state = { port: 0, direct: [] as string[], tunneled: [] as Seen[], tunnels: 0 };
 		const identity = JSON.stringify({ hostId: "h_workbox", apiVersion: 1 });
@@ -1209,7 +1156,6 @@ describe("startRemoteProxy through an HTTPS host's tunnel", () => {
 		const responses = await Promise.all(Array.from({ length: 20 }, (_, i) => fetch(`${proxy!.base}/api/v1/projects?i=${i}`).then((res) => res.json())));
 		expect(responses.every((body) => body.proto === "2.0")).toBe(true);
 		expect(host.tunnels).toBe(1);
-		// The only direct request is the unauthenticated identity probe that precedes the upgrade.
 		expect(host.direct.map((line) => line.split(" ")[1])).toEqual(["/api/v1/identity"]);
 		expect(host.tunneled[0]).toMatchObject({ url: "/api/v1/identity", auth: undefined });
 		expect(host.tunneled.slice(1).every((entry) => entry.auth === "Bearer pw")).toBe(true);
@@ -1245,13 +1191,11 @@ describe("startRemoteProxy through an HTTPS host's tunnel", () => {
 describe("startRemoteProxy when the upstream fails", () => {
 	const identity = JSON.stringify({ hostId: "h_workbox", apiVersion: 1 });
 	const daemonEntry = (url: string) => ({ hostId: "h_workbox", label: "workbox", url, password: "pw" });
-	// Short deadlines so a dead path shows within a test.
 	const fast = { openMs: 1_000, pingMs: 200 };
 	const cleanups: Array<() => unknown> = [];
 	let rejectUnauthorized: string | undefined;
 
 	beforeEach(() => {
-		// The HTTPS test hosts' certificate is self-signed.
 		rejectUnauthorized = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
 		process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 	});
@@ -1264,15 +1208,11 @@ describe("startRemoteProxy when the upstream fails", () => {
 		else process.env.NODE_TLS_REJECT_UNAUTHORIZED = rejectUnauthorized;
 	});
 
-	// Settles as the promise does, or with "hung" if it has not settled in time.
 	const within = <T>(promise: Promise<T>, ms = 2_000): Promise<T | "hung"> =>
 		Promise.race([promise, new Promise<"hung">((resolve) => setTimeout(() => resolve("hung"), ms))]);
 
 	type DaemonHandler = (req: Http2ServerRequest, res: Http2ServerResponse, drop: () => void) => void;
 
-	// AO's remote listener speaks HTTP/2 without TLS. drop() closes every
-	// connection to it, as a daemon restart does; onIdentity decides when the
-	// identity probe is answered.
 	async function startH2Daemon(handler: DaemonHandler, onIdentity = (answer: () => void, _res: Http2ServerResponse) => answer()): Promise<number> {
 		const sockets = new Set<Socket>();
 		const drop = () => { for (const socket of sockets) socket.destroy(); };
@@ -1305,11 +1245,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		expect(response.headers.get("etag")).toBe('W/"scratch"');
 	});
 
-	// An HTTPS daemon carrying HTTP/2 inside a WebSocket at /api/v1/tunnel, as
-	// AO's does behind a Cloudflare tunnel. drop() closes every tunnel; direct
-	// requests answer {direct}.
-	// holdMs sends what the daemon wrote within that time as one tunnel
-	// message, as the Cloudflare edge passes a small answer on.
 	async function startTunnelDaemon(handler: DaemonHandler, options: { failUpgrades?: number; answerUpgrades?: boolean; holdMs?: number } = {}) {
 		const tunnels = new Set<WebSocket>();
 		const drop = () => { for (const tunnel of tunnels) tunnel.terminate(); };
@@ -1330,9 +1265,7 @@ describe("startRemoteProxy when the upstream fails", () => {
 			port: 0,
 			upgrades: 0,
 			dropDirect: () => { for (const session of directSessions) session.destroy(); },
-			// Ends every connection with a TCP reset, as a network change does.
 			reset: () => { for (const socket of connections) socket.resetAndDestroy(); },
-			// Closes every tunnel with a close frame, as a daemon shutting down does.
 			closeTunnels: () => { for (const tunnel of tunnels) tunnel.close(); },
 		};
 		host.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => {
@@ -1372,9 +1305,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		}) as typeof ws.send;
 	}
 
-	// A TCP relay to a daemon. silence() makes every connection it carries go
-	// quiet with no FIN or RST, as a network change does; the first quietFirst
-	// connections are quiet from the start.
 	async function startRelay(target: number, quietFirst = 0) {
 		const links = new Set<{ quiet: boolean; ends: Socket[] }>();
 		let accepted = 0;
@@ -1400,9 +1330,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		return { port: (relay.address() as AddressInfo).port, silence: () => { for (const link of links) link.quiet = true; } };
 	}
 
-	// A TCP relay to a daemon that holds the daemon's answers to pings back for
-	// holdMs, as a slow uplink does: there a ping waits behind the data queued
-	// ahead of it. Every other frame goes straight through.
 	async function startPongHoldingRelay(target: number, holdMs: number) {
 		const relay = createNetServer((client) => {
 			const daemon = netConnect(target, "127.0.0.1");
@@ -1413,7 +1340,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 				while (frames.length >= 9 && frames.length >= 9 + frames.readUIntBE(0, 3)) {
 					const frame = frames.subarray(0, 9 + frames.readUIntBE(0, 3));
 					frames = frames.subarray(frame.length);
-					// A PING frame with its ACK flag set.
 					if (frame[3] === 6 && frame[4] & 1) setTimeout(() => client.write(frame), holdMs);
 					else client.write(frame);
 				}
@@ -1428,7 +1354,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		return (relay.address() as AddressInfo).port;
 	}
 
-	// The browser panel's side of a preview: an HTTP/2 connection to the proxy.
 	function previewBrowser(active: ActiveProxy) {
 		const preview = new URL(active.previewUrl("ao-1", "http://localhost:5173/"));
 		const browser = http2Connect(`https://127.0.0.1:${preview.port}`, trustPreview(preview));
@@ -1468,9 +1393,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 	});
 
 	it("relays a small body whose tunnelled stream closed before its end", async () => {
-		// Through the tunnel, a small answer's stream closes with NO_ERROR before
-		// its body ends. Once the request has gone out, as it has over any real
-		// network, Node destroys that stream before "end": the body is complete.
 		const host = await startTunnelDaemon((_req, res) => void setTimeout(() => res.end('{"ok":true}'), 30), { holdMs: 10 });
 		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`));
 		for (let attempt = 0; attempt < 3; attempt++) {
@@ -1482,8 +1404,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 	});
 
 	it("fails a body whose host destroyed its session mid-body", async () => {
-		// A destroyed session ends its streams with code 0 and no reset: only the
-		// destroyed session tells this cut from a finished body.
 		const port = await startH2Daemon((_req, res) => {
 			res.writeHead(200, { "content-type": "text/javascript" });
 			res.write("x".repeat(5_000));
@@ -1512,11 +1432,9 @@ describe("startRemoteProxy when the upstream fails", () => {
 		const cut = await fetch(`${proxy.base}/api/v1/cut`);
 		await expect(within(cut.text())).rejects.toThrow();
 		expect(await (await fetch(`${proxy.base}/api/v1/projects`)).json()).toEqual({ proto: "2.0" });
-		// The cut-off GET to /slow went once more, over a tunnel of its own.
 		expect(host.upgrades).toBe(4);
 	});
 
-	// Collects uncaught exceptions for the rest of the test.
 	function catchUncaught(): Error[] {
 		const uncaught: Error[] = [];
 		const onUncaught = (error: Error) => uncaught.push(error);
@@ -1526,9 +1444,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 	}
 
 	it("opens a new tunnel after a reset, without writing into the old one", async () => {
-		// A reset leaves ws unable to end a tunnel's stream. Any frame a session
-		// then wrote into it threw ERR_INTERNAL_ASSERTION, uncaught: the proxy's
-		// session and the host's alike.
 		const uncaught = catchUncaught();
 		let events: Http2ServerResponse | undefined;
 		const host = await startTunnelDaemon((req, res) => {
@@ -1542,11 +1457,9 @@ describe("startRemoteProxy when the upstream fails", () => {
 		await reader.read();
 		host.reset();
 		await expect(within(reader.read())).rejects.toThrow();
-		// The host has one more event for the stream it lost.
 		events?.write("data: late\n\n", () => undefined);
 		const next = await within(fetch(`${proxy.base}/api/v1/projects`));
 		expect(next === "hung" ? "hung" : await next.json()).toEqual({ proto: "2.0" });
-		// Past two ping intervals, when a stale session would have been destroyed.
 		await new Promise((resolve) => setTimeout(resolve, fast.pingMs * 2.5));
 		expect(uncaught.map((error) => error.stack)).toEqual([]);
 		expect(host.upgrades).toBe(2);
@@ -1554,24 +1467,17 @@ describe("startRemoteProxy when the upstream fails", () => {
 	});
 
 	it("delivers an answer the host sent just before closing its tunnel", async () => {
-		// While one of its writes is in flight (here a slow uplink), a session
-		// stops reading, and the tunnel holds what arrives meanwhile, the host's
-		// last answer and its close included.
 		const host = await startTunnelDaemon((req, res) => {
 			res.end(JSON.stringify({ last: req.method }));
 			if (req.method === "DELETE") setTimeout(() => host.closeTunnels(), 20);
 		});
-		// Default timing: pings must outlast the slow uplink.
 		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`));
 		expect((await fetch(`${proxy.base}/api/v1/projects`)).status).toBe(200);
 		const send = WebSocket.prototype.send;
 		vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (this: WebSocket, data: unknown, callback?: unknown) {
-			// The proxy's end of the tunnel (a client WebSocket has a URL).
 			if (this.url === undefined || typeof callback !== "function") return send.call(this, data as Buffer, {}, callback as () => void);
 			send.call(this, data as Buffer, {}, (error?: Error) => void setTimeout(() => callback(error), 300));
 		} as typeof send);
-		// A DELETE without a body: all headers, so the write in flight is its
-		// only one, and never sent twice, so only the first answer can count.
 		const answer = await within(fetch(`${proxy.base}/api/v1/sessions/ao-1`, { method: "DELETE" }));
 		expect(answer === "hung" ? "hung" : [answer.status, await answer.json()]).toEqual([200, { last: "DELETE" }]);
 	});
@@ -1581,9 +1487,7 @@ describe("startRemoteProxy when the upstream fails", () => {
 		await new Promise<void>((resolve) => gone.listen(0, "127.0.0.1", resolve));
 		const port = (gone.address() as AddressInfo).port;
 		await new Promise<void>((resolve) => gone.close(() => resolve()));
-		// A captive portal answers, with a redirect.
 		const portal = await startUpstream(() => ({ status: 302, body: "", headers: { location: "http://portal.invalid/" } }));
-		// Or the identity probe gets no answer in time.
 		let stall = false;
 		const realFetch = globalThis.fetch;
 		vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => stall && String(input).endsWith("/api/v1/identity")
@@ -1604,7 +1508,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 			proxy = undefined;
 		}
 		expect(answers).toEqual(["502 UPSTREAM_UNAVAILABLE", "502 UPSTREAM_UNAVAILABLE", "502 UPSTREAM_UNAVAILABLE", "502 HOST_IDENTITY_UNVERIFIED"]);
-		// What failed, not only "fetch failed".
 		expect(warned).toContainEqual(expect.stringContaining("(fetch failed: ECONNREFUSED); answering 502"));
 		expect(warned.filter((line) => line.includes("identity check failed"))).toEqual([expect.stringContaining("(fetch failed: unexpected redirect)")]);
 	});
@@ -1613,14 +1516,12 @@ describe("startRemoteProxy when the upstream fails", () => {
 		const seen: string[] = [];
 		const host = await startTunnelDaemon((req, res) => {
 			seen.push(req.method);
-			// The first try of each is cut off by a reset.
 			if (seen.filter((method) => method === req.method).length === 1) return void host.reset();
 			res.end(JSON.stringify({ method: req.method }));
 		});
 		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`), undefined, fast);
 		const get = await within(fetch(`${proxy.base}/api/v1/projects`));
 		expect(get === "hung" ? "hung" : [get.status, await get.json()]).toEqual([200, { method: "GET" }]);
-		// Without a body, so only its method keeps it from going twice.
 		const deleted = await within(fetch(`${proxy.base}/api/v1/sessions/ao-1`, { method: "DELETE" }));
 		expect(deleted === "hung" ? "hung" : [deleted.status, (await deleted.json()).code]).toEqual([502, "UPSTREAM_UNAVAILABLE"]);
 		expect(seen).toEqual(["GET", "GET", "DELETE"]);
@@ -1675,10 +1576,8 @@ describe("startRemoteProxy when the upstream fails", () => {
 		});
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${port}`));
 		const request = previewBrowser(proxy)("/src/main.ts");
-		// The proxy holds the request while it verifies the host...
 		await verifying;
 		request.close(http2Constants.NGHTTP2_CANCEL);
-		// ...and the browser's reset reaches it before the host answers.
 		await new Promise((resolve) => setTimeout(resolve, 200));
 		answerIdentity();
 		await new Promise((resolve) => setTimeout(resolve, 300));
@@ -1691,13 +1590,10 @@ describe("startRemoteProxy when the upstream fails", () => {
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${relay.port}`), undefined, fast);
 		expect((await fetch(`${proxy.base}/api/v1/projects`)).status).toBe(200);
 		relay.silence();
-		// A POST, which is not sent again (even without a body), fails with the session...
 		const stalled = await within(fetch(`${proxy.base}/api/v1/projects`, { method: "POST" }));
 		expect(stalled === "hung" ? "hung" : stalled.status).toBe(502);
-		// ...and the next request takes a fresh session, over a fresh connection.
 		expect((await fetch(`${proxy.base}/api/v1/projects`)).status).toBe(200);
 		relay.silence();
-		// A GET the silence cut off goes again over a fresh connection.
 		const retried = await within(fetch(`${proxy.base}/api/v1/projects`));
 		expect(retried === "hung" ? "hung" : retried.status).toBe(200);
 		expect(warned).toContainEqual(expect.stringContaining("on GET /api/v1/projects (upstream stopped answering pings); sending it again"));
@@ -1708,7 +1604,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		const daemon = createHttp2Server((req, res) => {
 			if (req.url === "/api/v1/identity") return void res.end(identity);
 			if (req.url !== "/api/v1/slow") return void res.end(JSON.stringify({ proto: req.httpVersion }));
-			// A restart: the daemon stops listening and drops every connection.
 			daemon.close();
 			for (const socket of sockets) socket.destroy();
 		});
@@ -1723,7 +1618,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 			return new Promise<void>((resolve) => daemon.close(() => resolve()));
 		});
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${port}`));
-		// The GET goes again at once, and finds the daemon down.
 		const cut = await within(fetch(`${proxy.base}/api/v1/slow`));
 		expect(cut === "hung" ? "hung" : [cut.status, (await cut.json()).code]).toEqual([502, "UPSTREAM_UNAVAILABLE"]);
 		await new Promise<void>((resolve) => daemon.listen(port, "127.0.0.1", resolve));
@@ -1737,7 +1631,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		const verifying = new Promise<void>((resolve) => { asked = resolve; });
 		const port = await startH2Daemon((_req, res) => res.end("{}"), (answer, res) => {
 			if (++identities > 1) return answer();
-			// The host answers, then sends GOAWAY: the session arrives closed.
 			answerFirst = () => {
 				answer();
 				res.stream.session?.close();
@@ -1772,7 +1665,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		expect((await fetch(items)).status).toBe(200);
 		expect(seen).toEqual([
 			{ method: "DELETE", body: '{"ids":["a"]}', endAfterHeaders: false },
-			// Without a body a request still ends with its headers.
 			{ method: "DELETE", body: "", endAfterHeaders: true },
 			{ method: "GET", body: "", endAfterHeaders: true },
 		]);
@@ -1781,7 +1673,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 	it("falls back to HTTP/1.1 within its deadline when an HTTP/2 session cannot open", async () => {
 		upstream = createServer((req, res) => res.end(req.url === "/api/v1/identity" ? identity : '{"proto":"1.1"}'));
 		await new Promise<void>((resolve) => upstream?.listen(0, "127.0.0.1", resolve));
-		// The first connection, the HTTP/2 attempt, never hears back.
 		const relay = await startRelay((upstream.address() as AddressInfo).port, 1);
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${relay.port}`), undefined, { openMs: 200, pingMs: 10_000 });
 		const response = await within(fetch(`${proxy.base}/api/v1/projects`));
@@ -1792,7 +1683,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		const host = await startTunnelDaemon(() => undefined, { answerUpgrades: false });
 		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`), undefined, { openMs: 200, pingMs: 10_000 });
 		const response = await within(fetch(`${proxy.base}/api/v1/projects`));
-		// Direct, over HTTP/2 or (on a slow machine, past the deadline) HTTP/1.1.
 		expect(response === "hung" ? "hung" : await response.json()).toEqual({ direct: expect.any(String) });
 	});
 
@@ -1808,7 +1698,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		expect(host.upgrades).toBe(2);
 	});
 
-	// How the browser panel saw a preview stream end: 0 (NO_ERROR) reads as a complete body.
 	const rstCodeOf = (stream: ReturnType<ReturnType<typeof previewBrowser>>) => new Promise<number>((resolve) => {
 		stream.resume();
 		stream.on("close", () => resolve(stream.rstCode));
@@ -1822,7 +1711,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		});
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${port}`));
 		const request = previewBrowser(proxy);
-		// Reset by the host, then cut with its connection (that stream just ends, with code 0).
 		expect(await rstCodeOf(request("/src/reset.js"))).not.toBe(http2Constants.NGHTTP2_NO_ERROR);
 		expect(await rstCodeOf(request("/src/drop.js"))).not.toBe(http2Constants.NGHTTP2_NO_ERROR);
 	});
@@ -1859,7 +1747,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 	it("keeps slots for the renderer's own requests while a preview's requests hang", async () => {
 		let hung = 0;
 		const port = await startH2Daemon((req, res) => {
-			// A dev server that never answers; the daemon sets no deadline on it.
 			if (req.url.includes("/preview/app/")) return void hung++;
 			res.end("{}");
 		});
@@ -1889,10 +1776,8 @@ describe("startRemoteProxy when the upstream fails", () => {
 			stream.resume();
 			stream.on("close", () => resolve(status));
 		}));
-		// The host holds every request the proxy lets through; the rest wait for a slot.
 		await vi.waitFor(() => expect(held.length).toBeGreaterThanOrEqual(80));
 		await new Promise((resolve) => setTimeout(resolve, 100));
-		// A graceful GOAWAY: the requests already sent finish, no new ones start.
 		closing = true;
 		held[0].stream.session?.close();
 		for (const res of held) res.end("{}");
@@ -1905,7 +1790,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		const port = await startH2Daemon((req, res) => {
 			const attempt = `${req.method} ${req.url}`;
 			attempts.push(attempt);
-			// A refused stream was never acted on (RFC 9113 §8.7).
 			if (req.url.endsWith("/busy") || attempts.filter((line) => line === attempt).length === 1)
 				return void res.stream.close(http2Constants.NGHTTP2_REFUSED_STREAM);
 			res.end("{}");
@@ -1925,8 +1809,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 		});
 		const relay = await startPongHoldingRelay(port, 1_000);
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${relay}`), undefined, fast);
-		// The upload arrives over several ping intervals; the host's window
-		// updates for it come back long before the ping's answer.
 		const answer = await new Promise<{ status: number; body: string }>((resolve, reject) => {
 			const upload = httpRequest(`${proxy!.base}/api/v1/sessions/ao-1/attachments`, { method: "POST" }, (res) => {
 				let body = "";
@@ -1946,7 +1828,6 @@ describe("startRemoteProxy when the upstream fails", () => {
 	});
 
 	it("gives no agent tab when the host is unreachable or its agent browser fails", async () => {
-		// Nothing listens here: the proxy answers its own 502.
 		const vacant = createServer();
 		await new Promise<void>((resolve) => vacant.listen(0, "127.0.0.1", resolve));
 		const { port } = vacant.address() as AddressInfo;
@@ -1980,7 +1861,6 @@ describe("remote mobile control browser boundary", () => {
 		expect(trusted.status).toBe(200);
 		expect(seen[0].auth).toBe("Bearer pw");
 		expect(fetchSites[0]).toBeUndefined();
-		// Protected media retains main's trusted-renderer browser boundary.
 		const media = await fetch(`${proxy.base}/api/v1/sessions/s1/workspace/file/blob`, { headers: { Origin: "app://renderer", "sec-fetch-site": "cross-site" } });
 		expect(media.status).toBe(200);
 		expect(fetchSites[1]).toBeUndefined();

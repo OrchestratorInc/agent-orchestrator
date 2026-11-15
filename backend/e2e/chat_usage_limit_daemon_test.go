@@ -26,9 +26,6 @@ type usageLimitDelivery struct {
 	ResetsAt time.Time `json:"resetsAt,omitempty"`
 }
 
-// TestFakeUsageLimitProvider is a native ACP/Codex peer launched by disposable
-// executable shims. Only this provider boundary is fake: the parent tests run
-// the real daemon binary, detached hosts, SQLite, HTTP, CDC, and startup ticker.
 func TestFakeUsageLimitProvider(t *testing.T) {
 	harness := os.Getenv("AO_E2E_USAGE_PROVIDER")
 	if harness == "" {
@@ -123,8 +120,6 @@ func serveUsageLimitProvider(harness string) error {
 							break
 						}
 					}
-					// Native Codex reset metadata has Unix-second precision. Round up
-					// so a two-second request never resumes earlier than two seconds.
 					resets[text] = time.Now().Add(time.Duration(delay)*time.Millisecond + time.Second - time.Nanosecond).Truncate(time.Second).UTC()
 				}
 				log, err := os.OpenFile(os.Getenv("AO_E2E_USAGE_CALLS"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -185,8 +180,6 @@ func serveUsageLimitProvider(harness string) error {
 				}
 				turn["status"] = "failed"
 				failure := map[string]any{"message": "You've hit your usage limit. Please try again later.", "codexErrorInfo": "usageLimitExceeded"}
-				// Exercise the native terminal-notification fallback: the final
-				// failed completion deliberately has no attached TurnError.
 				if err := notify("error", map[string]any{"threadId": nativeThread, "turnId": id, "willRetry": false, "error": failure}); err != nil {
 					return err
 				}
@@ -235,8 +228,6 @@ func newUsageLimitDaemonFixture(t *testing.T) *usageLimitDaemonFixture {
 	t.Setenv("CLAUDE_MODEL_CONFIG", `{"availableModels":["fixture-model"]}`)
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	codexHome := t.TempDir()
-	// The real daemon enrolls and validates its isolated device account through
-	// the native account/read peer above. This value is intentionally not a key.
 	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(`{"OPENAI_API_KEY":"fixture-not-a-real-api-key"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +373,6 @@ func TestUsageLimitDaemonAutomaticallyResumesBothProviders(t *testing.T) {
 			if len(after.Turns) != 3 || after.Turns[2].RetryOfTurnID != triggered.TurnID || after.Turns[2].State != "completed" || after.Turns[1].UsageLimit == nil || after.Turns[1].UsageLimit.AutoResume {
 				t.Fatalf("daemon ticker did not consume consent for one retry: %+v\n%s", after, f.daemon.tailLog())
 			}
-			// Observe another scheduler tick; consent must not dispatch again.
 			time.Sleep(1200 * time.Millisecond)
 			stats, err := f.stats(session)
 			if err != nil || stats.Deliveries != 2 || stats.RetryDeliveries != 1 || stats.RetryDeliveredAt == nil || stats.RetryDeliveredAt.Before(reset) {
@@ -393,10 +383,6 @@ func TestUsageLimitDaemonAutomaticallyResumesBothProviders(t *testing.T) {
 	}
 }
 
-// TestUsageLimitDaemonBrowserFixture keeps the same real daemon available to
-// Playwright or a local preview for at most 30 minutes (run with -timeout=35m).
-// The coordinator only triggers provider refusals and reports delivery evidence;
-// it never schedules or retries a turn.
 func TestUsageLimitDaemonBrowserFixture(t *testing.T) {
 	if os.Getenv("AO_E2E_USAGE_LIMIT_BROWSER") != "1" {
 		t.Skip("set AO_E2E_USAGE_LIMIT_BROWSER=1 for the connected browser fixture")

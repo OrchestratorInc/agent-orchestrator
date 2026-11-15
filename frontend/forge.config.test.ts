@@ -6,13 +6,6 @@ import { MachOParseError } from "./makers/macho-archs";
 import MakerNSIS from "./makers/maker-nsis";
 import appPackage from "./package.json";
 
-// postMake's dmg/zip branches only need to prove they call the right
-// maker-dmg functions with the right gates; the functions' own behavior
-// (sealDmg's credential matrix, verifyMacArtifact's script invocation) is
-// covered by makers/maker-dmg.test.ts. Mocking the whole module keeps this
-// suite from spawning codesign/xcrun/bash indirectly through the real chain.
-// vi.mock's factory is hoisted above the rest of the file (including plain
-// const declarations), so the mock fns themselves must go through vi.hoisted.
 const { sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured, checkMacDmgLayout } = vi.hoisted(() => ({
 	checkMacDmgLayout: vi.fn<(path: string) => Promise<void>>(async () => undefined),
 	sealDmg: vi.fn<(path: string) => Promise<boolean>>(),
@@ -24,8 +17,6 @@ vi.mock("./makers/maker-dmg", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./makers/maker-dmg")>();
 	return { ...actual, sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured };
 });
-// The layout check mounts the dmg with hdiutil; its behavior is covered by
-// scripts/build-mac-dmg.test.mjs and the mac-dmg-layout CI job.
 vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./scripts/build-mac-dmg.mjs")>();
 	return { ...actual, checkMacDmgLayout };
@@ -33,10 +24,6 @@ vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
 
 import config, { extraResourcesForPlatform, labelMacBundle, macSignOptionsForFile, WINDOWS_DISPLAY_NAME } from "./forge.config";
 
-// Minimal synthetic Mach-O headers (thin little-endian + fat big-endian), the
-// two on-disk layouts the signing selector must tell apart. Full parser
-// coverage lives in makers/macho-archs.test.ts; here the fixtures exist so the
-// per-file signing decision is exercised against real file bytes.
 const CPU_TYPE_X86_64 = 0x01000007;
 const CPU_TYPE_ARM64 = 0x0100000c;
 
@@ -69,8 +56,6 @@ function withHostArch<T>(arch: string, run: () => T): T {
 
 let fixtureDir: string;
 
-// The nested Node must sit at the real bundle path shape: the endsWith gate
-// and the content selector are two halves of one decision.
 function acpNodeWith(contents: Buffer): string {
 	const binDir = join(
 		fixtureDir,
@@ -124,7 +109,6 @@ describe("native runtime resources", () => {
 		expect(extraResourcesForPlatform("linux")).not.toContain("assets/Assets.car");
 		expect(extraResourcesForPlatform("win32")).not.toContain("assets/Assets.car");
 		expect(config.packagerConfig?.extendInfo).toMatchObject({ CFBundleIconName: "AppIcon" });
-		// The .icns stays as CFBundleIconFile for macOS before 26.
 		expect(config.packagerConfig?.icon).toBe("assets/icon");
 	});
 
@@ -233,8 +217,6 @@ describe("macOS signing", () => {
 	});
 
 	it("gives the app the dictation helper's usage strings", () => {
-		// Signed and nested in the app, the helper is checked against the app's
-		// Info.plist; a missing speech string makes macOS kill it.
 		expect(config.packagerConfig?.extendInfo).toMatchObject({
 			NSSpeechRecognitionUsageDescription: expect.any(String),
 			NSMicrophoneUsageDescription: expect.any(String),
@@ -296,11 +278,6 @@ describe("macOS signing", () => {
 });
 
 describe("postMake artifact verification", () => {
-	// #3879: a valid outer seal did not prove the bundled Intel ACP Node could
-	// actually run JavaScript. The dmg branch already ran verify-mac-artifact.sh
-	// through sealDmg/verifyDmg; these cases prove the zip branch — the artifact
-	// electron-updater installs auto-updates from, and per-arch what CI ships
-	// for x64 — gets the same nested-Node check instead of shipping unverified.
 	function darwinResult(artifacts: string[]) {
 		return [{ artifacts, packageJSON: {}, platform: "darwin" as const, arch: "x64" as const }];
 	}
@@ -335,8 +312,6 @@ describe("postMake artifact verification", () => {
 		expect(verifyMacArtifact).not.toHaveBeenCalled();
 	});
 
-	// A dmg without its install window layout must fail the build, before any
-	// signing or notarization time is spent on it, signed or not.
 	it("checks the dmg layout before sealing and stops the build when it is missing", async () => {
 		const makeResults = darwinResult(["/out/make/app.dmg"]);
 		await config.hooks?.postMake?.({} as never, makeResults);
@@ -445,7 +420,6 @@ describe("packaged native dependencies", () => {
 		if (typeof ignore !== "function") return;
 
 		expect(ignore("/.vite/build/main.js")).toBe(false);
-		// Release source maps go to Sentry, never into the app.
 		expect(ignore("/.vite/build/main.js.map")).toBe(true);
 		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js.map")).toBe(true);
 		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js")).toBe(false);

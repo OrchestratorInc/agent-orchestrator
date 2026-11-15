@@ -50,8 +50,6 @@ function setup() {
 	};
 }
 
-// Requests a download the way Chromium does, then allows it the way the user
-// does from the Downloads list. Returns the first (blocked) request's event.
 function startApproved(
 	manager: ReturnType<typeof createBrowserDownloadManager>,
 	session: EventEmitter,
@@ -402,7 +400,6 @@ describe("browser download manager", () => {
 		})]);
 		expect(JSON.stringify(test.manager.list())).not.toContain(item.url);
 
-		// The same link opened again in that tab stays one blocked entry.
 		test.session.emit("will-download", event, item, tab);
 		expect(test.manager.list().downloads).toHaveLength(1);
 
@@ -427,7 +424,6 @@ describe("browser download manager", () => {
 			status: "progressing",
 		})]);
 
-		// The approval does not carry over to a later request for the same URL.
 		const repeat = { preventDefault: vi.fn() };
 		test.session.emit("will-download", repeat, new FakeDownloadItem(), webContents);
 		expect(repeat.preventDefault).toHaveBeenCalledOnce();
@@ -449,7 +445,6 @@ describe("browser download manager", () => {
 		expect(event.preventDefault).toHaveBeenCalledOnce();
 		expect(other.setSavePath).not.toHaveBeenCalled();
 
-		// The approval is still there for the request it was given to.
 		test.session.emit("will-download", { preventDefault: vi.fn() }, item, tab);
 		expect(item.setSavePath).toHaveBeenCalledOnce();
 	});
@@ -464,15 +459,12 @@ describe("browser download manager", () => {
 		await test.manager.action({ id: "download-1", action: "allow" });
 		expect(tab.downloadURL).toHaveBeenCalledWith(item.url);
 
-		// Another profile asks for the same URL while the approved request is
-		// still on its way. It must not be saved in its place.
 		const intruder = new FakeDownloadItem();
 		const intruderEvent = { preventDefault: vi.fn() };
 		otherSession.emit("will-download", intruderEvent, intruder, { isDestroyed: () => false, downloadURL: vi.fn() });
 		expect(intruderEvent.preventDefault).toHaveBeenCalledOnce();
 		expect(intruder.setSavePath).not.toHaveBeenCalled();
 
-		// Neither must another tab of the same profile.
 		const sibling = new FakeDownloadItem();
 		const siblingEvent = { preventDefault: vi.fn() };
 		test.session.emit("will-download", siblingEvent, sibling, { isDestroyed: () => false, downloadURL: vi.fn() });
@@ -535,7 +527,6 @@ describe("browser download manager", () => {
 		expect(test.manager.list().downloads[0]).toMatchObject({ fileName: "report.txt", source: "app.example.test" });
 		await test.manager.action({ id: "download-1", action: "allow" });
 
-		// The replay of a blob link reports a bare UUID instead of the name.
 		const replay = new FakeDownloadItem();
 		replay.url = item.url;
 		replay.getFilename = () => "4b6f2c1e-0d7a-4f8e-9c55-1f2a3b4c5d6e";
@@ -561,15 +552,12 @@ describe("browser download manager", () => {
 		expect(intruderEvent.preventDefault).toHaveBeenCalledOnce();
 		expect(intruder.setSavePath).not.toHaveBeenCalled();
 
-		// A live sibling tab in the same session asks for the same URL before
-		// the session replay arrives. It must not be saved in its place.
 		const sibling = new FakeDownloadItem();
 		const siblingEvent = { preventDefault: vi.fn() };
 		session.emit("will-download", siblingEvent, sibling, { isDestroyed: () => false, downloadURL: vi.fn() });
 		expect(siblingEvent.preventDefault).toHaveBeenCalledOnce();
 		expect(sibling.setSavePath).not.toHaveBeenCalled();
 
-		// Electron delivers the session replay with a null WebContents.
 		const replayEvent = { preventDefault: vi.fn() };
 		session.emit("will-download", replayEvent, item, null);
 		expect(replayEvent.preventDefault).not.toHaveBeenCalled();
@@ -615,10 +603,8 @@ describe("browser download manager", () => {
 		expect(listed.filter((download) => download.status === "blocked").map((download) => download.id))
 			.toEqual(Array.from({ length: 20 }, (_, index) => `new-${249 - index}`));
 		expect(listed.filter((download) => download.status === "completed")).toHaveLength(200);
-		// The oldest blocked request was dropped, so it can no longer be allowed.
 		await expect(manager.action({ id: "new-0", action: "allow" })).rejects.toThrow("Download not found");
 
-		// Allowing one persists history: every real entry is still there.
 		startApproved(manager, session, new FakeDownloadItem());
 		const persisted = JSON.parse(readFileSync(historyPath, "utf8")) as Array<{ id: string; status: string }>;
 		expect(persisted.filter((download) => download.status === "completed")).toHaveLength(199);
@@ -643,7 +629,6 @@ describe("browser download manager", () => {
 		item.getURLChain = () => [item.url, "https://cdn.example.test/signed"];
 		item.getURL = () => "https://cdn.example.test/signed";
 
-		// The tab that requested it is gone, so the session requests it again.
 		session.emit("will-download", { preventDefault: vi.fn() }, item, { isDestroyed: () => true, downloadURL: vi.fn() });
 		await manager.action({ id: "download-1", action: "allow" });
 		expect(session.downloadURL).toHaveBeenCalledWith(item.url);

@@ -1,7 +1,3 @@
-// Package persistenthost keeps a provider stdio process alive while AO's daemon
-// is replaced. Raw protocols are forwarded unchanged. ACP uses a small relay
-// that preserves connection-scoped initialization, session, request-correlation,
-// and in-flight prompt state across daemon attachments.
 package persistenthost
 
 import (
@@ -29,84 +25,42 @@ import (
 )
 
 const (
-	// ProtocolVersion fences daemon/host control-plane compatibility.
-	ProtocolVersion  = 1
-	maxDetachedBytes = 32 << 20
-	startupTimeout   = 10 * time.Second
-	// Host hello is local control-plane I/O and must not stall daemon recovery.
-	handshakeTimeout = time.Second
-	// A stopped provider gets providerStdinGrace (providerQuickGrace for a quick
-	// stop) to exit on stdin closing, then SIGTERM, then a kill at the deadline.
+	ProtocolVersion      = 1
+	maxDetachedBytes     = 32 << 20
+	startupTimeout       = 10 * time.Second
+	handshakeTimeout     = time.Second
 	providerStdinGrace   = time.Second
 	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
 )
 
-// Protocol selects the provider-wire behavior owned by the host.
 type Protocol string
 
 const (
-	// ProtocolRaw preserves the original newline-delimited forwarding profile.
-	ProtocolRaw Protocol = ""
-	// ProtocolACP enables the host-owned ACP correlation and replay profile.
-	ProtocolACP Protocol = "acp"
-	// ProtocolUnreal preserves Unreal Agent's AO-private JSONL stream while
-	// fencing ownership with the same stable launch identity used by ACP hosts.
+	ProtocolRaw    Protocol = ""
+	ProtocolACP    Protocol = "acp"
 	ProtocolUnreal Protocol = "unreal"
 
-	// ACPPromptResultMethod is an AO-private notification emitted when an ACP
-	// prompt finishes after the daemon attachment that issued it has gone away.
-	ACPPromptResultMethod = "_ao/persistent_prompt_result"
-	// ACPPromptAckMethod acknowledges that AO durably committed a replayed prompt
-	// result, allowing the host to discard its prompt journal.
-	ACPPromptAckMethod = "_ao/persistent_prompt_ack"
-	// ACPInteractionCommandMethod records a user interaction decision in the host
-	// before the daemon releases the blocked ACP responder.
-	ACPInteractionCommandMethod = "_ao/persistent_interaction_command"
-	// ACPRequestIDMetaKey carries one host-stable identity on replayable
-	// provider-to-client requests such as permissions and elicitations.
-	ACPRequestIDMetaKey = "ao.persistentRequestId"
-	// ACPInitialPermissionsMetaKey records the process-launch approval policy,
-	// which can differ from mutable session settings after reconnect.
+	ACPPromptResultMethod        = "_ao/persistent_prompt_result"
+	ACPPromptAckMethod           = "_ao/persistent_prompt_ack"
+	ACPInteractionCommandMethod  = "_ao/persistent_interaction_command"
+	ACPRequestIDMetaKey          = "ao.persistentRequestId"
 	ACPInitialPermissionsMetaKey = "ao.initialPermissions"
-	// ACPSteerPromptMetaKey marks a session/prompt that steers the running turn
-	// (acp.SteerPrompt). The host admits it while the turn's prompt is active,
-	// and the turn's result is the answer of the last of its prompts to return.
-	ACPSteerPromptMetaKey = "ao.steerPrompt"
-	// ACPSteerKeepsTurnMetaKey also marks a steer prompt that the agent answers
-	// at once while the turn's earlier prompt keeps the work, as Hermes'
-	// `/steer` command is. Its answer is never the turn's result: the turn
-	// ends with the answer of its last other prompt, success or failure.
-	ACPSteerKeepsTurnMetaKey = "ao.steerKeepsTurn"
-	// ACPSteerTurnEndedDataKey is set in the error data of a steer prompt the
-	// host refused because the turn it was meant for had already ended. The
-	// agent never saw it, so the guidance can go as a new turn.
-	ACPSteerTurnEndedDataKey = "ao.steerTurnEnded"
-	// ACPPromptHandoffMethod is an AO-private notification carrying the
-	// non-final answer of a prompt an earlier daemon attachment sent, such as
-	// a running prompt handing the turn to a steer prompt. The reattached
-	// controller has no request of its own to match it to.
-	ACPPromptHandoffMethod = "_ao/persistent_prompt_handoff"
+	ACPSteerPromptMetaKey        = "ao.steerPrompt"
+	ACPSteerKeepsTurnMetaKey     = "ao.steerKeepsTurn"
+	ACPSteerTurnEndedDataKey     = "ao.steerTurnEnded"
+	ACPPromptHandoffMethod       = "_ao/persistent_prompt_handoff"
 )
 
 var (
-	// ErrAttached reports that another daemon controller owns the host.
-	ErrAttached = errors.New("chat host already has a controller")
-	// ErrUnauthorized reports an invalid host capability.
-	ErrUnauthorized = errors.New("chat host authentication failed")
-	// ErrIncompatible reports a control-plane or provider-ownership mismatch.
-	ErrIncompatible = errors.New("chat host incompatible")
-	// ErrHostExists reports an atomic per-session launch-lock conflict.
-	ErrHostExists = errors.New("chat host already exists")
-	// ErrOwnershipInconclusive means a descriptor or live host exists, but this
-	// client could not prove that it is safe to replace. Callers must preserve the
-	// durable session rather than treating the failed attachment as provider death.
+	ErrAttached              = errors.New("chat host already has a controller")
+	ErrUnauthorized          = errors.New("chat host authentication failed")
+	ErrIncompatible          = errors.New("chat host incompatible")
+	ErrHostExists            = errors.New("chat host already exists")
 	ErrOwnershipInconclusive = errors.New("chat host ownership is inconclusive")
-	// ErrNotRunning means a reconnect-only probe found no surviving host.
-	ErrNotRunning = errors.New("chat host is not running")
+	ErrNotRunning            = errors.New("chat host is not running")
 )
 
-// Descriptor is the private connection record published by a running host.
 type Descriptor struct {
 	Version              int       `json:"version"`
 	SessionID            string    `json:"sessionId"`
@@ -118,7 +72,6 @@ type Descriptor struct {
 	StartedAt            time.Time `json:"startedAt"`
 }
 
-// Config identifies one provider process and its AO session ownership.
 type Config struct {
 	ReconnectOnly        bool
 	SessionID            string
@@ -131,15 +84,11 @@ type Config struct {
 	Prepare              func(context.Context) (PreparedProvider, error)
 }
 
-// PreparedProvider is resolved only when no compatible live host can be
-// adopted. This keeps launch-only credential rotation out of reconnects.
 type PreparedProvider struct {
 	Env  []string
 	Argv []string
 }
 
-// ACPState is the connection-scoped state needed to reconstruct an ACP client
-// without initializing or resuming the same live provider a second time.
 type ACPState struct {
 	InitialPermissions   string          `json:"initialPermissions,omitempty"`
 	InitializeResult     json.RawMessage `json:"initializeResult,omitempty"`
@@ -148,13 +97,9 @@ type ACPState struct {
 	ActivePrompt         bool            `json:"activePrompt,omitempty"`
 	ActiveCompaction     bool            `json:"activeCompaction,omitempty"`
 	PendingResultEventID string          `json:"pendingResultEventId,omitempty"`
-	// AvailableCommands is the latest available_commands_update catalog for
-	// SessionID. Adapters announce it once, as a notification after session
-	// setup, so a controller that reattaches later would otherwise never see it.
-	AvailableCommands json.RawMessage `json:"availableCommands,omitempty"`
+	AvailableCommands    json.RawMessage `json:"availableCommands,omitempty"`
 }
 
-// Transport is one authenticated attachment to a persistent provider host.
 type Transport struct {
 	Stdin         io.WriteCloser
 	Stdout        io.Reader
@@ -164,11 +109,10 @@ type Transport struct {
 }
 
 type hello struct {
-	Version int    `json:"version"`
-	Token   string `json:"token"`
-	Action  string `json:"action"`
-	// QuickStop on a shutdown: see ShutdownQuick.
-	QuickStop bool `json:"quickStop,omitempty"`
+	Version   int    `json:"version"`
+	Token     string `json:"token"`
+	Action    string `json:"action"`
+	QuickStop bool   `json:"quickStop,omitempty"`
 }
 
 type helloResponse struct {
@@ -223,9 +167,6 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 		if readErr != nil || parseErr != nil || pid <= 0 || processalive.Alive(pid) {
 			return nil, ErrHostExists
 		}
-		// A host can die after atomically creating its launch lock but before it
-		// publishes host.json. Reclaim only a lock whose recorded owner is proven
-		// dead, then retry the same O_EXCL acquisition once.
 		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			return nil, ErrHostExists
 		}
@@ -312,8 +253,6 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 	if d.Protocol != cfg.Protocol {
 		return fmt.Errorf("%w: host protocol=%q requested=%q", ErrIncompatible, d.Protocol, cfg.Protocol)
 	}
-	// Codex raw hosts predate this ACP compatibility contract and retain their
-	// existing version/protocol fencing.
 	if d.Protocol == ProtocolRaw {
 		return nil
 	}
@@ -323,8 +262,6 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 	return nil
 }
 
-// ConnectOrStart attaches to an existing compatible host or starts one with the
-// current AO executable. Failed/incompatible probes never terminate that host.
 func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 	if d, err := readDescriptor(cfg.DataDir, cfg.SessionID); err == nil {
 		if err := validateDescriptor(cfg, d); err != nil && processalive.Alive(d.PID) {
@@ -335,9 +272,6 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 			return transport, nil
 		}
 		if errors.Is(attachErr, ErrAttached) {
-			// Desktop updater handoff can briefly start the replacement daemon
-			// before the old controller has detached. Wait for exclusive ownership;
-			// never turn that overlap into a competing provider process.
 			deadline := time.Now().Add(startupTimeout)
 			for time.Now().Before(deadline) && processalive.Alive(d.PID) {
 				timer := time.NewTimer(20 * time.Millisecond)
@@ -356,19 +290,10 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 				}
 			}
 		}
-		// A failed socket probe is not proof that a provider is dead. Only an OS
-		// process observation permits clearing the descriptor and falling back to
-		// native resume in a new host.
 		if processalive.Alive(d.PID) {
 			return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, attachErr)
 		}
-		// Do not remove stale ownership files here. Another starter may have
-		// already reclaimed the dead lock and published a replacement descriptor
-		// since this client read d. The detached host's O_EXCL lock acquisition is
-		// the single authority for reclaiming dead ownership.
 	} else if !errors.Is(err, os.ErrNotExist) {
-		// A malformed or unreadable ownership record is not proof that no host
-		// exists. Fail closed instead of launching a competing process.
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, err)
 	}
 	if cfg.ReconnectOnly {
@@ -418,9 +343,6 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 	return nil, fmt.Errorf("start chat host: %w", lastErr)
 }
 
-// Reconcile terminates compatible authenticated hosts whose durable session no
-// longer exists. Live-session hosts, incompatible hosts, and inconclusive probes
-// are preserved.
 func Reconcile(ctx context.Context, dataDir string, keep map[string]struct{}) error {
 	root := filepath.Join(dataDir, "chat-hosts")
 	entries, err := os.ReadDir(root)
@@ -447,9 +369,6 @@ func Reconcile(ctx context.Context, dataDir string, keep map[string]struct{}) er
 			continue
 		}
 		if !processalive.Alive(d.PID) {
-			// Claim the launch lock before cleaning a dead descriptor. If a new host
-			// already owns it, preserve its descriptor instead of deleting ownership
-			// state observed by a stale reconciler.
 			release, lockErr := acquireHostLock(dataDir, sessionID)
 			if lockErr != nil {
 				continue
@@ -526,9 +445,6 @@ func bindConnToContext(ctx context.Context, conn net.Conn) func(error) error {
 	}
 }
 
-// HostPID returns the live provider host pid recorded for sessionID, for
-// memory accounting of runtime-less Chat sessions. A missing descriptor or an
-// exited host reports false; nothing is ever started or stopped here.
 func HostPID(dataDir, sessionID string) (int, bool) {
 	d, err := readDescriptor(dataDir, sessionID)
 	if err != nil || d.PID <= 0 || !processalive.Alive(d.PID) {
@@ -537,15 +453,10 @@ func HostPID(dataDir, sessionID string) (int, bool) {
 	return d.PID, true
 }
 
-// Shutdown terminates current session ownership and waits for it to end.
-// Missing/dead hosts are harmless; unknown live owners fail closed.
-// The protocol acknowledgement only confirms that shutdown was requested.
 func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	return shutdown(ctx, dataDir, sessionID, false)
 }
 
-// ShutdownQuick is Shutdown for a provider that gains nothing from the stdin
-// grace (session closed, or deaf to stdin). An older host waits the full grace.
 func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
 	return shutdown(ctx, dataDir, sessionID, true)
 }
@@ -617,9 +528,6 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	if !response.OK {
 		return errors.New(response.Error)
 	}
-	// The host's own shutdown can take about 6 s: 3 s for the provider to exit
-	// once stdin closes, a 1 s reap, and 2 s for its process group to exit on
-	// SIGTERM before SIGKILL. Wait past that, with room for a loaded machine.
 	waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 	defer stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -627,7 +535,7 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	for {
 		current, readErr := readShutdownDescriptor(waitCtx, dataDir, sessionID)
 		if readErr == nil && current.Token != d.Token {
-			return nil // A new owner could only publish after the old lock released.
+			return nil
 		}
 		if errors.Is(readErr, os.ErrNotExist) {
 			path, _ := lockPath(dataDir, sessionID)
@@ -637,8 +545,6 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 				return lockErr
 			}
 		} else if readErr != nil && !hostFileBusy(readErr) {
-			// A busy descriptor is the exiting host deleting it, or another
-			// reader; the next poll sees it gone.
 			return readErr
 		}
 		select {
@@ -649,7 +555,6 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	}
 }
 
-// Run owns the provider until it exits or an authenticated shutdown arrives.
 func Run(ctx context.Context, cfg Config) error {
 	if len(cfg.Argv) == 0 || !filepath.IsAbs(cfg.Workdir) {
 		return errors.New("chat host requires provider argv and absolute workdir")
@@ -681,8 +586,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	// The adapter's stderr is the only record of why a turn went silent. Keep it
-	// beside the descriptor instead of discarding it.
 	if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
 		adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
 		defer func() { _ = adapterLog.Close() }()
@@ -692,8 +595,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	// The job owns descendants even if the direct provider exits first. Close
-	// it before waiting for inherited pipes and before releasing the host lock.
 	closeProviderTree = sync.OnceFunc(closeProviderTree)
 	defer closeProviderTree()
 
@@ -734,9 +635,6 @@ func Run(ctx context.Context, cfg Config) error {
 	go func() { acceptDone <- h.accept() }()
 
 	wait := sync.OnceValue(child.Wait)
-	// reapProvider waits up to a second for the provider to exit once its
-	// output ended, so its zombie does not hold the process group open while
-	// the group is asked to exit. A provider still running is left to the kill.
 	reapProvider := func() {
 		reaped := make(chan struct{})
 		go func() { _ = wait(); close(reaped) }()
@@ -754,18 +652,12 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		select {
 		case <-providerDone:
-			// Wrapper adapters may exit before their provider child. The hosted
-			// process tree is the ownership boundary, so explicit shutdown reaps
-			// any descendant that did not follow stdin closure.
 			reapProvider()
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
 			return
 		case <-time.After(grace):
 		}
-		// Some agents (Cursor) ignore stdin closing and only exit on a signal.
 		_ = terminateProviderProcess(child)
-		// The provider's output can stay open after it exits when a helper it
-		// started inherited the pipe, so its own exit also ends the wait.
 		exited := time.NewTicker(100 * time.Millisecond)
 		defer exited.Stop()
 	wait:
@@ -801,8 +693,6 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
-	// A surviving descendant can keep child.Wait blocked on the stderr-copy
-	// goroutine after the provider exits. Reap the job before that final wait.
 	closeProviderTree()
 	_ = wait()
 	return runErr
@@ -827,7 +717,7 @@ type host struct {
 	maxRequestID     int64
 	shutdown         chan struct{}
 	shutdownOnce     sync.Once
-	quickStop        atomic.Bool // set before shutdown closes; see ShutdownQuick
+	quickStop        atomic.Bool
 }
 
 type pendingRequest struct {
@@ -995,10 +885,6 @@ func (h *host) detach(conn net.Conn) {
 	_ = conn.Close()
 }
 
-// deliverProviderFrameLocked routes one adapter frame to the attached
-// controller, or buffers it for replay while detached. Callers must hold
-// h.mu. retainedByACP marks frames the ACP relay owns for its own replay, so
-// they must not also enter the generic detached buffer.
 func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
 	if requestID, ok := serverRequestID(frame); ok && !retainedByACP {
 		if _, exists := h.pendingRequests[requestID]; !exists {
@@ -1028,12 +914,6 @@ func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
 	}
 }
 
-// watchPromptStall terminates an in-flight prompt whose adapter went silent.
-// Turn settlement lives inside the ACP adapter, and the host discards the
-// adapter's stderr, so a lost completion (upstream claude-agent-acp#1145
-// class) leaves the session's Working indicator hanging with nothing to
-// observe. The watchdog gives such turns a terminal error and cancels the
-// adapter's turn. It never races forwardProvider: both relay under h.mu.
 func (h *host) watchPromptStall(ctx context.Context) {
 	ticker := time.NewTicker(promptStallCheckInterval)
 	defer ticker.Stop()
@@ -1048,8 +928,6 @@ func (h *host) watchPromptStall(ctx context.Context) {
 				h.deliverProviderFrameLocked(frames.client, true)
 			}
 			h.mu.Unlock()
-			// Like client frames, written outside h.mu: a full stdin pipe must
-			// not stall the provider reader.
 			if len(frames.provider) > 0 {
 				_, _ = h.stdin.Write(frames.provider)
 			}
@@ -1117,7 +995,6 @@ func (h *host) bufferFrameLocked(frame []byte) {
 	h.detachedBytes += len(frame)
 }
 
-// hostArgs keeps the Unix and Windows detached entry points on one wire format.
 func hostArgs(cfg Config) []string {
 	args := []string{"chat-host", cfg.SessionID, cfg.DataDir, cfg.Workdir}
 	if cfg.Protocol != ProtocolRaw {

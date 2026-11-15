@@ -11,8 +11,6 @@ import (
 	"time"
 )
 
-// transportServer returns an httptest server that always answers with the
-// given status and body for any CLI daemon call.
 func transportServer(t *testing.T, status int, body string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,9 +31,6 @@ func transportContext(t *testing.T, cfg testConfig, srv *httptest.Server) *comma
 	}}
 }
 
-// TestTransportDistinguishesEmptyResponses is the API-014 regression: an empty
-// 200/201 with a required decoded result must fail, while legitimate
-// bodyless calls (nil out) and 204 responses keep succeeding.
 func TestTransportDistinguishesEmptyResponses(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -136,8 +131,6 @@ func TestTransportDistinguishesEmptyResponses(t *testing.T) {
 	})
 }
 
-// TestSpawnRejectsEmptySessionID ensures a daemon that answers spawn with an
-// empty (but valid) body can never print a success line.
 func TestSpawnRejectsEmptySessionID(t *testing.T) {
 	for _, body := range []string{``, `{}`} {
 		cfg := setConfigEnv(t)
@@ -168,9 +161,6 @@ func TestSpawnRejectsEmptySessionID(t *testing.T) {
 	}
 }
 
-// TestReviewSubmitBatchRejectsEmptyEntries ensures batch review submit fails
-// instead of printing success when any returned entry is missing its run ID
-// or verdict — including empty objects and JSON nulls.
 func TestReviewSubmitBatchRejectsEmptyEntries(t *testing.T) {
 	batchInput := `[{"runId":"run-1","verdict":"approved"}]`
 	tests := []struct {
@@ -211,10 +201,6 @@ func TestReviewSubmitBatchRejectsEmptyEntries(t *testing.T) {
 	}
 }
 
-// TestReviewSubmitRejectsEmptyResult ensures review submit fails instead of
-// reporting a recorded review when the daemon returns nothing useful: an
-// empty body fails at the transport layer, while a valid-but-empty document
-// fails at the caller guard.
 func TestReviewSubmitRejectsEmptyResult(t *testing.T) {
 	tests := []struct {
 		name    string

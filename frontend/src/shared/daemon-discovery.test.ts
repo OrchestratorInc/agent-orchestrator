@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createListenPortScanner, defaultRunFilePath, parseDaemonListenPort, parseRunFile } from "./daemon-discovery";
 
-// Real shape emitted by slog's TextHandler in backend/internal/httpd/server.go.
 const LISTEN_LINE = 'time=2026-06-10T09:15:04.221-07:00 level=INFO msg="daemon listening" addr=127.0.0.1:3001 pid=4242';
 
 describe("parseDaemonListenPort", () => {

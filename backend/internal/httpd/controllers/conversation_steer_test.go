@@ -20,16 +20,6 @@ import (
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
-// The steer route's wire contract, asserted through the real router.
-//
-// Every refusal here is a code a client renders differently, so the codes are the
-// test: a steer that arrives a moment too late has to be distinguishable from an
-// agent that cannot steer at all, or the UI has nothing to say.
-
-// Steer satisfies the controller's contract for the doubles the sibling tests in
-// this package construct directly, so adding the route did not have to reach into
-// their files. Both default to a plain acceptance; the scenarios below state their
-// own outcome.
 func (f *fakeConversationService) Steer(
 	context.Context,
 	domain.SessionID,
@@ -111,8 +101,6 @@ func (s *promoteQueuedStub) PromoteQueuedTurn(
 	return s.result, s.err
 }
 
-// steerStub overrides only the steer answer, so a scenario states the outcome it is
-// about and inherits everything else.
 type steerStub struct {
 	*fakeConversationService
 
@@ -173,16 +161,12 @@ func steerRouter(t *testing.T, svc *steerStub) *httptest.Server {
 	return srv
 }
 
-// steerErrorBody is the daemon's locked error envelope: `error` is the kind, with
-// the stable code alongside it.
 type steerErrorBody struct {
 	Kind    string `json:"error"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
-// postSteer calls the route the way a client does and returns the status with both
-// possible bodies decoded.
 func postSteer(t *testing.T, svc *steerStub, body any) (int, map[string]any, steerErrorBody) {
 	t.Helper()
 	srv := steerRouter(t, svc)
@@ -253,8 +237,6 @@ func TestSteerOrSendRouteReturnsAtomicOutcome(t *testing.T) {
 	}
 }
 
-// 202, not 200: the provider takes the guidance and acts on it at its next model
-// boundary. The body names the turn it joined so a client can attach it.
 func TestSteerRouteAcceptsGuidanceAndNamesTheTurn(t *testing.T) {
 	svc := &steerStub{
 		fakeConversationService: &fakeConversationService{},
@@ -292,8 +274,6 @@ func TestSteerRouteAcceptsGuidanceAndNamesTheTurn(t *testing.T) {
 	}) {
 		t.Errorf("content = %#v, want native image", svc.seen[0].Content)
 	}
-	// A steer typed by a person is the person's, and the timeline attributes it that
-	// way rather than as something the daemon said.
 	if svc.seen[0].Origin != domain.MessageOriginHuman {
 		t.Errorf("origin = %q, want human", svc.seen[0].Origin)
 	}
@@ -320,17 +300,12 @@ func TestSteerRouteRejectsInvalidAttachmentBeforeCallingService(t *testing.T) {
 	}
 }
 
-// Every refusal, with the code a client keys its message off. Table-driven because
-// the mapping IS the contract: a wrong status turns an ordinary outcome into
-// something that looks like a server fault.
 func TestSteerRouteRefusalsAreTypedAndCoded(t *testing.T) {
 	cases := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
-		// wantInMessage keeps a refusal's advice honest where two routes share a
-		// sentinel and must not share its wording.
+		name          string
+		err           error
+		wantStatus    int
+		wantCode      string
 		wantInMessage string
 	}{
 		{
@@ -347,8 +322,6 @@ func TestSteerRouteRefusalsAreTypedAndCoded(t *testing.T) {
 			name:       "turn kind cannot take guidance",
 			err:        fmt.Errorf("%w: the provider is running a compact turn", chatsvc.ErrTurnNotSteerable),
 			wantStatus: http.StatusConflict, wantCode: "CHAT_TURN_NOT_STEERABLE",
-			// The provider's own explanation names the turn kind, which is the part a
-			// user can act on.
 			wantInMessage: "compact",
 		},
 		{
@@ -407,9 +380,6 @@ func TestSteerRouteRefusalsAreTypedAndCoded(t *testing.T) {
 	}
 }
 
-// A refusal must never arrive as a 500: the conversation is healthy, and a server
-// fault would send a client into retry-and-report instead of telling the user what
-// to do next.
 func TestSteerRouteReportsAnUnknownFailureAsAServerError(t *testing.T) {
 	svc := &steerStub{
 		fakeConversationService: &fakeConversationService{},
@@ -434,8 +404,6 @@ func TestSteerRouteRejectsUnparseableBody(t *testing.T) {
 	}
 }
 
-// With no Chat service wired the route answers the locked 501 envelope rather than
-// panicking on a nil service.
 func TestSteerRouteIsNotImplementedWithoutAChatService(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
@@ -454,8 +422,6 @@ func TestSteerRouteIsNotImplementedWithoutAChatService(t *testing.T) {
 	}
 }
 
-// The turn-scoped route identifies durable content; it carries no request body
-// that could replace what AO already queued.
 func TestQueuedTurnSteerRoutePromotesTheSelectedTurn(t *testing.T) {
 	svc := &promoteQueuedStub{
 		fakeConversationService: &fakeConversationService{},

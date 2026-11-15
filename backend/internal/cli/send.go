@@ -20,17 +20,12 @@ type sendOptions struct {
 	recoverOnly     bool
 }
 
-// sendAPIRequest mirrors the daemon's SendSessionMessageRequest body for
-// POST /api/v1/sessions/{id}/send. The CLI keeps its own copy so it need not
-// import httpd.
 type sendAPIRequest struct {
 	UserAuthored    bool   `json:"userAuthored,omitempty"`
 	SenderSessionID string `json:"senderSessionId,omitempty"`
 	Message         string `json:"message"`
 }
 
-// The steering DTOs mirror the daemon conversation API without coupling the
-// thin CLI to the HTTP controller package.
 type conversationMessageAPIRequest struct {
 	Text            string `json:"text"`
 	ClientMessageID string `json:"clientMessageId"`
@@ -91,8 +86,6 @@ func (c *commandContext) sendMessage(ctx context.Context, opts sendOptions) erro
 		return usageError{errors.New("usage: --session is required")}
 	}
 
-	// PathEscape: session ids are already "-"/digit safe, but may later come
-	// from sanitized issue refs; keep the URL well-formed regardless.
 	path := "sessions/" + url.PathEscape(session)
 	if !opts.steer {
 		return c.postJSON(ctx, path+"/send", sendAPIRequest{Message: message, SenderSessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID")), UserAuthored: strings.TrimSpace(os.Getenv("AO_SESSION_ID")) == ""}, nil)

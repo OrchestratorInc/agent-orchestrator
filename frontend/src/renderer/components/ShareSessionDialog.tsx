@@ -70,18 +70,11 @@ export { shareLinkRequest, shareLinksQueryKey } from "./share/linkAccess";
 
 const ROLE_RANK: Record<string, number> = { viewer: 1, editor: 2, member: 3 };
 
-/**
- * Every change to who has access shares this key, so a refetch waits for the
- * last one in flight: refetching when the first of two quick stops settles
- * would bring back the row the second just removed.
- */
 const ACCESS_CHANGE = ["share-access-change"] as const;
 
-/** A row shared before the control plane answered, until the grant replaces it. */
 const PENDING = "pending:";
 
 type AccessKey = ReturnType<typeof shareAccessQueryKey>;
-/** null: the control plane predates teams (its routes answer 404), so the dialog offers links only. */
 type AccessData = CloudCpShareAccess | null;
 type ShareRequest = {
 	key: AccessKey;
@@ -93,14 +86,8 @@ type ShareRequest = {
 };
 type Subject = { teamId: string } | { email: string };
 
-/** The name to show for a grant's subject. */
 const CAP_RANK: Record<string, number> = { "read-only": 1, standard: 2, trusted: 3 };
 
-/**
- * Gives a team's people, in every cached list of them under prefix, the
- * access the team now gives: those who had their access through this team,
- * and those it now gives more. Returns what it replaced, to put back.
- */
 export function withTeamAccess(
 	queryClient: QueryClient,
 	prefix: readonly unknown[],
@@ -129,17 +116,12 @@ function subjectName(entry: Pick<CloudCpShareEntry, "subject">): string {
 	return subject.kind === "team" ? subject.teamName ?? "" : subject.name || subject.email || "";
 }
 
-/** How to share the same thing again, for Undo. */
 function subjectInput(entry: CloudCpShareEntry): Subject | undefined {
 	if (entry.subject.kind === "team" && entry.subject.teamId) return { teamId: entry.subject.teamId };
 	if (entry.subject.email) return { email: entry.subject.email };
 	return undefined;
 }
 
-/**
- * One row per team or person at a scope, so a row shared a moment ago and
- * the grant that replaces it are the same row (and keep focus).
- */
 export function entryRowKey(entry: Pick<CloudCpShareEntry, "subject" | "scope" | "sessionId">): string {
 	const subject = entry.subject;
 	const who = subject.kind === "team" ? `team:${subject.teamId ?? ""}` : subject.email ? `email:${subject.email.toLowerCase()}` : `user:${subject.userId ?? ""}`;
@@ -168,11 +150,6 @@ function pendingIds(request: ShareRequest): Set<string> {
 	return new Set(request.recipients.map((recipient) => `${PENDING}${recipientKey(recipient)}`));
 }
 
-/**
- * The list with the grants the control plane made: each replaces its row in
- * place (a pending row, or the same subject's older grant), the rest go at
- * the end, and rows in `drop` that nothing replaced go away.
- */
 export function withCreatedEntries(data: CloudCpShareAccess, created: CloudCpShareEntry[], drop: ReadonlySet<string>): CloudCpShareAccess {
 	const byRow = new Map(created.map((entry) => [entryRowKey(entry), entry]));
 	const placed = new Set<string>();
@@ -191,89 +168,52 @@ function withoutGrants(data: AccessData | undefined, grantIds: ReadonlySet<strin
 	return data ? { ...data, entries: data.entries.filter((entry) => !grantIds.has(entry.grantId)) } : data;
 }
 
-/** Confirmation the link card asks for before a change it can't undo. */
 type LinkConfirm =
 	| { kind: "off" }
-	/** copy: Copy link asked, for a Trusted link made elsewhere, which only a new link can stand in for. */
 	| { kind: "change"; role: CloudCpShareRole; modeCap: ShareModeCap; copy?: boolean }
-	/** Copy new link for a link made elsewhere that can write: another link that can write. */
 	| { kind: "copy-new" }
 	| { kind: "revoke"; link: CloudCpShareLink };
 
-/** Where Link settings was opened from, to go back to when it closes. */
 const SETTINGS_OPENERS = { gear: "[data-share-settings]", card: "[data-share-link-settings]" } as const;
 type SettingsOpener = keyof typeof SETTINGS_OPENERS;
 
-/** The link a confirmation is about, as the links last read have it. */
 function confirmLink(confirm: Extract<LinkConfirm, { kind: "revoke" }>, links: LinkAccess): CloudCpShareLink {
 	return links.links.find((link) => link.id === confirm.link.id) ?? confirm.link;
 }
 
-/** How many people joined by the links a confirmation would turn off. */
 function confirmJoined(confirm: LinkConfirm, links: LinkAccess): number {
 	return confirm.kind === "revoke" ? confirmLink(confirm, links).joinedCount ?? 0 : links.joined;
 }
 
-/** Whether a confirmation offers to remove the people who joined: a link stops, the control plane can, and someone did. */
 function offersRemoveJoined(confirm: LinkConfirm, links: LinkAccess): boolean {
 	return confirm.kind !== "copy-new" && links.canRemoveJoined && confirmJoined(confirm, links) > 0;
 }
 
-/**
- * Whether a change lets anyone with the link write where they couldn't: to a
- * Can write link from a watch-only one, or from Read only agent permissions
- * to Standard. It asks first, naming the sandbox and its secrets.
- */
 function widensToWrite(link: Pick<CloudCpShareLink, "role" | "modeCap"> | undefined, next: { role: CloudCpShareRole; modeCap: ShareModeCap }): boolean {
 	if (next.role !== "editor") return false;
 	if (link?.role !== "editor") return true;
 	return actualLinkCap(link.role, link.modeCap) === "read-only" && actualLinkCap(next.role, next.modeCap) !== "read-only";
 }
 
-/**
- * Everything sharing holds for one session or its whole project, the way
- * Google Docs does it: people and teams on top (named, with what each can
- * do), then General access, one sentence that says who else the link lets
- * in, then Copy link. Picking someone turns it into a short confirm step that
- * names what will happen to whom. Against a control plane from before teams,
- * or in a build without Teams, it is General access and Copy link only.
- * Without a session it shares the whole project only. SharePanel draws it in
- * the share dialog and in Project settings › Sharing.
- */
 function useShareController({ active: open, orgId, projectId, sessionId, teams, standaloneAgent = false }: {
-	/** Whether the surface is showing; closing it forgets everything but the shares themselves. */
 	active: boolean;
 	orgId: string;
 	projectId: string;
-	/** The session to share; without one only the whole project. */
 	sessionId?: string;
-	/** Sharing with people and teams (Teams builds); off, links only. */
 	teams: boolean;
-	/** A Cloud standalone agent: its owner's alone, so the workspace's people reach it only when added. */
 	standaloneAgent?: boolean;
 }) {
 	const { t, i18n } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
 	const me = useCloudSession().session?.user;
 	const myEmail = me?.email?.toLowerCase() ?? "";
-	// A project belongs to its workspace: the access list names it on top.
-	// Undefined while it loads or when it couldn't be read.
 	const { org } = useCloudOrg(open);
 	const workspace = org?.id === orgId ? org : undefined;
-	// Its name only when it reads as one: never an email.
 	const workspaceName = workspaceDisplayName(workspace?.displayName);
-	// Nobody else in a personal workspace, and nobody else in the workspace can
-	// open a standalone agent: only its owner and the people added.
 	const personal = standaloneAgent || isPersonalWorkspace(workspace);
-	// How many are in a team's workspace. With nobody but you in it, it grants
-	// nobody anything, so it reads as a personal one. Unknown (loading, or
-	// unreadable) is never alone: that would understate who can open it.
 	const memberCount = useWorkspaceMemberCount(orgId, open && teams && Boolean(workspace) && !personal);
 	const solo = personal || (memberCount.data !== undefined && memberCount.data <= 1);
 	const queryClient = useQueryClient();
-	// Opened for a project rather than a session: there is no session to go back to.
-	// The same dialog can be handed a session again (the header follows the
-	// session on screen), so the scope follows it rather than its first one.
 	const projectOnly = !sessionId;
 	const [chosenScope, setScope] = useState<ShareScope>("session");
 	const scope: ShareScope = projectOnly ? "project" : chosenScope;
@@ -285,26 +225,20 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const [expiry, setExpiry] = useState<ShareExpiry>(DEFAULT_EXPIRY);
 	const [confirm, setConfirm] = useState<LinkConfirm | null>(null);
 	const [removeJoined, setRemoveJoined] = useState(false);
-	// What the polite live region last said: a copy, with who the link lets in.
 	const [announcement, setAnnouncement] = useState("");
 	const fieldInputRef = useRef<HTMLInputElement>(null);
 	const copyButtonRef = useRef<HTMLButtonElement>(null);
 	const contentRef = useRef<HTMLDivElement>(null);
 	const backButtonRef = useRef<HTMLButtonElement>(null);
-	// The control that opened Link settings, which gets focus back when it closes.
 	const settingsOpener = useRef<SettingsOpener>("gear");
-	// After a link is revoked in Link settings, focus goes to the next row's Revoke (its place), or Back.
 	const revokeFocus = useRef<{ id: string; index: number } | null>(null);
-	// A link whose revoke is reading the links first, to count who joined by it.
 	const [checkingRevoke, setCheckingRevoke] = useState<string | null>(null);
-	// Copy link waiting on a confirmation: one that replaces a Trusted link, or makes another that can write.
 	const pendingCopy = useRef<((url: string | undefined) => void) | null>(null);
 	const settlePendingCopy = (url: string | undefined) => {
 		const resolve = pendingCopy.current;
 		pendingCopy.current = null;
 		resolve?.(url);
 	};
-	// After a row is stopped, focus goes to the next row's menu (its row key), or the field.
 	const focusAfter = useRef<{ stopped: string; target: string } | null>(null);
 	const openRef = useRef(open);
 	openRef.current = open;
@@ -327,8 +261,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 			}
 		},
 	});
-	// Another session's dialog already found this control plane without teams:
-	// open links only at once instead of showing the people field first.
 	const knownUnavailable = useMemo(
 		() => open && queryClient.getQueryCache().findAll({ queryKey: ["cloud-share-access", baseUrl] }).some((query) => query.state.data === null),
 		[baseUrl, open, queryClient],
@@ -359,7 +291,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 				role: request.role,
 				modeCap: request.modeCap,
 			}),
-		// The rows show at once; each becomes its grant when the control plane answers.
 		onMutate: async (request) => {
 			await queryClient.cancelQueries({ queryKey: request.key });
 			queryClient.setQueryData<AccessData>(request.key, (data) =>
@@ -372,7 +303,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		},
 		onError: (_error, request) => {
 			queryClient.setQueryData<AccessData>(request.key, (data) => withoutGrants(data, pendingIds(request)));
-			// The picks come back with the access they were given, under the error.
 			if (openRef.current && scopeRef.current === request.scope) {
 				setStaged((current) => [...request.recipients.filter((recipient) => !current.some((other) => recipientKey(other) === recipientKey(recipient))), ...current]);
 				setStagedRole(request.role);
@@ -391,8 +321,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 			queryClient.setQueryData<AccessData>(key, (data) =>
 				data ? { ...data, entries: data.entries.map((other) => (other.grantId === entry.grantId ? { ...other, role, modeCap } : other)) } : data,
 			);
-			// An expanded team's people show the change at once too; the refetch
-			// when it is saved settles anyone with access another way.
 			const members = entry.subject.kind === "team" && entry.subject.teamId
 				? withTeamAccess(queryClient, ["cloud-team-share-access", baseUrl, orgId, projectId], entry.subject.teamId, role, modeCap)
 				: [];
@@ -400,7 +328,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		},
 		onError: (_error, { entry }, context) => {
 			for (const [membersKey, data] of context?.members ?? []) queryClient.setQueryData(membersKey, data);
-			// Put back only what this change replaced, in the list it changed.
 			const before = context?.previous?.entries.find((other) => other.grantId === entry.grantId);
 			if (!context || !before) return;
 			queryClient.setQueryData<AccessData>(context.key, (data) =>
@@ -419,7 +346,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 				modeCap: entry.modeCap ?? defaultCap(entry.role),
 				...(entry.deniedCommands?.length ? { deniedCommands: entry.deniedCommands } : {}),
 			}),
-		// Back where it was at once; the new grant replaces it when the control plane answers.
 		onMutate: async ({ key, entry, index }) => {
 			await queryClient.cancelQueries({ queryKey: key });
 			queryClient.setQueryData<AccessData>(key, (data) => {
@@ -455,7 +381,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 				return { ...data, entries };
 			});
 		},
-		// Undo is offered once the share is gone: offered sooner, it could race the stop.
 		onSuccess: (_result, { key, entry }, context) => {
 			const subject = subjectInput(entry);
 			undoNotice.show({
@@ -472,8 +397,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		setStagedCap("read-only");
 		share.reset();
 	};
-	// Closing forgets everything but the shares themselves, so the dialog
-	// opens fresh: no old errors, no picks, the default access of Can watch.
 	useEffect(() => {
 		if (open) return;
 		setStaged([]);
@@ -506,8 +429,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		setView("settings");
 	};
 	const closeSettings = () => setView("main");
-	// Focus follows the view: into Link settings on Back, and out of it to
-	// what opened it, so it never drops to the page behind the dialog.
 	const shownView = useRef(view);
 	useLayoutEffect(() => {
 		const was = shownView.current;
@@ -521,7 +442,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		const opener = content?.querySelector<HTMLElement>(SETTINGS_OPENERS[settingsOpener.current]) ?? content?.querySelector<HTMLElement>(SETTINGS_OPENERS.gear);
 		opener?.focus();
 	}, [open, view]);
-	// Once a revoked link's row has gone, focus the Revoke now in its place, else the one above, else Back.
 	const linkIds = links.links.map((link) => link.id).join(" ");
 	useLayoutEffect(() => {
 		const pending = revokeFocus.current;
@@ -534,7 +454,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const submitShare = () => {
 		if (!ready || staged.length === 0 || share.isPending) return;
 		const request: ShareRequest = { key: accessKey, scope, sessionId: scopeSession, recipients: staged, role: stagedRole, modeCap: stagedCap };
-		// Cleared before the request, so a second Enter has nothing to send.
 		resetStaging();
 		undoNotice.clearFailure();
 		share.mutate(request);
@@ -553,7 +472,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		undoNotice.clearFailure();
 		stop.mutate({ key: accessKey, entry });
 	};
-	// Moves focus once the stopped row has left the list.
 	useLayoutEffect(() => {
 		const pending = focusAfter.current;
 		if (!pending || entries.some((entry) => entry.grantId === pending.stopped)) return;
@@ -565,34 +483,21 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [access.data]);
 
-	// General access. Turning link access on makes a Can watch link; anything
-	// that widens it, turns it off, or replaces a link asks first.
 	const restricted = restrictedSentence(t, { scope, workspaceKnown: Boolean(workspace), solo, people: peopleAvailable });
 	const turnOnLinks = () => {
 		undoNotice.clearFailure();
 		links.turnOn.mutate({ role: "viewer", modeCap: "read-only", expiry });
 	};
-	// Each confirmation that counts who joined by a link reads the links again
-	// first: someone may have joined since the dialog opened. It can't be
-	// confirmed until the list is back (links.fetching).
 	const askTurnOff = () => {
 		setRemoveJoined(false);
 		setConfirm({ kind: "off" });
 		void links.refresh();
 	};
 	const askChange = (next: { role: CloudCpShareRole; modeCap: ShareModeCap }, copy = false) => {
-		// Removing the people who joined is only ever chosen, never ticked for
-		// them: someone who joined by link alone would lose access outright.
 		setRemoveJoined(false);
 		setConfirm({ kind: "change", ...next, ...(copy ? { copy } : {}) });
 		void links.refresh();
 	};
-	/**
-	 * Copy link that has to ask first. A Trusted link made elsewhere: a new
-	 * link can't be Trusted, so it replaces it with a Can write one. Any other
-	 * that can write: Copy new link makes another link that can write, which
-	 * asks as turning writing on does. Resolves to the URL to copy, or undefined.
-	 */
 	const askCopy = () => new Promise<string | undefined>((resolve) => {
 		settlePendingCopy(undefined);
 		pendingCopy.current = resolve;
@@ -613,9 +518,7 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 			setCheckingRevoke(null);
 		}
 		const current = fresh.find((other) => other.id === link.id);
-		// Gone already: the list now says so.
 		if (!current) return;
-		// A link nobody joined by stops at once; otherwise the owner chooses about them.
 		if (typeof current.joinedCount !== "number" || current.joinedCount === 0) {
 			links.revoke.mutate({ link: current, removeJoined: false }, { onError: () => { revokeFocus.current = null; } });
 			return;
@@ -631,14 +534,12 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const runConfirm = () => {
 		const current = confirm;
 		if (!current) return;
-		// Only what was offered: a control plane that can't remove them is never asked to.
 		const remove = removeJoined && offersRemoveJoined(current, links);
 		setConfirm(null);
 		undoNotice.clearFailure();
 		if (current.kind === "off") {
 			const count = links.links.length;
 			links.turnOff.mutate({ removeJoined: remove }, {
-				// Who lost access as the control plane counted it, not as the dialog last read it.
 				onSuccess: (removed) => undoNotice.show({
 					message: remove && removed !== undefined && removed > 0
 						? t("share.general.turnedOffRemoved", { count: removed })
@@ -655,7 +556,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 				onSuccess: (url) => {
 					if (current.copy) settlePendingCopy(url);
 				},
-				// The new link exists even when an old one couldn't be turned off; it can still be copied.
 				onError: (failure) => {
 					if (current.copy) settlePendingCopy(failure instanceof LinkRevokeError ? failure.url : undefined);
 				},
@@ -667,7 +567,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 	const announceCopy = () => {
 		const link = links.broadest;
 		const sentence = link ? anyoneSentence(t, scope, link.role) : "";
-		// Changing the text each time makes the region speak again for a second copy.
 		setAnnouncement((before) => `${t("share.linkCopiedSentence", { sentence })}${before.endsWith("​") ? "" : "​"}`);
 	};
 
@@ -679,7 +578,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		: linkError ? linkErrorMessage(t, linkError)
 			: undoNotice.failed ? t("share.undoFailed") : null;
 
-	// What Esc steps back out of before the surface closes: Link settings, then the confirm step.
 	const canStepBack = view === "settings" || staging;
 	const stepBack = (): boolean => {
 		if (view === "settings") {
@@ -692,8 +590,6 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 		}
 		return false;
 	};
-	// Where focus starts: ready to type a name. Links only: on Copy link when it
-	// can copy, else on General access; while that loads, on the first control.
 	const initialFocus = (): HTMLElement | null => (
 		peopleAvailable && fieldInputRef.current
 			? fieldInputRef.current
@@ -714,26 +610,15 @@ function useShareController({ active: open, orgId, projectId, sessionId, teams, 
 
 type ShareController = ReturnType<typeof useShareController>;
 
-/**
- * Shares this cloud session, or its whole project, in a dialog: the title,
- * where it is and the switch between the session and the whole project, Link
- * settings and Close on top, the SharePanel, then Copy link beside Done.
- * Without a session it shares the whole project only.
- */
 export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessionId, sessionName, projectName, people: teams = true, standaloneAgent = false }: {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	orgId: string;
 	projectId: string;
-	/** The session to share; without one the dialog shares the whole project only. */
 	sessionId?: string;
-	/** The session's title, for "Share \"<title>\"". */
 	sessionName?: string;
-	/** The project's name, for "Session in <project>". */
 	projectName?: string;
-	/** Sharing with people and teams (Teams builds); off, the dialog is links only. */
 	people?: boolean;
-	/** A Cloud standalone agent's session: its project is the agent, so there is no whole project to share instead. */
 	standaloneAgent?: boolean;
 }) {
 	const { t } = useTranslation();
@@ -751,11 +636,9 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(540px,calc(100vw-24px))]")}
 				onClick={(event) => event.stopPropagation()}
-				// An Undo handed to the global toast keeps the dialog open when used.
 				onInteractOutside={(event) => {
 					if (event.target instanceof Element && event.target.closest("[data-global-toast]")) event.preventDefault();
 				}}
-				// Focus must never stay on the page behind, where keys would reach the terminal.
 				onOpenAutoFocus={(event) => {
 					const target = share.initialFocus();
 					if (!target) return;
@@ -799,9 +682,6 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 									{projectOnly || standaloneAgent ? null : (
 										<>
 											<span aria-hidden="true">·</span>
-											{/* A dotted underline, as Add Project's "Start without a repo", so it
-											    reads as an action. Keyboard focus brightens it as hover does: the
-											    app draws no focus rings (styles.css). */}
 											<Button
 												type="button"
 												variant="link"
@@ -824,22 +704,15 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 	);
 }
 
-/**
- * The whole project's sharing as a page, for Project settings › Sharing:
- * the same SharePanel the share dialog shows for the project, with nothing to
- * close. Changes apply at once, as they do in the dialog.
- */
 export function ProjectSharePanel({ orgId, projectId, people: teams = true }: {
 	orgId: string;
 	projectId: string;
-	/** Sharing with people and teams (Teams builds); off, links only. */
 	people?: boolean;
 }) {
 	const share = useShareController({ active: true, orgId, projectId, teams });
 	return <SharePanel share={share} layout="inline" />;
 }
 
-/** The gear that opens Link settings. */
 function LinkSettingsButton({ onClick }: { onClick: () => void }) {
 	const { t } = useTranslation();
 	return (
@@ -854,14 +727,6 @@ function LinkSettingsButton({ onClick }: { onClick: () => void }) {
 	);
 }
 
-/**
- * Sharing's controls, from useShareController. In the dialog, its body and
- * footer: people, General access, then Copy link beside Done. Inline (Project
- * settings › Sharing), the same controls as settings sections: the people
- * field, People with access, then General access with Link settings and Copy
- * link beside its heading, and no Done. The confirm step and Link settings
- * take the panel's place in both, and Esc steps back out of them.
- */
 function SharePanel({ share: controller, layout }: { share: ShareController; layout: "dialog" | "inline" }) {
 	const { t } = useTranslation();
 	const {
@@ -872,7 +737,6 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 		expiry, setExpiry, askRevoke, checkingRevoke, announcement, announceCopy, askCopy, newTeamFor, setNewTeamFor,
 		confirm, removeJoined, setRemoveJoined, runConfirm, cancelConfirm,
 	} = controller;
-	// Inline, a link the clipboard refused shows under General access rather than beside Copy link in its heading.
 	const [copyFallbackHost, setCopyFallbackHost] = useState<HTMLDivElement | null>(null);
 	const inline = layout === "inline";
 
@@ -891,7 +755,6 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 			placeholder={t("share.addPeopleOrTeams")}
 			ariaLabel={t("share.addPeopleOrTeams")}
 			onNewTeam={(people, typed) => {
-				// A typed email joins the new team; other text names it.
 				const email = looksLikeEmail(typed) ? typed.toLowerCase() : "";
 				const picked = people.filter((recipient) => recipient.kind === "person");
 				setNewTeamFor({
@@ -939,7 +802,6 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 			scope={scope}
 			access={access.data ?? undefined}
 			entries={ordered}
-			// Counted with the list, so a workspace with only you in it never shows first.
 			loading={access.isLoading || memberCount.isLoading}
 			me={myEmail}
 			myName={me?.displayName}
@@ -987,7 +849,6 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 		/>
 	);
 	const errorLine = (className?: string) => (error ? <p role="alert" className={cn("text-caption leading-4 text-error", className)}>{error}</p> : null);
-	// Where "Notify people" goes once sharing sends email; for now they find it in the app.
 	const inAppNotice = <p className="self-center text-xs text-muted-foreground" data-share-in-app="">{t("share.inAppNotice")}</p>;
 	const stagingActions = (
 		<div className="flex shrink-0 gap-2">
@@ -1051,7 +912,6 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 				className="flex flex-col gap-(--size-settings-section-gap)"
 				data-share-panel={scope}
 				data-share-layout="inline"
-				// Esc steps back out of Link settings or the confirm step before it closes Settings.
 				data-settings-inline-edit={canStepBack ? "" : undefined}
 				onKeyDown={(event) => {
 					if (event.key !== "Escape" || event.nativeEvent.isComposing || !stepBack()) return;
@@ -1162,15 +1022,6 @@ function SharePanel({ share: controller, layout }: { share: ShareController; lay
 	);
 }
 
-/**
- * The questions General access asks before a change that can't be taken back:
- * turning link access off, letting anyone with the link write (a wider link,
- * or another one that can write), and making a new link, which every change
- * to a link's access does. When links stop, each offers to remove the people
- * who joined by them, when the control plane can, never ticked: removing is
- * the owner's choice. It counts them from the links just read again, so it
- * waits for that read.
- */
 function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoinedChange, onConfirm, onCancel }: {
 	confirm: LinkConfirm | null;
 	scope: ShareScope;
@@ -1198,8 +1049,6 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 		: confirm.kind === "revoke"
 			? t("share.confirm.revokeLink")
 			: t("share.confirm.changeLinks", { count });
-	// Who keeps access: everyone who joined, unless the owner ticks removing
-	// them. A control plane that counts them and counts nobody has nobody to keep it.
 	const keeps = (offerRemove && removeJoined) || (links.canRemoveJoined && joined === 0)
 		? undefined
 		: confirm.kind !== "revoke" && count > 1 ? t("share.confirm.keepJoinedSeveral") : t("share.confirm.keepJoined");
@@ -1219,7 +1068,6 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 			description={description}
 			confirmLabel={confirm.kind === "off" ? t("share.confirm.offAction") : confirm.kind === "revoke" ? t("share.revoke") : widening ? t("share.confirm.writeAction") : t("share.confirm.changeAction")}
 			destructive={confirm.kind === "off" || confirm.kind === "revoke"}
-			// The count of who joined is only as good as the list it came from.
 			confirmDisabled={links.fetching}
 			onConfirm={onConfirm}
 			onOpenChange={(next) => {
@@ -1240,10 +1088,6 @@ function LinkConfirmDialog({ confirm, scope, links, removeJoined, onRemoveJoined
 	);
 }
 
-/**
- * Broadest to most specific, as Figma lists access: what comes from the whole
- * project, then teams, then people, then emails still waiting for sign-in.
- */
 export function orderEntries(entries: readonly CloudCpShareEntry[], scope: ShareScope): CloudCpShareEntry[] {
 	const rank = (entry: CloudCpShareEntry) =>
 		scope === "session" && entry.scope === "project" ? 0
@@ -1261,19 +1105,13 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 	sessionId: string | undefined;
 	scope: ShareScope;
 	access: CloudCpShareAccess | undefined;
-	/** The access's entries, broadest first. */
 	entries: CloudCpShareEntry[];
 	loading: boolean;
 	me: string | undefined;
-	/** The signed-in person's name, for a project's list with only them on it. */
 	myName?: string;
-	/** The name of the workspace that owns the project, when it reads as one (never an email); its people have full access. */
 	workspaceName?: string;
-	/** How many people are in the workspace, you included; undefined while it loads or when it couldn't be read. */
 	memberCount?: number;
-	/** Nobody but you in the workspace (or a standalone agent): the workspace grants nobody anything, so it gets no row. */
 	solo: boolean;
-	/** "People with access" over the list; off where a section heading says it. */
 	label?: boolean;
 	onChange: (entry: CloudCpShareEntry, next: { role: CloudCpShareRole; modeCap: ShareModeCap }) => void;
 	onStop: (entry: CloudCpShareEntry) => void;
@@ -1296,10 +1134,7 @@ function AccessList({ orgId, projectId, sessionId, scope, access, entries, loadi
 			</div>
 		);
 	}
-	// A project has no owner of its own: it is the workspace's. With nobody
-	// else in the workspace, the one with access is you.
 	const youRow = solo && !owner && scope === "project" && Boolean(me);
-	// The CP names someone without a profile name by their email.
 	const myShownName = myName && myName.toLowerCase() !== me ? myName : undefined;
 	const workspaceDetail = [workspaceName, memberCount === undefined ? undefined : t("share.workspaceMemberCount", { count: memberCount })]
 		.filter(Boolean)
@@ -1388,7 +1223,6 @@ function AccessRow({ orgId, projectId, sessionId, scope, entry, onChange, onStop
 			? entry.subject.email
 			: t("teams.addedByEmail");
 	const modeCap = entry.modeCap ?? defaultCap(entry.role);
-	// Shared a moment ago: shown at once, changed once the grant exists.
 	const pending = entry.grantId.startsWith(PENDING);
 	return (
 		<li
@@ -1402,7 +1236,6 @@ function AccessRow({ orgId, projectId, sessionId, scope, entry, onChange, onStop
 				{team ? <TeamTile name={name} /> : <PersonAvatar name={entry.subject.name} email={entry.subject.email} invited={!entry.subject.name} />}
 				<div className="min-w-0 flex-1">
 					<p className="truncate text-control text-foreground">{name}</p>
-					{/* Only the email shortens: "from the whole project" stays whole, so it can be clicked. */}
 					<p className="flex min-w-0 items-baseline text-xs whitespace-nowrap text-muted-foreground">
 						<span className="min-w-0 truncate">{sub}</span>
 						{fromProject ? (
@@ -1505,11 +1338,6 @@ function TeamMemberLine({ member, teamId, scope }: { member: CloudCpTeamMemberAc
 	);
 }
 
-/**
- * The confirm step: who will get what. Each picked team's members are
- * weighed against what they already have, so the line names who gains, who
- * keeps more, and who is already a workspace member.
- */
 function StagedSummary({ orgId, projectId, sessionId, scope, staged, role, modeCap, onCapChange, entries, me, locale, membersHaveAccess = true }: {
 	orgId: string;
 	projectId: string;
@@ -1522,7 +1350,6 @@ function StagedSummary({ orgId, projectId, sessionId, scope, staged, role, modeC
 	entries: CloudCpShareEntry[];
 	me: string | undefined;
 	locale: string;
-	/** False for a Cloud standalone agent: the workspace's people get only what a share gives them. */
 	membersHaveAccess?: boolean;
 }) {
 	const { t } = useTranslation();

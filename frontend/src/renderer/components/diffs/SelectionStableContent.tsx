@@ -10,9 +10,6 @@ export function hasCodeSelection(container: HTMLElement | null): boolean {
 	);
 }
 
-/** Keep content from an in-flight refresh pending until the native selection ends.
- * Pausing refetch alone cannot cancel a response already in flight.
- */
 export function useSelectionSnapshot<T>(
 	container: RefObject<HTMLDivElement | null>,
 	value: T,

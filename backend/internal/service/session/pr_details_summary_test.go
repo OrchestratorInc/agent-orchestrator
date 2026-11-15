@@ -62,8 +62,6 @@ func TestListPRSummariesCarriesStoredPRDetails(t *testing.T) {
 	}
 }
 
-// Before any observation has carried details the summary says so, instead of
-// reporting a PR that has no description, labels or commits.
 func TestListPRSummariesLeavesDetailsUnobservedUntilStored(t *testing.T) {
 	prURL := "https://github.com/acme/repo/pull/7"
 	got, err := (&Service{store: newPRDetailsStore(prURL)}).ListPRSummaries(context.Background(), "mer-1")
@@ -82,8 +80,6 @@ func TestListPRSummariesLeavesDetailsUnobservedUntilStored(t *testing.T) {
 	}
 }
 
-// A store with no details support (older fakes, other stores) must not fail the
-// whole PR listing.
 func TestListPRSummariesWorksWhenTheStoreHasNoDetails(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
@@ -119,7 +115,6 @@ func TestSummarizeChecksListsHeadChecksFailingFirstThenByName(t *testing.T) {
 	}
 }
 
-// A merged PR with all-green checks still lists them, so "23/23 passed" can show.
 func TestSummarizeChecksListsChecksOfAMergedPassingPR(t *testing.T) {
 	pr := domain.PullRequest{URL: "u", Number: 1, HeadSHA: "h", Merged: true, CI: domain.CIPassing}
 	checks := []domain.PullRequestCheck{{Name: "unit", CommitHash: "h", Status: domain.PRCheckPassed}}
@@ -142,8 +137,6 @@ func TestSummarizeChecksIsAlwaysAListAndCapped(t *testing.T) {
 	}
 }
 
-// A merged PR keeps who reviewed it, which is part of its record, while the
-// unresolved-comment detail stays hidden: nothing can be acted on any more.
 func TestSummarizeReviewKeepsSubmittedReviewsForAFinishedPR(t *testing.T) {
 	submitted := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
 	reviews := []domain.PullRequestReview{
@@ -177,7 +170,6 @@ func TestSummarizeChecksListsACheckRepeatedAcrossAliasesOnce(t *testing.T) {
 	checks := []domain.PullRequestCheck{
 		{Name: "test", CommitHash: "head", Status: domain.PRCheckInProgress, CreatedAt: older},
 		{Name: "lint", CommitHash: "head", Status: domain.PRCheckPassed, CreatedAt: older},
-		// The same checks again, from the PR's other URL alias; "test" has since finished.
 		{Name: "test", CommitHash: "head", Status: domain.PRCheckPassed, CreatedAt: newer},
 		{Name: "lint", CommitHash: "head", Status: domain.PRCheckPassed, CreatedAt: older},
 	}

@@ -7,12 +7,6 @@ import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation"
 import type { WorkspaceSession } from "../../types/workspace";
 import { ChatWorkspace } from "./ChatWorkspace";
 
-/**
- * A Cloud review that runs in Chat, in the reviewer's tab as a local
- * reviewer chat is: the review prompt, the reviewer's work and verdict, and a
- * composer for follow-up questions. Its approvals are declined in the sandbox,
- * so it never asks.
- */
 export function CloudReviewerChatSurface({ session, reviewId, harness, hideHeader = false }: {
 	session: WorkspaceSession;
 	reviewId: string;

@@ -44,7 +44,6 @@ describe("ReviewBranchMenu", () => {
 		const { props } = renderMenu();
 		const trigger = screen.getByRole("button", { name: "Branch to review: main" });
 		expect(trigger).toHaveAttribute("title", "main");
-		// Text only, like the Changes trigger: the chevron is its one icon.
 		expect(trigger.querySelectorAll("svg")).toHaveLength(1);
 		expect(trigger.querySelector("svg")).toHaveClass("icon-chevron-down");
 		await openMenu();
@@ -97,7 +96,6 @@ describe("ReviewBranchMenu", () => {
 	it("adds search once there are two branches, filters by name or PR number, and ArrowDown enters the list", async () => {
 		const one = renderMenu({ rows: baseRows.slice(0, 1) });
 		await openMenu();
-		// A lone branch has nothing to search.
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
 		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 		one.view.unmount();
@@ -109,7 +107,6 @@ describe("ReviewBranchMenu", () => {
 
 		const seven = renderMenu({ rows: manyRows(7) });
 		await openMenu();
-		// Seven fit the box: no Show more.
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(7);
 		expect(screen.queryByRole("menuitem", { name: /^Show \d+ more$/ })).not.toBeInTheDocument();
 		seven.view.unmount();
@@ -136,7 +133,6 @@ describe("ReviewBranchMenu", () => {
 
 	it("shows a cut-off branch name in full on hover, and only when it is cut off", async () => {
 		const longName = "origin/ao/dev/market-place-13/root-orchestrator";
-		// jsdom has no layout: a name wider than 20 characters overflows its row.
 		const scrollWidth = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
 			return (this.textContent?.length ?? 0) * 7;
 		});
@@ -171,7 +167,6 @@ describe("ReviewBranchMenu", () => {
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(6);
 		const list = screen.getAllByRole("menuitemradio")[0].parentElement;
 		expect(list).toHaveClass("max-h-[16.125rem]", "overflow-y-auto");
-		// The same Show more as the commits list, at the end of the scroll.
 		const more = screen.getByRole("menuitem", { name: "Show 6 more" });
 		expect(list?.lastElementChild).toBe(more);
 		expect(more).toHaveClass("justify-center");

@@ -49,15 +49,13 @@ func (m *memStore) AgentAccountUsageSince(context.Context, time.Time) ([]domain.
 	return nil, nil
 }
 
-// fakeClaude reports who each folder is signed in as; "" is the device.
-// unshared makes every account folder fail to link.
 type fakeClaude struct {
 	signedInAs map[string]string
 	unshared   bool
-	onIdentity func(home string) // runs as a folder's identity is read
+	onIdentity func(home string)
 	onLimits   func()
-	apiKey     map[string]bool // folders logged in with an API key
-	failing    map[string]bool // folders whose check fails (a timeout)
+	apiKey     map[string]bool
+	failing    map[string]bool
 	windows    []domain.AgentAccountLimitWindow
 	limitsErr  error
 	orgOf      map[string]string
@@ -123,7 +121,6 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
 	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
 
-	// Signing in to the device's own login again is refused, not saved twice.
 	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +137,6 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 		t.Fatalf("duplicate saved: %+v", store.accounts)
 	}
 
-	// A new login is saved, and new sessions use the default until one is picked.
 	start, _ = svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
 	b := filepath.Join(root, "claude", start.OperationID)
 	claude.signedInAs[b] = "b@example.com"
@@ -161,7 +157,6 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 		t.Fatalf("moved session env = %v", env)
 	}
 
-	// The folder now holds someone else's login: picking it is refused.
 	claude.signedInAs[b] = "c@example.com"
 	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
@@ -174,9 +169,6 @@ func TestAccountsRefuseTheWrongLogin(t *testing.T) {
 	}
 }
 
-// TestAccountsRefuseAFolderThatCannotLink pins that an account whose folder
-// cannot link to the computer's history is never signed in, bound or moved to:
-// a session there would keep history of its own, and moves could not resume it.
 func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -210,14 +202,11 @@ func TestAccountsRefuseAFolderThatCannotLink(t *testing.T) {
 	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, start.OperationID); !errors.Is(err, ports.ErrAgentAccountUnshared) {
 		t.Fatalf("move to the account: %v", err)
 	}
-	// This computer's own login has no folder to link.
 	if err := svc.BindSession(ctx, "s2", domain.HarnessClaudeCode, "device-claude"); err != nil {
 		t.Fatalf("bind to this computer: %v", err)
 	}
 }
 
-// A signed-out account signs in again in its own folder, so its sessions keep
-// it; only the login it was saved with is kept there.
 func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -242,7 +231,6 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 	if _, err := svc.StartSignInAgain(ctx, "device-claude"); !errors.Is(err, ports.ErrAgentAccountDeviceFixed) {
 		t.Fatalf("sign in again to this computer: %v", err)
 	}
-	// Cancelled: the saved folder stays.
 	again, err := svc.StartSignInAgain(ctx, accountID)
 	if err != nil {
 		t.Fatal(err)
@@ -253,7 +241,6 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 	if _, err := os.Stat(b); err != nil {
 		t.Fatalf("cancel removed the saved folder: %v", err)
 	}
-	// Another login in the folder is refused and signed out again.
 	again, _ = svc.StartSignInAgain(ctx, accountID)
 	claude.signedInAs[b] = "c@example.com"
 	if status, _, err := svc.VerifyLogin(ctx, again.OperationID); err != nil || status != LoginMismatch {
@@ -262,7 +249,6 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 	if _, signedIn := claude.signedInAs[b]; signedIn {
 		t.Fatal("the other login stayed in the account's folder")
 	}
-	// The same login comes back on the same account.
 	again, _ = svc.StartSignInAgain(ctx, accountID)
 	claude.signedInAs[b] = "B@example.com"
 	status, view, err := svc.VerifyLogin(ctx, again.OperationID)
@@ -277,8 +263,6 @@ func TestSignInAgainKeepsTheAccountAndItsLogin(t *testing.T) {
 	}
 }
 
-// Removing an account stops its agents first; one that cannot be stopped keeps
-// the account, signed in.
 func TestRemoveStopsTheAccountsAgentsFirst(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -319,8 +303,6 @@ func TestRemoveStopsTheAccountsAgentsFirst(t *testing.T) {
 	}
 }
 
-// A sign-in cancelled while it is being checked is not saved: the cancel has
-// already signed the folder out and removed it.
 func TestCancelDuringVerifyDoesNotSaveTheAccount(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -337,7 +319,7 @@ func TestCancelDuringVerifyDoesNotSaveTheAccount(t *testing.T) {
 		if err := svc.CancelLogin(ctx, start.OperationID); err != nil {
 			t.Errorf("cancel: %v", err)
 		}
-		claude.signedInAs[b] = "b@example.com" // the CLI's answer was already on its way
+		claude.signedInAs[b] = "b@example.com"
 	}
 
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); !errors.Is(err, ports.ErrAgentAccountLoginUnknown) {
@@ -348,9 +330,6 @@ func TestCancelDuringVerifyDoesNotSaveTheAccount(t *testing.T) {
 	}
 }
 
-// While an account is being removed no launch resolves to it: a session that
-// starts in that window runs on the default, and a pick is refused. The
-// sessions still on it stay visible, so its agents can be found and stopped.
 func TestRemovingAnAccountKeepsNewLaunchesOffIt(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -390,18 +369,11 @@ func TestRemovingAnAccountKeepsNewLaunchesOffIt(t *testing.T) {
 	if err := svc.Remove(ctx, accountID); !errors.Is(err, ports.ErrAgentAccountInUse) {
 		t.Fatalf("remove: %v", err)
 	}
-	// The refused removal leaves the account usable.
 	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, accountID); err != nil {
 		t.Fatalf("account after a refused removal: %v", err)
 	}
 }
 
-// A new task on a default account that is known to be signed out, or now holds
-// another login, is refused rather than started there or quietly elsewhere.
-// Not knowing (no reading yet) is not a reason to refuse.
-// A new task on a default that is known to be signed out, or to hold another
-// login, starts on another account that is signed in, and is refused only when
-// there is none.
 func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -423,7 +395,7 @@ func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 
 	for _, tc := range []struct {
 		name  string
-		login string // "" signs the folder out
+		login string
 	}{{"signed out", ""}, {"another login", "c@example.com"}} {
 		t.Run(tc.name, func(t *testing.T) {
 			delete(claude.signedInAs, b)
@@ -442,7 +414,6 @@ func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 			}
 		})
 	}
-	// The computer's own login as the default follows the same rule.
 	if err := svc.SetDefault(ctx, "device-claude"); err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +425,6 @@ func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 	if err := svc.BindSession(ctx, "device-out", domain.HarnessClaudeCode, ""); err != nil || store.bindings["device-out"] != start.OperationID {
 		t.Fatalf("bind on a signed-out CLI login default: %q %v", store.bindings["device-out"], err)
 	}
-	// With no account signed in, the task is refused rather than started signed out.
 	delete(claude.signedInAs, b)
 	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
@@ -464,8 +434,6 @@ func TestNewTaskOnAKnownBadDefaultStartsOnAnotherAccount(t *testing.T) {
 	}
 }
 
-// A signed-out reading of the default that is older than the cache window is
-// read again first: the user may have signed it in outside AO since.
 func TestAnOldSignedOutDefaultIsReadAgainBeforeMovingOn(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -494,8 +462,6 @@ func TestAnOldSignedOutDefaultIsReadAgainBeforeMovingOn(t *testing.T) {
 	}
 }
 
-// When a session's agent is refused for its credentials, its account is read
-// again at once: it shows as signed out, and new tasks stop starting on it.
 func TestRecheckSessionAccountSeesALoginThatDied(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -514,7 +480,6 @@ func TestRecheckSessionAccountSeesALoginThatDied(t *testing.T) {
 	if err := svc.BindSession(ctx, "s1", domain.HarnessClaudeCode, ""); err != nil {
 		t.Fatal(err)
 	}
-	// Claude clears a folder's login when its refresh token is refused.
 	delete(claude.signedInAs, b)
 	svc.RecheckSessionAccount(ctx, "s1", domain.HarnessClaudeCode)
 	views, err := svc.List(ctx, false)
@@ -529,7 +494,6 @@ func TestRecheckSessionAccountSeesALoginThatDied(t *testing.T) {
 	if err := svc.BindSession(ctx, "s2", domain.HarnessClaudeCode, ""); err != nil || store.bindings["s2"] != "device-claude" {
 		t.Fatalf("new task after the default's login died: %q %v", store.bindings["s2"], err)
 	}
-	// A harness without accounts has nothing to read.
 	svc.RecheckSessionAccount(ctx, "s1", domain.HarnessGemini)
 }
 
@@ -563,9 +527,6 @@ func TestRunsOnComputerLoginFollowsTheDefaultAndThePick(t *testing.T) {
 	}
 }
 
-// A CLI login that uses an API key is not a subscription, so it cannot be an
-// account to switch to, but the CLI launches with it: as the default it must
-// not refuse new tasks.
 func TestAnAPIKeyCLILoginStillLaunchesAsTheDefault(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{signedInAs: map[string]string{}, apiKey: map[string]bool{"": true}}
@@ -575,7 +536,6 @@ func TestAnAPIKeyCLILoginStillLaunchesAsTheDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The app shows it as a login, not as signed out.
 	if len(views) != 1 || views[0].SignedIn || !views[0].LoggedIn {
 		t.Fatalf("API-key CLI login view = %+v, want logged in without a subscription", views)
 	}
@@ -584,9 +544,6 @@ func TestAnAPIKeyCLILoginStillLaunchesAsTheDefault(t *testing.T) {
 	}
 }
 
-// Agent readiness asks whether the saved account new sessions start on is
-// signed in. It has no say while they start on the computer's own login, and
-// the default changing tells readiness to look again.
 func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -610,8 +567,6 @@ func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	if identity, handled := svc.DefaultSignIn(ctx, domain.HarnessClaudeCode); !handled || !identity.SignedIn || identity.Email != "b@example.com" {
 		t.Fatalf("saved default = %+v handled %v, want b@example.com signed in", identity, handled)
 	}
-	// A signed-out default sends new sessions to the computer's own login, whose
-	// readiness the CLI reports itself.
 	delete(claude.signedInAs, b)
 	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
@@ -631,8 +586,6 @@ func TestDefaultSignInAnswersOnlyForASavedDefault(t *testing.T) {
 	}
 }
 
-// With the default signed out and another saved account signed in, readiness
-// describes that account, which new sessions start on.
 func TestDefaultSignInFollowsTheAccountNewSessionsStartOn(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -664,9 +617,6 @@ func TestDefaultSignInFollowsTheAccountNewSessionsStartOn(t *testing.T) {
 	}
 }
 
-// The data directory may be reached through a symlink now, though the account
-// was made under its real path. Removal still deletes the folder, and still
-// refuses anything outside the account root.
 func TestRemoveDeletesTheFolderThroughASymlinkedRoot(t *testing.T) {
 	physical := t.TempDir()
 	alias := filepath.Join(t.TempDir(), "alias")
@@ -689,8 +639,6 @@ func TestRemoveDeletesTheFolderThroughASymlinkedRoot(t *testing.T) {
 	}
 }
 
-// A check that fails (a timeout under load) says nothing about the login: the
-// account keeps reading as signed in, with the failure shown as its problem.
 func TestAFailedCheckDoesNotReadAsSignedOut(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -725,12 +673,11 @@ func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 	svc.now = func() time.Time { return now }
 	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
 	claude.signedInAs[filepath.Join(root, "claude", start.OperationID)] = "b@example.com"
-	// The read right after sign-in answers before the limits are known.
 	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
 		t.Fatal(err)
 	}
 	claude.windows = []domain.AgentAccountLimitWindow{{ID: "five_hour", UsedPercent: 1}}
-	now = now.Add(time.Minute) // the next poll, well inside the cache window
+	now = now.Add(time.Minute)
 	views, err := svc.List(ctx, false)
 	if err != nil {
 		t.Fatal(err)
@@ -740,7 +687,6 @@ func TestLimitsWithNoWindowsAreReadAgainSoon(t *testing.T) {
 			t.Fatalf("limits a minute after an empty answer: %+v", view.Limits)
 		}
 	}
-	// An answer with windows is kept for the whole cache window.
 	claude.windows = nil
 	now = now.Add(time.Minute)
 	views, _ = svc.List(ctx, false)
@@ -770,13 +716,12 @@ func TestAReadingThatReachesTheProviderConfirmsTheLogin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	read() // signed out
+	read()
 	claude.failing[""] = true
-	read() // the check fails
+	read()
 	if len(confirmed) != 0 {
 		t.Fatalf("confirmed without a working login: %v", confirmed)
 	}
-	// Signed in with the CLI's own login, outside AO.
 	claude.failing[""] = false
 	claude.signedInAs[""] = "a@example.com"
 	read()
@@ -828,7 +773,6 @@ func TestProblemKindSortsFailuresByWhatFailed(t *testing.T) {
 		{errors.New("claude ended without answering get_usage"), domain.AgentAccountProblemUnavailable},
 		{errors.New("claude get_usage: API error: status 429"), domain.AgentAccountProblemRateLimited},
 		{errors.New("claude get_usage: HTTP 429"), domain.AgentAccountProblemRateLimited},
-		// Digits in a port are not a status.
 		{errors.New("dial tcp 127.0.0.1:42901: connect: connection refused"), domain.AgentAccountProblemUnavailable},
 		{errors.New("dial tcp 127.0.0.1:429: connect: connection refused"), domain.AgentAccountProblemUnavailable},
 	} {
@@ -863,7 +807,7 @@ func TestASlowCheckIsTriedAgainSoonAndARateLimitIsNot(t *testing.T) {
 		t.Fatalf("slow check = %+v, want kind slow and the last limits", view)
 	}
 	claude.limitsErr = nil
-	now = now.Add(retryFailedAfter + time.Second) // well inside the five-minute window
+	now = now.Add(retryFailedAfter + time.Second)
 	if view := device(false); view.LimitsProblem != "" || view.LimitsErr != "" {
 		t.Fatalf("a minute after a slow check: %+v, want it read again", view)
 	}
@@ -893,7 +837,6 @@ func TestACLIThatStaysSlowIsAskedLessOften(t *testing.T) {
 	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
 	}
-	// Each slow check in a row doubles the wait, up to the usual five minutes.
 	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, freshFor, freshFor} {
 		now = now.Add(wait - time.Second)
 		if svc.needsReading(id, false) {
@@ -909,8 +852,6 @@ func TestACLIThatStaysSlowIsAskedLessOften(t *testing.T) {
 	}
 }
 
-// A failed read can keep earlier limits with no windows; the failure backoff
-// still applies instead of the 30-second empty-windows retry.
 func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
 	ctx := context.Background()
 	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
@@ -919,7 +860,7 @@ func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
 	now := time.Now()
 	svc.now = func() time.Time { return now }
 	id := domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude)
-	if _, err := svc.List(ctx, true); err != nil { // limits with no windows
+	if _, err := svc.List(ctx, true); err != nil {
 		t.Fatal(err)
 	}
 	claude.limitsErr = fmt.Errorf("claude get_usage: %w", context.DeadlineExceeded)
@@ -931,7 +872,6 @@ func TestASlowCheckOnAPlanWithoutWindowsStillBacksOff(t *testing.T) {
 		t.Fatal("a slow check was read again after 30 seconds")
 	}
 	now = now.Add(-retryEmptyAfter - time.Second)
-	// Each slow check in a row doubles the wait: one, two, then four minutes.
 	for _, wait := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
 		now = now.Add(wait - time.Second)
 		if svc.needsReading(id, false) {

@@ -1,4 +1,3 @@
-// Identity markers stay local. They carry no messages, keys, URLs or IDs.
 import { wasCapturedBeforeRenderer } from "../../shared/renderer-error-handlers";
 const apiErrors = new WeakSet<object>();
 const capturedErrors = new WeakSet<object>();
@@ -11,8 +10,6 @@ export function isApiError(error: unknown): boolean {
 	for (let depth = 0; depth < 8 && error !== null && typeof error === "object"; depth++) {
 		if (apiErrors.has(error)) return true;
 		if (!(error instanceof Error)) break;
-		// Electron serializes IPC rejections as plain Errors. Main owns both
-		// expected-state filtering and unexpected handler fault reporting.
 		if (error.message.startsWith("Error invoking remote method '")) return true;
 		try { error = error.cause; } catch { break; }
 	}
@@ -28,9 +25,6 @@ export function reserveException(error: unknown): boolean {
 	return true;
 }
 
-// Mark the exact error object produced by openapi-fetch after it parses the
-// response. Non-object error bodies need an identity to survive rethrowing;
-// normalize them to an Error with the same user-visible message.
 export function withApiErrorOwnership<T extends object>(client: T): T {
 	const wrapped = { ...client };
 	for (const key of ["GET", "PUT", "POST", "DELETE", "OPTIONS", "HEAD", "PATCH", "TRACE"]) {

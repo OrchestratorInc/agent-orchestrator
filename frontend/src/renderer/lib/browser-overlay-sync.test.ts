@@ -28,7 +28,6 @@ describe("subscribeBrowserOverlaySync", () => {
 		await flush();
 		expect(setOverlayOpen).toHaveBeenLastCalledWith(true);
 
-		// One browser hook unmounting must not lower the shell under the dialog.
 		first();
 		first();
 		expect(setOverlayOpen).not.toHaveBeenCalledWith(false);

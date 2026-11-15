@@ -45,8 +45,6 @@ function captureOncePerRun(key: string, event: string, properties: Record<string
 	void captureRendererEvent(event, properties);
 }
 
-/** Installed agents whose earlier chats can be imported. A sign-in check that
- * was inconclusive still counts; only a known signed-out agent is left out. */
 export function useImportableAgents(enabled: boolean): AgentId[] {
 	const readiness = useAgentReadinessQuery(enabled);
 	return (readiness.data?.agents ?? [])

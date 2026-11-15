@@ -62,7 +62,6 @@ export default function CloneRepositoryDialog({
 	firstRun?: boolean;
 	onOpenLocalFolder?: () => void;
 	onStartStandaloneAgent?: () => void;
-	/** Set when first run may offer the import step; runs once the import finished. */
 	onChatsImported?: () => void;
 	cloning?: boolean;
 	disabled: boolean;
@@ -75,7 +74,6 @@ export default function CloneRepositoryDialog({
 	onUseExisting: (path: string) => void;
 	onCancel: () => void;
 	activity?: "cloning" | "validating" | null;
-	/** The git step the running clone last reported. */
 	progress?: CloneProgress | null;
 	onError?: (message: string) => void;
 	onChooseRemoteDestination?: () => void;
@@ -100,7 +98,6 @@ export default function CloneRepositoryDialog({
 	const [repositoryFieldTouched, setRepositoryFieldTouched] = useState(false);
 	const [shake, setShake] = useState(false);
 	const [firstRunStep, setFirstRunStep] = useState<"welcome" | "import" | "github" | "sources" | "clone">(firstRun ? "welcome" : "clone");
-	// Back from the project step returns to the import step only if it was shown.
 	const [importOffered, setImportOffered] = useState(false);
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
 	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
@@ -230,8 +227,6 @@ export default function CloneRepositoryDialog({
 			try {
 				window.localStorage.setItem(LAST_CLONE_DESTINATION_KEY, selected);
 			} catch {
-				// Remembering the folder is a convenience; cloning still works if
-				// browser storage is unavailable.
 			}
 			onChange({ ...value, destinationParent: selected });
 		} catch (err) {
@@ -260,7 +255,6 @@ export default function CloneRepositoryDialog({
 			try {
 				window.localStorage.setItem(LAST_CLONE_DESTINATION_KEY, value.destinationParent.trim());
 			} catch {
-				// Remembering the folder is optional.
 			}
 		}
 		onContinue({
@@ -278,7 +272,6 @@ export default function CloneRepositoryDialog({
 					{(() => {
 						const render = (gh: GitHubState) => {
 						const showRepoPicker = firstRun && gh.hasGitHub;
-						// Setup is offered only once the user reaches something git-related.
 						const gate = (run: () => void) => {
 							if (gh.needsSetup) setFirstRunStep("github");
 							else run();
@@ -515,11 +508,6 @@ const clonePhaseKeys: Record<CloneProgress["phase"], MessageKey> = {
 	retrying: "createProject.clonePhaseRetrying",
 };
 
-/**
- * One line naming the step the clone is on. A new step rises in as the last
- * one drifts up and fades away; git's percent and the timer tick in place
- * within a step.
- */
 function CloneActivityRow({
 	activity,
 	elapsed,
@@ -628,18 +616,12 @@ export function repositoryNameFromGitUrl(raw: string): string | null {
 				return null;
 			}
 			host = parsed.hostname.toLowerCase();
-			// URL.pathname preserves percent escapes, while Go's net/url exposes a
-			// decoded URL.Path to the daemon. Decode once so this preview names the
-			// exact directory the daemon will create, including escaped separators.
 			remotePath = decodeURIComponent(parsed.pathname);
 		} catch {
 			return null;
 		}
 	}
 	const segments = remotePath.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
-	// The backend derives the checkout name from the final path segment. A
-	// self-hosted remote can validly use a single segment, for example
-	// https://git.example.com/repository.git.
 	if (segments.length < 1) return null;
 	if (isProviderSubpage(host, segments)) return null;
 	const lastSegment = segments[segments.length - 1] ?? "";
@@ -660,9 +642,6 @@ export function repositoryAvatarFromGitUrl(raw: string): { owner: string; url: s
 		case "bitbucket.org":
 			return { owner: remote.owner, url: `https://bitbucket.org/account/${encodedOwner}/avatar/64/` };
 		default:
-			// Azure DevOps and self-hosted providers do not share one public avatar
-			// endpoint. Unavatar knows the common provider URL shapes and the
-			// initials fallback keeps this non-blocking when it cannot resolve one.
 			return { owner: remote.owner, url: `https://unavatar.io/${encodeURIComponent(remote.host)}/${encodedOwner}` };
 	}
 }

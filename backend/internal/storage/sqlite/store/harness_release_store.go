@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// SetManagedHarnessRelease records the AO-managed release new launches of
-// harness start from. Every later launch records it as the release it runs.
 func (s *Store) SetManagedHarnessRelease(ctx context.Context, harness domain.AgentHarness, release string, at time.Time) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -24,8 +22,6 @@ func (s *Store) SetManagedHarnessRelease(ctx context.Context, harness domain.Age
 	return nil
 }
 
-// ListHarnessReleasesInUse lists the managed releases of harness that a live
-// session's current launch still runs.
 func (s *Store) ListHarnessReleasesInUse(ctx context.Context, harness domain.AgentHarness) ([]string, error) {
 	releases, err := s.qr.ListHarnessReleasesInUse(ctx, string(harness))
 	if err != nil {
@@ -34,7 +30,6 @@ func (s *Store) ListHarnessReleasesInUse(ctx context.Context, harness domain.Age
 	return releases, nil
 }
 
-// PruneSessionHarnessReleases forgets launches that are no longer current.
 func (s *Store) PruneSessionHarnessReleases(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -44,11 +39,6 @@ func (s *Store) PruneSessionHarnessReleases(ctx context.Context) error {
 	return nil
 }
 
-// ClaimLiveChatControllerGeneration claims generation for a Chat that
-// reconnected to its still-running provider. In the same transaction it
-// carries the release the replaced generation ran, and its stale-release
-// mark, to the new one: the provider process is the same, and no cleanup can
-// prune the old generation's row between the claim and the carry.
 func (s *Store) ClaimLiveChatControllerGeneration(ctx context.Context, id domain.SessionID, generation string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

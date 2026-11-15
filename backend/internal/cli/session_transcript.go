@@ -33,8 +33,6 @@ const (
 	elisionStrategy = "head_tail"
 )
 
-// ansiPattern matches CSI, OSC, and a single-character escape so color codes
-// never reach the caller's terminal or spend tokens.
 var ansiPattern = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|.)?`)
 
 type transcriptRequest struct {
@@ -290,9 +288,6 @@ func splitWorkerReportField(entry map[string]any) {
 	entry["workerReports"] = reports
 }
 
-// splitWorkerReports matches the desktop humanVisibleText rule: a trailing
-// block opened by a blank line and closed at the end of the text. Anything
-// else stays in the message so a malformed block is not dropped or half-read.
 func splitWorkerReports(text string) (visible, reports string, ok bool) {
 	if !strings.HasSuffix(text, workerReportClose) {
 		return text, "", false
@@ -373,8 +368,6 @@ func sanitizeText(s string) string {
 	return b.String()
 }
 
-// cappedKeys are the text fields whose middle may be elided. Identifiers,
-// paths, and statuses are left whole.
 var cappedKeys = map[string]bool{
 	"text": true, "summary": true, "command": true, "rawCommand": true,
 	"output": true, "terminalInput": true, "streamedText": true, "progress": true,
@@ -383,10 +376,6 @@ var cappedKeys = map[string]bool{
 	"message": true, "workerReports": true,
 }
 
-// capTree elides known text fields. Truncation records are attached to record
-// (the entry or turn) so a nested detail map is not given its own list.
-// force caps every string, which is how tool arguments and results stay bounded
-// without a fixed key list. Returns the number of fields cut.
 func capTree(v any, path string, maxChars int, fullCmd string, record map[string]any) int {
 	if maxChars == 0 || v == nil {
 		return 0

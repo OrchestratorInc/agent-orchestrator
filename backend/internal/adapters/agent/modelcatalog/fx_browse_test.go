@@ -199,7 +199,6 @@ func TestFXCatalogScopedSelections(t *testing.T) {
 					}
 					return nil, errors.New("AuthenticationRejected")
 				}
-				// FX resolves explicit and inherited cwd before looking up its workspace entry.
 				for _, dir := range []string{workspace + string(filepath.Separator) + ".", ""} {
 					got, err := discoverFXCatalog(context.Background(), ports.AgentModelDiscoveryRequest{AgentID: "fx", Binary: "fx", WorkingDir: dir, Env: env}, run)
 					if err != nil {

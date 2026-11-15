@@ -48,8 +48,6 @@ func TestStartupSafetyDoesNotAbortOnInterruptedProvisionStateWrite(t *testing.T)
 			t.Fatalf("startup writes for %s = %d, want 1", id, store.attempts[id])
 		}
 	}
-	// The successful row can be retried by the user. A new row can start after
-	// the listener binds; neither is an interrupted write from the old daemon.
 	retrying := st.sessions["mer-2"]
 	retrying.ProvisionState = domain.SessionProvisionProvisioning
 	st.sessions["mer-2"] = retrying
@@ -99,8 +97,6 @@ func TestBackgroundProvisionRetryDoesNotTouchReusedSessionID(t *testing.T) {
 	if err := m.ReconcileStartupSafety(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// SQLite can reuse MAX(num)+1 after a row is deleted. This is a new task,
-	// not the interrupted one whose startup write failed.
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
 		Mode: domain.SessionModeChat, ProvisionState: domain.SessionProvisionProvisioning,
@@ -142,7 +138,7 @@ func TestBackgroundPreparationCleanupHoldsProjectWorkspaceGate(t *testing.T) {
 		createEntered: make(chan struct{}, 1), releaseCreate: make(chan struct{}),
 	}
 	m.workspace = ws
-	st.num = 1 // the post-listener preparation receives mer-2, not the old mer-1
+	st.num = 1
 	st.sessions["mer-1"] = domain.SessionRecord{
 		ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker,
 		IsTaskPreparation: true, ProvisionState: domain.SessionProvisionProvisioning,

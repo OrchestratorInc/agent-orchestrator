@@ -100,20 +100,6 @@ import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy"
 import { aoBridge } from "../lib/bridge";
 import { isHostLocalWebLink } from "../lib/loopback";
 
-// One-click viewport width presets for responsive testing — height is shown
-// for reference but not enforced (only width drives CSS breakpoints, and
-// this is a docked panel of limited, variable height, not a device
-// emulator). No "Desktop" entry: the panel is already viewed on desktop, so
-// that preset was always a no-op. "Custom" covers anything these named
-// devices don't — you're never stuck with only this list.
-//
-// Matches Chrome DevTools' own "Standard" device list (front_end/models/
-// emulation/EmulatedDevices.ts) so anyone already familiar with that list
-// finds the same names here. Dimensions are each device's portrait/vertical
-// mode from that source; Nest Hub/Max are fixed-landscape smart displays, so
-// their one orientation is used directly. iPad Air and Nest Hub have since
-// been dropped from Chrome's own current list but are kept here since
-// they're still common, well-known breakpoints worth testing against.
 const DEVICE_PRESETS: { id: string; label: string; width: number; height: number; category: "phone" | "tablet" }[] = [
 	{ id: "iphone-se", label: "iPhone SE", width: 375, height: 667, category: "phone" },
 	{ id: "iphone-xr", label: "iPhone XR", width: 414, height: 896, category: "phone" },
@@ -265,7 +251,7 @@ export function useBrowserAnnotationQueue({
 					let pageUrl = "";
 					try {
 						pageUrl = await aoBridge.remotes.resolvePreviewUrl(hostIdRef.current, sendSessionId, payload.session.page.url);
-					} catch { /* A disconnected host cannot resolve a preview capability. */ }
+					} catch { }
 					sendPayload = { ...payload, session: { ...payload.session, page: { ...payload.session.page, url: pageUrl } } };
 				}
 				const message = formatBrowserAnnotationMessage(sendPayload, { screenshotPaths });
@@ -416,10 +402,6 @@ export function BrowserPanel({
 	);
 }
 
-// Memoized: SessionView renders several times per session switch for reasons
-// that never reach this panel, and each pass re-rendered every toolbar
-// tooltip and tab. Its props (the browser model included) are stable objects
-// that change only when what the panel shows changes.
 export const BrowserPanelView = memo(function BrowserPanelView({
 	session,
 	active,
@@ -467,8 +449,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	} = browserView;
 	const userBrowser = useUserBrowser();
 	const [urlInput, setUrlInput] = useState(navState.url);
-	// A popped-out panel is portaled outside #root; the popout flag covers that
-	// case, so this one marks only a live page docked inside the shell.
 	useDocumentFlag("data-browser-native-live", Boolean(navState.url) && !poppedOut);
 	const [urlCopied, setUrlCopied] = useState(false);
 	const [historySuggestions, setHistorySuggestions] = useState<Array<{ url: string; title?: string }>>([]);
@@ -479,12 +459,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		annotationQueue;
 	const hasNativeBrowser = Boolean(window.ao?.browser);
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
-	// Not on an agent tab: its page is its viewer's picture of the agent's page.
 	const onAgentTab = Boolean(tabs.find((tab) => tab.active)?.remote);
 	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url && !onAgentTab);
-	// An agent tab's localhost page is the host's: opened here it would be this
-	// computer's own. Before the viewer's first report the tab shows the viewer
-	// itself, an ao-preview-….localhost address, so that is held back too.
 	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
 	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { agentTab: onAgentTab }) && !browserUnavailable;
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
@@ -521,14 +497,11 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	} = useTabScrollEdges([tabs.length]);
 	const previousTabCountRef = useRef(tabs.length);
 
-	// Opening a tab (or a popup adding one) appends it, so reveal the newest.
 	useEffect(() => {
 		if (tabs.length > previousTabCountRef.current) scrollTabsToEnd();
 		previousTabCountRef.current = tabs.length;
 	}, [tabs.length, scrollTabsToEnd]);
 
-	// Keep the active tab visible when selection changes (click, keyboard, or a
-	// close that shifts activation), unless a drag is positioning it.
 	useEffect(() => {
 		if (draggedTopTabId) return;
 		const region = tabScrollRef.current;
@@ -597,11 +570,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		() =>
 			window.ao?.browser.onFocusLocation((targetViewId) => {
 				if (targetViewId !== viewId) return;
-				// ⌘T/Ctrl+T focuses the omnibox after opening a tab. When the bar is
-				// portaled into the inspector header it sits outside the panel focus
-				// boundary, so restore the browser shortcut target before the input
-				// takes focus — otherwise the next ⌘T/⌘W falls through to terminal
-				// shortcuts and yank focus to the main pane.
 				window.ao?.browser.notifyPanelUsed(viewId);
 				if (document.activeElement === urlInputRef.current) {
 					return;
@@ -681,9 +649,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		[reorderTabs, tabs],
 	);
 
-	// Docked DevTools belongs to the native page view, which is intentionally
-	// hidden while the active target is blank. Keep close available for any
-	// in-flight state update, but do not offer an open action with no page.
 	const canUseDevTools = hasNativeBrowser && Boolean(viewId) && Boolean(navState.url || devtoolsState.open);
 	const canTakeScreenshot = hasNativeBrowser && Boolean(viewId) && Boolean(navState.url);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -740,12 +705,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		clearTimeout(copyFeedbackTimeoutRef.current);
 		setHistorySuggestions([]);
 		setActiveHistorySuggestion(-1);
-		// A prior submit (typed, or pasted, then Enter) leaves the caret at the
-		// end of the old value; the browser keeps that same horizontal scroll
-		// position for the new value, scrolling the scheme/host off the left
-		// edge (e.g. showing "://example.com" instead of "https://example.com").
-		// Reset it once the DOM has the new value committed, so the address is
-		// readable from the start like a real address bar after navigating.
 		const frame = window.requestAnimationFrame(() => {
 			if (urlInputRef.current) urlInputRef.current.scrollLeft = 0;
 		});
@@ -884,11 +843,8 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		setUrlEditing(true);
 	};
 
-	// A remote preview's address works only in this panel, which trusts its
-	// certificate: outside AO it goes by its plain-http address.
 	const externalURL = async (url: string): Promise<string> => {
 		if (!session.hostId) return url;
-		// A disconnected host has no other address for it: keep the one shown.
 		return aoBridge.remotes.externalUrl(session.hostId, url).catch(() => url);
 	};
 
@@ -928,8 +884,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		}
 	};
 
-	// A blank new tab has nowhere to go on its own, so send focus straight to
-	// the URL bar afterward instead of leaving the user to click into it.
 	const handleOpenTab = useCallback(async () => {
 		await openTab();
 		urlInputRef.current?.focus();
@@ -941,7 +895,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			try {
 				await selectTab(tabId);
 			} catch {
-				// The existing tab remains active.
 			}
 		},
 		[selectTab],
@@ -969,8 +922,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							: "";
 	const agentStatusLabel = agentActivityLabel(agentBrowserActivity, agentBrowserActive);
 	const runtimeState = useBrowserRuntimeState();
-	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
-	// not a disconnect yet; alarming then would flash the alert on every relink.
 	const runtimeDisconnected =
 		hasNativeBrowser && runtimeState !== null && !runtimeState.connected && !runtimeState.connecting;
 	const runtimeRejectedMessage = runtimeState?.rejected ? t(browserRuntimeRejectedKey(runtimeState.rejectionCode)) : null;
@@ -993,9 +944,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			)}
 			data-testid="browser-address-bar"
 			onFocusCapture={() => {
-				// When docked, this form is portaled into the inspector header and is
-				// therefore outside the browser-panel focus boundary below. Restore the
-				// browser shortcut target when its address input receives focus.
 				if (viewId) window.ao?.browser.notifyPanelUsed(viewId);
 			}}
 			onSubmit={submit}
@@ -1061,8 +1009,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 								</Button>
 							</BrowserControlTooltip>
 						) : null}
-						{/* On an agent's host page, aria-disabled rather than disabled: a
-						    disabled button would lose the tooltip that says why. */}
 						{currentURLIsWeb ? (
 							<BrowserControlTooltip label={agentPageOnHost ? t("browser.agentPageOnHost") : t("inspector.openInSystemBrowser")}>
 									<Button
@@ -1163,7 +1109,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 					{draggedTopTab ? <BrowserTopTabDragOverlay tab={draggedTopTab} /> : null}
 				</DragOverlay>
 			</DndContext>
-			{/* The session strip's New terminal button, in its action slot. */}
 			<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-tab-strip-action>
 				<BrowserControlTooltip label={t("browser.openNewTab")}>
 					<Button
@@ -1298,15 +1243,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			data-testid="browser-panel"
 			onBlurCapture={(event: FocusEvent<HTMLDivElement>) => {
 				if (!viewId || event.currentTarget.contains(event.relatedTarget)) return;
-				// Focus moving into the portaled omnibox is still browser chrome — do
-				// not drop the shortcut target or ⌘T/⌘W will create/close terminals.
 				if (topbarHost && event.relatedTarget instanceof Node && topbarHost.contains(event.relatedTarget)) {
 					return;
 				}
-				// relatedTarget is null or body/documentElement when focus leaves the
-				// document entirely (e.g. into the native page after a shortcut-driven
-				// tab close) or when an unmounting element drops focus to document.body.
-				// That is still browser context, so keep the shortcut target.
 				if (
 					!event.relatedTarget ||
 					event.relatedTarget === document.body ||
@@ -1336,7 +1275,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									<span className="truncate" title={runtimeRejectedMessage ?? undefined}>
 										{runtimeRejectedMessage ?? t("browser.runtimeDisconnected")}
 									</span>
-									{/* Reconnecting sends the same token, which the daemon would refuse again. */}
 									{runtimeState.rejected ? null : (
 										<Button
 											className="shrink-0"
@@ -1574,8 +1512,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						<div className="my-1 h-px bg-border" role="separator" />
 						<DropdownMenuItem
 							className="gap-1.5"
-							// Radix re-focuses an item on pointer move/leave, which would pull focus
-							// out of the width field while the mouse drifts over the row.
 							onPointerMove={(event) => event.preventDefault()}
 							onPointerLeave={(event) => event.preventDefault()}
 							onSelect={(event) => {
@@ -1600,7 +1536,6 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 								}}
 								onClick={(event) => event.stopPropagation()}
 								onKeyDown={(event) => {
-									// Escape still closes the menu; everything else is typing.
 									if (event.key !== "Escape") event.stopPropagation();
 								}}
 								type="number"
@@ -1796,24 +1731,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			<div className="browser-panel__body flex min-h-0 flex-1 overflow-hidden">
 				<div
 					className="browser-panel__viewport relative min-h-0 flex-1 overflow-hidden"
-					// The live page paints as a separate native WebContentsView, not inside
-					// this div. Opening any browser overlay (e.g. the controls menu) briefly
-					// raises the transparent shell above that native view so the overlay can
-					// paint on top — if this div painted an opaque background here, it would
-					// blank the live page for the duration. `.browser-panel__viewport` in
-					// styles.css carries its own plain-CSS background for the empty/no-bridge
-					// placeholder states that is NOT a Tailwind utility and so can't be
-					// toggled via className — Tailwind utilities live in a lower-priority
-					// cascade layer and can never override plain author CSS. Gate that CSS
-					// rule with this data attribute instead, so there's exactly one place
-					// deciding opacity.
 					data-placeholder={!hasNativeBrowser || navState.url === "" ? "true" : undefined}
 					data-testid="browser-viewport"
 				>
-					{/* Only the native-view slot is width-constrained for a device
-					    preset — the empty/error placeholders below stay full-width
-					    overlays. maxWidth caps it to whatever room the panel actually
-					    has instead of overflowing a narrow docked panel. */}
 					<div
 						className={cn("relative mx-auto h-full", deviceFrameWidth && "border-x border-border shadow-(--shadow-popover)")}
 						style={deviceFrameWidth ? { maxWidth: "100%", width: deviceFrameWidth } : undefined}
@@ -1870,10 +1790,6 @@ function BrowserControlTooltip({
 	);
 }
 
-// A page's tab: the shared tab frame, with the page's favicon in the icon
-// slot and the ghost close button always showing at its right end. The slot
-// around it is what the strip sorts; the frame's button carries the drag
-// listeners.
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
@@ -1929,8 +1845,6 @@ function BrowserTabIcon({ favicon }: { favicon?: string }) {
 
 const noop = () => undefined;
 
-// The tab under the pointer while it is dragged: the same frame in its
-// dragging look, as a dragged session tab shows.
 export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 	tab,
 }: {
@@ -1966,8 +1880,6 @@ function agentActivityLabel(activity: BrowserViewModel["agentBrowserActivity"], 
 	return appI18n.t("browser.agentAction", { verb: browserActionVerb(action) });
 }
 
-// The daemon's refusal codes (backend/internal/browserruntime/broker.go). Name a
-// cause only for a code that identifies one; any other refusal stays generic.
 function browserRuntimeRejectedKey(code: string | undefined): MessageKey {
 	switch (code) {
 		case "BROWSER_RUNTIME_TOKEN_REJECTED":

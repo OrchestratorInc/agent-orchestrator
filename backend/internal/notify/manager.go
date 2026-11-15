@@ -1,4 +1,3 @@
-// Package notify owns notification write-side production and live dashboard fan-out.
 package notify
 
 import (
@@ -14,7 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Store is the write-side notification persistence boundary.
 type Store interface {
 	CreateNotification(ctx context.Context, rec domain.NotificationRecord) (domain.NotificationRecord, bool, error)
 	ResolveSessionNotifications(
@@ -32,19 +30,14 @@ type Store interface {
 	ReconcileResolvedNotifications(ctx context.Context, at time.Time) ([]domain.NotificationRecord, error)
 }
 
-// Publisher pushes notification events to live dashboard subscribers.
 type Publisher interface {
 	Publish(ctx context.Context, event domain.NotificationEvent) error
 }
 
-// Intent is the lifecycle-to-notification producer contract.
 type Intent = ports.NotificationIntent
 
-// Resolution is the lifecycle-to-notification resolution contract.
 type Resolution = ports.NotificationResolution
 
-// Manager validates lifecycle intents, enriches them into stored rows, persists
-// unread notifications, and publishes newly inserted rows to live subscribers.
 type Manager struct {
 	store     Store
 	publisher Publisher
@@ -53,17 +46,14 @@ type Manager struct {
 	newID     func() string
 }
 
-// Deps configures a Manager.
 type Deps struct {
 	Store     Store
 	Publisher Publisher
-	// Barrier orders persistence and publication with notification clear-all.
-	Barrier sync.Locker
-	Clock   func() time.Time
-	NewID   func() string
+	Barrier   sync.Locker
+	Clock     func() time.Time
+	NewID     func() string
 }
 
-// New constructs a write-side notification manager.
 func New(d Deps) *Manager {
 	m := &Manager{store: d.Store, publisher: d.Publisher, barrier: d.Barrier, clock: d.Clock, newID: d.NewID}
 	if m.barrier == nil {
@@ -78,8 +68,6 @@ func New(d Deps) *Manager {
 	return m
 }
 
-// Notify stores one notification intent and publishes it after persistence.
-// Duplicate unread rows are treated as a clean no-op.
 func (m *Manager) Notify(ctx context.Context, intent Intent) error {
 	if m == nil || m.store == nil {
 		return errors.New("notify: store is required")
@@ -107,10 +95,6 @@ func (m *Manager) Notify(ctx context.Context, intent Intent) error {
 	return nil
 }
 
-// Resolve closes every open notification the resolution matches and publishes
-// the rows it changed. Resolution is always derived from a lifecycle fact —
-// the session got its input, the PR stopped waiting on a merge — never from a
-// user action, so there is no manual counterpart to this call.
 func (m *Manager) Resolve(ctx context.Context, res Resolution) error {
 	if m == nil || m.store == nil {
 		return errors.New("notify: store is required")
@@ -142,9 +126,6 @@ func (m *Manager) Resolve(ctx context.Context, res Resolution) error {
 	return m.publishResolved(ctx, resolved)
 }
 
-// Reconcile closes notifications whose resolving transition happened while the
-// daemon was down. Lifecycle only observes live transitions, so without this a
-// restart could strand a needs-input row as unresolved forever.
 func (m *Manager) Reconcile(ctx context.Context) error {
 	if m == nil || m.store == nil {
 		return errors.New("notify: store is required")

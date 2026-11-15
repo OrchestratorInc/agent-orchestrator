@@ -13,15 +13,10 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { AccountLimits } from "./settings/AgentAccountsSection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
-/** The account a session's agent runs under, and the move to another account.
- * A move is the session's durable controller handoff: the agent restarts in the
- * same conversation on the new account, or stays on the old one if that fails.
- * Moving a working agent stops its turn after asking, through `dialog`. */
 export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId = session.hostId) {
 	const { t } = useTranslation();
 	const hostId = sessionHostId === LOCAL_HOST ? undefined : sessionHostId;
 	const provider = agentAccountProviderFor(session.provider);
-	// Only a live Claude Code or Codex session on a daemon has an account to show.
 	const shown = Boolean(provider) && !session.cloud && !session.isTerminated;
 	const shownId = shown ? session.id : undefined;
 	const accounts = useAgentAccounts(shown, hostId);
@@ -35,7 +30,6 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	const moving = interfaceTransitionIsActive(accountMove);
 	const settledPhase = accountMove && !moving ? accountMove.phase : undefined;
 
-	// The binding commits at the end of the move; reread it once the move settles.
 	useEffect(() => {
 		if (settledPhase) void actions.refreshSession(session.id);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -47,14 +41,11 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 		: [], [accounts.data, currentId, provider]);
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";
-	// "Moved from … to …" answers the move; the next message makes it history.
 	const messagedSinceMove = Boolean(accountMove && session.lastUserMessageAt &&
 		Date.parse(session.lastUserMessageAt) > Date.parse(accountMove.updatedAt));
 
 	const move = async (accountId: string, stopTurn = false) => {
 		if (accountId === currentId) return;
-		// A working agent may only be waiting on the old account's limit; moving
-		// stops that turn, so ask first.
 		if (working && !stopTurn) {
 			setConfirming(accountId);
 			return;
@@ -79,7 +70,6 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 
 	const moveRef = useRef(move);
 	moveRef.current = move;
-	// Only a subscription takes a session: the daemon refuses a move to an API-key login.
 	const choice = useMemo<AccountChoice | undefined>(() => {
 		if (!shown || !provider) return undefined;
 		return {
@@ -103,9 +93,6 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 	return { shown, choice, account, moving, status, dialog, error: message, clearError: () => setMessage("") };
 }
 
-/** The account the session's agent runs under, its limits, and the move to
- * another account. A Cloud session reads its creator's Cloud accounts; a local
- * or remote-host one the daemon's. */
 export function SessionAccountSummary({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	return session.cloud ? <CloudSessionAccountSummary session={session} orgId={session.cloud.orgId} /> : <LocalSessionAccountSummary session={session} hostId={hostId} />;
 }
@@ -139,7 +126,6 @@ function CloudSessionAccountSummary({ session, orgId }: { session: WorkspaceSess
 	const { t } = useTranslation();
 	const { agentAccounts } = useCloudOffering();
 	const meUserId = useCloudMeUserId();
-	// The accounts are the creator's own: only they can see the session's or move it.
 	const shown = agentAccounts && !session.isTerminated && !session.cloud?.shared &&
 		CLOUD_ACCOUNT_SWITCH_HARNESSES.includes(session.provider ?? "") &&
 		Boolean(meUserId) && session.cloud?.createdByUserId === meUserId;
@@ -158,7 +144,6 @@ function CloudSessionAccountSummary({ session, orgId }: { session: WorkspaceSess
 		session={session}
 		transition={transition}
 		currentId={current.data?.accountId}
-		// An account that stopped working cannot take the session; the control plane refuses it.
 		options={options.map((option) => ({ id: option.id, name: cloudAgentAccountName(option, t), selectable: option.validationState === "valid" }))}
 		label={label}
 		limits={null}
@@ -184,21 +169,17 @@ function SessionAccountPicker({ session, transition, currentId, options, label, 
 	const moving = interfaceTransitionIsActive(accountMove);
 	const settledPhase = accountMove && !moving ? accountMove.phase : undefined;
 
-	// The binding commits at the end of the move; reread it once the move settles.
 	useEffect(() => {
 		if (settledPhase) onSettled();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [settledPhase, accountMove?.id, session.id]);
 
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";
-	// "Moved from … to …" answers the move; the next message makes it history.
 	const messagedSinceMove = Boolean(accountMove && session.lastUserMessageAt &&
 		Date.parse(session.lastUserMessageAt) > Date.parse(accountMove.updatedAt));
 
 	const move = async (accountId: string, stopTurn = false) => {
 		if (accountId === currentId) return;
-		// A working agent may only be waiting on the old account's limit; moving
-		// stops that turn, so ask first.
 		if (working && !stopTurn) {
 			setConfirming(accountId);
 			return;

@@ -15,7 +15,6 @@ func TestKilocodeAuthStatusAuthorizedWithProviderEnv(t *testing.T) {
 	t.Setenv("KILO_DATA_DIR", filepath.Join(dir, "missing-kilo-data"))
 	t.Setenv("OPENAI_API_KEY", "openai-key")
 
-	// A kilo that cannot start leaves only the environment to answer.
 	status, err := (&Plugin{resolvedBinary: filepath.Join(dir, "kilo")}).AuthStatus(context.Background())
 	if err != nil {
 		t.Fatal(err)

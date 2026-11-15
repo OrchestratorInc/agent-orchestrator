@@ -1,6 +1,3 @@
-// An opened EventSource only proves that response headers arrived. A proxy may
-// buffer the body indefinitely, so remote streams must deliver a frame before
-// they replace the REST polling fallback.
 export function probeRemoteSse(
 	url: string,
 	eventNames: readonly string[],

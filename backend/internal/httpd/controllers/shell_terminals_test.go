@@ -95,9 +95,6 @@ func TestShellTerminalsAPI_OpenReturnsHandleForMuxAttach(t *testing.T) {
 	}
 }
 
-// The bug this guards: a shell opened from a session view must reach the
-// service with the session id intact, not just the project id, since only the
-// session id can resolve to the session's own worktree.
 func TestShellTerminalsAPI_OpenPassesSessionScopeThrough(t *testing.T) {
 	svc := &fakeShellTerminalService{opened: sampleShellTerminal()}
 	srv := newShellTerminalTestServer(t, svc)
@@ -114,8 +111,6 @@ func TestShellTerminalsAPI_OpenPassesSessionScopeThrough(t *testing.T) {
 	}
 }
 
-// The topbar action fires with no project selected and sends no body; that must
-// open a shell rather than 400.
 func TestShellTerminalsAPI_OpenAcceptsEmptyBody(t *testing.T) {
 	svc := &fakeShellTerminalService{opened: sampleShellTerminal()}
 	srv := newShellTerminalTestServer(t, svc)
@@ -129,8 +124,6 @@ func TestShellTerminalsAPI_OpenAcceptsEmptyBody(t *testing.T) {
 	}
 }
 
-// The desktop renderer attaches with its measured grid, so it asks the daemon
-// to start the shell then; older and secondary clients omit it.
 func TestShellTerminalsAPI_OpenPassesStartOnAttachThrough(t *testing.T) {
 	for _, tc := range []struct {
 		body string
@@ -275,8 +268,6 @@ func TestShellTerminalsAPI_RenameRejectsMalformedBody(t *testing.T) {
 	}
 }
 
-// A daemon built without the service must answer the locked 501 envelope, not
-// panic on a nil interface.
 func TestShellTerminalsAPI_NotImplementedWithoutService(t *testing.T) {
 	srv := newShellTerminalTestServer(t, nil)
 

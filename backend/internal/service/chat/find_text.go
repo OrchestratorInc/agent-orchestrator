@@ -22,20 +22,12 @@ import (
 var findMarkdownPool = sync.Pool{New: func() any { return goldmark.New(goldmark.WithExtensions(extension.GFM)) }}
 var findUserMarkdownPool = sync.Pool{New: func() any { return newUserFindMarkdown() }}
 
-// newUserFindMarkdown parses the markdown the chat renders in a person's own
-// message (UserMarkdown in ChatMarkdown.tsx): lists, task boxes, block quotes,
-// fenced code, code spans, emphasis and links. Headings, rules, HTML, tables,
-// strikethrough and link definitions stay literal text there, so they have no
-// parser here, and indented code reads as prose. Change both together.
 func newUserFindMarkdown() goldmark.Markdown {
 	return goldmark.New(
 		goldmark.WithParser(parser.NewParser(
 			parser.WithBlockParsers(
 				util.Prioritized(parser.NewListParser(), 300),
 				util.Prioritized(parser.NewListItemParser(), 400),
-				// Indented lines are prose in the bubble; goldmark's paragraph
-				// parser refuses them, so they are parsed as code and projected
-				// back as paragraphs in findMarkdownBlocks.
 				util.Prioritized(parser.NewCodeBlockParser(), 500),
 				util.Prioritized(parser.NewFencedCodeBlockParser(), 700),
 				util.Prioritized(parser.NewBlockquoteParser(), 800),
@@ -52,8 +44,6 @@ func newUserFindMarkdown() goldmark.Markdown {
 	)
 }
 
-// FindBlocks projects message prose into independent displayed text blocks:
-// agent messages as full Markdown, or the whole source as one plain block.
 func FindBlocks(source string, markdown bool) []string {
 	if !markdown {
 		return []string{source}
@@ -66,8 +56,6 @@ func FindBlocks(source string, markdown bool) []string {
 	return findMarkdownBlocks(md, []byte(source), false)
 }
 
-// FindUserBlocks projects a person's own message through the light Markdown
-// subset its bubble renders.
 func FindUserBlocks(source string) []string {
 	md, ok := findUserMarkdownPool.Get().(goldmark.Markdown)
 	if !ok {
@@ -77,14 +65,10 @@ func FindUserBlocks(source string) []string {
 	return findMarkdownBlocks(md, []byte(source), true)
 }
 
-// In a person's message image syntax is not parsed: `![alt](url)` shows as a
-// "!" before a link, every fence (mermaid and math included) is shown as code,
-// indented lines are paragraphs, and staged image paths in prose are image chips.
 func findMarkdownBlocks(md goldmark.Markdown, input []byte, user bool) []string {
 	root := md.Parser().Parse(text.NewReader(input))
 	var blocks []string
 	var body strings.Builder
-	// Where the current block shows its text as written: code spans and link labels.
 	var literal [][2]int
 	flush := func() {
 		if body.Len() > 0 {
@@ -135,8 +119,6 @@ func findMarkdownBlocks(md goldmark.Markdown, input []byte, user bool) []string 
 					body.Write(line.Value(input))
 					continue
 				}
-				// The bubble renders these lines as paragraphs: each line trimmed,
-				// a blank line starting the next paragraph.
 				value := unescapeFindText(strings.TrimSpace(string(line.Value(input))))
 				if value == "" {
 					flush()
@@ -151,7 +133,6 @@ func findMarkdownBlocks(md goldmark.Markdown, input []byte, user bool) []string 
 			return ast.WalkSkipChildren, nil
 		case *ast.Text:
 			value := string(n.Segment.Value(input))
-			// Goldmark retains backslash escapes and entities in ordinary text.
 			_, code := node.Parent().(*ast.CodeSpan)
 			if !code {
 				value = unescapeFindText(value)
@@ -166,7 +147,6 @@ func findMarkdownBlocks(md goldmark.Markdown, input []byte, user bool) []string 
 		case *ast.String:
 			body.Write(n.Value)
 		case *ast.RawHTML:
-			// React escapes raw HTML rather than interpreting it.
 			for i := 0; i < n.Segments.Len(); i++ {
 				segment := n.Segments.At(i)
 				body.Write(segment.Value(input))
@@ -232,11 +212,7 @@ func (f findText) endAt(index int) int {
 	return f.ends[index]
 }
 
-// Offsets are UTF-16 positions in the original displayed block, not in its
-// folded representation. Canonical segments map expansions back to whole glyphs.
 func foldFindText(source string) findText {
-	// Most transcript text is ASCII. Avoid grapheme segmentation and per-glyph
-	// case-fold allocations on this path (large code blocks in particular).
 	ascii, collapsed, previousSpace := true, false, false
 	for i := range len(source) {
 		if source[i] >= 128 {

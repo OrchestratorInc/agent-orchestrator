@@ -47,11 +47,6 @@ type AttachedTarget = {
 	chromiumChildSessionIds: Set<string>;
 };
 
-/**
- * One physical Electron debugger attachment can serve multiple logical CDP
- * clients from the restricted agent-browser daemon. Detaching one logical
- * client must not detach the underlying page debugger while another remains.
- */
 type PhysicalTargetAttachment = {
 	targetId: string;
 	debugger: AgentBrowserDebugger;
@@ -59,18 +54,11 @@ type PhysicalTargetAttachment = {
 	messageListener: (...args: unknown[]) => void;
 	detachListener: (...args: unknown[]) => void;
 	ownedDebugger: boolean;
-	/** Chromium sessions ("" is the page) whose Runtime domain a client enabled. */
 	runtimeSessions: Set<string>;
-	/** Runtime is disabled between AO commands; the next command re-enables it. */
 	quiet: boolean;
 	waking?: Promise<void>;
 };
 
-// An enabled Runtime domain is visible to pages (console serialization makes
-// heavy logging measurably slower), and bot managers such as Cloudflare
-// Turnstile score it as automation. Keep it on only while an AO command runs.
-// Emulated viewports are visible too (innerWidth no longer matches the window),
-// and AO's own live viewport must not be cleared by a client.
 const IDLE_QUIET_DELAY_MS = 250;
 const SWALLOWED_TARGET_METHODS = new Set([
 	"Emulation.setDeviceMetricsOverride",
@@ -124,7 +112,6 @@ export class AgentBrowserCDPBridge {
 		this.endpoint = "";
 	}
 
-	/** An AO command is about to run: re-enable Runtime where clients want it. */
 	async beginCommand(): Promise<void> {
 		this.seenCommand = true;
 		this.activeCommands += 1;
@@ -132,17 +119,12 @@ export class AgentBrowserCDPBridge {
 		await Promise.all([...this.physical.values()].map((physical) => this.wake(physical)));
 	}
 
-	/** An AO command finished: once none remain, hide Runtime from pages. */
 	async endCommand(): Promise<void> {
 		this.activeCommands = Math.max(0, this.activeCommands - 1);
 		if (this.activeCommands > 0) return;
 		await Promise.all([...this.physical.values()].map((physical) => this.quiet(physical)));
 	}
 
-	/**
-	 * The native daemon can also talk between AO commands, for example to attach
-	 * to a new popup. Anything that turned Runtime on then goes quiet again.
-	 */
 	private scheduleIdleQuiet(): void {
 		if (!this.seenCommand || this.activeCommands > 0) return;
 		clearTimeout(this.idleQuietTimer);
@@ -171,16 +153,12 @@ export class AgentBrowserCDPBridge {
 		physical.quiet = false;
 		physical.waking = (async () => {
 			for (const sessionId of [...physical.runtimeSessions]) {
-				// Contexts created or destroyed while Runtime was off were never
-				// reported. Clear them the way a navigation does; enabling Runtime
-				// then reports every live context afresh.
 				physical.messageListener(undefined, "Runtime.executionContextsCleared", {}, sessionId || undefined);
 				try {
 					await (sessionId
 						? physical.debugger.sendCommand("Runtime.enable", {}, sessionId)
 						: physical.debugger.sendCommand("Runtime.enable"));
 				} catch {
-					// The child frame went away while Runtime was off.
 					physical.runtimeSessions.delete(sessionId);
 				}
 			}
@@ -224,8 +202,6 @@ export class AgentBrowserCDPBridge {
 	private handleConnection(socket: WebSocket, connection: ConnectionContext): void {
 		this.connections.add(connection);
 		socket.on("message", (data) => {
-			// CDP correlates responses by request id and permits them to complete out
-			// of order. Do not serialize independent Page/DOM/Runtime/Network requests.
 			void this.handleMessage(connection, data).catch(() => undefined);
 		});
 		socket.on("close", () => {
@@ -245,8 +221,6 @@ export class AgentBrowserCDPBridge {
 		}
 		if (!Number.isInteger(request.id) || typeof request.method !== "string") return;
 		try {
-			// Browser-level target management stays on the unscoped connection;
-			// page commands require a session created by Target.attachToTarget.
 			const result = request.sessionId
 				? await this.forwardTargetCommand(connection, request)
 				: await this.handleBrowserCommand(connection, request);
@@ -511,7 +485,6 @@ export class AgentBrowserCDPBridge {
 			try {
 				physical.debugger.detach();
 			} catch {
-				// Electron may already be tearing the WebContents down.
 			}
 		}
 	}

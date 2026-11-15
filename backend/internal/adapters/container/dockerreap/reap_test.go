@@ -10,7 +10,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// fakeRunner scripts docker CLI responses by exact argv match, in call order.
 type fakeRunner struct {
 	t      *testing.T
 	calls  [][]string
@@ -35,9 +34,9 @@ func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]b
 
 func TestReapSessionContainers_RemovesLabeledNonSpared(t *testing.T) {
 	fr := &fakeRunner{t: t, script: []fakeCall{
-		{out: []byte("abc123\tfalse\ndef456\t\n")}, // list: one explicitly not-spared, one unset
-		{out: nil}, // rm abc123
-		{out: nil}, // rm def456
+		{out: []byte("abc123\tfalse\ndef456\t\n")},
+		{out: nil},
+		{out: nil},
 	}}
 	r := newWithRunner(fr)
 
@@ -55,8 +54,8 @@ func TestReapSessionContainers_RemovesLabeledNonSpared(t *testing.T) {
 
 func TestReapSessionContainers_SkipsSpared(t *testing.T) {
 	fr := &fakeRunner{t: t, script: []fakeCall{
-		{out: []byte("abc123\ttrue\ndef456\tfalse\n")}, // abc123 spared, def456 not
-		{out: nil}, // rm def456 only
+		{out: []byte("abc123\ttrue\ndef456\tfalse\n")},
+		{out: nil},
 	}}
 	r := newWithRunner(fr)
 
@@ -140,8 +139,8 @@ func TestReapSessionContainers_ListFailsSparesEverything(t *testing.T) {
 func TestReapSessionContainers_PartialRemovalReportsCountAndError(t *testing.T) {
 	fr := &fakeRunner{t: t, script: []fakeCall{
 		{out: []byte("abc123\t\ndef456\t\n")},
-		{out: nil}, // rm abc123 succeeds
-		{err: errors.New("rm def456: container is running")}, // rm def456 fails
+		{out: nil},
+		{err: errors.New("rm def456: container is running")},
 	}}
 	r := newWithRunner(fr)
 
@@ -154,17 +153,12 @@ func TestReapSessionContainers_PartialRemovalReportsCountAndError(t *testing.T) 
 	}
 }
 
-// TestReapSessionContainers_MiddleFailureDoesNotAbortRemaining is the
-// regression for the comment/code contradiction: a stuck container in the
-// middle of the list must not leave later containers unreaped. A 2-container
-// test with the failure last can't distinguish "kept going" from "aborted" —
-// this needs 3, with the failure in the middle.
 func TestReapSessionContainers_MiddleFailureDoesNotAbortRemaining(t *testing.T) {
 	fr := &fakeRunner{t: t, script: []fakeCall{
 		{out: []byte("aaa\t\nbbb\t\nccc\t\n")},
-		{out: nil}, // rm aaa succeeds
-		{err: errors.New("rm bbb: container is running")}, // rm bbb fails
-		{out: nil}, // rm ccc must still be attempted
+		{out: nil},
+		{err: errors.New("rm bbb: container is running")},
+		{out: nil},
 	}}
 	r := newWithRunner(fr)
 
@@ -184,10 +178,6 @@ func TestReapSessionContainers_MiddleFailureDoesNotAbortRemaining(t *testing.T) 
 	}
 }
 
-// TestReapSessionContainers_ContextDeadlineExceededSparesEverything is the
-// non-blocking review item: a wedged docker daemon (a docker call blocking
-// past reapTimeout) must resolve to "reap nothing," not a kill-blocking
-// error — same bias as every other ambiguous failure mode.
 func TestReapSessionContainers_ContextDeadlineExceededSparesEverything(t *testing.T) {
 	fr := &fakeRunner{t: t, script: []fakeCall{
 		{err: context.DeadlineExceeded},

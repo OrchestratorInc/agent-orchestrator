@@ -220,7 +220,6 @@ func TestGetLaunchCommandNoPromptWithAuto(t *testing.T) {
 func TestGetLaunchCommandContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	// Force binary resolution (unset cache) so ctx.Err() is hit.
 	_, err := (&Plugin{}).GetLaunchCommand(ctx, ports.LaunchConfig{Prompt: "x"})
 	if err == nil {
 		t.Fatal("expected error from canceled context, got nil")

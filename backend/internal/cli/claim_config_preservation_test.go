@@ -43,7 +43,6 @@ func TestCanonicalConfigPreservesExistingSettings(t *testing.T) {
 	if body.Config.Env["KEEP"] != "value" || body.Config.CanonicalRepoURL != got.Project.Config.CanonicalRepoURL {
 		t.Fatalf("config lost: %s", capture.body)
 	}
-	// #7514: a Cleanup script set in the app must survive a get -> write-back.
 	if len(body.Config.PreRemove) != 1 || body.Config.PreRemove[0] != "docker compose down -v" {
 		t.Fatalf("preRemove lost: %s", capture.body)
 	}

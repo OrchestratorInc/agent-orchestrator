@@ -12,8 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Run explicitly with AO_LIVE_OMP_ACP=1. It uses the user's existing OMP
-// executable, settings, models, and credentials; CI never depends on them.
 func TestLiveOMPACP(t *testing.T) {
 	if os.Getenv("AO_LIVE_OMP_ACP") != "1" {
 		t.Skip("set AO_LIVE_OMP_ACP=1 to run against the local OMP account")

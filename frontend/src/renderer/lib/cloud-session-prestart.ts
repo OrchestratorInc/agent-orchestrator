@@ -1,9 +1,3 @@
-// Earlier builds of the new chat page started a Cloud session as the page
-// opened, before its brief was sent, and recorded it here until a send claimed
-// it. Sessions are now created only when the person sends. This removes what
-// those builds left behind: a recorded session that never received a message
-// is deleted, and the record goes with it.
-
 import type { CloudCpClient } from "./cloud-cp/client";
 import { CloudCpError } from "./cloud-cp/errors";
 
@@ -12,7 +6,6 @@ const STORAGE_KEY = "ao.cloudPreparedSessions.v1";
 interface LegacyPreparedSession {
 	orgId: string;
 	sessionId: string;
-	/** Already deleted by the build that recorded it. */
 	discarded?: boolean;
 }
 
@@ -34,18 +27,11 @@ function forget(sessionId: string): void {
 		if (next.length === 0) localStorage.removeItem(STORAGE_KEY);
 		else localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
 	} catch {
-		// Nothing to forget without storage.
 	}
 }
 
 const cleaning = new Set<string>();
 
-/**
- * Deletes the org's sessions an earlier build started ahead of a brief and no
- * send claimed. A recorded session with a message of its own became a task (a
- * send claimed it just before the app quit), so it is kept; only its record
- * goes. A failure other than "already gone" keeps the record for the next run.
- */
 export async function cleanUpLegacyPreparedCloudSessions(
 	client: Pick<CloudCpClient, "listChatEvents" | "deleteSession">,
 	orgId: string,

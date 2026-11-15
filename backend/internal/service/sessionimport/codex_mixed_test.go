@@ -9,10 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// A thread continued through another Codex client or version mixes record
-// formats: an earlier turn written only as response items must survive a later
-// turn that also writes events, and an event-only reply must survive a later
-// reply written as a response item.
 func TestCodexMixedFormatsKeepEveryTurn(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, filepath.Join(root, "sessions", "rollout-2026-09-01T00-00-00-"+codexThread+".jsonl"), `{"type":"session_meta","payload":{"id":"`+codexThread+`","cwd":"/work/repo","source":"cli"}}

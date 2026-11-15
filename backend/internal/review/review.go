@@ -1,11 +1,3 @@
-// Package review holds the core code-review logic: triggering a reviewer over a
-// worker's worktree, recording review runs, and accepting submitted results.
-//
-// It is independent of any transport. The daemon's HTTP service
-// (internal/service/review) is a thin boundary over this engine today, and the
-// same engine can back an in-process CLI trigger later without going through the
-// API. Transport-specific concerns (DTOs, error→status mapping) stay in the
-// service/controller layers; the orchestration and run-id generation live here.
 package review
 
 import (
@@ -22,9 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// ErrInvalid and ErrNotFound let the transport layer map failures to 422/404.
-// ErrConflict marks a trigger the caller asked to reject rather than reuse; the
-// two specific conflicts wrap it so the transport can name which one occurred.
 var (
 	ErrInvalid  = errors.New("review: invalid input")
 	ErrNotFound = errors.New("review: not found")
@@ -32,23 +21,14 @@ var (
 
 	ErrReviewAlreadyRunning = fmt.Errorf("%w: review already running", ErrConflict)
 	ErrHeadAlreadyReviewed  = fmt.Errorf("%w: head already reviewed", ErrConflict)
-	// ErrPROwnedElsewhere means a named PR belongs to another active session,
-	// which a review trigger never takes over.
-	ErrPROwnedElsewhere = fmt.Errorf("%w: pull request owned by another session", ErrConflict)
-	// ErrHarnessInstallActive means the reviewer's harness is being installed,
-	// updated or removed, so a reviewer cannot start on it now.
+	ErrPROwnedElsewhere     = fmt.Errorf("%w: pull request owned by another session", ErrConflict)
 	ErrHarnessInstallActive = fmt.Errorf("%w: reviewer harness is being updated", ErrConflict)
 )
 
-// HarnessUseGate keeps reviewer launches from racing a harness update. The
-// release must be called once the reviewer's handle is recorded, so an update
-// that starts afterwards sees the reviewer as live.
 type HarnessUseGate interface {
 	TryBeginHarnessUse(harness domain.AgentHarness) (release func(), ok bool)
 }
 
-// Store is the persistence surface the engine needs. *sqlite.Store satisfies it
-// in production; tests use a fake.
 type Store interface {
 	UpsertReview(ctx stdctx.Context, r domain.Review) error
 	ArchiveReviewsBySession(ctx stdctx.Context, workerID domain.SessionID, now time.Time) error
@@ -76,39 +56,31 @@ type Store interface {
 	RecordReviewChatControllerError(ctx stdctx.Context, id, message string, now time.Time) (bool, error)
 }
 
-// Sessions resolves the worker session under review.
 type Sessions interface {
 	GetSession(ctx stdctx.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
-// PRs resolves the PR a worker owns.
 type PRs interface {
 	ListPRsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.PullRequest, error)
 }
 
-// Projects resolves the per-project reviewer config.
 type Projects interface {
 	GetProject(ctx stdctx.Context, id string) (domain.ProjectRecord, bool, error)
 }
 
-// Deps wires the engine.
 type Deps struct {
-	// HarnessUse, when set, is held across each reviewer launch.
-	HarnessUse HarnessUseGate
-	Store      Store
-	Sessions   Sessions
-	PRs        PRs
-	Projects   Projects
-	Launcher   Launcher
-	// ChatRecoveryDone gates operations that could mistake a recovering reviewer for an exited one.
+	HarnessUse       HarnessUseGate
+	Store            Store
+	Sessions         Sessions
+	PRs              PRs
+	Projects         Projects
+	Launcher         Launcher
 	ChatRecoveryDone <-chan struct{}
 
-	// Clock and NewID are injectable for deterministic tests.
 	Clock func() time.Time
 	NewID func() string
 }
 
-// Engine is the core code-review engine.
 type Engine struct {
 	harnessUse HarnessUseGate
 	store      Store
@@ -121,16 +93,12 @@ type Engine struct {
 
 	chatRecoveryDone <-chan struct{}
 
-	// triggerMu guards triggerLocks; triggerLocks holds one mutex per worker
-	// session so concurrent Trigger calls for the same worker serialise (see
-	// lockWorker). Distinct workers never contend.
 	triggerMu    sync.Mutex
 	triggerLocks map[domain.SessionID]*sync.Mutex
 }
 
 const autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
 
-// New wires an Engine from its dependencies, defaulting the clock and id source.
 func New(d Deps) *Engine {
 	clock := d.Clock
 	if clock == nil {
@@ -155,14 +123,6 @@ func New(d Deps) *Engine {
 	}
 }
 
-// lockWorker serialises Trigger calls for a single worker session and returns
-// the unlock func. Without it, two concurrent triggers for the same worker can
-// both pass the per-commit idempotency check and each spawn a reviewer against
-// the same deterministic handle, leaving two running runs for one commit (#242).
-//
-// The per-worker mutex is created on first use and kept for the lifetime of the
-// engine; the entry is a single pointer, so the unbounded-by-session-count map
-// is a negligible, bounded-in-practice cost.
 func (e *Engine) lockWorker(id domain.SessionID) func() {
 	e.triggerMu.Lock()
 	mu, ok := e.triggerLocks[id]
@@ -175,9 +135,6 @@ func (e *Engine) lockWorker(id domain.SessionID) func() {
 	return mu.Unlock
 }
 
-// waitForChatRecovery keeps a missing startup controller from being treated as
-// proof of exit. Recovery itself bypasses this gate; provider result callbacks
-// must also remain available while native conversations reconnect.
 func (e *Engine) waitForChatRecovery(ctx stdctx.Context) error {
 	if e.chatRecoveryDone == nil {
 		return nil
@@ -190,9 +147,6 @@ func (e *Engine) waitForChatRecovery(ctx stdctx.Context) error {
 	}
 }
 
-// TriggerResult is the outcome of a trigger: the (new or existing) run, the live
-// reviewer pane's handle so the UI can attach its terminal, and whether a new
-// pass was started (false when an existing run for the same commit was reused).
 type TriggerResult struct {
 	Run              domain.ReviewRun
 	ReviewerHandleID string
@@ -201,13 +155,9 @@ type TriggerResult struct {
 	Runs             []domain.ReviewRun
 	CreatedRuns      []domain.ReviewRun
 	ReviewerSurface  domain.ReviewerSurface
-	// SkipReason is set only for a normal automatic-trigger policy race, such
-	// as the worker becoming active after the coordinator's initial read.
-	SkipReason string
+	SkipReason       string
 }
 
-// SessionReviews is a worker's review state: the live reviewer handle plus its
-// recorded passes, newest first.
 type SessionReviews struct {
 	ReviewerHandleID      string
 	ReviewerHarness       domain.ReviewerHarness
@@ -215,70 +165,36 @@ type SessionReviews struct {
 	Runs                  []domain.ReviewRun
 	Reviews               []PRReviewState
 	ReviewerSurface       domain.ReviewerSurface
-	// ActiveReviewers lists every reviewer with a live pane or running pass,
-	// selected reviewer first, so clients can open each of several reviewers
-	// working on the same worker at once.
-	ActiveReviewers []domain.ReviewerSurface
+	ActiveReviewers       []domain.ReviewerSurface
 }
 
-// CancelResult is the review state after a reviewer pane cancellation.
 type CancelResult struct {
 	ReviewerHandleID string
 	Reviews          []PRReviewState
 	CancelledRuns    []domain.ReviewRun
 }
 
-// TerminateResult reports the reviewer pane hard-teardown performed because
-// the owning worker session is leaving its live lifecycle.
 type TerminateResult struct {
 	ReviewerHandleID string
 	CancelledRuns    []domain.ReviewRun
 }
 
-// RestoreReviewerResult reports an idle reviewer pane restored alongside its
-// worker session.
 type RestoreReviewerResult struct {
 	ReviewerHandleID string
 	Restored         bool
 }
 
-// TriggerOptions selects the reviewer, its surface, and the same-commit policy
-// for one trigger.
 type TriggerOptions struct {
-	// Harness and Config override the resolved reviewer for this pass only.
-	Harness domain.ReviewerHarness
-	Config  domain.AgentConfig
-	Source  domain.ReviewTriggerSource
-	// InterfaceMode chooses Chat or Terminal for the reviewer; empty keeps the
-	// reviewer's persisted surface or the adapter default.
-	InterfaceMode domain.ReviewerInterfaceMode
-	// PRURL restricts the pass to one of the worker's PRs; empty reviews every
-	// eligible PR on the session.
-	PRURL string
-	// RejectReviewedHead turns "nothing new to review" into an error instead of
-	// a silent reuse: ErrReviewAlreadyRunning when a pass is already running on
-	// a PR head, ErrHeadAlreadyReviewed when every head already has a review.
-	RejectReviewedHead bool
-	// Rerun reviews every open PR head again even when it already has a review,
-	// and lets a different reviewer run alongside one that is still running.
-	// The same reviewer is never started twice on one head at the same time:
-	// a person's rerun reuses that running pass, an agent's rerun is told so.
-	Rerun bool
-	// BranchPRLookupFoundNone reports that the caller looked up open PRs from
-	// the worker's branch just before this trigger and found none, so a
-	// no-PR error may say so.
+	Harness                 domain.ReviewerHarness
+	Config                  domain.AgentConfig
+	Source                  domain.ReviewTriggerSource
+	InterfaceMode           domain.ReviewerInterfaceMode
+	PRURL                   string
+	RejectReviewedHead      bool
+	Rerun                   bool
 	BranchPRLookupFoundNone bool
 }
 
-// TriggerWithOptions starts reviews for every PR on the worker session that needs review.
-// It reuses running/up-to-date runs, retries failed/current changes-requested
-// heads, and uses one reviewer pane for every new run in the batch. Automatic
-// retries against the same PR head stop after three failed auto-review runs.
-//
-// An empty override keeps the project's configured reviewer. A known one runs
-// this pass under it without editing project config, so picking a reviewer for
-// one session cannot change what any other session in the project runs. The
-// harness-change path below already handles the swap by respawning the pane.
 func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionID, opts TriggerOptions) (TriggerResult, error) {
 	override, overrideConfig, source, mode := opts.Harness, opts.Config, opts.Source, opts.InterfaceMode
 	if source == "" {
@@ -305,10 +221,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{}, fmt.Errorf("%w: automatic review cannot override interface mode", ErrInvalid)
 	}
 
-	// Serialise concurrent triggers for this worker so the idempotency check
-	// below (and the reviewer spawn that follows it) can't be raced into a
-	// double-spawn. Held across the spawn deliberately: the loser then re-reads
-	// the freshly-recorded run and short-circuits to Created:false.
 	if err := e.waitForChatRecovery(ctx); err != nil {
 		return TriggerResult{}, err
 	}
@@ -341,14 +253,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if len(prs) == 0 {
 		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone))
 	}
-	// Only closed or merged PRs are tracked: say so the same way, not just
-	// that no PR head is open, unless the caller named one of them.
 	noOpenPR := ""
 	if strings.TrimSpace(opts.PRURL) == "" && !hasOpenPR(prs) {
 		noOpenPR = noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone)
 	}
 	if want := strings.TrimSpace(opts.PRURL); want != "" {
-		// A targeted pass reviews only the named PR, matched by API or web URL.
 		var only []domain.PullRequest
 		for _, pr := range prs {
 			if pr.URL == want || pr.HTMLURL == want {
@@ -413,9 +322,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		selectedMode = domain.ReviewerInterfaceTUI
 	}
-	// Another reviewer that is still working keeps running: a worker may ask
-	// several reviewers for opinions on the same commit at once. Only idle
-	// panes of other reviewers are released.
 	if err := e.destroyIdleOtherReviewerHandles(ctx, workerID, harness, reviewRows, runs); err != nil {
 		return TriggerResult{}, err
 	}
@@ -436,13 +342,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	reviews := Plan(prs, runs)
 	if source == domain.ReviewTriggerAuto || opts.Rerun {
 		reviews = Plan(prs, reviewRunsForHarness(runs, harness))
-		// Automatic sweeps may discover another eligible PR while this harness is
-		// already reviewing one. Reconciliation above has proved the reviewer
-		// terminal is still alive, so do not append work to its active batch. A
-		// later sweep can start the remaining PR after the current run terminates.
 		if hadRunningReviewer {
-			// A person's rerun reuses the pass already running for this reviewer;
-			// an agent asked for new work and must hear that none started.
 			if opts.Rerun && source == domain.ReviewTriggerAgent {
 				return TriggerResult{}, nothingToReviewError(reviews, runs, harness, true, noOpenPR)
 			}
@@ -472,11 +372,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	var restarted []domain.ReviewRun
 	batchID := ""
 	for _, reviewState := range reviews {
-		// A PR that is already up to date has nothing due — unless the caller asked
-		// for a different reviewer than the one that produced that verdict. Picking
-		// another agent is precisely a request for a second opinion on this commit,
-		// so refusing it makes the reviewer choice inert exactly when it is most
-		// useful. Ineligible PRs stay excluded: nothing can review those.
 		eligible := reviewState.Status == ReviewStateNeedsReview || (source != domain.ReviewTriggerAuto && reviewState.Status == ReviewStateChangesRequested) || (opts.Rerun && reviewState.Status != ReviewStateIneligible)
 		if source == domain.ReviewTriggerAuto && autoReviewHeadBlocked(runs, reviewState.PRURL, reviewState.TargetSHA, harness) {
 			eligible = false
@@ -485,14 +380,10 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		case reviewState.Status == ReviewStateIneligible:
 			continue
 		case opts.Rerun:
-			// An explicit rerun reviews the head again, except that one reviewer
-			// is never started twice on the same head concurrently.
 			if headRunningForHarness(runs, reviewState.PRURL, reviewState.TargetSHA, harness) {
 				continue
 			}
 		case opts.RejectReviewedHead:
-			// Any pass on this head, running or complete, by any reviewer, means
-			// it is not due; the caller asked to hear about that, not reuse it.
 			if headHasReview(runs, reviewState.PRURL, reviewState.TargetSHA) {
 				continue
 			}
@@ -512,19 +403,17 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			batchID = e.newID()
 		}
 		run := domain.ReviewRun{
-			ID:            e.newID(),
-			ReviewID:      reviewRow.ID,
-			SessionID:     workerID,
-			BatchID:       batchID,
-			Harness:       harness,
-			TriggerSource: source,
-			PRURL:         reviewState.PRURL,
-			TargetSHA:     reviewState.TargetSHA,
-			Status:        domain.ReviewRunRunning,
-			Verdict:       domain.VerdictNone,
-			CreatedAt:     now,
-			// Completion refreshes this snapshot before delivery. Keeping the
-			// trigger-time value also makes a running pass truthful in the API.
+			ID:               e.newID(),
+			ReviewID:         reviewRow.ID,
+			SessionID:        workerID,
+			BatchID:          batchID,
+			Harness:          harness,
+			TriggerSource:    source,
+			PRURL:            reviewState.PRURL,
+			TargetSHA:        reviewState.TargetSHA,
+			Status:           domain.ReviewRunRunning,
+			Verdict:          domain.VerdictNone,
+			CreatedAt:        now,
 			AutoInjectReview: worker.AutoInjectReview,
 		}
 		if err := e.store.InsertReviewRun(ctx, run); err != nil {
@@ -635,8 +524,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 	}
 	if handleID == "" {
-		// Each pass gets a fresh reviewer process on the same stable terminal
-		// handle when there is no resumable live agent session to notify.
 		releaseHarness, err := e.beginHarnessUse(harness)
 		if err != nil {
 			return TriggerResult{}, failRuns(0, err)
@@ -645,8 +532,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		if err := e.launcher.Preflight(ctx, harness, worker.Metadata.WorkspacePath, selectedMode); err != nil {
 			return TriggerResult{}, failRuns(0, fmt.Errorf("reviewer preflight: %w", err))
 		}
-		// A review owns one Chat controller. Stop it while its durable fence
-		// still belongs to it before a config replacement claims a new epoch.
 		if hasConfigOverride && !modeChanging && selectedMode == domain.ReviewerInterfaceChat {
 			if err := e.stopReviewChatWork(ctx, reviewRow); err != nil {
 				return TriggerResult{}, failRuns(0, err)
@@ -659,8 +544,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			return TriggerResult{}, rollbackReplacement(err)
 		}
 		if reviewRow.IsArchived {
-			// Chat must be active before its controller can claim ownership. Only
-			// reopen once launch work is due; rollback restores the archive on failure.
 			reviewRow.IsArchived = false
 			reviewRow.ReviewerActivityState = domain.ActivityActive
 			if err := e.store.UpsertReview(ctx, reviewRow); err != nil {
@@ -782,9 +665,6 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 	}
 }
 
-// noTrackedPRMessage explains a trigger with no PR to review and gives the
-// exact retry command, since the PR may simply not be discovered yet. It says
-// the worker's branch has no open PR only when a lookup found none.
 func noTrackedPRMessage(worker domain.SessionRecord, branchLookupFoundNone bool) string {
 	retry := fmt.Sprintf("`ao review trigger %s --pr <url>`", worker.ID)
 	if branch := strings.TrimSpace(worker.Metadata.Branch); branch != "" && branchLookupFoundNone {
@@ -793,8 +673,6 @@ func noTrackedPRMessage(worker domain.SessionRecord, branchLookupFoundNone bool)
 	return fmt.Sprintf("Orchestrator is not tracking an open PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
 }
 
-// headHasReview reports whether any reviewer has a running or completed pass
-// on the PR head. Failed and cancelled passes never produced a review.
 func headHasReview(runs []domain.ReviewRun, prURL, targetSHA string) bool {
 	for _, run := range runs {
 		if run.PRURL != prURL || run.TargetSHA != targetSHA {
@@ -816,10 +694,6 @@ func headRunningForHarness(runs []domain.ReviewRun, prURL, targetSHA string, har
 	return false
 }
 
-// nothingToReviewError explains why a trigger that asked not to reuse silently
-// started nothing. It names the first reviewable PR head, so the caller sees
-// which commit is already covered and what to do next. noOpenPR, when set,
-// explains a session whose tracked PRs are all closed or merged.
 func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harness domain.ReviewerHarness, rerun bool, noOpenPR string) error {
 	for _, review := range reviews {
 		if review.Status == ReviewStateIneligible {
@@ -846,7 +720,6 @@ func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harn
 	return fmt.Errorf("%w: no open PR head to review", ErrInvalid)
 }
 
-// hasOpenPR reports whether any of prs is neither closed nor merged.
 func hasOpenPR(prs []domain.PullRequest) bool {
 	for _, pr := range prs {
 		if !pr.Merged && !pr.Closed {
@@ -863,8 +736,6 @@ func shortSHA(sha string) string {
 	return sha
 }
 
-// SwitchReviewer serializes reviewer preference changes with trigger/restore
-// and returns the authoritative post-switch review state.
 func (e *Engine) SwitchReviewer(
 	ctx stdctx.Context,
 	workerID domain.SessionID,
@@ -960,8 +831,6 @@ func (e *Engine) destroyOtherReviewerHandles(ctx stdctx.Context, workerID domain
 	return nil
 }
 
-// destroyIdleOtherReviewerHandles releases other reviewers' panes that have no
-// running pass, while leaving any reviewer that is still working alone.
 func (e *Engine) destroyIdleOtherReviewerHandles(ctx stdctx.Context, workerID domain.SessionID, selected domain.ReviewerHarness, reviews []domain.Review, runs []domain.ReviewRun) error {
 	idle := make([]domain.Review, 0, len(reviews))
 	for _, review := range reviews {
@@ -1000,10 +869,6 @@ func (e *Engine) resetReviewerRuntimeLocked(ctx stdctx.Context, workerID domain.
 	return nil
 }
 
-// RestoreReviewer relaunches the reviewer terminal for a restored worker when
-// that worker already has review history. It does not create review_run rows or
-// start a review; explicit trigger remains the only path that starts review
-// work.
 func (e *Engine) RestoreReviewer(ctx stdctx.Context, workerID domain.SessionID) (RestoreReviewerResult, error) {
 	if workerID == "" {
 		return RestoreReviewerResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
@@ -1030,9 +895,6 @@ func (e *Engine) RestoreReviewer(ctx stdctx.Context, workerID domain.SessionID) 
 	return e.restoreReviewerLocked(ctx, workerID, worker, harness, config)
 }
 
-// RecoverChatReviewers restores each durable chat reviewer by its persisted
-// review row. It must not re-resolve the worker's current reviewer preference:
-// that preference may have changed since this particular reviewer started.
 func (e *Engine) RecoverChatReviewers(ctx stdctx.Context) error {
 	reviews, err := e.store.ListRecoverableChatReviews(ctx)
 	if err != nil {
@@ -1145,10 +1007,6 @@ func (e *Engine) restoreReviewerLocked(
 	if err != nil {
 		return RestoreReviewerResult{}, err
 	}
-	// Restoring the selected reviewer must not cancel another reviewer that is
-	// still running alongside it; only idle panes of other reviewers go. One
-	// whose pane did not survive cannot finish, so its passes are cancelled
-	// rather than left looking like a review still in progress.
 	if err := e.destroyIdleOtherReviewerHandles(ctx, workerID, harness, reviewRows, runs); err != nil {
 		return RestoreReviewerResult{}, err
 	}
@@ -1156,8 +1014,6 @@ func (e *Engine) restoreReviewerLocked(
 		if other.Harness == harness || !reviewRunsContainRunningForReview(runs, other) {
 			continue
 		}
-		// A Chat reviewer has no pane by design; RecoverChatReviewers restores
-		// its durable conversation, so a missing handle is not a dead reviewer.
 		if other.InterfaceMode == domain.ReviewerInterfaceChat {
 			continue
 		}
@@ -1195,10 +1051,6 @@ func (e *Engine) restoreReviewerLocked(
 		}
 	}
 	launchID := e.newID()
-	// A reviewer being relaunched is no longer "exited". Clear that before the
-	// launch so clients stop offering Restore for a reviewer that is back, while
-	// state the new process reports through its hooks during launch still wins
-	// (the finalizing upsert below preserves it).
 	restoredActivity := domain.ActivityState("")
 	wasExited := reviewRow.ReviewerActivityState == domain.ActivityExited
 	if wasExited {
@@ -1256,7 +1108,6 @@ func (e *Engine) restoreReviewerLocked(
 	if err != nil {
 		restoreErr := fmt.Errorf("restore reviewer: %w", err)
 		if wasExited {
-			// The relaunch failed, so the reviewer is still gone.
 			if _, markErr := e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, agentSessionID, launchID, domain.ActivityExited, e.clock()); markErr != nil {
 				restoreErr = errors.Join(restoreErr, markErr)
 			}
@@ -1295,9 +1146,6 @@ func (e *Engine) failRunningRestoredRuns(ctx stdctx.Context, runs []domain.Revie
 	return nil
 }
 
-// TeardownReviewerTerminal destroys reviewer panes before shutdown removes the
-// worker worktree, but preserves review rows and native agent session ids so
-// worker restore can recreate the reviewer terminal later.
 func (e *Engine) TeardownReviewerTerminal(ctx stdctx.Context, workerID domain.SessionID) error {
 	if workerID == "" {
 		return fmt.Errorf("%w: worker session id is required", ErrInvalid)
@@ -1366,9 +1214,6 @@ func reviewRunsForReview(runs []domain.ReviewRun, reviewID string) []domain.Revi
 	return out
 }
 
-// cancelStaleRunningRuns fails this reviewer's running passes when its pane is
-// gone. It is scoped to one reviewer so a dead pane cannot cancel another
-// reviewer that is still working on the same worker.
 func (e *Engine) cancelStaleRunningRuns(ctx stdctx.Context, workerID domain.SessionID, harness domain.ReviewerHarness, reviewRow domain.Review, hasReview bool, runs []domain.ReviewRun) (bool, error) {
 	hasRunning := false
 	for _, run := range runs {
@@ -1390,8 +1235,6 @@ func (e *Engine) cancelStaleRunningRuns(ctx stdctx.Context, workerID domain.Sess
 		}
 	}
 	for _, h := range []domain.ReviewerHarness{harness, ""} {
-		// Legacy rows predate per-harness runs and belong to whichever reviewer
-		// is current, so they go with it.
 		if _, err := e.store.CancelRunningReviewRunsBySessionAndHarness(ctx, workerID, h, "cancelled because reviewer terminal is unavailable"); err != nil {
 			return false, err
 		}
@@ -1440,15 +1283,6 @@ func reviewQueue(runs []domain.ReviewRun) []ports.ReviewTask {
 	return queue
 }
 
-// secondOpinionWanted reports whether an explicit manual override makes an
-// otherwise up-to-date PR worth running again. A config-only override (for
-// example, picking a model under the same harness) always requests another
-// pass. A harness-only override only does so when it actually changes the
-// reviewer whose pass is currently authoritative; re-picking the same harness
-// must still reuse. That remains true even while another harness is already
-// running: a different reviewer is a second opinion, not a restart. Legacy
-// runs may have an empty harness, which means "the same resolved harness as
-// today" for this comparison.
 func secondOpinionWanted(state PRReviewState, hasHarnessOverride, hasConfigOverride bool, harness domain.ReviewerHarness) bool {
 	if state.Status == ReviewStateIneligible {
 		return false
@@ -1483,9 +1317,6 @@ func replaceReviewLatestRun(reviews []PRReviewState, prURL, targetSHA string, ru
 }
 
 func firstReusableRun(reviews []PRReviewState) domain.ReviewRun {
-	// Legacy compatibility only: in the multi-PR model the authoritative state
-	// is Reviews. When no run is created, this field is just a best-effort
-	// non-empty run for older clients.
 	for _, review := range reviews {
 		if review.LatestRun != nil {
 			return *review.LatestRun
@@ -1494,7 +1325,6 @@ func firstReusableRun(reviews []PRReviewState) domain.ReviewRun {
 	return domain.ReviewRun{}
 }
 
-// List returns a worker's review state: the live reviewer handle and its passes.
 func (e *Engine) List(ctx stdctx.Context, workerID domain.SessionID) (SessionReviews, error) {
 	if workerID == "" {
 		return SessionReviews{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
@@ -1558,8 +1388,6 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		if other.ID == reviewRow.ID {
 			continue
 		}
-		// Other reviewers can be running alongside the selected one; a pane that
-		// died mid-pass must fail its runs the same way the selected one does.
 		if changed, err := e.reconcileExitedReviewer(ctx, &other, runs); err != nil {
 			return SessionReviews{}, err
 		} else if changed {
@@ -1587,8 +1415,6 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 	}, nil
 }
 
-// reviewerRowActive reports whether a reviewer has a pane to open or a pass
-// still running. An archived reviewer is retired and never listed as active.
 func reviewerRowActive(review domain.Review, runs []domain.ReviewRun) bool {
 	if review.ID == "" || review.IsArchived {
 		return false
@@ -1606,9 +1432,6 @@ func reviewerRowActive(review domain.Review, runs []domain.ReviewRun) bool {
 
 const reviewerExitedBeforeSubmission = "reviewer process exited before submitting a result"
 
-// reconcileExitedReviewer converts a definitively dead active reviewer into
-// durable failed-run facts. Probe errors are intentionally ignored: an unknown
-// runtime state is not proof that the reviewer exited.
 func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Review, runs []domain.ReviewRun) (bool, error) {
 	if review.ID == "" || review.ReviewerHandleID == "" || review.ReviewerActivityState != domain.ActivityActive {
 		return false, nil
@@ -1625,7 +1448,6 @@ func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Revi
 	}
 	alive, err := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
 	if err != nil {
-		// An unavailable probe is unknown, not evidence that the reviewer died.
 		alive = true
 	}
 	if alive {
@@ -1668,8 +1490,6 @@ func legacyReviewerHandle(review domain.Review) string {
 	return review.ReviewerHandleID
 }
 
-// Cancel interrupts the live reviewer pane for a worker and marks running
-// review runs as cancelled so they no longer block a fresh trigger.
 func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelResult, error) {
 	if workerID == "" {
 		return CancelResult{}, fmt.Errorf("%w: worker session id is required", ErrInvalid)
@@ -1711,9 +1531,6 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 		}
 		return CancelResult{ReviewerHandleID: handle, Reviews: Plan(prs, runs)}, nil
 	}
-	// Several reviewers may be running on this worker at once; cancel stops
-	// all of them. The selected reviewer is cancelled first and its handle is
-	// the one reported, so single-reviewer clients see what they did before.
 	reviewers, err := e.runningReviewersForCancel(ctx, workerID, harness, running)
 	if err != nil {
 		return CancelResult{}, err
@@ -1738,7 +1555,6 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 		cancelledHarness[review.Harness] = true
 	}
 	primary := reviewers[0]
-	// Legacy rows have no harness; they belong to the reported reviewer.
 	hasLegacy := false
 	for _, run := range running {
 		hasLegacy = hasLegacy || run.Harness == ""
@@ -1770,9 +1586,6 @@ func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelRe
 	return CancelResult{ReviewerHandleID: primary.ReviewerHandleID, Reviews: Plan(prs, runs), CancelledRuns: cancelled}, nil
 }
 
-// runningReviewersForCancel returns every reviewer row with a live handle that
-// owns a running pass, selected reviewer first. Legacy runs with no harness
-// resolve to the selected reviewer, matching currentReviewForCancel.
 func (e *Engine) runningReviewersForCancel(ctx stdctx.Context, workerID domain.SessionID, selected domain.ReviewerHarness, running []domain.ReviewRun) ([]domain.Review, error) {
 	var out []domain.Review
 	seen := map[domain.ReviewerHarness]bool{}
@@ -1842,15 +1655,10 @@ func (e *Engine) currentReviewForSession(ctx stdctx.Context, workerID domain.Ses
 	return e.store.GetReviewBySession(ctx, workerID)
 }
 
-// TerminateReviewer destroys the live reviewer pane for a worker and cancels
-// any running review runs. Unlike Cancel, this does not ask the reviewer
-// adapter for a graceful interrupt sequence: worker termination/restore must
-// remove the terminal pane itself.
 func (e *Engine) TerminateReviewer(ctx stdctx.Context, workerID domain.SessionID, body string) (TerminateResult, error) {
 	return e.terminateReviewer(ctx, workerID, body, false)
 }
 
-// ArchiveReviewer retires all reviewer surfaces but retains conversations and results.
 func (e *Engine) ArchiveReviewer(ctx stdctx.Context, workerID domain.SessionID) error {
 	_, err := e.terminateReviewer(ctx, workerID, "cancelled because reviewer was archived", true)
 	return err
@@ -1916,10 +1724,6 @@ func (e *Engine) terminateReviewer(ctx stdctx.Context, workerID domain.SessionID
 	return TerminateResult{ReviewerHandleID: destroyedHandle, CancelledRuns: cancelled}, nil
 }
 
-// reviewerSelection resolves which reviewer reviews the worker's PR: a
-// persisted session preference wins, then the project's reviewer config, then
-// the project's default worker config, then the worker's own harness when
-// supported, otherwise claude-code.
 func (e *Engine) reviewerSelection(
 	ctx stdctx.Context,
 	worker domain.SessionRecord,
@@ -2012,8 +1816,6 @@ func (e *Engine) upsertReview(ctx stdctx.Context, worker domain.SessionRecord, h
 		UpdatedAt:             now,
 	}
 	if ok {
-		// Reuse the existing row's identity and creation time; UpsertReview
-		// refreshes harness/pr_url/reviewer_handle_id/updated_at.
 		review.ID = existing.ID
 		review.IsArchived = existing.IsArchived
 		if existing.IsArchived {
@@ -2048,8 +1850,6 @@ func (e *Engine) setReviewerInterfaceMode(ctx stdctx.Context, reviewID string, m
 	return nil
 }
 
-// stopReviewChatWork settles durable work even when no controller survived a
-// daemon restart. It runs before replacing the review controller fence.
 func (e *Engine) stopReviewChatWork(ctx stdctx.Context, review domain.Review) error {
 	if review.InterfaceMode != domain.ReviewerInterfaceChat {
 		return nil
@@ -2060,8 +1860,6 @@ func (e *Engine) stopReviewChatWork(ctx stdctx.Context, review domain.Review) er
 	return e.store.SettleReviewChatWork(ctx, review.ID, e.clock())
 }
 
-// beginHarnessUse holds the harness against updates until the caller records
-// the reviewer it launches.
 func (e *Engine) beginHarnessUse(harness domain.ReviewerHarness) (func(), error) {
 	if e.harnessUse == nil {
 		return func() {}, nil

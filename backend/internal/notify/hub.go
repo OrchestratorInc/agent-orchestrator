@@ -14,19 +14,16 @@ type subscription struct {
 	ch        chan domain.NotificationEvent
 }
 
-// Hub is an in-process publisher for notification SSE subscribers.
 type Hub struct {
 	mu     sync.RWMutex
 	nextID int
 	subs   map[int]subscription
 }
 
-// NewHub constructs an empty notification Hub.
 func NewHub() *Hub {
 	return &Hub{subs: map[int]subscription{}}
 }
 
-// Subscribe registers a live notification subscriber. Empty projectID receives all projects.
 func (h *Hub) Subscribe(projectID domain.ProjectID) (<-chan domain.NotificationEvent, func()) {
 	if h == nil {
 		ch := make(chan domain.NotificationEvent)
@@ -49,7 +46,6 @@ func (h *Hub) Subscribe(projectID domain.ProjectID) (<-chan domain.NotificationE
 	}
 }
 
-// Publish pushes one notification event to matching subscribers without blocking lifecycle writes.
 func (h *Hub) Publish(_ context.Context, event domain.NotificationEvent) error {
 	if h == nil {
 		return nil
@@ -61,8 +57,6 @@ func (h *Hub) Publish(_ context.Context, event domain.NotificationEvent) error {
 			continue
 		}
 		if event.Kind == domain.NotificationCleared {
-			// Clear supersedes every queued event. Making room here guarantees a
-			// slow subscriber observes the reset before any later notification.
 			drainNotificationEvents(sub.ch)
 		}
 		select {

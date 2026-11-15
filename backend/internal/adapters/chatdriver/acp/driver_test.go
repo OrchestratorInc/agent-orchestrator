@@ -133,8 +133,6 @@ func recordPersistentACPCall(method string) {
 }
 
 func TestPersistentACPDriverSurvivesRealProcessDetach(t *testing.T) {
-	// These are protocol contract tests, not claims of authenticated E2E for
-	// every vendor. Each runs the real detached host with a fake ACP process.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessClaudeCode, domain.HarnessCursor, domain.HarnessOpenCode, domain.HarnessOpenCodeV2,
 		domain.HarnessDroid, domain.HarnessKimi, domain.HarnessKimchi,
@@ -183,7 +181,7 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrame
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	_ = nextEvent(t, first.Events()) // controller.ready
+	_ = nextEvent(t, first.Events())
 	ref, err := first.SendTurn(context.Background(), ports.ChatUserMessage{Text: "survive"})
 	if err != nil {
 		t.Fatalf("SendTurn: %v", err)
@@ -202,9 +200,6 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrame
 		t.Fatalf("detach first daemon: %v", err)
 	}
 
-	// Simulate an app update moving/removing the new launch installation and
-	// changed desired model/environment. None may prevent live adoption or
-	// rewrite provider files/credentials.
 	cfg.Launch = func(context.Context, LaunchConfig) (Launch, error) {
 		return Launch{}, errors.New("new provider installation is unavailable")
 	}
@@ -229,10 +224,8 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrame
 		t.Fatalf("activate replacement: %v", err)
 	}
 
-	_ = nextEvent(t, second.Events()) // controller.ready reconstructed from cached setup
+	_ = nextEvent(t, second.Events())
 	if replayFrames > 0 {
-		// Hold projection during the burst, just as a restarting daemon can be
-		// behind the detached host. Neither connection nor history may be lost.
 		time.Sleep(300 * time.Millisecond)
 	}
 	var replayedDelta, completed ports.ChatEvent
@@ -295,10 +288,6 @@ func testACPProcessDetach(t *testing.T, harness domain.AgentHarness, replayFrame
 	}
 }
 
-// A prompt attempted before the controller acknowledges the previous terminal
-// receipt is refused by the host without a receipt of its own. That refusal must
-// not erase the outstanding receipt, or the late ACK is dropped and the host
-// refuses every later prompt.
 func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
@@ -338,7 +327,7 @@ func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
 			}
 			defer func() { _ = conv.(ports.ChatProviderTerminator).Terminate() }()
 			ack := conv.(ports.ChatProviderEventAcknowledger)
-			_ = nextEvent(t, conv.Events()) // controller.ready
+			_ = nextEvent(t, conv.Events())
 
 			original := runPersistentACPTurn(t, conv)
 			if original.TurnState != tc.originalState || original.ProviderEventID == "" {
@@ -370,8 +359,6 @@ func TestPersistentACPLateAckSurvivesHostLocalPromptRejection(t *testing.T) {
 	}
 }
 
-// runPersistentACPTurn starts one turn and returns its terminal event once the
-// conversation reports it can accept the next turn.
 func runPersistentACPTurn(t *testing.T, conv ports.ChatConversation) ports.ChatEvent {
 	t.Helper()
 	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "turn"})
@@ -616,8 +603,6 @@ func TestPersistentACPResumeAdoptsLivePromptWithoutSecondSetup(t *testing.T) {
 	conv := opened.(*conversation)
 	t.Cleanup(func() { _ = conv.Close() })
 
-	// The replacement SDK must not write initialize or session/resume. Its reader
-	// also remains gated until the durable provider turn is installed.
 	_ = host.SetReadDeadline(time.Now().Add(40 * time.Millisecond))
 	probe := make([]byte, 1)
 	if _, err := host.Read(probe); err == nil {
@@ -722,7 +707,7 @@ func TestPersistentACPReplayAppliesAcceptedPermissionCommand(t *testing.T) {
 		_, _ = fmt.Fprintln(host, `{"jsonrpc":"2.0","method":"_ao/persistent_interaction_command","params":{"eventId":"acp-host:2","requestId":"acp-request:1","kind":"approval","providerPending":true,"decision":{"id":"allow"}}}`)
 	}()
 
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 	requested := nextEvent(t, conv.Events())
 	if requested.Kind != ports.ChatEventApprovalRequested || requested.RequestID != "acp-request:1" {
 		t.Fatalf("requested event = %#v", requested)
@@ -800,9 +785,6 @@ func TestPersistentACPReconnectAcknowledgesAlreadyCommittedPrompt(t *testing.T) 
 		ackResult <- ack
 	}()
 
-	// No durable running turn means the terminal event was already committed.
-	// Reconnect must close the commit/ACK crash window without projecting it a
-	// second time or becoming permanently unrecoverable.
 	if err := conv.ActivateLiveReconnect(context.Background(), ""); err != nil {
 		t.Fatalf("ActivateLiveReconnect: %v", err)
 	}
@@ -833,28 +815,26 @@ func TestPersistentACPReconnectAcknowledgesAlreadyCommittedPrompt(t *testing.T) 
 type fakeAgent struct {
 	conn *acpsdk.AgentSideConnection
 
-	mu                sync.Mutex
-	initParams        acpsdk.InitializeRequest
-	authMethods       []string
-	capabilities      *acpsdk.AgentCapabilities
-	initErr           error
-	newParams         acpsdk.NewSessionRequest
-	loadParams        acpsdk.LoadSessionRequest
-	resumeParams      acpsdk.ResumeSessionRequest
-	forkParams        acpsdk.UnstableForkSessionRequest
-	forkID            string
-	forkErr           error
-	forkCalls         int
-	onFork            func(context.Context) error
-	deletedForks      []string
-	loadUpdates       []acpsdk.SessionUpdate
-	loadUpdateBatches [][]acpsdk.SessionUpdate
-	blockLoadCall     int
-	loadStarted       chan struct{}
-	failLoadFrom      int   // LoadSession calls >= this number return failLoadErr
-	failLoadErr       error // the SDK coerces a plain error into -32603
-	// rejectReload answers a session/load of an already loaded, unclosed
-	// session with Copilot's "already loaded" error.
+	mu                  sync.Mutex
+	initParams          acpsdk.InitializeRequest
+	authMethods         []string
+	capabilities        *acpsdk.AgentCapabilities
+	initErr             error
+	newParams           acpsdk.NewSessionRequest
+	loadParams          acpsdk.LoadSessionRequest
+	resumeParams        acpsdk.ResumeSessionRequest
+	forkParams          acpsdk.UnstableForkSessionRequest
+	forkID              string
+	forkErr             error
+	forkCalls           int
+	onFork              func(context.Context) error
+	deletedForks        []string
+	loadUpdates         []acpsdk.SessionUpdate
+	loadUpdateBatches   [][]acpsdk.SessionUpdate
+	blockLoadCall       int
+	loadStarted         chan struct{}
+	failLoadFrom        int
+	failLoadErr         error
 	rejectReload        bool
 	sessionOpen         bool
 	closeCalls          int
@@ -871,12 +851,11 @@ type fakeAgent struct {
 	cancelErr           error
 	cancelCalls         int
 	customPrompt        func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error)
-	// agentInfo, when set, is reported as the handshake's agentInfo.
 	agentInfo           *acpsdk.Implementation
 	mode                string
-	modeNotFound        bool // SetSessionMode returns -32601
+	modeNotFound        bool
 	modeRequiresOption  SessionOption
-	configNotFound      bool // SetSessionConfigOption returns -32601
+	configNotFound      bool
 	configErr           error
 	newSessionUpdates   []acpsdk.SessionUpdate
 	options             map[string]string
@@ -888,13 +867,10 @@ type fakeAgent struct {
 	steerPrompt         []acpsdk.ContentBlock
 	steerMeta           map[string]any
 	steerOut            string
-	steerMethodNotFound bool // HandleExtensionMethod returns -32601 for steering
+	steerMethodNotFound bool
 	steerExtensionErr   error
-	// extension, when set, answers every agent extension method instead of
-	// the default _session/steering handler.
-	extension func(method string, raw json.RawMessage) (any, error)
-	// initMeta, when set, replaces the initialize response's top-level _meta.
-	initMeta map[string]any
+	extension           func(method string, raw json.RawMessage) (any, error)
+	initMeta            map[string]any
 }
 
 type legacyKimiAgent struct {
@@ -1362,7 +1338,6 @@ func TestACPDriverDefersPromptUntilDurableTurnBinding(t *testing.T) {
 		t.Fatal("session/new did not receive the background tool restriction")
 	}
 
-	// Consume controller.ready from session setup.
 	_ = nextEvent(t, conversation.Events())
 	ref, err := conversation.SendTurn(context.Background(), ports.ChatUserMessage{
 		Text: "change it", Settings: ports.ChatTurnSettings{
@@ -1553,7 +1528,7 @@ func TestACPInterruptWaitsForProviderPromptCompletion(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer conversation.Close()
-	_ = nextEvent(t, conversation.Events()) // controller.ready
+	_ = nextEvent(t, conversation.Events())
 	ref, err := conversation.SendTurn(context.Background(), ports.ChatUserMessage{Text: "wait"})
 	if err != nil {
 		t.Fatalf("SendTurn: %v", err)
@@ -1576,8 +1551,6 @@ func TestACPInterruptWaitsForProviderPromptCompletion(t *testing.T) {
 		t.Fatal("provider did not receive ACP cancel notification")
 	}
 
-	// Accepting session/cancel is not a terminal result. AO must remain busy
-	// until the provider resolves the original session/prompt request.
 	quiet := time.After(100 * time.Millisecond)
 	for {
 		select {
@@ -1850,12 +1823,8 @@ func TestACPDriverReappliesLaunchContextWhenResuming(t *testing.T) {
 	}
 }
 
-// standingInstructions is the fixed preamble text used by the preamble tests.
 const standingInstructions = "AO standing instructions for this session"
 
-// runOneTurn sends a single text turn and returns the prompt the provider saw.
-// The caller must already have drained the controller.ready event emitted at
-// session setup.
 func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, text string) []acpsdk.ContentBlock {
 	t.Helper()
 	ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
@@ -1867,9 +1836,6 @@ func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, tex
 	if err := conv.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 		t.Fatalf("StartDeferredTurn: %v", err)
 	}
-	// The turn is released only after it completes, just before the driver
-	// announces it is ready; wait for that, as a caller sending the next turn
-	// must, or the next SendTurn can find the turn still in flight.
 	completed := false
 	for {
 		event := nextEvent(t, conv.Events())
@@ -1885,8 +1851,6 @@ func runOneTurn(t *testing.T, agent *fakeAgent, conv ports.ChatConversation, tex
 	return append([]acpsdk.ContentBlock(nil), agent.promptParams.Prompt...)
 }
 
-// preambleText reads AO's standing instructions back out of a native prompt the
-// way the agent does: the resource block is what reaches the model.
 func preambleText(prompt []acpsdk.ContentBlock) string {
 	if len(prompt) == 0 || prompt[0].Resource == nil {
 		return ""
@@ -1898,9 +1862,6 @@ func preambleText(prompt []acpsdk.ContentBlock) string {
 	return contents.Text
 }
 
-// preambleConfig is the binding shape under test: an agent with no
-// system-prompt launch flag that ignores session/new _meta and receives AO's
-// standing context only as an embedded resource on the first prompt.
 func preambleConfig() Config {
 	return Config{
 		Harness:      domain.HarnessCommandCode,
@@ -1918,11 +1879,6 @@ func preambleConfig() Config {
 	}
 }
 
-// TestACPDriverDeliversSessionPreambleOnStartAndResume covers the channel AO
-// uses for agents that accept no system-prompt launch flag and ignore
-// session/new _meta: an embedded resource leading the first prompt. Standing
-// context is process input rather than transcript history, so a resumed session
-// must receive the recomputed instructions again.
 func TestACPDriverDeliversSessionPreambleOnStartAndResume(t *testing.T) {
 	newDriver := func(agent *fakeAgent) *Driver {
 		driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -1939,7 +1895,7 @@ func TestACPDriverDeliversSessionPreambleOnStartAndResume(t *testing.T) {
 			t.Fatalf("Start: %v", err)
 		}
 		defer conv.Close()
-		_ = nextEvent(t, conv.Events()) // controller.ready
+		_ = nextEvent(t, conv.Events())
 		prompt := runOneTurn(t, agent, conv, "do the task")
 		if got := preambleText(prompt); got != standingInstructions {
 			t.Fatalf("first prompt standing context = %q, want %q (prompt %#v)", got, standingInstructions, prompt)
@@ -1961,7 +1917,7 @@ func TestACPDriverDeliversSessionPreambleOnStartAndResume(t *testing.T) {
 			t.Fatalf("Resume: %v", err)
 		}
 		defer conv.Close()
-		_ = nextEvent(t, conv.Events()) // controller.ready
+		_ = nextEvent(t, conv.Events())
 		prompt := runOneTurn(t, agent, conv, "continue the task")
 		if got := preambleText(prompt); got != standingInstructions {
 			t.Fatalf("resumed first prompt standing context = %q, want %q (prompt %#v)", got, standingInstructions, prompt)
@@ -1969,9 +1925,6 @@ func TestACPDriverDeliversSessionPreambleOnStartAndResume(t *testing.T) {
 	})
 }
 
-// Standing context is process input, so it is delivered once per session rather
-// than repeated on every turn, which would grow the transcript and re-state the
-// same rules mid-conversation.
 func TestACPDriverDeliversSessionPreambleOncePerSession(t *testing.T) {
 	agent := &fakeAgent{promptNoPermission: true}
 	driver := New(preambleConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -1984,7 +1937,7 @@ func TestACPDriverDeliversSessionPreambleOncePerSession(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	defer conv.Close()
-	_ = nextEvent(t, conv.Events()) // controller.ready
+	_ = nextEvent(t, conv.Events())
 	if got := preambleText(runOneTurn(t, agent, conv, "first")); got != standingInstructions {
 		t.Fatalf("first prompt standing context = %q", got)
 	}
@@ -1996,12 +1949,6 @@ func TestACPDriverDeliversSessionPreambleOncePerSession(t *testing.T) {
 	}
 }
 
-// An agent command that clears the conversation in place (Hermes' /reset)
-// keeps the session id, so no relaunch re-delivers the standing context. The
-// reset prompt must go out as the bare command, which is the only form the
-// agent recognizes, and the prompt after a completed reset must carry the
-// standing context again. A reset that failed cleared nothing, so it re-arms
-// nothing.
 func TestACPDriverRearmsSessionPreambleAfterConversationReset(t *testing.T) {
 	start := func(t *testing.T, agent *fakeAgent) ports.ChatConversation {
 		t.Helper()
@@ -2018,7 +1965,7 @@ func TestACPDriverRearmsSessionPreambleAfterConversationReset(t *testing.T) {
 			t.Fatalf("Start: %v", err)
 		}
 		t.Cleanup(func() { conv.Close() })
-		_ = nextEvent(t, conv.Events()) // controller.ready
+		_ = nextEvent(t, conv.Events())
 		return conv
 	}
 	assertBareReset := func(t *testing.T, prompt []acpsdk.ContentBlock) {
@@ -2071,11 +2018,6 @@ func TestACPDriverRearmsSessionPreambleAfterConversationReset(t *testing.T) {
 	})
 }
 
-// A first turn that never reaches the provider must not spend the standing
-// context. Both paths here fail in SendTurn, after the prompt is built but
-// before any session/prompt is sent: spending the preamble in SendTurn would
-// silently drop AO's instructions from the session's first real turn, which is
-// the failure these cases exist to prevent.
 func TestACPDriverPreservesSessionPreambleWhenFirstTurnNeverStarts(t *testing.T) {
 	newConversation := func(t *testing.T, agent *fakeAgent) ports.ChatConversation {
 		t.Helper()
@@ -2088,14 +2030,12 @@ func TestACPDriverPreservesSessionPreambleWhenFirstTurnNeverStarts(t *testing.T)
 			t.Fatalf("Start: %v", err)
 		}
 		t.Cleanup(func() { conv.Close() })
-		_ = nextEvent(t, conv.Events()) // controller.ready
+		_ = nextEvent(t, conv.Events())
 		return conv
 	}
 
 	t.Run("rejected first-turn settings", func(t *testing.T) {
 		agent := &fakeAgent{promptNoPermission: true}
-		// Reject the first turn's settings, which fails SendTurn before the
-		// prompt is ever sent to the provider. Session setup is unaffected.
 		reject := false
 		driverConfig := preambleConfig()
 		driverConfig.ValidateTurnSettings = func(_ ports.PermissionMode, settings ports.ChatTurnSettings) error {
@@ -2113,7 +2053,7 @@ func TestACPDriverPreservesSessionPreambleWhenFirstTurnNeverStarts(t *testing.T)
 			t.Fatalf("Start: %v", err)
 		}
 		defer conv.Close()
-		_ = nextEvent(t, conv.Events()) // controller.ready
+		_ = nextEvent(t, conv.Events())
 
 		reject = true
 		if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
@@ -2126,7 +2066,6 @@ func TestACPDriverPreservesSessionPreambleWhenFirstTurnNeverStarts(t *testing.T)
 			t.Fatal("a turn whose settings were rejected still reached the provider")
 		}
 
-		// The retried turn must carry the standing context AO never delivered.
 		reject = false
 		if got := preambleText(runOneTurn(t, agent, conv, "retry the task")); got != standingInstructions {
 			t.Fatalf("retry standing context = %q, want %q; a rejected turn must not spend it", got, standingInstructions)
@@ -2137,8 +2076,6 @@ func TestACPDriverPreservesSessionPreambleWhenFirstTurnNeverStarts(t *testing.T)
 		agent := &fakeAgent{promptNoPermission: true}
 		conv := newConversation(t, agent)
 
-		// A prepared turn the controller drops before starting, as it does when
-		// durable binding fails.
 		ref, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{
 			Text: "abandoned task", ClientMessageID: "ao-client-message-discarded",
 		})
@@ -2371,9 +2308,6 @@ func TestACPDriverHistoryRefreshHonorsCancellation(t *testing.T) {
 	}
 }
 
-// A provider that answers session/load with -32603 while AO's context is still
-// live has failed the replay itself; the refresh must return a dedicated error
-// rather than a generic one the settle loop keeps polling.
 func TestACPDriverHistoryRefreshMapsProviderInternalErrorToLoadFailed(t *testing.T) {
 	userID := "11111111-1111-4111-8111-111111111111"
 	user := acpsdk.UpdateUserMessageText("Inspect the repository")
@@ -2417,9 +2351,6 @@ func TestACPDriverHistoryRefreshMapsProviderInternalErrorToLoadFailed(t *testing
 	}
 }
 
-// When AO's own deadline ends a session/load, the SDK reports a synthetic
-// -32603 carrying "context deadline exceeded". That is AO's timeout, not a
-// provider failure, and must keep its context error classification.
 func TestACPDriverHistoryRefreshKeepsOwnDeadlineAsContextError(t *testing.T) {
 	userID := "11111111-1111-4111-8111-111111111111"
 	user := acpsdk.UpdateUserMessageText("Inspect the repository")
@@ -2457,8 +2388,6 @@ func TestACPDriverHistoryRefreshKeepsOwnDeadlineAsContextError(t *testing.T) {
 	}
 }
 
-// The initial resume load takes the same mapping so a transition that fails
-// before the first refresh also reports the rejection.
 func TestACPDriverResumeMapsProviderInternalLoadErrorToLoadFailed(t *testing.T) {
 	agent := &fakeAgent{
 		capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
@@ -2510,7 +2439,6 @@ func TestNormalizeACPLoadErrorKeepsOtherCodes(t *testing.T) {
 
 func TestHistoricalUserContentDropsStandingInstructionsJoinedToTheFirstMessage(t *testing.T) {
 	standing := StandingInstructionsBlock("AO standing instructions")
-	// Cursor replays the first prompt's text blocks joined into one.
 	joined := acpsdk.TextBlock(standing.Text.Text + "\nFix the failing test")
 	if got := historicalUserContent(joined); got != "Fix the failing test" {
 		t.Fatalf("replayed first message = %q, want only what the user typed", got)
@@ -2678,7 +2606,6 @@ func TestACPDriverPinsReadOnlyModeAndPolicy(t *testing.T) {
 		t.Fatal("binding launch config lost ReadOnly")
 	}
 	conv := opened.(*conversation)
-	// A later turn naming Auto must not move the provider off the pinned mode.
 	if err := conv.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Approval: ports.PermissionModeAuto}); err != nil {
 		t.Fatalf("apply turn settings: %v", err)
 	}
@@ -2758,7 +2685,6 @@ func TestACPDriverRefusesReadOnlyWithoutBinding(t *testing.T) {
 	if launches != 0 {
 		t.Fatalf("refused read-only launch started %d provider processes", launches)
 	}
-	// A tool-less background task has nothing to restrict.
 	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{
 		WorkspacePath: t.TempDir(), ReadOnly: true, DisableTools: true,
 	})
@@ -2990,7 +2916,6 @@ func TestValidateInputResponseAcceptsAMarkedOtherAnswerForARequiredQuestion(t *t
 	question := map[string]any{"type": "string", "oneOf": []any{
 		map[string]any{"const": "Native"}, map[string]any{"const": "Bridge"},
 	}}
-	// The field shape claude-agent-acp's askUserQuestionsToCreateRequest sends.
 	other := map[string]any{"type": "string", "title": "Other", "_meta": map[string]any{
 		askUserQuestionCustomAnswerMetaKey: map[string]any{"questionId": "question_0", "isCustomAnswer": true},
 	}}
@@ -3016,8 +2941,6 @@ func TestValidateInputResponseAcceptsAMarkedOtherAnswerForARequiredQuestion(t *t
 }
 
 func TestValidateInputResponseKeepsUnmarkedCustomFieldsIndependent(t *testing.T) {
-	// A generic MCP form may have a "name_custom" (or even "question_0_custom")
-	// field of its own; without the marker it never answers the required field.
 	for _, field := range []string{"name", "question_0"} {
 		t.Run(field, func(t *testing.T) {
 			request := ports.ChatInputRequest{Mode: "form", Schema: map[string]any{
@@ -3102,8 +3025,6 @@ func TestACPDriverPreservesNestedToolAndTerminalMetadata(t *testing.T) {
 	}
 }
 
-// Only a binding whose agent keeps one list for the session marks its plan as
-// spanning turns; every other ACP plan stays a plan for the turn it arrived in.
 func TestACPDriverMarksPlansThatSpanTurns(t *testing.T) {
 	for _, spans := range []bool{false, true} {
 		t.Run(fmt.Sprintf("PlansSpanTurns=%v", spans), func(t *testing.T) {
@@ -3314,8 +3235,6 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	conv.activeTurn = "turn-1"
 	conv.mu.Unlock()
 
-	// claude-code's Bash tool reports rawInput as {"command": "..."} — exactly
-	// the shape the neutral `detail.command` contract must be filled from.
 	rawInput := map[string]any{"command": "/bin/zsh -lc 'ao session ls'"}
 	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
@@ -3346,9 +3265,6 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	}
 }
 
-// A tool row's detail is rewritten on every update and carried by every
-// snapshot, so an html_render page and an html_preview screenshot are not
-// stored whole.
 func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 	page := map[string]any{"html": strings.Repeat("<p>x</p>", 2000), "title": "Turns"}
 	shot := strings.Repeat("iVBORw0KGgo", 400)
@@ -3397,10 +3313,6 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 	}
 }
 
-// A tool call that carries no input and no content — hermes' delegate "Agent
-// tool" call is the live case — must not store JSON nulls in its detail: the
-// timeline expanded the row onto a literal "null" body, reading as data when
-// it is only absence.
 func TestACPToolDetailOmitsMissingInputAndContent(t *testing.T) {
 	tool := &toolState{id: "agent-1", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted}
 	event := (&conversation{harness: domain.HarnessHermes}).toolEvent("turn-1", tool, true)
@@ -3418,8 +3330,6 @@ func TestACPToolDetailOmitsMissingInputAndContent(t *testing.T) {
 	}
 }
 
-// claude-agent-acp passes an MCP image result through as rawOutput in the
-// Anthropic shape, with the base64 under source.data.
 func TestACPToolDetailDropsAnthropicImageData(t *testing.T) {
 	shot := strings.Repeat("iVBORw0KGgo", 400)
 	tool := &toolState{
@@ -3656,8 +3566,6 @@ func TestACPDriverMapsCostRateLimitsAndAuthRecovery(t *testing.T) {
 	}
 }
 
-// A binding may restate a session/prompt error in the user's terms, but an
-// authentication refusal keeps its sentinel so reauthentication still works.
 func TestACPDriverRestatesPromptErrorThroughBinding(t *testing.T) {
 	agent := &fakeAgent{promptNoPermission: true}
 	var calls int
@@ -3691,9 +3599,6 @@ func TestACPDriverRestatesPromptErrorThroughBinding(t *testing.T) {
 		if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			t.Fatalf("StartDeferredTurn: %v", err)
 		}
-		// The turn is released only after TurnCompleted, just before the
-		// controller announces it is ready; wait for that, as a caller sending
-		// the next turn must, or the next SendTurn can find the turn in flight.
 		var completed *ports.ChatEvent
 		for {
 			event := nextEvent(t, opened.Events())
@@ -3819,8 +3724,6 @@ func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 		t.Fatalf("retry detail = %#v", detail)
 	}
 
-	// Claude can use a new extension incident id for each attempt before its
-	// provider turn id is available. AO must still update one active-episode row.
 	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
 		Update: acpsdk.SessionUpdate{SessionInfoUpdate: &acpsdk.SessionSessionInfoUpdate{
@@ -3979,7 +3882,6 @@ func TestACPDriverConsumesLegacyKimiSelectorsOnSDK0135(t *testing.T) {
 	model, modelCalls := agent.model, agent.modelCalls
 	mode, modeCalls, configCalls := agent.mode, agent.modeCalls, agent.configCalls
 	agent.mu.Unlock()
-	// Start finds the session already on the model and sends nothing; the explicit set does.
 	if model != "kimi-code/kimi-for-coding" || modelCalls != 1 ||
 		mode != "default" || modeCalls != 1 || configCalls != 0 {
 		t.Fatalf("legacy setters: model=%q/%d mode=%q/%d config=%d",
@@ -3987,9 +3889,6 @@ func TestACPDriverConsumesLegacyKimiSelectorsOnSDK0135(t *testing.T) {
 	}
 }
 
-// A binding whose agent's session modes are pure approval policies suppresses
-// the provider mode list: AO renders its own permission picker instead, and the
-// dropped catalog must not shadow it with a second copy of the same setting.
 func TestACPDriverSuppressSessionModesDropsLegacyModeOption(t *testing.T) {
 	agent := &legacyKimiAgent{}
 	driver := New(Config{
@@ -4018,11 +3917,6 @@ func TestACPDriverSuppressSessionModesDropsLegacyModeOption(t *testing.T) {
 	}
 }
 
-// The same approval policy often rides a proper config option too — current
-// Hermes sends `edit_approval_policy` under category "mode" beside its legacy
-// session-mode list — so the suppression must cover that surface as well, or
-// the composer still renders the provider's three policies beside AO's four
-// permission modes.
 func TestDriverSuppressSessionModesDropsModeCategoryConfigOptions(t *testing.T) {
 	mode := acpsdk.SessionConfigOptionCategoryMode
 	model := acpsdk.SessionConfigOptionCategoryModel
@@ -4070,9 +3964,6 @@ func TestACPTurnSettingsPreferModelConfigOptionAlongsideLegacyModels(t *testing.
 	}
 	defer conv.Close()
 	c := conv.(*conversation)
-	// Grok supplies a legacy models block as well as the modern model option.
-	// The modern catalog came through session/new above; retain the legacy
-	// fact too, without adding Grok-specific behavior to the fake wire agent.
 	c.mu.Lock()
 	c.legacyModel = true
 	c.mu.Unlock()
@@ -4298,10 +4189,6 @@ func TestResolveLegacyModelChoiceDistinguishesThinkingVariants(t *testing.T) {
 	}
 }
 
-// Hermes advertises provider-prefixed ids (auto:anthropic/claude-opus-4.6,
-// openrouter:anthropic/claude-opus-4.6) while its configuration names the bare
-// model. A bare value resolves through the provider-prefixed suffix, preferring
-// the auto: row when several providers list the same model.
 func TestResolveLegacyModelChoiceResolvesProviderPrefixedAdvertisedID(t *testing.T) {
 	hermes := []ports.ChatConfigOptionChoice{
 		{Value: "auto:anthropic/claude-opus-4.6"},
@@ -4462,9 +4349,6 @@ func TestACPDriverRejectsAmbiguousLegacyModelAlias(t *testing.T) {
 	}
 }
 
-// The composer sends Hermes' bare configured model while the legacy session
-// selector only advertises provider-prefixed ids. The launch must translate the
-// bare value to the auto:-prefixed advertised id before session/set_model.
 func TestACPDriverTranslatesBareConfigModelToProviderPrefixedAdvertisedID(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "openrouter:anthropic/claude-opus-4.6",
@@ -4497,9 +4381,6 @@ func TestACPDriverTranslatesBareConfigModelToProviderPrefixedAdvertisedID(t *tes
 	}
 }
 
-// A composer start stores Hermes' auto:<model> id, but a restored session
-// offers the provider row auto: resolved to instead. Resume must re-resolve the
-// stored id rather than fail the restore with an unoffered model.
 func TestACPDriverResumesStoredAutoModelAgainstResolvedProviderRow(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "openrouter:anthropic/claude-opus-4.6",
@@ -4578,8 +4459,6 @@ func TestACPDriverExposesDynamicAvailableCommandsAsSkills(t *testing.T) {
 		t.Fatal("skills capability was not advertised after the command catalog arrived")
 	}
 
-	// ACP updates are snapshots. An empty update removes commands that are no
-	// longer available but keeps the feature known, so the UI can render no menu.
 	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(conv.ProviderConversationID()),
 		Update: acpsdk.SessionUpdate{AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
@@ -4796,10 +4675,6 @@ func TestDiscoverConfigOptionsReadsSessionCatalogWithoutPrompt(t *testing.T) {
 	}
 }
 
-// Discovery must read the legacy `models` session/new field. Hermes sends no
-// configOptions and lists its whole catalog under `models`, so the composer's
-// picker offered only the configured model before launch (review comment
-// 4365736482 on PR #6635).
 func TestDiscoverConfigOptionsReadsLegacyModels(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "auto:anthropic/claude-opus-4.6",
@@ -4879,10 +4754,6 @@ func nextEvent(t *testing.T, events <-chan ports.ChatEvent) ports.ChatEvent {
 	}
 }
 
-// TestACPDriverStartToleratesMethodNotFound verifies that Start() succeeds
-// even when the agent returns -32601 for session/set_mode and
-// session/set_config_option. The launch-time flags (model, --auto, --yolo)
-// are expected to have already applied the initial settings.
 func TestACPDriverStartToleratesMethodNotFound(t *testing.T) {
 	agent := &fakeAgent{
 		modeNotFound:   true,
@@ -4914,9 +4785,6 @@ func TestACPDriverStartToleratesMethodNotFound(t *testing.T) {
 	defer conv.Close()
 }
 
-// TestACPDriverSendTurnPropagatesMethodNotFound verifies that SendTurn returns
-// an actionable error (not a silent skip) when the agent returns -32601 for
-// session/set_mode or session/set_config_option during a runtime settings change.
 func TestACPDriverSendTurnPropagatesMethodNotFound(t *testing.T) {
 	agent := &fakeAgent{
 		modeNotFound:   true,
@@ -4945,8 +4813,6 @@ func TestACPDriverSendTurnPropagatesMethodNotFound(t *testing.T) {
 	}
 	defer conv.Close()
 
-	// A runtime mode change should fail with ErrACPSetterUnsupported, not be
-	// silently swallowed.
 	_, err = conv.SendTurn(context.Background(), ports.ChatUserMessage{
 		Text:     "hello",
 		Settings: ports.ChatTurnSettings{Approval: ports.PermissionModeAcceptEdits},
@@ -5024,8 +4890,6 @@ func TestNormalizeMCPServersStillGatesOptionalTransports(t *testing.T) {
 	}
 }
 
-// TestNormalizeMCPServersEmptyReturnsEmptySlice verifies that empty configs
-// return a non-nil empty slice (not nil) so the SDK serializes it correctly.
 func TestNormalizeMCPServersEmptyReturnsEmptySlice(t *testing.T) {
 	servers, err := normalizeMCPServers(nil, acpsdk.McpCapabilities{})
 	if err != nil {
@@ -5039,13 +4903,10 @@ func TestNormalizeMCPServersEmptyReturnsEmptySlice(t *testing.T) {
 	}
 }
 
-// TestACPDriverPreservesEarlyConfigOptionUpdates verifies that config option
-// updates received via session/update during session/new are not overwritten
-// when the NewSession response carries an empty config options catalog.
 func TestACPDriverPreservesEarlyConfigOptionUpdates(t *testing.T) {
 	earlyOption := selectConfigOption("model", "Model", "model", "glm-5.2", "glm-5.2", "kimi")
 	agent := &fakeAgent{
-		newConfig: nil, // session/new response has no config options
+		newConfig: nil,
 		newSessionUpdates: []acpsdk.SessionUpdate{
 			{ConfigOptionUpdate: &acpsdk.SessionConfigOptionUpdate{ConfigOptions: []acpsdk.SessionConfigOption{earlyOption}}},
 		},
@@ -5077,8 +4938,6 @@ func TestACPDriverPreservesEarlyConfigOptionUpdates(t *testing.T) {
 	}
 }
 
-// Tests substitute provider stdio at the same private seam as real host
-// connections. Catalog discovery shares only the ephemeral spawn dependency.
 func (d *Driver) useTestProcess(spawn spawnFunc) {
 	d.spawn = spawn
 	d.openProcess = func(ctx context.Context, cfg LaunchConfig, prepare func(context.Context) (map[string]string, error)) (*process, error) {
@@ -5097,8 +4956,6 @@ func (d *Driver) useTestProcess(spawn spawnFunc) {
 	}
 }
 
-// TestPR5208FreshStartAppliesSelectedEffort verifies that the selected effort
-// level is applied through ACP before the first prompt.
 func TestPR5208FreshStartAppliesSelectedEffort(t *testing.T) {
 	effortOption := selectConfigOption("effort", "Effort", "effort", "default", "default", "low", "high")
 	effortOptionLow := selectConfigOption("effort", "Effort", "effort", "low", "default", "low", "high")
@@ -5174,12 +5031,10 @@ func TestACPConversationImplementsCompactor(t *testing.T) {
 		t.Fatal("conversation does not implement ChatCompactor")
 	}
 
-	// Refuses when capability is not advertised
 	if _, err := compactor.Compact(context.Background()); err == nil || !strings.Contains(err.Error(), "cannot compact history") {
 		t.Fatalf("Compact without capability = %v, want cannot compact history", err)
 	}
 
-	// Refuses when another turn is already active
 	c := conv.(*conversation)
 	c.mu.Lock()
 	c.capabilities[ports.ChatCapabilityCompaction] = true
@@ -5207,9 +5062,8 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 	}
 	defer opened.Close()
 
-	_ = nextEvent(t, opened.Events()) // controller.ready
+	_ = nextEvent(t, opened.Events())
 
-	// Report initial usage
 	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
 		Update: acpsdk.SessionUpdate{
@@ -5218,7 +5072,7 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SessionUpdate initial usage: %v", err)
 	}
-	_ = nextEvent(t, opened.Events()) // usage event
+	_ = nextEvent(t, opened.Events())
 
 	compactionPromptReceived := make(chan string, 1)
 	agent.mu.Lock()
@@ -5231,7 +5085,6 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 		}
 		compactionPromptReceived <- promptText
 
-		// Emit intermediate message chunk (should be suppressed by compaction turn)
 		_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
 			SessionId: params.SessionId,
 			Update: acpsdk.SessionUpdate{
@@ -5241,7 +5094,6 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 			},
 		})
 
-		// Emit reduced token usage
 		_ = agent.conn.SessionUpdate(ctx, acpsdk.SessionNotification{
 			SessionId: params.SessionId,
 			Update: acpsdk.SessionUpdate{
@@ -5271,7 +5123,6 @@ func TestACPCompactionExecutesPromptAndEmitsCompactedEvent(t *testing.T) {
 		t.Fatal("timed out waiting for /compact prompt")
 	}
 
-	// Drain events and verify compaction event
 	var compactedEvent *ports.ChatEvent
 	for {
 		ev := nextEvent(t, opened.Events())
@@ -5328,7 +5179,7 @@ func compactionFailureTestDriver(t *testing.T) (*fakeAgent, ports.ChatConversati
 		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { _ = opened.Close() })
-	_ = nextEvent(t, opened.Events()) // controller.ready
+	_ = nextEvent(t, opened.Events())
 	return agent, opened
 }
 
@@ -5348,10 +5199,8 @@ func compactionStatusPrompt(agent *fakeAgent, statuses ...map[string]any) func(c
 }
 
 type compactionTurnResult struct {
-	turn      ports.ChatEvent
-	compacted bool
-	// timelineError is the turn's error row, the only timeline item a failed
-	// compaction has. Without one the timeline leaves the turn out.
+	turn          ports.ChatEvent
+	compacted     bool
 	timelineError error
 }
 
@@ -5376,9 +5225,8 @@ func TestACPCompactionReportedFailedFailsTheTurn(t *testing.T) {
 	started := map[string]any{"status": "started", "reason": "manual"}
 	for name, test := range map[string]struct {
 		failed map[string]any
-		// after are updates sent once the failure is reported.
-		after []map[string]any
-		want  string
+		after  []map[string]any
+		want   string
 	}{
 		"provider message": {
 			failed: map[string]any{"status": "failed", "error": map[string]any{
@@ -5522,7 +5370,6 @@ func TestACPDriverExposesCompactionWhenCommandAdvertised(t *testing.T) {
 		t.Fatal("compaction capability should not be present before command update")
 	}
 
-	// Push available commands update containing compact
 	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
 		Update: acpsdk.SessionUpdate{
@@ -5536,7 +5383,6 @@ func TestACPDriverExposesCompactionWhenCommandAdvertised(t *testing.T) {
 		t.Fatalf("SessionUpdate available commands: %v", err)
 	}
 
-	// Await skills known
 	lister := opened.(ports.ChatSkillLister)
 	awaitSkillCount(t, lister, 1)
 
@@ -5544,7 +5390,6 @@ func TestACPDriverExposesCompactionWhenCommandAdvertised(t *testing.T) {
 		t.Fatal("compaction capability was not enabled after compact command was advertised")
 	}
 
-	// Push later commands update omitting compact: capability must be cleared
 	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
 		Update: acpsdk.SessionUpdate{
@@ -5613,7 +5458,7 @@ func TestACPCompactionEmitsBusyBeforeCompactReturns(t *testing.T) {
 	}
 	defer opened.Close()
 
-	_ = nextEvent(t, opened.Events()) // controller.ready
+	_ = nextEvent(t, opened.Events())
 
 	agent.mu.Lock()
 	blockPrompt := make(chan struct{})
@@ -5629,7 +5474,6 @@ func TestACPCompactionEmitsBusyBeforeCompactReturns(t *testing.T) {
 		t.Fatalf("Compact: %v", err)
 	}
 
-	// Immediately after Compact returns, turn-started and controller-busy must already be queued
 	ev1 := nextEvent(t, opened.Events())
 	if ev1.Kind != ports.ChatEventTurnStarted {
 		t.Fatalf("first event = %v, want ChatEventTurnStarted", ev1.Kind)
@@ -5658,7 +5502,7 @@ func TestACPCompactionCancelledDoesNotSettle(t *testing.T) {
 	}
 	defer opened.Close()
 
-	_ = nextEvent(t, opened.Events()) // controller.ready
+	_ = nextEvent(t, opened.Events())
 
 	agent.mu.Lock()
 	agent.customPrompt = func(ctx context.Context, params acpsdk.PromptRequest) (acpsdk.PromptResponse, error) {
@@ -5752,9 +5596,6 @@ func TestReconnectMissingHostNeverLaunchesProvider(t *testing.T) {
 	}
 }
 
-// A provider that never persisted the stored session reports it missing on
-// reload. Only a caller that proved the conversation never started may then
-// start fresh; every other reload failure keeps its existing error.
 func TestACPDriverResumeStartsFreshOnlyForMissingSessionWhenAllowed(t *testing.T) {
 	notFound := &acpsdk.RequestError{Code: -32002, Message: "Resource not found: provider-session-1"}
 	tests := []struct {
@@ -5810,8 +5651,6 @@ func TestACPDriverResumeStartsFreshOnlyForMissingSessionWhenAllowed(t *testing.T
 	}
 }
 
-// Launch-scoped options are set once the session exists, before the launch's
-// turn settings, and again after session/load.
 func TestACPDriverAppliesLaunchSessionOptionsOnStartAndResume(t *testing.T) {
 	catalog := []acpsdk.SessionConfigOption{
 		selectConfigOption("agent", "Agent", "", "", "", "ao-sess1"),
@@ -5883,8 +5722,6 @@ func TestACPDriverFailsStartWhenRequiredLaunchOptionIsRejected(t *testing.T) {
 	}
 }
 
-// A setter may accept a launch option without returning the catalog. Keep the
-// remaining advertised choices available for subsequent launch settings.
 func TestACPDriverPreservesCatalogAcrossLaunchOptionsWithoutReturnedCatalog(t *testing.T) {
 	catalog := []acpsdk.SessionConfigOption{
 		selectConfigOption("agent", "Agent", "", "default", "default", "copilot"),
@@ -5931,9 +5768,6 @@ func TestACPDriverPreservesCatalogAcrossLaunchOptionsWithoutReturnedCatalog(t *t
 	}
 }
 
-// A setter may accept a change without returning the rebuilt catalog.
-// SetConfigOption returns nil so callers requiring an authoritative confirmation
-// can fail closed, while the in-memory catalog preserves the accepted option.
 func TestACPDriverSetConfigOptionReturnsNilWhenAgentOmitsCatalog(t *testing.T) {
 	catalog := []acpsdk.SessionConfigOption{
 		selectConfigOption("model", "Model", "", "sonnet", "sonnet", "opus"),
@@ -5960,7 +5794,6 @@ func TestACPDriverSetConfigOptionReturnsNilWhenAgentOmitsCatalog(t *testing.T) {
 		t.Fatal("conversation does not implement ChatConfigOptionController")
 	}
 
-	// fakeAgent has setConfig == nil by default, so SetSessionConfigOption returns empty ConfigOptions.
 	updated, err := controller.SetConfigOption(context.Background(), "model", ports.ChatConfigOptionValue{Select: "opus"})
 	if err != nil {
 		t.Fatalf("SetConfigOption: %v", err)
@@ -5978,8 +5811,6 @@ func TestACPDriverSetConfigOptionReturnsNilWhenAgentOmitsCatalog(t *testing.T) {
 	}
 }
 
-// RequireAdvertisedOptions makes an option the session never offered fail
-// instead of reaching an agent that would acknowledge and drop it.
 func TestACPDriverRequireAdvertisedOptionsRejectsUnadvertised(t *testing.T) {
 	catalog := []acpsdk.SessionConfigOption{
 		selectConfigOption("allow_all", "Allow all", "", "off", "on", "off"),
@@ -6035,8 +5866,6 @@ func TestACPDriverRequireAdvertisedOptionsRejectsUnadvertised(t *testing.T) {
 	}
 }
 
-// An agent that refuses to reload a session its connection holds (Copilot)
-// still refreshes history when the binding closes the session first.
 func TestACPRefreshHistoryClosesSessionBeforeReload(t *testing.T) {
 	for _, closeFirst := range []bool{false, true} {
 		agent := &fakeAgent{
@@ -6080,9 +5909,6 @@ func TestACPRefreshHistoryClosesSessionBeforeReload(t *testing.T) {
 	}
 }
 
-// Copilot replays user prompts without message ids. Each prompt after an
-// answer must start its own turn, or every later turn merges into the first
-// and no checkpoint can match.
 func TestACPHistoryReplaySplitsIDLessPromptsAfterAnswers(t *testing.T) {
 	agent := &fakeAgent{
 		capabilities: &acpsdk.AgentCapabilities{LoadSession: true},
@@ -6135,10 +5961,6 @@ func TestACPHistoryReplaySplitsIDLessPromptsAfterAnswers(t *testing.T) {
 	}
 }
 
-// A shell-executing agent bound to the session workspace (hermes) reaches every
-// child directory from its cwd, so a multi-repo workspace's additional
-// directories need no ACP capability: they are dropped, not sent, and the
-// session starts instead of failing.
 func TestACPDriverImplicitWorkspaceDirectoriesStartsWithoutProviderSupport(t *testing.T) {
 	agent := &fakeAgent{promptNoPermission: true}
 	driver := New(Config{
@@ -6169,9 +5991,6 @@ func TestACPDriverImplicitWorkspaceDirectoriesStartsWithoutProviderSupport(t *te
 	}
 }
 
-// An agent that sandboxes file access to its declared roots and does not
-// advertise additional-directories support still fails a multi-repo spawn:
-// silently dropping the directories would hide work the agent cannot reach.
 func TestACPDriverUnsupportedAdditionalDirectoriesStillFail(t *testing.T) {
 	agent := &fakeAgent{promptNoPermission: true}
 	driver := New(Config{

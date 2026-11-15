@@ -8,8 +8,6 @@ function App({ handler, enabled = true }: { handler: () => void; enabled?: boole
 	return null;
 }
 
-// The window listener backs up the main process where none is attached (web
-// preview, e2e). jsdom reports a non-mac platform, so the palette is Ctrl+K.
 describe("useAppShortcut window fallback", () => {
 	beforeEach(() => appShortcutBus.reset());
 

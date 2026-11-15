@@ -26,27 +26,22 @@ var browserTelemetryActions = map[string]struct{}{
 	"target": {},
 }
 
-// BrowserService authorizes and executes session-scoped browser operations.
 type BrowserService interface {
 	Status(ctx context.Context, sessionID domain.SessionID, capability string) (browserruntime.Status, error)
 	Execute(ctx context.Context, sessionID domain.SessionID, capability, action string, args map[string]interface{}) (browserruntime.Result, string, error)
 }
 
-// BrowserChromeService installs and reports Chrome mode: the native host
-// registration and extension bundle that let sessions use the user's Chrome.
 type BrowserChromeService interface {
 	ChromeStatus() BrowserChromeStatusResponse
 	SetupChrome() (BrowserChromeStatusResponse, error)
 	RemoveChrome() (BrowserChromeStatusResponse, error)
 }
 
-// BrowserController exposes the loopback-only browser command API.
 type BrowserController struct {
 	Svc    BrowserService
 	Chrome BrowserChromeService
 }
 
-// Register adds browser status, command, and Chrome-mode routes to the API router.
 func (c *BrowserController) Register(r chi.Router) {
 	r.Get("/browser/status", c.status)
 	r.Post("/browser/commands", c.execute)
@@ -224,7 +219,5 @@ func writeBrowserError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func captureBrowserFailure(r *http.Request, kind apierr.Kind, code string) {
-	// Keep the captured error message generic: command errors can contain
-	// provider/page details, while telemetry only needs the stable code.
 	envelope.CaptureError(r, apierr.New(kind, code, "browser command failed", nil))
 }

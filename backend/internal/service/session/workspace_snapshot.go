@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// snapshotSelection uses the same validated comparison as the review, including
-// synthetic trees produced by combining non-adjacent commits. No worktree reads.
 func (s *Service) snapshotSelection(ctx context.Context, id domain.SessionID, input WorkspaceSelectionRevisionInput) (WorkspaceCommitSelection, error) {
 	shas, err := selectionCommitSHAs(input.CommitSHA, input.CommitSHAs)
 	if err != nil {
@@ -30,7 +28,6 @@ func (s *Service) snapshotSelection(ctx context.Context, id domain.SessionID, in
 	if !selection.Combinable {
 		return WorkspaceCommitSelection{}, commitsNotCombinable(selection.Conflict)
 	}
-	// An empty comparison still has a complete repository at its tip.
 	if selection.after == "" {
 		selection.after = selection.View.TipSHA
 	}
@@ -40,8 +37,6 @@ func (s *Service) snapshotSelection(ctx context.Context, id domain.SessionID, in
 	return selection, nil
 }
 
-// ListWorkspaceSnapshotTree lists tracked paths at the review's after revision.
-// A filter searches the entire snapshot; otherwise only one directory is read.
 func (s *Service) ListWorkspaceSnapshotTree(ctx context.Context, id domain.SessionID, input WorkspaceSelectionRevisionInput, filter string) (WorkspaceTree, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
@@ -93,7 +88,7 @@ func (s *Service) ListWorkspaceSnapshotTree(ctx context.Context, id domain.Sessi
 			entry.Type = WorkspaceTreeDir
 		} else if fields[1] != "blob" {
 			entry.Binary = true
-		} // Submodules remain visible but are never traversed.
+		}
 		entry.Size, _ = strconv.ParseInt(fields[3], 10, 64)
 		if entry.Status == "" {
 			entry.Status = WorkspaceFileUnmodified
@@ -114,8 +109,6 @@ func (s *Service) ListWorkspaceSnapshotTree(ctx context.Context, id domain.Sessi
 	return result, nil
 }
 
-// GetWorkspaceSnapshotFile opens changed AND unchanged files at the selected
-// revision. A deleted path reads its old side, never a same-named live file.
 func (s *Service) GetWorkspaceSnapshotFile(ctx context.Context, id domain.SessionID, input WorkspaceSelectionRevisionInput) (WorkspaceFileDetail, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
@@ -175,7 +168,6 @@ func (s *Service) GetWorkspaceSnapshotFile(ctx context.Context, id domain.Sessio
 	return detail, nil
 }
 
-// GetWorkspaceSnapshotBlob serves bounded passive media from the same snapshot.
 func (s *Service) GetWorkspaceSnapshotBlob(ctx context.Context, id domain.SessionID, input WorkspaceSelectionRevisionInput) (WorkspaceFileBlob, error) {
 	ctx, cancel := context.WithTimeout(ctx, workspaceReviewTimeout)
 	defer cancel()
@@ -211,9 +203,6 @@ func (s *Service) GetWorkspaceSnapshotBlob(ctx context.Context, id domain.Sessio
 	return WorkspaceFileBlob{Path: rel, Side: input.Side, MediaType: mediaType, Data: data}, nil
 }
 
-// pinnedSnapshotSelection preserves a snapshot across ordinary branch advances.
-// Its anchor must still belong to the selected source; a force-push that removes
-// it fails explicitly rather than substituting a new revision or live bytes.
 func (s *Service) pinnedSnapshotSelection(ctx context.Context, id domain.SessionID, input WorkspaceView, shas []string) (WorkspaceCommitSelection, error) {
 	if !fullCommitSHA.MatchString(input.ExpectedTipSHA) || (input.ExpectedBaseSHA != "" && !fullCommitSHA.MatchString(input.ExpectedBaseSHA)) {
 		return WorkspaceCommitSelection{}, apierr.Invalid("INVALID_WORKSPACE_SNAPSHOT", "Snapshot anchors must be full commit SHAs", nil)

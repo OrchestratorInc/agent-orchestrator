@@ -26,7 +26,6 @@ func TestBoundaryAcceptanceAndRecoveryDoNotReplayFirstRequest(t *testing.T) {
 	if err != nil || !first {
 		t.Fatalf("first boundary: %v %v", first, err)
 	}
-	// A crash before an acceptance receipt cannot safely replay this request.
 	unknown := newMemorySideStore()
 	_, _ = unknown.ClaimSideLaunch(ctx, "launch", now)
 	recovered, err := unknown.recover("launch", store.export("launch"), now)

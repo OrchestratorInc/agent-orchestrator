@@ -66,9 +66,6 @@ func TestDeleteTerminatedSessionRemovesRecordAndNeverReusesItsID(t *testing.T) {
 	}
 }
 
-// A session's usage events cascade away with it, but its spend must stay in the
-// agent account usage view, attributed to the same accounts and days. Two
-// deleted sessions on the same account, day and model add up.
 func TestDeleteTerminatedSessionKeepsAccountUsage(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -81,8 +78,6 @@ func TestDeleteTerminatedSessionKeepsAccountUsage(t *testing.T) {
 	mustNoError(t, s.CreateAgentAccount(ctx, domain.AgentAccount{
 		ID: "acct-b", Provider: domain.AgentAccountProviderClaude, Home: "/tmp/acct-b", Email: "b@example.com", CreatedAt: t0,
 	}))
-	// first moves from the device login to acct-b after a day; second stays on
-	// the device login.
 	mustNoError(t, s.BindSessionAgentAccount(ctx, first.ID, domain.AgentAccountProviderClaude, "device-claude", t0))
 	mustNoError(t, s.BindSessionAgentAccount(ctx, first.ID, domain.AgentAccountProviderClaude, "acct-b", t0.Add(24*time.Hour)))
 	for i, sess := range []domain.SessionRecord{first, second} {
@@ -154,8 +149,6 @@ func TestDeleteTerminatedSessionRefusesLiveSession(t *testing.T) {
 	}
 }
 
-// A project orchestrator conversation outlives each orchestrator session;
-// deleting one would cascade its turns out of that shared history.
 func TestDeleteTerminatedSessionRefusesSharedConversationHistory(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -285,9 +278,6 @@ SELECT ?1 || '-activity-' || i, ?1, i, 'command', 'completed', ?3, ?3 FROM n`, c
 	}
 }
 
-// terminated_at follows is_terminated however the row is written. Retention
-// lists only archived sessions with nothing left on disk, each with when it was
-// archived, or its last update for a row archived before terminated_at existed.
 func TestReleasedArchivedSessionsCarryWhenTheyWereArchived(t *testing.T) {
 	dir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dir)
@@ -351,10 +341,6 @@ func TestReleasedArchivedSessionsCarryWhenTheyWereArchived(t *testing.T) {
 	}
 }
 
-// Retention leaves out the sessions delete refuses for shared history: an
-// earlier orchestrator whose turns stay in the project conversation, and the
-// one that conversation now belongs to. Otherwise every pass would retry them.
-// A session's own conversation does not hold it back.
 func TestReleasedArchivedSessionsLeaveOutSharedConversationHistory(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

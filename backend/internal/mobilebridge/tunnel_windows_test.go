@@ -16,8 +16,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Run the test executable as a console-subsystem cloudflared stand-in so the
-// production discovery and runner paths can be checked without network access.
 func TestMain(m *testing.M) {
 	if report := os.Getenv("AO_TEST_CLOUDFLARED_CONSOLE"); report != "" {
 		console, _, _ := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetConsoleWindow").Call()
@@ -101,8 +99,6 @@ func TestCloudflaredRunnerHasNoConsoleAndStops(t *testing.T) {
 	assertNoCloudflaredConsole(t, report)
 }
 
-// Electron starts the daemon detached. Reproduce that parent process state:
-// an ordinary go test console can otherwise mask the unwanted window.
 func runInDetachedProcess(t *testing.T) bool {
 	t.Helper()
 	if os.Getenv("AO_TEST_DETACHED_TUNNEL") == "1" {

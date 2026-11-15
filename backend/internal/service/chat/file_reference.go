@@ -15,18 +15,12 @@ import (
 )
 
 var (
-	// ErrFileReferenceInvalid rejects invalid or foreign-session captured context.
 	ErrFileReferenceInvalid = errors.New("invalid captured file reference")
-	// ErrAnnotationLimit rejects more than eight combined chat/file annotations.
-	ErrAnnotationLimit = errors.New("at most eight annotations may be attached")
+	ErrAnnotationLimit      = errors.New("at most eight annotations may be attached")
 )
 
-// FileReferenceQuotedPath marks the prompt format in the existing content text
-// field, not in the public reference DTO.
-// Empty text identifies receipts dispatched by older daemons.
 const FileReferenceQuotedPath = "ao_file_reference_quoted_path_v1"
 
-// ValidateFileReference bounds captured context without trusting its source hints.
 func ValidateFileReference(ref ports.ChatFileReference) error {
 	return ports.ValidateChatFileReference(ref)
 }
@@ -64,7 +58,6 @@ func fileReferenceTextFormat(ref ports.ChatFileReference, quoted bool) string {
 	}
 	name := ref.Path
 	if quoted {
-		// Match JSON.stringify on the cloud path, including literal Unicode.
 		var encoded strings.Builder
 		encoder := json.NewEncoder(&encoded)
 		encoder.SetEscapeHTML(false)
@@ -94,8 +87,6 @@ func validateFileReferenceContent(msg ports.ChatUserMessage, sessionID string) e
 	return nil
 }
 
-// Accepted transcript references can age independently; captured file blocks must
-// remain the same on a mixed-annotation receipt replay.
 func fileReferenceContentsMatch(raw string, incoming []ports.ChatContent) bool {
 	var durable []ports.ChatContent
 	if raw != "" && json.Unmarshal([]byte(raw), &durable) != nil {
@@ -113,14 +104,7 @@ func fileReferenceContentsMatch(raw string, incoming []ports.ChatContent) bool {
 	return reflect.DeepEqual(extract(durable), extract(incoming))
 }
 
-// replayFileReferences skips image/resource values with bounded decoder memory.
-// jsontext validates even skipped values, so corrupt payloads cannot be mistaken
-// for a complete replay merely because they contain no annotation marker.
 func replayFileReferences(raw string) ([]ports.ChatContent, bool) {
-	// SkipValue still buffers an entire scalar string. Remove only the ASCII,
-	// unescaped contents of canonical image data strings before decoding; replacing
-	// such contents with an empty string preserves JSON syntax, including corruption
-	// elsewhere. Leave escaped/non-ASCII values to the normal validator.
 	var compact strings.Builder
 	remaining := raw
 	for {
@@ -138,7 +122,6 @@ func replayFileReferences(raw string) ([]ports.ChatContent, bool) {
 			compact.WriteString(remaining[:start])
 			remaining = remaining[end:]
 		} else {
-			// Advance past this key, without changing any of its value.
 			compact.WriteString(remaining[:start])
 			remaining = remaining[start:]
 		}

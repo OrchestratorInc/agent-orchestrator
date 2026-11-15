@@ -15,12 +15,6 @@ const decorations = {
 	matchOverviewRuler: "#ffcc00",
 } satisfies NonNullable<SearchOptions>["decorations"];
 
-/**
- * xterm can briefly retain a match column beyond the live grid after reflow.
- * Its decoration registration then throws instead of merely skipping the
- * highlight. Search navigation has already happened at that point, so drop
- * only this known decoration failure rather than taking down the terminal.
- */
 export function safeTerminalFind(
 	find: (query: string, options?: SearchOptions) => boolean,
 	query: string,
@@ -64,7 +58,6 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 	const clearSearch = useCallback(() => {
 		if (!searchAddon) return;
 		searchAddon.clearDecorations();
-		// xterm 5 can leave the active result selected after decorations clear.
 		safeTerminalFind((value, options) => searchAddon.findNext(value, options), "");
 		setResults({ resultCount: 0, resultIndex: -1 });
 	}, [searchAddon]);
@@ -118,10 +111,6 @@ export function TerminalSearch({ onClose, onReturnFocus, open, searchAddon }: Te
 			if (open && (!query || !queryIsValid)) clearSearch();
 			return;
 		}
-		// Searching xterm's scrollback can be substantially more expensive than a
-		// text-input update. A fast typist must see the query first; coalescing to
-		// one latest search per frame also prevents a burst of input events from
-		// queuing stale whole-buffer scans behind one another.
 		const frame = window.requestAnimationFrame(() => {
 			safeTerminalFind(
 				(value, options) => searchAddon.findNext(value, options),

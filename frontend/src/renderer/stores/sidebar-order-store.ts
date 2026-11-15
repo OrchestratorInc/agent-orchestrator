@@ -13,13 +13,9 @@ function readStoredOrder(storageKey: string): string[] {
 }
 
 type SidebarOrderState = {
-	/** Persisted project order shared by creation, sidebar drag, and navigation. */
 	projectOrder: string[];
-	/** Creation priority retained until a snapshot includes the new project. */
 	pendingCreatedProjectIds: string[];
-	/** Projects pinned above the rest of the list. Order within comes from `projectOrder`. */
 	pinnedProjectIds: string[];
-	/** Display order of each mounted project's sessions, keyed by `sessionUiKey(projectId, hostId)`. */
 	sessionOrders: Record<string, string[]>;
 	setProjectOrder: (order: readonly string[], pendingCreatedProjectIds?: readonly string[]) => void;
 	moveProjectToTop: (projectId: string) => void;
@@ -29,10 +25,6 @@ type SidebarOrderState = {
 	clearSessionOrder: (projectKey: string) => void;
 };
 
-/**
- * Project order survives renderer restarts. The Sidebar also publishes its
- * mounted session lists here so keyboard navigation follows the visible order.
- */
 export const useSidebarOrderStore = create<SidebarOrderState>((set, get) => ({
 	projectOrder: readStoredOrder(PROJECT_ORDER_STORAGE_KEY),
 	pendingCreatedProjectIds: readStoredOrder(PENDING_CREATED_PROJECTS_STORAGE_KEY),
@@ -73,9 +65,6 @@ export const useSidebarOrderStore = create<SidebarOrderState>((set, get) => ({
 			window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify(next));
 		} catch {}
 		set({ pinnedProjectIds: next });
-		// Store the order as displayed (pinned group first), then put the
-		// project at the group boundary: a new pin lands at the bottom of the
-		// pinned group, an unpinned project at the top of the rest.
 		const others = new Set(next.filter((id) => id !== projectId));
 		const rest = projectOrder.filter((id) => id !== projectId);
 		const pinnedRest = rest.filter((id) => others.has(id));

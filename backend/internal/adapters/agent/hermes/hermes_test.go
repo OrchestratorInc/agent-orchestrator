@@ -46,7 +46,6 @@ func TestStandingInstructionsPreserveNativeOverlay(t *testing.T) {
 	}
 }
 func TestRestoreRequiresAOTitledSession(t *testing.T) {
-	// A native ID alone, even an exact one, is not an AO-titled conversation.
 	for _, id := range []string{"", "latest", "native-id"} {
 		_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{DataDir: t.TempDir(), Session: ports.SessionRef{ID: "ao-1", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
 		if ok || err == nil || !strings.Contains(err.Error(), "title unavailable") {
@@ -62,8 +61,6 @@ func TestLaunchRejectsToolRestrictions(t *testing.T) {
 	}
 }
 
-// AO spawns default to auto, so every approval mode must launch. Modes without a
-// native tier keep native prompts; only explicit bypass adds --yolo.
 func TestPermissionModesMapToNativeApprovals(t *testing.T) {
 	for _, tt := range []struct {
 		mode ports.PermissionMode
@@ -196,12 +193,9 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 }
 
 func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
-	// Source installs append a date, channel, or commit; Homebrew and desktop
-	// bundles report the release. Only the qualified v0.21 and v0.22 lines are accepted.
 	for _, line := range []string{
 		"Hermes Agent v0.21.6",
 		"Hermes Agent v0.21.6 (2026.9.24) · upstream 818c13be",
-		// Homebrew 0.22.2 reading tags from a stray checkout under HERMES_HOME.
 		"Hermes Agent v0.21.5+9180.g818c13b (2026.9.24) · upstream d87e7536",
 		"Hermes Agent v0.21.7 (2026.9.24) · local 1a2b3c4d (+2 carried commits)",
 		"Hermes Agent v0.22.2 · stable · d923a5e",
@@ -212,7 +206,6 @@ func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 		}
 	}
 
-	// Release lines whose chrome AO has not qualified stay unverified.
 	for _, output := range []string{"Hermes Agent v0.20.9", "Hermes Agent v0.23.0", "Hermes Agent v1.0.0", "Hermes Agent v0.21.6-malicious", "wrapper\nHermes Agent v0.21.6", "Not Hermes Agent v0.21.6", "Hermes Agent vX"} {
 		first, _, _ := strings.Cut(output, "\n")
 		if supportedNativeVersion(first) {
@@ -221,10 +214,6 @@ func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 	}
 }
 
-// writeHomebrewKeg lays out a keg the way Homebrew pours one:
-// <prefix>/Cellar/<formula>/<kegDir>/bin/hermes printing banner, an
-// INSTALL_RECEIPT.json recording receiptVersion ("" omits it), and a
-// <prefix>/bin/hermes symlink to it, which it returns.
 func writeHomebrewKeg(t *testing.T, formula, kegDir, receiptVersion, banner string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -256,9 +245,6 @@ func writeHomebrewKeg(t *testing.T, formula, kegDir, receiptVersion, banner stri
 }
 
 func TestHomebrewUnknownBannerQualifiesFromKeg(t *testing.T) {
-	// Homebrew builds Hermes from the release tarball, so the bottle cannot read
-	// its version from git and prints `vunknown`. The keg and Homebrew's receipt
-	// then name the release, and only a qualified one is accepted.
 	const unknown = "Hermes Agent vunknown (2026.9.24)"
 	for _, tc := range []struct {
 		name, formula, kegDir, receipt, banner string
@@ -283,7 +269,6 @@ func TestHomebrewUnknownBannerQualifiesFromKeg(t *testing.T) {
 		})
 	}
 
-	// Outside a keg, `vunknown` names no release at all.
 	plain := filepath.Join(t.TempDir(), "hermes")
 	if err := os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -294,7 +279,6 @@ func TestHomebrewUnknownBannerQualifiesFromKeg(t *testing.T) {
 }
 
 func TestProbeAcceptsHomebrewBottleWithUnknownBanner(t *testing.T) {
-	// The banner AO's own `brew install hermes-agent` produced on macOS.
 	const banner = "Hermes Agent vunknown (2026.9.24)"
 	launcher := writeHomebrewKeg(t, "hermes-agent", "0.22.4", "0.22.4", banner)
 	if ok, reason, timedOut := probeNativeVersion(t.Context(), launcher); !ok || timedOut {
@@ -314,7 +298,7 @@ func TestNativeStateDSNEscapesQueryCharacters(t *testing.T) {
 		t.Fatalf("unsafe native state DSN: %q", dsn)
 	}
 	if runtime.GOOS == "windows" {
-		return // Windows filenames cannot contain '?'.
+		return
 	}
 	fixtureDB := filepath.Join(t.TempDir(), "state.db")
 	writer, err := sql.Open("sqlite", fixtureDB)
@@ -407,7 +391,6 @@ func TestStandingInstructionsBudgetIncludesEnvironmentKey(t *testing.T) {
 	}
 }
 
-// fakeNativeBinary installs a shell stand-in at the official POSIX launcher path.
 func fakeNativeBinary(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -415,8 +398,6 @@ func fakeNativeBinary(t *testing.T) string {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	// Probe only the fixture: a Homebrew or system Hermes on the test host
-	// is a qualified install that would otherwise be resolved first.
 	saved := systemLaunchers
 	systemLaunchers = nil
 	t.Cleanup(func() { systemLaunchers = saved })
@@ -558,7 +539,6 @@ func TestComposerStyleAttributesExcludeColorPayloads(t *testing.T) {
 	}
 }
 
-// writeNativeState creates a minimal native state database with one titled row.
 func writeNativeState(t *testing.T, home, id, title string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(home, "state.db"))
@@ -590,7 +570,6 @@ func TestFreshLaunchTitlesNewNativeConversation(t *testing.T) {
 	if !slices.Equal(first, want) {
 		t.Fatalf("launch = %v, want %v", first, want)
 	}
-	// A relaunch must never adopt the previous conversation.
 	if _, err := New().GetLaunchCommand(t.Context(), cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -663,15 +642,11 @@ func TestProviderFromStatusReadsActiveProvider(t *testing.T) {
 	}{
 		{"configured provider", "  Model:        (not set)\n  Provider:     OpenAI API\n  Providers:    OpenAI API, Anthropic\n", "OpenAI API", ports.AgentAuthStatusConfigured},
 		{"auto with connected providers", "  Provider:     Auto\n  Providers:    Anthropic, GitHub Copilot\n", "Anthropic, GitHub Copilot", ports.AgentAuthStatusConfigured},
-		// The Provider row falls back to the requested provider without
-		// credentials, and an empty inventory cannot prove one is missing.
 		{"explicit label without credentials", "  Provider:     OpenAI API\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
 		{"auto without credentials", "  Provider:     Auto\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
 		{"selected provider not connected", "  Provider:     defunct-provider\n  Providers:    Anthropic\n", "", ports.AgentAuthStatusUnknown},
 		{"label only", "  Provider:     Auto\n", "", ports.AgentAuthStatusUnknown},
-		// Hermes prints "unknown" when its inventory probe fails.
 		{"failed inventory", "  Provider:     Auto\n  Providers:    unknown\n", "", ports.AgentAuthStatusUnknown},
-		// Keyless local routes and SDK chains (an AWS profile) are not listed.
 		{"keyless local route", "  Provider:     LM Studio\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
 		{"keyless loopback route", "  Provider:     Actual Computer\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
 		{"sdk credential chain", "  Provider:     AWS Bedrock\n  Providers:    none connected\n", "", ports.AgentAuthStatusUnknown},
@@ -702,15 +677,11 @@ func TestCredentialStoreIdentityReadsNativeStores(t *testing.T) {
 		{"quoted key", ".env", "'ANTHROPIC_API_KEY'=sk-ant\n", true, domain.AgentAccountMethodAPIKey},
 		{"oauth store", "auth.json", `{"providers":{"nous":{"access_token":"x"}}}`, true, domain.AgentAccountMethodAccount},
 		{"empty oauth store", "auth.json", `{"providers":{}}`, false, ""},
-		// Hermes keeps an empty pool list after removing the last credential.
 		{"pool credential", "auth.json", `{"version":1,"providers":{},"credential_pool":{"openai-api":[{"id":"a","access_token":"x"}]}}`, true, domain.AgentAccountMethodAccount},
 		{"removed final pool credential", "auth.json", `{"version":1,"providers":{},"credential_pool":{"openai-api":[]}}`, false, ""},
-		// The last assignment is the one Hermes keeps.
 		{"superseded env key", ".env", "OPENROUTER_API_KEY=review-dummy-key\nOPENROUTER_API_KEY=\n", false, ""},
 		{"blank env key", ".env", "OPENROUTER_API_KEY=\"   \"\n", false, ""},
-		// Hermes keeps an interior U+FEFF in the name, so this is another variable.
 		{"bom-prefixed env key", ".env", "NOTES=ordinary\n\ufeffOPENROUTER_API_KEY=sk-or-review-dummy\n", false, ""},
-		// A borrowed env-key reference stays after its source variable is gone.
 		{"secret-free pool reference", "auth.json", `{"version":1,"providers":{},"credential_pool":{"openrouter":[{"id":"a","source":"env:OPENROUTER_API_KEY","label":"OPENROUTER_API_KEY","auth_type":"api_key","access_token":""}]}}`, false, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -749,26 +720,20 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"})
 	}
 	for _, key := range []string{"HERMES_EPHEMERAL_SYSTEM_PROMPT", "HERMES_LANGUAGE"} {
-		// Every assignment form python-dotenv accepts must be caught.
 		forms := []string{
 			"OPENROUTER_API_KEY=x\nexport " + key + "=native\n",
 			"'" + key + "'=native\n",
 			"export\t" + key + "=native\n",
 			"\xef\xbb\xbf" + key + "=native\n",
 			key + " = 'multi\nline'\n",
-			// Python's \s and str.strip are Unicode: NBSP is whitespace.
 			"export\u00a0" + key + "=native\n",
 			"\u00a0" + key + "=native\n",
-			// Hermes rewrites a UTF-16 (Notepad "Unicode") file as UTF-8 first,
-			// and a U+FEFF surviving either decode is dropped by utf-8-sig.
 			utf16LE("\ufeff" + key + "=native\r\n"),
 			utf16LE("\ufeff\ufeff" + key + "=native\n"),
 			"\xef\xbb\xbf\ufeff" + key + "=native\n",
 		}
 		if runtime.GOOS == "windows" {
-			// Windows os.environ upper-cases names.
 			forms = append(forms, strings.ToLower(key)+"=native\n")
-			// Python's full upper-casing expands the U+FB06 "st" ligature.
 			if strings.Contains(key, "ST") {
 				forms = append(forms, strings.Replace(strings.ToLower(key), "st", "\ufb06", 1)+"=native\n")
 			}
@@ -782,7 +747,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 			}
 		}
 	}
-	// A home or managed-scope redirect would load another, unchecked .env.
 	for _, key := range []string{"HERMES_HOME", "HERMES_MANAGED_DIR"} {
 		if err := os.WriteFile(filepath.Join(home, ".env"), []byte(key+"="+t.TempDir()+"\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -794,8 +758,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := os.Remove(filepath.Join(home, ".env")); err != nil {
 		t.Fatal(err)
 	}
-	// A source install's project .env loads with override when the home
-	// .env is absent.
 	if err := os.MkdirAll(filepath.Join(home, "hermes-agent"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -808,7 +770,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := os.Remove(filepath.Join(home, "hermes-agent", ".env")); err != nil {
 		t.Fatal(err)
 	}
-	// HERMES_MANAGED_DIR resolves against the session workspace.
 	workspace := t.TempDir()
 	if err := os.Mkdir(filepath.Join(workspace, ".ao-review-managed"), 0o700); err != nil {
 		t.Fatal(err)
@@ -817,14 +778,12 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := New().GetAgentHooks(t.Context(), managed); err == nil || !strings.Contains(err.Error(), "managed") {
 		t.Fatalf("workspace-relative managed scope accepted: %v", err)
 	}
-	// Python's str.strip also removes U+001C..U+001F.
 	for _, prefix := range []string{"\x1c", "\x1f", "\u00a0"} {
 		managed.Env = map[string]string{"HERMES_HOME": home, "HERMES_MANAGED_DIR": prefix + filepath.Join(workspace, ".ao-review-managed")}
 		if err := New().GetAgentHooks(t.Context(), managed); err == nil || !strings.Contains(err.Error(), "managed") {
 			t.Fatalf("managed scope with %q prefix accepted: %v", prefix, err)
 		}
 	}
-	// The filesystem follows a symlink before "..", unlike filepath.Join.
 	if runtime.GOOS != "windows" {
 		external := t.TempDir()
 		for _, dir := range []string{"target", "managed"} {
@@ -840,7 +799,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 			t.Fatalf("symlinked managed scope accepted: %v", err)
 		}
 	}
-	// .op.env bootstraps the environment before the managed scope is read.
 	if err := os.WriteFile(filepath.Join(home, ".op.env"), []byte("HERMES_MANAGED_DIR="+t.TempDir()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +808,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := os.Remove(filepath.Join(home, ".op.env")); err != nil {
 		t.Fatal(err)
 	}
-	// The source checkout stays under the default home when HERMES_HOME moves.
 	userHome := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(userHome, ".hermes", "hermes-agent"), 0o700); err != nil {
 		t.Fatal(err)
@@ -868,8 +825,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	if err := New().GetAgentHooks(t.Context(), separate); err == nil || !strings.Contains(err.Error(), "HERMES_LANGUAGE") {
 		t.Fatalf("installed checkout's project .env accepted: %v", err)
 	}
-	// Malformed encodings are refused: Hermes's replacement-character and
-	// latin-1 fallbacks can still apply assignments.
 	for _, form := range []string{
 		"# legacy comment \xff\n\u00a0HERMES_LANGUAGE=de\n",
 		"# legacy comment \xff\n\u00a0HERMES_EPHEMERAL_SYSTEM_PROMPT=native\n",
@@ -884,7 +839,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 			t.Fatalf("%q in .env accepted: %v", form, err)
 		}
 	}
-	// A key named inside another quoted value is not an assignment.
 	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("NOTES='first line\nHERMES_LANGUAGE=just documentation\nlast line'\n# HERMES_LANGUAGE=de\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -893,7 +847,6 @@ func TestHooksForceEnglishChromeAndRefuseDotenvOverrides(t *testing.T) {
 	}
 }
 
-// utf16LE encodes s as UTF-16LE bytes in a string.
 func utf16LE(s string) string {
 	var b []byte
 	for _, unit := range utf16.Encode([]rune(s)) {
@@ -915,27 +868,21 @@ func TestResolveHomeExpandsLikeHermes(t *testing.T) {
 	if err != nil || got != filepath.Join(home, "h-x") {
 		t.Fatalf("ResolveHome($VAR) = %q, %v", got, err)
 	}
-	// Variables expand before ~, as os.path.expanduser(os.path.expandvars(...)).
 	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_PARENT": "~", "HERMES_HOME": "$HERMES_PARENT/custom"})
 	if err != nil || got != filepath.Join(home, "custom") {
 		t.Fatalf("ResolveHome(var then ~) = %q, %v", got, err)
 	}
-	// An undefined variable stays literal, so AO never picks another directory.
 	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": "/srv/$AO_REVIEW_UNDEFINED/custom"})
 	if err != nil || got != "/srv/$AO_REVIEW_UNDEFINED/custom" {
 		t.Fatalf("ResolveHome(undefined) = %q, %v", got, err)
 	}
-	// An explicitly empty child variable is defined and expands to empty.
 	got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": "${AO_REVIEW_EMPTY}/custom", "AO_REVIEW_EMPTY": ""})
 	if err != nil || got != "/custom" {
 		t.Fatalf("ResolveHome(empty child var) = %q, %v", got, err)
 	}
-	// Hermes resolves a relative home against the session workspace, not the
-	// daemon's directory, so it is refused rather than inspected elsewhere.
 	if got, err = ResolveHome(map[string]string{"HOME": home, "HERMES_HOME": ".ao-review-relative-hermes"}); err == nil {
 		t.Fatalf("ResolveHome(relative) = %q, want error", got)
 	}
-	// The default derived from a relative HOME is just as relative.
 	if got, err = ResolveHome(map[string]string{"HERMES_HOME": "", "HOME": ".ao-review-relative-user"}); err == nil {
 		t.Fatalf("ResolveHome(relative HOME) = %q, want error", got)
 	}
@@ -953,7 +900,7 @@ func TestExpandWindowsVarsMatchesNtpath(t *testing.T) {
 	for in, want := range map[string]string{
 		`%APPDATA%\hermes`: `C:\A\hermes`,
 		`$X\${X}`:          `x\x`,
-		`$X-`:              `$X-`, // ntpath names may contain '-', so this is undefined X-
+		`$X-`:              `$X-`,
 		`%MISSING%\h`:      `%MISSING%\h`,
 		`'%APPDATA%'\h`:    `'%APPDATA%'\h`,
 		`100%%`:            "100%",
@@ -974,8 +921,6 @@ func TestCompactBusyChromeWitnessesSubmission(t *testing.T) {
 	}
 }
 
-// gitCheckout initializes a real repository with one commit and returns a
-// helper that runs git in it.
 func gitCheckout(t *testing.T, dir string) func(args ...string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -1012,7 +957,6 @@ func TestConfirmedIdentityFollowsInstallRevision(t *testing.T) {
 	if !identityConfirmed(t.Context(), launcher) {
 		t.Fatal("fresh confirmation not reused")
 	}
-	// A source update moves the checkout without touching the launcher.
 	git("commit", "-q", "--allow-empty", "-m", "two")
 	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("confirmation survived an installation revision change")
@@ -1053,7 +997,6 @@ func TestConfirmedIdentityFollowsLinkedWorktreeRevision(t *testing.T) {
 	if !identityConfirmed(t.Context(), launcher) {
 		t.Fatal("fresh confirmation not reused")
 	}
-	// Branch refs of a linked worktree live in the shared git directory.
 	git(worktree, "commit", "-q", "--allow-empty", "-m", "two")
 	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("confirmation survived a commit in a linked worktree")
@@ -1065,7 +1008,6 @@ func TestConfirmedIdentityFollowsWrapperSourceRevision(t *testing.T) {
 		t.Skip("POSIX shell wrapper")
 	}
 	t.Setenv("HERMES_HOME", t.TempDir())
-	// A checkout installed outside HERMES_HOME (install.sh --dir).
 	src := t.TempDir()
 	git := gitCheckout(t, src)
 	launcher := filepath.Join(src, ".hermes", "bin", "hermes")
@@ -1110,7 +1052,6 @@ func TestSourceCleanlinessMatchesNativeTopology(t *testing.T) {
 		if !sourceUnmodified(t.Context(), root) {
 			t.Fatalf("%q: clean checkout reported modified", name)
 		}
-		// git prints the root with its trailing space; it must still match.
 		if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW DIRTY ROOT BUSY\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -1118,7 +1059,6 @@ func TestSourceCleanlinessMatchesNativeTopology(t *testing.T) {
 			t.Fatalf("%q: tracked edit accepted", name)
 		}
 		git("checkout", "-q", "--", "en.yaml")
-		// Native discovery follows an untracked plugin symlink git never enters.
 		external := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(external, "locales"), 0o700); err != nil {
 			t.Fatal(err)
@@ -1136,7 +1076,6 @@ func TestSourceCleanlinessMatchesNativeTopology(t *testing.T) {
 			t.Fatalf("%q: untracked plugin symlink accepted", name)
 		}
 	}
-	// A git checkout git cannot read is not verified clean.
 	broken := t.TempDir()
 	if err := os.WriteFile(filepath.Join(broken, ".git"), []byte("gitdir: /nonexistent\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1184,7 +1123,6 @@ func TestApostropheWrapperResolvesSourceRoot(t *testing.T) {
 	if got := launcherSourceRoot(wrapper); got != want {
 		t.Fatalf("launcherSourceRoot = %q, want %q", got, want)
 	}
-	// A wrapper whose checkout AO cannot name is never served from cache.
 	opaque := filepath.Join(t.TempDir(), "hermes")
 	if err := os.WriteFile(opaque, []byte("#!/bin/sh\nexec \"$HERMES_ROOT/hermes\" \"$@\"\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -1209,11 +1147,9 @@ func TestInheritedCredentialClearedByProjectDotenv(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "hermes-agent", ".env"), []byte("OPENROUTER_API_KEY=\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Without a home .env, Hermes loads the project .env with override.
 	if identity, found := credentialStoreIdentity(t.Context()); found {
 		t.Fatalf("key cleared by project .env reported: %+v", identity)
 	}
-	// With one, the project .env loads without override and cannot clear it.
 	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("NOTES=ordinary\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1232,7 +1168,6 @@ func TestInheritedCredentialClearedByHomeDotenv(t *testing.T) {
 	if _, found := credentialStoreIdentity(t.Context()); !found {
 		t.Fatal("inherited key without a home .env not found")
 	}
-	// Hermes loads its home .env with override.
 	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("OPENROUTER_API_KEY=\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1250,7 +1185,6 @@ func TestCompactComposerBelow64ColumnsIsIdle(t *testing.T) {
 		{"compact idle", "transcript\n" + rule + "\n☤ ❯ ", domain.ActivityIdle},
 		{"compact draft", "transcript\n" + rule + "\n☤ ❯ typed draft", domain.ActivityBlocked},
 		{"compact busy", "transcript\n" + rule + "\n☤ ❯ msg=interrupt · Ctrl+C cancel", domain.ActivityActive},
-		// Native compact chrome draws only the state icon, without ❯.
 		{"compact busy icon", "transcript\n" + rule + "\n\x1b[3m☤ msg=interrupt · /queue · /bg · /steer · Ctrl+C cancel\x1b[m", domain.ActivityActive},
 		{"compact approval icon", "transcript\n" + rule + "\n⚠ ", domain.ActivityBlocked},
 		{"compact question icon", "transcript\n" + rule + "\n? ", domain.ActivityBlocked},
@@ -1271,7 +1205,6 @@ func TestHooksIgnoreEnvExamplesInConfigComments(t *testing.T) {
 		}
 		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: map[string]string{"HERMES_HOME": home}, SystemPrompt: "AO"})
 	}
-	// The installer's generated config documents ${VAR} in comments.
 	if err := hooks("# api_key: ${OPENROUTER_API_KEY}\nmodel:\n  default: gpt\n  base_url: ${CUSTOM_BASE_URL}\n"); err != nil {
 		t.Fatalf("comment or non-instruction ${VAR} refused: %v", err)
 	}
@@ -1288,8 +1221,6 @@ func TestHooksIgnoreEnvExamplesInConfigComments(t *testing.T) {
 			t.Fatalf("instruction ${VAR} accepted for %q: %v", config, err)
 		}
 	}
-	// Hermes renders only system_prompt, tone and style of the selected
-	// personality; a description is list-preview text.
 	for _, config := range []string{
 		"display:\n  personality: mine\npersonalities:\n  mine:\n    description: \"${LABEL}\"\n    system_prompt: Native overlay\n",
 		"display:\n  personality: mine\nagent:\n  personalities:\n    mine:\n      description: \"${LABEL}\"\n      system_prompt: Native overlay\n",
@@ -1331,7 +1262,6 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 	if qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("untagged checkout accepted")
 	}
-	// An annotated tag is a loose ref and object, then packed with a peel line.
 	git("tag", "-a", "v0.22.2", "-m", "v0.22.2")
 	if !qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("loose annotated qualified tag at HEAD rejected")
@@ -1348,7 +1278,6 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 			t.Fatalf("%q accepted", line)
 		}
 	}
-	// A tracked modification is not the release, whatever the banner says.
 	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("release\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1368,7 +1297,6 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 		t.Fatal("tracked modification accepted")
 	}
 	git("checkout", "-q", "--", "tracked.txt")
-	// A loose ref can name an annotated tag object stored in a pack.
 	tagObject := git("rev-parse", "refs/tags/v0.22.2")
 	git("repack", "-q", "-a", "-d")
 	git("update-ref", "-d", "refs/tags/v0.22.2")
@@ -1376,7 +1304,6 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 	if !qualifiedSourceCheckout(t.Context(), launcher, banner) {
 		t.Fatal("loose ref to a packed annotated tag rejected")
 	}
-	// A loose ref shadows a stale packed entry of the same name.
 	git("pack-refs", "--all")
 	release := head
 	git("commit", "-q", "--allow-empty", "-m", "retag")
@@ -1388,7 +1315,6 @@ func TestTaglessSourceBannerNeedsQualifiedTagAtHead(t *testing.T) {
 	git("checkout", "-q", "main")
 	git("tag", "-f", "v0.22.2", release)
 	git("checkout", "-q", "--detach", release)
-	// A commit past the tag, or an unqualified line, is not that release.
 	git("tag", "v0.23.0")
 	git("tag", "-d", "v0.22.2")
 	if qualifiedSourceCheckout(t.Context(), launcher, banner) {
@@ -1408,13 +1334,10 @@ func TestDotenvValuesFollowPythonDotenv(t *testing.T) {
 	}
 	t.Setenv("HERMES_MANAGED_DIR", "")
 	for content, found := range map[string]bool{
-		// ${VAR} and ${VAR:-default} resolve before the value is used.
 		"OPENROUTER_API_KEY=${AO_REVIEW_MISSING}\n":     false,
 		"OPENROUTER_API_KEY=${AO_REVIEW_MISSING:-sk}\n": true,
-		// Double-quoted escapes decode, so this is a tab: blank.
-		"OPENROUTER_API_KEY=\"\\t\"\n": false,
-		// A bare name sets nothing.
-		"OPENROUTER_API_KEY\n": false,
+		"OPENROUTER_API_KEY=\"\\t\"\n":                  false,
+		"OPENROUTER_API_KEY\n":                          false,
 	} {
 		home := t.TempDir()
 		t.Setenv("HERMES_HOME", home)
@@ -1425,7 +1348,6 @@ func TestDotenvValuesFollowPythonDotenv(t *testing.T) {
 			t.Errorf("%q: found = %v, want %v", content, got, found)
 		}
 	}
-	// A bare protected name without "=" is not an assignment.
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, ".env"), []byte("HERMES_LANGUAGE\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1453,7 +1375,6 @@ func TestHooksRefuseLayersThatReplaceAOValues(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// External secret sources may override; only override_existing: false is safe.
 	for config, refused := range map[string]bool{
 		"secrets:\n  bitwarden:\n    enabled: true\n":                               true,
 		"secrets:\n  onepassword:\n    enabled: yes\n":                              true,
@@ -1475,7 +1396,6 @@ func TestHooksRefuseLayersThatReplaceAOValues(t *testing.T) {
 			t.Errorf("%q: HERMES_MANAGED_DIR not pinned", config)
 		}
 	}
-	// English locale layers reword the chrome AO reads.
 	for _, rel := range []string{"locales/en.yaml", "locales/en.tui.yaml", "plugins/pack/locales/en.yaml", "plugins/category/pack/locales/en.core.yml"} {
 		home := t.TempDir()
 		write(filepath.Join(home, rel), "cli: {}\n")
@@ -1501,7 +1421,6 @@ func TestHooksRefuseLayersThatReplaceAOValues(t *testing.T) {
 	if err := hooks(home, "", nil); err == nil {
 		t.Fatal("HERMES_BUNDLED_LOCALES in .env accepted")
 	}
-	// Hermes reads config.yaml as YAML 1.1: unquoted yes is a bool, not text.
 	for config, refused := range map[string]bool{
 		"agent:\n  system_prompt: yes\n":                                    true,
 		"agent:\n  system_prompt: 'yes'\n":                                  false,
@@ -1563,7 +1482,6 @@ func TestReleaseBannerRefusesModifiedSourceCheckout(t *testing.T) {
 	if ok, why, _ := probeNativeVersion(t.Context(), launcher); !ok {
 		t.Fatalf("clean release checkout rejected: %s", why)
 	}
-	// The release banner has no dirty marker; git does.
 	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW LOCAL BUSY\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1607,7 +1525,6 @@ func TestPluginLanguagePackRoutesMatchNativeDiscovery(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 	}
-	// Native discovery follows a symlinked plugin directory.
 	home := t.TempDir()
 	link(pack("en"), filepath.Join(home, "plugins", "review-pack"))
 	if err := hooks(home, "", nil); err == nil {
@@ -1618,7 +1535,6 @@ func TestPluginLanguagePackRoutesMatchNativeDiscovery(t *testing.T) {
 	if err := hooks(home, "", nil); err != nil {
 		t.Errorf("symlinked German plugin pack refused: %v", err)
 	}
-	// HERMES_BUNDLED_PLUGINS is another plugin root, relative to the workspace.
 	bundled := t.TempDir()
 	link(pack("en"), filepath.Join(bundled, "review-pack"))
 	if err := hooks(t.TempDir(), "", map[string]string{"HERMES_BUNDLED_PLUGINS": bundled}); err == nil {
@@ -1629,7 +1545,6 @@ func TestPluginLanguagePackRoutesMatchNativeDiscovery(t *testing.T) {
 	if err := hooks(t.TempDir(), workspace, map[string]string{"HERMES_BUNDLED_PLUGINS": "review-plugins"}); err == nil {
 		t.Error("relative HERMES_BUNDLED_PLUGINS accepted")
 	}
-	// link/.. resolves through the symlink natively, not lexically.
 	workspace, external := t.TempDir(), t.TempDir()
 	if err := os.MkdirAll(filepath.Join(external, "target"), 0o700); err != nil {
 		t.Fatal(err)
@@ -1639,7 +1554,6 @@ func TestPluginLanguagePackRoutesMatchNativeDiscovery(t *testing.T) {
 	if err := hooks(t.TempDir(), workspace, map[string]string{"HERMES_BUNDLED_PLUGINS": "link/../bundled"}); err == nil {
 		t.Error("HERMES_BUNDLED_PLUGINS through link/.. accepted")
 	}
-	// Unset (t.Setenv above restores it), so a secret source cannot gap-fill it.
 	if err := os.Unsetenv("HERMES_BUNDLED_PLUGINS"); err != nil {
 		t.Fatal(err)
 	}
@@ -1650,7 +1564,6 @@ func TestPluginLanguagePackRoutesMatchNativeDiscovery(t *testing.T) {
 	if value, pinned := env["HERMES_BUNDLED_PLUGINS"]; !pinned || value != "" {
 		t.Errorf("HERMES_BUNDLED_PLUGINS not pinned empty: %q, %v", value, pinned)
 	}
-	// HERMES_BUNDLED_LOCALES resolves against the session workspace.
 	workspace = t.TempDir()
 	if err := os.MkdirAll(filepath.Join(workspace, "review-catalog"), 0o700); err != nil {
 		t.Fatal(err)
@@ -1668,14 +1581,11 @@ func TestStandingInstructionResidualsFollowNativeConfig(t *testing.T) {
 	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
 	t.Setenv("AO_REVIEW_UNUSED_NAME", "renamed")
 	for config, refused := range map[string]bool{
-		// Hermes expands values, not keys: an unused literal key selects nothing.
 		"display:\n  personality: helpful\npersonalities:\n  \"${AO_REVIEW_UNUSED_NAME}\": Unselected static prompt\n": false,
 		"display:\n  personality: \"${AO_REVIEW_UNUSED_NAME}\"\n":                                                      true,
-		// Explicit binary renders as b'...' natively.
-		"agent:\n  system_prompt: !!binary SGVsbG8=\n": true,
-		"agent:\n  system_prompt: \"b'Hello'\"\n":      false,
-		"agent:\n  system_prompt: !!str yes\n":         false,
-		// One strict-true source opens startup; the rest are fetched on truthiness.
+		"agent:\n  system_prompt: !!binary SGVsbG8=\n":                                                                 true,
+		"agent:\n  system_prompt: \"b'Hello'\"\n":                                                                      false,
+		"agent:\n  system_prompt: !!str yes\n":                                                                         false,
 		"secrets:\n  command:\n    enabled: true\n    override_existing: false\n  bitwarden:\n    enabled: 'yes'\n    override_existing: true\n": true,
 		"secrets:\n  command:\n    enabled: true\n    override_existing: false\n  bitwarden:\n    enabled: 1\n    override_existing: true\n":     true,
 		"secrets:\n  command:\n    enabled: true\n    override_existing: false\n  bitwarden:\n    enabled: 0\n    override_existing: true\n":     false,
@@ -1700,7 +1610,6 @@ func TestDefaultHomeThatMovesWhenPinnedIsRefused(t *testing.T) {
 	}
 	t.Setenv("HERMES_BUNDLED_LOCALES", "")
 	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
-	// A reference to a variable AO sets later still expands in the child.
 	t.Setenv("HERMES_LANGUAGE", "")
 	if err := os.Unsetenv("HERMES_LANGUAGE"); err != nil {
 		t.Fatal(err)
@@ -1755,15 +1664,12 @@ func TestSourceCleanlinessIgnoresInheritedGitContextAndCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW LOCAL BUSY\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A tracked edit changes neither the launcher nor HEAD.
 	if identityConfirmed(t.Context(), launcher) {
 		t.Fatal("cached confirmation reused for a modified source checkout")
 	}
 	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: Working\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// An untracked or ignored English catalog in the checkout's bundled
-	// locales or plugins is loaded natively without touching tracked files.
 	for _, rel := range []string{"locales/en.tui.yaml", "plugins/pack/locales/en.yaml"} {
 		path := filepath.Join(root, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -1794,7 +1700,6 @@ func TestSourceCleanlinessIgnoresInheritedGitContextAndCache(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "en.yaml"), []byte("busy: REVIEW LOCAL BUSY\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// AO's own git context must not supply another tree's cleanliness.
 	t.Setenv("GIT_WORK_TREE", clean)
 	t.Setenv("GIT_DIR", filepath.Join(root, ".git"))
 	if ok, _, _ := probeNativeVersion(t.Context(), launcher); ok {
@@ -1849,7 +1754,6 @@ func TestSourceCatalogPathsInvalidateFreshAndCachedQualification(t *testing.T) {
 				{"non-English", "plugins/日本語/locales/de.yaml", false},
 			} {
 				t.Run(tt.name, func(t *testing.T) {
-					// Prime the same identity while the source is still clean.
 					if ok, why, _ := probeNativeVersion(t.Context(), launcher); !ok {
 						t.Fatalf("clean checkout rejected: %s", why)
 					}
@@ -1866,7 +1770,6 @@ func TestSourceCatalogPathsInvalidateFreshAndCachedQualification(t *testing.T) {
 					}
 					for _, ignored := range []bool{false, true} {
 						if ignored {
-							// Ignore the root so filenames with newlines are covered too.
 							if err := os.WriteFile(filepath.Join(root, ".git", "info", "exclude"), []byte("/plugins/\n"), 0o600); err != nil {
 								t.Fatal(err)
 							}
@@ -1905,7 +1808,6 @@ func TestStructuredPersonalityRendersLikeNative(t *testing.T) {
 	t.Setenv("HERMES_BUNDLED_PLUGINS", "")
 	const prefix = "display:\n  personality: mine\npersonalities:\n  mine:\n"
 	for fields, want := range map[string]string{
-		// str() of a list or map is Python repr, which AO refuses to guess.
 		"    system_prompt: [First, Second]\n":                     "",
 		"    system_prompt: []\n":                                  "",
 		"    system_prompt: Text\n    tone: [Precise, Short]\n":    "",
@@ -1952,14 +1854,12 @@ func TestNativeHomeWithParentComponentIsRefused(t *testing.T) {
 	hooks := func(env map[string]string) error {
 		return New().GetAgentHooks(t.Context(), ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "ao-1", Env: env, SystemPrompt: "AO"})
 	}
-	// Natively link/.. is target, not base.
 	if err := hooks(map[string]string{"HERMES_HOME": base + "/link/../native"}); err == nil {
 		t.Error("explicit home through link/.. accepted")
 	}
 	if err := hooks(map[string]string{"HERMES_HOME": "", "HOME": t.TempDir(), "HERMES_DATA_DIR_SUFFIX": "/../native"}); err == nil {
 		t.Error("data-dir suffix with .. accepted")
 	}
-	// An ordinary symlinked home is preserved.
 	if err := os.Symlink(filepath.Join(target, "native"), filepath.Join(base, "home")); err != nil {
 		t.Fatal(err)
 	}

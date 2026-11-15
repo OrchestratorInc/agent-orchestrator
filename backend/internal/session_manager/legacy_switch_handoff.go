@@ -14,9 +14,6 @@ type legacySwitchHandoffStore interface {
 	LegacySwitchHandoffPath(ctx context.Context, sessionID domain.SessionID, harness domain.AgentHarness, nativeID string) (string, error)
 }
 
-// withLegacySwitchHandoff adds back the hidden handoff of a switch made by the
-// agent switching on main, for a worker resuming the native session that
-// switch started. Without it, the agent loses what it was handed.
 func (m *Manager) withLegacySwitchHandoff(ctx context.Context, rec domain.SessionRecord, systemPrompt string) string {
 	store, ok := m.store.(legacySwitchHandoffStore)
 	nativeID := strings.TrimSpace(rec.Metadata.AgentSessionID)
@@ -24,7 +21,6 @@ func (m *Manager) withLegacySwitchHandoff(ctx context.Context, rec domain.Sessio
 		return systemPrompt
 	}
 	path, err := store.LegacySwitchHandoffPath(ctx, rec.ID, rec.Harness, nativeID)
-	// The file is AO's own, under its handoffs folder.
 	if err != nil || path == "" || !strings.HasPrefix(filepath.Clean(path), filepath.Join(m.dataDir, "handoffs")+string(filepath.Separator)) {
 		return systemPrompt
 	}

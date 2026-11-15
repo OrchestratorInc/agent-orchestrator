@@ -11,8 +11,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// The checkout recipe given after a metadata-only claim must remain safe when
-// a repository contains a branch that shadows Git's FETCH_HEAD pseudo-ref.
 func TestPRCheckoutByVerifiedSHAWithFETCHHEADBranch(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	runGit(t, repo, "branch", "FETCH_HEAD")
@@ -24,7 +22,6 @@ func TestPRCheckoutByVerifiedSHAWithFETCHHEADBranch(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "PR head")
 	prHead := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
 	runGit(t, repo, "switch", "-c", "session", "refs/heads/FETCH_HEAD")
-	// Model a fetch of the provider's verified head without a network call.
 	gitDir := strings.TrimSpace(runGit(t, repo, "rev-parse", "--absolute-git-dir"))
 	if err := os.WriteFile(filepath.Join(gitDir, "FETCH_HEAD"), []byte(prHead+"\n"), 0o600); err != nil {
 		t.Fatal(err)

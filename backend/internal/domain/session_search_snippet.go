@@ -8,43 +8,20 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// SessionSearchExpansionMarker separates a document's own text from the
-// identifier parts appended to it for indexing ("handleSubmit" also indexes
-// "handle submit"). The tokenizer treats it as a separator, so it changes
-// nothing about matching; the snippet builder stops at it, so the appended
-// parts never show up as if they were part of the message.
 const SessionSearchExpansionMarker = "\x1f"
 
-// SessionSearchSnippetStart and SessionSearchSnippetEnd bracket a matched term
-// inside a snippet. They are control characters, so no transcript contains them,
-// and the service turns them into offsets before anything reaches a renderer.
 const (
 	SessionSearchSnippetStart = "\x02"
 	SessionSearchSnippetEnd   = "\x03"
 )
 
-// SessionSearchHighlightTerm is one term a snippet marks: the folded text of a
-// query token, and whether it matches as a prefix.
 type SessionSearchHighlightTerm struct {
 	Text   string
 	Prefix bool
 }
 
-// sessionSearchSnippetTokens is how many tokens a snippet shows. It matches the
-// FTS5 snippet() length the surfaces were designed around.
 const sessionSearchSnippetTokens = 14
 
-// SessionSearchSnippet returns the part of text that best shows why it matched,
-// with each matched token bracketed by SessionSearchSnippetStart/End.
-//
-// It replaces FTS5's snippet(), which re-runs the full MATCH per call and, for
-// a prefix term, rebuilds the merged posting list every time. The page's rows
-// already carry their text, so the snippet is cut here with the index's
-// tokenization rules (unicode61: letters and digits, case and diacritics fold).
-//
-// The window is the run of sessionSearchSnippetTokens tokens holding the most
-// distinct query terms, then the most matches, then the earliest; it starts a
-// couple of tokens before its first match so the match has context.
 func SessionSearchSnippet(text string, terms []SessionSearchHighlightTerm) string {
 	if cut := strings.Index(text, SessionSearchExpansionMarker); cut >= 0 {
 		text = text[:cut]
@@ -53,12 +30,11 @@ func SessionSearchSnippet(text string, terms []SessionSearchHighlightTerm) strin
 	if len(tokens) == 0 {
 		return ""
 	}
-	matched := make([]int, len(tokens)) // index into terms + 1, or 0
+	matched := make([]int, len(tokens))
 	for index := range tokens {
 		matched[index] = matchSnippetToken(text[tokens[index].start:tokens[index].end], terms)
 	}
 	start := bestSnippetWindow(matched, len(terms))
-	// A window near the end slides back so it is full: a short text shows whole.
 	start = max(0, min(start, len(tokens)-sessionSearchSnippetTokens))
 	end := min(start+sessionSearchSnippetTokens, len(tokens))
 
@@ -67,7 +43,6 @@ func SessionSearchSnippet(text string, terms []SessionSearchHighlightTerm) strin
 	if start > 0 {
 		builder.WriteString("…")
 	} else {
-		// From the very start, keep any leading punctuation ("--- FAIL:").
 		cursor = 0
 	}
 	for index := start; index < end; index++ {
@@ -92,8 +67,6 @@ func SessionSearchSnippet(text string, terms []SessionSearchHighlightTerm) strin
 
 type snippetToken struct{ start, end int }
 
-// snippetTokens splits text into unicode61 tokens: maximal runs of letters,
-// digits and combining marks.
 func snippetTokens(text string) []snippetToken {
 	var tokens []snippetToken
 	start := -1
@@ -113,10 +86,6 @@ func snippetTokens(text string) []snippetToken {
 	return tokens
 }
 
-// matchSnippetToken returns 1 + the index of the first term the token matches,
-// or 0. A token matches a term whole, by prefix when the term is a prefix, or
-// through one of its camel-case parts, so "submit" marks "handleSubmit" the way
-// the index found it.
 func matchSnippetToken(token string, terms []SessionSearchHighlightTerm) int {
 	folded := FoldSessionSearchText(token)
 	var parts []string
@@ -143,11 +112,6 @@ func matchSnippetToken(token string, terms []SessionSearchHighlightTerm) int {
 	return 0
 }
 
-// SessionSearchTextHasAllTerms reports whether every term appears in text,
-// matched the way the snippet marks them (whole, by prefix, or through a
-// camel-case part). The ranking's name tier uses it on session names: whether a
-// name holds every typed word depends only on the name and the query, not on
-// any index statistics.
 func SessionSearchTextHasAllTerms(text string, terms []SessionSearchHighlightTerm) bool {
 	if len(terms) == 0 {
 		return false
@@ -170,7 +134,6 @@ func SessionSearchTextHasAllTerms(text string, terms []SessionSearchHighlightTer
 	return false
 }
 
-// bestSnippetWindow picks the first token of the snippet.
 func bestSnippetWindow(matched []int, termCount int) int {
 	best, bestDistinct, bestHits := 0, -1, -1
 	seen := make([]bool, termCount+1)
@@ -198,9 +161,6 @@ func bestSnippetWindow(matched []int, termCount int) int {
 	return best
 }
 
-// writeCollapsed writes the separator between two tokens with any run of
-// whitespace reduced to one space, so a snippet of command output reads as one
-// line.
 func writeCollapsed(builder *strings.Builder, separator string, leading bool) {
 	if separator == "" {
 		return
@@ -225,9 +185,6 @@ func writeCollapsed(builder *strings.Builder, separator string, leading bool) {
 	}
 }
 
-// FoldSessionSearchText lowercases text and removes diacritics, the way the
-// index's unicode61 tokenizer (remove_diacritics 2) folds it, so "Café" and
-// "cafe" compare equal.
 func FoldSessionSearchText(text string) string {
 	lower := strings.ToLower(text)
 	ascii := true
@@ -250,9 +207,6 @@ func FoldSessionSearchText(text string) string {
 	return builder.String()
 }
 
-// sessionSearchHighlightTerms turns one FTS term (a word or a phrase) into the
-// tokens a snippet should mark. A phrase marks each of its tokens; a prefix
-// applies to the phrase's last token, as it does in FTS5.
 func sessionSearchHighlightTerms(term string, prefix bool) []SessionSearchHighlightTerm {
 	tokens := snippetTokens(term)
 	out := make([]SessionSearchHighlightTerm, 0, len(tokens))

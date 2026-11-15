@@ -12,9 +12,6 @@ const maxACPFrameSize = 10 * 1024 * 1024
 
 var errACPFrameTooLarge = errors.New("ACP frame exceeds 10 MiB limit")
 
-// extensionMethodReader aliases explicitly configured legacy method names into
-// ACP's underscore extension namespace. The SDK owns JSON-RPC requests and
-// responses; the wire transport delivers updates with replay backpressure.
 type extensionMethodReader struct {
 	reader     *bufio.Reader
 	aliases    map[string]string

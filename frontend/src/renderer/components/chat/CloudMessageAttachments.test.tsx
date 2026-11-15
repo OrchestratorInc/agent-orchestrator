@@ -70,7 +70,6 @@ describe("CloudMessageAttachments", () => {
 		expect(await screen.findByRole("dialog", { name: "spec.pdf" })).toBeInTheDocument();
 		const whole = screen.getAllByTestId("pdf-preview").find((preview) => preview.dataset.firstPage === "false");
 		expect(whole).toBeDefined();
-		// Each viewer gets its own copy of the bytes.
 		const load = mocks.pdfPreview.mock.calls.at(-1)?.[0].load as () => Promise<Uint8Array>;
 		expect(Array.from(await load())).toEqual([37, 80, 68, 70]);
 	});

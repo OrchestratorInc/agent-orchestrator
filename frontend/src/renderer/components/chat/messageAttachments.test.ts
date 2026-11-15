@@ -27,7 +27,6 @@ describe("inline image paths", () => {
 		expect(proseBesideImages(`${a} ${b}`, [a, b])).toBe("");
 	});
 
-	// Only the editor knows which paths are chips; a typed path is the user's text.
 	it("sends a typed path untouched, attached or not", () => {
 		expect(proseBesideImages(`No, look at ${b} again`, [a])).toBe(`No, look at ${b} again`);
 		expect(proseBesideImages(`see\n${b}\nthanks`, [])).toBe(`see\n${b}\nthanks`);

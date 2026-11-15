@@ -44,7 +44,6 @@ function setup(node: ReactNode) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 60_000 }, mutations: { retry: false } } });
 	const wrap = (child: ReactNode) => (
 		<QueryClientProvider client={client}>
-			{/* No delay so a hovertip assertion does not wait on the provider's timing. */}
 			<TooltipProvider delayDuration={0}>{child}</TooltipProvider>
 		</QueryClientProvider>
 	);
@@ -118,7 +117,6 @@ test("shows the control plane's reason in the editor when it refuses a Cloud cue
 	fireEvent.click(screen.getByRole("button", { name: "Create" }));
 	expect(await screen.findByRole("alert")).toHaveTextContent("A cue named \"Tests\" already exists in this project.");
 	expect(toast).not.toHaveBeenCalled();
-	// The draft stays, so the name can be changed and saved.
 	expect(screen.getByLabelText("Name")).toHaveValue("tests");
 
 	vi.mocked(cues.createCue).mockRejectedValueOnce(new CloudCpError("A command cue cannot have a prompt.", { status: 422, code: "validation_error" }));
@@ -127,7 +125,6 @@ test("shows the control plane's reason in the editor when it refuses a Cloud cue
 	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("A command cue cannot have a prompt."));
 	expect(toast).not.toHaveBeenCalled();
 
-	// Any other failure is still a toast.
 	vi.mocked(cues.createCue).mockRejectedValueOnce(new CloudCpError("The control plane is unavailable.", { status: 503 }));
 	fireEvent.click(screen.getByRole("button", { name: "Create" }));
 	await waitFor(() => expect(toast).toHaveBeenCalledWith("Could not save the cue.", "The control plane is unavailable.", "error"));
@@ -429,7 +426,6 @@ test("switching sessions during the button's refresh never dispatches into the o
 });
 
 test("session creation saves and closes without running, changing history, or navigating", async () => {
-	// Project-wide automatic setup is covered by Project Settings workspace scripts.
 	setup(<CueRunMenu projectId="project" sessionId="session" />);
 	openMenu();
 	fireEvent.click(await screen.findByRole("menuitem", { name: "New cue" }));

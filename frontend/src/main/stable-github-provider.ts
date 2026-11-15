@@ -15,8 +15,6 @@ export class StableGitHubProvider extends GitHubProvider {
   override async getLatestVersion() {
     const info = await super.getLatestVersion();
     let notes: string | undefined;
-    // GitHub's Atom feed contains only ten releases. If stable has fallen out,
-    // the stock provider silently pairs its download with the first nightly's notes.
     try {
       const response = await fetch(
         `https://api.github.com/repos/${this.options.owner}/${this.options.repo}/releases/tags/${encodeURIComponent(info.tag)}`,
@@ -36,7 +34,6 @@ export class StableGitHubProvider extends GitHubProvider {
         }
       }
     } catch {
-      // Optional notes must never prevent an update or reuse another build's notes.
     }
     return { ...info, releaseNotes: notes };
   }

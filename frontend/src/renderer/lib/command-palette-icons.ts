@@ -42,7 +42,6 @@ import {
 import type { AppShortcutId } from "../../shared/shortcuts";
 import type { CommandGroupId, CommandItem } from "./command-palette";
 
-/** Exact-id icons for known actions. Add new command ids here as they ship. */
 const COMMAND_ICONS: Record<string, AppIcon> = {
 	"current-new-task": Plus,
 	"current-import-sessions": Download,
@@ -73,7 +72,6 @@ const COMMAND_ICONS: Record<string, AppIcon> = {
 	"project-action:remove": Trash2,
 };
 
-/** What each shortcut command does, drawn like the control it stands for. */
 const SHORTCUT_ICONS: Partial<Record<AppShortcutId, AppIcon>> = {
 	"new-session": Plus,
 	"keyboard-shortcuts": Keyboard,
@@ -100,7 +98,6 @@ const SHORTCUT_ICONS: Partial<Record<AppShortcutId, AppIcon>> = {
 	"toggle-diff": GitCompareArrows,
 };
 
-/** Fallback icons by group when no exact id match exists. */
 const GROUP_ICONS: Partial<Record<CommandGroupId, AppIcon>> = {
 	projects: Folder,
 	files: File,
@@ -108,13 +105,9 @@ const GROUP_ICONS: Partial<Record<CommandGroupId, AppIcon>> = {
 	messages: MessageSquare,
 	settings: Settings,
 	prs: GitPullRequest,
-	// Session-text hits get a terminal glyph so they read as transcript text
-	// rather than as a command or a file.
 	search: Terminal,
-	// Sessions / attention stay text-only, matching Cursor's "Chats" rows.
 };
 
-/** Icons for a session's actions, keyed by the action they run. */
 const SESSION_ACTION_ICONS: Partial<Record<NonNullable<CommandItem["action"]>["kind"], AppIcon>> = {
 	navigate: ArrowRight,
 	"resume-session": RotateCcw,

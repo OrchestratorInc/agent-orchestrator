@@ -4,7 +4,6 @@ function normalizeWorkspacePath(path: string): string {
 	return path.trim().replace(/^\.\//, "").replace(/\\/g, "/");
 }
 
-/** A path with its percent escapes decoded, or as it is when it holds a malformed one. */
 export function decodePath(path: string): string {
 	try {
 		return decodeURIComponent(path);
@@ -23,13 +22,11 @@ function hasNonFileScheme(reference: string): boolean {
 	);
 }
 
-/** Remove markdown/editor location syntax while retaining the referenced file. */
 export function normalizeWorkspaceFileReference(reference: string): string {
 	let path = reference.trim();
 	if (/^file:\/\//i.test(path)) {
 		try {
 			path = new URL(path).pathname;
-			// file:///C:/path is the URL form of a Windows drive path.
 			if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1);
 		} catch {
 			return "";
@@ -41,7 +38,6 @@ export function normalizeWorkspaceFileReference(reference: string): string {
 	return normalizeWorkspacePath(path);
 }
 
-/** Extract the first line from common editor/file-link location suffixes. */
 export function workspaceFileReferenceLine(reference: string): number | undefined {
 	const decoded = decodePath(reference.trim());
 	const match = decoded.match(/#L(\d+)(?:C\d+)?(?:-L?\d+(?:C\d+)?)?$/i)
@@ -56,7 +52,6 @@ function fileBasename(path: string): string {
 	return slash >= 0 ? path.slice(slash + 1) : path;
 }
 
-/** Resolve a file reference only when it identifies a known workspace file. */
 export function findWorkspaceFilePath(
 	rawPath: string,
 	paths: readonly string[],
@@ -79,7 +74,6 @@ export function findWorkspaceFilePath(
 	return byBase.length === 1 ? byBase[0] : undefined;
 }
 
-/** Reuse hits and misses for one immutable workspace catalog. */
 export function createWorkspaceFileLookup(paths: readonly string[]): (reference: string) => string | undefined {
 	const results = new Map<string, string | undefined>();
 	let index: {
@@ -90,8 +84,6 @@ export function createWorkspaceFileLookup(paths: readonly string[]): (reference:
 		if (hasNonFileScheme(reference)) return undefined;
 		const normalized = normalizeWorkspaceFileReference(reference);
 		if (!normalized) return undefined;
-		// Build on the first file reference, not for chats without any. A fresh
-		// session mount must not normalize the whole catalog for every snippet.
 		if (!index) {
 			index = { exact: new Map(), byBasename: new Map() };
 			for (const path of paths) {
@@ -105,8 +97,6 @@ export function createWorkspaceFileLookup(paths: readonly string[]): (reference:
 		}
 		const exact = index.exact.get(normalized);
 		if (exact) return exact;
-		// Every suffix match shares the final path segment. Keep duplicates in
-		// the bucket: they must remain ambiguous, just as in the linear lookup.
 		const candidates = index.byBasename.get(fileBasename(normalized)) ?? [];
 		const suffixes = candidates.filter(({ normalized: candidate }) =>
 			normalized.endsWith(`/${candidate}`) || candidate.endsWith(`/${normalized}`),
@@ -117,14 +107,12 @@ export function createWorkspaceFileLookup(paths: readonly string[]): (reference:
 	return (reference) => {
 		if (results.has(reference)) return results.get(reference);
 		const result = resolve(reference);
-		// Streaming can produce arbitrarily many incomplete references.
 		if (results.size >= 1024) results.clear();
 		results.set(reference, result);
 		return result;
 	};
 }
 
-/** A link-shaped local path can still target a new file absent from a stale catalog. */
 export function explicitWorkspaceFilePath(reference: string): string | undefined {
 	if (!reference.trim() || reference.trim().startsWith("#") || hasNonFileScheme(reference)) return undefined;
 	const normalized = normalizeWorkspaceFileReference(reference);
@@ -141,29 +129,16 @@ export function explicitWorkspaceFilePath(reference: string): string | undefined
 	return undefined;
 }
 
-/** True for a normalized reference that names a location by absolute path. */
 export function isAbsoluteFileReference(path: string): boolean {
 	return path.startsWith("/") || path === "~" || path.startsWith("~/") || /^[A-Za-z]:\//.test(path);
 }
 
-/**
- * The path to hand to the file opener for a reference the file list matched to
- * `matched`. An absolute reference is kept as written: its tail matching a
- * workspace file does not mean it is that file, so the daemon decides.
- */
 export function workspaceFileOpenTarget(reference: string, matched: string): string {
 	if (hasNonFileScheme(reference)) return matched;
 	const normalized = normalizeWorkspaceFileReference(reference);
 	return isAbsoluteFileReference(normalized) ? normalized : matched;
 }
 
-/**
- * Map a chat/turn path onto the workspace-relative path the Files API expects.
- * Turn diffs often carry basenames or absolute worktree paths; the workspace
- * file list carries repo-relative paths. For an absolute path this is a guess
- * from its tail, so callers resolve absolute references through the daemon
- * instead.
- */
 export function matchWorkspaceFilePath(
 	rawPath: string,
 	files: readonly WorkspaceFileSummary[],

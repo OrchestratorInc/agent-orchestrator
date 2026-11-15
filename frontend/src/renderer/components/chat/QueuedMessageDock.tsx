@@ -26,14 +26,12 @@ import { parseBrowserAnnotationMessage, type ParsedBrowserAnnotationItem } from 
 export type QueuedMessage = {
 	turnId: string;
 	message: ConversationMessage;
-	/** Sent but not yet confirmed by the daemon: shown at once, with no actions until it has a turn id. */
 	pending?: boolean;
 };
 
 const QUEUE_DOCK_VISIBLE_ROWS = 5;
 const REORDER_ACTIVATION_DISTANCE = 4;
 
-/** Keep queue drags inside the scroll list, matching sidebar session rows. */
 const restrictToQueueDockBounds: Modifier = ({ activeNodeRect, containerNodeRect, transform }) => {
 	if (!activeNodeRect || !containerNodeRect) return transform;
 	const minY = containerNodeRect.top - activeNodeRect.top;
@@ -101,7 +99,6 @@ function QueuedMessageRowContent({
 }: {
 	message: ConversationMessage;
 	showPersistentSteer?: boolean;
-	/** Cmd/Ctrl+Enter in the empty composer steers this row; the button shows the key. */
 	enterSteers?: boolean;
 	showHoverSteer?: boolean;
 	canSteer?: boolean;
@@ -113,10 +110,8 @@ function QueuedMessageRowContent({
 	canCancelMessage?: (message: ConversationMessage) => boolean;
 	turnId: string;
 	busy?: boolean;
-	/** Busy only while the composer sends: the actions wait without dimming. */
 	steady?: boolean;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
-	/** The grip stays put whenever the dock can reorder; only dragging is gated. */
 	showGrip?: boolean;
 	reorderEnabled?: boolean;
 	dragHandleRef?: (element: HTMLButtonElement | null) => void;
@@ -124,8 +119,6 @@ function QueuedMessageRowContent({
 }) {
 	const { t } = useTranslation();
 	const annotations = message.origin === "human" ? null : parseBrowserAnnotationMessage(message.text);
-	// Lead with what the user wrote: page titles and counts alone leave two
-	// batches from the same page indistinguishable.
 	const annotationLabel = (item: ParsedBrowserAnnotationItem) =>
 		item.comment || (item.changes.length > 0 ? t("chat.automation.visualChanges", { count: item.changes.length }) : item.target);
 	const text = annotations
@@ -135,15 +128,10 @@ function QueuedMessageRowContent({
 	const tooltip = annotations
 		? [annotations.pageTitle, ...annotations.items.map((item) => `${item.number}. ${annotationLabel(item)}`)].join("\n")
 		: text;
-	// Relayed user-authored text is generated, so it can be steered or cancelled
-	// but not edited; the chat may narrow which human messages it can edit.
 	const editable = message.origin === "human" && (canEditMessage?.(message) ?? true);
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
-	// Each send briefly disables every row. Dimming them on every Enter made the
-	// dock flicker and showed the hidden hover Steer on every row.
-	// Row actions change state instantly: no fades on hover, disable or key hint.
 	const steadyClass = cn("transition-none", steady && "disabled:opacity-100");
 
 	return (
@@ -197,7 +185,6 @@ function QueuedMessageRowContent({
 						aria-label="Steer this queued message into the running turn"
 						title="Steer into running turn"
 					>
-						{/* The key hint hides in place on other rows, so every Steer button is the same width. */}
 						<span
 							className={cn(
 								"inline-flex shrink-0 items-center gap-1 text-muted-foreground",
@@ -296,7 +283,6 @@ function SortableQueuedMessageRow({
 	busy?: boolean;
 	steady?: boolean;
 	error?: string;
-	/** What is happening to the row now (steering, deleting), shown under it. */
 	status?: string;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
 	showGrip?: boolean;
@@ -393,7 +379,6 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 }: {
 	messages: QueuedMessage[];
 	disabled?: boolean;
-	/** The composer is sending: row actions wait for it, without dimming. */
 	sending?: boolean;
 	editingTurnId?: string;
 	canSteer?: boolean;
@@ -401,18 +386,12 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	steerNextRequest?: number;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
 	onBeginQueuedEdit?: (turnId: string, text: string) => void;
-	/** Which human messages Edit is offered on; every one when absent. */
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
-	/** Which messages Delete is offered on; every one when absent. */
 	canCancelMessage?: (message: ConversationMessage) => boolean;
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promotePendingTurnId?: string;
 	cancelPendingTurnId?: string;
-	/**
-	 * Queued messages being steered into the running turn. They stay in the queue, in their
-	 * place, until the agent takes them, with their Delete still offered and no second Steer.
-	 */
 	steeringTurnIds?: ReadonlySet<string>;
 	steerErrors?: Readonly<Record<string, string>>;
 }) {
@@ -468,8 +447,6 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 		() => messages.filter((entry) => !entry.pending).map(({ turnId }) => turnId),
 		[messages],
 	);
-	// Rows read in send order, like the transcript: the next message on top, the
-	// newest at the bottom, and a send not yet confirmed after everything queued.
 	const displayTurnIds = useMemo(() => {
 		if (!displayOrder) return fifoTurnIds;
 		const known = new Set(fifoTurnIds);
@@ -489,8 +466,6 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	);
 	const reorderEnabled =
 		Boolean(onReorderQueuedTurns) && fifoTurnIds.length > 1 && isOpen;
-	// Grips appear with the second row, a send still in flight included, and
-	// then stay put while sends come and go; only dragging waits.
 	const showGrip = Boolean(onReorderQueuedTurns) && displayMessages.length > 1 && isOpen;
 	const nextQueuedTurnId = fifoTurnIds[0];
 
@@ -696,22 +671,16 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 								{displayMessages.map(({ turnId, message, pending }, index) => {
 									const steering = steeringTurnIds?.has(turnId) ?? false;
 									const deleting = cancelPendingTurnId === turnId;
-									// A steering row keeps its Delete: deleting it withdraws the steer.
 									const rowBusy =
 										disabled || (promotePendingTurnId === turnId && !steering) || deleting;
 									const busy = rowBusy || Boolean(sending);
 									const isNextQueuedTurn = turnId === nextQueuedTurnId;
 									return (
 										<SortableQueuedMessageRow
-											// The send's own id outlives the swap from pending to confirmed, so the
-											// row stays mounted instead of replaying its entrance.
 											key={message.clientMessageId ?? turnId}
 											turnId={turnId}
 											message={message}
-											// Folded, the dock keeps the next message to send in view.
 											hiddenFromView={!isOpen && index !== 0}
-											// Every row's Steer, and the next row's key hint, stay put while a
-											// turn can be steered: typing or sending never makes them blink.
 											showPersistentSteer={Boolean(canSteer)}
 											enterSteers={Boolean(canSteer && isNextQueuedTurn)}
 											busy={busy}
@@ -725,8 +694,6 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											reorderEnabled={reorderEnabled && !busy && !pending}
 											{...rowProps}
 											{...(steering ? { onPromoteQueuedTurn: undefined, showPersistentSteer: false, enterSteers: false } : null)}
-											// A send the daemon has not confirmed yet shows the same actions,
-											// held until it has a turn, so confirming it shifts nothing.
 											{...(pending ? { busy: true, steady: true } : null)}
 										/>
 									);

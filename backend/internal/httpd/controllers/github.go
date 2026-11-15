@@ -14,31 +14,24 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 )
 
-// GitHubPATService is the controller-facing contract for local GitHub PAT management.
 type GitHubPATService interface {
 	StorePAT(ctx context.Context, token string) error
 	StoreOAuthToken(ctx context.Context, token, refreshToken string, expiresAt, refreshTokenExpiresAt time.Time) error
 	HasPAT(ctx context.Context) bool
-	// Login is the GitHub username AO is signed in as (a stored token or the
-	// gh CLI), or "" when unknown.
 	Login(ctx context.Context) string
 	DeletePAT(ctx context.Context) error
 	ListRepos(ctx context.Context) ([]githubpat.Repo, error)
 }
 
-// GitHubStatusResponse reports whether a token is stored and whom AO is signed
-// in to GitHub as.
 type GitHubStatusResponse struct {
 	Connected bool   `json:"connected"`
 	Login     string `json:"login,omitempty" description:"GitHub username AO is signed in as, from a stored token or the gh CLI; absent when it could not be resolved."`
 }
 
-// GitHubController owns the local GitHub PAT + repos routes.
 type GitHubController struct {
 	Svc GitHubPATService
 }
 
-// Register mounts the GitHub routes on the supplied router.
 func (c *GitHubController) Register(r chi.Router) {
 	r.Put("/github/pat", c.putPAT)
 	r.Delete("/github/pat", c.deletePAT)
@@ -46,14 +39,8 @@ func (c *GitHubController) Register(r chi.Router) {
 	r.Get("/github/repos", c.listRepos)
 }
 
-// PutGitHubPATRequest is the request body for storing a GitHub PAT. For an
-// expiring GitHub App OAuth token, the optional refresh fields let the daemon
-// renew the token without a manual reconnect; a plain PAT sends only 'pat'.
 type PutGitHubPATRequest struct {
-	PAT string `json:"pat"`
-	// Optional OAuth refresh material. RefreshToken empty => stored as a plain,
-	// non-refreshable credential. ExpiresIn / RefreshTokenExpiresIn are seconds
-	// from now, as returned by GitHub's token exchange.
+	PAT                   string `json:"pat"`
 	RefreshToken          string `json:"refreshToken,omitempty"`
 	ExpiresIn             int    `json:"expiresIn,omitempty"`
 	RefreshTokenExpiresIn int    `json:"refreshTokenExpiresIn,omitempty"`

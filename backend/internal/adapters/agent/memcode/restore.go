@@ -25,7 +25,6 @@ type restorePlan struct {
 	freshSequence                       int
 }
 
-// PrepareNativeRestore validates history and prepares a generation-scoped native handshake.
 func (p *Plugin) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConfig) (ports.NativeRestoreInitialization, error) {
 	target := cfg.Session.Metadata[ports.MetadataKeyAgentSessionID]
 	digest, count, err := transcript(cfg.Session.WorkspacePath, target)
@@ -39,18 +38,14 @@ func (p *Plugin) PrepareNativeRestore(ctx context.Context, cfg ports.RestoreConf
 	return &restorePlan{argv: argv, target: target, workspace: cfg.Session.WorkspacePath, dataDir: cfg.DataDir, session: cfg.Session.ID, digest: digest, count: count}, nil
 }
 
-// Argv implements the native TUI adapter contract.
 func (p *restorePlan) Argv() []string { return append([]string(nil), p.argv...) }
 
-// LaunchEnv implements the native TUI adapter contract.
 func (p *restorePlan) LaunchEnv() map[string]string {
 	return map[string]string{"AO_MEMCODE_INTERACTIVE_RESTORE": "1", "AO_MEMCODE_RESTORE_TARGET": p.target}
 }
 
-// ResumeInput implements the native TUI adapter contract.
 func (p *restorePlan) ResumeInput() string { return "/resume " + p.target }
 
-// TargetID implements the native TUI adapter contract.
 func (p *restorePlan) TargetID() string { return p.target }
 func (p *restorePlan) verifyHistory() error {
 	digest, count, err := transcript(p.workspace, p.target)
@@ -63,7 +58,6 @@ func (p *restorePlan) verifyHistory() error {
 	return nil
 }
 
-// Ready implements the native TUI adapter contract.
 func (p *restorePlan) Ready(ctx context.Context, generation, output string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -88,7 +82,6 @@ func (p *restorePlan) Ready(ctx context.Context, generation, output string) (boo
 	return true, nil
 }
 
-// Restored implements the native TUI adapter contract.
 func (p *restorePlan) Restored(ctx context.Context, generation, output string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -114,9 +107,6 @@ func emptyComposer(output string) bool {
 	if len(lines) > 16 {
 		lines = lines[len(lines)-16:]
 	}
-	// A discussed panic can be only one line above the current composer.
-	// Scope crash rejection to the newest idle chrome, rather than transcript
-	// text that happens to fit in the same short terminal capture.
 	idle := -1
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "○ idle" {
@@ -150,7 +140,6 @@ func transcript(workspace, id string) ([32]byte, int, error) {
 		return zero, 0, err
 	}
 	relative := filepath.Join(".memcode", "sessions", id, "messages.json")
-	// os.Root confines both traversal and symlinks to the selected workspace.
 	confined, err := os.OpenRoot(root)
 	if err != nil {
 		return zero, 0, err

@@ -29,7 +29,6 @@ func TestBuildHandoffNoteTiersTurnsAndCountsTheRest(t *testing.T) {
 	if !strings.HasPrefix(got, HandoffNotePrefix) || !strings.HasSuffix(got, "</ao-handoff-request>") {
 		t.Fatalf("note is not wrapped in the handoff block:\n%s", got)
 	}
-	// 30 turns: the latest, five previous, fifteen older, nine only counted.
 	for _, want := range []string{
 		"request-30", "response-30", "request-25", "request-10", "ship the importer", "- a.go",
 		"9 earlier turns are not shown. Run `ao session history`", "then wait for the user",
@@ -212,9 +211,6 @@ func TestHandoffNoteKeepsArtifactsWithinTheByteCap(t *testing.T) {
 	}
 }
 
-// The clipper itself lives in handoffnote now; this drives it through the
-// builder, with a note whose parts that are never dropped (an agent's history
-// file hint) are over both caps on their own.
 func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
 	note := BuildHandoffNote(HandoffNoteInput{
 		HistoryFiles: []HandoffHistoryFile{{Harness: HarnessKimi, Path: "/h/kimi.jsonl", Read: strings.Repeat("📄", handoffNoteMaxChars*2)}},
@@ -226,8 +222,6 @@ func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
 	}
 }
 
-// The desktop's note names the agents, keeps every field, and points at
-// ao session history for the whole conversation.
 func TestBuildHandoffNoteCarriesTheSessionAndPointsAtItsHistory(t *testing.T) {
 	note := BuildHandoffNote(HandoffNoteInput{
 		SwitchID: "switch-1", SourceHarness: HarnessClaudeCode, TargetHarness: HarnessCodex,

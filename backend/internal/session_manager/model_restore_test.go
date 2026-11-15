@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// Use the production lifecycle and reopen SQLite: the fake lifecycle copies
-// metadata wholesale and cannot catch fields dropped by the real reducer.
 func TestSessionModelSurvivesRestore(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessCommandCode, domain.HarnessHermes} {
 		t.Run(string(harness), func(t *testing.T) {
@@ -51,10 +49,8 @@ func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) 
 			}
 			for _, operation := range []string{"restore", "native_resume", "restore_all", "saved_prompt", "chat_restore", "chat_resume"} {
 				t.Run(string(kind)+"/"+selection.name+"/"+operation, func(t *testing.T) {
-					// Each case owns its store, fakes and manager. Run serially, the
-					// ~300 cases spend ~0.55s each mostly waiting, 2.5 minutes in all.
 					t.Parallel()
-					selection := selection // the legacy case rewrites wantEffort below
+					selection := selection
 					ctx := context.Background()
 					dataDir := t.TempDir()
 					store, err := sqlitetest.Open(dataDir)
@@ -123,8 +119,6 @@ func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) 
 						t.Fatalf("spawn effort = %q, want %q", rec.Metadata.Effort, selection.wantEffort)
 					}
 
-					// Emulate an exited provider or a terminated session, preserving the
-					// native conversation id independently of its selected model.
 					rec.IsTerminated = operation != "native_resume" && operation != "chat_resume"
 					rec.Activity.State = domain.ActivityExited
 					runtime.exitedLaunches = map[string]bool{rec.Metadata.RuntimeLaunchID: true}
@@ -134,8 +128,6 @@ func testSessionModelSurvivesRestore(t *testing.T, harness domain.AgentHarness) 
 					}
 					wantModel := selection.wantModel
 					if selection.legacy {
-						// Older rows have no selection snapshot, even if a model was
-						// explicitly chosen. Do not infer it from current defaults.
 						rec.Metadata.Model = ""
 						rec.Metadata.Effort = ""
 						wantModel = ""

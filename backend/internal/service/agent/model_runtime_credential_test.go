@@ -22,9 +22,6 @@ func (a runtimeCredentialAgent) RuntimeCredentialEnv(dataDir string, _ map[strin
 	return map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-saved"}
 }
 
-// A setup token saved through AO's login menu is the only credential on a
-// computer with no native Claude login, so local discovery must carry it or the
-// catalog finds no credential and goes stale.
 func TestModelDiscoveryRequestCarriesRuntimeCredential(t *testing.T) {
 	dataDir := t.TempDir()
 	svc := newService([]agentregistry.HarnessAgent{{
@@ -42,7 +39,6 @@ func TestModelDiscoveryRequestCarriesRuntimeCredential(t *testing.T) {
 		t.Fatalf("discovery env = %v, want the saved setup token", request.Env)
 	}
 
-	// A cloud credential scope reflects the pushed credential, not this computer's.
 	request, err = svc.modelDiscoveryRequest(context.Background(), "claude-code", "@cred:anthropic_api_key", "/bin/claude")
 	if err != nil {
 		t.Fatal(err)

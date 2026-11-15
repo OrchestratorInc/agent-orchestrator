@@ -3,11 +3,6 @@ import type { WorkspaceSession } from "../types/workspace";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useCloudCp } from "./useCloudCp";
 
-/**
- * Sends a message to the session's worker agent the way its mode takes one:
- * Cloud through the control plane, a chat session as a conversation message,
- * a terminal session as typed input.
- */
 export function useSendToSessionWorker(session: WorkspaceSession, hostId?: string) {
 	const { client: cloudClient } = useCloudCp();
 	return async (message: string, fallbackError: string) => {

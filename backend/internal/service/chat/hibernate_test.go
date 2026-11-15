@@ -33,9 +33,7 @@ type hibernationConversation struct {
 	backgroundErr     error
 	backgroundChecks  atomic.Int32
 	onBackgroundCheck func(context.Context)
-	// afterNextRead runs once, after the next session read and before that
-	// read's (now possibly stale) record is returned.
-	afterNextRead atomic.Pointer[func()]
+	afterNextRead     atomic.Pointer[func()]
 }
 
 type hibernationSessionStore struct {
@@ -146,7 +144,6 @@ func hibernationHarnessWith(t *testing.T, state domain.TurnState, configure func
 		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 			return len(s.Turns) == 1 && s.Turns[0].State == state
 		})
-		// The durable receipt precedes the projector releasing its dispatch lock.
 		if err := h.svc.DrainQueued(ctx, testSession); err != nil {
 			t.Fatal(err)
 		}
@@ -156,8 +153,6 @@ func hibernationHarnessWith(t *testing.T, state domain.TurnState, configure func
 		t.Fatalf("get session = %v, %v", found, err)
 	}
 	rec.Kind = domain.KindWorker
-	// Back-date the activity rather than moving the clock: tests that parse a
-	// usage-limit reset time rely on the harness clock staying where it started.
 	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: h.now().Add(-chatsvc.IdleBeforeHibernate)}
 	rec.Metadata.ProviderConversationID = conv.ProviderConversationID()
 	if err := h.st.UpdateSession(ctx, rec); err != nil {
@@ -586,8 +581,6 @@ func TestOpeningViewWaitsForHibernationThenWakes(t *testing.T) {
 		hibernated <- err
 	}()
 	<-conv.started
-	// A concurrent opportunistic sweep must skip the occupied gate, not block
-	// explicit Exit/Kill behind a hibernation operation waiting on provider I/O.
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
 	defer cancel()
 	if slept, err := h.svc.HibernateChat(probeCtx, testSession); slept || err != nil {
@@ -654,7 +647,7 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 	}
 
 	resumed := newFakeConversation()
-	resumed.turnSeq = 1 // Native resume must continue the original turn sequence.
+	resumed.turnSeq = 1
 	var resumeConfig ports.ChatResumeConfig
 	var nextID atomic.Int32
 	wakeService := chatsvc.New(chatsvc.Options{
@@ -686,8 +679,6 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 		return err
 	})
 
-	// The relay returns while the wake is still blocked: a caller holding the
-	// session's input lease must not wait on the resume that needs it drained.
 	turnID, err := wakeService.RelayChatTurnWithID(ctx, testSession, "CI failed; fix it", "ci-nudge-1")
 	if err != nil || turnID == "" {
 		t.Fatalf("RelayChatTurnWithID = %q, %v", turnID, err)
@@ -714,10 +705,6 @@ func TestRelayChatTurnWithIDWakesHibernatedSession(t *testing.T) {
 	}
 }
 
-// A relay that read the session just before hibernation recorded its marker
-// waits on the controller gate, then finds the session asleep. It must queue
-// and return rather than wake inline: its caller may hold the session's input
-// lease, which the resume waits to drain.
 func TestRelayRacingHibernationQueuesInsteadOfWakingInline(t *testing.T) {
 	h, conv := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()
@@ -735,8 +722,6 @@ func TestRelayRacingHibernationQueuesInsteadOfWakingInline(t *testing.T) {
 		}
 	})
 
-	// The relay's first session read returns the pre-marker record; hibernation
-	// then takes the gate, writes the marker and blocks stopping the provider.
 	hibernated := make(chan error, 1)
 	startHibernation := func() {
 		go func() {
@@ -1205,7 +1190,7 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	release := make(chan struct{})
 	first := &hibernationConversation{fakeConversation: newFakeConversation(), started: started, release: release}
 	resumed := newFakeConversation()
-	resumed.turnSeq = 1 // Native resume continues the same provider turn-id sequence.
+	resumed.turnSeq = 1
 	h := &harness{st: st, activity: &recordingActivity{}, clock: time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)}
 	var nextID atomic.Int32
 	svc := chatsvc.New(chatsvc.Options{
@@ -1242,7 +1227,6 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
 		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
 	})
-	// Wait for projection to release the dispatch lock before testing shutdown.
 	if err := svc.DrainQueued(ctx, testSession); err != nil {
 		t.Fatal(err)
 	}
@@ -1312,8 +1296,6 @@ func TestSendDuringHibernationAcceptsThenWakesNativeConversation(t *testing.T) {
 	}
 }
 
-// A switch on a chat that went to sleep wakes it first, as a message would,
-// instead of being refused because the source agent is not running.
 func TestProviderSwitchWakesASleepingChatFirst(t *testing.T) {
 	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()
@@ -1331,9 +1313,6 @@ func TestProviderSwitchWakesASleepingChatFirst(t *testing.T) {
 	}
 }
 
-// A relay queued for a hibernated session keeps the sender facts the live
-// controller path records: transcript attribution and the orchestrator's
-// interaction with its worker.
 func TestRelayWhileHibernatedKeepsSenderAndInteraction(t *testing.T) {
 	h, _ := settledHibernationHarness(t, domain.TurnStateCompleted)
 	ctx := context.Background()

@@ -23,7 +23,6 @@ export function ReviewerChatSurface({
 	hostId?: string;
 	hostUnreachable?: boolean;
 	hideHeader?: boolean;
-	/** Opens a shell in the worker's worktree: the stopped banner's other way on. */
 	onOpenShell?: () => void;
 	openingShell?: boolean;
 	shellError?: string;
@@ -35,7 +34,6 @@ export function ReviewerChatSurface({
 	const openSessionLink = useSessionLinkNavigation(hostId);
 	const { baseUrl: remoteBase } = useHostConnection(hostId);
 	const draftOwner = useMemo(() => ({ sessionId: sessionUiKey(`review:${reviewId}`, hostId), incarnation: reviewId }), [hostId, reviewId]);
-	// One surface shows each review's chat in turn: a target is for its review, once.
 	const annotationNavigation = useChatNavigationRequest<ChatMessageFocusTarget>(reviewId);
 	useChatMessageFocus(sessionUiKey(workerSessionId, hostId), reviewId, Boolean(snapshot), annotationNavigation.navigate);
 	if (isLoading)

@@ -15,8 +15,6 @@ import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
-// Routing and daemon requests are external boundaries; every modal, settings
-// form, selector, and recovery action in these tests is the real component.
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	...await importOriginal<typeof import("@tanstack/react-router")>(),
 	useNavigate: () => vi.fn(),
@@ -130,7 +128,6 @@ describe("Settings recovery modal integration", () => {
 	});
 
 	it("leaves focus on the targeted Harness action when readiness is already cached", async () => {
-		// Cursor has no subscription accounts, so Login is its Account tab's primary action.
 		catalog = { agents: [...catalog.agents, agentReadiness("cursor", "Cursor", { authentication: "unauthorized" })] };
 		const client = renderDialogs();
 		act(() => {

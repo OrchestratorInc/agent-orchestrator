@@ -85,8 +85,6 @@ import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 
-// The reviewer is set only when the project starts on its default agents
-// (Developer Mode); the setup sheet asks for the worker and orchestrator only.
 type ProjectAgents = CreateProjectSetup & {
 	workerAgent: string;
 	orchestratorAgent: string;
@@ -128,7 +126,6 @@ type GitHubRepositoryAvailability = { state: "idle" | "checking" | "available" |
 type CreateProjectFlowMode = ProjectKind | "choose";
 type ProjectSource = "clone" | "local" | "workspace";
 
-/** Where the new project should live: on this machine or in AO Cloud. */
 type ProjectOffering = "local" | "cloud";
 type RemoteBrowseRequest = { kind: ProjectKind; preserveCurrentDialog: boolean } | { kind: "clone_destination" };
 
@@ -146,8 +143,6 @@ function createProjectViewReducer(state: CreateProjectView, action: CreateProjec
 	return state === action.view ? null : state;
 }
 
-// Shared create-project flow. The daemon owner determines the folder picker,
-// Git preparation, and agent catalog; the screens stay the same.
 export function CreateProjectFlow({
 	children,
 	connected = true,
@@ -177,12 +172,7 @@ export function CreateProjectFlow({
 	connected?: boolean;
 	existingProjectNames?: readonly string[];
 	existingProjectPaths?: readonly string[];
-	// A folder was dropped on the app window (ShellLayout owns the global
-	// listener). Mirrors openSignal but carries a path: skips straight to the
-	// mode picker with the native OS dialog step skipped.
 	droppedPath?: { path: string; nonce: number } | null;
-	// When true, render the Workspace/Project chooser inline (start page) instead
-	// of behind a trigger + dialog. Folder validation + agent sheet stay modal.
 	embedded?: boolean;
 	idleLabel?: string;
 	hostId?: string;
@@ -200,11 +190,7 @@ export function CreateProjectFlow({
 	onDismiss?: () => void;
 	onOpenExistingProject?: (path: string) => void | Promise<void>;
 	onSelectHost?: (hostId?: string) => void;
-	// Monotonic counter: each new value opens the flow programmatically (the ⌘N
-	// "no project in scope" fallback). Lets the shortcut reuse the sidebar's own
-	// create-project flow instead of a separate delegating component.
 	openSignal?: number;
-	// Home-page action cards: each new nonce jumps straight to its source.
 	sourceSignal?: { source: ProjectSource | "cloud"; nonce: number } | null;
 }) {
 	const { t } = useTranslation();
@@ -234,48 +220,30 @@ export function CreateProjectFlow({
 	const [projectImportShake, setProjectImportShake] = useState(false);
 	const [isChoosingPath, setIsChoosingPath] = useState(false);
 	const [isCreating, setIsCreating] = useState(false);
-	// A cloud card is creating (a workspace may be uploading folders for
-	// minutes); its dialog stays open until it ends.
 	const [cloudCreating, setCloudCreating] = useState(false);
 	const [isInitializing, setIsInitializing] = useState(false);
 	const [isPreparingGit, setIsPreparingGit] = useState(false);
 	const [repositorySetup, setRepositorySetup] = useState<"NOT_A_GIT_REPO" | "PROJECT_UNBORN" | null>(null);
 	const [repositorySetupWarning, setRepositorySetupWarning] = useState<string | null>(null);
-	// A path that arrived via droppedPath, staged until the user confirms
-	// Workspace vs Project. Consumed exactly once by openFolderStep.
 	const [pendingDropPath, setPendingDropPath] = useState<string | null>(null);
 
-	// Cloud is exposed as another project source. Creating one still requires
-	// authentication, but discovery stays alongside clone/folder/workspace.
 	const { cloudEnabled, loading: cloudGateLoading } = useCloudGate();
 	const { status: cloudSessionStatus, signIn: cloudSignIn } = useCloudSession();
 	const cloudAvailable = cloudEnabled && cloudSessionStatus === "authenticated";
 	const [offering, setOffering] = useState<ProjectOffering>("local");
-	// Whether the user already answered "Local or Cloud?" by picking Local.
-	// Lives here so backing out of a local sub-step returns to the local list.
 	const [localChosen, setLocalChosen] = useState(false);
 
 	const hasModePicker = mode === "choose";
 	const projectImportOpen = projectImportStep !== null && projectValidation !== null;
 	const folderDialogOpen = folderPickerOpen && validationScan !== null;
 	const isBusy = isChoosingPath || isCreating || isInitializing || isPreparingGit || preparedClone.isCleaning;
-	// Developer Mode previews the automatic flow: the project starts on the most
-	// preferred ready agent without asking. Otherwise the setup sheet asks for
-	// the worker and orchestrator agents.
 	const automaticAgents = useUiStore((state) => state.developerMode);
-	// Refresh agent checks while the flow is open so the project starts on the
-	// best agent this machine (or host) has right now, not a stale snapshot.
 	const loadAgentDefaults = useProjectAgentDefaults(
 		automaticAgents && (embedded || activeView !== null || selectedPath !== null) && connected,
 		hostId,
 	);
 	const { settings: flowSettings, isLoading: settingsLoading } = useSettings(hostId);
 	const intakeVisible = !!flowSettings?.trackerIntakeEnabled;
-	// Without agent pickers the sheet only asks for tracker intake, shows a
-	// repository setup notice, or reports a failed create. With none of those
-	// there is nothing to decide, so the project is created as soon as its folder
-	// is chosen. While settings still load the sheet stays up, so the wait is
-	// visible and can be cancelled.
 	const sheetNeeded = !automaticAgents || intakeVisible || repositorySetup !== null || error !== null;
 	const sheetOpen = selectedPath !== null && (sheetNeeded || settingsLoading);
 	const autoCreatedPath = useRef<string | null>(null);
@@ -285,8 +253,6 @@ export function CreateProjectFlow({
 	const setProjectImportStep = (step: ProjectImportStep | null) => dispatchView(step ? { type: "open", view: step } : { type: "closeProjectImport" });
 
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	// Settings opens as a page in the center pane; this flow stays mounted under it,
-	// so its modals and backdrop step aside instead of covering the page.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const resetProjectImportState = () => {
 		setCloneRegistrationFailed(false);
@@ -349,8 +315,6 @@ export function CreateProjectFlow({
 		}
 		setCloneSelection(null);
 		preparedClone.complete();
-		// Keep the selector mounted behind the native picker. Closing it first
-		// exposes a blank compositor frame on Windows before Explorer takes focus.
 		void chooseDirectory(source === "workspace" ? "workspace" : "single_repo", presetPath ?? undefined);
 	};
 
@@ -496,9 +460,6 @@ export function CreateProjectFlow({
 		void chooseDirectory(mode, presetPath);
 	};
 
-	// Cloud create finished: the list refetch is already invalidated by the
-	// form; just close the picker and fall back to the default Local choice.
-	// Like a local project, a new cloud project opens straight onto its board.
 	const shell = useShellMaybe();
 	const onCloudProjectCreated = (projectId: string) => {
 		setModePickerOpen(false);
@@ -507,7 +468,6 @@ export function CreateProjectFlow({
 		shell?.openProject?.(projectId);
 	};
 
-	// Seed with the current value so we never open on mount; open when it changes.
 	const lastOpenSignal = useRef(openSignal);
 	useEffect(() => {
 		if (openSignal === undefined || openSignal === lastOpenSignal.current) return;
@@ -515,8 +475,6 @@ export function CreateProjectFlow({
 		startFlow();
 	}, [openSignal]);
 
-	// A folder was dropped on the app window. Ignored while the flow already has
-	// UI on screen so an in-progress manual selection is never silently discarded.
 	const lastDropNonce = useRef(droppedPath?.nonce);
 	useEffect(() => {
 		if (!droppedPath || droppedPath.nonce === lastDropNonce.current) return;
@@ -572,11 +530,6 @@ export function CreateProjectFlow({
 				setIsInitializing(false);
 				setIsCreating(true);
 			}
-		// Workspace imports can adopt an existing local Git root. Preserve its
-		// checked-out branch as the workspace default (child defaults stay
-		// separate); the daemon resolves it at spawn time. Single-repo imports
-		// skip this lookup entirely — the daemon resolves their base branch
-		// itself, saving a blocking IPC round-trip on the critical path.
 		const defaultBranch =
 			selectedKind === "workspace" && !hostId ? await aoBridge.app.getRepositoryBranch(selectedPath) : undefined;
 		await onCreateProject({
@@ -833,9 +786,6 @@ export function CreateProjectFlow({
 		<>
 			{!embedded &&
 				children?.({
-					// Zero-arg wrapper: callers wire this directly to onClick, whose
-					// SyntheticEvent would otherwise be forwarded as startFlow's
-					// presetPath and get treated as a dropped path.
 					choosePath: () => startFlow(),
 					disabled: isBusy,
 					error,
@@ -883,13 +833,8 @@ export function CreateProjectFlow({
 						onCreateStandaloneAgent={onCreateStandaloneAgent}
 						open={modePickerOpen && !settingsOpen}
 						onOpenChange={(open) => {
-							// Escape or an outside click while a cloud create runs: the
-							// upload cannot be cancelled, so the dialog stays.
 							if (isBusy || cloudCreating) return;
 							setModePickerOpen(open);
-							// Dismissed without picking a kind — don't let a stale dropped
-							// path hijack the next manual "New Project" click, and reopen
-							// on the default Local choice.
 							if (!open) {
 								setPendingDropPath(null);
 								setOffering("local");
@@ -1258,8 +1203,6 @@ function CreateProjectFlowBackdrop({ open }: { open: boolean }) {
 				<motion.div
 					aria-hidden="true"
 					className="dialog-overlay z-[calc(var(--z-overlay)-1)]"
-					// Arriving from another modal (lib/modal-handoff.ts), it shows at
-					// full strength so the dim never dips.
 					initial={document.documentElement.dataset.modalHandoff ? false : { opacity: 0 }}
 					animate={{ opacity: 1, transition: { duration: 0.08 } }}
 					exit={{ opacity: 0, transition: { duration: 0.06 } }}
@@ -1307,7 +1250,6 @@ function CreateProjectSourceDialog({
 	localChosen: boolean;
 	onLocalChosenChange: (chosen: boolean) => void;
 	onCloudCreated: (projectId: string) => void;
-	/** Whether the cloud card is creating; the dialog ignores close requests meanwhile. */
 	onCloudBusyChange?: (busy: boolean) => void;
 	onSignIn: () => void;
 	onCloudSelect: () => void;
@@ -1350,11 +1292,6 @@ function CreateProjectSourceDialog({
 	);
 }
 
-/**
- * Shown when the user picks Cloud but is not signed in yet. Keeps the Cloud
- * option discoverable and actionable from the create-project flow instead of
- * silently hiding it: a single button starts the WorkOS sign-in.
- */
 function CloudSignInPanel({
 	disabled,
 	onBack,
@@ -1380,15 +1317,6 @@ function CloudSignInPanel({
 	);
 }
 
-// Cloud project creation goes straight to the control plane
-// (client.createGitHubProject) instead of the daemon POST the local flow uses;
-// the repository is cloned in a cloud sandbox, so no folder picker.
-
-/**
- * The cloud side of project creation: a project (one main repository, more
- * beside it, or none) or a workspace (repositories and local folders side by
- * side, like a local workspace).
- */
 function CloudCreateCard(props: {
 	dialog?: boolean;
 	onAuthRequired: () => void;
@@ -1417,7 +1345,6 @@ function CloudProjectCard({
 	onBack: () => void;
 	onClose?: () => void;
 	onCreated: (projectId: string) => void;
-	/** Switches the card to a cloud workspace. */
 	onKindChange?: (kind: CloudCreateKind) => void;
 	onBusyChange?: (busy: boolean) => void;
 }) {
@@ -1425,19 +1352,10 @@ function CloudProjectCard({
 	const { client } = useCloudCp();
 	const { org } = useCloudOrg();
 	const queryClient = useQueryClient();
-	// The org's offering decides where the project's sessions run: the org's
-	// default provider, chosen in Settings. With more than one provider the
-	// project records it (config.sandboxProvider), so changing the default later
-	// moves no existing project. The coder template picker, size and workspace
-	// prefix appear only when that provider is coder.
 	const offering = useCloudOffering();
 	const offersSandboxChoice = offering.offersProviderChoice;
 	const effectiveSandboxProvider = offering.defaultProvider;
 	const usesCoder = effectiveSandboxProvider === CODER_PROVIDER;
-	// A project is either made from repositories (one main repository plus any
-	// additional ones every session clones beside it) or standalone: no
-	// repository at all, so its sessions start in an empty folder (the cloud
-	// counterpart of a local standalone agent).
 	const [projectSource, setProjectSource] = useState<"repositories" | "standalone">("repositories");
 	const standalone = projectSource === "standalone";
 	const chooseProjectSource = (source: "repositories" | "standalone") => {
@@ -1456,9 +1374,6 @@ function CloudProjectCard({
 	const [isCreating, setIsCreating] = useState(false);
 	useReportBusy(isCreating, onBusyChange);
 	const finishCreate = useFinishCloudProjectCreate();
-	// Repositories come from the GitHub App installation and are selected by
-	// their numeric id (create goes through POST /github/projects). The project
-	// takes the repository's name; there is no separate name to configure.
 	const [selectedRepoId, setSelectedRepoId] = useState("");
 	const github = useCloudGitHubAppConnection(onAuthRequired);
 	const { appConnected, appRepositoriesReady, noRepositoriesShared, busy: githubOAuthBusy } = github;
@@ -1470,11 +1385,9 @@ function CloudProjectCard({
 	const selectMainRepo = (nextId: string) => {
 		setSelectedRepoId(nextId);
 		setSubmitError(null);
-		// The new main repository is no longer an additional one.
 		const next = githubAppRepos.data?.find((repo) => repo.githubRepositoryId === nextId);
 		if (next) setExtraRepoUrls((current) => current.filter((url) => !sameRepository(url, canonicalGitHubUrl(next.fullName))));
 	};
-	// "Make main" swaps an additional repository with the main one.
 	const makeMainRepo = (url: string) => {
 		const next = githubAppRepos.data?.find((repo) => sameRepository(canonicalGitHubUrl(repo.fullName), url));
 		if (!next) return;
@@ -1483,9 +1396,6 @@ function CloudProjectCard({
 		setSubmitError(null);
 	};
 
-	// If the selected repository disappears from the installation (access revoked,
-	// archived, or removed from the App's repo list), drop the stale selection so
-	// we never submit a githubRepositoryId the installation no longer grants.
 	useEffect(() => {
 		if (!appConnected || selectedRepoId === "" || githubAppRepos.data === undefined) return;
 		if (!githubAppRepos.data.some((repo) => repo.githubRepositoryId === selectedRepoId)) setSelectedRepoId("");
@@ -1502,7 +1412,6 @@ function CloudProjectCard({
 				setIsCreating(false);
 				return;
 			}
-			// The fields show their own errors; create stays blocked until they are valid.
 			if (coderWorkspaceNamePrefixInvalid || extraReposInvalid || standaloneNameInvalid) {
 				setIsCreating(false);
 				return;
@@ -1513,13 +1422,8 @@ function CloudProjectCard({
 				orchestrator: { agent: selection.orchestratorAgent },
 				...(coder ? { coder } : {}),
 				...(offersSandboxChoice && effectiveSandboxProvider ? { sandboxProvider: effectiveSandboxProvider } : {}),
-				// Every session clones these beside the main repository.
 				...(additionalRepos.length > 0 ? { repos: additionalRepos.map((url) => ({ url })) } : {}),
 			};
-			// The App path authorizes by repository id and derives the default
-			// branch server-side. Coder config nests under `config.coder`, which
-			// the control plane reads for the dev-kit template. A standalone
-			// project has no repository to authorize.
 			const { project } = standalone || selectedRepo === undefined
 				? await client.createStandaloneProject(org.id, { displayName: standaloneNameTrimmed, config })
 				: await client.createGitHubProject(org.id, {
@@ -1530,12 +1434,6 @@ function CloudProjectCard({
 			await finishCreate(project, offering);
 			onCreated(project.id);
 		} catch (err) {
-			// A repository backs at most one active project per workspace; the
-			// control plane rejects a duplicate with `project_repository_exists`.
-			// That is not a failure the user needs to act on (the project they
-			// asked for already exists), so open that project instead of showing
-			// a conflict error. If it cannot be located, close quietly rather
-			// than surface a message the user cannot act on.
 			if (
 				err instanceof CloudCpError &&
 				err.code === "project_repository_exists" &&
@@ -1552,9 +1450,6 @@ function CloudProjectCard({
 						const { items, page: info } = await client.listProjects(org.id, { limit: 100, cursor });
 						const match =
 							items.find((candidate) => candidate.githubRepositoryId === repoId) ??
-							// Fallback for legacy projects stored without a repository id: match
-							// the full `owner/name` path segment (not a loose substring, which
-							// would let `acme/repo` match a sibling `acme/repo-two`).
 							items.find((candidate) =>
 								candidate.repositoryUrl.toLowerCase().replace(/\.git$/, "").endsWith(`/${repoFullName}`),
 							);
@@ -1568,7 +1463,6 @@ function CloudProjectCard({
 						return;
 					}
 				} catch {
-					// Lookup failed: fall through to the quiet close below.
 				}
 				setIsCreating(false);
 				(onClose ?? onBack)();
@@ -1684,7 +1578,6 @@ function CloudProjectCard({
 
 					<CloudGitHubConnectionStatus connection={github} />
 
-					{/* More repositories every session clones beside the main one. */}
 					{selectedRepo !== undefined ? (
 						<div className="space-y-2 pt-2">
 							<Label className={onboardingFormLabelClass}>
@@ -1712,7 +1605,6 @@ function CloudProjectCard({
 				</div>
 				)}
 
-				{/* Coder template and size are inherited by every session. */}
 				{usesCoder && (standalone || selectedRepo !== undefined) ? (
 					<CloudCoderSetupFields
 						setup={coderSetup}
@@ -1722,7 +1614,6 @@ function CloudProjectCard({
 					/>
 				) : null}
 
-				{/* Agents, once a repository is chosen (a standalone project needs none). */}
 				{(standalone || selectedRepo !== undefined) && org !== undefined ? (
 					<CloudAgentSetupStep
 						onBack={onBack}
@@ -1734,7 +1625,6 @@ function CloudProjectCard({
 					/>
 				) : null}
 
-				{/* The agent step carries its own Back; show one here until it appears. */}
 				{!standalone && selectedRepo === undefined ? (
 					<div className={onboardingFooterActionsClass}>
 						<Button type="button" variant="secondary" onClick={onBack} disabled={isCreating}>
@@ -1747,7 +1637,6 @@ function CloudProjectCard({
 	);
 }
 
-/** Shared source chooser for first-run and subsequent project creation. */
 function ImportSourcePicker({
 	cloudEnabled = false,
 	cloudGateLoading = false,
@@ -1782,15 +1671,9 @@ function ImportSourcePicker({
 	onSelectHost?: (hostId?: string) => void;
 }) {
 	const { t } = useTranslation();
-	// With Cloud available, ask "Local or Cloud?" first so cloud and local
-	// sources never share one list. Cloud never runs on a remote machine, so a
-	// preselected host skips the question.
 	const cloudOffered = cloudEnabled && Boolean(onCloudSelect);
 	const askPlacement = cloudOffered && !hostId && !localChosen;
 	const reduceMotion = useReducedMotion();
-	// Until the cloud gate is known, render no step: showing the local list and
-	// then swapping in the Local/Cloud tiles reads as a glitch. A daemon that is
-	// still booting retries for a while, so stop waiting after a beat.
 	const [gateWaitOver, setGateWaitOver] = useState(false);
 	useEffect(() => {
 		if (!cloudGateLoading) return;
@@ -1798,8 +1681,6 @@ function ImportSourcePicker({
 		return () => window.clearTimeout(timer);
 	}, [cloudGateLoading]);
 	const gateKnown = !cloudGateLoading || gateWaitOver;
-	// Switching steps only resizes the panel: it springs to the new content's
-	// height while the two steps cross-fade in place (popLayout overlaps them).
 	const bodyRef = useRef<HTMLDivElement>(null);
 	const [bodyHeight, setBodyHeight] = useState<number | "auto">("auto");
 	useLayoutEffect(() => {
@@ -1809,16 +1690,12 @@ function ImportSourcePicker({
 		observer.observe(body);
 		return () => observer.disconnect();
 	}, []);
-	// The outgoing step overlaps the incoming one while it fades, so it stops
-	// taking clicks at once: a quick double-click must not hit the next step.
 	const fade = {
 		initial: { opacity: 0 },
 		animate: { opacity: 1 },
 		exit: { opacity: 0, pointerEvents: "none" as const },
 		transition: { duration: reduceMotion ? 0 : 0.12, ease: "easeOut" as const },
 	};
-	// The focused tile unmounts when the step changes; hand focus to the new
-	// step's first control so keyboard users are not dropped to the top.
 	const step = !gateKnown ? "none" : askPlacement ? "placement" : "sources";
 	const previousStep = useRef(step);
 	useEffect(() => {
@@ -1837,7 +1714,6 @@ function ImportSourcePicker({
 		onClose?.();
 		onCreateStandaloneAgent?.();
 	};
-	// Both steps use the same tile so they read as one family.
 	const tile = (key: string, icon: ReactNode, label: string, hint: string, onClick?: () => void) => (
 		<Pressable
 			key={key}
@@ -1874,7 +1750,6 @@ function ImportSourcePicker({
 		},
 	];
 	const title = hostLabel ? t("remote.addProjectOn", { label: hostLabel, defaultValue: "New project on {{label}}" }) : t("createProject.addCodeTitle");
-	// A non-breaking space keeps the subtitle's line while the step is unknown.
 	const description = !gateKnown
 		? "\u00a0"
 		: askPlacement
@@ -1912,7 +1787,6 @@ function ImportSourcePicker({
 					{tile(
 						"local",
 						<Laptop className="size-6" aria-hidden="true" />,
-						// With remote machines connected, the machine picker lives behind this tile.
 						hasRemoteHosts ? t("createProject.placementMachines") : t("createProject.placementLocal"),
 						hasRemoteHosts ? t("createProject.placementMachinesDesc") : t("createProject.placementLocalDesc"),
 						() => onLocalChosenChange(true),
@@ -2019,7 +1893,6 @@ function ProjectImportDialog({
 	const [customGitHubOwner, setCustomGitHubOwner] = useState(remote);
 	const selectedGitHubOwner = githubOwners.find((owner) => owner.login === githubOwner);
 	const [availability, setAvailability] = useState<GitHubRepositoryAvailability>({ state: "idle" });
-	// Bumped when GitHub setup finishes, so owner and name checks that ran while signed out run again.
 	const [githubReadyNonce, setGitHubReadyNonce] = useState(0);
 	const githubNameDescription = [
 		availability.state === "unavailable" ? "githubRepoNameError" : null,
@@ -2401,8 +2274,6 @@ function CreateProjectFolderDialog({
 	const workspaceRootIsProject = isWorkspace && validation?.root.isRepo === true && validation.root.hasOrigin === true;
 	const workspaceValidationBlocked = isWorkspace && validation !== null && (!validation.isValid || validation.nextStep === "error") && !workspaceHasNoChildGitRepos;
 	const workspaceExcludedRepos = isWorkspace ? displayRepos.filter((repo) => repo.isRepo && repo.requiredActions.length > 0) : [];
-	// The daemon registers children without a commit or origin as not set up and
-	// leaves them out of sessions, so only block when no child repo is ready.
 	const workspaceHasReadyRepo = displayRepos.some((repo) => repo.isRepo && repo.requiredActions.length === 0 && repo.status !== "error" && repo.blockingErrors.length === 0);
 	const workspaceReposNeedSetup = workspaceExcludedRepos.length > 0 && !workspaceHasReadyRepo;
 	const workspaceReposExcluded = workspaceExcludedRepos.length > 0 && workspaceHasReadyRepo;

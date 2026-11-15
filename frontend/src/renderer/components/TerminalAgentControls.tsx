@@ -13,13 +13,6 @@ import { Button } from "./ui/button";
 
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
 
-/**
- * A terminal session tab's agent row, in either of the tab's menus. A picked
- * agent adds Switch and Cancel, since a terminal has no next message to wait
- * on; a successful switch closes the menu. A chat picks its agent in the composer.
- * A Cloud session's switch is its interface transition to the picked agent,
- * among the agents its control plane can switch to.
- */
 export function TerminalAgentPickerRow({
 	session,
 	hostId,
@@ -27,7 +20,6 @@ export function TerminalAgentPickerRow({
 }: {
 	session: WorkspaceSession;
 	hostId?: string;
-	/** The agent is working, so it cannot be replaced right now. */
 	blocked: boolean;
 }) {
 	const { t } = useTranslation();
@@ -52,12 +44,10 @@ export function TerminalAgentPickerRow({
 			.catch((error) => showGlobalToast(t("agentSwitch.switchFailed"), apiErrorMessage(error), "error"));
 	};
 	const target = pending ? [agentLabel(pending.harness), pending.modelLabel].filter(Boolean).join(" · ") : "";
-	// One bordered bar under the picked agent's settings: what it switches to, Switch, cancel.
 	const footer = pending ? (
 		<div className="mt-1 box-border flex h-10 shrink-0 items-center border-t border-border px-1.5 pt-1">
 			<div role="status" className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-border bg-interactive-active/50 pl-2 pr-1 text-xs text-foreground">
 				<ProviderMark provider={pending.harness} className="size-3.5" />
-				{/* The mark names the agent, so the model alone fits beside Switch. */}
 				<span className="min-w-0 flex-1 truncate" title={target}>{pending.modelLabel ?? agentLabel(pending.harness)}</span>
 				<Button
 					type="button"

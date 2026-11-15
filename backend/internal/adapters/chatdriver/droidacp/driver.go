@@ -1,5 +1,3 @@
-// Package droidacp binds the user's own Factory Droid installation to AO's
-// reusable ACP Chat transport.
 package droidacp
 
 import (
@@ -14,9 +12,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// New launches Droid's native ACP daemon from the exact binary resolved by its
-// existing agent plugin. Login, models, settings, and updates remain owned by
-// the user's Droid installation.
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:   domain.HarnessDroid,
@@ -28,9 +23,6 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 	settingsMode := cfg.Permissions
 	bypass := ports.NormalizePermissionMode(cfg.Permissions) == ports.PermissionModeBypassPermissions
 	if bypass {
-		// Droid's ACP-daemon form is under `exec`, where full bypass exists.
-		// The TUI adapter maps this to high because interactive Droid has no
-		// equivalent flag; Chat can preserve AO's stronger requested meaning.
 		settingsMode = ports.PermissionModeDefault
 	}
 	args, err := droid.PrepareRuntimeSettingsArgs(

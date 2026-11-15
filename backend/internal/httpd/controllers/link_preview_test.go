@@ -15,15 +15,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 )
 
-// linkPreviewRig pairs the daemon-under-test with the origin it unfurls.
 type linkPreviewRig struct {
 	daemon    *httptest.Server
 	origin    *httptest.Server
 	originHit *atomic.Int32
 }
 
-// newLinkPreviewRig serves originBody (with contentType) from a fake origin
-// and mounts the real router with a linkpreview.Service pointed at it.
 func newLinkPreviewRig(t *testing.T, contentType, originBody string, originStatus int) linkPreviewRig {
 	t.Helper()
 	return newLinkPreviewRigWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -95,7 +92,7 @@ func TestLinkPreviewReadsOpenGraphTags(t *testing.T) {
 		"url":         rig.origin.URL + "/article",
 		"title":       "The OG Title",
 		"description": "An OG description.",
-		"imageUrl":    rig.origin.URL + "/static/og.png", // relative og:image resolved against the page URL
+		"imageUrl":    rig.origin.URL + "/static/og.png",
 		"siteName":    "Example Site",
 		"faviconUrl":  rig.origin.URL + "/icon.svg",
 	}
@@ -127,7 +124,6 @@ func TestLinkPreviewFallsBackToTitleAndMetaDescription(t *testing.T) {
 	if _, ok := got["imageUrl"]; ok {
 		t.Errorf("imageUrl should be omitted when the page has none, got %v", got["imageUrl"])
 	}
-	// No <link rel="icon">: the origin-root /favicon.ico fallback applies.
 	if got["faviconUrl"] != rig.origin.URL+"/favicon.ico" {
 		t.Errorf("faviconUrl = %v", got["faviconUrl"])
 	}
@@ -187,7 +183,6 @@ func TestLinkPreviewCachesSuccessAndFailure(t *testing.T) {
 		_, _ = io.WriteString(w, ogPage)
 	})
 
-	// Two requests for the same URL hit the origin once.
 	for i := 0; i < 2; i++ {
 		if res := rig.get(t, rig.origin.URL+"/article"); res.StatusCode != http.StatusOK {
 			t.Fatalf("request %d: got %d, want 200", i, res.StatusCode)
@@ -197,7 +192,6 @@ func TestLinkPreviewCachesSuccessAndFailure(t *testing.T) {
 		t.Fatalf("origin hits = %d, want 1 (second request served from cache)", got)
 	}
 
-	// Failures are cached too, under the shorter TTL.
 	for i := 0; i < 2; i++ {
 		if res := rig.get(t, rig.origin.URL+"/missing"); res.StatusCode != http.StatusNotFound {
 			t.Fatalf("request %d: got %d, want 404", i, res.StatusCode)
@@ -241,15 +235,12 @@ func TestLinkPreviewFollowsRedirectAndReportsFinalURL(t *testing.T) {
 	if got["url"] != rig.origin.URL+"/final" {
 		t.Errorf("url = %v, want the final post-redirect URL", got["url"])
 	}
-	// Assets resolve against the final URL too.
 	if got["imageUrl"] != rig.origin.URL+"/static/og.png" {
 		t.Errorf("imageUrl = %v", got["imageUrl"])
 	}
 }
 
 func TestLinkPreviewRejectsMissingContentType(t *testing.T) {
-	// Header()["Content-Type"] = nil suppresses net/http's sniffing, so the
-	// response really carries no Content-Type even though the body looks like HTML.
 	rig := newLinkPreviewRigWithHandler(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header()["Content-Type"] = nil
 		_, _ = io.WriteString(w, ogPage)

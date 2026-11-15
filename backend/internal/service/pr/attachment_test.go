@@ -65,10 +65,8 @@ func TestValidateAttachment_AllowedTypes(t *testing.T) {
 		{"data.json", "application/json", []byte(`{"a":1}`), "data.json", "application/json", false},
 		{"rows.csv", "text/csv", []byte("a,b\n1,2\n"), "rows.csv", "text/csv", false},
 		{"bundle.zip", "application/x-zip-compressed", zipBytes, "bundle.zip", "application/zip", false},
-		// No declared type: taken from the extension.
 		{"build.log", "", []byte("ok\n"), "build.log", "text/plain", false},
 		{"shot.png", "application/octet-stream", pngBytes, "shot.png", "image/png", true},
-		// No or foreign extension: the type's own extension is appended.
 		{"pasted", "image/png", pngBytes, "pasted.png", "image/png", true},
 		{"page.html", "image/png", pngBytes, "page.html.png", "image/png", true},
 	} {
@@ -111,14 +109,12 @@ func TestValidateAttachment_Rejections(t *testing.T) {
 			t.Errorf("%s: error = %v, want %v", tc.label, err, tc.want)
 		}
 	}
-	// Exactly 10 MiB is allowed.
 	exact := append(append([]byte{}, zipBytes...), make([]byte, MaxAttachmentBytes-len(zipBytes))...)
 	if _, err := validateAttachment("a.zip", "application/zip", exact); err != nil {
 		t.Fatalf("10 MiB attachment: %v", err)
 	}
 }
 
-// fakeAttachmentStore records what a comment's files did with the provider.
 type fakeAttachmentStore struct {
 	access     ports.SCMAttachmentAccess
 	accessErr  error
@@ -194,7 +190,7 @@ func TestPostComment_RemovesItsFilesWhenThePostFails(t *testing.T) {
 	files.stored.URLs = files.stored.URLs[:1]
 	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // the request is gone; the files still go
+	cancel()
 	_, err := svc.PostComment(ctx, CommentRequest{
 		PRID: "42", PRURL: pr.URL, Body: "![x](attachment:0)",
 		Attachments: []CommentAttachment{{Name: "a.png", ContentType: "image/png", Data: pngBytes}},
@@ -222,7 +218,6 @@ func TestPostComment_WithoutWriteAccessStoresNothing(t *testing.T) {
 	if len(files.batches) != 0 || len(scm.commentRequests) != 0 {
 		t.Fatalf("stored %d batches, posted %d comments", len(files.batches), len(scm.commentRequests))
 	}
-	// A provider that refuses the write mid-way reads the same.
 	files = allowedStore()
 	files.storeErr = ports.ErrSCMForbidden
 	svc = NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: files})
@@ -273,7 +268,6 @@ func TestPostComment_FilesMustMatchTheBodysLinks(t *testing.T) {
 
 func TestPostComment_LeavesAttachmentLinksInCodeAlone(t *testing.T) {
 	pr := openPRFixture()
-	// With no files, a comment that shows the syntax posts as written.
 	scm := &fakeStateCommentSCM{commentResult: ports.SCMCommentResult{ID: "IC_1"}}
 	svc := NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Commenter: scm, Attachments: allowedStore()})
 	plain := "Link a file with `![shot.png](attachment:0)`."
@@ -283,7 +277,6 @@ func TestPostComment_LeavesAttachmentLinksInCodeAlone(t *testing.T) {
 	if scm.commentRequests[0].Body != plain {
 		t.Fatalf("posted body = %q", scm.commentRequests[0].Body)
 	}
-	// With files, only links outside code are files; the examples stay as text.
 	scm = &fakeStateCommentSCM{commentResult: ports.SCMCommentResult{ID: "IC_2"}}
 	files := allowedStore()
 	files.stored.URLs = files.stored.URLs[:1]
@@ -315,7 +308,6 @@ func TestAttachmentAccess(t *testing.T) {
 	if _, err := svc.AttachmentAccess(context.Background(), "7", pr.URL); !errors.Is(err, ErrPRNotFound) {
 		t.Fatalf("mismatched number error = %v", err)
 	}
-	// A provider that can't store files reads as not allowed, not as a failure.
 	files.accessErr = ports.ErrSCMUnsupported
 	if got, err := svc.AttachmentAccess(context.Background(), "42", pr.URL); err != nil || got.Allowed || got.Reason != "unsupported" {
 		t.Fatalf("unsupported access = %#v, err %v", got, err)

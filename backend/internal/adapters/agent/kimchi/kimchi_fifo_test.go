@@ -25,7 +25,6 @@ func TestReadBoundedSystemPromptRejectsNonRegularFile(t *testing.T) {
 		t.Fatalf("error should mention non-regular file; got %q", err.Error())
 	}
 
-	// Sanity: the FIFO was actually created and is a named pipe.
 	info, err := os.Stat(fifo)
 	if err != nil {
 		t.Fatal(err)

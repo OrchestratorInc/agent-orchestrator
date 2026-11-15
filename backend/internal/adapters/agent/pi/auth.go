@@ -14,7 +14,6 @@ import (
 
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 
-// AuthStatus returns the plugin's local authentication status.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if status, ok, err := piLocalAuthStatus(ctx); err != nil {
 		return ports.AgentAuthStatusUnknown, err
@@ -24,8 +23,6 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	return ports.AgentAuthStatusUnknown, nil
 }
 
-// piLocalAuthStatus checks Pi's own auth.json first; a key in the environment
-// is the fallback when it holds no usable credential.
 func piLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -76,8 +73,6 @@ type piAuthEntry struct {
 	Expires float64 `json:"expires"`
 }
 
-// piAuthJSON also returns, for a usable credential, the file as evidence with
-// how it signs in and the providers it holds.
 func piAuthJSON(ctx context.Context, path string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, bool, error) {
 	none := domain.AgentAccountIdentity{}
 	data, err := authprobe.ReadCredentialFile(ctx, path)
@@ -127,18 +122,12 @@ func piAuthEntryIsOAuth(entry piAuthEntry) bool {
 	if !strings.EqualFold(strings.TrimSpace(entry.Type), "oauth") {
 		return false
 	}
-	// OAuth tokens live in auth.json after `/login` and auto-refresh when
-	// expired, so a stored access token counts as a login even past expiry.
-	// `/logout` deletes the provider entry from auth.json rather than leaving
-	// a stale token behind, so a lingering access string is not a logout case.
 	return strings.TrimSpace(entry.Access) != ""
 }
 
 func piAuthKeyIsResolved(key string) bool {
 	key = strings.TrimSpace(key)
 	if key == "" || strings.HasPrefix(key, "!") {
-		// Avoid executing configured commands during a global auth probe. Their
-		// result remains unknown until Pi resolves them while launching.
 		return false
 	}
 
@@ -146,7 +135,6 @@ func piAuthKeyIsResolved(key string) bool {
 	expanded := os.Expand(key, func(name string) string {
 		switch name {
 		case "$", "!":
-			// Pi documents $$ and $! as escaped literal prefixes.
 			return name
 		default:
 			value, ok := os.LookupEnv(name)

@@ -24,8 +24,6 @@ func killProcessTree(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
-	// Node launches the provider as a child. taskkill /T is the Windows equivalent
-	// of killing the Unix process group and avoids leaving Claude behind.
 	kill := aoprocess.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
 	if err := kill.Run(); err != nil {
 		return cmd.Process.Kill()

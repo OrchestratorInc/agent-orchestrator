@@ -85,9 +85,6 @@ describe("spawnCloudOrchestrator", () => {
 		});
 	});
 
-	// The control plane starts the orchestrator in Chat as the local daemon does
-	// and keeps the default for the workers it spawns. "tui" is sent too: an
-	// orchestrator created without a default starts in the terminal.
 	it("is created with the user's default session interface", async () => {
 		for (const [defaultSessionMode, interfaceMode] of [["chat", "chat"], ["tui", "tui"]] as const) {
 			const queryClient = primeClient({ id: "project-1" });
@@ -112,8 +109,6 @@ describe("spawnCloudOrchestrator", () => {
 	});
 
 	it("honors the project's configured orchestrator agent over the Codex-first fallback", async () => {
-		// The project picked Claude Code, but Codex is also connected (e.g. a
-		// ChatGPT login). The configured choice must win instead of Codex-first.
 		const queryClient = primeClient({
 			id: "project-1",
 			config: { orchestrator: { agent: "claude-code" } },
@@ -130,8 +125,6 @@ describe("spawnCloudOrchestrator", () => {
 	});
 
 	it("falls back to the connected-credential priority when the configured agent is not connected", async () => {
-		// Project configured Cursor, but only Codex is connected: fall back rather
-		// than block the spawn on an unusable choice.
 		const queryClient = primeClient({
 			id: "project-1",
 			config: { orchestrator: { agent: "cursor" } },

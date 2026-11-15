@@ -27,13 +27,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
-// fakeArtifactVersions holds versions in memory; RecordSave appends the file's
-// current content as a user version.
 type fakeArtifactVersions struct {
-	dir      string
-	versions []domain.SessionArtifactVersion // oldest first
-	blobs    map[string]string               // sha256 -> content
-	// snapshotErr fails Snapshot; afterSnapshot runs once it kept the content.
+	dir           string
+	versions      []domain.SessionArtifactVersion
+	blobs         map[string]string
 	snapshotErr   error
 	afterSnapshot func()
 }
@@ -206,8 +203,6 @@ func TestArtifactVersionRestoreWritesTheFileAndRecordsAUserVersion(t *testing.T)
 	srv, fake, dir := artifactVersionServer(t)
 	restore := srv.URL + "/api/v1/sessions/ao-1/artifact-versions/restore"
 
-	// The file moved on since the viewer last read it. A restore does not need
-	// the viewer's fingerprint: it keeps what it replaces as a version first.
 	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("edited meanwhile"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -262,8 +257,6 @@ func TestArtifactVersionRestoreWritesNothingWhenTheCurrentContentCannotBeKept(t 
 
 func TestArtifactVersionRestoreRefusesAnAgentWriteThatRacedTheSnapshot(t *testing.T) {
 	srv, fake, dir := artifactVersionServer(t)
-	// The agent writes after the current content was kept but before the restore
-	// writes. That edit has no copy yet, so the restore must not replace it.
 	fake.afterSnapshot = func() {
 		if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("agent raced"), 0o600); err != nil {
 			t.Fatal(err)
@@ -314,8 +307,8 @@ func TestArtifactVersionListOnlyReadsAndSyncRecordsTheEdit(t *testing.T) {
 
 func TestArtifactVersionReadTruncatesALongVersion(t *testing.T) {
 	srv, fake, _ := artifactVersionServer(t)
-	long := strings.Repeat("é", 200<<10)              // 400 KiB of two-byte characters
-	fake.add(long, domain.ArtifactVersionSourceAgent) // version 3
+	long := strings.Repeat("é", 200<<10)
+	fake.add(long, domain.ArtifactVersionSourceAgent)
 
 	status, body := artifactVersionCall(t, http.MethodGet, srv.URL+"/api/v1/sessions/ao-1/artifact-versions/3?path=plan.md", nil)
 	var one struct {
@@ -373,13 +366,13 @@ func TestArtifactVersionReadRefusesABinaryVersionAndRestoreWritesIt(t *testing.T
 	base := srv.URL + "/api/v1/sessions/ao-1/artifact-versions"
 	restore := base + "/restore"
 	binary := "\xff\xfe not text"
-	fake.add(binary, domain.ArtifactVersionSourceAgent) // version 3
+	fake.add(binary, domain.ArtifactVersionSourceAgent)
 	fake.add("v4 agent", domain.ArtifactVersionSourceAgent)
 	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("v4 agent"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	lostBlob := fake.versions[0].SHA256
-	delete(fake.blobs, lostBlob) // version 1's content is gone
+	delete(fake.blobs, lostBlob)
 
 	status, body := artifactVersionCall(t, http.MethodGet, base+"/3?path=plan.md", nil)
 	if status != http.StatusBadRequest || artifactErrorCode(t, body) != "ARTIFACT_FILE_BINARY" {
@@ -408,7 +401,6 @@ func TestArtifactVersionReadRefusesABinaryVersionAndRestoreWritesIt(t *testing.T
 	}
 }
 
-// mediaVersionServer lists one PNG with two real versions.
 func mediaVersionServer(t *testing.T) (*httptest.Server, []byte, []byte) {
 	t.Helper()
 	srv, fake, dir := artifactVersionServer(t)
@@ -496,7 +488,6 @@ func TestArtifactVersionListSaysItServesMediaVersions(t *testing.T) {
 	}
 }
 
-// A page's own cache-busting query must not be taken for a kept version.
 func TestPreviewFileLeavesAPagesVersionQueryAlone(t *testing.T) {
 	srv, _, dir := artifactVersionServer(t)
 	if err := os.WriteFile(filepath.Join(dir, "style.css"), []byte("body{}"), 0o600); err != nil {
@@ -527,8 +518,6 @@ func TestArtifactOriginServesAKeptVersion(t *testing.T) {
 	}
 }
 
-// Restore is not limited to the types the viewer offers it for: every binary
-// comes back byte for byte, through the real capture and blob store.
 func TestArtifactVersionRestoreIsByteExactForAnyBinaryType(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()

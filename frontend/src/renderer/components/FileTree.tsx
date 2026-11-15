@@ -19,13 +19,8 @@ type DirectoryState = { key:string; requested:string[]; open:Set<string> };
 
 const ROW_HEIGHT = 28;
 
-/** Indent level and name width (%) of each stand-in row: a small tree, not a uniform block. */
 const SKELETON_ROWS: ReadonlyArray<readonly [number, number]> = [[0, 26], [0, 34], [1, 46], [1, 30], [1, 54], [0, 22], [0, 40], [0, 32], [0, 44]];
 
-/**
- * Stand-in rows while a tree loads, at the tree's own row height and indent,
- * so loading reads as the list arriving rather than a line of text in its corner.
- */
 export function FileTreeSkeleton() {
 	const { t } = useTranslation();
 	return (
@@ -41,11 +36,6 @@ export function FileTreeSkeleton() {
 	);
 }
 
-// Pierre Trees paints inside a shadow root, so it is themed through its
-// override variables. Everything maps to AO's semantic tokens: neutral hover
-// and selection fills, passive chrome, the standard focus ring and radius.
-// Rows pad 6px on both sides (no scrollbar gutter, no row margin) so the icon
-// column and the trailing status letter sit the same distance from the edges.
 function treeStyle(flushTop: boolean): React.CSSProperties {
 	return {
 		"--trees-bg-override": "transparent",
@@ -70,9 +60,6 @@ function treeStyle(flushTop: boolean): React.CSSProperties {
 	} as React.CSSProperties;
 }
 
-// Folders use Lucide's Folder / FolderOpen (the icon set project rows use)
-// instead of the tree's chevron: one symbol carries both shapes and the row's
-// expanded state picks which is visible through inherited custom properties.
 const FOLDER_SPRITE = `<svg data-icon-sprite aria-hidden="true" width="0" height="0">
   <symbol id="ao-folder" viewBox="0 0 24 24">
     <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -82,8 +69,6 @@ const FOLDER_SPRITE = `<svg data-icon-sprite aria-hidden="true" width="0" height
   </symbol>
 </svg>`;
 
-// Per-technology file glyphs keep their own colors, like the file icons in the
-// Changes review; only the folder glyph is neutral.
 const TREE_ICONS = {
 	set: "complete",
 	colored: true,
@@ -91,9 +76,6 @@ const TREE_ICONS = {
 	remap: { "file-tree-icon-chevron": { name: "ao-folder", width: 14, height: 14, viewBox: "0 0 24 24" } },
 } as const;
 
-// Folders never read as "active" (only the open file does). The row focus ring
-// is hidden while the last input was a pointer (the hook below sets
-// data-pointer-focus on the tree host) and returns on the first key press.
 const TREE_UNSAFE_CSS = `
   [data-item-type="folder"] > [data-item-section="icon"] > [data-icon-name="file-tree-icon-chevron"] {
     transform: none !important;
@@ -141,10 +123,6 @@ const EXPAND_WATCH_MS = 600;
 
 type TreeModel = ReturnType<typeof useFileTree>["model"];
 
-/**
- * Clicking a folder toggles it, but only the open file may read as active:
- * drop any folder from the selection and put the open file back.
- */
 function restoreFileSelection(model: TreeModel, selectedPath: string | null, syncing: { current: boolean }) {
 	syncing.current = true;
 	for (const path of model.getSelectedPaths()) {
@@ -154,20 +132,6 @@ function restoreFileSelection(model: TreeModel, selectedPath: string | null, syn
 	syncing.current = false;
 }
 
-/**
- * Settles the list the way a project's session list settles in the sidebar
- * (0.14s, same ease, children sliding down 12px as they fade in) when one
- * folder opens or closes. Pierre windows its rows and reuses DOM nodes, so this
- * runs imperatively on its shadow root: the new child rows slide and fade in,
- * and every row below the folder glides by the height that was added or
- * removed, which reads as the list growing and shrinking.
- *
- * A folder toggle is spotted from the user's click or key press on a folder
- * row, not by diffing the tree on every model event. Lazy folders report their
- * children a fetch later, so the change in visible rows is what triggers the
- * settle. The hook also tracks the last input device so the row focus ring
- * only shows for keyboard focus.
- */
 function useTreeExpandAnimation(model: TreeModel) {
 	const hostRef = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -193,12 +157,10 @@ function useTreeExpandAnimation(model: TreeModel) {
 			treeHost()?.removeAttribute("data-pointer-focus");
 			if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) markFolderToggle(event);
 		};
-		// `animate` is missing in non-browser DOMs (jsdom), where a late frame would throw.
 		const animate = (dir: string, delta: number) => {
 			if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 			const root = treeHost()?.shadowRoot;
 			if (!root) return;
-			// Sticky ancestor rows repeat a folder's path; only the list rows move.
 			const rows = [...root.querySelectorAll<HTMLElement>('button[data-type="item"][data-item-path]:not([data-file-tree-sticky-row])')];
 			const dirIndex = rows.findIndex((row) => row.dataset.itemPath === dir);
 			if (dirIndex < 0) return;
@@ -211,7 +173,6 @@ function useTreeExpandAnimation(model: TreeModel) {
 					);
 					return;
 				}
-				// Rows below the folder travel the height gained or lost.
 				row.animate?.([{ transform: `translateY(${-delta * ROW_HEIGHT}px)` }, { transform: "none" }], timing);
 			});
 		};
@@ -247,8 +208,6 @@ function entryToNode(entry: WorkspaceTreeEntry): TreeNode {
 	return { name: entry.name, path: entry.path, type: "file", status: entry.status, binary: entry.binary };
 }
 
-// Observe directory queries rather than copying them into local state, so
-// workspace invalidation updates expanded folders without closing them.
 function treeFromDirectories(entries: WorkspaceTreeEntry[], directories: Map<string, WorkspaceTreeEntry[]>): TreeNode[] {
 	return entries.map((entry) => {
 		const node = entryToNode(entry);
@@ -271,9 +230,7 @@ export function FileTree({
 	flushTop = false,
 	expandChanged = false,
 }: {
-	/** Start the first row at the top edge (the Files split view's divider). */
 	flushTop?: boolean;
-	/** Changed-only: open every folder, including ones that appear later. */
 	expandChanged?: boolean;
  source?: FilesSource;
 	filterText: string;
@@ -411,7 +368,6 @@ function WorkspaceFileTree({
 	);
 }
 
-/** Every folder above the files, as the tree names them ("a/b/"). */
 function directoryPaths(paths: readonly string[]): string[] {
 	const directories = new Set<string>();
 	for (const path of paths) {
@@ -581,11 +537,6 @@ function PierreTreeSurface({
 	);
 }
 
-/**
- * The changed-files view is a warm, path-first model. Pierre Trees owns the
- * canonical path index and virtualized rows; manifest refreshes update that
- * stable model instead of rebuilding a React node for every visible file.
- */
 function ChangedFileTree({
 	onPrefetchPath,
 	data,
@@ -658,8 +609,6 @@ function ChangedFileTree({
 	modelRef.current = model;
 	const hostRef = useTreeExpandAnimation(model);
 
-	// Folders seen before keep the open state the user left them in; with
-	// expandAll a folder that first appears now opens like the rest.
 	const knownDirectories = useRef<Set<string> | null>(null);
 	useLayoutEffect(() => {
 		const rows = model.getVisibleRows(0, model.getVisibleCount());

@@ -23,31 +23,14 @@ import (
 )
 
 const (
-	publishRenderPath  = "/api/v1/sessions/{sessionId}/renders"
-	checkRenderPath    = "/api/v1/sessions/{sessionId}/renders/check"
-	renderFilePath     = "/api/v1/sessions/{sessionId}/renders/{renderId}"
-	renderArtifactPath = "/api/v1/sessions/{sessionId}/renders/{renderId}/artifact"
-	// Scripts run, but the opaque origin keeps the page out of the app's
-	// session and storage, and corsMiddleware refuses Origin: null, so even a
-	// render opened top-level cannot call the daemon. No popups, no modals,
-	// no top navigation.
-	// No workers: a worker's requests carry no frame, so the desktop app's
-	// guard that keeps agent pages off the local network could not see them.
-	renderContentSecurityPolicy = "sandbox allow-scripts allow-forms; worker-src 'none'"
-	// An HTML artifact framed inline keeps a real origin of its own, the
-	// ao-inline-artifact.<session>.localhost host, so its module scripts, fetch
-	// of sibling files and fonts load same-origin. That origin is not the app's,
-	// and corsMiddleware refuses it everywhere but its own host, so the page
-	// still cannot call the daemon.
+	publishRenderPath                   = "/api/v1/sessions/{sessionId}/renders"
+	checkRenderPath                     = "/api/v1/sessions/{sessionId}/renders/check"
+	renderFilePath                      = "/api/v1/sessions/{sessionId}/renders/{renderId}"
+	renderArtifactPath                  = "/api/v1/sessions/{sessionId}/renders/{renderId}/artifact"
+	renderContentSecurityPolicy         = "sandbox allow-scripts allow-forms; worker-src 'none'"
 	inlineArtifactContentSecurityPolicy = "sandbox allow-scripts allow-forms allow-same-origin; worker-src 'none'"
-	// A page made by an agent whose sandbox has no network loads nothing over
-	// the network either: only what it carries inline.
-	// ponytail: CSP does not cover WebRTC or a dns-prefetch hint; the reader's
-	// frames would need a proxy, as the check window has, to close those too.
-	offlineRenderContentSecurityPolicy = renderContentSecurityPolicy + "; default-src data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'"
-	// A terminal session has no thread to show a page in; point the agent at
-	// the command that does work there.
-	renderNeedsChatMessage = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
+	offlineRenderContentSecurityPolicy  = renderContentSecurityPolicy + "; default-src data: blob: 'unsafe-inline' 'unsafe-eval'; form-action 'none'"
+	renderNeedsChatMessage              = "ao render works only in chat sessions; in a terminal session, open the file with ao preview <file>"
 )
 
 var (
@@ -70,8 +53,6 @@ func (c *ConversationsController) publishRender(w http.ResponseWriter, r *http.R
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	// The desktop app measures the page from the origin the CLI reached, as
-	// a render check loads it.
 	result, err := svc.PublishRender(r.Context(), sessionID(r), chatsvc.RenderInput{
 		HTML: req.HTML, Title: req.Title, Height: req.Height, BaseURL: "http://" + r.Host, Artifact: req.Artifact,
 	})
@@ -136,8 +117,6 @@ func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Req
 	if !decodeConversationBody(w, r, &req) {
 		return
 	}
-	// The desktop app loads the page from the origin the CLI reached: the
-	// loopback listener (preview hosts never reach this route).
 	result, err := svc.CheckRender(r.Context(), sessionID(r), chatsvc.RenderCheckInput{
 		HTML: req.HTML, Width: req.Width, BaseURL: "http://" + r.Host,
 	})
@@ -163,8 +142,6 @@ func (c *ConversationsController) checkRender(w http.ResponseWriter, r *http.Req
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "RENDER_CHECK_UNAVAILABLE",
 			"render check needs the Orchestrator desktop app; open it, or publish without a check", nil)
 	case errors.As(err, &desktopErr):
-		// The desktop app reached the page but could not check it (it did not
-		// load in time, say). The agent needs the reason, not an opaque 500.
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "RENDER_CHECK_FAILED",
 			desktopErr.Message, map[string]any{"desktopCode": desktopErr.Code})
 	case errors.Is(err, chatsvc.ErrNotChatMode):
@@ -184,9 +161,6 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 	if chatsvc.RenderOffline(renderID) {
 		csp = offlineRenderContentSecurityPolicy
 	}
-	// A stored render never changes, so its id and the bootstrap version name
-	// the served page, and a revalidation is answered without reading it. An
-	// id unfit for a header is left to the store, which refuses it.
 	if renderTagID.MatchString(renderID) && notModified(w, r, csp, pageTag(r, renderpage.Version+"-"+renderID)) {
 		return
 	}
@@ -204,11 +178,8 @@ func (c *ConversationsController) renderFile(w http.ResponseWriter, r *http.Requ
 	serveSandboxedPage(w, r, csp, stored, renderpage.Version+"-"+renderID)
 }
 
-// renderTagID is a render id fit to put in an ETag.
 var renderTagID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,200}$`)
 
-// pageTag is the ETag of the response serveSandboxedPage sends for tag:
-// ?source=1 is a different body, so it has a tag the page's can never match.
 func pageTag(r *http.Request, tag string) string {
 	if r.URL.Query().Get("source") == "1" {
 		return "src-" + tag
@@ -216,10 +187,6 @@ func pageTag(r *http.Request, tag string) string {
 	return tag
 }
 
-// serveSandboxedPage serves an agent's HTML page with the theme bootstrap, or
-// with ?source=1 the page as the agent wrote it, for reading: plain text,
-// without the bootstrap. tag names the stored page and the bootstrap version,
-// since the bootstrap is added as the page is served.
 func serveSandboxedPage(w http.ResponseWriter, r *http.Request, csp string, page []byte, tag string) {
 	if r.URL.Query().Get("source") == "1" {
 		serveSandboxed(w, r, csp, page, "text/plain; charset=utf-8", pageTag(r, tag))
@@ -228,9 +195,6 @@ func serveSandboxedPage(w http.ResponseWriter, r *http.Request, csp string, page
 	serveSandboxed(w, r, csp, renderpage.Document(page), "text/html; charset=utf-8", tag)
 }
 
-// setSandboxHeaders sets what every sandboxed response carries, 304s included:
-// the sandbox CSP, no sniffing, no referrer, revalidation on every load, and
-// the ETag.
 func setSandboxHeaders(h http.Header, csp, etag string) {
 	h.Set("Content-Security-Policy", csp)
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -239,8 +203,6 @@ func setSandboxHeaders(h http.Header, csp, etag string) {
 	h.Set("ETag", `"`+etag+`"`)
 }
 
-// notModified answers 304 when the request already holds etag, so a frame
-// that revalidates on every load costs no file read.
 func notModified(w http.ResponseWriter, r *http.Request, csp, etag string) bool {
 	quoted := `"` + etag + `"`
 	for _, candidate := range strings.Split(r.Header.Get("If-None-Match"), ",") {
@@ -253,7 +215,6 @@ func notModified(w http.ResponseWriter, r *http.Request, csp, etag string) bool 
 	return false
 }
 
-// serveSandboxed serves body in the sandbox csp names, with setSandboxHeaders.
 func serveSandboxed(w http.ResponseWriter, r *http.Request, csp string, body []byte, contentType, etag string) {
 	setSandboxHeaders(w.Header(), csp, etag)
 	w.Header().Set("Content-Type", contentType)

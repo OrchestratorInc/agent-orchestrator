@@ -14,7 +14,6 @@ import {
 import { SearchablePicker } from "./SearchablePicker";
 import { Button } from "./ui/button";
 
-/** The user-facing reason a set of additional repositories cannot be saved. */
 export function additionalReposProblemMessage(t: TFunction, problem: ReturnType<typeof additionalReposProblem>): string | undefined {
 	if (!problem) return undefined;
 	const name = gitHubFullName(problem.url) ?? problem.url;
@@ -34,11 +33,6 @@ export function additionalReposProblemMessage(t: TFunction, problem: ReturnType<
 	}
 }
 
-/**
- * The project's additional repositories: every session clones each one beside
- * the main repository, in the folder named after it, on the session branch.
- * Rows hold canonical GitHub URLs; "" is a row still to be picked.
- */
 export function CloudAdditionalReposEditor({
 	available,
 	mainUrl,
@@ -52,7 +46,6 @@ export function CloudAdditionalReposEditor({
 	mainUrl?: string;
 	value: readonly string[];
 	onChange: (next: string[]) => void;
-	/** Swaps a row with the main repository (create flow only). */
 	onMakeMain?: (url: string) => void;
 	disabled?: boolean;
 	loading?: boolean;
@@ -66,16 +59,12 @@ export function CloudAdditionalReposEditor({
 		const options = available
 			.map((repo) => ({ value: canonicalGitHubUrl(repo.fullName), label: repo.fullName, private: repo.isPrivate }))
 			.filter((option) => !(mainUrl && sameRepository(option.value, mainUrl)) && !taken.some((url) => sameRepository(url, option.value)));
-		// A stored repository the installation no longer lists stays selectable so
-		// the row does not silently go blank.
 		if (current !== "" && !options.some((option) => sameRepository(option.value, current))) {
 			options.unshift({ value: current, label: gitHubFullName(current) ?? current, private: false });
 		}
 		return options;
 	};
 	const canAdd = !disabled && value.length < MAX_PROJECT_ADDITIONAL_REPOS && !value.includes("");
-	// The row "Add a repository" just appended: its picker opens straight away,
-	// and dismissing it without a choice takes the blank row back out.
 	const [addedIndex, setAddedIndex] = useState<number | null>(null);
 	const addButtonRef = useRef<HTMLButtonElement>(null);
 	const focusTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -88,7 +77,6 @@ export function CloudAdditionalReposEditor({
 		setAddedIndex(null);
 		if (value[index] !== "") return;
 		onChange(value.filter((_, i) => i !== index));
-		// The picker's trigger goes with the row; keep focus on the add button.
 		clearTimeout(focusTimer.current);
 		focusTimer.current = setTimeout(() => addButtonRef.current?.focus(), 0);
 	};
@@ -101,8 +89,6 @@ export function CloudAdditionalReposEditor({
 						ariaLabel={t("cloudRepos.additionalRepository", { defaultValue: "Additional repository {{number}}", number: index + 1 })}
 						fixedScroll
 						className="min-w-0 flex-1"
-						// Still loading, a row can open: its list says so until the
-						// repositories arrive (a row just added opens straight away).
 						disabled={disabled}
 						loading={loading}
 						loadingText={t("createProject.githubReposLoading", { defaultValue: "Loading repositories..." })}

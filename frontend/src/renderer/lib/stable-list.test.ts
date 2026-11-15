@@ -11,8 +11,6 @@ describe("sameContent", () => {
 	});
 
 	it("does not treat a missing key as equal to an undefined one", () => {
-		// `{}` and `{ detail: undefined }` render the same today, but an item that
-		// gained a field must still count as changed or the row will not update.
 		expect(sameContent({}, { detail: undefined })).toBe(false);
 	});
 
@@ -31,7 +29,6 @@ describe("useStableList", () => {
 		);
 		const stable = result.current;
 
-		// A refetch: same content, all-new objects, which is what JSON parsing gives.
 		rerender({ list: [{ id: "a", n: 1 }, { id: "b", n: 2 }] });
 		expect(result.current[0]).toBe(stable[0]);
 		expect(result.current[1]).toBe(stable[1]);
@@ -82,7 +79,6 @@ describe("useStableList", () => {
 
 		rerender({ list: [] });
 		rerender({ list: [{ id: "a", n: 1 }] });
-		// Held forever, a long-lived surface would accumulate every item it ever saw.
 		expect(result.current[0]).not.toBe(original);
 	});
 });

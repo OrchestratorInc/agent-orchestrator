@@ -34,9 +34,6 @@ type interruptHarness struct {
 	transcript string
 }
 
-// newInterruptHarness runs the real chain for one terminal session: hook
-// signals through the lifecycle manager into SQLite, and the observer reading
-// the native transcript through the harness's adapter.
 func newInterruptHarness(t *testing.T, harness domain.AgentHarness, transcriptName string, createdAt time.Time) *interruptHarness {
 	t.Helper()
 	ctx := context.Background()
@@ -119,9 +116,6 @@ func (h *interruptHarness) poll(t *testing.T) domain.SessionRecord {
 	return got
 }
 
-// Esc at a Claude permission prompt ends the turn but fires no hook. The
-// session read blocked ("needs input") until the stale-activity observer
-// proved the screen idle.
 func TestTurnFailureObserverIdlesAnEscInterruptedClaudeTurn(t *testing.T) {
 	promptAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
 	h := newInterruptHarness(t, domain.HarnessClaudeCode, "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl", promptAt.Add(-time.Minute))
@@ -142,8 +136,6 @@ func TestTurnFailureObserverIdlesAnEscInterruptedClaudeTurn(t *testing.T) {
 		t.Fatalf("after Esc: activity = %+v, want idle at %v", got.Activity, escAt)
 	}
 
-	// The next prompt starts a turn before Claude records it; the old
-	// interrupt is not replayed.
 	nextAt := escAt.Add(10 * time.Second)
 	h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: nextAt, Event: "user-prompt-submit"})
 	if got := h.poll(t); got.Activity.State != domain.ActivityActive {
@@ -155,11 +147,6 @@ func TestTurnFailureObserverIdlesAnEscInterruptedClaudeTurn(t *testing.T) {
 	}
 }
 
-// The user re-prompts within a poll of an Esc. The prompt hook lands while
-// the session still reads active, so the state and its LastActivityAt stay
-// put, and a poll before Claude records the prompt sees the interrupt as the
-// newest record. It belongs to the turn before the prompt and must not idle
-// the new one.
 func TestTurnFailureObserverKeepsATurnPromptedRightAfterAnInterruptActive(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -212,12 +199,9 @@ func TestTurnFailureObserverKeepsATurnPromptedRightAfterAnInterruptActive(t *tes
 	}
 }
 
-// Esc pressed with no turn running (dismissing a menu or autocomplete) writes
-// nothing to the transcript, so a running turn stays active.
 func TestTurnFailureObserverKeepsAClaudeTurnWithoutAnInterruptActive(t *testing.T) {
 	promptAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
 	h := newInterruptHarness(t, domain.HarnessClaudeCode, "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl", promptAt.Add(-time.Minute))
-	// An earlier turn was interrupted; this one is running.
 	h.write(t, claudeUserRecord(promptAt.Add(-30*time.Second), `"first"`), claudeInterrupt(promptAt.Add(-20*time.Second)))
 	h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: promptAt, Event: "user-prompt-submit"})
 	if got := h.poll(t); got.Activity.State != domain.ActivityActive {
@@ -229,8 +213,6 @@ func TestTurnFailureObserverKeepsAClaudeTurnWithoutAnInterruptActive(t *testing.
 	}
 }
 
-// Codex fires no Stop for an interrupted turn, and the local hooks do not
-// include Codex 0.150's Interrupt hook; the rollout records turn_aborted.
 func TestTurnFailureObserverIdlesAnEscInterruptedCodexTurn(t *testing.T) {
 	promptAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
 	h := newInterruptHarness(t, domain.HarnessCodex, "rollout-2026-10-19T04-39-19-01a15274-eee2-7a60-848f-bbc06024ed54.jsonl", promptAt.Add(-time.Minute))
@@ -247,8 +229,6 @@ func TestTurnFailureObserverIdlesAnEscInterruptedCodexTurn(t *testing.T) {
 	}
 }
 
-// The interrupt reports its own event, a turn boundary that clears a pending
-// permission dialog.
 func TestTurnFailureObserverReportsAnInterruptEvent(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	transcript := filepath.Join(t.TempDir(), "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl")
@@ -273,11 +253,6 @@ func TestTurnFailureObserverReportsAnInterruptEvent(t *testing.T) {
 	}
 }
 
-// Esc while a foreground Task subagent runs: Claude Code aborts the child and
-// its runAgent cleanup fires SubagentStop for it ("SubagentStop on interrupted
-// query", in the 2.1.287 and 2.1.302 bundles), then records the parent's
-// interrupt marker. Whichever reaches AO first, the session ends idle: a
-// running child keeps the interrupt's idle active only until its stop lands.
 func TestTurnFailureObserverIdlesAClaudeTurnInterruptedDuringASubagent(t *testing.T) {
 	for _, stopFirst := range []bool{false, true} {
 		name := "interrupt observed first"
@@ -322,10 +297,6 @@ func TestTurnFailureObserverIdlesAClaudeTurnInterruptedDuringASubagent(t *testin
 	}
 }
 
-// /clear (or /resume, or a conversation switch) inside the TUI moves Claude to
-// another transcript without a restart. The next hook carries the new session
-// id and transcript path, so the observer reads the new conversation, and the
-// one left behind no longer counts.
 func TestTurnFailureObserverFollowsAClaudeConversationSwitch(t *testing.T) {
 	promptAt := time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond)
 	h := newInterruptHarness(t, domain.HarnessClaudeCode, "511e68be-f634-4b26-b7c7-7f4d258144c6.jsonl", promptAt.Add(-time.Minute))
@@ -335,7 +306,6 @@ func TestTurnFailureObserverFollowsAClaudeConversationSwitch(t *testing.T) {
 	h.hook(t, ports.ActivitySignal{State: domain.ActivityIdle, Timestamp: promptAt.Add(time.Second), Event: "stop",
 		AgentSessionID: "511e68be-f634-4b26-b7c7-7f4d258144c6"})
 
-	// /clear, then a prompt in the new conversation.
 	cleared := filepath.Join(filepath.Dir(h.transcript), "7d0c1b2a-3948-4576-8a9b-0c1d2e3f4a5b.jsonl")
 	nextAt := promptAt.Add(10 * time.Second)
 	h.hook(t, ports.ActivitySignal{State: domain.ActivityActive, Timestamp: nextAt, Event: "user-prompt-submit",
@@ -345,7 +315,6 @@ func TestTurnFailureObserverFollowsAClaudeConversationSwitch(t *testing.T) {
 	if got.Activity.State != domain.ActivityActive || got.Metadata.NativeTranscriptPath != cleared {
 		t.Fatalf("after the switch: state %q transcript %q, want active on %q", got.Activity.State, got.Metadata.NativeTranscriptPath, cleared)
 	}
-	// The conversation left behind no longer counts.
 	h.write(t, claudeInterrupt(nextAt.Add(time.Second)))
 	if got := h.poll(t); got.Activity.State != domain.ActivityActive {
 		t.Fatalf("the left conversation's interrupt idled the session: %q", got.Activity.State)

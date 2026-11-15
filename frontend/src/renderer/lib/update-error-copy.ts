@@ -3,12 +3,6 @@ import type { UpdateErrorInfo, UpdateErrorPhase } from "../../shared/update-erro
 import { displayableUpdateError } from "../../shared/update-error-message";
 import { appI18n } from "../i18n";
 
-/**
- * The text for an update failure in the person's language (#5755). The main
- * process sends an English sentence plus what it says; this rebuilds that
- * sentence from the catalog and falls back to the English text (still guarded
- * against dumps) for AO's own messages and statuses from an older main process.
- */
 export function localizedUpdateError(
 	text: string | undefined,
 	info: UpdateErrorInfo | undefined,
@@ -49,7 +43,6 @@ function updateErrorReason(info: UpdateErrorInfo, t: TFunction): string {
 		case "rate-limited":
 			return t("settings.updates.error.reason.rateLimited");
 		case "not-found":
-			// A check looks for the update information; a download or install for the file.
 			return info.phase === "check" || info.phase === "return"
 				? t("settings.updates.error.reason.notFoundInfo")
 				: t("settings.updates.error.reason.notFoundFile");

@@ -14,8 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Exercise every shipped adapter through its real native restore builder. No
-// provider is installed or contacted: all resolution/probes use isolated CLIs.
 func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixtures")
@@ -110,8 +108,6 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 				}
 			}
 			if string(harness.Harness) == "cline" {
-				// Without hook metadata Cline can still recover from history;
-				// the missing-identity case must also have no matching history.
 				if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '[]'\n"), 0755); err != nil {
 					t.Fatal(err)
 				}

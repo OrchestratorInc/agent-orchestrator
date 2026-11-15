@@ -1,14 +1,3 @@
-/**
- * Copy and save for a chat image's resolved URL.
- *
- * Loopback images on the origins connect-src allows (http 127.0.0.1 and
- * *.localhost: the daemon and remote-host proxies) load in CORS mode, so the
- * renderer reads them itself: the remote proxy rejects a main-process fetch
- * because it carries Sec-Fetch-Site without Origin. Other http(s) images are
- * read by the main process (see `main/chat-image-ipc.ts`); inline `data:` and
- * `blob:` sources are read in place.
- */
-
 import { MAX_CHAT_IMAGE_BYTES } from "../../../shared/chat-image";
 import { aoBridge } from "../../lib/bridge";
 
@@ -40,7 +29,6 @@ async function loadChatImage(url: string): Promise<ImageBytes> {
 	return { bytes: new Uint8Array(await blob.arrayBuffer()), mimeType };
 }
 
-/** Re-encode as PNG, the one format every clipboard target accepts. */
 async function toPng({ bytes, mimeType }: ImageBytes): Promise<Uint8Array> {
 	if (mimeType === "image/png") return bytes;
 	const objectUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeType }));
@@ -62,10 +50,6 @@ async function toPng({ bytes, mimeType }: ImageBytes): Promise<Uint8Array> {
 	}
 }
 
-/**
- * The name to offer when saving: the URL's own file name when it has one,
- * otherwise the image's label, with an extension that matches its bytes.
- */
 export function chatImageSaveName(url: string, label: string, mimeType: string): string {
 	const extension = EXTENSION_BY_MIME[mimeType] ?? "png";
 	let fromUrl = "";
@@ -73,7 +57,6 @@ export function chatImageSaveName(url: string, label: string, mimeType: string):
 		const { protocol, pathname } = new URL(url, "http://localhost/");
 		if (protocol === "http:" || protocol === "https:") fromUrl = decodeURIComponent(pathname.slice(pathname.lastIndexOf("/") + 1));
 	} catch {
-		// An unparsable URL falls back to the label.
 	}
 	if (/\.[A-Za-z0-9]{2,5}$/.test(fromUrl)) return fromUrl;
 	const stem = (fromUrl || label).replace(/[\\/:*?"<>|\u0000-\u001f]/g, "").trim() || "image";
@@ -84,7 +67,6 @@ export async function copyChatImage(url: string): Promise<void> {
 	await aoBridge.clipboard.writeImage(await toPng(await loadChatImage(url)));
 }
 
-/** Resolves false when the user cancels the save dialog. */
 export async function saveChatImage(url: string, label: string): Promise<boolean> {
 	const image = await loadChatImage(url);
 	return aoBridge.chatImage.save({ name: chatImageSaveName(url, label, image.mimeType), bytes: image.bytes });

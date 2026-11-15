@@ -1,6 +1,3 @@
-// defineConfig comes from vitest/config (a superset of vite's) so the `test`
-// block typechecks; vitest itself must be pointed at this file explicitly
-// (package.json test script) because it only auto-discovers vite.config.*.
 import { execFileSync } from "node:child_process";
 import { defineConfig } from "vitest/config";
 import type { Plugin } from "vite";
@@ -13,8 +10,6 @@ import { DEFAULT_POSTHOG_HOST } from "./src/shared/posthog-config";
 import { parseTeamsFlag } from "./src/shared/teams-flag";
 import { sentrySourceMaps } from "./vite.sentry";
 
-// Read once, when the renderer is built or served: a value that is neither
-// "on" nor "off" stops here instead of shipping a build that guessed.
 const TEAMS_FLAG = parseTeamsFlag(process.env.VITE_AO_TEAMS);
 
 const POSTHOG_ORIGINS = (() => {
@@ -26,22 +21,6 @@ const POSTHOG_ORIGINS = (() => {
 	} catch {
 		return [];
 	}
-	// posthog-js serves capture from api_host but fetches remote config from a
-	// sibling "-assets" host it derives from the same name, so a CSP built only
-	// from api_host blocks that request and logs a console error on every launch
-	// of a packaged build. Capture is unaffected (it uses api_host), and AO
-	// ignores what remote config offers, since replay, flags, and surveys are all
-	// disabled in the client. Allowing the origin only silences the error; the
-	// client settings still win over anything the server would say.
-	//
-	// The asset_host option deliberately does not cover this: per its own docs it
-	// "only applies to /static/* asset paths; dynamic assets like remote config
-	// continue to use the regular asset host derived from api_host".
-	// Scoped to PostHog Cloud, matching what posthog-js itself does: it only
-	// rewrites to an "-assets" sibling for *.posthog.com. A self-hosted instance
-	// or a loopback capture endpoint serves everything from one origin, and
-	// deriving there would emit a nonsense entry (127.0.0.1 would become
-	// "127-assets.0.0.1").
 	const origins = [url.origin];
 	if (/\.posthog\.com$/i.test(url.hostname)) {
 		const assetsHost = url.hostname.replace(/^([^.]+)\./, "$1-assets.");
@@ -82,15 +61,6 @@ const DEV_BUILD_INFO = {
 	isDirty: gitIsDirty(),
 };
 
-// Cloud terminals attach over a ticketed wss:// dialed directly from the
-// renderer (the WorkOS token stays in the main process; the single-use ticket
-// is the socket's whole authorization — see lib/cloud-terminal-mux.ts), so the
-// packaged CSP must allow the control-plane origin or every cloud terminal
-// stays on "Connecting…" forever in built apps. The runtime URL is a daemon
-// setting the build cannot read; list the baked defaults and fold in a
-// developer's AO_CLOUD_CONTROL_PLANE_URL override so a custom control plane
-// keeps a working terminal in packaged builds too.
-// The hosted cloud control planes, plus AO_CLOUD_CONTROL_PLANE_URL when set.
 const CLOUD_CP_ORIGINS = (() => {
 	const origins = ["https://staging-api.aoagents.dev", "https://api.aoagents.dev"];
 	const override = process.env.AO_CLOUD_CONTROL_PLANE_URL?.trim();
@@ -108,55 +78,22 @@ const CLOUD_CP_ORIGINS = (() => {
 
 const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^http/, "ws"));
 
-// CSP for the renderer. The daemon is loopback-only, so network access is
-// pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws), plus the
-// cloud control-plane websocket origins above. The policy is injected here
-// rather than written into index.html so the serve variant can differ,
-// relaxed only where the dev server itself needs it. Only the build injects
-// it (injectCspMeta below is build-only), so the dev app runs with no CSP at
-// all: a missing source works in dev and fails only in a packaged build, as
-// the cloud-terminal block in #4666 and the blob: attachment tiles did. Check
-// any new resource scheme against this list by hand.
 export function contentSecurityPolicy(mode: "build" | "serve"): string {
 	return [
 		"default-src 'self'",
-		// 'wasm-unsafe-eval' lets @pierre/highlights compile its WebAssembly module;
-		// it does not permit JS eval. react-refresh injects its inline preamble in
-		// serve mode; a hash is impractical because the preamble changes with the
-		// plugin version.
 		mode === "serve" ? "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'" : "script-src 'self' 'wasm-unsafe-eval'",
 		"style-src 'self' 'unsafe-inline'",
-		// Repository avatars can come from self-hosted SCM instances whose origins
-		// are only known at runtime. Keep the broad exception limited to images;
-		// scripts, connections, frames, and other resource classes remain scoped.
-		//
-		// blob: in img-src, media-src and connect-src is for object URLs the
-		// renderer makes from bytes it already holds: a file the user just sent
-		// draws its tile from the composer's copy (sent-attachment-previews.ts),
-		// and copying an image re-encodes it through one. Only the renderer's own
-		// scripts can mint a blob: URL, so it opens no network access.
-		//
-		// The snapshot scheme is where main serves the cached artifact previews that gallery cards
-		// show as plain images (main/artifact-snapshots.ts). 'self' is only the app:// origin, so
-		// without it every cached card is refused in a packaged build and falls back to live.
 		`img-src 'self' data: blob: http://127.0.0.1:* http://*.localhost:* https: ${ARTIFACT_SNAPSHOT_SCHEME}:`,
-		// A cloud session's audio and video artifacts stream from its control plane.
 		["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",
 			"'self'",
 			"data:",
-			// A just-sent PDF or text file is read from its object URL (see img-src).
 			"blob:",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
-			// Session artifact files are read from the daemon's artifact preview
-			// origin (ao-preview-artifact.<id>.localhost:<port>), a subdomain of
-			// localhost that 'self' and 127.0.0.1 do not cover.
 			"http://*.localhost:*",
-			// Vite serves on localhost, which 'self' does not cover for the ws://
-			// HMR socket.
 			mode === "serve" ? "ws://localhost:*" : "",
 			...POSTHOG_ORIGINS,
 			...CLOUD_CP_WS_ORIGINS,
@@ -165,13 +102,6 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 			.join(" "),
 		"object-src 'none'",
 		"base-uri 'self'",
-		// Agent HTML renders (RenderFrame) are the only frames: sandboxed pages
-		// served by the loopback daemon.
-		// 'self' lets dev:web, whose API base is relative, frame a page; the page
-		// keeps its own sandbox from the daemon's CSP header either way.
-		// *.localhost is the inline-artifact origin an HTML artifact is framed from.
-		// A cloud session's HTML artifact is framed from its control plane, whose
-		// response CSP sandboxes it.
 		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 	].join("; ");
 }
@@ -225,28 +155,18 @@ export default defineConfig({
 		"import.meta.env.VITE_AO_GIT_DIRTY": JSON.stringify(String(DEV_BUILD_INFO.isDirty)),
 		"import.meta.env.VITE_AO_TEAMS": JSON.stringify(TEAMS_FLAG),
 	},
-	// "@/" → the renderer root (src/renderer), the shadcn/ui import convention.
 	resolve: {
 		alias: {
 			"@": fileURLToPath(new URL("./src/renderer", import.meta.url)),
 			"@aoagents/product-ui": fileURLToPath(
 				new URL("../packages/product-ui/src/index.ts", import.meta.url),
 			),
-			// The alias above resolves product-ui to its source, so that package's
-			// own imports resolve from packages/product-ui/ — which only has a
-			// node_modules if `npm ci` was run there too. CI does that; a
-			// frontend-only install does not, and the failure mode is quiet: every
-			// test importing product-ui dies at transform time with "failed to
-			// resolve clsx", which reads as pre-existing breakage rather than a
-			// missing install. Point both runtime deps at the frontend copies so
-			// one install is enough.
 			clsx: fileURLToPath(new URL("./node_modules/clsx", import.meta.url)),
 			"tailwind-merge": fileURLToPath(
 				new URL("./node_modules/tailwind-merge", import.meta.url),
 			),
 		},
 	},
-	// The app, plus the hidden page main renders cached artifact previews in.
 	build: {
 		sourcemap: sentry.sourcemap,
 		rollupOptions: {
@@ -256,9 +176,6 @@ export default defineConfig({
 			},
 		},
 	},
-	// Dev proxy for VITE_NO_ELECTRON=1 browser preview — forwards /api and /mux
-	// to the daemon so the renderer can be tested against a running daemon from
-	// a plain browser without an Electron shell.
 	server: {
 		proxy: {
 			"/api": {
@@ -289,10 +206,6 @@ export default defineConfig({
 		environment: "jsdom",
 		silent: "passed-only",
 		testTimeout: 20_000,
-		// Anchor node_modules at any depth: a bare "node_modules/**" replaces
-		// vitest's default "**/node_modules/**" and only matches the root.
-		// The docs site is its own package with its own Vitest config and
-		// dependencies; the docs CI step runs its tests.
 		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**", "src/docs/**"],
 		globals: true,
 		setupFiles: "./src/renderer/test/setup.ts",

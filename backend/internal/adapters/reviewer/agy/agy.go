@@ -1,4 +1,3 @@
-// Package agy defines AO's experimental host-trusted Antigravity reviewer.
 package agy
 
 import (
@@ -17,23 +16,19 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/reviewgateway"
 )
 
-// HarnessID identifies the Agy reviewer adapter.
 const HarnessID domain.ReviewerHarness = "agy"
 
 const minimumVersion = "1.1.6"
 
-// HostTrustWarning documents the authority retained by Agy's interactive TUI.
 const HostTrustWarning = "experimental host-trusted reviewer: Agy sandbox mode is not OS isolation and its built-in tools retain host authority"
 
 var requiredFlags = []string{"--agent", "--conversation", "--prompt-interactive", "--sandbox"}
 
-// Reviewer describes Agy's host-trusted interactive lifecycle.
 type Reviewer struct {
 	resolveBinary func(context.Context) (string, error)
 	run           func(context.Context, map[string]string, string, ...string) ([]byte, error)
 }
 
-// New returns the experimental host-trusted adapter.
 func New() *Reviewer {
 	return &Reviewer{
 		resolveBinary: agentagy.ResolveAgyBinary,
@@ -45,15 +40,11 @@ func New() *Reviewer {
 	}
 }
 
-// Harness identifies the Agy reviewer.
 func (*Reviewer) Harness() domain.ReviewerHarness { return HarnessID }
 
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
-// ReviewCommand launches Agy's permanent interactive TUI in sandbox mode. The
-// checkout and AO prompt root are explicitly added because this experimental
-// mode is host-trusted rather than contained.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
 	binary, err := r.resolveBinary(ctx)
 	if err != nil {
@@ -85,15 +76,11 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	}, nil
 }
 
-// ReviewRestoreCommand restores a recorded Agy reviewer pane by relaunching
-// the reviewer command with its AO-owned profile and current task context.
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
 }
 
-// ReviewPreflight verifies that the Agy executable is available. Compatibility
-// probing happens after AO-owned state roots are available in ReviewCommand.
 func (r *Reviewer) ReviewPreflight(ctx context.Context, _ string) error {
 	_, err := r.resolveBinary(ctx)
 	return err
@@ -127,14 +114,10 @@ func appendEnvironment(base []string, overrides map[string]string) []string {
 	return result
 }
 
-// ReviewMessage returns the short AO-owned task-file reference for a future
-// long-lived TUI. The full instructions remain outside terminal scrollback.
 func (*Reviewer) ReviewMessage(_ context.Context, inv ports.ReviewInvocation) (string, error) {
 	return inv.Prompt, nil
 }
 
-// ReviewCancel matches Agy's fixed TUI behavior: the first Ctrl-C interrupts
-// the active operation, while a second Ctrl-C begins the exit flow.
 func (*Reviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
 	return ports.ReviewCancelSpec{Mode: ports.ReviewCancelInterrupt, Interrupts: 1}, nil
 }

@@ -13,8 +13,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// branchViewService serves a single-repository session checked out at repo
-// whose project names main as its default branch.
 func branchViewService(repo string) *Service {
 	st := newFakeStore()
 	st.projects["proj"] = domain.ProjectRecord{ID: "proj", Path: repo, Config: domain.ProjectConfig{DefaultBranch: "main"}}
@@ -54,7 +52,6 @@ func TestBranchViewListsCommitsSinceDefaultMergeBase(t *testing.T) {
 	runGit(t, repo, "switch", "main")
 	commitWorkspaceFile(t, repo, "main.txt", "main\n", "advance main")
 	runGit(t, repo, "switch", "-c", "session")
-	// Staged, unstaged and untracked changes the branch view must not disturb.
 	writeWorkspaceFile(t, repo, "README.md", "staged\n")
 	runGit(t, repo, "add", "README.md")
 	writeWorkspaceFile(t, repo, "README.md", "staged\nunstaged\n")
@@ -145,7 +142,6 @@ func TestBranchViewWithoutDefaultBranchStartsAtTheRootCommit(t *testing.T) {
 	runGit(t, repo, "switch", "-c", "feature")
 	tip := commitWorkspaceFile(t, repo, "feature.txt", "feature\n", "add feature")
 	runGit(t, repo, "switch", "main")
-	// No project and no remote: nothing names a default branch to measure from.
 	svc := workspaceReviewService(t, repo)
 
 	history, err := svc.GetWorkspaceHistory(context.Background(), "ao-1", WorkspaceView{Branch: "feature"})
@@ -158,7 +154,6 @@ func TestBranchViewWithoutDefaultBranchStartsAtTheRootCommit(t *testing.T) {
 	if len(history.Commits) != 2 || history.CommitsTruncated {
 		t.Fatalf("commits = %+v, want the whole two-commit history", history.Commits)
 	}
-	// The range starts from the empty tree, so the root commit's files count.
 	if history.RangeSummary == nil || *history.RangeSummary != (WorkspaceSummary{Files: 4, Additions: 4}) {
 		t.Fatalf("range summary = %+v, want every file from the root commit on", history.RangeSummary)
 	}
@@ -300,7 +295,6 @@ func TestBranchViewCommitListDoesNotReadWorktreeSizes(t *testing.T) {
 	runGit(t, repo, "switch", "-c", "feature")
 	commitWorkspaceFile(t, repo, "data.txt", "branch text\n", "add data")
 	runGit(t, repo, "switch", "main")
-	// The checked-out worktree has an unrelated binary file at the same path.
 	writeWorkspaceFile(t, repo, "data.txt", "worktree\x00binary\x00"+strings.Repeat("x", 4096))
 
 	history, err := branchViewService(repo).GetWorkspaceHistory(context.Background(), "ao-1", WorkspaceView{Branch: "feature"})

@@ -11,8 +11,6 @@ vi.mock("../../lib/api-client", () => ({
 	getApiBaseUrl: () => "http://127.0.0.1:4567",
 }));
 
-// Same boundary as chat: mermaid needs layout APIs jsdom lacks, so stub the
-// engine and assert the preview routes the fence to the diagram.
 vi.mock("../../lib/mermaid-diagram", () => ({
 	isRenderableDiagram: (code: string) => code.trim().length > 0 && code.length <= 20_000,
 	renderMermaidDiagram: vi.fn(async () => '<svg xmlns="http://www.w3.org/2000/svg"><g>diagram</g></svg>'),

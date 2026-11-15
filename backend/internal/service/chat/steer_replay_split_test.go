@@ -7,7 +7,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// steerActivity is the row Steer records on the running turn.
 func steerActivity(turnID, clientID, text string) domain.ConversationActivity {
 	return domain.ConversationActivity{
 		TurnID: turnID, Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusCompleted,
@@ -18,8 +17,6 @@ func steerActivity(turnID, clientID, text string) domain.ConversationActivity {
 	}
 }
 
-// historyTurn is one turn as ACP session/load replays it: a new turn per user
-// message, settled as recovered because the replay carries no outcome.
 func historyTurn(id, userText string, provider ...ports.ChatEvent) []ports.ChatEvent {
 	events := []ports.ChatEvent{
 		{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id},
@@ -39,10 +36,6 @@ func assistant(itemID, text string) ports.ChatEvent {
 	return ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderItemID: itemID, Text: text}
 }
 
-// Claude stores each steer as its own user message, and ACP replay starts a new
-// turn at every user message. One AO turn with two steers comes back as several
-// turns, and only some of them hold an assistant item AO can match. None of them
-// may come back as a new recovered turn.
 func TestReplayAttachesSplitTurnsToTheirAOTurn(t *testing.T) {
 	turns := []domain.ConversationTurn{
 		{ID: "prompt", ProviderTurnID: "live-turn", State: domain.TurnStateCompleted},
@@ -58,7 +51,6 @@ func TestReplayAttachesSplitTurnsToTheirAOTurn(t *testing.T) {
 		messages []domain.ConversationMessage
 		replay   [][]ports.ChatEvent
 	}{{
-		// Session -349: both steers arrived after a tool call, 0.5 s apart.
 		name: "steers after tool work",
 		messages: []domain.ConversationMessage{
 			{TurnID: "prompt", Role: domain.MessageRoleAssistant, Text: "Read-only check.", ProviderItemID: "msg-1"},
@@ -70,8 +62,6 @@ func TestReplayAttachesSplitTurnsToTheirAOTurn(t *testing.T) {
 			historyTurn("history-c", "tell me is this true?", assistant("msg-2", "Mostly true.")),
 		},
 	}, {
-		// Lab: both steers arrived before Claude's first output, so the prompt
-		// is replayed alone too and the only matchable turn comes last.
 		name: "steers before any output",
 		messages: []domain.ConversationMessage{
 			{TurnID: "prompt", Role: domain.MessageRoleAssistant, Text: "59269", ProviderItemID: "msg-2"},
@@ -108,9 +98,6 @@ func TestReplayAttachesSplitTurnsToTheirAOTurn(t *testing.T) {
 	}
 }
 
-// Only prompts and steers AO recorded are absorbed, once each. A later message
-// with the same text that AO never stored, for example one typed in the
-// terminal, stays a new turn.
 func TestReplayKeepsUnrecordedRepeatOfSteerText(t *testing.T) {
 	turns := []domain.ConversationTurn{
 		{ID: "prompt", ProviderTurnID: "live-turn", State: domain.TurnStateCompleted},

@@ -315,9 +315,6 @@ func TestContextCancellation(t *testing.T) {
 }
 
 func TestResolveAiderBinaryFallback(t *testing.T) {
-	// When the binary is not on PATH or any well-known location, the resolver
-	// MUST surface ports.ErrAgentBinaryNotFound rather than a silent string
-	// fallback that lets a missing CLI launch into an empty tmux pane.
 	bin, err := ResolveAiderBinary(context.Background())
 	if err != nil {
 		if !errors.Is(err, ports.ErrAgentBinaryNotFound) {

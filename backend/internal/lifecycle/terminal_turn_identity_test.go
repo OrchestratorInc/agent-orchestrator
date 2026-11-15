@@ -107,7 +107,6 @@ func TestDelayedStopFromAnEarlierTurnOnTheSameThreadDoesNotAnswerTheNextOne(t *t
 	signal("user-prompt-submit", "turn-1", "FIRST REQUEST", 1)
 	signal("stop", "turn-1", "FIRST ANSWER", 2)
 	signal("user-prompt-submit", "turn-2", "SECOND REQUEST", 3)
-	// The first turn's Stop is delivered again, after the second prompt.
 	signal("stop", "turn-1", "FIRST ANSWER", 2)
 	signal("stop", "turn-2", "SECOND ANSWER", 4)
 	turns, err := store.ListTerminalTurns(ctx, rec.ID)

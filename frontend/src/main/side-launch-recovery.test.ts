@@ -150,7 +150,7 @@ it("retries the exact frozen restore after sixty seconds and releases the payloa
 	const retry = recovery.ensureReady();
 	await vi.advanceTimersByTimeAsync(1000);
 	await retry;
-	expect(fetcher).toHaveBeenCalledTimes(3); // Do not reclaim after acknowledged claim.
+	expect(fetcher).toHaveBeenCalledTimes(3);
 	expect(fetcher.mock.calls[2][1]?.body).toBe(fetcher.mock.calls[1][1]?.body);
 	expect(String(fetcher.mock.calls[2][1]?.body)).not.toContain("newer local state");
 	expect(getSnapshot).toHaveBeenCalledOnce();
@@ -179,7 +179,7 @@ it("coalesces concurrent captures into one read plus a follow-up for later mutat
 	await vi.advanceTimersByTimeAsync(0);
 	const later = Array.from({ length: 100 }, () => recovery.capture());
 	await vi.advanceTimersByTimeAsync(0);
-	expect(fetcher).toHaveBeenCalledTimes(2); // Claim and the first read.
+	expect(fetcher).toHaveBeenCalledTimes(2);
 	finish(ok());
 	await Promise.all([first, ...later]);
 	expect(fetcher).toHaveBeenCalledTimes(3);
@@ -268,14 +268,14 @@ it("retains accepted close ownership when the background snapshot fails", async 
 	const { recovery, fetcher, onError } = setup();
 	recovery.setAttachment(attachment);
 	await recovery.ensureReady();
-	ledger.confirm("side"); // The daemon's DELETE already succeeded.
+	ledger.confirm("side");
 	fetcher.mockRejectedValueOnce(new Error("snapshot transport failed"));
 	expect(recovery.captureInBackground()).toBeUndefined();
 	expect(ledger.pending()).toEqual([]);
 	await vi.advanceTimersByTimeAsync(0);
 	expect(onError).toHaveBeenCalledOnce();
 	expect(ledger.state?.sides).toMatchObject([{ cleanupOnly: true, providerForkId: "fork" }]);
-	await recovery.capture(); // A later capture still works without another claim.
+	await recovery.capture();
 	expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/claim"))).toHaveLength(1);
 });
 
@@ -304,8 +304,6 @@ it("captures a verified open side mutation after restore rejection without losin
 	const capture = await recovery.captureForClose();
 	expect(capture.coverage).toEqual({ ids: [], ready: false });
 	expect(ledger.state?.sides).toEqual([updated, blocked]);
-	// A second crash still offers both the latest mutation and the private
-	// original which the first replacement daemon could not restore.
 	recovery.setAttachment({ ...attachment, generation: 2, pid: 22 });
 	await recovery.ensureReady();
 	const offered = JSON.parse(String(fetcher.mock.calls.findLast(([url, init]) => String(url).endsWith("/state") && init?.method === "POST")?.[1]?.body));

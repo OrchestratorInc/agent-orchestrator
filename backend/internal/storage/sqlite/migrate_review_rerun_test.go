@@ -2,11 +2,6 @@ package sqlite
 
 import "testing"
 
-// TestMigration0177AllowsRepeatApprovalsButNotDoubleRunning guards both halves
-// of the narrowed review_run key: an explicit rerun may record a second
-// approved pass for the same (worker, PR, commit, reviewer), while two running
-// passes for that key still collide (#242). Down must collapse the repeat
-// approvals so the wider index can be rebuilt.
 func TestMigration0177AllowsRepeatApprovalsButNotDoubleRunning(t *testing.T) {
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 176)
 	upTo(t, db, 177)
@@ -49,8 +44,6 @@ func TestMigration0177AllowsRepeatApprovalsButNotDoubleRunning(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate survivors: %v", err)
 	}
-	// The wider key allows one running-or-approved row per key: the newest
-	// completed approval wins over both the older approval and the running pass.
 	if len(survivors) != 1 || survivors[0] != "r-approved-2" {
 		t.Fatalf("survivors after down = %v, want only the newest approval", survivors)
 	}

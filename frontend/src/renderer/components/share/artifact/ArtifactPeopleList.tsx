@@ -3,23 +3,16 @@ import { X } from "@/components/app-icons";
 import { Button } from "../../ui/button";
 import { PersonAvatar } from "../../teams/TeamVisuals";
 
-/** Someone a link is shared with: on the live link (id), or added before it is published (pending). */
 export interface ArtifactPerson {
 	email: string;
 	id?: string;
 	pending?: boolean;
 }
 
-/**
- * People with access: the owner, then everyone the link is shared with, each
- * with Can view (the only role) and × to remove them. The list scrolls inside
- * the popover once it is long.
- */
 export function ArtifactPeopleList({ owner, people, onRemove, removing }: {
 	owner: { name?: string; email?: string };
 	people: readonly ArtifactPerson[];
 	onRemove: (person: ArtifactPerson) => void;
-	/** The email being removed now, whose × is disabled. */
 	removing?: string;
 }) {
 	const { t } = useTranslation();

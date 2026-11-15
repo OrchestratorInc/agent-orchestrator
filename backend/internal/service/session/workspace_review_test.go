@@ -352,10 +352,6 @@ func workspaceChildRepo(t *testing.T, root, name, content string) string {
 	return dir
 }
 
-// A workspace project leaves Sections and Commits zero-valued, so its review
-// pane can only request the combined scope. A file an agent just created is
-// untracked, and git diff never reports one — the group came back empty and the
-// Files inspector sat on "Loading diff..." against successful responses.
 func TestGetWorkspaceDiffsIncludesUntrackedChildRepoFile(t *testing.T) {
 	root := newWorkspaceRepo(t)
 	rootBase := strings.TrimSpace(runGit(t, root, "rev-parse", "HEAD"))
@@ -394,8 +390,6 @@ func TestGetWorkspaceDiffsIncludesUntrackedChildRepoFile(t *testing.T) {
 		}
 		patches[group.Repository] = group.Patch
 	}
-	// The renderer keys its diffs by "<repository>/<path>", so an empty patch
-	// leaves the file with nothing to render at all.
 	if !strings.Contains(patches["alpha"], "+++ b/workspace-test.txt") || !strings.Contains(patches["alpha"], "+alpha workspace test") {
 		t.Fatalf("untracked child repo patch = %q", patches["alpha"])
 	}
@@ -510,8 +504,6 @@ func TestUncommittedSectionCountsPartiallyStagedFileOnce(t *testing.T) {
 		t.Fatalf("manifest version = %q, files version = %q", manifest.WorkspaceVersion, files.WorkspaceVersion)
 	}
 
-	// Two snapshots that differ only in the Uncommitted section must not share
-	// a version, or a fenced diff request could read a stale patch.
 	before := finalizeWorkspaceManifest(WorkspaceManifest{SessionID: "ao-1", Sections: WorkspaceFileSections{Uncommitted: []WorkspaceFileSummary{{Path: "README.md", Status: WorkspaceFileModified, Additions: 1}}}})
 	after := finalizeWorkspaceManifest(WorkspaceManifest{SessionID: "ao-1", Sections: WorkspaceFileSections{Uncommitted: []WorkspaceFileSummary{{Path: "README.md", Status: WorkspaceFileModified, Additions: 2}}}})
 	if before.WorkspaceVersion == after.WorkspaceVersion {
@@ -620,8 +612,6 @@ func TestUncommittedRevisionSides(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// The versioned read takes the Git status path; the unversioned after
-			// side takes the fast worktree path. Both must agree.
 			for _, version := range []string{files.WorkspaceVersion, ""} {
 				got, err := svc.GetWorkspaceFileRevision(context.Background(), "ao-1", tc.path, WorkspaceDiffUncommitted, tc.side, version, "")
 				if err != nil {
@@ -693,9 +683,6 @@ func TestWorkspaceProjectManifestListsUncommittedPerRepository(t *testing.T) {
 	}
 }
 
-// The mobile Files screen reads a worktree scope's file from GetWorkspaceDiffs
-// and GetWorkspaceFileRevision. Each scope must answer with its own sides even
-// when base, HEAD, the index and the worktree all differ.
 func TestScopedReadsKeepToTheirScopeWhenBaseHeadIndexAndWorktreeDiffer(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	base := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
@@ -704,15 +691,10 @@ func TestScopedReadsKeepToTheirScopeWhenBaseHeadIndexAndWorktreeDiffer(t *testin
 	writeWorkspaceFile(t, repo, "lib.txt", "a\nb\nc\n")
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "branch change")
-	// README.md: base "hello", HEAD "committed", worktree adds an uncommitted line.
 	writeWorkspaceFile(t, repo, "README.md", "committed\nuncommitted edit\n")
-	// src/app.go: a staged edit whose worktree bytes are back at the base, so the
-	// combined base → worktree diff is empty while Staged is not.
 	writeWorkspaceFile(t, repo, "src/app.go", "package main\n// staged\n")
 	runGit(t, repo, "add", "src/app.go")
 	writeWorkspaceFile(t, repo, "src/app.go", "package main\n")
-	// lib.txt: a staged line at the end, and an unstaged line inserted above it,
-	// so the index and the worktree number the staged line differently.
 	writeWorkspaceFile(t, repo, "lib.txt", "a\nb\nc\nstaged\n")
 	runGit(t, repo, "add", "lib.txt")
 	writeWorkspaceFile(t, repo, "lib.txt", "inserted\na\nb\nc\nstaged\n")

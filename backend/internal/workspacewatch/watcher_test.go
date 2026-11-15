@@ -124,9 +124,6 @@ func TestWatchStillReportsChangesWhenWorkspaceIsNestedInAnotherRepository(t *tes
 	parent := t.TempDir()
 	runGit(t, parent, "init")
 
-	// The workspace sits inside the parent repository. Git's upward search
-	// resolves the parent repo, which tracks no files under the workspace; the
-	// watch must fall back to walking the tree instead of trusting that answer.
 	root := filepath.Join(parent, "workspace", "session")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir nested workspace: %v", err)
@@ -160,13 +157,7 @@ func TestWatchReportsChangesWhenWorkspaceRootIsASymlink(t *testing.T) {
 		t.Fatalf("write existing-directory file: %v", err)
 	}
 
-	// Git canonicalizes --show-toplevel to the real path, so a symlinked
-	// workspace root must still be recognized as the repository toplevel;
-	// otherwise the watch falls back to WalkDir, which does not descend
-	// through a symlink root, and nested edits are never reported.
 	link := filepath.Join(t.TempDir(), "workspace")
-	// A junction needs no privileges on Windows and, like a symlink, is
-	// canonicalized away by git rev-parse --show-toplevel.
 	if runtime.GOOS == "windows" {
 		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, repo).CombinedOutput(); err != nil {
 			t.Fatalf("junction workspace: %v\n%s", err, out)
@@ -196,8 +187,6 @@ func TestDiscoverGitWorkspaceRecognizesSymlinkedToplevel(t *testing.T) {
 	}
 
 	link := filepath.Join(t.TempDir(), "workspace")
-	// A junction needs no privileges on Windows and, like a symlink, is
-	// canonicalized away by git rev-parse --show-toplevel.
 	if runtime.GOOS == "windows" {
 		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, repo).CombinedOutput(); err != nil {
 			t.Fatalf("junction workspace: %v\n%s", err, out)
@@ -206,8 +195,6 @@ func TestDiscoverGitWorkspaceRecognizesSymlinkedToplevel(t *testing.T) {
 		t.Fatalf("symlink workspace: %v", err)
 	}
 
-	// Git reports the canonical real path as the toplevel, so the workspace
-	// must be matched by filesystem identity, not by path string.
 	git := discoverGitWorkspace(context.Background(), link)
 	if !git.available {
 		t.Fatal("symlinked repository toplevel was not recognized as a git workspace")
@@ -383,10 +370,6 @@ func TestChangeInUnwatchedDirectoryStillNotifies(t *testing.T) {
 		t.Fatalf("Watch: %v", err)
 	}
 
-	// The only watch is the root, so the created directory itself stays
-	// unwatched. Its creation must still surface through the watched root's
-	// Create event so the read model refresh remains reachable even when
-	// per-directory coverage degrades.
 	unwatched := filepath.Join(root, "beyond-cap")
 	if err := os.Mkdir(unwatched, 0o755); err != nil {
 		t.Fatalf("mkdir beyond-cap directory: %v", err)
@@ -412,7 +395,6 @@ func TestHandleEventReclaimsWatchBudgetOnRemoveAndRename(t *testing.T) {
 		t.Fatalf("add victim: %v", err)
 	}
 
-	// Removing a watched directory must free its budget slot.
 	if !handleEvent(context.Background(), limiter, root, gitWorkspace{}, fsnotify.Event{
 		Name: victim,
 		Op:   fsnotify.Remove,
@@ -428,7 +410,6 @@ func TestHandleEventReclaimsWatchBudgetOnRemoveAndRename(t *testing.T) {
 		}
 	}
 
-	// Renaming a watched directory must reclaim its slot too.
 	if !handleEvent(context.Background(), limiter, root, gitWorkspace{}, fsnotify.Event{
 		Name: victim,
 		Op:   fsnotify.Rename,
@@ -439,7 +420,6 @@ func TestHandleEventReclaimsWatchBudgetOnRemoveAndRename(t *testing.T) {
 		t.Fatalf("limiter budget after Rename = %d, want 1 (already released)", limiter.used)
 	}
 
-	// The freed slot must be reusable by newly created directories.
 	created := filepath.Join(root, "created")
 	if err := os.Mkdir(created, 0o755); err != nil {
 		t.Fatalf("mkdir created directory: %v", err)
@@ -473,8 +453,6 @@ func TestLimiterAddIsIdempotent(t *testing.T) {
 	if err := limiter.add(context.Background(), dir); err != nil {
 		t.Fatalf("re-add of an already-watched directory: %v", err)
 	}
-	// Re-adding a watched directory must not consume a second budget slot:
-	// used must always equal the number of distinct watched directories.
 	if limiter.used != len(limiter.watched) || limiter.used != 1 {
 		t.Fatalf("used=%d watched=%d, want 1/1", limiter.used, len(limiter.watched))
 	}
@@ -488,7 +466,6 @@ func TestReleaseIgnoresPathsTheLimiterNeverWatched(t *testing.T) {
 	defer func() { _ = watcher.Close() }()
 
 	limiter := newDirWatchLimiter(watcher, 2)
-	// A nil limiter and paths outside the watched set must both be no-ops.
 	limiter.release(filepath.Join(t.TempDir(), "untracked"))
 	var nilLimiter *dirWatchLimiter
 	nilLimiter.release(filepath.Join(t.TempDir(), "untracked"))

@@ -99,7 +99,7 @@ func TestConfigureInjectsThePermissionTiersOpenCodeEnforces(t *testing.T) {
 		want   string
 		prompt string
 	}{
-		{want: "ao-default"}, // No standing instructions still needs every tier.
+		{want: "ao-default"},
 		{mode: ports.PermissionModeDefault, want: "ao-default", prompt: "Follow AO worker rules."},
 		{mode: ports.PermissionModeAcceptEdits, want: "ao-accept-edits", prompt: "Follow AO worker rules."},
 		{mode: ports.PermissionModeAuto, want: "ao-auto", prompt: "Follow AO worker rules."},
@@ -125,8 +125,6 @@ func TestConfigureInjectsThePermissionTiersOpenCodeEnforces(t *testing.T) {
 			if config.DefaultAgent != test.want || len(config.Agent) != 4 {
 				t.Fatalf("config = %#v, want default agent %q and four tiers", config, test.want)
 			}
-			// Every tier is advertised, so the picker can switch to any of them
-			// mid-session, and each carries AO's standing instructions.
 			for _, tier := range []string{"ao-default", "ao-accept-edits", "ao-auto", "ao-bypass"} {
 				agent, ok := config.Agent[tier]
 				if !ok {
@@ -136,16 +134,11 @@ func TestConfigureInjectsThePermissionTiersOpenCodeEnforces(t *testing.T) {
 					t.Fatalf("tier %q prompt = %#v, want %q (omitted when empty)", tier, prompt, test.prompt)
 				}
 			}
-			// Accept edits and auto write no rules at all: AO answers their
-			// requests instead, so whatever the user or repository denied is
-			// never asked about and stays denied.
 			for _, tier := range []string{"ao-default", "ao-accept-edits", "ao-auto"} {
 				if got := config.Agent[tier]["permission"]; got != nil {
 					t.Fatalf("tier %q permission = %#v, want the provider's own policy", tier, got)
 				}
 			}
-			// OpenCode's scalar full-access form: a wildcard rule can still lose
-			// to a more specific deny contributed by another config layer.
 			if got := config.Agent["ao-bypass"]["permission"]; got != "allow" {
 				t.Fatalf("bypass tier = %#v", got)
 			}
@@ -206,8 +199,6 @@ func TestPermissionPolicyAnswersRequestsTheWayAutoDoes(t *testing.T) {
 		})
 	}
 
-	// A denied tool never raises a request, so nothing here can override it —
-	// which is the whole reason AO stopped writing rules for these modes.
 	if _, handled := permissionPolicy(ports.PermissionModeAuto,
 		acpsdk.RequestPermissionRequest{Options: options[:1]}); handled {
 		t.Fatal("auto answered a request offering no allow-once option")

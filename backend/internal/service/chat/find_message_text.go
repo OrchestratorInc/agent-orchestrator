@@ -15,9 +15,6 @@ var findInlineImage = regexp.MustCompile(`\.ao/attachments/(?:attachment|image)-
 
 const maxFindBlockCacheBytes = 16 << 20
 
-// findBlockCache keeps parsed settled messages, so a re-search of a long
-// transcript does not run Markdown over all of it again. Blocks depend only on
-// the text, so its hash is the key. Cached slices are shared and read-only.
 var findBlockCache = struct {
 	sync.Mutex
 	blocks map[[sha256.Size]byte][]string
@@ -38,7 +35,6 @@ func findMessageBlocks(message domain.ConversationMessage) []string {
 	if message.Streaming {
 		return parse(source)
 	}
-	// The same text splits differently as a reply and as a person's message.
 	key := sha256.Sum256([]byte(string(message.Role) + "\x00" + source))
 	findBlockCache.Lock()
 	blocks, ok := findBlockCache.blocks[key]
@@ -87,14 +83,9 @@ func findMessageText(message domain.ConversationMessage) string {
 			source = source[:match[0]]
 		}
 	}
-	// Inline image paths are removed per block by FindUserBlocks, which knows
-	// which ones the bubble draws as image chips and which it shows as code.
 	return source
 }
 
-// stripInlineImages removes staged image paths the bubble draws as image chips.
-// A path that overlaps a [start, end) range in literal is shown as written (in
-// a code span or a link label), so it stays.
 func stripInlineImages(source string, literal [][2]int) string {
 	var visible strings.Builder
 	from := 0

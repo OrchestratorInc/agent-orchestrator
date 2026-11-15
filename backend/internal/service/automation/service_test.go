@@ -147,8 +147,6 @@ func TestListLoadsLatestRunsInOneStoreCall(t *testing.T) {
 	}
 }
 
-// Removing server-side canonicalization, default enabling, or injected durable
-// identity must make this test fail.
 func TestCreateValidatesAndPersistsCanonicalAutomation(t *testing.T) {
 	now := time.Date(2026, time.March, 6, 15, 0, 0, 0, time.UTC)
 	store := newFakeStore()
@@ -179,8 +177,6 @@ func TestCreateValidatesAndPersistsCanonicalAutomation(t *testing.T) {
 	}
 }
 
-// Removing patch semantics, re-enable schedule advancement, or schedule
-// replacement canonicalization must make this test fail.
 func TestUpdateAppliesOnlyProvidedFieldsAndReenablesFromNow(t *testing.T) {
 	now := time.Date(2026, time.March, 8, 15, 30, 0, 0, time.UTC)
 	store := newFakeStore()
@@ -211,8 +207,6 @@ func TestUpdateAppliesOnlyProvidedFieldsAndReenablesFromNow(t *testing.T) {
 	}
 }
 
-// Disabling is only a scheduling gate; it must not rewrite the outstanding
-// occurrence or any durable history pointer.
 func TestUpdateDisablePreservesNextOccurrence(t *testing.T) {
 	now := time.Date(2026, time.March, 8, 15, 30, 0, 0, time.UTC)
 	next := now.Add(time.Hour)
@@ -304,9 +298,6 @@ func TestUpdateTimezonePreservesIntervalAnchor(t *testing.T) {
 	}
 }
 
-// A timezone-only edit must not delay a schedule that has already started:
-// re-anchoring a recent DTSTART in a zone further west would otherwise put it
-// in the future and skip every occurrence before it.
 func TestUpdateTimezoneDoesNotDelayStartedSchedule(t *testing.T) {
 	for _, tc := range []struct {
 		name, cron, rrule, to, next string
@@ -389,8 +380,6 @@ func isAPIError(err error, kind apierr.Kind) bool {
 	return errors.As(err, &apiError) && apiError.Kind == kind
 }
 
-// Creation intent is emitted only after persistence; updates and invalid/failed
-// creations must not inflate the canonical creation count.
 func TestCreationIntentTelemetry(t *testing.T) {
 	for _, tc := range []struct{ template, useCase, wantTemplate, wantUseCase string }{
 		{"", "", "custom", "unknown"},

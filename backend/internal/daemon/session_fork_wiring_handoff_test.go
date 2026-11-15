@@ -36,8 +36,6 @@ func (r *recordingForkNotes) ForkHandoffNote(_ context.Context, source domain.Se
 	return "NOTE", nil
 }
 
-// A terminal agent with no fork command is forked with its conversation, and
-// the end of its screen, given to a fresh agent as text.
 func TestTerminalAgentWithoutForkCommandForksAsText(t *testing.T) {
 	ctx := context.Background()
 	rec := domain.SessionRecord{ID: "copilot-1", Mode: domain.SessionModeTUI, Harness: domain.HarnessCopilot}
@@ -61,7 +59,6 @@ func TestTerminalAgentWithoutForkCommandForksAsText(t *testing.T) {
 	}
 }
 
-// Other refusals still stand: a text copy can't fix them.
 func TestTerminalForkKeepsRefusalsTextCantFix(t *testing.T) {
 	rec := domain.SessionRecord{ID: "copilot-1", Mode: domain.SessionModeTUI}
 	sources := forkSources{terminal: fakeTerminalForkSources{source: sessionfork.Source{Refusal: sessionfork.CodeOlderTurn}}, notes: &recordingForkNotes{}}
@@ -74,8 +71,6 @@ func TestTerminalForkKeepsRefusalsTextCantFix(t *testing.T) {
 	}
 }
 
-// A hibernated Chat session gets the notice queued for when its agent wakes,
-// rather than being woken for it.
 func TestPRMovedNoticeIsQueuedForAHibernatedChat(t *testing.T) {
 	var queued string
 	send := func(context.Context, domain.SessionID, string) error {
@@ -94,8 +89,6 @@ func TestPRMovedNoticeIsQueuedForAHibernatedChat(t *testing.T) {
 	}
 }
 
-// A Chat session whose agent never started has nowhere to queue the notice,
-// so its agent is started, as opening the session would, and told.
 func TestPRMovedNoticeStartsAChatAgentThatNeverStarted(t *testing.T) {
 	var started bool
 	var sent string
@@ -148,8 +141,6 @@ func (n *cutoffNotes) ForkHandoffNote(_ context.Context, _ domain.SessionRecord,
 	return "NOTE", nil
 }
 
-// A terminal fork's note is the screen and turns as they were when its files
-// were captured, not whatever the original did while the fork was set up.
 func TestTerminalTextForkUsesTheScreenFromWhenItsFilesWereCaptured(t *testing.T) {
 	screen := "$ before the fork"
 	notes := &cutoffNotes{}

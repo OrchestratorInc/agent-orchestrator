@@ -1,4 +1,3 @@
-// Package codewhale implements the Codewhale terminal adapter.
 package codewhale
 
 import (
@@ -22,8 +21,6 @@ const adapterID = "codewhale"
 
 var nativeSessionIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// Plugin launches the user's Codewhale installation without replacing its
-// home directory, credentials, provider configuration, hooks, or sessions.
 type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
@@ -31,7 +28,6 @@ type Plugin struct {
 	runCommand     commandRunner
 }
 
-// New returns a ready-to-register Codewhale adapter.
 func New() *Plugin { return &Plugin{} }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -40,7 +36,6 @@ var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentNativeSessionResolver = (*Plugin)(nil)
 
-// Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
 	return adapters.Manifest{
 		ID:          adapterID,
@@ -53,13 +48,10 @@ func (p *Plugin) Manifest() adapters.Manifest {
 	}
 }
 
-// GetConfigSpec reports Codewhale's free-form model override.
 func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 	return agentbase.ModelConfigSpec(ctx, "Model override passed to `codewhale --model`.")
 }
 
-// GetLaunchCommand starts a fresh interactive Codewhale session. AO delivers
-// the initial task after startup because --prompt runs once and exits.
 func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) ([]string, error) {
 	cmd, err := p.baseCommand(ctx, cfg.WorkspacePath, cfg.Config, cfg.Permissions)
 	if err != nil {
@@ -69,7 +61,6 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	return cmd, nil
 }
 
-// GetPromptDeliveryStrategy keeps the TUI alive while AO sends its first task.
 func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchConfig) (ports.PromptDeliveryStrategy, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -77,7 +68,6 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// PromptReadinessHints gives the TUI time to render its input before delivery.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
@@ -91,10 +81,6 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 	}, nil
 }
 
-// GetRestoreCommand resumes exactly the durable Codewhale conversation UUID
-// captured from its saved-session store. Missing identity permits AO's ordinary
-// fresh fallback; malformed identity fails closed instead of selecting a
-// best-match session or mistaking a lifecycle hook id for a conversation id.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) ([]string, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -137,15 +123,12 @@ func appendPermissionFlags(cmd *[]string, mode ports.PermissionMode) {
 	case ports.PermissionModeAuto:
 		*cmd = append(*cmd, "--approval-policy", "auto")
 	case ports.PermissionModeBypassPermissions:
-		// v0.10.0 retains --yolo as its explicit unrestricted TUI mode. The
-		// public --approval-policy parser intentionally does not accept bypass.
 		*cmd = append(*cmd, "--yolo")
 	case ports.PermissionModeDefault, ports.PermissionModeAcceptEdits:
 		*cmd = append(*cmd, "--approval-policy", "on-request")
 	}
 }
 
-// SessionInfo returns lifecycle metadata already persisted by AO.
 func (p *Plugin) SessionInfo(ctx context.Context, session ports.SessionRef) (ports.SessionInfo, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.SessionInfo{}, false, err
@@ -173,13 +156,10 @@ var codewhaleBinarySpec = binaryutil.BinarySpec{
 	},
 }
 
-// ResolveCodewhaleBinary finds Codewhale on PATH or in its common native
-// installer locations.
 func ResolveCodewhaleBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, codewhaleBinarySpec)
 }
 
-// ResolveBinary resolves the executable path for readiness and model probes.
 func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return p.codewhaleBinary(ctx)
 }
@@ -210,8 +190,6 @@ func (p *Plugin) codewhaleBinary(ctx context.Context) (string, error) {
 	return binary, nil
 }
 
-// InvalidateBinaryResolution forgets the cached executable path, so the next
-// launch resolves it again: after AO installs a managed copy, for example.
 func (p *Plugin) InvalidateBinaryResolution() {
 	p.binaryMu.Lock()
 	p.resolvedBinary = ""

@@ -18,7 +18,6 @@ import (
 	"time"
 )
 
-// fakeStartTime is a launch identity that can never match a live process.
 const fakeStartTime = "Thu Jan  1 00:00:00 1970"
 
 func startSleeper(t *testing.T, args ...string) *exec.Cmd {
@@ -34,8 +33,6 @@ func startSleeper(t *testing.T, args ...string) *exec.Cmd {
 	return cmd
 }
 
-// sleeperRunning reports whether the un-reaped child is still alive (WNOHANG:
-// 0 means running, pid means it exited and became reapable).
 func sleeperRunning(t *testing.T, pid int) bool {
 	t.Helper()
 	var status syscall.WaitStatus
@@ -46,11 +43,6 @@ func sleeperRunning(t *testing.T, pid int) bool {
 	return n == 0
 }
 
-// Regression for issue #3475 (A1): a PID recorded by a previous daemon
-// generation is stale by construction. If the live process holding that number
-// does not carry the recorded launch identity, reap must not kill it — the
-// recycled number can belong to anything, including a tmux server whose group
-// kill wipes every session at once.
 func TestReapPersistedProcessesRefusesMismatchedIdentity(t *testing.T) {
 	cmd := startSleeper(t, "sleep", "60")
 
@@ -77,8 +69,6 @@ func TestReapPersistedProcessesRefusesMismatchedIdentity(t *testing.T) {
 	}
 }
 
-// A legacy registry entry (written before launch identities were recorded)
-// carries no proof of ownership, so reap must skip it entirely.
 func TestReapPersistedProcessesSkipsLegacyEntriesWithoutStartTime(t *testing.T) {
 	cmd := startSleeper(t, "sleep", "60")
 
@@ -104,7 +94,6 @@ func TestReapPersistedProcessesSkipsLegacyEntriesWithoutStartTime(t *testing.T) 
 	}
 }
 
-// Reap still does its job when the recorded identity checks out.
 func TestReapPersistedProcessesKillsVerifiedProcess(t *testing.T) {
 	cmd := startSleeper(t, "sleep", "60")
 	startTime := previewProcessStartTime(cmd.Process.Pid)
@@ -160,10 +149,6 @@ func TestSignalPreviewGroupKillsVerifiedGroup(t *testing.T) {
 		"verified preview group was not killed")
 }
 
-// Once the root is reaped, the PID no longer provably belongs to AO's
-// preview, so no group kill may happen even though descendants survive: a
-// leaked preview process is safer than a group kill landing on a recycled
-// PID. The orphan must still be alive after the escalation call.
 func TestForceKillLeaksOrphanedGroupAfterRootIsReaped(t *testing.T) {
 	cmd := previewCommand("/bin/sh", "-c", "sleep 60 & sleep 1")
 	if err := cmd.Start(); err != nil {
@@ -203,8 +188,6 @@ func waitUntil(t *testing.T, timeout time.Duration, done func() bool, message st
 	t.Fatal(message)
 }
 
-// requireBootTicks returns pid's start time and its ticks, failing unless the
-// start time is boot+<this boot's id>+<non-zero ticks since boot>.
 func requireBootTicks(t *testing.T, pid int) (start, ticks string) {
 	t.Helper()
 	boot, err := bootID()
@@ -219,9 +202,6 @@ func requireBootTicks(t *testing.T, pid int) (start, ticks string) {
 	return start, ticks
 }
 
-// On Linux the launch identity is the boot id plus clock ticks since boot,
-// which a wall-clock step (a VM resumed from a pause) does not move; ps's
-// lstart moves with it.
 func TestPreviewProcessStartTimeUsesBootTicksOnLinux(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("boot ticks come from /proc")
@@ -230,15 +210,13 @@ func TestPreviewProcessStartTimeUsesBootTicksOnLinux(t *testing.T) {
 	requireBootTicks(t, cmd.Process.Pid)
 }
 
-// The #3475 case under boot ticks: a recorded PID that now belongs to a later
-// process in the same boot must not match the record.
 func TestSignalPreviewGroupRefusesLaterProcessFromSameBoot(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("boot ticks come from /proc")
 	}
 	earlier := startSleeper(t, "sleep", "60")
 	recorded, _ := requireBootTicks(t, earlier.Process.Pid)
-	time.Sleep(50 * time.Millisecond) // several clock ticks (USER_HZ is 100)
+	time.Sleep(50 * time.Millisecond)
 	later := startSleeper(t, "sleep", "60")
 	if err := signalPreviewGroup(later.Process.Pid, recorded, syscall.SIGKILL); !errors.Is(err, errStalePreviewPID) {
 		t.Fatalf("signalPreviewGroup = %v, want errStalePreviewPID", err)
@@ -249,9 +227,6 @@ func TestSignalPreviewGroupRefusesLaterProcessFromSameBoot(t *testing.T) {
 	}
 }
 
-// The registry outlives a reboot, and ticks since boot repeat across boots: a
-// record from another boot must not match a process that started at the same
-// tick in this one.
 func TestSignalPreviewGroupRefusesRecordFromAnotherBoot(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("boot ticks come from /proc")
@@ -268,8 +243,6 @@ func TestSignalPreviewGroupRefusesRecordFromAnotherBoot(t *testing.T) {
 	}
 }
 
-// A preview recorded with ps's lstart (macOS, or Linux before boot ticks)
-// can still be stopped.
 func TestSignalPreviewGroupAcceptsLstartRecord(t *testing.T) {
 	cmd := startSleeper(t, "sleep", "60")
 	recorded := psStartTime(cmd.Process.Pid)

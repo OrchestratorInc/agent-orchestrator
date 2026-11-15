@@ -30,8 +30,6 @@ const (
 
 type accountSpawnFunc func(ctx context.Context, bin, workdir string, env []string, args []string) (*process, error)
 
-// AccountFactory reuses the app-server transport for account-scoped reads
-// without creating a conversation.
 type AccountFactory struct {
 	resolve func(context.Context) (string, error)
 	log     *slog.Logger
@@ -48,13 +46,10 @@ type capabilityCall struct {
 	result domain.CodexAccountCapabilities
 }
 
-// NewAccountFactory builds a structured Codex account client factory.
 func NewAccountFactory(plugin codexPlugin, log *slog.Logger) *AccountFactory {
 	return NewAccountFactoryWithResolver(plugin.ResolveBinary, log)
 }
 
-// NewAccountFactoryWithResolver lets daemon readiness resolve through a fresh
-// adapter instance for every native operation, avoiding binary-path caches.
 func NewAccountFactoryWithResolver(resolve func(context.Context) (string, error), log *slog.Logger) *AccountFactory {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -70,7 +65,6 @@ func NewAccountFactoryWithResolver(resolve func(context.Context) (string, error)
 
 var _ ports.CodexAccountClientFactory = (*AccountFactory)(nil)
 
-// Open starts an account-scoped Codex app-server client.
 func (f *AccountFactory) Open(ctx context.Context, account ports.CodexAccountContext) (ports.CodexAccountClient, error) {
 	if account.Home == "" || !filepath.IsAbs(account.Home) {
 		return nil, errors.New("codex account home must be absolute")
@@ -105,8 +99,6 @@ func (f *AccountFactory) Open(ctx context.Context, account ports.CodexAccountCon
 	return client, nil
 }
 
-// Capabilities detects and caches the structured account protocol supported by
-// the resolved Codex binary and version.
 func (f *AccountFactory) Capabilities(ctx context.Context) domain.CodexAccountCapabilities {
 	probeCtx, probeCancel := context.WithTimeout(ctx, capabilityProbeTimeout)
 	defer probeCancel()
@@ -297,9 +289,6 @@ func (c *accountClient) Read(ctx context.Context, refreshToken bool) (ports.Code
 	return ports.CodexAccountObservation{Authentication: domain.AgentAuthenticationAuthorized, Method: method, Email: safeCodexAccountEmail(response.Account.Email)}, nil
 }
 
-// Logout asks Codex to own the complete sign-out operation, including OAuth
-// revocation and credential-store cleanup. AO deliberately does not reproduce
-// that protocol by deleting auth.json itself.
 func (c *accountClient) Logout(ctx context.Context) error {
 	if err := c.conn.request(ctx, codexproto.MethodAccountLogout, nil, nil); err != nil {
 		var rpcErr *rpcError

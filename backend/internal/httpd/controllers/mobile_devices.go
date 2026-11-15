@@ -11,25 +11,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// DeviceRoster is the management view of the push-device registry, satisfied by
-// *mobilebridge.DeviceRegistry.
 type DeviceRoster interface {
 	List() []mobilebridge.PushDevice
 	Delete(installID string) error
 }
 
-// LiveSet reports which install ids are currently running the app, satisfied by
-// *presence.Tracker.
 type LiveSet interface {
 	Live() map[string]bool
-	// LastSeen reports when a device last made any request. The registry's own
-	// LastSeenAt only advances on register/announce, so it goes stale during a
-	// long foreground session — a phone open for hours would background and
-	// immediately read "last seen 3 hours ago".
 	LastSeen(installID string) (time.Time, bool)
 }
 
-// DeviceAccess is the device list's view of credentials, satisfied by *BridgeService.
 type DeviceAccess interface {
 	AccessDevices() []mobilebridge.AccessDevice
 	ConnectedCredentials() map[string]bool
@@ -38,7 +29,6 @@ type DeviceAccess interface {
 	UnlinkAccount() error
 }
 
-// AccountDevicesID is the one list row for all account devices, which share one token.
 const AccountDevicesID = "account"
 
 const (
@@ -47,27 +37,17 @@ const (
 	deviceKindAccount  = "account"
 )
 
-// MobileDevicesController owns the desktop-only device list routes. They are
-// mounted under /api/v1/mobile, which lanControlBlock 404s on the LAN listener,
-// so a paired device can neither enumerate nor remove the others.
 type MobileDevicesController struct {
 	Registry DeviceRoster
 	Presence LiveSet
-	// Nil lists push registrations only.
-	Access DeviceAccess
+	Access   DeviceAccess
 }
 
-// writeRegistryUnavailable answers a request with 503 DEVICE_REGISTRY_UNAVAILABLE.
-// Shared by List/Mute/Remove for the one failure mode they all guard against: a
-// device registry that failed to load (e.g. a corrupt push-devices.json),
-// which must not prevent the daemon from starting or the rest of the app from
-// working.
 func writeRegistryUnavailable(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "DEVICE_REGISTRY_UNAVAILABLE",
 		"The mobile device registry failed to load; device management is unavailable until the daemon restarts with a valid registry", nil)
 }
 
-// List handles GET /api/v1/mobile/devices.
 func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 	if c.Registry == nil && c.Access == nil {
 		writeRegistryUnavailable(w, r)
@@ -81,10 +61,6 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 	if c.Presence != nil {
 		live = c.Presence.Live()
 	}
-	// Prefer presence's timestamp: it advances on every request, whereas the
-	// stored one only moves on register/announce. Presence is in-memory, so
-	// after a daemon restart it has nothing and the stored value, the last
-	// registration, is the best we have.
 	lastSeen := func(d mobilebridge.PushDevice) time.Time {
 		seen := d.LastSeenAt
 		if c.Presence != nil {
@@ -95,7 +71,6 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 		return seen
 	}
 	out := make([]MobileDeviceResponse, 0, len(devices)+1)
-	// A phone's push registration belongs to the row of the token that made it.
 	owned := map[string]bool{}
 	if c.Access != nil {
 		push := make(map[string]mobilebridge.PushDevice, len(devices))
@@ -146,8 +121,6 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 			LastSeenAt:           lastSeen(d),
 		})
 	}
-	// Live devices first, then most-recently-seen, so the phone you are holding
-	// is at the top of the list.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Live != out[j].Live {
 			return out[i].Live
@@ -157,8 +130,6 @@ func (c *MobileDevicesController) List(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, MobileDevicesResponse{Devices: out})
 }
 
-// Remove handles DELETE /api/v1/mobile/devices/{id}: it revokes a device or unlinks
-// the account. A phone on the pairing password only loses its notifications.
 func (c *MobileDevicesController) Remove(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if c.Access != nil {
@@ -176,7 +147,6 @@ func (c *MobileDevicesController) Remove(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		if found {
-			// Best effort: the token is already revoked.
 			if installID != "" && c.Registry != nil {
 				_ = c.Registry.Delete(installID)
 			}

@@ -1,21 +1,5 @@
 //go:build !windows
 
-// Package e2e drives a real `ao daemon` over HTTP.
-//
-// These are not unit tests with a fake seam. They boot the actual daemon binary
-// against a throwaway data dir, register a real git project, and talk to a real
-// agent. That is the only level at which some of chat mode's promises can be
-// checked at all: "the mode you picked is the mode you get", "your message
-// survives a restart", "the agent asked before it acted" are claims about the
-// whole stack — routes, store, controller, provider — not about any one package.
-//
-// Gated on AO_CHAT_E2E=1 because they cost real model calls and need a working
-// local agent install:
-//
-//	AO_CHAT_E2E=1 go test ./e2e/ -v -timeout 20m
-//
-// Windows is excluded: the harness uses process groups to make sure a killed
-// daemon takes its agent child processes with it.
 package e2e
 
 import (
@@ -39,8 +23,6 @@ import (
 
 const gateEnv = "AO_CHAT_E2E"
 
-// requireE2E skips unless the gate is set and the agent binary is present.
-// Skipping loudly with a reason beats a green run that exercised nothing.
 func requireE2E(t *testing.T) {
 	t.Helper()
 	if os.Getenv(gateEnv) != "1" {
@@ -59,18 +41,12 @@ func codexBinary() string {
 	return "codex"
 }
 
-/* ---- the daemon under test --------------------------------------------- */
-
 var (
 	buildOnce sync.Once
 	aoBinary  string
 	buildErr  error
 )
 
-// buildDaemon compiles the binary under test once per `go test` process. Testing
-// the built binary rather than an in-process assembly is the point: wiring bugs
-// live in main and in the daemon's own boot path, which an in-process harness
-// would skip right past.
 func buildDaemon(t *testing.T) string {
 	t.Helper()
 	buildOnce.Do(func() {
@@ -105,9 +81,6 @@ type daemon struct {
 	pgid int
 }
 
-// startDaemon boots a daemon on dataDir. Passing a dataDir that a previous
-// daemon used is how the restart scenarios work: the second boot has to find the
-// first one's sessions on disk.
 func startDaemon(t *testing.T, dataDir string) *daemon {
 	t.Helper()
 	bin := buildDaemon(t)
@@ -124,15 +97,10 @@ func startDaemon(t *testing.T, dataDir string) *daemon {
 		"AO_DATA_DIR="+dataDir,
 		"AO_RUN_FILE="+filepath.Join(dataDir, "running.json"),
 		"AO_PORT="+strconv.Itoa(port),
-		// Never inherit a desktop-stamped export setting from the shell that
-		// runs the tests; a test daemon must not report to PostHog.
 		"AO_TELEMETRY_REMOTE=off",
 	)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	// Own process group: a hard kill must take the agent child processes with it,
-	// or a killed daemon leaves an app-server holding the conversation and the
-	// next boot's resume races a process that is still alive.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
@@ -149,15 +117,10 @@ func startDaemon(t *testing.T, dataDir string) *daemon {
 	}
 	t.Cleanup(d.kill)
 	d.waitReady()
-	// Kill this daemon's sessions before it goes away. A TUI session's tmux lives
-	// outside the data dir and outlives the daemon, so without this the machine
-	// accumulates panes that later collide by name. Best-effort: the crash
-	// scenarios kill the daemon on purpose and these calls simply fail.
 	t.Cleanup(d.killAllSessions)
 	return d
 }
 
-// killAllSessions tears down every session this daemon still considers live.
 func (d *daemon) killAllSessions() {
 	var list struct {
 		Sessions []struct {
@@ -192,7 +155,6 @@ func (d *daemon) waitReady() {
 	d.t.Fatalf("daemon never became ready on :%d\n%s", d.port, d.tailLog())
 }
 
-// stop shuts the daemon down the way a user quitting the app would.
 func (d *daemon) stop() {
 	if d.cmd == nil || d.cmd.Process == nil {
 		return
@@ -210,8 +172,6 @@ func (d *daemon) stop() {
 	d.waitPortFree()
 }
 
-// kill is the crash case: no shutdown hooks run, nothing gets settled on the way
-// out. What the next boot finds on disk is all it has.
 func (d *daemon) kill() {
 	if d.cmd == nil || d.cmd.Process == nil {
 		return
@@ -240,9 +200,6 @@ func (d *daemon) tailLog() string {
 		return fmt.Sprintf("(no daemon log: %v)", err)
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-	// Successful request logs are noise here: the interesting lines are warnings,
-	// errors, and anything the chat controller wrote. Keeping them out is what
-	// makes a failure message readable at all.
 	kept := make([]string, 0, len(lines))
 	for _, line := range lines {
 		if strings.Contains(line, "level=INFO msg=\"http request\"") && strings.Contains(line, "status=200") {
@@ -255,8 +212,6 @@ func (d *daemon) tailLog() string {
 	}
 	return "--- daemon log (non-200 requests, warnings, errors) ---\n" + strings.Join(kept, "\n")
 }
-
-/* ---- HTTP -------------------------------------------------------------- */
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
@@ -294,7 +249,6 @@ func (d *daemon) call(method, path string, body, out any) (int, error) {
 	return res.StatusCode, nil
 }
 
-// mustCall fails the test unless the response status matches.
 func (d *daemon) mustCall(method, path string, want int, body, out any) {
 	d.t.Helper()
 	var raw json.RawMessage
@@ -303,8 +257,6 @@ func (d *daemon) mustCall(method, path string, want int, body, out any) {
 		d.t.Fatalf("%s %s: %v", method, path, err)
 	}
 	if status != want {
-		// The envelope deliberately hides internal detail from clients, so the
-		// daemon's own log is the only place the cause is written down.
 		d.t.Fatalf("%s %s: status %d, want %d: %s\n%s", method, path, status, want, raw, d.tailLog())
 	}
 	if out != nil && len(raw) > 0 {
@@ -314,8 +266,6 @@ func (d *daemon) mustCall(method, path string, want int, body, out any) {
 	}
 }
 
-// apiError is the daemon's error envelope. Asserting on `code` rather than on
-// prose keeps these tests from breaking when a message is reworded.
 type apiError struct {
 	Error   string `json:"error"`
 	Code    string `json:"code"`
@@ -332,14 +282,6 @@ func (d *daemon) callExpectingError(method, path string, body any) (int, apiErro
 	return status, out
 }
 
-/* ---- fixtures ---------------------------------------------------------- */
-
-// seedProject creates a real git repo and registers it, because a session's
-// workspace is a real worktree cut from a real branch.
-//
-// The project id is made unique per run because session ids derive from it and a
-// TUI session's tmux name is global to the machine, not scoped to the data dir. A
-// fixed fixture name collides with its own leftovers from an earlier run.
 func seedProject(t *testing.T, d *daemon, name string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), fmt.Sprintf("%s%d", name, uniqueSuffix()))
@@ -363,8 +305,6 @@ func seedProject(t *testing.T, d *daemon, name string) string {
 	}
 	run("git", "add", "-A")
 	run("git", "commit", "-m", "init")
-	// Strict default-branch resolution deliberately refuses a local-only HEAD.
-	// Give the fixture a primary remote with a cached HEAD like a real project.
 	run("git", "remote", "add", "origin", dir)
 	run("git", "fetch", "origin", "main")
 	run("git", "remote", "set-head", "origin", "main")
@@ -374,7 +314,6 @@ func seedProject(t *testing.T, d *daemon, name string) string {
 	}
 	d.mustCall("POST", "/projects", http.StatusCreated, map[string]any{"path": dir}, &out)
 	if out.Project.ID == "" {
-		// Some builds answer 200 for an already-registered path; re-read to get the id.
 		d.mustCall("POST", "/projects", http.StatusOK, map[string]any{"path": dir}, &out)
 	}
 	if out.Project.ID == "" {
@@ -383,9 +322,6 @@ func seedProject(t *testing.T, d *daemon, name string) string {
 	return out.Project.ID
 }
 
-// setPermissions sets the project's agent permission mode. Approvals are only
-// reachable through it: AO maps permission mode onto the provider's approval
-// policy at launch, and the default posture deliberately never asks.
 func setPermissions(t *testing.T, d *daemon, projectID, mode string) {
 	t.Helper()
 	d.mustCall("PUT", "/projects/"+projectID+"/config", http.StatusOK, map[string]any{
@@ -414,28 +350,17 @@ func spawn(t *testing.T, d *daemon, req map[string]any) spawned {
 	return out
 }
 
-/* ---- conversation reads ------------------------------------------------ */
-
 type turn struct {
-	// Set when an undo discarded the turn: the row survives so a client can say
-	// what was taken back, which is the distinction the rollback scenarios assert.
-	RolledBack     bool   `json:"rolledBack"`
-	ID             string `json:"id"`
-	State          string `json:"state"`
-	ProviderTurnID string `json:"providerTurnId"`
-	ErrorMessage   string `json:"errorMessage"`
-	RequestedAt    string `json:"requestedAt"`
-	// Diff is what the turn changed on disk. A nil pointer and an empty file list
-	// are different answers: the first means the provider never reported, the second
-	// means it reported that nothing changed.
-	Diff *turnDiff `json:"diff"`
-	// Plan is the agent's plan for the turn. Nil means it made none, which is not the
-	// same as an empty plan.
-	Plan *turnPlan `json:"plan"`
+	RolledBack     bool      `json:"rolledBack"`
+	ID             string    `json:"id"`
+	State          string    `json:"state"`
+	ProviderTurnID string    `json:"providerTurnId"`
+	ErrorMessage   string    `json:"errorMessage"`
+	RequestedAt    string    `json:"requestedAt"`
+	Diff           *turnDiff `json:"diff"`
+	Plan           *turnPlan `json:"plan"`
 }
 
-// turnPlan is the agent's plan, as structured steps rather than prose: the per-step
-// status is where the agent is up to, and that is not recoverable from a sentence.
 type turnPlan struct {
 	Explanation string     `json:"explanation"`
 	Steps       []planStep `json:"steps"`
@@ -459,8 +384,6 @@ type diffFile struct {
 	Status    string `json:"status"`
 }
 
-// fileByPath finds a changed file, so an assertion does not depend on the order the
-// provider happened to list them in.
 func (d turnDiff) fileByPath(path string) (diffFile, bool) {
 	for _, file := range d.Files {
 		if file.Path == path {
@@ -482,16 +405,13 @@ type message struct {
 }
 
 type activity struct {
-	ID        string `json:"id"`
-	TurnID    string `json:"turnId"`
-	Sequence  int64  `json:"sequence"`
-	Kind      string `json:"activityKind"`
-	Status    string `json:"status"`
-	Summary   string `json:"summary"`
-	RequestID string `json:"requestId"`
-	// Detail is the typed payload for the activity's kind. An approval's offered
-	// decisions live in here rather than as a top-level field, which is the shape
-	// the renderer reads.
+	ID         string          `json:"id"`
+	TurnID     string          `json:"turnId"`
+	Sequence   int64           `json:"sequence"`
+	Kind       string          `json:"activityKind"`
+	Status     string          `json:"status"`
+	Summary    string          `json:"summary"`
+	RequestID  string          `json:"requestId"`
 	DetailJSON json.RawMessage `json:"detail"`
 }
 
@@ -500,9 +420,6 @@ type decisionOpt struct {
 	Label string `json:"label"`
 }
 
-// decisions is what a client can actually render buttons from. Reading it the way
-// the renderer does is the point: a field the daemon writes somewhere the client
-// never looks is indistinguishable from a field it never wrote.
 func (a activity) decisions() []decisionOpt {
 	var detail struct {
 		Decisions []decisionOpt `json:"decisions"`
@@ -523,32 +440,24 @@ type turnSettings struct {
 }
 
 type snapshot struct {
-	ConversationID string       `json:"conversationId"`
-	Settings       turnSettings `json:"settings"`
-	Mode           string       `json:"mode"`
-	Controller     string       `json:"controller"`
-	Title          string       `json:"title"`
-	LatestSequence int64        `json:"latestSequence"`
-	Turns          []turn       `json:"turns"`
-	Messages       []message    `json:"messages"`
-	Activities     []activity   `json:"activities"`
-	// Pointers because absent and zero are different claims: the provider not
-	// having reported yet is not the same as a conversation using no tokens.
-	Usage      *usageState      `json:"usage"`
-	RateLimits *rateLimitsState `json:"rateLimits"`
-	// Nil until a compaction has run, which is the distinction the compaction
-	// scenarios assert on.
-	CompactedAt *string `json:"compactedAt"`
-	// Provider state that belongs to the conversation rather than to a turn. All nil
-	// until the provider reports, so absent stays distinguishable from empty.
-	ModelReroute *modelRerouteState `json:"modelReroute"`
-	Account      *accountState      `json:"account"`
-	ThreadState  *threadState       `json:"threadState"`
-	MCPServers   []mcpServerState   `json:"mcpServers"`
+	ConversationID string             `json:"conversationId"`
+	Settings       turnSettings       `json:"settings"`
+	Mode           string             `json:"mode"`
+	Controller     string             `json:"controller"`
+	Title          string             `json:"title"`
+	LatestSequence int64              `json:"latestSequence"`
+	Turns          []turn             `json:"turns"`
+	Messages       []message          `json:"messages"`
+	Activities     []activity         `json:"activities"`
+	Usage          *usageState        `json:"usage"`
+	RateLimits     *rateLimitsState   `json:"rateLimits"`
+	CompactedAt    *string            `json:"compactedAt"`
+	ModelReroute   *modelRerouteState `json:"modelReroute"`
+	Account        *accountState      `json:"account"`
+	ThreadState    *threadState       `json:"threadState"`
+	MCPServers     []mcpServerState   `json:"mcpServers"`
 }
 
-// modelRerouteState is the provider answering with a model other than the one asked
-// for. Present means the composer selected model is no longer what is replying.
 type modelRerouteState struct {
 	FromModel      string `json:"fromModel"`
 	ToModel        string `json:"toModel"`
@@ -564,8 +473,6 @@ type accountState struct {
 	ReauthReason     string  `json:"reauthReason"`
 }
 
-// threadState is the PROVIDER lifecycle view of the thread, not the session status
-// AO derives. Both are readable from one snapshot, which is why they are separate.
 type threadState struct {
 	Status     string   `json:"status"`
 	WaitingOn  []string `json:"waitingOn"`
@@ -580,8 +487,6 @@ type mcpServerState struct {
 	FailureReason string `json:"failureReason"`
 }
 
-// usageState is the conversation's token position, carried as current state on the
-// snapshot rather than as timeline rows.
 type usageState struct {
 	ContextUsed   int64 `json:"contextUsed"`
 	ContextWindow int64 `json:"contextWindow"`
@@ -591,24 +496,19 @@ type usageState struct {
 	TotalTokens   int64 `json:"totalTokens"`
 }
 
-// rateLimitsState is the account's quota position. Percentages in 0..100, with
-// negative meaning the provider did not report that window.
 type rateLimitsState struct {
-	PrimaryUsedPercent       float64 `json:"primaryUsedPercent"`
-	SecondaryUsedPercent     float64 `json:"secondaryUsedPercent"`
-	PrimaryResetsInSeconds   int64   `json:"primaryResetsInSeconds"`
-	SecondaryResetsInSeconds int64   `json:"secondaryResetsInSeconds"`
-	PlanLabel                string  `json:"planLabel"`
-	// CompactedAt is when history was last summarized to reclaim context, empty if
-	// never. On the snapshot because a client consults it on every render and must
-	// not have to scan an unbounded timeline for it.
-	CompactedAt    string     `json:"compactedAt"`
-	Mode           string     `json:"mode"`
-	Controller     string     `json:"controller"`
-	LatestSequence int64      `json:"latestSequence"`
-	Turns          []turn     `json:"turns"`
-	Messages       []message  `json:"messages"`
-	Activities     []activity `json:"activities"`
+	PrimaryUsedPercent       float64    `json:"primaryUsedPercent"`
+	SecondaryUsedPercent     float64    `json:"secondaryUsedPercent"`
+	PrimaryResetsInSeconds   int64      `json:"primaryResetsInSeconds"`
+	SecondaryResetsInSeconds int64      `json:"secondaryResetsInSeconds"`
+	PlanLabel                string     `json:"planLabel"`
+	CompactedAt              string     `json:"compactedAt"`
+	Mode                     string     `json:"mode"`
+	Controller               string     `json:"controller"`
+	LatestSequence           int64      `json:"latestSequence"`
+	Turns                    []turn     `json:"turns"`
+	Messages                 []message  `json:"messages"`
+	Activities               []activity `json:"activities"`
 }
 
 func (s snapshot) turnByID(id string) (turn, bool) {
@@ -620,9 +520,6 @@ func (s snapshot) turnByID(id string) (turn, bool) {
 	return turn{}, false
 }
 
-// userTurnStates maps each inbound message's text to the state of its turn,
-// which is how the queue and interrupt scenarios read the timeline: a turn only
-// matters here as the fate of one message.
 func (s snapshot) userTurnStates() map[string]string {
 	states := map[string]string{}
 	for _, m := range s.Messages {
@@ -663,9 +560,6 @@ func (d *daemon) conversation(sessionID string) snapshot {
 	return out
 }
 
-// awaitConversation polls until pred holds. Every scenario here is asynchronous —
-// the provider streams on its own schedule — so polling with a deadline and a
-// diagnostic dump is the only honest way to assert on an outcome.
 func (d *daemon) awaitConversation(sessionID string, timeout time.Duration, what string, pred func(snapshot) bool) snapshot {
 	d.t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -682,11 +576,6 @@ func (d *daemon) awaitConversation(sessionID string, timeout time.Duration, what
 	return last
 }
 
-// awaitLiveController waits for a session to be live with a controller attached.
-//
-// Reattaching after a restart is the boot pass's job — reconcile captures the
-// session, records a restore marker, and the restore pass relaunches it — so a
-// client has nothing to call and simply waits, which is what the renderer does.
 func (d *daemon) awaitLiveController(sessionID string, timeout time.Duration) snapshot {
 	d.t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -757,10 +646,6 @@ func terminal(state string) bool {
 	}
 }
 
-/* ---- misc -------------------------------------------------------------- */
-
-// uniqueSuffix is a short monotonic tag for fixture names. Session ids are
-// user-visible and derived from the project id, so it stays short.
 func uniqueSuffix() int64 {
 	return suffixCounter.Add(1) + time.Now().Unix()%100000
 }
@@ -780,10 +665,6 @@ func freePort(t *testing.T) int {
 	return port
 }
 
-// harnessWithoutChatDriver names an agent the daemon says cannot run chat mode.
-//
-// Read from the daemon rather than hardcoded: drivers get added, and a test naming
-// an agent by hand quietly stops testing anything the day that agent gains one.
 func harnessWithoutChatDriver(t *testing.T, d *daemon) string {
 	t.Helper()
 	var settings struct {
@@ -795,9 +676,6 @@ func harnessWithoutChatDriver(t *testing.T, d *daemon) string {
 	for _, harness := range settings.ChatHarnesses {
 		supported[harness] = true
 	}
-	// Any real harness will do; these are simply ones with no machine protocol AO
-	// drives. The loop is what keeps the test honest if one of them ever gains a
-	// driver.
 	for _, candidate := range []string{"aider", "goose", "continue", "cline", "amp"} {
 		if !supported[candidate] {
 			return candidate

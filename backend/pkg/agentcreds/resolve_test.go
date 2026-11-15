@@ -14,9 +14,6 @@ func envFrom(values map[string]string) Env {
 	return func(name string) string { return values[name] }
 }
 
-// Precedence, corrected by experiment: CLAUDE_CODE_OAUTH_TOKEN beats
-// ANTHROPIC_API_KEY. Getting this backwards means AO confidently validates a
-// credential the agent will not send.
 func TestFirstPartyPrecedence(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -60,8 +57,6 @@ func TestFirstPartyPrecedence(t *testing.T) {
 	}
 }
 
-// Source 5, the subscription login. On Linux and Windows this is the only
-// path; on macOS it is where a keychain read falls through to.
 func TestCredentialsFileIsSourceFive(t *testing.T) {
 	dir := t.TempDir()
 	content := `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-from-file"}}`
@@ -99,8 +94,6 @@ func TestClaudeConfigDirIgnoresXDGConfigHome(t *testing.T) {
 	}
 }
 
-// Every env source must outrank the file, or AO validates the subscription
-// while the agent uses the env var.
 func TestEnvBeatsCredentialsFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"),
@@ -115,8 +108,6 @@ func TestEnvBeatsCredentialsFile(t *testing.T) {
 	}
 }
 
-// Q1's blast radius, pinned: with keychain reads disallowed the resolver keeps
-// working and simply loses source 5. Nothing else changes.
 func TestKeychainCanBeDisabledWithoutBreakingResolution(t *testing.T) {
 	dir := t.TempDir()
 	opts := ResolveOptions{Env: envFrom(nil), ConfigDir: dir, GOOS: "darwin", AllowKeychain: false,
@@ -128,15 +119,12 @@ func TestKeychainCanBeDisabledWithoutBreakingResolution(t *testing.T) {
 		t.Fatal("no credential should resolve with no env, no file, and no keychain")
 	}
 
-	// Env sources are entirely unaffected by the keychain decision.
 	opts.Env = envFrom(map[string]string{"ANTHROPIC_API_KEY": "key"})
 	if _, ok := ResolveLocal(context.Background(), ProviderFirstParty, opts); !ok {
 		t.Fatal("env-sourced credentials must resolve regardless of keychain policy")
 	}
 }
 
-// A locked or denied keychain must fall through to the file, never abort
-// resolution: the user is very likely signed in and simply has it locked.
 func TestKeychainFailureFallsThroughToFile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"),
@@ -166,9 +154,6 @@ func TestKeychainSuccessIsSourceFive(t *testing.T) {
 	}
 }
 
-// Claude Code v2.1.268+ stores the /login managed API key under the "Claude
-// Code" keychain service. AO must read it and classify it as an API key so
-// the probe sends x-api-key, not Bearer.
 func TestKeychainManagedKeyResolvesAsAPIKey(t *testing.T) {
 	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
 		Env: envFrom(map[string]string{"HOME": t.TempDir()}), GOOS: "darwin", AllowKeychain: true,
@@ -193,9 +178,6 @@ func TestKeychainManagedKeyResolvesAsAPIKey(t *testing.T) {
 	}
 }
 
-// When the older "Claude Code-credentials" entry is present but empty ({}) —
-// as happens after a v2.1.268 /login — the resolver must fall through to the
-// "Claude Code" managed-key service rather than report no credential.
 func TestKeychainEmptyCredentialsFallsThroughToManagedKey(t *testing.T) {
 	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
 		Env: envFrom(map[string]string{"HOME": t.TempDir()}), GOOS: "darwin", AllowKeychain: true,
@@ -221,10 +203,6 @@ func TestKeychainEmptyCredentialsFallsThroughToManagedKey(t *testing.T) {
 	}
 }
 
-// A setup token (sk-ant-oat*) stored under the "Claude Code" keychain service
-// must be classified as KindOAuthToken so the probe sends Bearer, not
-// x-api-key. Sending it under x-api-key would be rejected as an invalid API
-// key even though the credential is valid.
 func TestKeychainSetupTokenFromClassifiedAsOAuth(t *testing.T) {
 	cred, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
 		Env: envFrom(map[string]string{"HOME": t.TempDir()}), GOOS: "darwin", AllowKeychain: true,
@@ -253,7 +231,6 @@ func TestKeychainSetupTokenFromClassifiedAsOAuth(t *testing.T) {
 	}
 }
 
-// Non-Mac platforms must never invoke the keychain helper at all.
 func TestKeychainIsMacOnly(t *testing.T) {
 	for _, goos := range []string{"linux", "windows"} {
 		t.Run(goos, func(t *testing.T) {
@@ -268,8 +245,6 @@ func TestKeychainIsMacOnly(t *testing.T) {
 	}
 }
 
-// The provider gate. Guessing here would send a Bedrock credential to
-// api.anthropic.com.
 func TestResolveProvider(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -352,9 +327,6 @@ func TestResolveLocalReadsCredentialFileSynchronously(t *testing.T) {
 	}
 }
 
-// Honoring apiKeyHelper means executing a command named in a settings file.
-// Claude Code gates that behind workspace trust; AO declines entirely rather
-// than making a credential check into a way to run code from a repo.
 func TestAPIKeyHelperIsNeverExecuted(t *testing.T) {
 	_, ok := ResolveLocal(context.Background(), ProviderFirstParty, ResolveOptions{
 		Env:       envFrom(map[string]string{"ANTHROPIC_API_KEY_HELPER": "/bin/echo leak"}),
@@ -369,9 +341,6 @@ func TestAPIKeyHelperIsNeverExecuted(t *testing.T) {
 	}
 }
 
-// Claude Code stores the access token's expiry and a refresh token next to the
-// subscription login. AO records both facts (never the refresh token itself) so
-// an access token that merely expired is not mistaken for a signed-out user.
 func TestStoredLoginCarriesExpiryAndRenewability(t *testing.T) {
 	expiresAt := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	content := fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-stored","refreshToken":"sk-ant-ort01-stored","expiresAt":%d}}`, expiresAt.UnixMilli())
@@ -405,8 +374,6 @@ func TestStoredLoginCarriesExpiryAndRenewability(t *testing.T) {
 	}
 }
 
-// A refresh token carries its own expiry. Past it, Claude Code cannot renew the
-// login either, so the expired access token must be judged by the provider.
 func TestExpiredLoginIsRenewableOnlyWhileItsRefreshTokenIsInDate(t *testing.T) {
 	expiresAt := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	refreshExpiresAt := expiresAt.Add(21 * 24 * time.Hour)

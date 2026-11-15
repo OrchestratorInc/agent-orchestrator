@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { IMAGE_CHECKERBOARD, svgDataUrl } from "../lib/image-files";
 import { PanelMessage } from "./WorkspaceDiffView";
 
-/** An SVG file's rendered view, beside its code view. */
 export function SvgFileView({ content, path }: { content: string; path: string }) {
 	const { t } = useTranslation();
 	const src = useMemo(() => svgDataUrl(content), [content]);

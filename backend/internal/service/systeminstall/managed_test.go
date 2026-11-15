@@ -18,11 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// managedCodexService updates Codex through npm into a managed root. The fake
-// npm install writes a codex binary into the --prefix directory, and that
-// binary reports the version it was installed at.
-// releaseStoreStub stands in for the database: the current release per
-// harness and the releases live sessions run.
 type releaseStoreStub struct {
 	mu      sync.Mutex
 	current map[domain.AgentHarness]string
@@ -90,7 +85,6 @@ func newManagedCodexFixture(t *testing.T, sessions []domain.SessionRecord) *mana
 		f.invalidated = append(f.invalidated, target)
 		f.mu.Unlock()
 	})
-	// The harness resolver prefers the managed launcher once it exists.
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
 		launcher := filepath.Join(f.root, "bin", "codex")
 		if target, err := filepath.EvalSymlinks(launcher); err == nil {
@@ -113,7 +107,6 @@ func newManagedCodexFixture(t *testing.T, sessions []domain.SessionRecord) *mana
 		if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
 			return err
 		}
-		// The fake binary's content is its version; the probe below reads it.
 		return os.WriteFile(filepath.Join(prefix, "bin", "codex"), []byte(version+"\n"), 0o755)
 	})
 	s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, _ io.Writer) error {
@@ -160,7 +153,6 @@ func TestManagedUpdateInstallsSideBySideAndSwitches(t *testing.T) {
 	if job.Status != StatusSucceeded {
 		t.Fatalf("first managed update = %+v", job)
 	}
-	// Installed into its own directory, pinned to the release the user saw.
 	if len(f.installs) != 1 || !slices.Contains(f.installs[0].Argv, "@openai/codex@1.1.0") ||
 		!slices.Contains(f.installs[0].Argv, filepath.Join(f.root, "codex", "versions", "v1")) {
 		t.Fatalf("install = %v", f.installs)
@@ -181,8 +173,6 @@ func TestManagedUpdateInstallsSideBySideAndSwitches(t *testing.T) {
 		t.Fatalf("current release recorded = %q, want v1", f.releases.current[domain.HarnessCodex])
 	}
 
-	// A second update gets a new directory; the first stays for the sessions
-	// that still run it.
 	if job = f.update(t, "1.2.0"); job.Status != StatusSucceeded {
 		t.Fatalf("second managed update = %+v", job)
 	}
@@ -294,7 +284,6 @@ func TestFailedManagedStartupIncludesOutputAndKeepsCurrentRelease(t *testing.T) 
 
 func TestManagedUpdateFailureKeepsPathsOutOfTheNotice(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
-	// npm exits 0 without writing the executable.
 	f.s.installCommands = installCommandRunnerFunc(func(context.Context, ports.InstallCommand, io.Writer, io.Writer) error { return nil })
 	job := f.update(t, "1.1.0")
 	if job.Status != StatusFailed || job.Error != "Installed, but codex was not found." {
@@ -332,8 +321,6 @@ func TestManagedProbeWithoutAVersionIsNotACrash(t *testing.T) {
 
 func TestSetupFailureAfterTheSwitchSaysTheSwitchHappened(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
-	// A directory where managed.json goes makes its write fail after current
-	// has moved to the new release.
 	if err := os.MkdirAll(filepath.Join(f.root, "codex", "managed.json", "blocker"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -351,8 +338,6 @@ func TestFailedRecordSwitchesBackToThePreviousRelease(t *testing.T) {
 	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
 		t.Fatalf("first update = %+v", job)
 	}
-	// The switch to v2 happens, then recording it fails: launches would run
-	// v2 while recording v1, so the update switches back.
 	f.releases.failSet = true
 	if job := f.update(t, "1.2.0"); job.Status != StatusFailed {
 		t.Fatalf("update with a failed record = %+v", job)
@@ -374,8 +359,6 @@ func TestUnsettledSwitchKeepsEveryReleaseWhileSessionsRun(t *testing.T) {
 	if job := f.update(t, "1.1.0"); job.Status != StatusSucceeded {
 		t.Fatalf("first update = %+v", job)
 	}
-	// Recording the switch to v2 fails, and so does switching back (a
-	// directory blocks the temporary link the switch needs).
 	if err := os.MkdirAll(filepath.Join(f.root, "codex", ".current-v1", "blocked"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -390,8 +373,6 @@ func TestUnsettledSwitchKeepsEveryReleaseWhileSessionsRun(t *testing.T) {
 		t.Fatalf("the unsettled switch was not marked: %v", err)
 	}
 
-	// A session launched meanwhile runs v2 but recorded v1. A later update
-	// succeeds, and cleanup must still keep v2 for it.
 	f.releases.failSet = false
 	if job := f.update(t, "1.3.0"); job.Status != StatusSucceeded {
 		t.Fatalf("later update = %+v", job)
@@ -404,7 +385,6 @@ func TestUnsettledSwitchKeepsEveryReleaseWhileSessionsRun(t *testing.T) {
 		}
 	}
 
-	// Once no session is left, the old releases go and the target settles.
 	f.s.sessions = sessionListerStub{}
 	f.releases.setInUse(domain.HarnessCodex)
 	f.s.RemoveUnusedManagedReleases(context.Background())
@@ -418,9 +398,6 @@ func TestUnsettledSwitchKeepsEveryReleaseWhileSessionsRun(t *testing.T) {
 	}
 }
 
-// A daemon that dies after switching current and before recording the
-// switch leaves its mark; startup records the release current points at, and
-// cleanup keeps every release while a session that launched may still run it.
 func TestStartupReconcilesASwitchTheDaemonDiedIn(t *testing.T) {
 	live := []domain.SessionRecord{{ID: "codex-1", Harness: domain.HarnessCodex}}
 	f := newManagedCodexFixture(t, live)
@@ -431,7 +408,6 @@ func TestStartupReconcilesASwitchTheDaemonDiedIn(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(targetDir, unsettledMarker)); !os.IsNotExist(err) {
 		t.Fatalf("a recorded switch stayed marked: %v", err)
 	}
-	// The crash: v2 installed, marked, current switched, nothing recorded.
 	if err := os.CopyFS(filepath.Join(targetDir, "versions", "v2"), os.DirFS(filepath.Join(targetDir, "versions", "v1"))); err != nil {
 		t.Fatal(err)
 	}
@@ -452,8 +428,6 @@ func TestStartupReconcilesASwitchTheDaemonDiedIn(t *testing.T) {
 		t.Fatalf("release new launches record after startup = %q, want v2 (what current runs)", recorded)
 	}
 
-	// A launch before the crash recorded v1; one after startup records v2.
-	// The next update succeeds and its cleanup keeps both while they run.
 	f.releases.setInUse(domain.HarnessCodex, "v1", "v2")
 	if job := f.update(t, "1.3.0"); job.Status != StatusSucceeded {
 		t.Fatalf("next update = %+v", job)
@@ -523,15 +497,12 @@ func TestReleasesAreDeletedOnlyOnceNoLiveSessionRunsThem(t *testing.T) {
 		return err == nil
 	}
 
-	// One session still runs v1 (for example a Chat that reconnected to its
-	// old process after a daemon restart); v2 is unused.
 	f.releases.setInUse(domain.HarnessCodex, "v1")
 	f.s.RemoveUnusedManagedReleases(context.Background())
 	if !release("v1") || release("v2") || !release("v3") {
 		t.Fatalf("v1=%t v2=%t v3=%t; want only the unused v2 removed", release("v1"), release("v2"), release("v3"))
 	}
 
-	// If the database cannot say what is in use, nothing is deleted.
 	f.releases.failUse = true
 	f.releases.setInUse(domain.HarnessCodex)
 	f.s.RemoveUnusedManagedReleases(context.Background())
@@ -574,7 +545,6 @@ func TestReleasesAreKeptWhileAReviewerRunsTheHarness(t *testing.T) {
 	f := newManagedCodexFixture(t, nil)
 	f.update(t, "1.1.0")
 	f.update(t, "1.2.0")
-	// A reviewer is not a session, so no release row says which copy it runs.
 	f.s.reviewers = reviewerListerStub{handles: []domain.ReviewerHandle{{SessionID: "worker-1", Harness: domain.ReviewerCodex, HandleID: "pane-1"}}}
 	f.s.RemoveUnusedManagedReleases(context.Background())
 	if _, err := os.Stat(filepath.Join(f.root, "codex", "versions", "v1")); err != nil {
@@ -599,7 +569,6 @@ func TestManagedReinstallRepairsTheManagedCopy(t *testing.T) {
 	if job, _ := f.s.Status(context.Background(), TargetCodex); job.Status != StatusSucceeded {
 		t.Fatalf("reinstall = %+v", job)
 	}
-	// The same release, installed fresh beside the copy sessions run.
 	last := f.installs[len(f.installs)-1]
 	if !slices.Contains(last.Argv, "@openai/codex@1.1.0") || !slices.Contains(last.Argv, filepath.Join(f.root, "codex", "versions", "v2")) {
 		t.Fatalf("reinstall ran %v, want the managed release 1.1.0 into v2", last.Argv)
@@ -647,8 +616,6 @@ func TestStartupRepairsMissingWindowsJunction(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(targetDir, unsettledMarker), []byte("v2"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Kill a real child at mklink entry, after switchManagedCurrent physically
-	// removed the prior junction. Recovery must repair the actual crash gap.
 	child := exec.Command(os.Args[0], "-test.run=^TestWindowsJunctionCrashHelper$")
 	child.Env = append(os.Environ(), "AO_TEST_JUNCTION_CRASH_DIR="+targetDir)
 	if err := child.Run(); err == nil {
@@ -792,8 +759,6 @@ func TestWindowsJunctionCrashHelper(t *testing.T) {
 	t.Fatal("mklink boundary not reached")
 }
 
-// newManagedNPMExecService runs managed npm installs through install, which
-// writes the release under the --prefix it gets, and runs real version probes.
 func newManagedNPMExecService(t *testing.T, install func(prefix string) error) *Service {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -851,8 +816,6 @@ func TestManagedOpenCodeMajorsKeepSeparateLaunchers(t *testing.T) {
 }
 
 func TestManagedCopilotInstallsTheLauncherNotThePlatformBinary(t *testing.T) {
-	// npm's layout: bin/copilot links to the package's Node loader, and the
-	// platform package's binary sits under the loader's node_modules/.bin.
 	s := newManagedNPMExecService(t, func(prefix string) error {
 		pkg := filepath.Join(prefix, "lib", "node_modules", "@github", "copilot")
 		if err := writeVersionScript(filepath.Join(pkg, "npm-loader.js"), "1.0.101"); err != nil {
@@ -866,7 +829,6 @@ func TestManagedCopilotInstallsTheLauncherNotThePlatformBinary(t *testing.T) {
 		}
 		return os.Symlink(filepath.Join("..", "lib", "node_modules", "@github", "copilot", "npm-loader.js"), filepath.Join(prefix, "bin", "copilot"))
 	})
-	// The resolver returns the native binary behind the npm loader.
 	native := "/opt/homebrew/lib/node_modules/@github/copilot/node_modules/.bin/copilot-darwin-arm64"
 	plan := Plan{Target: TargetCopilot, Method: "npm", Package: "@github/copilot"}
 	if err := s.runManagedInstall(context.Background(), plan, &installedBaseline{path: native, expected: "1.0.101"}, nil, io.Discard); err != nil {
