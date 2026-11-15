@@ -8,6 +8,15 @@ const composer = readFileSync(fileURLToPath(new URL("./spawn-composer.tsx", impo
 const platformControls = ["ios", "android"].map((platform) => readFileSync(fileURLToPath(new URL(`./spawn-composer-controls.${platform}.tsx`, import.meta.url)), "utf8"));
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
 
+/** The text from `start` up to `end`; both must be there, or the slice would be the wrong text. */
+function between(text: string, start: string, end: string): string {
+	const from = text.indexOf(start);
+	expect(from, start).toBeGreaterThanOrEqual(0);
+	const to = text.indexOf(end, from);
+	expect(to, end).toBeGreaterThan(from);
+	return text.slice(from, to);
+}
+
 describe("spawn page", () => {
 	// A started spawn can't be called back. The page holds until the request
 	// settles, then becomes the session's conversation in place.
@@ -87,10 +96,11 @@ describe("spawn composer", () => {
 	it("forgets a load once what it loaded is cleared", () => {
 		expect(spawn).toContain("const resetModelSource = () => { clearModelOverride(); loadedFor.current.models = undefined; setModelCatalog(undefined); setModelError(undefined); };");
 		expect(spawn).toContain("if (!requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { loadedFor.current.project = undefined; setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }");
-		const changeProject = spawn.slice(spawn.indexOf("const changeProject = "), spawn.indexOf("const selectAgent = "));
+		const changeProject = between(spawn, "const changeProject = ", "const selectAgent = ");
 		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeGreaterThan(0);
+		expect(changeProject.indexOf("setProjectDetail(undefined);")).toBeGreaterThan(0);
 		expect(changeProject.indexOf("loadedFor.current.project = undefined;")).toBeLessThan(changeProject.indexOf("setProjectDetail(undefined);"));
-		const chooseHost = spawn.slice(spawn.indexOf("const chooseHost = "), spawn.indexOf("const changeProject = "));
+		const chooseHost = between(spawn, "const chooseHost = ", "const changeProject = ");
 		expect(chooseHost).toContain("loadedFor.current.catalog = undefined;");
 		expect(chooseHost).toContain("loadedFor.current.project = undefined;");
 	});
@@ -109,11 +119,21 @@ describe("spawn composer", () => {
 
 	// A failed agent's list is asked again on the next load; the ones that loaded are not.
 	it("asks again only for the agent model lists that failed", () => {
-		const effect = spawn.slice(spawn.indexOf("const cache = agentModelCache.current;"), spawn.indexOf("}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);"));
+		const effect = between(spawn, "const cache = agentModelCache.current;", "}, [agentIds, cloudSelected, connected, epoch, reloadKey, selectedHostId]);");
 		expect(effect).toContain("void Promise.all(missing.map(async (id) => {");
 		expect(effect).toContain("return [id, undefined] as const;");
 		expect(effect).toContain("for (const [id, models] of entries) if (models) cache.record(scope, id, models);");
 		expect(effect).not.toContain("loadedFor");
+	});
+});
+
+describe("spawn offline notice", () => {
+	// The store closes the connection on purpose whenever the app goes to the
+	// background; that is not the machine being offline (see spawnHostOffline).
+	it("calls the machine offline by the link rule the other screens use, not by a closed connection", () => {
+		expect(spawn).toContain("const unreachable = spawnHostOffline(selectedHost, phoneNetwork, Date.now());");
+		expect(spawn).not.toContain('connection === "closed");');
+		expect(spawn).toContain("offline: unreachable,");
 	});
 });
 
