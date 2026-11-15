@@ -1083,11 +1083,12 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 									: null}
 								below={ghView.busy && !ghInstalled ? <InstallProgress job={ghView.job} label={t("firstRun.githubTitle")} />
 									: ghView.ended && !ghInstalled ? <InstallProblem view={ghView} docsUrl={GITHUB_CLI_URL} docsLabel={t("firstRun.ghDocs")} />
+									// Installed but signed out: the existing login flow (Sign in with
+									// GitHub opens an embedded `gh auth login` terminal), in the card.
+									: ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded />
 									: undefined}
 							/>
 						</ul>
-						{/* The existing login flow: an embedded `gh auth login` terminal. */}
-						{ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded /> : null}
 					</RowGroup>
 					<RowGroup title={t("firstRun.toolsAgentsHeading")} hint={t("firstRun.agentsBodyNone")}>
 						<ul className={ROW_LIST}>
