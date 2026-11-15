@@ -37,11 +37,18 @@ import { Pressable } from "./ui/pressable";
 import { labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, teamsPageFor, type TeamsPage, visibleGlobalSettings } from "./settings/settingsCatalog";
+import { searchSettings, type SettingsSearchHit } from "../lib/palette-registry";
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
 import { fetchPairingCode, mobilePairingCodeQueryKey, PAIRING_CODE_REFRESH_MS } from "../lib/mobile-pairing-code";
 import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 import { useEdgeFade } from "../hooks/useEdgeFade";
+
+/** A setting to scroll to and mark once its page shows: a palette deep link or a Settings search hit. */
+type SettingsFocusRequest = { section?: GlobalSettingsSection; label: string };
+
+/** A Settings search hit with the rail page it is on. */
+export type SettingsSearchResult = SettingsSearchHit & { pageLabel: string; icon: AppIcon };
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -171,6 +178,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
 	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
+	const [focusRequest, setFocusRequest] = useState<SettingsFocusRequest | null>(null);
 	const projectHistory = useSectionHistory<ProjectSettingsSection>("general");
 	const activeProjectSection = projectHistory.current;
 	const [pendingProjectSection, setPendingProjectSection] = useState<{ navigate: () => void } | null>(null);
@@ -258,6 +266,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		setHarnessView(settingsModal?.scope === "global" ? settingsModal.harnessView : undefined);
 		setStartLogin(settingsModal?.scope === "global" && settingsModal.startLogin === true);
 		setShowDiagnostics(settingsModal?.scope === "global" ? settingsModal.showDiagnostics : undefined);
+		setFocusRequest(settingsModal?.scope === "global" && settingsModal.focusSetting ? { section: settingsModal.section, label: settingsModal.focusSetting } : null);
 	}, [settingsModal]);
 
 	useEffect(() => {
@@ -288,6 +297,17 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const selectGlobalSection = (id: GlobalSettingsSection) => {
 		globalHistory.visit(id);
 		setFocusAgentId(undefined);
+	};
+	const searchPages = isProjectSettings ? [] : globalSections.map(({ id, label, icon }) => ({ id, label: label(t), icon }));
+	const search = (query: string): SettingsSearchResult[] => searchSettings(t, query, searchPages).flatMap((hit) => {
+		const page = searchPages.find((entry) => entry.id === hit.section);
+		return page ? [{ ...hit, pageLabel: page.label, icon: page.icon }] : [];
+	});
+	// Opens the hit's page and, for a single setting, lands on its row. A fresh
+	// request each time, so picking the same hit again marks it again.
+	const reveal = (hit: SettingsSearchHit) => {
+		selectGlobalSection(hit.section);
+		setFocusRequest(hit.focus ? { section: hit.section, label: hit.focus } : null);
 	};
 	const navItems: SettingsNavEntry[] = isProjectSettings
 		? projectSections.map(({ id, label, icon }) => ({ id, label, icon, active: activeProjectSection === id, disabled: cueBusy, onSelect: () => selectProjectSection(id) }))
@@ -325,6 +345,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		remoteHostId,
 		cueBusy,
 		close: closeSettingsDialog,
+		search,
+		reveal,
+		focusRequest,
 		title: activeLabel,
 		isBodyReady,
 		bodyKey: displaySettings?.scope === "project" ? refKey({ host: displaySettings.hostId ?? LOCAL_HOST, id: displaySettings.projectId }) : "global",
@@ -660,16 +683,16 @@ const SETTINGS_FOCUS_RETRY_MS = 100;
 const SETTINGS_FOCUS_ATTEMPTS = 40;
 
 /**
- * Scrolls to and briefly highlights the setting a global settings request names
- * (`focusSetting`, its visible label), once the requested page is showing.
+ * Scrolls to and briefly highlights the setting the layer's focus request names
+ * (a deep link's `focusSetting` or a search hit, by visible label), once the
+ * requested page is showing.
  */
 function useSettingsRowFocus(scrollerRef: RefObject<HTMLDivElement | null>, layer: SettingsLayer | null) {
-	const settingsModal = useUiStore((state) => state.settingsModal);
-	const request = settingsModal?.scope === "global" && settingsModal.focusSetting ? settingsModal : null;
+	const request = layer?.focusRequest ?? null;
 	const layerRef = useRef(layer);
 	layerRef.current = layer;
 	useEffect(() => {
-		const label = request?.focusSetting;
+		const label = request?.label;
 		if (!label) return;
 		let attempts = 0;
 		let timer: number | undefined;

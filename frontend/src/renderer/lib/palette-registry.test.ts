@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appI18n } from "../i18n";
-import { buildChoiceCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "./palette-registry";
+import { buildChoiceCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, searchSettings, type PalettePreferences } from "./palette-registry";
 import { filterCommands } from "./command-palette";
 
 const t = appI18n.t.bind(appI18n);
@@ -133,5 +133,21 @@ describe("palette registry", () => {
 		const items = buildSettingsCommands(t, { developerMode: false, diagnostics: false, prefs });
 		expect(filterCommands(items, "nord")[0]?.id).toBe("setting:color-theme");
 		expect(items.some((item) => item.id.startsWith("choice:"))).toBe(false);
+	});
+
+	it("searches only the settings on the pages the rail shows, best first", () => {
+		const pages = [
+			{ id: "general" as const, label: "General" },
+			{ id: "computerUse" as const, label: "Computer use" },
+			{ id: "billing" as const, label: "Billing" },
+		];
+		expect(searchSettings(t, "dark mode", pages)[0]).toEqual({ id: "setting:theme", section: "general", title: t("settings.theme"), focus: t("settings.theme") });
+		// Mobile is not on the rail, so none of its rows match.
+		expect(searchSettings(t, "pair phone", pages).some((hit) => hit.section === "mobile")).toBe(false);
+		// A page the index does not name still matches by its rail label, and opens at its top.
+		expect(searchSettings(t, "billing", pages)[0]).toEqual({ id: "setting:billing", section: "billing", title: "Billing" });
+		// A page the index does name is found by its own entry.
+		expect(searchSettings(t, "computer", pages)[0]).toMatchObject({ id: "setting:computer-use", section: "computerUse" });
+		expect(searchSettings(t, "   ", pages)).toEqual([]);
 	});
 });

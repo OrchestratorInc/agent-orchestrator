@@ -3,7 +3,7 @@ import { isSplitPaneShortcut, type AppShortcutId } from "../../shared/shortcuts"
 import { shortcutLabelKeys } from "../i18n/key-maps";
 import type { MessageKey } from "../i18n";
 import type { GlobalSettingsSection } from "../stores/ui-store";
-import type { CommandItem } from "./command-palette";
+import { filterCommands, type CommandItem } from "./command-palette";
 import { APP_LOCALES, type AppLocale } from "../i18n/locales";
 import { useLocaleStore } from "../stores/locale-store";
 import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
@@ -271,6 +271,37 @@ export function buildSettingsCommands(t: TFunction, visibility: SettingsVisibili
 					: { kind: "open-settings-section", section: entry.section, ...(isPage ? {} : { focus: title }) },
 		};
 	});
+}
+
+/** One hit of the Settings search: the page it is on and, for a single setting, the row label to land on. */
+export type SettingsSearchHit = { id: string; section: GlobalSettingsSection; title: string; focus?: string };
+
+/**
+ * The Settings search: settings on the pages shown (`pages`, the rail's list)
+ * that match `query`, best first, ranked as the palette ranks them. A page the
+ * index does not name still matches by its rail label.
+ */
+export function searchSettings(
+	t: TFunction,
+	query: string,
+	pages: ReadonlyArray<{ id: GlobalSettingsSection; label: string }>,
+): SettingsSearchHit[] {
+	if (!query.trim()) return [];
+	const shown = new Set(pages.map((page) => page.id));
+	const indexed = buildSettingsCommands(t, { developerMode: true, diagnostics: true })
+		.filter((item) => item.action?.kind === "open-settings-section" && shown.has(item.action.section));
+	const named = new Set(indexed.flatMap((item) => item.action?.kind === "open-settings-section" && !item.action.focus ? [item.action.section] : []));
+	const unnamedPages: CommandItem[] = pages.filter((page) => !named.has(page.id)).map((page) => ({
+		id: `setting:${page.id}`,
+		group: "settings",
+		title: page.label,
+		keywords: SECTION_KEYWORDS[page.id] ?? [],
+		action: { kind: "open-settings-section", section: page.id },
+	}));
+	return filterCommands([...indexed, ...unnamedPages], query).flatMap((item) =>
+		item.action?.kind === "open-settings-section"
+			? [{ id: item.id, section: item.action.section, title: item.title, ...(item.action.focus ? { focus: item.action.focus } : {}) }]
+			: []);
 }
 
 /** The registry entry naming a whole settings page. */

@@ -45,6 +45,7 @@ import {
 import {
 	useCallback,
 	useEffect,
+	useId,
 	useLayoutEffect,
 	memo,
 	useMemo,
@@ -52,6 +53,7 @@ import {
 	useState,
 	type CSSProperties,
 	type DragEvent as ReactDragEvent,
+	type KeyboardEvent as ReactKeyboardEvent,
 	type MouseEvent,
 	type ReactNode,
 	type RefObject,
@@ -125,6 +127,7 @@ import {
 	SidebarGroup,
 	SidebarGroupContent,
 	SidebarHeader,
+	SidebarInput,
 	SidebarMenu,
 	SidebarMenuButton,
 	SidebarMenuItem,
@@ -148,7 +151,7 @@ import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { captureRendererException } from "../lib/telemetry";
 import { AwakeMenuItem, awakeNeedsAttention, useFooterStayAwake } from "./AwakeControl";
 import { FOOTER_RAIL_BUTTON_CLASS, SidebarUpdateRail, SidebarUpdateRow } from "./SidebarUpdate";
-import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
+import { SettingsSaveStatus, useSettingsPage, type SettingsSearchResult } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
@@ -3658,24 +3661,167 @@ function SidebarTopNavRow({
 	);
 }
 
-/** Settings sections in place of the project tree while the settings page is open. */
+/**
+ * Settings sections in place of the project tree while the settings page is
+ * open, under a search field. While the field holds a query, the settings that
+ * match it replace the sections: picking one opens its page and marks its row.
+ */
 export function SettingsSidebarNav({ layer }: { layer: NonNullable<ReturnType<typeof useSettingsPage>> }) {
 	const { t } = useTranslation();
+	const { state, setOpen } = useSidebar();
+	const isCollapsed = state === "collapsed";
+	const [query, setQuery] = useState("");
+	const [selected, setSelected] = useState(0);
+	const inputRef = useRef<HTMLInputElement>(null);
+	const listId = useId();
+	const searching = query.trim() !== "";
+	const results = searching ? layer.search(query) : [];
+	const selectedIndex = Math.min(selected, results.length - 1);
+	const optionId = (index: number) => `${listId}-option-${index}`;
+	const updateQuery = (value: string) => {
+		setQuery(value);
+		setSelected(0);
+	};
+	const pick = (result: SettingsSearchResult | undefined, index: number) => {
+		if (!result) return;
+		setSelected(index);
+		layer.reveal(result);
+	};
+	const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+		if (event.nativeEvent.isComposing) return;
+		if (event.key === "Escape" && query) {
+			// The field is marked as an in-place edit while it holds a query, so
+			// the page's Escape-to-close stands down and Escape clears it first.
+			event.preventDefault();
+			updateQuery("");
+			return;
+		}
+		if (!searching || results.length === 0) return;
+		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+			event.preventDefault();
+			const step = event.key === "ArrowDown" ? 1 : -1;
+			setSelected((selectedIndex + step + results.length) % results.length);
+		} else if (event.key === "Enter") {
+			event.preventDefault();
+			pick(results[selectedIndex], selectedIndex);
+		}
+	};
+	useEffect(() => {
+		if (!searching || selectedIndex < 0) return;
+		document.getElementById(`${listId}-option-${selectedIndex}`)?.scrollIntoView?.({ block: "nearest" });
+	}, [listId, query, searching, selectedIndex]);
 	return (
-		<SidebarContent className="scrollbar-none gap-0 px-2">
-			<SidebarGroup className="p-0">
-				<SidebarGroupContent>
-					<SidebarMenu aria-label={t("settings.navSectionsAria")} className="gap-0.5" role="navigation">
-						{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
-							<SidebarMenuItem key={id}>
-								<SidebarTopNavRow active={active} disabled={disabled} icon={<Icon aria-hidden="true" />} label={label} onClick={onSelect} tooltip={label} />
-							</SidebarMenuItem>
-						))}
+		<>
+			<div className="flex shrink-0 flex-col px-2 pb-1.5 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-1.5">
+				{isCollapsed ? (
+					<SidebarMenu>
+						<SidebarMenuItem>
+							<SidebarTopNavRow
+								icon={<Search aria-hidden="true" />}
+								label={t("settings.search.placeholder")}
+								onClick={() => {
+									setOpen(true);
+									requestAnimationFrame(() => inputRef.current?.focus());
+								}}
+								tooltip={t("settings.search.placeholder")}
+							/>
+						</SidebarMenuItem>
 					</SidebarMenu>
-				</SidebarGroupContent>
-				<SettingsSaveStatus />
-			</SidebarGroup>
-		</SidebarContent>
+				) : (
+					<div className="relative">
+						<Search aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 size-icon-md -translate-y-1/2 text-muted-foreground" />
+						<SidebarInput
+							aria-activedescendant={searching && selectedIndex >= 0 ? optionId(selectedIndex) : undefined}
+							aria-autocomplete="list"
+							aria-controls={searching ? listId : undefined}
+							aria-expanded={searching}
+							aria-label={t("settings.search.placeholder")}
+							className="h-8 rounded-lg border-sidebar-border bg-transparent pl-8 text-sm"
+							data-settings-inline-edit={query ? "" : undefined}
+							onChange={(event) => updateQuery(event.target.value)}
+							onKeyDown={onKeyDown}
+							placeholder={t("settings.search.placeholder")}
+							ref={inputRef}
+							role="combobox"
+							spellCheck={false}
+							type="search"
+							value={query}
+						/>
+					</div>
+				)}
+			</div>
+			<SidebarContent className="scrollbar-none gap-0 px-2">
+				<SidebarGroup className="p-0">
+					<SidebarGroupContent>
+						{searching ? (
+							results.length > 0 ? (
+								<SidebarMenu aria-label={t("settings.search.results")} className="gap-0.5" id={listId} role="listbox">
+									{results.map((result, index) => (
+										<SidebarMenuItem key={result.id} role="presentation">
+											<SettingsSearchResultRow
+												id={optionId(index)}
+												onSelect={() => pick(result, index)}
+												result={result}
+												selected={index === selectedIndex}
+											/>
+										</SidebarMenuItem>
+									))}
+								</SidebarMenu>
+							) : (
+								<p className="px-2.5 py-2 text-sm text-muted-foreground" id={listId} role="status">
+									{t("settings.search.noResults")}
+								</p>
+							)
+						) : (
+							<SidebarMenu aria-label={t("settings.navSectionsAria")} className="gap-0.5" role="navigation">
+								{layer.navItems.map(({ id, label, icon: Icon, active, disabled, onSelect }) => (
+									<SidebarMenuItem key={id}>
+										<SidebarTopNavRow active={active} disabled={disabled} icon={<Icon aria-hidden="true" />} label={label} onClick={onSelect} tooltip={label} />
+									</SidebarMenuItem>
+								))}
+							</SidebarMenu>
+						)}
+					</SidebarGroupContent>
+					<SettingsSaveStatus />
+				</SidebarGroup>
+			</SidebarContent>
+		</>
+	);
+}
+
+/** One Settings search hit: the setting, with the page it is on trailing when that page is not the hit itself. */
+function SettingsSearchResultRow({
+	id,
+	onSelect,
+	result,
+	selected,
+}: {
+	id: string;
+	onSelect: () => void;
+	result: SettingsSearchResult;
+	selected: boolean;
+}) {
+	const Icon = result.icon;
+	return (
+		<SidebarMenuButton
+			aria-selected={selected}
+			className={cn(NAV_ROW_CLASS, SIDEBAR_ROW_CLASS, NAV_ROW_HIGHLIGHT_HOST_CLASS, "transition-none")}
+			data-active={selected}
+			id={id}
+			isActive={selected}
+			onClick={onSelect}
+			// Focus stays in the search field, so arrows and Enter keep working after a click.
+			onMouseDown={(event) => event.preventDefault()}
+			role="option"
+			tabIndex={-1}
+		>
+			<NavRowHighlight active={selected} />
+			<span className="relative z-[1] inline-flex shrink-0 items-center justify-center"><Icon aria-hidden="true" /></span>
+			<span className="relative z-[1] min-w-0 flex-1 truncate text-left">{result.title}</span>
+			{result.focus ? (
+				<span className="relative z-[1] ml-auto max-w-[45%] shrink-0 truncate font-sans text-caption text-passive">{result.pageLabel}</span>
+			) : null}
+		</SidebarMenuButton>
 	);
 }
 

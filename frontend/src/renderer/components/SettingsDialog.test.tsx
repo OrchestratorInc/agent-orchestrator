@@ -471,6 +471,41 @@ describe("SettingsDialog", () => {
 		}
 	});
 
+	it("searches settings from the top of the rail and lands on the picked row", async () => {
+		const original = Element.prototype.scrollIntoView;
+		Element.prototype.scrollIntoView = vi.fn();
+		try {
+			useUiStore.getState().openGlobalSettings("mobile");
+			renderSettingsDialog();
+			await screen.findByTestId("global-settings-section");
+
+			const search = screen.getByRole("combobox", { name: "Search settings" });
+			await userEvent.type(search, "copy on sel");
+			// The matching settings replace the section list.
+			expect(screen.queryByRole("navigation", { name: "Settings sections" })).toBeNull();
+			const hit = within(screen.getByRole("listbox", { name: "Matching settings" })).getAllByRole("option")[0];
+			expect(hit).toHaveTextContent("Copy on select");
+			expect(hit).toHaveTextContent("General");
+			expect(hit).toHaveAttribute("aria-selected", "true");
+
+			await userEvent.keyboard("{Enter}");
+			expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
+			const row = await screen.findByTestId("copy-on-select-row");
+			await vi.waitFor(() => expect(row).toHaveClass("settings-focus-target"));
+
+			// The first Escape clears the search, leaving settings open with its sections back.
+			await userEvent.keyboard("{Escape}");
+			expect(search).toHaveValue("");
+			expect(screen.getByRole("navigation", { name: "Settings sections" })).toBeInTheDocument();
+			expect(useUiStore.getState().settingsModal).not.toBeNull();
+
+			await userEvent.type(search, "zzzz");
+			expect(screen.getByRole("status")).toHaveTextContent("No matching settings");
+		} finally {
+			Element.prototype.scrollIntoView = original;
+		}
+	});
+
 	it("shows Remote hosts without Developer mode even while the connection switch is off", async () => {
 		useUiStore.setState({ developerMode: false, remoteHosts: false });
 		useUiStore.getState().openGlobalSettings("remoteHosts");
