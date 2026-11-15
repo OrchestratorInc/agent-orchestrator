@@ -52,7 +52,7 @@ import { CloudLocalSignInDialog } from "../CloudLocalSignInDialog";
 import { GitHubIcon } from "../GitHubIcon";
 import { Badge } from "../ui/badge";
 import { ConfirmDialog } from "../ConfirmDialog";
-import { GitHubOnboardingNotice } from "../GitHubOnboardingNotice";
+import { GitHubLoginActions, GitHubLoginTerminal, useGitHubLogin } from "../GitHubOnboardingNotice";
 import { dragStyle } from "../PageTopbar";
 import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "../settings/harness/HarnessAuthTerminalPanel";
 import { Button } from "../ui/button";
@@ -932,6 +932,8 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 		void ghAuth.refetch();
 	});
 	const agentInstalls = useAgentInstalls((agentId) => void refresh([agentId]));
+	// Signing the CLI in once it's installed: actions on the row, terminal under it.
+	const ghLogin = useGitHubLogin();
 
 	const gh = gate.requirements.find((requirement) => requirement.id === "gh");
 	const ghInstalled = gh?.satisfied === true;
@@ -1080,12 +1082,12 @@ function ToolsStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void 
 										</Button>
 									)
 									: ghSignedIn ? <RowState>{t("firstRun.signedIn")}</RowState>
-									: null}
+									: <GitHubLoginActions login={ghLogin} />}
 								below={ghView.busy && !ghInstalled ? <InstallProgress job={ghView.job} label={t("firstRun.githubTitle")} />
 									: ghView.ended && !ghInstalled ? <InstallProblem view={ghView} docsUrl={GITHUB_CLI_URL} docsLabel={t("firstRun.ghDocs")} />
-									// Installed but signed out: the existing login flow (Sign in with
-									// GitHub opens an embedded `gh auth login` terminal), in the card.
-									: ghInstalled && !ghSignedIn ? <GitHubOnboardingNotice embedded />
+									// Installed but signed out: the `gh auth login` terminal Sign in
+									// with GitHub opens, in the card.
+									: ghInstalled && !ghSignedIn && (ghLogin.terminal || ghLogin.startError) ? <GitHubLoginTerminal login={ghLogin} />
 									: undefined}
 							/>
 						</ul>
