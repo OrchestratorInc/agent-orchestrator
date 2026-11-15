@@ -3440,6 +3440,8 @@
 	"artifacts.bulkDeleteFailed": "{{total}} 件中 {{failed}} 件を削除できませんでした: {{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.hostLoadFailed": "{{host}} のアーティファクトを読み込めませんでした。",
+	"artifacts.hostLoadRetry": "再試行",
 	"artifacts.empty.title": "Create your first artifact",
 	"artifacts.empty.description": "Artifacts are pages and documents an agent writes for you. Pick where the session should live.",
 	"artifacts.create": "Create artifact",

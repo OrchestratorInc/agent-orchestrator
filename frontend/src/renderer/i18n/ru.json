@@ -3569,6 +3569,8 @@
 	"artifacts.bulkDeleteFailed": "Не удалось удалить {{failed}} из {{total}}: {{message}}",
 	"artifacts.noMatches": "Совпадений нет",
 	"artifacts.clearFilters": "Сбросить фильтры",
+	"artifacts.hostLoadFailed": "Не удалось загрузить артефакты с {{host}}.",
+	"artifacts.hostLoadRetry": "Повторить",
 	"artifacts.empty.title": "Создайте свой первый артефакт",
 	"artifacts.empty.description": "Артефакты включают страницы и документы, которые агент создаёт для вас. Выберите, где разместить сессию.",
 	"artifacts.create": "Создать артефакт",

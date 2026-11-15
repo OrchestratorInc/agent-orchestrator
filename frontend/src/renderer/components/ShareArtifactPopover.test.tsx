@@ -810,6 +810,12 @@ describe("useArtifactShareFile", () => {
 		const untracked = renderHook(() => useArtifactShareFile({ sessionId: "sess-1", path: "notes.md", projectId: "proj-1" }), { wrapper });
 		expect(untracked.result.current).not.toHaveProperty("artifactId");
 	});
+
+	it("names a remote host's file by its host, so it is downloaded from there", () => {
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useArtifactShareFile({ id: "art-1", hostId: "https://h-vm.useao.dev", sessionId: "sess-1", path: "deck.html", projectId: "proj-1" }), { wrapper });
+		expect(result.current).toEqual({ source: "host", hostId: "https://h-vm.useao.dev", sessionId: "sess-1", path: "deck.html", projectId: "proj-1", artifactId: "art-1" });
+	});
 });
 
 describe("useReconciledShareLinks", () => {
@@ -856,7 +862,9 @@ describe("useReconciledShareLinks", () => {
 		await waitFor(() => expect(first.result.current.size).toBe(1));
 		expect(second.result.current.get("https://viewer.test/artifact/abc")).toBe("restricted");
 		expect(list).toHaveBeenCalledTimes(1);
-		expect(invalidate).toHaveBeenCalledTimes(1);
+		// Once for the artifact lists, once for the links of remote hosts' files.
+		expect(invalidate).toHaveBeenCalledTimes(2);
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["host-share-links"] });
 	});
 
 	it("asks for nothing while signed out", async () => {
