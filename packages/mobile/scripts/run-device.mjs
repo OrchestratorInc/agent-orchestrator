@@ -40,9 +40,6 @@ const TMUX = ["-L", "ao-mobile-device"];
 // Bump when the build steps below change, so older cached apps are not reused.
 const RECIPE = 1;
 const KEEP = 4;
-// Personal-team profiles last seven days. Rebuild a cached app this close to
-// expiry, so it doesn't stop launching mid-session.
-const PROFILE_MARGIN_MS = 24 * 60 * 60 * 1000;
 
 const args = process.argv.slice(2);
 const command = args.find((a) => !a.startsWith("--")) ?? "run";
@@ -189,25 +186,36 @@ function fingerprint(team, bundleId, keepPush) {
 	return { hash, key: sha(hash, RECIPE, bundleId, team, keepPush).slice(0, 16) };
 }
 
-// When the provisioning profile signed into the app expires (0 when unreadable).
-function profileExpiry(app) {
+// The provisioning profile signed into the app: when it expires (0 when
+// unreadable) and which devices it lets the app run on.
+function profileInfo(app) {
 	const profile = path.join(app, "embedded.mobileprovision");
-	if (!existsSync(profile)) return 0;
-	const plist = run("security", ["cms", "-D", "-i", profile], { capture: true, allowFail: true }).stdout ?? "";
+	const plist = existsSync(profile) ? (run("security", ["cms", "-D", "-i", profile], { capture: true, allowFail: true }).stdout ?? "") : "";
 	const date = plist.match(/<key>ExpirationDate<\/key>\s*<date>([^<]+)<\/date>/)?.[1];
-	return date ? Date.parse(date) || 0 : 0;
+	const list = plist.match(/<key>ProvisionedDevices<\/key>\s*<array>([\s\S]*?)<\/array>/)?.[1] ?? "";
+	return { expires: date ? Date.parse(date) || 0 : 0, devices: [...list.matchAll(/<string>([^<]+)<\/string>/g)].map((m) => m[1]) };
 }
 
-function build({ key, hash, team, bundleId, keepPush }) {
+// Why an app can't run on this device, or null when it can. Free-team profiles
+// last seven days, and a profile only covers devices registered when it was made.
+function profileProblem(app, udid) {
+	const { expires, devices } = profileInfo(app);
+	if (!expires) return "has no readable provisioning profile";
+	if (expires <= Date.now()) return `has a provisioning profile that expired ${new Date(expires).toISOString()}`;
+	if (!devices.includes(udid)) return "has a provisioning profile that doesn't include this iPhone";
+	return null;
+}
+
+function build({ key, hash, team, bundleId, keepPush, udid }) {
 	const dir = path.join(STORE, "builds", key);
 	const app = path.join(dir, "Orchestrator.app");
 	if (existsSync(app) && !flag("rebuild")) {
-		const expires = profileExpiry(app);
-		if (expires - Date.now() > PROFILE_MARGIN_MS) {
-			log(`native build reused (fingerprint ${hash.slice(0, 10)}, profile valid until ${new Date(expires).toISOString()})`);
+		const problem = profileProblem(app, udid);
+		if (!problem) {
+			log(`native build reused (fingerprint ${hash.slice(0, 10)}, profile valid until ${new Date(profileInfo(app).expires).toISOString()})`);
 			return { app, dir, built: false };
 		}
-		log(`cached app's provisioning profile ${expires ? `expires ${new Date(expires).toISOString()}` : "is unreadable"}; rebuilding to renew it`);
+		log(`cached app ${problem}; rebuilding`);
 	}
 	log(`native build needed (fingerprint ${hash.slice(0, 10)}); this takes several minutes the first time`);
 	const before = out("git", ["-C", repo, "status", "--porcelain"]);
@@ -234,9 +242,12 @@ function build({ key, hash, team, bundleId, keepPush }) {
 			"-workspace", "Orchestrator.xcworkspace",
 			"-scheme", "Orchestrator",
 			"-configuration", "Debug",
-			"-destination", "generic/platform=iOS",
+			// The selected iPhone, registered with the team if it isn't yet, so the
+			// profile Xcode makes covers it.
+			"-destination", `id=${udid}`,
 			"-derivedDataPath", derived,
 			"-allowProvisioningUpdates",
+			"-allowProvisioningDeviceRegistration",
 			"-quiet",
 			`DEVELOPMENT_TEAM=${team}`,
 		],
@@ -245,6 +256,8 @@ function build({ key, hash, team, bundleId, keepPush }) {
 	);
 	const product = path.join(derived, "Build/Products/Debug-iphoneos/Orchestrator.app");
 	if (!existsSync(product)) fail(`xcodebuild finished but ${product} is missing`);
+	const problem = profileProblem(product, udid);
+	if (problem) fail(`the app xcodebuild just signed ${problem}; check the team's provisioning in Xcode`);
 	clone(product, app);
 	writeJSON(path.join(dir, "meta.json"), { fingerprint: hash, branch, sha: out("git", ["-C", repo, "rev-parse", "HEAD"]), builtAt: new Date().toISOString() });
 	prune(path.join(STORE, "builds"));
@@ -264,18 +277,26 @@ function lanIP() {
 // copy and re-sign with the same identity and entitlements.
 function withIP(app, ip) {
 	const current = existsSync(path.join(app, "ip.txt")) ? readFileSync(path.join(app, "ip.txt"), "utf8").trim() : "";
-	if (current === ip) return app;
+	if (current === ip) return { path: app, cleanup: () => {} };
 	log(`Mac address changed (${current || "none"} -> ${ip}); re-signing with the new ip.txt`);
 	const tmp = mkdtempSync(path.join(tmpdir(), "ao-device-app-"));
+	const cleanup = () => rmSync(tmp, { recursive: true, force: true });
 	const copy = path.join(tmp, "Orchestrator.app");
 	clone(app, copy);
 	writeFileSync(path.join(copy, "ip.txt"), `${ip}\n`);
 	const identity = run("codesign", ["-dvv", app], { capture: true }).stderr.match(/^Authority=(.+)$/m)?.[1];
-	if (!identity) fail("could not read the signing identity of the cached app");
+	if (!identity) {
+		cleanup();
+		fail("could not read the signing identity of the cached app");
+	}
 	const ents = path.join(tmp, "ents.plist");
 	writeFileSync(ents, run("codesign", ["-d", "--entitlements", "-", "--xml", app], { capture: true }).stdout);
-	run("codesign", ["-f", "-s", identity, "--entitlements", ents, copy]);
-	return copy;
+	const signed = run("codesign", ["-f", "-s", identity, "--entitlements", ents, copy], { allowFail: true });
+	if (signed.status !== 0) {
+		cleanup();
+		fail("re-signing the app with the new ip.txt failed");
+	}
+	return { path: copy, cleanup };
 }
 
 // A rebuild for the same fingerprint (a renewed profile) has a new builtAt, so
@@ -290,7 +311,9 @@ function install(app, dir, key, udid) {
 		return ip;
 	}
 	log("installing on the phone");
-	const result = run("xcrun", ["devicectl", "device", "install", "app", "--device", udid, withIP(app, ip)], { capture: true, allowFail: true });
+	const staged = withIP(app, ip);
+	const result = run("xcrun", ["devicectl", "device", "install", "app", "--device", udid, staged.path], { capture: true, allowFail: true });
+	staged.cleanup();
 	if (result.status !== 0) {
 		const output = `${result.stdout}\n${result.stderr}`;
 		if (output.includes("maximum number of installed apps")) {
@@ -333,7 +356,7 @@ const bundleId = process.env.AO_MOBILE_BUNDLE_ID ?? `aoagents.ao.dev.${team.toLo
 const keepPush = process.env.AO_MOBILE_KEEP_PUSH === "1";
 deps();
 const { hash, key } = fingerprint(team, bundleId, keepPush);
-const { app, dir, built } = build({ key, hash, team, bundleId, keepPush });
+const { app, dir, built } = build({ key, hash, team, bundleId, keepPush, udid: device.udid });
 const ip = install(app, dir, key, device.udid);
 const logFile = await metro();
 if (!flag("no-launch")) {

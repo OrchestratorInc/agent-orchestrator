@@ -302,8 +302,9 @@ npm run device -- status    # what is installed, whether Metro is running
 - The phone loads JavaScript from `http://<Mac LAN IP>:8081`, so keep it on the same Wi-Fi. If the
   Mac's address changes, the script re-signs the cached app with the new one.
 - A free developer profile allows three of its apps on a phone; delete one if the install says so.
-- Free-team provisioning profiles last seven days. When a cached app's profile is within a day of
-  expiring, the script rebuilds it (renewing the profile) and reinstalls.
+- Free-team provisioning profiles last seven days and only cover registered devices. A cached app
+  whose profile has expired, or doesn't list the selected iPhone, is rebuilt for that iPhone
+  (registering it) and reinstalled.
 - Builds and the `node_modules` store live in `~/.ao/dev/mobile-device`; it needs tmux.
 
 ## Over-the-air updates
