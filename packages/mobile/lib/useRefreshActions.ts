@@ -31,12 +31,17 @@ export function useRefreshActions(refresh: () => Promise<unknown>) {
 			setRefreshing(false);
 		}
 	}, []);
+	// The stale banner's Retry stays tappable while one runs, so retries can
+	// overlap: `retrying` holds until the last of them answers.
+	const pendingRetries = useRef(0);
 	const retry = useCallback(async () => {
+		pendingRetries.current += 1;
 		setRetrying(true);
 		try {
 			await latest.current();
 		} finally {
-			setRetrying(false);
+			pendingRetries.current -= 1;
+			if (pendingRetries.current === 0) setRetrying(false);
 		}
 	}, []);
 	return { refreshing, onRefresh, retrying, retry };
