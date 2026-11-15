@@ -126,8 +126,13 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
+	// Adapters that look the conversation up through the CLI need the
+	// session's environment: a project-level credential or profile reaches the
+	// session, not the daemon. No browser capability is issued for a probe.
+	probeEnv := m.runtimeEnvForHarness(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env, rec.Harness)
 	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
 		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
+		Env: probeEnv,
 	})
 	if err != nil || !ok {
 		return false
