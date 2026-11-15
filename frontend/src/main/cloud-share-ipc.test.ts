@@ -36,7 +36,7 @@ const HOST_ID = "https://h-vm.useao.dev";
 const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
-type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number };
+type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void };
 
 function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact> } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
@@ -69,6 +69,7 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 			const headers = new Headers(artifact.tag === false
 				? { "content-length": String(bytes.length), "last-modified": new Date(Number(artifact.mtimeNs / 1_000_000n)).toUTCString() }
 				: { etag: `"${bytes.length}-${artifact.mtimeNs}"` });
+			artifact.served?.();
 			return new Response(bytes.subarray(0, bytes.length - (artifact.shortBy ?? 0)), { headers });
 		}),
 		fetch: vi.fn(async (url: string, init: RequestInit) => {
@@ -553,8 +554,9 @@ describe("cloudShare IPC for a remote host's file", () => {
 	it("publishes it by downloading it through the host's proxy, and keeps its record apart from this computer's sessions", async () => {
 		const { publish, invoke, hostFile, hostRequests, requests, records, sent } = setup({ hostFiles: deck() });
 		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", share: { id: SHARE_ID } });
-		// The panel's inspect and publish's own version check each read only a GET's headers; the third GET is the download. The route refuses HEAD.
-		expect(hostRequests.filter((request) => request.startsWith("GET "))).toHaveLength(3);
+		// The panel's inspect, publish's own version check and the check after the download each read only a GET's headers;
+		// the third GET is the download. The route refuses HEAD.
+		expect(hostRequests.filter((request) => request.startsWith("GET "))).toHaveLength(4);
 		expect(hostRequests.some((request) => request.startsWith("HEAD "))).toBe(false);
 		expect(requests).toContain("POST /api/cloud/v1/me/artifact-shares/finalize");
 		expect(sent.at(-1)).toEqual({ sessionId: "sess-1", path: "docs/deck.html", sentBytes: 40, totalBytes: 40 });
@@ -589,6 +591,19 @@ describe("cloudShare IPC for a remote host's file", () => {
 
 	it("publishes nothing when the download is not the whole version the host named", async () => {
 		const { publish, hostFile, requests } = setup({ hostFiles: deck({ shortBy: 3 }) });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "changed" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("publishes nothing when the file was rewritten on the host while it downloaded", async () => {
+		const hostFiles = deck();
+		let served = 0;
+		// The download (the third read) gets the old version's tag and length; the file is rewritten in place, same length, as it streams.
+		hostFiles.get("sess-1/docs/deck.html")!.served = () => {
+			if (++served === 3) hostFiles.set("sess-1/docs/deck.html", { body: "<h1>REMOTE DECK</h1>", mtimeNs: MTIME_NS + 1_000_000_000n });
+		};
+		const { publish, hostFile, requests } = setup({ hostFiles });
 		await expect(publish(hostFile)).resolves.toMatchObject({ status: "changed" });
 		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
 		expect(await snapshots()).toEqual([]);

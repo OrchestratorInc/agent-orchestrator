@@ -3375,6 +3375,8 @@
 	"artifacts.bulkDeleteFailed": "Couldn't delete {{failed}} of {{total}}: {{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.hostLoadFailed": "Couldn't load artifacts from {{host}}.",
+	"artifacts.hostLoadRetry": "Retry",
 	"artifacts.empty.title": "Create your first artifact",
 	"artifacts.empty.description": "Artifacts are pages and documents an agent writes for you. Pick where the session should live.",
 	"artifacts.create": "Create artifact",

@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => ({
 	workspaces: [] as WorkspaceSummary[],
 	remoteWorkspaces: [] as WorkspaceSummary[],
 	remoteHosts: [] as Array<{ hostId: string; label: string; url: string; status: "connected" | "offline" }>,
+	remoteFailedHostIds: [] as string[],
+	remoteRefetch: vi.fn(),
 	remoteDel: vi.fn(),
 	agents: [] as Array<Record<string, unknown>>,
 	navigate: vi.fn(),
@@ -77,7 +79,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	workspaceQueryKeyForHost: () => ["workspaces"],
 	useWorkspaceQuery: () => ({ data: mocks.workspaces, isLoading: false, error: null }),
-	useRemoteWorkspaces: () => ({ data: mocks.remoteWorkspaces ?? [] }),
+	useRemoteWorkspaces: () => ({ data: mocks.remoteWorkspaces ?? [], failedHostIds: mocks.remoteFailedHostIds, refetch: mocks.remoteRefetch }),
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: { deleteSessionArtifact: mocks.deleteCloudArtifact } }),
@@ -230,6 +232,8 @@ describe("ArtifactsView", () => {
 		mocks.workspaces = withArtifacts;
 		mocks.remoteWorkspaces = [];
 		mocks.remoteHosts = [];
+		mocks.remoteFailedHostIds = [];
+		mocks.remoteRefetch.mockReset();
 		mocks.remoteDel.mockReset();
 		mocks.agents = [codexReady];
 		mocks.hideShellTopbar = true;
@@ -442,6 +446,23 @@ describe("ArtifactsView", () => {
 		await waitFor(() => expect(mocks.remoteDel).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/artifact-files", { params: { path: { sessionId: "ao-2" }, query: { path: "bench.md" } } }));
 		expect(mocks.del).not.toHaveBeenCalled();
 		expect(useArtifactsViewStore.getState().pinnedArtifactIds).toEqual([]);
+	});
+
+	it("says when a remote machine's artifacts could not be loaded, with a retry, instead of showing no matches", async () => {
+		const user = userEvent.setup();
+		mocks.remoteHosts = [{ hostId: "https://h-vm.useao.dev", label: "build-vm", url: "https://h-vm.useao.dev", status: "connected" }];
+		mocks.remoteFailedHostIds = ["https://h-vm.useao.dev"];
+		renderView();
+
+		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load artifacts from build-vm.");
+		await user.click(within(screen.getByRole("group", { name: "Artifact location" })).getByRole("button", { name: "build-vm" }));
+		expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load artifacts from build-vm.");
+		expect(screen.queryByText("No matches")).not.toBeInTheDocument();
+		await user.click(within(screen.getByRole("alert")).getByRole("button", { name: "Retry" }));
+		expect(mocks.remoteRefetch).toHaveBeenCalledTimes(1);
+		// Another location does not name the machine.
+		await user.click(within(screen.getByRole("group", { name: "Artifact location" })).getByRole("button", { name: "On this machine" }));
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 	});
 
 	it("selects artifacts one by one and deletes them together after confirming", async () => {

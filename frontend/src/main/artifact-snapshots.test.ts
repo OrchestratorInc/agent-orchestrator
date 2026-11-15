@@ -227,6 +227,17 @@ describe("artifact snapshot store", () => {
 			expect(await fs.readdir(path.join(directory, "cloud")).catch(() => [])).toHaveLength(0);
 		});
 
+		it("are not handed out from a read that a sign-out overtook", async () => {
+			const cache = store();
+			await cache.bindCloudAccount("user-1");
+			await cache.request(cloudJob);
+			const reading = cache.get(cloudJob);
+			const requesting = cache.request(cloudJob);
+			void cache.clearCloud();
+			expect(await reading).toBeNull();
+			expect(await requesting).toBeNull();
+		});
+
 		it("keep being served, and a render under way keeps going, when the same account is bound again", async () => {
 			let finish: (() => void) | undefined;
 			const render = vi.fn(() => new Promise<Buffer>((resolve) => {
@@ -363,5 +374,12 @@ describe("registerArtifactSnapshotProtocol", () => {
 		expect(Buffer.from(await found.arrayBuffer()).toString()).toBe("webp-bytes");
 		// Another host's snapshot is the account's: not served while signed out.
 		expect((await handler!(new Request(artifactSnapshotUrl(job({ hostId: "host-2" }))))).status).toBe(404);
+		expect(found.headers.get("cache-control")).toBe("max-age=31536000, immutable");
+		// Signed in it is served, but never kept by the browser: its URL names no account, so a kept copy would outlive a sign-out.
+		await store.bindCloudAccount("user-1");
+		await store.request(job({ hostId: "host-2" }));
+		const bound = await handler!(new Request(artifactSnapshotUrl(job({ hostId: "host-2" }))));
+		expect(bound.status).toBe(200);
+		expect(bound.headers.get("cache-control")).toBe("no-store");
 	});
 });

@@ -99,7 +99,8 @@ export function ArtifactsView() {
 	// Every saved remote host, so an offline host's last list still shows.
 	const remoteHosts = useShellMaybe()?.remoteHosts;
 	const remoteHostIds = useMemo(() => remoteHosts?.map((host) => host.hostId), [remoteHosts]);
-	const remoteWorkspaces = useRemoteWorkspaces({ cachedHostIds: remoteHostIds }).data;
+	const remote = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	const remoteWorkspaces = remote.data;
 	const hostLabels = useMemo(() => new Map((remoteHosts ?? []).map((host) => [host.hostId, host.label])), [remoteHosts]);
 	const orchestratorTitle = t("shell.orchestrator");
 	// Published marks and the Sharing filter read each file's shareUrl; bring
@@ -177,6 +178,10 @@ export function ArtifactsView() {
 		// Cloud artifacts show only where the control plane keeps them.
 		...(cloudArtifacts ? [{ value: "cloud" as const, label: t("artifacts.locationCloud") }] : []),
 	];
+	// Machines whose list did not load, among those shown: said so, with a retry, instead of
+	// leaving their artifacts silently missing.
+	const failedHosts = (remoteHosts ?? []).filter((host) => remote.failedHostIds.includes(host.hostId)
+		&& (location === undefined || location === hostArtifactLocation(host.hostId)));
 	const projectName = (group: ArtifactGroup) => withHostLabel(group.isScratchpad ? scratchpadName : group.name, group.hostId && hostLabels.get(group.hostId));
 	const selectedProjects = groups.filter((group) => projectIds.includes(group.id));
 	const filtering = projectIds.length > 0 || types.length > 0 || sharings.length > 0;
@@ -401,6 +406,12 @@ export function ArtifactsView() {
 						)}
 					</div>
 				</div>
+				{failedHosts.map((host) => (
+					<div key={host.hostId} role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
+						<span className="min-w-0 truncate">{t("artifacts.hostLoadFailed", { host: host.label })}</span>
+						<Button type="button" size="sm" variant="quiet" onClick={() => void remote.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
+					</div>
+				))}
 				{hasArtifacts && filtering ? (
 					<div className="mt-2 flex flex-wrap items-center gap-1.5">
 						{([
@@ -432,7 +443,7 @@ export function ArtifactsView() {
 								<p role="alert" className="px-3 py-8 text-center text-sm text-destructive">{workspaceQuery.error.message}</p>
 							) : !hasArtifacts ? (
 								<EmptyArtifacts workspaces={workspaces ?? []} />
-							) : visibleGroups.length === 0 ? (
+							) : visibleGroups.length === 0 && location !== undefined && failedHosts.length > 0 ? null : visibleGroups.length === 0 ? (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
 									<Button variant="quiet" size="sm" onClick={clearFilters}>

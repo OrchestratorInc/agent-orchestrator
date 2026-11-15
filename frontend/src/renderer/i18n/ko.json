@@ -3399,6 +3399,8 @@
 	"artifacts.bulkDeleteFailed": "{{total}}개 중 {{failed}}개를 삭제하지 못했습니다: {{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.hostLoadFailed": "{{host}}의 아티팩트를 불러오지 못했습니다.",
+	"artifacts.hostLoadRetry": "다시 시도",
 	"artifacts.empty.title": "Create your first artifact",
 	"artifacts.empty.description": "Artifacts are pages and documents an agent writes for you. Pick where the session should live.",
 	"artifacts.create": "Create artifact",

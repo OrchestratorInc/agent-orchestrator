@@ -256,22 +256,30 @@ export type HostFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 /** A remote host's file's name, size and fingerprint, read from its headers alone. */
 export async function inspectHostShareFile(fetchHost: HostFetch, file: { url: string; relativePath: string; name: string }, signal?: AbortSignal): Promise<HostShareFileInfo> {
-	// A GET whose body is dropped once the headers are in: the host's file route
-	// answers GET only, and a HEAD there is refused with 405.
-	const response = await fetchHostWithin(fetchHost, file.url, { method: "GET" }, HOST_SHARE_TIMEOUTS.inspect, signal);
+	const version = await hostFileVersion(fetchHost, file.url, signal);
+	return { name: file.name, relativePath: file.relativePath, ...version };
+}
+
+/**
+ * A remote host's file's size and fingerprint, from its headers alone. A GET whose body is dropped
+ * once the headers are in: the host's file route answers GET only, and a HEAD there is refused with 405.
+ */
+async function hostFileVersion(fetchHost: HostFetch, url: string, signal?: AbortSignal): Promise<{ size: number; fingerprint: string }> {
+	const response = await fetchHostWithin(fetchHost, url, { method: "GET" }, HOST_SHARE_TIMEOUTS.inspect, signal);
 	await response.body?.cancel().catch(() => undefined);
 	if (!response.ok) throw hostFileError(response);
 	const version = hostShareFingerprint(response.headers);
 	if (!version) throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share its files.");
-	return { name: file.name, relativePath: file.relativePath, ...version };
+	return version;
 }
 
 /**
  * Downloads a remote host's file into a private snapshot under snapshotDir,
  * hashing it as it goes. The version is the one the response names, so a
  * file the agent rewrote since the panel showed it is caught by the caller's
- * fingerprint check; a body shorter or longer than that version is refused
- * as source_changed. The download needs as much free space as the file.
+ * fingerprint check. A body shorter or longer than that version, or a file
+ * that is no longer that version once the body is read, is refused as
+ * source_changed. The download needs as much free space as the file.
  */
 export async function snapshotHostShareFile(
 	fetchHost: HostFetch,
@@ -295,11 +303,15 @@ export async function snapshotHostShareFile(
 		throw new CloudShareError("host_unsupported", "The machine this file is on is running an older Orchestrator. Update it to share its files.");
 	}
 	const target = path.join(snapshotDir, randomUUID());
-	const output = await fs.open(target, "wx", 0o600);
+	// The body is cancelled on every way out short of reading it all, so it never holds its connection.
+	const reader = response.body.getReader();
+	const output = await fs.open(target, "wx", 0o600).catch(async (error: unknown) => {
+		await reader.cancel().catch(() => undefined);
+		throw error;
+	});
 	const hash = createHash("sha256");
 	let size = 0;
 	try {
-		const reader = response.body.getReader();
 		for (;;) {
 			if (options.signal?.aborted) {
 				await reader.cancel().catch(() => undefined);
@@ -318,9 +330,15 @@ export async function snapshotHostShareFile(
 		}
 		// The bytes must be all of the version the response named, and no more.
 		if (size !== version.size) throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
+		// The host streams the live file, so a rewrite in place during the body can mix two versions
+		// under the first one's tag: the file must still be that version once it is all read.
+		if ((await hostFileVersion(fetchHost, file.url, options.signal)).fingerprint !== version.fingerprint) {
+			throw new CloudShareError("source_changed", "The file changed while it was being prepared for sharing.");
+		}
 		await output.close();
 		return { path: target, size, sha256: hash.digest("hex"), fingerprint: version.fingerprint };
 	} catch (error) {
+		await reader.cancel().catch(() => undefined);
 		await output.close().catch(() => undefined);
 		await fs.rm(target, { force: true });
 		// A connection that dropped mid-download reads as the host being away, not as a bug.
