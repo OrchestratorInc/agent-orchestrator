@@ -132,7 +132,7 @@ describe("clone repository input", () => {
 		expect(await screen.findByRole("dialog", { name: "Let's set up your first project" })).toBeInTheDocument();
 		// The step it skipped is not on the way back.
 		fireEvent.click(screen.getByRole("button", { name: "Back to code source" }));
-		expect(screen.getByRole("dialog", { name: "Welcome to Agent Orchestrator" })).toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Welcome to Orchestrator" })).toBeInTheDocument();
 	});
 
 	it("cannot dismiss the first run welcome step, but the close button works afterwards", () => {
