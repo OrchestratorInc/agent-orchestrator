@@ -46,6 +46,39 @@ func TestRegisterArtifactsReportsWhatStaysUnlisted(t *testing.T) {
 	}
 }
 
+func TestRegisterArtifactsReportsOnlyNewFilesByType(t *testing.T) {
+	_, st, dir := registrationFixture(t, "brand.html", "notes.html", "shot.png")
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: filepath.Dir(filepath.Dir(dir)), Telemetry: sink})
+	ctx := context.Background()
+
+	if _, err := svc.RegisterArtifacts(ctx, "mer-1", []string{"brand.html", "notes.html", "shot.png", "brand.html"}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]any{}
+	for _, ev := range sink.events {
+		if ev.Name != "ao.artifacts.registered" {
+			t.Fatalf("unexpected event %q", ev.Name)
+		}
+		if len(ev.Payload) != 2 || ev.SessionID != nil || ev.ProjectID != nil {
+			t.Fatalf("event carries more than the type and count: %+v", ev)
+		}
+		got[ev.Payload["file_type"].(string)] = ev.Payload["count"]
+	}
+	if len(got) != 2 || got["html"] != 2 || got["image"] != 1 {
+		t.Fatalf("counts by type = %v", got)
+	}
+
+	// Registering a path again is not a new artifact.
+	sink.events = nil
+	if _, err := svc.RegisterArtifacts(ctx, "mer-1", []string{"brand.html"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("re-registration sent %+v", sink.events)
+	}
+}
+
 func TestRegisterArtifactsRegistersNothingUnlessEveryPathIsValid(t *testing.T) {
 	svc, st, _ := registrationFixture(t, "brand.html")
 

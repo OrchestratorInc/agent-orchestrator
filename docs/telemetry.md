@@ -614,7 +614,8 @@ email address.
   `code`, `archive`, `bundle` (a bundle directory), or `other`. The extension
   itself is not sent.
 - `source` is where the artifact's session runs: `local`, `remote_host`, or
-  `cloud`. It is omitted where the app does not know it (chat cards and links).
+  `cloud`. It is omitted where the app does not know it (chat cards and links)
+  and on a bulk delete from the Artifacts page, which can span both.
   On share events it is `local` for a file on this computer and `cloud` for a
   cloud session's file.
 - `surface` on `opened_externally` and `deleted` is `page` (the Artifacts

@@ -825,8 +825,12 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 		if !ok {
 			continue
 		}
-		if name == "ao.artifacts.registered" && key == "file_type" {
-			if text, ok := value.(string); !ok || !telemetrymeta.ValidArtifactFileType(text) {
+		if name == "ao.artifacts.registered" {
+			if key == "file_type" {
+				if text, ok := value.(string); !ok || !telemetrymeta.ValidArtifactFileType(text) {
+					continue
+				}
+			} else if _, ok := value.(int); !ok {
 				continue
 			}
 		}

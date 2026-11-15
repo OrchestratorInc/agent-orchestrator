@@ -735,6 +735,26 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 }
 
+func TestArtifactRegisteredPayloadIsTypeBucketAndCount(t *testing.T) {
+	got := sanitizeRemotePayload("ao.artifacts.registered", map[string]any{
+		"file_type": "html", "count": 2,
+		"path": "/Users/alice/report.html", "name": "report.html", "session_id": "mer-1",
+	})
+	if len(got) != 2 || got["file_type"] != "html" || got["count"] != int64(2) {
+		t.Fatalf("payload = %#v", got)
+	}
+	for _, hostile := range []any{"report.html", "/Users/alice/a.html", "HTML", 42} {
+		got = sanitizeRemotePayload("ao.artifacts.registered", map[string]any{"file_type": hostile})
+		if len(got) != 0 {
+			t.Fatalf("accepted file_type %#v: %#v", hostile, got)
+		}
+	}
+	got = sanitizeRemotePayload("ao.artifacts.registered", map[string]any{"count": "/Users/alice/report.html"})
+	if len(got) != 0 {
+		t.Fatalf("accepted a text count: %#v", got)
+	}
+}
+
 func TestAutomationCreationPayloadIsClosedVocabulary(t *testing.T) {
 	got := sanitizeRemotePayload("ao.automation.created", map[string]any{
 		"template_id": "daily_pr_review_v1", "use_case": "pr_review",

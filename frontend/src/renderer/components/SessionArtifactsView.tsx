@@ -690,6 +690,12 @@ export function SessionArtifactsView({
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [listedArtifacts, cloud]);
 	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	// Mounted with a request: the request effect selects its file after the
+	// first commit, so until then the gallery is not what the person opened.
+	const [openedOntoArtifact, setOpenedOntoArtifact] = useState(() => Boolean(request));
+	useEffect(() => {
+		if (selectedPath !== null) setOpenedOntoArtifact(false);
+	}, [selectedPath]);
 	// A file a request opened before the session listed it, until the list has
 	// it. Only that file gets the not-listed-yet note: one that leaves the list
 	// later (deleted here or by the agent) is gone, not on its way.
@@ -868,10 +874,11 @@ export function SessionArtifactsView({
 	// Only the cards in view and near it are built; the list itself scrolls.
 	const grid = useVirtualGridRows(listedArtifacts.length);
 	// The open counts the session's listed deliverables; the cards show once a
-	// cloud session's list has loaded.
+	// cloud session's list has loaded. A tab opened onto one artifact (a chat
+	// link, a new registration) is not a list open until Back shows the cards.
 	useArtifactListTelemetry({
 		surface: "tab",
-		visible,
+		visible: visible && selectedPath === null && !openedOntoArtifact,
 		settled: !session.artifactFilesPending,
 		count: listedArtifacts.length,
 		hasCards: listedArtifacts.length > 0,

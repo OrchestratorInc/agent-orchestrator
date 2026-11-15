@@ -658,6 +658,36 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
+	it("keeps only enums, counts and durations on artifact usage events", async () => {
+		const leaks = { path: "/Users/alice/report.html", name: "report.html", url: "https://share.example/abc", title: "Q3 plan", session: "alice-session", emails: ["bob@example.com"] };
+		expect(await sanitizeRendererProperties("ao.artifacts.list_opened", {
+			...leaks, surface: "page", outcome: "loaded", artifact_count_bucket: "6-20", time_to_first_card_ms: 412,
+		})).toEqual({ surface: "page", outcome: "loaded", artifact_count_bucket: "6-20", time_to_first_card_ms: 412 });
+		expect(await sanitizeRendererProperties("ao.artifacts.opened", {
+			...leaks, surface: "chat_card", file_type: "html", source: "cloud", owner: "teammate",
+		})).toEqual({ surface: "chat_card", file_type: "html", source: "cloud", owner: "teammate" });
+		expect(await sanitizeRendererProperties("ao.artifacts.published", {
+			...leaks, access: "anyone", invite_count: 2, republish: false, source: "local", file_type: "pdf",
+		})).toEqual({ access: "anyone", invite_count: 2, republish: false, source: "local", file_type: "pdf" });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { ...leaks, reason: "limit" })).toEqual({ reason: "limit" });
+		expect(await sanitizeRendererProperties("ao.artifacts.feedback_sent", { ...leaks, comment_count: 3 })).toEqual({ comment_count: 3 });
+		expect(await sanitizeRendererProperties("ao.artifacts.deleted", { ...leaks, surface: "page", count: 4 })).toEqual({ surface: "page", count: 4 });
+	});
+
+	it("drops artifact values outside their vocabulary or bounds", async () => {
+		expect(await sanitizeRendererProperties("ao.artifacts.opened", {
+			surface: "viewer", file_type: "/Users/alice/a.html", source: "laptop", owner: "u_123",
+		})).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.opened_externally", { target: "email", surface: "chat_card" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.list_opened", {
+			outcome: "loaded", time_to_first_card_ms: -1, artifact_count_bucket: "17",
+		})).toEqual({ outcome: "loaded" });
+		expect(await sanitizeRendererProperties("ao.artifacts.list_opened", { time_to_first_card_ms: 12.5 })).toEqual({});
+		// A property only travels on the events it belongs to.
+		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", { reason: "limit", count: 2, outcome: "loaded" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.share_invited", { invite_count: 5000 })).toEqual({});
+	});
+
 	it("keeps bounded spawn source and typed failure fields", async () => {
 		const props = await sanitizeRendererProperties("ao.orchestrators.spawned", {
 			project_id: "demo-project",
