@@ -20,7 +20,7 @@ vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
 	probeAgentAuth: auth.probe,
 }));
 
-import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, useOnboardingLogin, verifyAgentSignIn } from "./ToolInstalls";
+import { agentRowState, InstallProblem, InstallProgress, useAgentInstalls, useGhInstall, LOGIN_VERIFY_MS, useOnboardingLogin, useVerifyWhileSigningIn, verifyAgentSignIn } from "./ToolInstalls";
 
 const plan = (agentId: string, automatic = true) => ({
 	agentId,
@@ -328,5 +328,37 @@ describe("useOnboardingLogin", () => {
 		flow.unmount();
 		setWorkflow(login("late"));
 		expect(terminals.close).toHaveBeenCalledWith("late");
+	});
+});
+
+describe("useVerifyWhileSigningIn", () => {
+	afterEach(() => vi.useRealTimers());
+
+	it("notices a login that finishes while its terminal stays open, then stops checking", async () => {
+		vi.useFakeTimers();
+		// Droid-style: the CLI signs in inside the terminal, which never exits.
+		let signedIn = false;
+		const verify = vi.fn(async () => undefined);
+		const hook = renderHook(({ done }) => useVerifyWhileSigningIn("droid", done, verify), { initialProps: { done: false } });
+		await act(async () => { await vi.advanceTimersByTimeAsync(LOGIN_VERIFY_MS); });
+		expect(verify).toHaveBeenLastCalledWith(["droid"]);
+		// The credentials change mid-login; the next check sees it and the row turns ready.
+		signedIn = true;
+		await act(async () => { await vi.advanceTimersByTimeAsync(LOGIN_VERIFY_MS); });
+		expect(verify).toHaveBeenCalledTimes(2);
+		hook.rerender({ done: signedIn });
+		await act(async () => { await vi.advanceTimersByTimeAsync(LOGIN_VERIFY_MS * 3); });
+		expect(verify).toHaveBeenCalledTimes(2);
+	});
+
+	it("waits for a slow check before starting the next", async () => {
+		vi.useFakeTimers();
+		let finish: () => void = () => undefined;
+		const verify = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+		renderHook(() => useVerifyWhileSigningIn("qwen", false, verify));
+		await act(async () => { await vi.advanceTimersByTimeAsync(LOGIN_VERIFY_MS * 4); });
+		expect(verify).toHaveBeenCalledOnce();
+		await act(async () => { finish(); await vi.advanceTimersByTimeAsync(LOGIN_VERIFY_MS); });
+		expect(verify).toHaveBeenCalledTimes(2);
 	});
 });

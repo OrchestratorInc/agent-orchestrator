@@ -145,6 +145,37 @@ export function useAgentInstalls(onInstalled: (agentId: string) => void) {
 	return { plansReady: !plans.isPending, planFor, canInstall, start, view };
 }
 
+/** How often an open login re-verifies sign-in (each check waits for the last). */
+export const LOGIN_VERIFY_MS = 5_000;
+
+/**
+ * While a harness login is open, verifies its sign-in afresh every
+ * LOGIN_VERIFY_MS until it is done. Some logins finish inside a terminal that
+ * stays open (a TUI's in-session login command), so the terminal ending can't
+ * be the only signal, and readiness alone would reuse a signed-out answer for
+ * minutes. Each check waits for the one before it, so probes never pile up.
+ */
+export function useVerifyWhileSigningIn(agentId: string | undefined, done: boolean, verify: (agentIds: string[]) => Promise<void>) {
+	const verifyRef = useRef(verify);
+	verifyRef.current = verify;
+	useEffect(() => {
+		if (!agentId || done) return;
+		let active = true;
+		let timer: number | undefined;
+		const next = () => {
+			timer = window.setTimeout(async () => {
+				await verifyRef.current([agentId]).catch(() => undefined);
+				if (active) next();
+			}, LOGIN_VERIFY_MS);
+		};
+		next();
+		return () => {
+			active = false;
+			window.clearTimeout(timer);
+		};
+	}, [agentId, done]);
+}
+
 /**
  * A harness login started on Your tools, kept by the onboarding flow rather
  * than the step: going Back and returning reattaches the same terminal (the
