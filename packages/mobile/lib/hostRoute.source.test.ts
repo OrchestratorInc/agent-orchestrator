@@ -108,7 +108,7 @@ describe("retained-stack host routes", () => {
 		const file = source("../app/files/[sessionId]/file.tsx");
 		expect(file).toContain("useEffect(() => () => reading.current?.abort(), []);");
 		expect(file).toContain("await branchBackend.file(id, path, read, controller.signal);");
-		expect(file).toContain("backend.imageSource(sessionId, path, which, version, read, controller.signal)");
+		expect(file).toContain("retryWhenVerified(backend, (signal) => backend.imageSource(sessionId, path, which, version, read, signal), controller.signal)");
 		const folder = source("./files/FolderList.tsx");
 		expect(folder).toContain("useEffect(() => () => inFlight.current?.abort(), []);");
 		expect(folder).toContain("await backend.tree(sessionId, dir, controller.signal);");

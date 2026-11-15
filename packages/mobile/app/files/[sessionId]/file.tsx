@@ -11,7 +11,7 @@ import { userFacingError } from "../../../lib/connectionError";
 import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
 import { hostRouteMatches } from "../../../lib/hostRoute";
-import { resolveWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
+import { resolveWhenVerified, retryWhenVerified, useVerifiedOnMount } from "../../../lib/heldBackend";
 import { ImageViewer } from "../../../lib/ImageViewer";
 import { usePressFeedback } from "../../../lib/pressFeedback";
 import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
@@ -546,8 +546,10 @@ function useImageSources(backend: FilesBackend | null, sessionId: string, path: 
 		// Cancelled with the page or the image it was for, even while waiting for the connection.
 		const controller = new AbortController();
 		// A side that can't be read is no side: the page then says the image is
-		// unavailable rather than staying on Opening… with the read rejected.
-		const side = (which: "before" | "after") => backend.imageSource(sessionId, path, which, version, read, controller.signal).catch(() => undefined);
+		// unavailable rather than staying on Opening… with the read rejected. One
+		// that timed out waiting for the connection is not an answer: it is read
+		// again once the machine is verified, not kept as missing.
+		const side = (which: "before" | "after") => retryWhenVerified(backend, (signal) => backend.imageSource(sessionId, path, which, version, read, signal), controller.signal).catch(() => undefined);
 		void Promise.all([
 			wantBefore ? side("before") : undefined,
 			wantAfter ? side("after") : undefined,
