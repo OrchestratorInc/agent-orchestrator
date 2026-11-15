@@ -206,6 +206,7 @@ import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./T
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
 import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -665,7 +666,24 @@ export interface ChatWorkspaceProps {
 	steerPending?: boolean;
 	/** Why the last steer was refused, from the daemon's typed answer. */
 	steerRefusal?: string;
+	/**
+	 * Steers a queued message into the running turn (the queue's Steer). Absent means this
+	 * chat cannot, and the queue offers no Steer: a Steer that reached nothing would show the
+	 * message as steered while it stayed queued.
+	 */
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/**
+	 * Why the last steer of a queued message failed, by its turn, from the host's durable
+	 * record (a Cloud chat's events), so the row says so after a remount too.
+	 */
+	queuedSteerErrors?: Readonly<Record<string, string>>;
+	/**
+	 * Queued messages the host's durable record shows being steered (a Cloud chat's events).
+	 * With it, a message being steered stays in the queue, in its place, marked steering and
+	 * still deletable, until the agent takes it; without it (a local chat) it leaves the queue
+	 * for the running turn at once.
+	 */
+	steeringQueuedTurnIds?: ReadonlySet<string>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
 	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
 	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
@@ -911,6 +929,8 @@ function ChatWorkspaceContent({
 	steerPending,
 	steerRefusal,
 	onPromoteQueuedTurn,
+	queuedSteerErrors,
+	steeringQueuedTurnIds,
 	onEditQueuedTurn,
 	canEditQueuedMessage,
 	onCancelQueuedTurn,
@@ -1228,14 +1248,20 @@ function ChatWorkspaceContent({
 			})),
 		[backgroundWakeQueuedTurnIds, localEchos, snapshot.items, snapshot.latestSequence],
 	);
+	// A host that records steers keeps a message being steered in the queue (see steeringQueuedTurnIds).
+	const steerInQueue = steeringQueuedTurnIds !== undefined;
 	const visibleQueuedMessages = useMemo(
 		() => [
 			...queuedMessages.filter(
-				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && !steerStartedAt.has(message.turnId),
+				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && (steerInQueue || !steerStartedAt.has(message.turnId)),
 			),
 			...pendingQueuedMessages,
 		],
-		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerInQueue, steerStartedAt],
+	);
+	const steeringTurnIds = useMemo(
+		() => (steerInQueue ? new Set([...steeringQueuedTurnIds, ...steerStartedAt.keys()]) : undefined),
+		[steerInQueue, steeringQueuedTurnIds, steerStartedAt],
 	);
 	// A steer sent from the composer shows in its turn at once, as a send's echo does.
 	// The daemon places its row when the agent accepts the steer, so until then the echo
@@ -1254,7 +1280,7 @@ function ChatWorkspaceContent({
 		});
 	}, [pendingSteerEchoes]);
 	const timelineSnapshot = useMemo(() => {
-		const steering = queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
+		const steering = steerInQueue ? [] : queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
 		if (turn?.state !== "running" || (steering.length === 0 && pendingSteerEchoes.length === 0)) return snapshot;
 		const items = [...snapshot.items];
 		pendingSteerEchoes.forEach((echo, index) => {
@@ -1291,7 +1317,7 @@ function ChatWorkspaceContent({
 				})),
 			],
 		};
-	}, [pendingSteerEchoes, queuedMessages, snapshot, steerStartedAt, turn]);
+	}, [pendingSteerEchoes, queuedMessages, snapshot, steerInQueue, steerStartedAt, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1860,7 +1886,13 @@ function ChatWorkspaceContent({
 		[onResolveInput, stablePendingUserInput],
 	);
 	const canSteerQueuedMessage =
-		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
+		Boolean(onSteer) && Boolean(onPromoteQueuedTurn) && can(snapshot, "steer") && turn?.state === "running";
+	// A failure the host recorded shows until the person retries; one this view saw first
+	// (a refused request) shows over it.
+	const queuedSteerFailures = useMemo(
+		() => (queuedSteerErrors && Object.keys(queuedSteerErrors).length > 0 ? { ...queuedSteerErrors, ...steerErrors } : steerErrors),
+		[queuedSteerErrors, steerErrors],
+	);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
@@ -1869,7 +1901,7 @@ function ChatWorkspaceContent({
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
-					onPromoteQueuedTurn={newWorkDisabled ? undefined : promoteQueuedTurn}
+					onPromoteQueuedTurn={newWorkDisabled || !onPromoteQueuedTurn ? undefined : promoteQueuedTurn}
 					onBeginQueuedEdit={
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
@@ -1881,7 +1913,8 @@ function ChatWorkspaceContent({
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
-					steerErrors={steerErrors}
+					steerErrors={queuedSteerFailures}
+					steeringTurnIds={steeringTurnIds}
 				/>
 			) : null,
 		[
@@ -1895,13 +1928,15 @@ function ChatWorkspaceContent({
 			newWorkDisabled,
 			onCancelQueuedTurn,
 			onEditQueuedTurn,
+			onPromoteQueuedTurn,
 			onReorderQueuedTurns,
 			reorderQueuedTurns,
 			promoteQueuedTurn,
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
-			steerErrors,
+			queuedSteerFailures,
+			steeringTurnIds,
 			visibleQueuedMessages,
 		],
 	);
@@ -2165,7 +2200,7 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy || importBlock ? null : (
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -6333,7 +6368,7 @@ function TimelineItem({
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
 				) : (
-					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
 				)}
 			</FromAgent>
 		);

@@ -40,6 +40,7 @@ const AGENT_HUES: Record<AgentId, number | null> = {
 	"docker-agent": null,
 	memcode: 140,
 	hermes: 75,
+	stakpak: 215,
 };
 
 export function agentTone(harness: string): string {

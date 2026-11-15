@@ -47,6 +47,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => !account.device || account.signedIn).length > 1;
 	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[loginKey];
@@ -144,7 +145,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>; })}
-			{hostId ? null : <AccountHandoffRow />}
+			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}

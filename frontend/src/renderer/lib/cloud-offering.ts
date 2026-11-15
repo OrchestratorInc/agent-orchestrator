@@ -30,6 +30,11 @@ export const ATTACHMENTS_FEATURE = "attachments";
 export const QUEUED_EDIT_FEATURE = "queued-edit";
 /** Offering feature the control plane sends when a queued message can be deleted without stopping a started turn (deleteQueuedMessage). */
 export const QUEUED_DELETE_FEATURE = "queued-delete";
+/**
+ * Offering feature the control plane sends when a queued message can be steered into the
+ * running turn (steerQueuedMessage), with the outcome recorded on the queued turn's events.
+ */
+export const QUEUED_STEER_FEATURE = "queued-steer";
 /** The largest Cloud attachment when the control plane takes files but names no limit. */
 export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 

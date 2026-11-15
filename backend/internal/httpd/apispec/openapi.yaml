@@ -20288,6 +20288,7 @@ components:
           - docker-agent
           - memcode
           - hermes
+          - stakpak
           - fake
           type: string
         approvalMode:
@@ -21071,6 +21072,7 @@ components:
           - docker-agent
           - memcode
           - hermes
+          - stakpak
           - cloudflared
           - cua-driver
           type: string
@@ -23370,6 +23372,8 @@ components:
           type: string
         behind:
           type: integer
+        branch:
+          type: string
         commits:
           type: integer
         conflicts:
@@ -25314,6 +25318,7 @@ components:
           - docker-agent
           - memcode
           - hermes
+          - stakpak
           type: string
         issueId:
           type: string

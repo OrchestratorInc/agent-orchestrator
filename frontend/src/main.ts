@@ -1,4 +1,6 @@
-import { SideCloseRecovery } from "./main/side-close";
+import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
+import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
+import { SideCloseController } from "./main/side-close-controller";
 import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { launchTriageInTerminal } from "./main/triage-launch";
 import { initializeDesktopLog } from "./main/desktop-log";
@@ -64,6 +66,7 @@ import { createCliShadowShellPath } from "./main/cli-shadow-shell-path";
 import { cliShadowEnabled } from "./shared/cli-shadow";
 import { registerDictationIpc } from "./main/dictation";
 import { launchCommand } from "./main/launch-command";
+import { createLaunchTiming } from "./main/launch-timing";
 import { readNativeAppIcon } from "./main/native-app-icon";
 import { blocksRenderFrameNavigation, cloudArtifactPrefix } from "./main/render-frame-guard";
 import { agentPageRequestAllowed } from "./main/render-frame-network";
@@ -98,6 +101,8 @@ import {
 } from "./shared/daemon-startup-status";
 import { reloadAppView, toggleAppDevTools } from "./main/app-devtools";
 import { acceptLanguages, applyBrowserIdentity, applyUserAgentFallback } from "./main/browser-identity";
+import { purgeRootCachesOnce, sweepTemporaryBrowserPartitions } from "./main/browser-storage-cleanup";
+import { createUserBrowser } from "./main/user-browser";
 import { openChromeExtensionsPage } from "./main/chrome-extensions-page";
 import { appShortcutDelivery, attachAppShortcuts, attachShellReloadGuard } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
@@ -355,6 +360,7 @@ app.setPath(
 // Resolve once against the launch cwd, before the daemon can chdir. The exact
 // absolute value is shared by policy bootstrap and every daemon spawn.
 const desktopLaunchWorkingDirectory = process.cwd();
+const launchTiming = createLaunchTiming(process.getCreationTime() ?? performance.timeOrigin);
 const desktopDataDir = resolveDesktopDataDir(process.env, os.homedir(), desktopLaunchWorkingDirectory, app.isPackaged);
 initializeDesktopLog(desktopDataDir);
 let telemetryPolicyController: DesktopTelemetryController | null = null;
@@ -821,29 +827,43 @@ let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<stri
 const SIDE_STATE_BACKSTOP_MS = 5_000;
 let sideStateTimer: ReturnType<typeof setInterval> | undefined;
 const sideCloseRecovery = new SideCloseRecovery();
-function publishPendingSideCloses(): void {
-	getShellWebContents()?.send("sideChats:pendingClosesChanged");
-}
-function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }): void {
-	sideCloseRecovery.remember(state);
+const sideCloseController = new SideCloseController({
+	ledger: sideCloseRecovery,
+	attachment: () => sideLaunchRecovery.attachment,
+	ensureClaimed: () => sideLaunchRecovery.ensureClaimed(),
+	capture: () => sideLaunchRecovery.captureForClose(),
+	onOwnershipChange: () => { sideLaunchState = sideCloseRecovery.state; },
+	onChange: (state: SideCloseState) => { getShellWebContents()?.send("sideChats:closeStateChanged", state); },
+});
+function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }, coverage: SideSnapshotCoverage): void {
+	sideCloseRecovery.remember(state, coverage);
 	sideLaunchState = sideCloseRecovery.state;
-	publishPendingSideCloses();
+	sideCloseController.reconcile(coverage);
+}
+
+function armSideStateBackstop(): void {
+	if (sideStateTimer) return;
+	sideStateTimer = setInterval(() => {
+		if (sideLaunchRecovery.status === "ready" || sideCloseController.hasPending()) sideLaunchRecovery.captureCloseInBackground();
+	}, SIDE_STATE_BACKSTOP_MS);
 }
 
 const sideLaunchRecovery = new SideLaunchRecovery({
 	snapshot: () => sideLaunchState,
-	onRestore: () => sideCloseRecovery.markRestoreAttempt(),
+	onRestore: (snapshot) => sideCloseRecovery.markRestoreAttempt(snapshot),
+	onRestoreAccepted: (snapshot) => { sideCloseRecovery.markRestoreAccepted(snapshot); sideLaunchState = sideCloseRecovery.state; sideCloseController.reconcile(); },
 	onSnapshot: rememberSideLaunchState,
 	onError: error => console.warn("AO: side chat recovery or capture failed", error),
+	onClaimed: () => { sideCloseController.setRecovery("restoring"); armSideStateBackstop(); },
 	onReady: () => {
-		const capture = () => sideLaunchRecovery.captureInBackground();
-		capture();
-		if (sideStateTimer) clearInterval(sideStateTimer);
-		sideStateTimer = setInterval(capture, SIDE_STATE_BACKSTOP_MS);
+		sideCloseController.setRecovery("ready"); // gated until a post-ready capture is applied
+		sideLaunchRecovery.captureCloseInBackground();
+		armSideStateBackstop();
 	},
 });
 app.once("will-quit", () => {
 	sideLaunchRecovery.setAttachment(undefined);
+	sideCloseController.setAttachment(undefined, "unavailable");
 	if (sideStateTimer) clearInterval(sideStateTimer);
 	sideStateTimer = undefined;
 });
@@ -858,6 +878,7 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		disposeBrowserStreamLink();
 	}
 	daemonStatus = nextStatus;
+	if (nextStatus.state === "ready") launchTiming.mark("daemonReady");
 	if (nextStatus.state === "ready") void telemetryIdentity.flush();
 	else telemetryIdentity.invalidate();
 	getShellWebContents()?.send("daemon:status", daemonStatus);
@@ -872,6 +893,8 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		if (sideStateTimer) clearInterval(sideStateTimer);
 		sideStateTimer = undefined;
 	}
+	// The daemon status/URL event above precedes the new close epoch/projection.
+	sideCloseController.setAttachment(sideLaunchRecovery.attachment, sideLaunchRecovery.status);
 }
 
 const MAX_DAEMON_OUTPUT_CHARS = 12_000;
@@ -985,9 +1008,17 @@ function browserProfileStateDir(): string {
 	return path.dirname(runFile ?? path.join(os.homedir(), ".ao", "running.json"));
 }
 
+// The person's own browser, for pages that refuse AO's Browser panel.
+const userBrowser = createUserBrowser({
+	platform: process.platform,
+	openExternal: (url) => shell.openExternal(url),
+	defaultBrowserName: () => app.getApplicationNameForProtocol("https://"),
+});
+
 async function clearElectronBrowserProfileData(partition: string): Promise<void> {
 	const browserSession = session.fromPartition(partition);
-	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()]);
+	// clearCache leaves V8's code cache, which is most of what a cleared partition still holds.
+	await Promise.all([browserSession.clearStorageData(), browserSession.clearCache(), browserSession.clearCodeCaches({})]);
 }
 
 async function disposeAllBrowserViewHosts(): Promise<void> {
@@ -1276,6 +1307,8 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
+		openInUserBrowser: (url) => userBrowser.open(url),
+		describeUserBrowser: () => userBrowser.describe(),
 		prepareBrowserPartition: (partition) =>
 			applyBrowserIdentity(session.fromPartition(partition), {
 				chromeVersion: process.versions.chrome,
@@ -1323,6 +1356,7 @@ async function createWindowInternal(): Promise<void> {
 		establishBrowserStreamLink();
 	}
 
+	mainWindow.once("show", () => launchTiming.mark("windowShown"));
 	showWhenRendererLoaded(mainWindow, shellWebContents);
 	void shellWebContents.loadURL(rendererUrl());
 
@@ -3158,54 +3192,30 @@ ipcMain.handle("daemon:restart", async () => {
 		return reportDaemonRestartFailure(error);
 	}
 });
-async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<void> {
-	// Pin known ownership immediately, even while an older restore is in flight.
-	// A second daemon crash must not lose this close intent while capture waits.
-	if (closedSideId && !cancelClose && sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) {
-		sideCloseRecovery.begin(closedSideId);
-		sideLaunchState = sideCloseRecovery.state;
-		publishPendingSideCloses();
-	}
-	await sideLaunchRecovery.ensureReady();
-	if (closedSideId) {
-		if (cancelClose) sideCloseRecovery.cancel(closedSideId);
-		else {
-			// Capture missing ownership before allowing DELETE. Once pinned, later
-			// snapshot failures must retain the cleanup record.
-			if (!sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) await captureSideChatState();
-			sideCloseRecovery.begin(closedSideId);
-		}
-		sideLaunchState = sideCloseRecovery.state;
-		publishPendingSideCloses();
-	}
-	const { attachment, state } = await sideLaunchRecovery.capture();
-	if (!sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
-	if (alreadyClosedId) {
-		sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
-		sideLaunchState = sideCloseRecovery.state;
-		publishPendingSideCloses();
-	}
+async function captureSideChatState(): Promise<void> {
+	const generation = daemonAttachmentGeneration;
+	// A verified OPEN side can accept a draft/receipt while an unrelated
+	// restore is rejected. Its capture must share the coverage-aware queue
+	// with close operations rather than wait for full-launch readiness.
+	const { attachment } = await sideLaunchRecovery.captureForClose();
+	if (generation !== daemonAttachmentGeneration || !sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
 }
 
-ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelClose = false) => {
+ipcMain.handle("sideChats:capture", async (event, ...legacyCloseArguments: unknown[]) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted side chat capture request.");
-	if (closedSideId !== undefined && (typeof closedSideId !== "string" || closedSideId.length > 255)) {
-		throw new Error("Invalid side chat identity.");
-	}
-	if (typeof cancelClose !== "boolean") throw new Error("Invalid close cancellation.");
-	return captureSideChatState(closedSideId, cancelClose);
+	if (legacyCloseArguments.length) throw new Error("Side chat close protocol changed. Reload the desktop app.");
+	return captureSideChatState();
 });
-ipcMain.handle("sideChats:confirmClose", async (event, sideId: string, alreadyClosed = false) => {
-	if (event.sender !== getShellWebContents() || typeof sideId !== "string" || !sideId || sideId.length > 255 || typeof alreadyClosed !== "boolean") throw new Error("Invalid side close confirmation.");
-	if (alreadyClosed) { await captureSideChatState(undefined, false, sideId); return; }
-	sideCloseRecovery.confirm(sideId);
-	publishPendingSideCloses();
-	// DELETE already established success. Keep cleanup in RAM while refreshing.
-	sideLaunchRecovery.captureInBackground();
+ipcMain.handle("sideChats:confirmClose", () => {
+	throw new Error("Side chat close protocol changed. Reload the desktop app.");
 });
-ipcMain.handle("sideChats:pendingCloses", (event, sessionId: string) => {
-	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || sessionId.length > 255) throw new Error("Invalid side close query.");
-	return sideCloseRecovery.pending(sessionId);
+ipcMain.handle("sideChats:requestClose", (event, input: SideCloseRequest) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted side chat close request.");
+	return sideCloseController.requestClose(input);
+});
+ipcMain.handle("sideChats:closeState", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || !sessionId || sessionId.length > 255) throw new Error("Invalid side close query.");
+	return sideCloseController.summary(sessionId);
 });
 
 ipcMain.handle("editorHandoff:pathAction", (event, input) => {
@@ -4135,6 +4145,16 @@ ipcMain.handle(
 
 // The renderer could not decode or start the bundled sound. Beep so the
 // notification still makes a sound where the OS beep works at all.
+// The shell reports the first frame that shows the workspace, which ends the
+// launch. Logged once: a reload reports the frame again.
+let launchTimingLogged = false;
+ipcMain.on("app:sessionsShown", (event) => {
+	if (event.sender !== getShellWebContents() || launchTimingLogged) return;
+	launchTimingLogged = true;
+	launchTiming.mark("sessionsShown");
+	console.info(launchTiming.line());
+});
+
 ipcMain.on("notifications:soundFailed", (event) => {
 	if (event.sender !== getShellWebContents()) return;
 	shell.beep();
@@ -4543,6 +4563,14 @@ async function writeAppStateOnLaunch(): Promise<void> {
 
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
+	launchTiming.mark("appReady");
+	// Before any browser partition exists; both run in the background.
+	void sweepTemporaryBrowserPartitions(app.getPath("userData")).then(({ removed, failed }) => {
+		if (removed || failed) console.info(`browser storage: removed ${removed} leftover temporary profiles${failed ? `, ${failed} failed` : ""}`);
+	});
+	void purgeRootCachesOnce(session.defaultSession, app.getPath("userData")).catch((error: unknown) => {
+		console.warn("browser storage: root cache purge failed; retrying next launch:", error);
+	});
 	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	void refreshGitHubOwners();
