@@ -144,9 +144,10 @@ export function ArtifactsView() {
 	const grid = useVirtualGridRows(cards.length, scrollElement);
 	useArtifactListTelemetry({
 		surface: "page",
-		visible: true,
-		settled: !workspaceQuery.isLoading,
-		failed: Boolean(workspaceQuery.error) && !workspaces,
+		// Cloud cards join the local ones, so the open waits for both lists.
+		settled: !workspaceQuery.isLoading && !workspaceQuery.cloudLoading,
+		// The same condition that shows the error in place of any cached cards.
+		failed: Boolean(workspaceQuery.error),
 		count: artifactCount(groups),
 		hasCards: cards.length > 0,
 	});

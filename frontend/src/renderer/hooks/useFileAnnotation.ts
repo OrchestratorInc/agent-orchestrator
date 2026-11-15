@@ -12,7 +12,7 @@ type UseFileAnnotationOptions = {
 	hostId?: string;
 	source?: string;
 	sendMessage?: (message: string) => Promise<void>;
-	/** Told after every comment in a send reached the agent, with how many there were. */
+	/** Told once per send with how many comments reached the agent, including those before a failure. */
 	onSent?: (commentCount: number) => void;
 };
 
@@ -141,6 +141,8 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 				settleSent();
 			}, 1_200);
 		} catch (submitError) {
+			// Comments that reached the agent before a later message failed still count.
+			if (delivered > 0) onSent?.(delivered);
 			if (generation !== generationRef.current) return;
 			// Comments that already reached the agent close; the rest stay to retry.
 			const deliveredKeys = new Set(pending.slice(0, delivered).map((entry) => fileAnnotationKey(entry.target)));

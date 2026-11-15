@@ -1100,7 +1100,10 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// removalVersion is read outside React by applyOptimisticProjectRemovals.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready, removalVersion]);
-	return { ...local, data };
+	// True while a cloud list is still on its first fetch: the merged data may
+	// still grow. Disabled cloud queries (signed out, offering off) never count.
+	const cloudLoading = includeCloud && (cloud.isLoading || cloudSessions.isLoading || sharedWorkspaces.isLoading);
+	return { ...local, data, cloudLoading };
 }
 
 /**

@@ -878,7 +878,8 @@ export function SessionArtifactsView({
 	// link, a new registration) is not a list open until Back shows the cards.
 	useArtifactListTelemetry({
 		surface: "tab",
-		visible: visible && selectedPath === null && !openedOntoArtifact,
+		open: visible,
+		showing: selectedPath === null && !openedOntoArtifact,
 		settled: !session.artifactFilesPending,
 		count: listedArtifacts.length,
 		hasCards: listedArtifacts.length > 0,

@@ -6,7 +6,8 @@
 export const ARTIFACT_FILE_TYPES = ["html", "markdown", "pdf", "image", "video", "audio", "data", "text", "office", "code", "archive", "bundle", "other"] as const;
 export type ArtifactFileType = (typeof ARTIFACT_FILE_TYPES)[number];
 
-const EXTENSION_TYPES: Record<string, ArtifactFileType> = {};
+// A Map, so an extension like `constructor` or `__proto__` is not found on Object.prototype.
+const EXTENSION_TYPES = new Map<string, ArtifactFileType>();
 for (const [type, extensions] of [
 	["html", "html htm"],
 	["markdown", "md markdown mdx"],
@@ -20,7 +21,7 @@ for (const [type, extensions] of [
 	["code", "js mjs cjs ts tsx jsx py go rs java rb sh css scss swift kt c cc cpp h hpp cs php sql"],
 	["archive", "zip tar gz tgz 7z rar"],
 ] as const) {
-	for (const extension of extensions.split(" ")) EXTENSION_TYPES[extension] = type;
+	for (const extension of extensions.split(" ")) EXTENSION_TYPES.set(extension, type);
 }
 
 /** The artifact's coarse file type, from its extension; a bundle directory row is "bundle". */
@@ -29,7 +30,7 @@ export function artifactFileType(path: string, bundle = false): ArtifactFileType
 	const name = path.slice(path.lastIndexOf("/") + 1);
 	const dot = name.lastIndexOf(".");
 	if (dot <= 0) return "other";
-	return EXTENSION_TYPES[name.slice(dot + 1).toLowerCase()] ?? "other";
+	return EXTENSION_TYPES.get(name.slice(dot + 1).toLowerCase()) ?? "other";
 }
 
 export const ARTIFACT_COUNT_BUCKETS = ["0", "1", "2-5", "6-20", "21-50", "51-200", "200+"] as const;

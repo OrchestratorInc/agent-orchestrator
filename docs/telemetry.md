@@ -594,7 +594,7 @@ email address.
 | Event | When it is sent | Artifact-specific properties |
 | --- | --- | --- |
 | `ao.artifacts.registered` | The daemon registers new artifact files for a session (`ao artifact add`). One event per registration and file type; registering a path again sends nothing | `file_type`, `count` |
-| `ao.artifacts.list_opened` | The Artifacts page opens, or a session's Artifacts tab opens while the inspector is showing. Once per open | `surface` (`page`, `tab`), `outcome`, `artifact_count_bucket`, `time_to_first_card_ms` |
+| `ao.artifacts.list_opened` | The Artifacts page opens, or a session's Artifacts tab shows its cards while the inspector is open. Once per open; closing and reopening the page, tab or inspector counts again, and returning from one artifact to the cards does not | `surface` (`page`, `tab`), `outcome`, `artifact_count_bucket`, `time_to_first_card_ms` |
 | `ao.artifacts.opened` | You open an artifact | `surface` (`page`, `tab`, `chat_card`, `link`, `board`), `file_type`, `source`, `owner` |
 | `ao.artifacts.opened_externally` | You choose Show in Finder (or File Explorer or the file manager), Show in Terminal, Open in browser, or Download | `target` (`file_manager`, `terminal`, `browser`, `download`), `surface`, `file_type`, `source` |
 | `ao.artifacts.deleted` | Deleting one artifact, or several from the Artifacts page, succeeds | `surface`, `count`, `source` |

@@ -11,6 +11,8 @@ describe("artifact telemetry buckets", () => {
 		expect(artifactFileType("Makefile")).toBe("other");
 		expect(artifactFileType(".env")).toBe("other");
 		expect(artifactFileType("app.icon/icon.json", true)).toBe("bundle");
+		expect(artifactFileType("report.constructor")).toBe("other");
+		expect(artifactFileType("report.__proto__")).toBe("other");
 	});
 
 	it("bands artifact counts", () => {
