@@ -169,3 +169,26 @@ func TestLifecycleDestroysBothRuntimesAndForgetsTarget(t *testing.T) {
 		t.Fatal("destroyed session kept its target")
 	}
 }
+
+func TestServiceReportsChromeAsTheProfileInChromeMode(t *testing.T) {
+	service, panel, chrome, _, token := chromeService(t)
+	ctx := context.Background()
+
+	if _, _, err := service.Execute(ctx, "s1", token, "profile", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(panel.actions) != 1 || panel.actions[0] != "profile" {
+		t.Fatalf("panel actions = %v", panel.actions)
+	}
+	if _, _, err := service.Execute(ctx, "s1", token, "target", map[string]interface{}{"target": "chrome"}); err != nil {
+		t.Fatal(err)
+	}
+	result, _, err := service.Execute(ctx, "s1", token, "profile", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := result.Value.(map[string]interface{})
+	if value["profileName"] != "your Chrome" || value["persistent"] != true || len(chrome.actions) != 0 {
+		t.Fatalf("chrome profile = %#v chrome actions = %v", value, chrome.actions)
+	}
+}

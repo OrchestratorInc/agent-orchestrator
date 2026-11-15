@@ -1038,6 +1038,11 @@ async function createWindowInternal(): Promise<void> {
 		return;
 	}
 	const browserProfileStore = await createBrowserProfileStore({ stateDir: browserProfileStateDir() });
+	// Agents start in a persistent profile, so a site the user signed in to once
+	// stays signed in for the next session. Temporary stays a per-session choice.
+	await browserProfileStore.ensureDefaultProfile("Personal").catch((error: unknown) => {
+		console.warn(`AO: could not create the default browser profile: ${(error as Error).message}`);
+	});
 	// In the background: this must never hold up the window.
 	void repairBrowserProfileCookies({
 		stateDir: browserProfileStateDir(),
