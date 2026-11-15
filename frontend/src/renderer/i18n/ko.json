@@ -409,7 +409,7 @@
 	"firstRun.install": "설치",
 	"firstRun.agentsBodyNone": "계속하려면 Harness를 하나 이상 설치하고 로그인하세요.",
 	"firstRun.toolsGithubHeading": "도구",
-	"firstRun.toolsGithubHint": "에이전트가 풀 리퀘스트를 열 수 있게 합니다.",
+	"firstRun.toolsGithubHint": "에이전트가 사용자를 대신해 브랜치를 푸시하고 풀 리퀘스트를 열 수 있게 합니다.",
 	"firstRun.toolsAgentsHeading": "Harness",
 	"firstRun.moreHarnesses_one": "Harness {{count}}개 더",
 	"firstRun.moreHarnesses_other": "Harness {{count}}개 더",

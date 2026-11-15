@@ -409,7 +409,7 @@
 	"firstRun.install": "安装",
 	"firstRun.agentsBodyNone": "请至少安装并登录一个 Harness 后继续。",
 	"firstRun.toolsGithubHeading": "工具",
-	"firstRun.toolsGithubHint": "让智能体能够创建拉取请求。",
+	"firstRun.toolsGithubHint": "让智能体代表你推送分支并创建拉取请求。",
 	"firstRun.toolsAgentsHeading": "Harness",
 	"firstRun.moreHarnesses_one": "另外 {{count}} 个 Harness",
 	"firstRun.moreHarnesses_other": "另外 {{count}} 个 Harness",

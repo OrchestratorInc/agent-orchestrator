@@ -371,7 +371,7 @@
 	"firstRun.install": "Install",
 	"firstRun.agentsBodyNone": "Install and sign in to at least one harness to continue.",
 	"firstRun.toolsGithubHeading": "Tools",
-	"firstRun.toolsGithubHint": "Lets agents open pull requests.",
+	"firstRun.toolsGithubHint": "Lets agents push branches and open pull requests on your behalf.",
 	"firstRun.toolsAgentsHeading": "Harnesses",
 	"firstRun.moreHarnesses_one": "{{count}} more harness",
 	"firstRun.moreHarnesses_other": "{{count}} more harnesses",
