@@ -58,16 +58,32 @@ const PROJECT_SKILLS_KEY = "ao.chat.projectSkills.v1";
  */
 export const REMEMBERED_SKILL_PROJECTS = 12;
 
-// Insertion order is recency: a write moves its project to the end.
-type ProjectSkills = Record<string, ChatSkill[]>;
+type SkillLists = Record<string, ChatSkill[]>;
 
-function readProjectSkills(): ProjectSkills {
+// Every chat that opens reads these, and together they can run to hundreds of
+// kilobytes. Parsing that again on every chat switch would cost the switch time,
+// so the parsed copy is kept for as long as the stored text is unchanged (another
+// window's write changes the text, so it is still picked up).
+const parsedLists = new Map<string, { raw: string; lists: SkillLists }>();
+
+function readSkillLists(key: string): SkillLists {
 	try {
-		const parsed: unknown = JSON.parse(storage()?.getItem(PROJECT_SKILLS_KEY) ?? "{}");
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as ProjectSkills) : {};
+		const raw = storage()?.getItem(key) ?? "{}";
+		const cached = parsedLists.get(key);
+		if (cached?.raw === raw) return cached.lists;
+		const parsed: unknown = JSON.parse(raw);
+		const lists = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as SkillLists) : {};
+		parsedLists.set(key, { raw, lists });
+		return lists;
 	} catch {
 		return {};
 	}
+}
+
+function writeSkillLists(key: string, lists: SkillLists): void {
+	const raw = JSON.stringify(lists);
+	storage()?.setItem(key, raw);
+	parsedLists.set(key, { raw, lists });
 }
 
 /**
@@ -81,34 +97,29 @@ function readProjectSkills(): ProjectSkills {
 export function readChatSkills(harness: string, hostId?: string, projectId?: string): ChatSkill[] {
 	if (!harness) return [];
 	if (projectId) {
-		const own = readProjectSkills()[`${keyFor(harness, hostId)}:${projectId}`];
+		const own = readSkillLists(PROJECT_SKILLS_KEY)[`${keyFor(harness, hostId)}:${projectId}`];
 		if (Array.isArray(own)) return own;
 	}
-	try {
-		const all: unknown = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
-		const skills = all && typeof all === "object" ? (all as Record<string, unknown>)[keyFor(harness, hostId)] : undefined;
-		return Array.isArray(skills) ? (skills as ChatSkill[]) : [];
-	} catch {
-		return [];
-	}
+	const skills = readSkillLists(SKILLS_KEY)[keyFor(harness, hostId)];
+	return Array.isArray(skills) ? skills : [];
 }
 
 export function rememberChatSkills(harness: string, hostId: string | undefined, skills: ChatSkill[], projectId?: string): void {
 	try {
-		const all: Record<string, ChatSkill[]> = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
 		const key = keyFor(harness, hostId);
-		if (JSON.stringify(all[key]) !== JSON.stringify(skills)) {
-			all[key] = skills;
-			storage()?.setItem(SKILLS_KEY, JSON.stringify(all));
-		}
+		const all = readSkillLists(SKILLS_KEY);
+		if (JSON.stringify(all[key]) !== JSON.stringify(skills)) writeSkillLists(SKILLS_KEY, { ...all, [key]: skills });
 		if (!projectId) return;
-		const projects = readProjectSkills();
+		// Insertion order is recency: each write moves its project to the end, even
+		// when its list is unchanged, so a project in daily use is never the one dropped.
+		const projects = readSkillLists(PROJECT_SKILLS_KEY);
 		const projectKey = `${key}:${projectId}`;
-		if (JSON.stringify(projects[projectKey]) === JSON.stringify(skills)) return;
-		delete projects[projectKey];
-		projects[projectKey] = skills;
-		const kept = Object.entries(projects).slice(-REMEMBERED_SKILL_PROJECTS);
-		storage()?.setItem(PROJECT_SKILLS_KEY, JSON.stringify(Object.fromEntries(kept)));
+		const keys = Object.keys(projects);
+		if (keys[keys.length - 1] === projectKey && JSON.stringify(projects[projectKey]) === JSON.stringify(skills)) return;
+		const next: SkillLists = { ...projects };
+		delete next[projectKey];
+		next[projectKey] = skills;
+		writeSkillLists(PROJECT_SKILLS_KEY, Object.fromEntries(Object.entries(next).slice(-REMEMBERED_SKILL_PROJECTS)));
 	} catch {
 		// Only polish: without it a new chat offers no "/" skills.
 	}

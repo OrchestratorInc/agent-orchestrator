@@ -36,4 +36,17 @@ describe("remembered chat skills", () => {
 		expect(readChatSkills("claude-code", undefined, "project-0")).toEqual([skill(`repo-${REMEMBERED_SKILL_PROJECTS}`)]);
 		expect(readChatSkills("claude-code", undefined, "project-1")).toEqual([skill("repo-1")]);
 	});
+
+	it("counts a project as used when its unchanged list is reported again", () => {
+		for (let index = 0; index < REMEMBERED_SKILL_PROJECTS; index += 1) {
+			rememberChatSkills("claude-code", undefined, [skill(`repo-${index}`)], `project-${index}`);
+		}
+		// Opening a chat in the oldest project again reports the same list.
+		rememberChatSkills("claude-code", undefined, [skill("repo-0")], "project-0");
+		rememberChatSkills("claude-code", undefined, [skill("repo-new")], "project-new");
+
+		expect(readChatSkills("claude-code", undefined, "project-0")).toEqual([skill("repo-0")]);
+		// The least recently used project is the one dropped.
+		expect(readChatSkills("claude-code", undefined, "project-1")).toEqual([skill("repo-new")]);
+	});
 });
