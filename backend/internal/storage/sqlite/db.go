@@ -207,8 +207,8 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 			}
 			state.rows["_repaired"] = timestampCompletionVersion
 			state.dirty = true
-			err = state.save()
-			complete = true
+			err = state.saveProgress(context.Background(), writeDB)
+			complete = state.rows["_repaired"] == timestampCompletionVersion
 		}
 		if err != nil {
 			slog.Warn("cannot record new database repair completion", "error", err)

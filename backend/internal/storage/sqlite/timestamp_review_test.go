@@ -73,6 +73,8 @@ type repairScanCounts struct {
 	connections, writer, reader               atomic.Int64
 	expireAfterBatch, sessionBatch, committed atomic.Bool
 	fenceRows                                 atomic.Int64
+	checkpointOutcome                         string
+	checkpointCalls                           atomic.Int64
 }
 type repairScanDriver struct {
 	driver.Driver
@@ -99,6 +101,15 @@ func (d repairScanDriver) Open(name string) (driver.Conn, error) {
 	return repairScanConn{sqliteConn: conn, counts: d.counts, writer: d.counts.connections.Add(1) == 1}, nil
 }
 func (c repairScanConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if query == "PRAGMA wal_checkpoint(FULL)" {
+		c.counts.checkpointCalls.Add(1)
+		switch c.counts.checkpointOutcome {
+		case "busy":
+			return c.sqliteConn.QueryContext(ctx, "SELECT 1, 1, 0", nil)
+		case "error":
+			return nil, errors.New("injected checkpoint failure")
+		}
+	}
 
 	if c.counts.committed.Load() && strings.Contains(query, `FROM "sessions" `) && strings.HasPrefix(query, "SELECT rowid,") && c.counts.expireAfterBatch.CompareAndSwap(true, false) {
 		rows, err := c.sqliteConn.QueryContext(ctx, `SELECT count(*) FROM sessions WHERE CAST(created_at AS TEXT) GLOB '* +0000 UTC'`, nil)
@@ -265,5 +276,61 @@ func TestTimestampCASMissRetriesOnNextOpen(t *testing.T) {
 	var at string
 	if err := db.QueryRow(`SELECT CAST(created_at AS TEXT) FROM conversations WHERE id='miss'`).Scan(&at); err != nil || at != "2026-10-21 03:30:00 +0000 UTC" {
 		t.Fatalf("CAS miss was not retried: %q %v", at, err)
+	}
+}
+
+func TestTimestampCheckpointMustCompleteBeforeMarker(t *testing.T) {
+	for _, outcome := range []string{"busy", "error"} {
+		t.Run(outcome, func(t *testing.T) {
+			dir := t.TempDir()
+			db := openMigratedTestDBIn(t, dir)
+			if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('checkpoint',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,'2026-10-21 09:00:00 +0530 IST')`); err != nil {
+				t.Fatal(err)
+			}
+			counts, done := &repairScanCounts{checkpointOutcome: outcome}, make(chan struct{})
+			s, err := openWithTimestampOptions(dir, repairScanOptions(t, counts, done))
+			if err != nil {
+				t.Fatalf("checkpoint failure blocked startup: %v", err)
+			}
+			<-done
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			readLedger := func() map[string]string {
+				data, err := os.ReadFile(filepath.Join(dir, "timestamp-repair-skips.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var ledger map[string]string
+				if err := json.Unmarshal(data, &ledger); err != nil {
+					t.Fatal(err)
+				}
+				return ledger
+			}
+			ledger := readLedger()
+			if ledger["_repaired"] != "" {
+				t.Fatalf("%s checkpoint wrote completed marker: %q", outcome, ledger["_repaired"])
+			}
+			for key := range ledger {
+				if strings.HasPrefix(key, timestampCompletionPrefix) {
+					t.Fatalf("%s checkpoint persisted table completion: %s", outcome, key)
+				}
+			}
+			if counts.checkpointCalls.Load() == 0 {
+				t.Fatal("checkpoint was not attempted")
+			}
+			done = make(chan struct{})
+			s, err = openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: 30 * time.Second, repairDone: done})
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-done
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if marker := readLedger()["_repaired"]; marker != timestampCompletionVersion {
+				t.Fatalf("next Open did not finish repair: %q", marker)
+			}
+		})
 	}
 }

@@ -110,12 +110,31 @@ func (s *timestampRepairState) skip(table string, values []any, n int, err error
 	slog.Warn("timestamp repair skipped row", "table", table, "rowid", values[n], "error", err)
 }
 
-// Completion version 2 excludes tables previously marked after a CAS miss.
-const timestampCompletionVersion = "2"
-const timestampCompletionPrefix = "_complete2/"
+// Version 3 also requires the repaired database pages to be checkpointed.
+const timestampCompletionVersion = "3"
+const timestampCompletionPrefix = "_complete3/"
 
 func (s *timestampRepairState) complete(table, signature string) {
 	s.completed[table] = signature
 	s.rows[timestampCompletionPrefix+table] = signature
 	s.dirty = true
+}
+
+func (s *timestampRepairState) saveProgress(ctx context.Context, db *sql.DB) error {
+	var err error
+	if s.dirty && len(s.completed) > 0 {
+		var busy, logged, checkpointed int
+		err = db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(FULL)").Scan(&busy, &logged, &checkpointed)
+		if err != nil || busy != 0 {
+			if err == nil {
+				err = fmt.Errorf("timestamp repair checkpoint busy: %d", busy)
+			}
+			for table := range s.completed {
+				delete(s.rows, timestampCompletionPrefix+table)
+			}
+			clear(s.completed)
+			delete(s.rows, "_repaired")
+		}
+	}
+	return errors.Join(err, s.save())
 }

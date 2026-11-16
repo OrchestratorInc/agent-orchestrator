@@ -65,7 +65,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 	state.reader = reader
 	state.timestampRepairResult = timestampRepairResult{}
 	state.retry = map[string]bool{}
-	defer func() { result = state.timestampRepairResult; err = errors.Join(err, state.save()) }()
+	defer func() { result = state.timestampRepairResult; err = errors.Join(err, state.saveProgress(ctx, db)) }()
 	columns, err := timestampColumns(ctx, reader)
 	if err != nil {
 		return result, err
