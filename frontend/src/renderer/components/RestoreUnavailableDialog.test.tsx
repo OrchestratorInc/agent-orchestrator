@@ -56,7 +56,7 @@ beforeEach(() => {
 });
 
 describe("RestoreUnavailableDialog", () => {
-	it("fills the missing orchestrator agent and recreates instead of opening settings", async () => {
+	it("recreates a local orchestrator with no orchestrator agent instead of opening settings", async () => {
 		const onOpenChange = vi.fn();
 		const onRecreated = vi.fn();
 		spawnMock.mockResolvedValue("orch-new");
@@ -77,8 +77,8 @@ describe("RestoreUnavailableDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Create new orchestrator" }));
 
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("orch-new"));
-		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", undefined);
-		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
+		// The local daemon fills the empty role itself as it starts.
+		expect(fillRoleAgentsMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 

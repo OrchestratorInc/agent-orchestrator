@@ -538,7 +538,7 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
 	});
 
-	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
 		spawnMock.mockResolvedValue("orch-new");
 		useWorkspaceQueryMock.mockReturnValue({
 			data: [
@@ -565,8 +565,8 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
 
 		await waitFor(() => expect(spawnMock).toHaveBeenCalled());
-		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", undefined);
-		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
+		// The local daemon fills the empty role itself as it starts.
+		expect(fillRoleAgentsMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 

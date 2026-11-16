@@ -99,8 +99,9 @@ export function useProjectOrchestratorAction({
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
 			// A project that lost its orchestrator agent starts on the ranked
-			// default instead of sending the user to settings first.
-			if (!orchestrator && project && project.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
+			// default. This daemon fills the empty role as it starts; a remote
+			// host may run an older one that refuses instead.
+			if (hostId && !orchestrator && project && project.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
 				await fillMissingProjectRoleAgents(queryClient, projectId, hostId);
 			}
 			const openedSessionId = hostId

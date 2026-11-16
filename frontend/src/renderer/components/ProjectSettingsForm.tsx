@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState } from "react";
 import { ProjectSettingsSection as SettingsSection } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
-import { loadProjectAgentDefaults, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
+import { loadRankedProjectAgentDefaults, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { useConnectedHosts } from "../hooks/useHostConnection";
@@ -186,19 +186,33 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const missingRoleAgent = !config.worker?.agent || !config.orchestrator?.agent;
 	const activeOrchestratorRef = useRef(activeOrchestrator);
 	activeOrchestratorRef.current = activeOrchestrator;
-	// Wait for the project's sessions: a fill before they load would miss a
-	// running orchestrator and the save would replace it with the default.
-	const sessionsSettled = hostId ? !remoteProjectQuery.isPending : !workspaceQuery.isPending;
+	// Wait for current session data: a fill from missing or cached sessions
+	// could miss a running orchestrator, and the save would replace it with the
+	// default.
+	const sessionsQuery = hostId ? remoteProjectQuery : workspaceQuery;
+	const sessionsSettled = sessionsQuery.data !== undefined && !sessionsQuery.isFetching;
+	// The orchestrator agent the fill chose. Saving it never replaces a running
+	// orchestrator on another agent: the user didn't pick it.
+	const autoFilledOrchestratorRef = useRef("");
 	const [agentDefaults, setAgentDefaults] = useState<{ workerAgent: string; orchestratorAgent: string } | null | undefined>(missingRoleAgent ? null : undefined);
 	useEffect(() => {
 		if (!missingRoleAgent || !hostConnected || !sessionsSettled) return;
 		let active = true;
-		void loadProjectAgentDefaults(queryClient, hostId).then((defaults) => {
+		// Without this machine's agent readiness there's no ranked pick, so the
+		// roles stay empty and the required warning shows.
+		void loadRankedProjectAgentDefaults(queryClient, hostId).then((defaults) => {
 			if (!active) return;
+			if (!defaults) {
+				setAgentDefaults(undefined);
+				return;
+			}
 			const orchestratorAgent = config.orchestrator?.agent || activeOrchestratorRef.current?.provider || defaults.orchestratorAgent;
 			// The filled orchestrator is the project's current one, not a change
 			// that should start a replacement on the next save.
-			if (!config.orchestrator?.agent) lastOrchestratorRef.current = orchestratorAgent;
+			if (!config.orchestrator?.agent) {
+				lastOrchestratorRef.current = orchestratorAgent;
+				autoFilledOrchestratorRef.current = orchestratorAgent;
+			}
 			setAgentDefaults({ workerAgent: defaults.workerAgent, orchestratorAgent });
 		});
 		return () => {
@@ -292,7 +306,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		});
 		if (error) throw apiErrorException(error);
 		const replaceOrchestrator = replacementFailedRef.current || values.orchestratorAgent !== lastOrchestratorRef.current ||
-			(Boolean(activeOrchestrator && activeOrchestrator.provider !== values.orchestratorAgent) && !replacementAttemptedRef.current);
+			(Boolean(activeOrchestrator && activeOrchestrator.provider !== values.orchestratorAgent) && !replacementAttemptedRef.current &&
+				values.orchestratorAgent !== autoFilledOrchestratorRef.current);
 		lastOrchestratorRef.current = values.orchestratorAgent;
 		if (replaceOrchestrator) {
 			replacementAttemptedRef.current = true;

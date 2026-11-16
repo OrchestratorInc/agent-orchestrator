@@ -177,13 +177,15 @@ export function ProjectSettingsEditor({ initialValues, agentDefaults, section, c
 	}, [didSave]);
 	// A project registered without a worker or orchestrator agent opens with the
 	// ranked default filled in, never an empty required picker. A role the user
-	// already set, here or before, is never replaced.
+	// already set, here or before, is never replaced. A filled role drops any
+	// model, mode or effort left in its config, like picking an agent by hand,
+	// since those belonged to no agent and may not fit the filled one.
 	useEffect(() => {
 		if (!agentDefaults) return;
 		setDraft((current) => current.workerAgent && current.orchestratorAgent ? current : {
 			...current,
-			workerAgent: current.workerAgent || agentDefaults.workerAgent,
-			orchestratorAgent: current.orchestratorAgent || agentDefaults.orchestratorAgent,
+			...(current.workerAgent ? {} : { workerAgent: agentDefaults.workerAgent, workerModel: "", workerMode: "", workerEffort: "" }),
+			...(current.orchestratorAgent ? {} : { orchestratorAgent: agentDefaults.orchestratorAgent, orchestratorModel: "", orchestratorMode: "", orchestratorEffort: "" }),
 		});
 	}, [agentDefaults?.workerAgent, agentDefaults?.orchestratorAgent]);
 	const agentsMissing = capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && agentDefaults !== null;

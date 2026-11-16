@@ -73,7 +73,6 @@ import { revealSessionSearchMatch } from "../lib/session-search-reveal";
 import { usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
-import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
 import { useShell } from "../lib/shell-context";
 import { sessionUiKey } from "../lib/hosts";
 import { beginModalHandoff } from "../lib/modal-handoff";
@@ -84,7 +83,6 @@ import { useKeybindingsStore } from "../stores/keybindings-store";
 import {
 	CLOUD_PROJECT_KIND,
 	findProjectOrchestrator,
-	hasConfiguredOrchestratorAgent,
 	isOrchestratorSession,
 	openPRs,
 	STANDALONE_WORKSPACE_ID,
@@ -916,8 +914,8 @@ export const CommandPalette = memo(function CommandPalette() {
 				return;
 			}
 			if (!workspace) return;
-			// A project that lost its orchestrator agent starts on the ranked default.
-			if (!hasConfiguredOrchestratorAgent(workspace)) await fillMissingProjectRoleAgents(queryClient, projectId);
+			// A project that lost its orchestrator agent starts on the ranked
+			// default: the daemon fills the empty role as it starts.
 			const sessionId = await spawnOrchestrator(projectId, "command_palette");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			navigateToTarget(sessionRoute(projectId, sessionId));

@@ -60,7 +60,6 @@ import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
 import {
-	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
 	openPRs,
 	type WorkspaceSession,
@@ -92,7 +91,6 @@ import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConv
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
-import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
@@ -1752,8 +1750,8 @@ const ProjectItem = memo(function ProjectItem({
 		}
 		setIsSpawning(true);
 		try {
-			// A project that lost its orchestrator agent starts on the ranked default.
-			if (!hasConfiguredOrchestratorAgent(workspace)) await fillMissingProjectRoleAgents(queryClient, workspace.id);
+			// A project that lost its orchestrator agent starts on the ranked
+			// default: the daemon fills the empty role as it starts.
 			const sessionId = await spawnOrchestrator(workspace.id, "sidebar");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			selection.goSession(workspace.id, sessionId);

@@ -529,7 +529,7 @@ describe("project board with no sessions", () => {
 		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(2, "proj-1", "board", false, "tui");
 	});
 
-	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
 		const unconfiguredProject = { ...project, orchestratorAgent: undefined };
 		respondWith([unconfiguredProject], []);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
@@ -539,8 +539,8 @@ describe("project board with no sessions", () => {
 		await userEvent.click(spawnButton);
 
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledWith("proj-1", "board", false, undefined));
-		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", undefined);
-		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnOrchestratorMock.mock.invocationCallOrder[0]);
+		// The local daemon fills the empty role itself as it starts.
+		expect(fillRoleAgentsMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 

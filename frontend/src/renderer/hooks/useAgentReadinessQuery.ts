@@ -60,15 +60,16 @@ export const agentReadinessQueryOptions = {
 	gcTime: Number.POSITIVE_INFINITY,
 };
 
-/**
- * The agents a new project starts on, ranked from the readiness snapshot the
- * renderer already holds (one fetch when it holds none). When that snapshot
- * has not confirmed the preferred agent yet, it waits for the daemon's checks
- * (joining any already running) before ranking. A failed fetch ranks nothing,
- * so the project falls back to the daemon's default agent.
- */
-export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults> {
-	let agents: AgentReadinessSnapshot[] = [];
+// Bounds the readiness wait so creating or starting a project never hangs on
+// a daemon that accepted the request and stopped answering.
+const PROJECT_AGENT_DEFAULTS_DEADLINE_MS = 5000;
+
+// The readiness snapshot ranked for a project's default agents: the one the
+// renderer already holds, or one fetch when it holds none. When it hasn't
+// confirmed the agent AO prefers most, it waits for the daemon's checks
+// (joining any already running) first. Null when it could not be loaded.
+async function readProjectAgentSnapshot(queryClient: QueryClient, hostId?: string): Promise<AgentReadinessSnapshot[] | null> {
+	let agents: AgentReadinessSnapshot[];
 	try {
 		agents = (await queryClient.ensureQueryData({
 			...agentReadinessQueryOptions,
@@ -76,7 +77,7 @@ export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?
 			queryFn: () => fetchAgentReadiness(hostId),
 		})).agents;
 	} catch {
-		// Keep the fallback below.
+		return null;
 	}
 	if (preferredAgentNeedsChecks(agents)) {
 		try {
@@ -87,7 +88,33 @@ export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?
 			// Rank what we have.
 		}
 	}
-	return defaultProjectAgents(agents);
+	return agents;
+}
+
+function readProjectAgentSnapshotWithDeadline(queryClient: QueryClient, hostId?: string): Promise<AgentReadinessSnapshot[] | null> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<null>((resolve) => {
+		timer = setTimeout(() => resolve(null), PROJECT_AGENT_DEFAULTS_DEADLINE_MS);
+	});
+	return Promise.race([readProjectAgentSnapshot(queryClient, hostId), deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The agents a new project starts on. When readiness can't be loaded in time
+ * it ranks nothing, so the project falls back to AO's default agent.
+ */
+export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults> {
+	return defaultProjectAgents((await readProjectAgentSnapshotWithDeadline(queryClient, hostId)) ?? []);
+}
+
+/**
+ * Default agents ranked from this machine's (or host's) readiness, or null when
+ * readiness could not be loaded. Use it when the pick is saved to an existing
+ * project, so an unranked fallback is never written.
+ */
+export async function loadRankedProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults | null> {
+	const agents = await readProjectAgentSnapshotWithDeadline(queryClient, hostId);
+	return agents ? defaultProjectAgents(agents) : null;
 }
 
 export function useAgentReadinessQuery(enabled = true, hostId?: string) {

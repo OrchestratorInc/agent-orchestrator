@@ -122,8 +122,6 @@ function notifyCtxChange() {
 	for (const listener of ctx.listeners) listener();
 }
 
-const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
@@ -1013,7 +1011,7 @@ describe("CommandPalette actions", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
 		ctx.params = { projectId: "proj-2" };
 		ctx.workspaces[1].orchestratorAgent = undefined;
 		spawnMock.mockResolvedValue("proj-2-orch-new");
@@ -1022,9 +1020,8 @@ describe("CommandPalette actions", () => {
 		await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
 
+		// The daemon fills the empty role as it starts the orchestrator.
 		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-2", "command_palette"));
-		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-2");
-		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 

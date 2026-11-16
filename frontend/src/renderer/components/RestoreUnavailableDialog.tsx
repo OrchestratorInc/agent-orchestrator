@@ -49,8 +49,10 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 		setBusy(true);
 		setError(undefined);
 		try {
-			// A project that lost its orchestrator agent starts on the ranked default.
-			if (!hasOrchestratorAgent) await fillMissingProjectRoleAgents(queryClient, session.workspaceId, hostId);
+			// A project that lost its orchestrator agent starts on the ranked
+			// default. This daemon fills the empty role as it starts; a remote
+			// host may run an older one that refuses instead.
+			if (hostId && !hasOrchestratorAgent) await fillMissingProjectRoleAgents(queryClient, session.workspaceId, hostId);
 			const id = hostId
 				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true, "restore_dialog")
 				: await spawnOrchestrator(session.workspaceId, "restore_dialog", true);

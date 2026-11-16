@@ -12,7 +12,7 @@ const { getMock, putMock, remoteGetMock, remotePutMock, loadDefaultsMock } = vi.
 
 vi.mock("./api-client", () => ({ apiClient: { GET: getMock, PUT: putMock } }));
 vi.mock("./host-clients", () => ({ clientForHost: () => ({ GET: remoteGetMock, PUT: remotePutMock }) }));
-vi.mock("../hooks/useAgentReadinessQuery", () => ({ loadProjectAgentDefaults: loadDefaultsMock }));
+vi.mock("../hooks/useAgentReadinessQuery", () => ({ loadRankedProjectAgentDefaults: loadDefaultsMock }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
 	workspaceQueryKeyForHost: (hostId?: string) => (hostId ? ["remote-workspaces", hostId] : ["workspaces"]),
 }));
@@ -52,7 +52,16 @@ describe("fillMissingProjectRoleAgents", () => {
 
 		await fillMissingProjectRoleAgents(new QueryClient(), "proj-1");
 
-		expect(loadDefaultsMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("writes nothing when agent readiness can't be loaded, so no unranked pick is saved", async () => {
+		loadDefaultsMock.mockResolvedValue(null);
+		getMock.mockResolvedValue(projectResponse({}));
+
+		await fillMissingProjectRoleAgents(new QueryClient(), "proj-1");
+
+		expect(getMock).not.toHaveBeenCalled();
 		expect(putMock).not.toHaveBeenCalled();
 	});
 

@@ -126,8 +126,6 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 });
 
 vi.mock("../lib/rename-session", () => ({ renameSession: renameSessionMock }));
-const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
 
 vi.mock("../lib/spawn-orchestrator", () => ({
 	spawnOrchestrator: spawnMock,
@@ -893,16 +891,15 @@ describe("Sidebar", () => {
 		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("Projects"));
 	});
 
-	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
+	it("starts the orchestrator of a project with no orchestrator agent instead of opening settings", async () => {
 		const user = userEvent.setup();
 		spawnMock.mockResolvedValue("proj-1-orch-new");
 		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined }] });
 
 		await user.click(screen.getByRole("button", { name: "Spawn Project One orchestrator" }));
 
+		// The daemon fills the empty role as it starts the orchestrator.
 		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-1", "sidebar"));
-		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1");
-		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
