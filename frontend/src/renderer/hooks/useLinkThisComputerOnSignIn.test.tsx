@@ -22,16 +22,17 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: (err: any) => (typeof err === "object" && err?.message ? err.message : "failed"),
 }));
 vi.mock("../components/settings/ConnectMobileContent", () => ({
-	fetchMobileStatus: async () => {
+	fetchMobileStatus: vi.fn(async () => {
 		if (fake.failNextStatusRead) {
 			fake.failNextStatusRead = false;
 			throw new Error("daemon is starting");
 		}
 		return { ...fake.status };
-	},
+	}),
 	tunnelUrl: (status: { url: string }) => status.url,
 }));
 
+import { fetchMobileStatus } from "../components/settings/ConnectMobileContent";
 import { isRetryableLinkError, useLinkThisComputerOnSignIn } from "./useLinkThisComputerOnSignIn";
 
 const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
@@ -39,6 +40,7 @@ const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider 
 beforeEach(() => {
 	vi.mocked(linkThisComputer).mockClear();
 	vi.mocked(apiClient.POST).mockClear();
+	vi.mocked(fetchMobileStatus).mockClear();
 	fake.signedIn = false;
 	fake.failNextStatusRead = false;
 	Object.assign(fake.status, { enabled: true, noPublicTunnel: false, accountLinked: false });
@@ -158,24 +160,53 @@ test("retry delays back off exponentially and stop after max retries", async () 
 	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
 	await vi.advanceTimersByTimeAsync(0);
 	// Initial attempt was made (status was not enabled, so retry 1 was scheduled for 30s).
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(1);
+
 	// Before 30s, no second attempt:
 	await vi.advanceTimersByTimeAsync(29_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(1);
 	expect(linkThisComputer).not.toHaveBeenCalled();
+
 	// At 30s, attempt 1 runs (delay doubled to 60s):
 	await vi.advanceTimersByTimeAsync(1_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(2);
+
 	// Advance 59s: still waiting on 60s delay:
 	await vi.advanceTimersByTimeAsync(59_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(2);
+
 	// At +60s (90s total), attempt 2 runs (delay doubled to 120s):
 	await vi.advanceTimersByTimeAsync(1_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(3);
+
+	// Advance 119s (209s total): still waiting on 120s delay:
+	await vi.advanceTimersByTimeAsync(119_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(3);
+
 	// At +120s (210s total), attempt 3 runs (delay doubled to 240s):
-	await vi.advanceTimersByTimeAsync(120_000);
+	await vi.advanceTimersByTimeAsync(1_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(4);
+
+	// Advance 239s (449s total): still waiting on 240s delay:
+	await vi.advanceTimersByTimeAsync(239_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(4);
+
 	// At +240s (450s total), attempt 4 runs (delay capped at 300s):
-	await vi.advanceTimersByTimeAsync(240_000);
+	await vi.advanceTimersByTimeAsync(1_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(5);
+
+	// Advance 299s (749s total): still waiting on 300s delay:
+	await vi.advanceTimersByTimeAsync(299_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(5);
+
 	// At +300s (750s total), attempt 5 runs (max retries reached):
-	await vi.advanceTimersByTimeAsync(300_000);
+	await vi.advanceTimersByTimeAsync(1_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(6);
+
 	// Remote access turns on now, but max retries was reached so no more polls occur:
 	Object.assign(fake.status, { enabled: true });
 	await vi.advanceTimersByTimeAsync(600_000);
+	expect(fetchMobileStatus).toHaveBeenCalledTimes(6);
 	expect(linkThisComputer).not.toHaveBeenCalled();
 });
 
