@@ -2426,10 +2426,10 @@ export function CloudSessionChatSurface({
 					onDismiss={() => setSwitchError(undefined)}
 				/>
 			) : planRefusal?.key === refusalKey || live ? (
-				<div className="[&>[data-composer-notice]:not(:first-child)]:rounded-t-none">
+				<>
 					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} shared={cloud?.shared === true} onDismiss={() => setPlanRefusal(undefined)} />}
 					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
-				</div>
+				</>
 			) : undefined}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
