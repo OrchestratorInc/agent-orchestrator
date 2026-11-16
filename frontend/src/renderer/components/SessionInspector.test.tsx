@@ -1993,7 +1993,7 @@ describe("SessionInspector PR section", () => {
       error: { error: "conflict", code: "SESSION_TURN_STOP_PENDING", message: "a stop was already sent for this turn" },
       response: { status: 409 },
     });
-    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active" } })} />);
+    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } })} />);
     await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
     expect(await screen.findByRole("button", { name: "Stop requested" })).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -2004,21 +2004,21 @@ describe("SessionInspector PR section", () => {
       error: { error: "conflict", code: "SESSION_COMPOSER_BUSY", message: "Clear the draft first" },
       response: { status: 409 },
     });
-    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active" } })} />);
+    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } })} />);
     await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Clear the draft first");
     expect(screen.getByRole("button", { name: "Stop turn" })).toBeEnabled();
   });
 
-  it.each<Partial<WorkspaceSession>>([
-    { activity: { state: "idle" } },
+  it.each([
+    { activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" } },
     { mode: "chat" },
     { cloud: { orgId: "org-1" } },
     { provider: "opencode" },
     { isTerminated: true },
-  ])("hides Stop turn for an ineligible session %j", async (overrides) => {
+  ] satisfies Partial<WorkspaceSession>[])("hides Stop turn for an ineligible session %j", (overrides) => {
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], {
-      mode: "tui", activity: { state: "active" }, ...overrides,
+      mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" }, ...overrides,
     })} />, undefined, (client) => client.setQueryData(["agent-readiness"], {
       agents: ["claude-code", "opencode"].map((id) => agentReadiness(id, id, { canStopTurn: id === "claude-code" })),
     }));
