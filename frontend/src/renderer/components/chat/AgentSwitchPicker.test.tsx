@@ -263,12 +263,14 @@ describe("AgentModelPicker", () => {
 
 	it("skips an unavailable first model when going from the rail into the list", async () => {
 		const user = userEvent.setup();
-		open(undefined, false, "claude-code", {
-			models: [{ id: "old", label: "Old", unavailableReason: "Needs a newer Claude Code" }, { id: "sonnet", label: "Sonnet" }],
+		// Codex keeps its list in the order given, so the unavailable model stays first.
+		open(undefined, false, "codex", {
+			models: [{ id: "old", label: "Old", unavailableReason: "Needs a newer Codex" }, { id: "sonnet", label: "Sonnet" }],
 			modelId: undefined,
+			modelLabel: "Codex",
 		});
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
+		act(() => screen.getByRole("radio", { name: "Codex" }).focus());
 		await user.keyboard("{ArrowDown}");
 		expect(screen.getByRole("menuitemradio", { name: /^Sonnet/ })).toHaveFocus();
 	});
