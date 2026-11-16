@@ -16,6 +16,7 @@ import {
 	sameShareFingerprint,
 } from "../../shared/cloud-share";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
@@ -304,6 +305,7 @@ export function useReconciledShareLinks(): ShareAccessByUrl {
 		read
 			.then(() => Promise.all([
 				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }),
+				queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey }),
 				queryClient.invalidateQueries({ queryKey: HOST_SHARE_LINKS_KEY }),
 			]))
 			// Offline or signed out: the records stay as they are until the next list.
@@ -622,6 +624,8 @@ function SharePanel({
 	 */
 	const refreshArtifacts = () => {
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+		// Kept artifacts get their shareUrl from their own list.
+		void queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey });
 		shareLinksChanged();
 	};
 	const { baseUrl, signedIn, scope } = useShareAccess();
