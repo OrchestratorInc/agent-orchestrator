@@ -76,7 +76,7 @@ import {
 	hidesShellTopbar,
 } from "../lib/platform";
 import { sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, newestActiveOrchestrator, isScratchpadWorkspace, sessionIsActive, STANDALONE_WORKSPACE_ID, toProjectKind, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import type { components } from "../../api/schema";
 import { parseArtifactLink, parseSessionLink, resolveSessionLink } from "../lib/session-links";
 import { useAgentInventoryTelemetry, useSetupCheckedTelemetry } from "../hooks/useAgentInventoryTelemetry";
@@ -1091,9 +1091,12 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (uiState.provisioningProjectIds.has(projectKey) || uiState.restartingProjectIds.has(projectKey)) return;
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
-			// A project that lost its orchestrator agent starts on the ranked default.
-			if (!hasConfiguredOrchestratorAgent(workspace)) await fillMissingProjectRoleAgents(queryClient, projectId, hostId);
-			const sessionId = await openRemoteOrchestrator(hostId, projectId, newestActiveOrchestrator(workspace.sessions));
+			// A project that lost a role's agent starts on the ranked default. The
+			// host may run a daemon too old to fill empty roles itself, so fill
+			// them first (worker included) unless an orchestrator is already open.
+			const activeOrchestrator = newestActiveOrchestrator(workspace.sessions);
+			if (!activeOrchestrator) await fillMissingProjectRoleAgents(queryClient, projectId, hostId);
+			const sessionId = await openRemoteOrchestrator(hostId, projectId, activeOrchestrator);
 			const refresh = queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			// Only a new orchestrator must be in the list before its route can find it.
 			if (!workspace.sessions.some((session) => session.id === sessionId)) await refresh;

@@ -112,6 +112,9 @@ describe("RestoreUnavailableDialog", () => {
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("remote-new"));
 		expect(workspaceQueryMock).toHaveBeenCalledWith("proj-1", undefined, "box-b");
 		expect(remoteSpawnMock).toHaveBeenCalledWith("box-b", "proj-1", undefined, undefined, true, "restore_dialog");
+		// The host may run an older daemon, so a missing worker agent is filled
+		// first even though the orchestrator agent is set.
+		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", "box-b");
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 

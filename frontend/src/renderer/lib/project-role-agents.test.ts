@@ -52,6 +52,30 @@ describe("fillMissingProjectRoleAgents", () => {
 
 		await fillMissingProjectRoleAgents(new QueryClient(), "proj-1");
 
+		// One project read and nothing else, so remote starts can always call it.
+		expect(getMock).toHaveBeenCalledTimes(1);
+		expect(loadDefaultsMock).not.toHaveBeenCalled();
+		expect(putMock).not.toHaveBeenCalled();
+	});
+
+	it("fills a missing worker agent when the orchestrator agent is set", async () => {
+		getMock.mockResolvedValue(projectResponse({ orchestrator: { agent: "cursor" } }));
+
+		await fillMissingProjectRoleAgents(new QueryClient(), "proj-1");
+
+		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({ config: { worker: { agent: "claude-code" }, orchestrator: { agent: "cursor" } } }),
+		}));
+	});
+
+	it("writes nothing when the roles were filled while the defaults loaded", async () => {
+		getMock
+			.mockResolvedValueOnce(projectResponse({ worker: { agent: "codex" } }))
+			.mockResolvedValueOnce(projectResponse({ worker: { agent: "codex" }, orchestrator: { agent: "cursor" } }));
+
+		await fillMissingProjectRoleAgents(new QueryClient(), "proj-1");
+
+		expect(getMock).toHaveBeenCalledTimes(2);
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
@@ -61,7 +85,7 @@ describe("fillMissingProjectRoleAgents", () => {
 
 		await fillMissingProjectRoleAgents(new QueryClient(), "proj-1");
 
-		expect(getMock).not.toHaveBeenCalled();
+		expect(getMock).toHaveBeenCalledTimes(1);
 		expect(putMock).not.toHaveBeenCalled();
 	});
 

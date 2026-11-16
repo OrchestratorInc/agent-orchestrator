@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { useMutation, useMutationState, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, type WorkspaceSession } from "../types/workspace";
+import { CLOUD_PROJECT_KIND, type WorkspaceSession } from "../types/workspace";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost, type WorkspaceScope } from "./useWorkspaceQuery";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
@@ -98,10 +98,10 @@ export function useProjectOrchestratorAction({
 			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
-			// A project that lost its orchestrator agent starts on the ranked
-			// default. This daemon fills the empty role as it starts; a remote
-			// host may run an older one that refuses instead.
-			if (hostId && !orchestrator && project && project.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
+			// A project that lost a role's agent starts on the ranked default. This
+			// daemon fills empty roles as it starts; a remote host may run an older
+			// one that refuses instead, so fill there first (worker included).
+			if (hostId && !orchestrator && project && project.kind !== CLOUD_PROJECT_KIND) {
 				await fillMissingProjectRoleAgents(queryClient, projectId, hostId);
 			}
 			const openedSessionId = hostId
