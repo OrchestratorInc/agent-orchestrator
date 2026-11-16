@@ -21,9 +21,18 @@ const defaultForceStopWait = 3 * time.Second
 type forceStopHooks struct {
 	identities func(context.Context) (map[int]procmem.Identity, error)
 	kill       func(pid int) error
-	wait       time.Duration
-	poll       time.Duration
+	// freeze stops a process without ending it (SIGSTOP), so it can no longer
+	// spawn anything while its tree is captured. Nil where the platform has no
+	// such signal (Windows, which keeps a dead parent's pid on its children
+	// instead).
+	freeze func(pid int) error
+	wait   time.Duration
+	poll   time.Duration
 }
+
+// maxFreezeRounds bounds how often ForceStop re-reads a tree to catch
+// descendants spawned while it was freezing the rest.
+const maxFreezeRounds = 32
 
 func defaultForceStopHooks() forceStopHooks {
 	return forceStopHooks{
@@ -37,8 +46,9 @@ func defaultForceStopHooks() forceStopHooks {
 			// ignored, and SIGKILL also ends a stopped process.
 			return process.Kill()
 		},
-		wait: defaultForceStopWait,
-		poll: 100 * time.Millisecond,
+		freeze: freezeProcess,
+		wait:   defaultForceStopWait,
+		poll:   100 * time.Millisecond,
 	}
 }
 
@@ -49,6 +59,9 @@ func defaultForceStopHooks() forceStopHooks {
 type capturedProcess struct {
 	pid   int
 	start string
+	// startedAt is the wall-clock start, used to tell a captured process's
+	// real children from a later process that reused a pid.
+	startedAt time.Time
 }
 
 // forceStopState remembers, per reviewer handle, the captured processes a
@@ -122,8 +135,24 @@ func (l *agentLauncher) ForceStop(ctx context.Context, handleID string) (bool, e
 		return false, fmt.Errorf("capture reviewer process tree: %w", captureErr)
 	}
 	tree = mergeCaptured(previous, tree)
-	destroyErr := l.runtime.Destroy(ctx, handle)
+	if hooks.freeze != nil {
+		// The reviewer keeps running between the capture and its teardown and
+		// may spawn a tool there, possibly in its own session. Once its
+		// parent dies the tool is reparented and its ancestry lost, so freeze
+		// the whole tree first: stopped processes cannot spawn, and their
+		// children keep a live parent, so re-reading until nothing new shows
+		// up yields every descendant.
+		frozen, err := freezeTree(ctx, tree, hooks)
+		if err != nil {
+			l.stops.keep(handleID, frozen)
+			return false, fmt.Errorf("freeze reviewer process tree: %w", err)
+		}
+		tree = frozen
+	}
+	// Kill the whole tree before tearing the runtime down, so nothing it
+	// spawns can outlive the ownership roots unseen.
 	stopped, err := l.stopCaptured(ctx, handleID, tree, hooks)
+	destroyErr := l.runtime.Destroy(ctx, handle)
 	if err != nil || !stopped {
 		return false, errors.Join(err, destroyErr)
 	}
@@ -131,6 +160,80 @@ func (l *agentLauncher) ForceStop(ctx context.Context, handleID string) (bool, e
 		return false, destroyErr
 	}
 	return true, nil
+}
+
+// freezeTree stops every process in tree and keeps re-reading until no new
+// descendant appears. It returns the frozen tree, or an error when the tree
+// cannot be trusted or does not settle.
+func freezeTree(ctx context.Context, tree []capturedProcess, hooks forceStopHooks) ([]capturedProcess, error) {
+	frozen := map[int]bool{}
+	for range maxFreezeRounds {
+		for _, p := range tree {
+			if !frozen[p.pid] {
+				frozen[p.pid] = true
+				_ = hooks.freeze(p.pid)
+			}
+		}
+		identities, err := hooks.identities(ctx)
+		if err != nil {
+			return tree, fmt.Errorf("read process identities: %w", err)
+		}
+		extended, err := extendTree(tree, identities)
+		if err != nil {
+			return tree, err
+		}
+		if len(extended) == len(tree) {
+			return tree, nil
+		}
+		tree = extended
+	}
+	return tree, errors.New("reviewer process tree kept growing while being frozen")
+}
+
+// extendTree adds every descendant of tree that identities shows. A child of
+// a captured process that is still alive (same start identity) is genuine. A
+// child whose captured parent is gone counts only if it started after that
+// parent did: Windows keeps a dead parent's pid on its children, but a later
+// process may reuse that pid. A possible child whose identity or parent
+// cannot be read makes the tree untrustworthy.
+func extendTree(tree []capturedProcess, identities map[int]procmem.Identity) ([]capturedProcess, error) {
+	members := make(map[int]capturedProcess, len(tree))
+	for _, p := range tree {
+		members[p.pid] = p
+	}
+	for {
+		added := false
+		for pid, identity := range identities {
+			if _, ok := members[pid]; ok {
+				continue
+			}
+			if identity.PPID == procmem.UnknownPPID {
+				return tree, fmt.Errorf("cannot read the parent of process %d", pid)
+			}
+			parent, ok := members[identity.PPID]
+			if !ok {
+				continue
+			}
+			if !identity.Known() {
+				return tree, fmt.Errorf("cannot read the identity of reviewer process %d", pid)
+			}
+			parentNow, alive := identities[parent.pid]
+			genuine := alive && parentNow.Start == parent.start
+			if !genuine {
+				genuine = !identity.StartedAt.IsZero() && !parent.startedAt.IsZero() && !identity.StartedAt.Before(parent.startedAt)
+			}
+			if !genuine {
+				continue
+			}
+			child := capturedProcess{pid: pid, start: identity.Start, startedAt: identity.StartedAt}
+			members[pid] = child
+			tree = append(tree, child)
+			added = true
+		}
+		if !added {
+			return tree, nil
+		}
+	}
 }
 
 // StopSurvivors kills only the processes an earlier force-stop of handleID
@@ -216,7 +319,7 @@ func (l *agentLauncher) captureReviewerTree(ctx context.Context, handle ports.Ru
 		if !identity.Known() {
 			return nil, fmt.Errorf("cannot read the identity of reviewer process %d", pid)
 		}
-		tree = append(tree, capturedProcess{pid: pid, start: identity.Start})
+		tree = append(tree, capturedProcess{pid: pid, start: identity.Start, startedAt: identity.StartedAt})
 		pending = append(pending, children[pid]...)
 	}
 	return tree, nil
@@ -274,6 +377,11 @@ func killTreeSurvivors(ctx context.Context, tree []capturedProcess, hooks forceS
 		identities, err := hooks.identities(ctx)
 		if err != nil {
 			return tree, fmt.Errorf("read process identities: %w", err)
+		}
+		// Anything a captured process spawned before it died is the
+		// reviewer's too.
+		if tree, err = extendTree(tree, identities); err != nil {
+			return tree, err
 		}
 		var remaining []capturedProcess
 		for _, captured := range tree {

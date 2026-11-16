@@ -69,34 +69,6 @@ func (t *scriptedTable) kill(pid int) error {
 	return nil
 }
 
-// destroyWrappers models the runtime's Destroy: the PTY host and AO's
-// supervisor exit, and the agent below them is reparented to init.
-func (t *scriptedTable) destroyWrappers(pids ...int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, pid := range pids {
-		delete(t.processes, pid)
-	}
-	for pid, p := range t.processes {
-		if _, ok := t.processes[p.PPID]; !ok && p.PPID != 1 {
-			p.PPID = 1
-			t.processes[pid] = p
-		}
-	}
-}
-
-type destroyHookRuntime struct {
-	*rootedRuntime
-	onDestroy func()
-}
-
-func (r *destroyHookRuntime) Destroy(ctx context.Context, handle ports.RuntimeHandle) error {
-	if r.onDestroy != nil {
-		r.onDestroy()
-	}
-	return r.rootedRuntime.Destroy(ctx, handle)
-}
-
 func forceStopLauncher(rt reviewerRuntime, table *scriptedTable) *agentLauncher {
 	return &agentLauncher{runtime: rt, forceStop: forceStopHooks{identities: table.identities, kill: table.kill, wait: 50 * time.Millisecond, poll: 5 * time.Millisecond}}
 }
@@ -107,17 +79,29 @@ func TestForceStopLeavesAReusedPidAlone(t *testing.T) {
 		"44487 1 100 0:00 ao pty-host",
 		"44493 44487 100 0:00 claude --review",
 	)
-	rt := &destroyHookRuntime{rootedRuntime: &rootedRuntime{fakeRuntime: &fakeRuntime{}, roots: []int{44487}}}
-	rt.onDestroy = func() {
-		table.destroyWrappers(44487)
-		table.mu.Lock()
-		table.processes[44493] = procmem.Process{PID: 44493, PPID: 1, Command: "claude --review"}
-		table.started[44493] = "later" // same pid and even the same command: another process
-		table.mu.Unlock()
+	rt := &rootedRuntime{fakeRuntime: &fakeRuntime{}, roots: []int{44487}}
+	l := forceStopLauncher(rt, table)
+	reads := 0
+	l.forceStop.identities = func(ctx context.Context) (map[int]procmem.Identity, error) {
+		reads++
+		if reads == 2 {
+			// After the capture the agent exits and another process takes its
+			// pid: same pid and even the same command, but a new start.
+			table.mu.Lock()
+			table.processes[44493] = procmem.Process{PID: 44493, PPID: 1, Command: "claude --review"}
+			table.started[44493] = "later"
+			table.mu.Unlock()
+		}
+		return table.identities(ctx)
 	}
-	stopped, err := forceStopLauncher(rt, table).ForceStop(context.Background(), "review-mer-1")
-	if err != nil || !stopped || len(table.killed) != 0 {
-		t.Fatalf("ForceStop = %v, %v killed=%v; want confirmed without killing the reused pid", stopped, err, table.killed)
+	stopped, err := l.ForceStop(context.Background(), "review-mer-1")
+	if err != nil || !stopped {
+		t.Fatalf("ForceStop = %v, %v; want confirmed", stopped, err)
+	}
+	for _, pid := range table.killed {
+		if pid == 44493 {
+			t.Fatalf("killed the process that reused pid 44493: killed=%v", table.killed)
+		}
 	}
 }
 
