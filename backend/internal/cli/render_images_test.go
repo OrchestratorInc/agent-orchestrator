@@ -128,6 +128,11 @@ func TestImageType(t *testing.T) {
 		{"svg with a prolog", "\ufeff<?xml version='1.0' encoding='UTF-8'?>\r\n<!-- drawn by hand -->\n" +
 			`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">` + "\n<svg/>", "image/svg+xml"},
 		{"svg after an internal subset", `<!DOCTYPE svg [<!ENTITY ink "#123"> <!-- ] > --> <!ATTLIST svg a CDATA "]>">]><svg></svg>`, "image/svg+xml"},
+		{"svg with entity namespaces", "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- Generator: Adobe Illustrator 16.0.0 -->\n" +
+			`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [` +
+			"\n\t<!ENTITY ns_svg \"http://www.w3.org/2000/svg\">\n\t<!ENTITY ns_xlink \"http://www.w3.org/1999/xlink\">\n]>\n" +
+			`<svg version="1.1" xmlns="&ns_svg;" xmlns:xlink="&ns_xlink;" width="24" height="24"><rect width="24" height="24"/></svg>`, "image/svg+xml"},
+		{"latin-1 svg", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\" standalone=\"no\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><title>caf\xe9</title></svg>", "image/svg+xml"},
 		{"text", "OPENAI_API_KEY=sk-test", ""},
 		{"empty", "", ""},
 		{"text starting with BM", "BMW_TOKEN=0123456789abcdef", ""},
@@ -143,6 +148,8 @@ func TestImageType(t *testing.T) {
 		{"root that only starts with svg", "<svgx/>", ""},
 		{"unterminated comment", "<!-- <svg/>", ""},
 		{"unterminated doctype", `<!DOCTYPE svg [<!ENTITY e "><svg/>`, ""},
+		{"latin-1 document with another root", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n<config>TOKEN=1</config>", ""},
+		{"entity text before the root", `<!DOCTYPE svg [<!ENTITY t "TOKEN=1">]>&t;<svg/>`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := imageType([]byte(tc.data))

@@ -290,6 +290,8 @@ func isAVIF(data []byte) bool {
 // isSVG reports whether data is XML whose root element is <svg>.
 func isSVG(data []byte) bool {
 	decoder := xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, []byte("\ufeff"))))
+	decoder.Strict = false
+	decoder.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) { return input, nil }
 	for {
 		token, err := decoder.RawToken()
 		if err != nil {
