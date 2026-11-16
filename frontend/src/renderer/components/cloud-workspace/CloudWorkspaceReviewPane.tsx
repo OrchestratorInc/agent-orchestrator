@@ -1,9 +1,10 @@
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileCode2, GitCommitHorizontal, MessageSquarePlus } from "@/components/app-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { cloudWorkspaceReviewDiffsQueryOptions } from "../../hooks/useCloudWorkspaceReview";
-import type { CloudCpClient, CloudCpWorkspaceReviewCommit, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewResponse, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
+import { cloudWorkspaceReviewDiffsQueryOptions, cloudWorkspaceView, invalidateCloudWorkspaceViews } from "../../hooks/useCloudWorkspaceReview";
+import type { FilesReviewSelection } from "../../hooks/useFilesReviewSelection";
+import { CloudCpError, type CloudCpClient, type CloudCpWorkspaceReviewCommit, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewResponse, type CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import { cn } from "../../lib/utils";
 import { useUiStore, type CloudReviewUiState } from "../../stores/ui-store";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
@@ -12,6 +13,8 @@ import { Button } from "../ui/button";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Pressable } from "../ui/pressable";
 import { Checkbox } from "../ui/checkbox";
+import { ReviewBranchMenu } from "../diffs/ReviewBranchMenu";
+import { ReviewChangesMenu } from "../diffs/ReviewChangesMenu";
 import { CloudDiffFile } from "./CloudDiffFile";
 import type { CloudFileOpenOptions } from "./CloudWorkspaceExplorer";
 
@@ -65,7 +68,7 @@ function isViewedRecord(file: CloudCpWorkspaceReviewFileSummary, records: Viewed
 }
 
 export function CloudWorkspaceReviewPane({
-	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, ready = true, repository, sessionId, split,
+	annotation, baseUrl, client, data, filter, onBrowseAll, onOpenFile, orgId, ready = true, repository, review, sessionId, split,
 }: {
 	annotation: FileAnnotationModel;
 	baseUrl: string;
@@ -79,10 +82,21 @@ export function CloudWorkspaceReviewPane({
 	ready?: boolean;
 	/** The sibling repository under review in a multi-repository session; undefined for the main one. */
 	repository?: string;
+	/**
+	 * The branch and changes picked as in a local review. Another branch or a
+	 * PR is reviewed from its commits; the checked-out branch keeps this pane's
+	 * own scopes and commits. Unset offers the checked-out branch alone.
+	 */
+	review?: FilesReviewSelection;
 	sessionId: string;
 	split: boolean;
 }) {
 	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const target = review?.target;
+	const viewing = target !== undefined && target.branch.kind !== "checked_out" && review?.branchMenu != null;
+	const view = viewing ? cloudWorkspaceView(target.view, target.commitShas) : undefined;
+	const viewFiles = useMemo(() => (viewing ? (target.files ?? []) as unknown as CloudCpWorkspaceReviewFileSummary[] : undefined), [target?.files, viewing]);
 	const first = useMemo(() => initialSelection(data), [data]);
 	const storedSelection = useUiStore((state) => state.inspectorSessions[sessionId]?.cloudReviewSelection?.[repository ?? ""]);
 	const setStoredSelection = useUiStore((state) => state.setCloudReviewSelection);
@@ -95,17 +109,20 @@ export function CloudWorkspaceReviewPane({
 	useEffect(() => {
 		if (data.commits.length === 0 && commitBrowserOpen) setReviewUi(sessionId, repository, { commitBrowserOpen: false });
 	}, [data.commits.length, commitBrowserOpen, sessionId, repository, setReviewUi]);
-	const selectedCommit = useMemo(() => data.commits.find((commit) => commit.sha === commitSha), [commitSha, data.commits]);
+	const selectedCommit = useMemo(() => (viewing ? undefined : data.commits.find((commit) => commit.sha === commitSha)), [commitSha, data.commits, viewing]);
 	const allFiles = useMemo(
-		() => scope === "committed" && selectedCommit ? selectedCommit.files : filesForScope(data, scope),
-		[data, scope, selectedCommit],
+		() => viewFiles ?? (scope === "committed" && selectedCommit ? selectedCommit.files : filesForScope(data, scope)),
+		[data, scope, selectedCommit, viewFiles],
 	);
+	// Another branch or a PR only has commits.
+	const reviewScope: CloudCpWorkspaceReviewScope = viewing ? "committed" : scope;
 	const normalizedFilter = filter.trim().toLowerCase();
 	const files = useMemo(
 		() => normalizedFilter ? allFiles.filter((file) => `${file.path} ${file.previousPath ?? ""}`.toLowerCase().includes(normalizedFilter)) : allFiles,
 		[allFiles, normalizedFilter],
 	);
-	const selectionKey = selectedCommit ? `commit:${selectedCommit.sha}` : scope;
+	// Viewed marks and collapsed files belong to what is reviewed: a view's are keyed by its branch and picked commits.
+	const selectionKey = viewing ? `view:${target.key}` : selectedCommit ? `commit:${selectedCommit.sha}` : scope;
 	const storageKey = `ao.cloud.files.viewed.${sessionId}.${repository ? `${repository}.` : ""}${selectionKey}`;
 	const [viewedRecords, setViewedRecords] = useState<ViewedRecords>(() => readViewedRecords(storageKey));
 	useEffect(() => {
@@ -139,9 +156,18 @@ export function CloudWorkspaceReviewPane({
 	const requested = files.filter((file) => !deferredByDefault(file) || fileStates[file.path]?.loadedDeferred);
 	const batches = chunk(requested.map((file) => file.path));
 	const diffQueries = useQueries({ queries: batches.map((paths) => ({
-		...cloudWorkspaceReviewDiffsQueryOptions({ client, baseUrl, orgId, sessionId, paths, scope, commitSha: selectedCommit?.sha, workspaceVersion: data.workspaceVersion, ignoreWhitespace: false, enabled: ready }),
+		...cloudWorkspaceReviewDiffsQueryOptions({ client, baseUrl, orgId, sessionId, paths, scope: reviewScope, commitSha: selectedCommit?.sha, workspaceVersion: viewing ? undefined : data.workspaceVersion, ignoreWhitespace: false, view, enabled: ready && (!viewing || target.state === "ready") }),
 		staleTime: Infinity,
 	})) });
+	// A view's diffs come from its commits, fenced to the tip and base its
+	// history listed; the version they carry names that content.
+	const workspaceVersion = viewing ? diffQueries.find((query) => query.data)?.data?.workspaceVersion ?? "" : data.workspaceVersion;
+	// A moved tip or base fails the reads it fenced; the views' new tips key new reads.
+	const refMoved = diffQueries.some((query) => query.error instanceof CloudCpError && query.error.code === "WORKSPACE_REF_MOVED");
+	useEffect(() => {
+		if (refMoved) invalidateCloudWorkspaceViews(queryClient, client, baseUrl, orgId, sessionId);
+	}, [baseUrl, client, orgId, queryClient, refMoved, sessionId]);
+	const openContext: CloudFileOpenOptions = viewing ? { source: target.source } : { commitSha: selectedCommit?.sha, scope };
 	const patchByPath = useMemo(() => {
 		const result = new Map<string, string>();
 		for (const query of diffQueries) for (const group of query.data?.groups ?? []) for (const path of group.includedPaths) result.set(path, group.patch);
@@ -179,21 +205,42 @@ export function CloudWorkspaceReviewPane({
 	const visibleScopes = scopeOrder.filter((entry) => data.sections[entry].length > 0);
 	const combinedFiles = filesForScope(data, "combined");
 
+	const showCommitBrowser = commitBrowserOpen && !viewing;
+	const conflict = target?.conflict;
+
 	return <div className="flex h-full min-h-0 flex-col">
 		<div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-border bg-surface px-2 py-1.5">
+			{review?.branchMenu ? <ReviewBranchMenu {...review.branchMenu} /> : null}
+			{viewing ? <ReviewChangesMenu {...review.changesMenu} /> : <>
 			{combinedFiles.length > 0 ? <Button aria-pressed={scope === "combined"} onClick={() => selectScope("combined")} size="sm" variant="ghost">{t("files.reviewChanges")}<span className="text-caption text-passive">{combinedFiles.length}</span></Button> : null}
 			{visibleScopes.map((entry) => <Button aria-pressed={scope === entry} key={entry} onClick={() => selectScope(entry)} size="sm" variant="ghost">{t(`files.section.${entry}`)}<span className="text-caption text-passive">{data.sections[entry].length}</span></Button>)}
 			<Button aria-expanded={commitBrowserOpen} aria-pressed={scope === "committed"} disabled={data.commits.length === 0} onClick={() => setCommitBrowserOpen(!commitBrowserOpen)} size="sm" variant="ghost"><GitCommitHorizontal className="size-icon-sm" />{t("files.commits")}{selectedCommit ? <span className="text-caption text-passive">{selectedCommit.sha.slice(0, 7)}</span> : null}</Button>
-			{!commitBrowserOpen ? <div className="ml-auto flex items-center gap-1 text-caption text-muted-foreground">
+			</>}
+			{!showCommitBrowser ? <div className="ml-auto flex items-center gap-1 text-caption text-muted-foreground">
 				<span>{t("files.reviewProgress", { total: allFiles.length, viewed: viewedCount })}</span>
 				<Button aria-label={t(allCollapsed ? "files.expandAll" : "files.collapseAll")} onClick={() => setFileStates({ ...fileStates, ...Object.fromEntries(files.map((file) => [file.path, { ...fileStates[file.path], collapsed: !allCollapsed }])) })} size="icon-sm" variant="ghost">{allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}</Button>
 			</div> : null}
 		</div>
-		{commitBrowserOpen ? <CommitBrowser commits={data.commits} filter={filter} onSelect={selectCommit} selectedSha={selectedCommit?.sha} /> : <div className="board-scrollbar min-h-0 flex-1 overflow-y-auto" data-files-scroll-root>
+		{/* The branch shows in its picker; this row only explains a fall back to the checked-out branch. */}
+		{review?.notice ? <p className="shrink-0 border-b border-border px-3 py-1 text-2xs text-muted-foreground" role="status">{review.notice}</p> : null}
+		{showCommitBrowser ? <CommitBrowser commits={data.commits} filter={filter} onSelect={selectCommit} selectedSha={selectedCommit?.sha} /> : viewing && target.state === "pending" ? (
+			<PanelMessage compact>{(target.commitShas?.length ?? 0) > 1 ? t("files.changes.combining") : t("files.loading")}</PanelMessage>
+		) : viewing && target.state === "error" ? (
+			<PanelMessage action={<RetryButton onClick={review.retryTarget} />}>{target.error?.message || t("files.error.loadWorkspace")}</PanelMessage>
+		) : viewing && target.state === "not_combinable" ? (
+			<PanelMessage
+				action={<div className="flex flex-wrap items-center justify-center gap-2">
+					<Button onClick={review.includeCommitsBetween} size="sm" type="button" variant="secondary">{t("files.changes.includeBetween")}</Button>
+					<Button onClick={review.showAllCommits} size="sm" type="button" variant="secondary">{t("files.changes.showAllCommits")}</Button>
+				</div>}
+			>
+				{conflict?.reason === "unsupported_history" ? t("files.changes.unsupportedHistory") : t("files.changes.notCombinable", { subject: conflict?.subject || conflict?.commitSha.slice(0, 7) || "" })}
+			</PanelMessage>
+		) : <div className="board-scrollbar min-h-0 flex-1 overflow-y-auto" data-files-scroll-root>
 			{firstError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{firstError.message}</PanelMessage> : null}
 			{groupError ? <PanelMessage action={<RetryButton onClick={retryAll} />}>{groupError.message}</PanelMessage> : null}
 			{diffQueries.some((query) => query.isPending) && patchByPath.size === 0 ? <PanelMessage compact>{t("files.loadingDiff")}</PanelMessage> : null}
-			{files.length === 0 ? <PanelMessage action={allFiles.length === 0 ? <Button onClick={onBrowseAll}>{t("files.browseAll")}</Button> : undefined} compact>{allFiles.length === 0 ? t("files.noneChanged") : t("files.noFilterMatches")}</PanelMessage> : null}
+			{files.length === 0 ? <PanelMessage action={allFiles.length === 0 && !viewing ? <Button onClick={onBrowseAll}>{t("files.browseAll")}</Button> : undefined} compact>{allFiles.length === 0 ? t("files.noneChanged") : t("files.noFilterMatches")}</PanelMessage> : null}
 			{files.map((file) => {
 				const patch = patchByPath.get(file.path);
 				const deferred = deferredByDefault(file) && !fileStates[file.path]?.loadedDeferred;
@@ -208,8 +255,8 @@ export function CloudWorkspaceReviewPane({
 						<span className={cn("font-mono text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
 						<Pressable className="min-w-0 flex-1 truncate font-mono text-xs hover:underline" onClick={() => toggleCollapsed(file.path)}>{file.path}</Pressable>
 						<span className="text-caption text-success">+{file.additions}</span><span className="text-caption text-error">−{file.deletions}</span>
-						<Button aria-label={t("files.addFeedback")} aria-pressed={fileAnnotationTarget != null} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion: data.workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button>
-						<Button aria-label={t("files.openFullFileGeneric")} onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="icon-sm" variant="ghost"><FileCode2 /></Button>
+						<Button aria-label={t("files.addFeedback")} aria-pressed={fileAnnotationTarget != null} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope: reviewScope, surface: "review", workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button>
+						<Button aria-label={t("files.openFullFileGeneric")} onClick={() => onOpenFile?.(file.path, { ...openContext, mode: "file" })} size="icon-sm" variant="ghost"><FileCode2 /></Button>
 						<Checkbox aria-label={isViewed(file) ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })} checked={isViewed(file)} onCheckedChange={(checked) => markViewed(file, checked === true)} />
 					</header>
 					</PopoverAnchor>
@@ -230,8 +277,8 @@ export function CloudWorkspaceReviewPane({
 					</PopoverContent>
 					</Popover>
 					{/* A sibling repository's paths are relative to it, so they would not name the file in the session's chat. */}
-					{!closed && patch ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} chatReferences={repository === undefined} client={client} commitSha={selectedCommit?.sha} file={file} onActiveSelectionChange={() => undefined} orgId={orgId} patch={patch} scope={scope} sessionId={sessionId} split={split} surface="review" workspaceVersion={data.workspaceVersion} /> : null}
-					{!closed && !patch ? <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><span className="min-w-0 flex-1">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : reason ? t("files.diffUnavailableReason", { reason }) : t("files.loadingDiff")}</span>{deferred ? <Button onClick={() => setFileStates({ ...fileStates, [file.path]: { ...fileStates[file.path], loadedDeferred: true } })} size="sm" variant="secondary">{t("files.loadDiff")}</Button> : null}<Button onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="sm" variant="secondary">{t("files.fileView")}</Button></div> : null}
+					{!closed && patch ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} chatReferences={repository === undefined} client={client} commitSha={selectedCommit?.sha} file={file} onActiveSelectionChange={() => undefined} orgId={orgId} patch={patch} scope={reviewScope} sessionId={sessionId} source={viewing ? target.source : undefined} split={split} surface="review" view={view} workspaceVersion={workspaceVersion} /> : null}
+					{!closed && !patch ? <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><span className="min-w-0 flex-1">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : reason ? t("files.diffUnavailableReason", { reason }) : t("files.loadingDiff")}</span>{deferred ? <Button onClick={() => setFileStates({ ...fileStates, [file.path]: { ...fileStates[file.path], loadedDeferred: true } })} size="sm" variant="secondary">{t("files.loadDiff")}</Button> : null}<Button onClick={() => onOpenFile?.(file.path, { ...openContext, mode: "file" })} size="sm" variant="secondary">{t("files.fileView")}</Button></div> : null}
 				</section>;
 			})}
 		</div>}

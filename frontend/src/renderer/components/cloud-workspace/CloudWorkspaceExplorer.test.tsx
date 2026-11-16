@@ -15,7 +15,10 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { TooltipProvider } from "../ui/tooltip";
 import { CloudWorkspaceExplorer } from "./CloudWorkspaceExplorer";
 
-const { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } = vi.hoisted(() => ({
+const { getWorkspaceBranches, getWorkspaceCommitSelection, getWorkspaceHistory, getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } = vi.hoisted(() => ({
+	getWorkspaceBranches: vi.fn(),
+	getWorkspaceCommitSelection: vi.fn(),
+	getWorkspaceHistory: vi.fn(),
 	getWorkspaceReview: vi.fn(),
 	resumeSession: vi.fn(),
 	getWorkspaceReviewDiffs: vi.fn(),
@@ -24,7 +27,7 @@ const { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, res
 }));
 
 vi.mock("../../hooks/useCloudCp", () => ({
-	useCloudCp: () => ({ baseUrl: "https://cloud.test", ready: true, client: { getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } }),
+	useCloudCp: () => ({ baseUrl: "https://cloud.test", ready: true, client: { getWorkspaceBranches, getWorkspaceCommitSelection, getWorkspaceHistory, getWorkspaceReview, getWorkspaceReviewDiffs, getWorkspaceReviewTree, resumeSession, searchWorkspaceReview } }),
 }));
 vi.mock("../../hooks/useCloudWorkspaceReview", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../../hooks/useCloudWorkspaceReview")>();
@@ -88,6 +91,10 @@ describe("CloudWorkspaceExplorer", () => {
 	beforeEach(() => {
 		getWorkspaceReview.mockReset();
 		getWorkspaceReviewDiffs.mockReset();
+		// A worker that predates review views, unless a test says otherwise.
+		getWorkspaceBranches.mockReset().mockRejectedValue(new CloudCpError("unsupported", { status: 501, code: "WORKSPACE_VIEW_UNSUPPORTED" }));
+		getWorkspaceHistory.mockReset();
+		getWorkspaceCommitSelection.mockReset();
 		getWorkspaceReviewTree.mockReset();
 		searchWorkspaceReview.mockReset().mockResolvedValue({ results: [] });
 		window.localStorage.clear();
@@ -614,5 +621,65 @@ describe("CloudWorkspaceExplorer", () => {
 		// A sibling's file opens as ../<repository>/<path>.
 		await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
 		expect(onOpenFile).toHaveBeenCalledWith("../11x/server/main.go", expect.anything());
+	});
+
+	describe("branch and PR review", () => {
+		const tip = "3".repeat(40);
+		const base = "8".repeat(40);
+		const prUrl = "https://github.com/acme/app/pull/42";
+		const prFile = changed("src/pr.ts");
+		function mockViews() {
+			getWorkspaceReview.mockResolvedValue(mixedReview());
+			getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+			getWorkspaceBranches.mockReset().mockResolvedValue({
+				supported: true, truncated: false, defaultBranch: "main",
+				branches: [
+					{ kind: "local", name: "ao/cloud", tipSha: "1".repeat(40), checkedOut: true, isDefault: false },
+					{ kind: "pull_request", name: "fix/crash", tipSha: tip, checkedOut: false, isDefault: false, prNumber: 42, prUrl },
+				],
+			});
+			getWorkspaceHistory.mockResolvedValue({
+				view: { kind: "pull_request", name: "#42", tipSha: tip, baseSha: base, baseRef: "origin/main", rangeMode: "since_base" },
+				commits: [{ sha: "c".repeat(40), subject: "Fix the crash", author: "Ada", timestamp: "2026-09-20T00:00:00Z", files: [prFile] }],
+				commitsTruncated: false, rangeSummary: { files: 1, additions: 1, deletions: 0 },
+			});
+			getWorkspaceCommitSelection.mockResolvedValue({ tipSha: tip, baseSha: base, contiguous: true, combinable: true, files: [prFile], summary: { files: 1, additions: 1, deletions: 0 }, truncated: false });
+		}
+
+		it("keeps the review on the worktree with no branch menu when the worker predates views", async () => {
+			getWorkspaceReview.mockResolvedValue(mixedReview());
+			getWorkspaceReviewDiffs.mockResolvedValue({ workspaceVersion: "v1", groups: [] });
+			renderExplorer();
+			expect(await screen.findByRole("button", { name: /Staged/ })).toBeInTheDocument();
+			await waitFor(() => expect(getWorkspaceBranches).toHaveBeenCalled());
+			expect(screen.queryByRole("button", { name: /Branch to review/ })).not.toBeInTheDocument();
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		});
+
+		it("reviews a PR picked from the branch menu through its view, and opens its files from it", async () => {
+			mockViews();
+			const onOpenFile = vi.fn();
+			render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<TooltipProvider><CloudWorkspaceExplorer onOpenFile={onOpenFile} session={session} /></TooltipProvider>
+				</QueryClientProvider>,
+			);
+			await userEvent.click(await screen.findByRole("button", { name: "Branch to review: ao/cloud" }));
+			await userEvent.click(await screen.findByRole("menuitemradio", { name: /fix\/crash/ }));
+			expect(await screen.findByRole("button", { name: "Changes to review: All commits" })).toBeInTheDocument();
+			// Another branch has only commits: the worktree's scopes and the file tree step aside.
+			expect(screen.queryByRole("button", { name: /Staged/ })).not.toBeInTheDocument();
+			expect(screen.queryByRole("tab", { name: "Files" })).not.toBeInTheDocument();
+			expect(await screen.findByText("src/pr.ts")).toBeInTheDocument();
+			expect(getWorkspaceHistory).toHaveBeenCalledWith("org-1", "session-1", { prNumber: 42, sourceUrl: prUrl });
+			await waitFor(() => expect(getWorkspaceReviewDiffs).toHaveBeenLastCalledWith("org-1", "session-1", expect.objectContaining({
+				scope: "committed", paths: ["src/pr.ts"], prNumber: 42, sourceUrl: prUrl, expectedTipSha: tip, expectedBaseSha: base, workspaceVersion: undefined,
+			})));
+			await userEvent.click(screen.getByRole("button", { name: "Open full file" }));
+			expect(onOpenFile).toHaveBeenCalledWith("src/pr.ts", expect.objectContaining({ mode: "file", source: expect.objectContaining({ kind: "snapshot", view: expect.objectContaining({ prNumber: 42 }) }) }));
+			// Its viewed marks are kept apart from the worktree's.
+			await userEvent.click(screen.getByRole("checkbox", { name: /src\/pr.ts/ }));
+			expect(window.localStorage.getItem("ao.cloud.files.viewed.session-1.view:pr:42:all")).toContain("src/pr.ts");
+		});
 	});
 });

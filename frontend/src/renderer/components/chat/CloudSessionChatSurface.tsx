@@ -1,6 +1,6 @@
 import { CLOUD_CHAT_MESSAGE_BYTES, EXCERPT_PREAMBLE, isExcerptSnapshot, formatSnapshotExcerpt, formatNumberedAnnotations } from "../../../shared/chat-excerpt";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ChatFileReference } from "../../../shared/chat-file-reference";
+import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
@@ -17,6 +17,7 @@ import { sessionUiKey } from "../../lib/hosts";
 import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { useCloudSessionEventStream } from "../../hooks/useCloudSessionEvents";
+import { cloudFileReferenceQueryKey, resolveCloudFileReference, useCloudFileReferenceEvents } from "../../hooks/useCloudWorkspaceReview";
 import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey, refreshCloudSessionLifecycle, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
 import { useUiStore } from "../../stores/ui-store";
@@ -1537,6 +1538,7 @@ export function CloudSessionChatSurface({
 	onOpenFiles,
 	onOpenFile,
 	onOpenArtifact,
+	onOpenFileAnnotation,
 	controllerTransitioning,
 	newWorkDisabled,
 	onConversationWorkChange,
@@ -1599,6 +1601,8 @@ export function CloudSessionChatSurface({
 	onOpenFile?: (path: string) => void;
 	/** Opens one of the session's artifacts in the inspector's Artifacts tab, by its artifact path. */
 	onOpenArtifact?: (target: { path: string }) => void;
+	/** Opens a sent file reference's file at its lines, once the control plane has resolved them. */
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	controllerTransitioning?: boolean;
 	newWorkDisabled?: boolean;
 	onConversationWorkChange?: (state: {
@@ -1611,6 +1615,15 @@ export function CloudSessionChatSurface({
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser);
 	const { client, ready, userId, baseUrl } = useCloudCp();
+	// Sent file references resolve through the control plane. One that cannot
+	// resolve them (an older one) marks this resolver unsupported, so the chips
+	// show their captures alone and offer no opening.
+	const cloudOrgId = cloud?.orgId;
+	const fileAnnotationResolver = useMemo(
+		() => cloudOrgId ? { queryKey: cloudFileReferenceQueryKey(baseUrl, cloudOrgId, session.id), resolve: resolveCloudFileReference(client, cloudOrgId, { current: false }) } : undefined,
+		[baseUrl, client, cloudOrgId, session.id],
+	);
+	useCloudFileReferenceEvents({ baseUrl, orgId: cloudOrgId, sessionId: session.id, enabled: Boolean(cloudOrgId && ready) });
 	const restoreSession = useRestoreSession();
 	// The archived session a sent message is restoring, so the composer shows the
 	// restore. Kept by id: this surface outlives the session it shows.
@@ -2591,6 +2604,8 @@ export function CloudSessionChatSurface({
 			onOpenFiles={onOpenFiles}
 			onOpenFile={openFileFromChat}
 			onOpenArtifact={onOpenArtifact}
+			onOpenFileAnnotation={onOpenFileAnnotation}
+			fileAnnotationResolver={fileAnnotationResolver}
 			onInterrupt={activeTurn ? () => interrupt.mutate() : undefined}
 			onSteer={activeTurn && snapshot.capabilities?.includes("steer") ? (text, attachments, clientMessageId) => {
 				if (attachments?.length || splitCloudAttachmentReferences(text).attachmentIds.length) return Promise.resolve({ status: "not-accepted" as const, reason: "Cloud steering currently accepts text only." });

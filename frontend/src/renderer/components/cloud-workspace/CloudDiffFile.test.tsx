@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render as renderRaw, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -10,6 +11,9 @@ import type { CloudCpClient, CloudCpWorkspaceReviewFileSummary } from "../../lib
 import type { CodeSelection } from "../diffs/useCodeSelection";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
 import { CloudDiffFile } from "./CloudDiffFile";
+
+// The diff loads a revealed reference's full file through a query.
+const render = (ui: ReactNode) => renderRaw(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>);
 
 const chat = vi.hoisted(() => ({
 	ask: vi.fn<(reference: FileCodeReference) => boolean>(() => true),
@@ -28,17 +32,17 @@ vi.mock("../diffs/useCodeSelection", async (importActual) => ({
 }));
 
 vi.mock("@pierre/diffs", () => ({
-	parsePatchFiles: () => [{ files: [{ name: "src/App.tsx", type: "changed" }] }],
+	parsePatchFiles: () => [{ files: [{ name: "src/App.tsx", type: "changed", hunks: [], deletionLines: [], additionLines: [] }] }],
 }));
 
 vi.mock("@pierre/diffs/react", () => ({
 	FileDiff: ({ lineAnnotations, options, renderGutterUtility }: {
 		lineAnnotations?: unknown[];
-		options: { diffStyle: string; loadDiffFiles: (metadata: unknown) => Promise<unknown> };
+		options: { collapsedContextThreshold: number; diffStyle: string; loadDiffFiles: (metadata: unknown) => Promise<unknown> };
 		renderGutterUtility?: (getLine: () => { lineNumber: number; side: "additions" }) => ReactNode;
 	}) => {
 		void options.loadDiffFiles({ name: "src/App.tsx", type: "changed" });
-		return <div data-annotations={lineAnnotations?.length ?? 0} data-testid="file-diff" data-style={options.diffStyle}>{renderGutterUtility?.(() => ({ lineNumber: 2, side: "additions" }))}</div>;
+		return <div data-annotations={lineAnnotations?.length ?? 0} data-collapsed={options.collapsedContextThreshold} data-testid="file-diff" data-style={options.diffStyle}>{renderGutterUtility?.(() => ({ lineNumber: 2, side: "additions" }))}</div>;
 	},
 }));
 
@@ -116,5 +120,47 @@ describe("CloudDiffFile", () => {
 	it("keeps Add to chat off where the path would not name the file in the session", () => {
 		renderDiff({ chatReferences: false });
 		expect(chat.enabled).toBe(false);
+	});
+
+	it("reads a view's revisions from its commits, not the worktree's version", async () => {
+		const getWorkspaceReviewRevision = vi.fn().mockResolvedValue(revision);
+		const view = { prNumber: 12, sourceUrl: "https://github.com/acme/app/pull/12", expectedTipSha: "a".repeat(40), commitShas: ["c".repeat(40)] };
+		renderDiff({ client: { getWorkspaceReviewRevision } as unknown as CloudCpClient, scope: "committed", view });
+		await waitFor(() => expect(getWorkspaceReviewRevision).toHaveBeenCalledTimes(2));
+		expect(getWorkspaceReviewRevision).toHaveBeenCalledWith("org-1", "session-1", { ...view, path: file.path, scope: "committed", side: "before" });
+		expect(getWorkspaceReviewRevision.mock.calls[0][2]).not.toHaveProperty("workspaceVersion");
+	});
+
+	it("names a PR's picked commit in a chat reference, and offers no reference for a branch view", () => {
+		chat.ask.mockClear();
+		const tip = "a".repeat(40);
+		const sha = "c".repeat(40);
+		const url = "https://github.com/acme/app/pull/12";
+		renderDiff({ scope: "committed", source: { kind: "snapshot", view: { prNumber: 12, sourceUrl: url, expectedTipSha: tip }, commitShas: [sha], label: "PR #12" } });
+		expect(chat.enabled).toBe(true);
+		chat.onAsk?.({
+			host: document.createElement("div"),
+			rows: [{ kind: "add", oldNo: null, newNo: 2, text: "TWO", side: "new" }],
+			range: { start: 2, end: 2, side: "additions", endSide: "additions" },
+			point: { x: 0, y: 0 },
+			dragging: false,
+		} as unknown as CodeSelection);
+		expect(chat.ask).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: "pull_request", number: 12, url, snapshot: tip }, commitSha: sha, scope: "committed" }));
+		renderDiff({ scope: "committed", source: { kind: "snapshot", view: { branch: "feat/x" }, commitShas: [sha], label: "feat/x" } });
+		expect(chat.enabled).toBe(false);
+	});
+
+	it("loads the full file and keeps no context collapsed to reveal a chat reference's lines", async () => {
+		const getWorkspaceReviewRevision = vi.fn().mockResolvedValue(revision);
+		renderDiff({ annotationRange: { line: 2, endLine: 2, side: "new", lines: [{ kind: "add", side: "new", oldNo: null, newNo: 2, text: "TWO" }], requestKey: 1 }, client: { getWorkspaceReviewRevision } as unknown as CloudCpClient });
+		expect(screen.getByTestId("file-diff")).toHaveAttribute("data-collapsed", String(Number.MAX_SAFE_INTEGER));
+		await waitFor(() => expect(getWorkspaceReviewRevision).toHaveBeenCalledWith("org-1", "session-1", expect.objectContaining({ path: file.path, side: "after", workspaceVersion: undefined })));
+		// The mocked renderer draws no rows, so the reveal cannot verify them.
+		expect(await screen.findByText(/Loading selected lines|could not be verified/)).toBeInTheDocument();
+	});
+
+	it("keeps unchanged context collapsed without a reference to reveal", () => {
+		renderDiff();
+		expect(screen.getByTestId("file-diff")).toHaveAttribute("data-collapsed", "8");
 	});
 });

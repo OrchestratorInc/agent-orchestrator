@@ -135,6 +135,14 @@ import type {
 	CloudCpWorkspaceReviewTreeResponse,
 	CloudCpWorkspaceReviewWriteRequest,
 	CloudCpWorkspaceReviewWriteResponse,
+	CloudCpWorkspaceReviewView,
+	CloudCpWorkspaceBranchesResponse,
+	CloudCpWorkspaceHistoryQuery,
+	CloudCpWorkspaceHistoryResponse,
+	CloudCpWorkspaceCommitSelectionRequest,
+	CloudCpWorkspaceCommitSelectionResponse,
+	CloudCpFileReferenceResolveRequest,
+	CloudCpFileReferenceResolution,
 	CloudCpTerminalTicketRequest,
 	CloudCpTerminalTicketResponse,
 	CloudCpUpdateProjectRequest,
@@ -462,6 +470,14 @@ export interface CloudCpClient {
 	getWorkspaceReviewDiffs(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewDiffsRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewDiffsResponse>;
 	getWorkspaceReviewRevision(orgId: string, sessionId: string, query: CloudCpWorkspaceReviewRevisionQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewRevisionResponse>;
 	updateWorkspaceReviewFile(orgId: string, sessionId: string, body: CloudCpWorkspaceReviewWriteRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceReviewWriteResponse>;
+	/** The branches and PRs a review can show instead of the worktree. 501 `WORKSPACE_VIEW_UNSUPPORTED` from a worker that predates views. */
+	getWorkspaceBranches(orgId: string, sessionId: string, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceBranchesResponse>;
+	/** A branch's or PR's commits, newest first, with the tip and base later reads fence to. */
+	getWorkspaceHistory(orgId: string, sessionId: string, query: CloudCpWorkspaceHistoryQuery, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceHistoryResponse>;
+	/** The files picked commits of a view change together (none picked: the view's whole range). */
+	getWorkspaceCommitSelection(orgId: string, sessionId: string, body: CloudCpWorkspaceCommitSelectionRequest, options?: CloudCpWorkspaceRequestOptions): Promise<CloudCpWorkspaceCommitSelectionResponse>;
+	/** Where a sent chat file reference's lines are now. A sibling repository's reference names it in the body. */
+	resolveFileReference(orgId: string, sessionId: string, body: CloudCpFileReferenceResolveRequest, options?: CloudCpRequestOptions): Promise<CloudCpFileReferenceResolution>;
 	/** Re-provision a deleted session, keeping its conversation and work intact. */
 	restoreSession(
 		orgId: string,
@@ -730,6 +746,14 @@ function buildUrl(baseUrl: string, path: string, query?: QueryParams): string {
 		if (search !== "") url += `?${search}`;
 	}
 	return url;
+}
+
+/** A review view's query parameters; `commitShas` repeats once per SHA. Undefined fields are left out. */
+function viewQuery(view: CloudCpWorkspaceReviewView): QueryParams {
+	return {
+		branch: view.branch, prNumber: view.prNumber, sourceUrl: view.sourceUrl,
+		expectedTipSha: view.expectedTipSha, expectedBaseSha: view.expectedBaseSha, commitShas: view.commitShas,
+	};
 }
 
 /** The `repository` query parameter of a workspace call; undefined for the main repository. */
@@ -1171,7 +1195,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
-				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...repositoryQuery(o) }, signal: o?.signal,
+				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...viewQuery(query), ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewDiffs: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
@@ -1181,12 +1205,28 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
 				query: {
 					path: query.path, scope: query.scope, side: query.side, workspaceVersion: query.workspaceVersion,
-					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...repositoryQuery(o),
+					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...viewQuery(query), ...repositoryQuery(o),
 				}, signal: o?.signal,
 			}),
 		updateWorkspaceReviewFile: (orgId, sessionId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
 				body, query: repositoryQuery(o), signal: o?.signal,
+			}),
+		getWorkspaceBranches: (orgId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/branches`, {
+				query: repositoryQuery(o), signal: o?.signal,
+			}),
+		getWorkspaceHistory: (orgId, sessionId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/history`, {
+				query: { branch: query.branch, prNumber: query.prNumber, sourceUrl: query.sourceUrl, ...repositoryQuery(o) }, signal: o?.signal,
+			}),
+		getWorkspaceCommitSelection: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/history/selection`, {
+				body, query: repositoryQuery(o), signal: o?.signal,
+			}),
+		resolveFileReference: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/conversation/file-references/resolve`, {
+				body, signal: o?.signal,
 			}),
 		restoreSession: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/restore`, {
