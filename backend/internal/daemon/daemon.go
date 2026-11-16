@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/dockeragentacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/cuadriver"
@@ -584,6 +585,9 @@ func Run(buildVersion string) (retErr error) {
 					Env:     request.Env,
 				}, request.WorkingDir, log)
 			},
+			"docker-agent": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return dockeragentacp.DiscoverConfigOptions(listCtx, request.Binary, cfg.DataDir, request.Env, log)
+			},
 			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
@@ -670,6 +674,13 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	lcStack.StartActivityObserver(wiredSessMgr.SessionRuntimeEnv)
+	// The runtime reaper also observes reviewers serving an in-progress review
+	// run; the review engine reduces each pass into run transitions. Its first
+	// pass (ReconcileRuntime, after Chat reviewer recovery) settles runs a
+	// previous daemon left in progress.
+	lcStack.runtimeReaper.BindReviewers(reviewSvc.ReviewerObserver())
+
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
@@ -779,6 +790,11 @@ func Run(buildVersion string) (retErr error) {
 			defer cancel()
 			return wake.WakeHibernatedChat(wakeCtx, id)
 		})
+	}
+	if check, ok := sessMgr.(interface {
+		ImportedChatWrittenElsewhere(context.Context, domain.SessionRecord, time.Time) (bool, bool)
+	}); ok {
+		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {

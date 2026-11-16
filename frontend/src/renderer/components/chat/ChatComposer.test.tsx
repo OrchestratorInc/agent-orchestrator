@@ -406,6 +406,45 @@ describe("send keys", () => {
   window.getSelection()!.removeAllRanges();text.remove();
  });
 
+	it.each([
+		["the Browser address bar", () => Object.assign(document.createElement("input"), { type: "text" })],
+		["a terminal", () => document.createElement("textarea")],
+		["a rich text field", () => {
+			const div = Object.assign(document.createElement("div"), { tabIndex: 0 });
+			div.setAttribute("contenteditable", "true");
+			return div;
+		}],
+	])("leaves focus in %s when the window regains focus", (_, makeField) => {
+		const { field } = renderComposer({ autoFocusKey: "session-1" });
+		const other = makeField();
+		document.body.append(other);
+		other.focus();
+		expect(document.activeElement).toBe(other);
+
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+
+		expect(document.activeElement).toBe(other);
+		expect(document.activeElement).not.toBe(field);
+		other.remove();
+	});
+
+	it("still refocuses the message field when a button held focus", () => {
+		const { field } = renderComposer({ autoFocusKey: "session-1" });
+		const button = document.createElement("button");
+		document.body.append(button);
+		button.focus();
+
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+		});
+
+		expect(document.activeElement).toBe(field);
+		button.remove();
+	});
+
 	it("does not focus the hidden or inactive chat composer", () => {
 		const { field } = renderComposer({ autoFocus: false, autoFocusKey: "session-1" });
 		expect(document.activeElement).not.toBe(field);
@@ -867,14 +906,15 @@ describe("send keys", () => {
 		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts.map(upgradeExcerpt));
 	});
 
-	it.each([
+	it.each<[string, string, string?]>([
 		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
 		["validation_error", "Request was rejected"],
 		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
 		// A refused /btw or /side launch must not lock the main draft.
 		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
 		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
-	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
+		["CHAT_OPEN_ELSEWHERE", "open in another process", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again."],
+	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message, shown = message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
 			.mockRejectedValueOnce({ code, message })
@@ -885,7 +925,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(screen.getByRole("alert")).toHaveTextContent(message);
+		expect(screen.getByRole("alert")).toHaveTextContent(shown);
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		first.unmount();
 		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);

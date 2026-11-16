@@ -76,6 +76,7 @@ async function start(job: ArtifactSnapshotJob): Promise<void> {
 		sessionId: job.sessionId,
 		sessionTitle: job.sessionTitle,
 		cloud: job.cloud as ArtifactRow["cloud"],
+		hostId: job.hostId,
 	};
 	quietMs = /\.pdf$/i.test(job.path) ? QUIET_PDF_MS : QUIET_MS;
 	const root = document.getElementById("root") as HTMLElement;

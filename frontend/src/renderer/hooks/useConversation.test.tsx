@@ -1233,6 +1233,71 @@ describe("conversation branching commands", () => {
 			{ params: { path: { sessionId: "ao-1", branchId: "branch-previous" } } },
 		);
 	});
+
+	// One client for the whole test: the shared wrapper builds a new one per
+	// render, which would drop the branch mutation's error on rerender.
+	function renderBranchCommands() {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		return renderHook(
+			({ turnActive }) => useConversationCommands("ao-1", undefined, false, turnActive),
+			{
+				wrapper: ({ children }: { children: ReactNode }) => (
+					<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+				),
+				initialProps: { turnActive: true },
+			},
+		);
+	}
+
+	it("disables branch navigation while a turn is active", () => {
+		const { result, rerender } = renderBranchCommands();
+		expect(result.current.activateBranchDisabled).toBe(true);
+
+		rerender({ turnActive: false });
+		expect(result.current.activateBranchDisabled).toBe(false);
+	});
+
+	it("clears CHAT_EDIT_BUSY branch error when the turn finishes", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		apiErrorMessageMock.mockImplementation((error: { message?: string } | undefined) => error?.message ?? "error");
+		const busyError = { code: "CHAT_EDIT_BUSY", message: "stop the current turn before switching conversation branches" };
+		postMock.mockResolvedValue({ data: undefined, error: busyError });
+
+		const { result, rerender } = renderBranchCommands();
+		await act(async () => {
+			await expect(result.current.activateBranch("branch-previous")).rejects.toBe(busyError);
+		});
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBe("stop the current turn before switching conversation branches");
+		});
+
+		rerender({ turnActive: false });
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBeUndefined();
+		});
+	});
+
+	it("preserves unrelated branch errors when a turn finishes", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		apiErrorMessageMock.mockImplementation((error: { message?: string } | undefined) => error?.message ?? "error");
+		const genericError = { code: "SERVER_ERROR", message: "server error" };
+		postMock.mockResolvedValue({ data: undefined, error: genericError });
+
+		const { result, rerender } = renderBranchCommands();
+		await act(async () => {
+			await expect(result.current.activateBranch("branch-previous")).rejects.toBe(genericError);
+		});
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBe("server error");
+		});
+
+		rerender({ turnActive: false });
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBe("server error");
+		});
+	});
 });
 
 describe("steering refusals", () => {
@@ -1361,6 +1426,17 @@ describe("steering refusals", () => {
 		await expect(result.current.steer("wait for the switch", undefined, "transition-steer-1")).resolves.toEqual({
 			status: "not-accepted",
 			reason: "The session is switching interfaces. This guidance was not delivered; send it after the switch finishes.",
+		});
+	});
+
+	it("treats a steer refused because the chat is open elsewhere as definitive non-acceptance", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_OPEN_ELSEWHERE");
+		postMock.mockResolvedValue({ data: undefined, error: { code: "CHAT_OPEN_ELSEWHERE" } });
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await expect(result.current.steer("narrow the search", undefined, "elsewhere-steer-1")).resolves.toEqual({
+			status: "not-accepted",
+			reason: "chat.draft.openElsewhere",
 		});
 	});
 
@@ -1679,4 +1755,192 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 	await act(async () => { refresh.resolve(page(21)); });
 
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
+});
+
+describe("opening a local chat it has cached", () => {
+	const page = (latestSequence: number, oldestSequence: number, hasMoreBefore: boolean, turnState = "running", activeBranchId?: string) => ({
+		data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence, oldestSequence, hasMoreBefore, activeBranchId,
+			turns: [{ id: "t1", state: turnState, requestedAt: "2026-11-16T00:00:00Z" }], messages: [], activities: [],
+		},
+		error: undefined,
+	});
+	const mount = (queryClient: QueryClient) => renderHook(() => useConversation("ao-1"), {
+		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+	});
+
+	it("reads only the live page when the chat changed while closed, keeping older pages", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockResolvedValueOnce(page(21, 11, true, "completed"))
+			.mockRejectedValue(new Error("an older page was read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		act(() => first.result.current.loadOlder());
+		await waitFor(() => expect(first.result.current.hasOlder).toBe(false));
+		first.unmount();
+
+		// The turn finishes while another session is on screen: the event only marks the chat stale.
+		await queryClient.invalidateQueries({ queryKey: conversationQueryKey("ao-1") });
+		expect(getMock).toHaveBeenCalledTimes(2);
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(second.result.current.snapshot?.turns[0]?.state).toBe("completed"));
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(getMock.mock.calls[2][1]).toMatchObject({ params: { query: { beforeSequence: undefined } } });
+		expect(second.result.current.snapshot).toMatchObject({ latestSequence: 21, oldestSequence: 1 });
+		expect(second.result.current.hasOlder).toBe(false);
+	});
+
+	it("keeps the chat stale when it changes again before its open read lands", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockReturnValueOnce(openRead.promise)
+			.mockResolvedValueOnce(page(22, 1, false, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		// Opened and left again before its read lands; the turn finishes in between.
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		second.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+		await act(async () => { openRead.resolve(page(21, 1, false)); });
+		await waitFor(() => expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true));
+
+		const third = mount(queryClient);
+		await waitFor(() => expect(third.result.current.snapshot?.latestSequence).toBe(22));
+		expect(third.result.current.snapshot?.turns[0]?.state).toBe("completed");
+		expect(getMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("reads again when the chat changed while closed and reopened during its open read", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockReturnValueOnce(openRead.promise)
+			.mockResolvedValueOnce(page(22, 1, false, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		second.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+		// Back before the first read lands: that read is still the one in flight.
+		const third = mount(queryClient);
+		await act(async () => { openRead.resolve(page(21, 1, false)); });
+
+		await waitFor(() => expect(third.result.current.snapshot?.latestSequence).toBe(22));
+		expect(getMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("loads older history asked for during the open read after it, keeping the read's live page", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockReturnValueOnce(openRead.promise)
+			.mockResolvedValueOnce(page(10, 1, false, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: conversationQueryKey("ao-1") });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		// The reader scrolls up before the open read lands.
+		act(() => second.result.current.loadOlder());
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await act(async () => { openRead.resolve(page(21, 11, true, "completed")); });
+
+		await waitFor(() => expect(second.result.current.hasOlder).toBe(false));
+		expect(getMock.mock.calls[2][1]).toMatchObject({ params: { query: { beforeSequence: 11 } } });
+		expect(second.result.current.snapshot).toMatchObject({ latestSequence: 21, oldestSequence: 1 });
+	});
+
+	it("cancels a reload left running from before the chat closed so it cannot write over the open read", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const reloadOlder = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockResolvedValueOnce(page(10, 1, false))
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockReturnValueOnce(reloadOlder.promise)
+			.mockResolvedValueOnce(page(21, 11, true, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		act(() => first.result.current.loadOlder());
+		await waitFor(() => expect(first.result.current.hasOlder).toBe(false));
+
+		// An event reloads every page; the chat closes while the older one is still loading.
+		void queryClient.invalidateQueries({ queryKey: key }, { cancelRefetch: false });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(4));
+		first.unmount();
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(second.result.current.snapshot?.latestSequence).toBe(21));
+		expect(second.result.current.snapshot).toMatchObject({ oldestSequence: 1 });
+		await act(async () => { reloadOlder.resolve(page(10, 1, false)); });
+
+		expect(queryClient.getQueryData<{ pages: { latestSequence: number }[] }>(key)?.pages[0]?.latestSequence).toBe(21);
+		expect(getMock).toHaveBeenCalledTimes(5);
+	});
+
+	it("drops an open read that lands after the chat moved to another branch", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false, "running", "branch-a"))
+			.mockReturnValueOnce(openRead.promise)
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		// The reader switches branch; its refetch lands before the open read does.
+		act(() => {
+			queryClient.setQueryData(key, { pages: [toSnapshot(page(22, 1, false, "completed", "branch-b").data as never)], pageParams: [undefined] });
+		});
+		await act(async () => { openRead.resolve(page(21, 1, false, "completed", "branch-a")); });
+
+		expect(queryClient.getQueryData<{ pages: { activeBranchId?: string; latestSequence: number }[] }>(key)?.pages[0])
+			.toMatchObject({ activeBranchId: "branch-b", latestSequence: 22 });
+		await waitFor(() => expect(second.result.current.snapshot).toMatchObject({ activeBranchId: "branch-b", latestSequence: 22 }));
+		expect(getMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("makes no request when the chat did not change while closed", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		getMock.mockReset().mockResolvedValueOnce(page(20, 1, false)).mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+
+		const second = mount(queryClient);
+		expect(second.result.current.snapshot?.latestSequence).toBe(20);
+		await act(async () => {});
+		expect(getMock).toHaveBeenCalledTimes(1);
+	});
 });

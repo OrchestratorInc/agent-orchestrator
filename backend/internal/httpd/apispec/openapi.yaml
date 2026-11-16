@@ -20834,11 +20834,14 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
           - fake
           type: string
         approvalMode:
@@ -21616,11 +21619,14 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
           - cloudflared
           - cua-driver
           type: string
@@ -23573,10 +23579,42 @@ components:
           type: string
         body:
           type: string
+        cancelRequestedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        cancelledBy:
+          enum:
+          - user
+          - worker_lifecycle
+          type: string
         createdAt:
           format: date-time
           type: string
         deliveredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        failureReason:
+          enum:
+          - preflight_failed
+          - launch_failed
+          - never_started
+          - exited_during_launch
+          - turn_ended_without_submit
+          - process_exited
+          - timed_out
+          - daemon_restarted
+          - cancel_unconfirmed
+          type: string
+        firstActivityAt:
           format: date-time
           type:
           - "null"
@@ -23587,13 +23625,32 @@ components:
           type: string
         id:
           type: string
+        launchingAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         prUrl:
           type: string
         reviewId:
           type: string
         sessionId:
           type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         status:
+          enum:
+          - queued
+          - launching
+          - running
+          - cancelling
+          - completed
+          - failed
+          - cancelled
+          - superseded
           type: string
         targetSha:
           type: string
@@ -23920,6 +23977,8 @@ components:
           type: string
         behind:
           type: integer
+        branch:
+          type: string
         commits:
           type: integer
         conflicts:
@@ -25858,11 +25917,14 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
           type: string
         issueId:
           type: string

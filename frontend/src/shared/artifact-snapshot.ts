@@ -33,7 +33,10 @@ export type ArtifactSnapshotJob = {
 	previewUrl?: string;
 	sessionTitle: string;
 	cloud?: { orgId: string };
-	/** The host the session runs on; absent or "local" for this computer. Another host's artifacts are never snapshotted. */
+	/**
+	 * The host the session runs on; absent or "local" for this computer. Another host's page is read
+	 * through its loopback proxy's artifact origin, the same URL a live card frames.
+	 */
 	hostId?: string;
 	/** The resolved light or dark theme the card is shown in. */
 	theme: "light" | "dark";
@@ -45,6 +48,15 @@ export type ArtifactSnapshotJob = {
 export type ArtifactSnapshotIdentity = Pick<ArtifactSnapshotJob, "hostId" | "cloud" | "sessionId" | "path" | "updatedAt" | "theme" | "styleTheme">;
 
 const MAX_FIELD = 4_096;
+
+/**
+ * Whether the snapshot belongs to the signed-in account rather than to this computer: a Cloud
+ * session's, or one on another host, which is reached only while signed in. These are kept apart
+ * and cleared on sign-out.
+ */
+export function isAccountBoundSnapshot(snapshot: Pick<ArtifactSnapshotIdentity, "cloud" | "hostId">): boolean {
+	return Boolean(snapshot.cloud) || Boolean(snapshot.hostId && snapshot.hostId !== LOCAL_SNAPSHOT_HOST);
+}
 const FIELDS = ["sessionId", "path", "name", "kind", "updatedAt", "sessionTitle", "styleTheme"] as const;
 const URL_FIELDS = ["inlineUrl", "rawUrl", "previewUrl"] as const;
 
@@ -60,7 +72,7 @@ export function parseArtifactSnapshotJob(value: unknown): ArtifactSnapshotJob | 
 		if (url !== undefined && (typeof url !== "string" || url.length > MAX_FIELD)) return undefined;
 	}
 	const hostId = input.hostId;
-	if (hostId !== undefined && (typeof hostId !== "string" || (hostId !== "" && hostId !== LOCAL_SNAPSHOT_HOST))) return undefined;
+	if (hostId !== undefined && (typeof hostId !== "string" || hostId.length > MAX_FIELD)) return undefined;
 	if (!input.sessionId || !input.path || (input.theme !== "light" && input.theme !== "dark")) return undefined;
 	const cloud = input.cloud;
 	if (cloud !== undefined && (typeof cloud !== "object" || cloud === null || typeof (cloud as { orgId?: unknown }).orgId !== "string")) return undefined;
@@ -89,7 +101,7 @@ export function artifactSnapshotUrl(identity: ArtifactSnapshotIdentity): string 
 	return `${ARTIFACT_SNAPSHOT_SCHEME}://${SNAPSHOT_URL_HOST}/?${params}`;
 }
 
-/** The snapshot a URL from `artifactSnapshotUrl` names, or undefined for any other URL. Another host's is refused, as for jobs. */
+/** The snapshot a URL from `artifactSnapshotUrl` names, or undefined for any other URL. */
 export function parseArtifactSnapshotUrl(value: string): ArtifactSnapshotIdentity | undefined {
 	if (!URL.canParse(value)) return undefined;
 	const url = new URL(value);
@@ -102,6 +114,5 @@ export function parseArtifactSnapshotUrl(value: string): ArtifactSnapshotIdentit
 	const hostId = field("h");
 	const orgId = field("o");
 	if (!sessionId || !path || updatedAt === undefined || styleTheme === undefined || (theme !== "light" && theme !== "dark")) return undefined;
-	if (hostId !== undefined && hostId !== "" && hostId !== LOCAL_SNAPSHOT_HOST) return undefined;
 	return { sessionId, path, updatedAt, theme, styleTheme, hostId: hostId || undefined, cloud: orgId !== undefined ? { orgId } : undefined };
 }
