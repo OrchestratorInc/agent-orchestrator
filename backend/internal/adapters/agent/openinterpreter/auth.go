@@ -10,9 +10,16 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
+
+// generatedProviderKeys are the variables Open Interpreter's generated
+// providers read. They match the provider keys AO offers for this harness, so
+// a key saved in AO counts as configured.
+var generatedProviderKeys = generatedProviderKeyNames()
 
 // AuthStatus reports local credential configuration only. Native login status
 // does not validate tokens and does not cover every custom model provider.
@@ -31,6 +38,10 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	if status := authStatus(output); status != ports.AgentAuthStatusUnknown {
 		return status, nil
+	}
+	// Native login status covers only the built-in OpenAI provider.
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, generatedProviderKeys...) != "" {
+		return ports.AgentAuthStatusConfigured, nil
 	}
 
 	// Native login does not report credentials supplied by a custom provider.

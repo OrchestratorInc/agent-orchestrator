@@ -66,6 +66,9 @@ base_url = "https://example.invalid/v1"
 			t.Setenv("AO_INTERPRETER_TEST_KEY", tc.key)
 			t.Setenv("AO_INTERPRETER_MISSING_TEST_KEY", "")
 			t.Setenv("AO_INTERPRETER_TEST_LOGIN", tc.login)
+			for _, name := range generatedProviderKeys {
+				t.Setenv(name, "")
+			}
 			if tc.config != "" {
 				if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(tc.config), 0o600); err != nil {
 					t.Fatal(err)
@@ -80,6 +83,35 @@ base_url = "https://example.invalid/v1"
 			got, err := p.AuthStatus(context.Background())
 			if err != nil || got != tc.want {
 				t.Fatalf("AuthStatus = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// A provider key saved in AO (or exported) for one of the generated providers
+// counts as configured even though native login covers only OpenAI.
+func TestAuthStatusGeneratedProviderKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native login fixture requires a POSIX shell")
+	}
+	for _, name := range generatedProviderKeys {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("INTERPRETER_HOME", t.TempDir())
+			for _, other := range generatedProviderKeys {
+				t.Setenv(other, "")
+			}
+			binary := filepath.Join(t.TempDir(), "interpreter")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'Not logged in\\n'\nexit 1\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			p := &Plugin{resolvedBinary: binary}
+			if got, err := p.AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusUnknown {
+				t.Fatalf("AuthStatus without a key = %q, %v; want unknown", got, err)
+			}
+			t.Setenv(name, "saved-key")
+			if got, err := p.AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusConfigured {
+				t.Fatalf("AuthStatus with %s = %q, %v; want configured", name, got, err)
 			}
 		})
 	}

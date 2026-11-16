@@ -23,6 +23,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -513,6 +514,9 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 	if err != nil {
 		return base, fmt.Errorf("%s model discovery: %w", agentID, err)
 	}
+	if agentID == "open-interpreter" {
+		models = append(models, openInterpreterProviderModels(ctx, binary, workingDir, env)...)
+	}
 	base.Providers = reportedJSONProviders(output)
 	if includeLocal {
 		// The model command lists what it can run; the provider cache, every model.
@@ -941,15 +945,18 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 	if agentID == "open-interpreter" {
 		// The native catalog follows the selected provider and account. Include
 		// a version marker to invalidate older binary-only manual catalogs.
+		// Generated providers are listed only when their key is present, so
+		// key presence (never the value) is part of the fingerprint.
+		providers := "providers=" + openInterpreterKeyedProviders(env)
 		root, err := nativeconfig.Resolve(env, "INTERPRETER_HOME", ".openinterpreter")
 		if err != nil {
-			return "native-debug-models-v1"
+			return "native-debug-models-v2:" + providers
 		}
 		paths := []string{filepath.Join(root, "config.toml"), filepath.Join(root, "auth.json")}
 		if workingDir != "" {
 			paths = append(paths, filepath.Join(workingDir, ".openinterpreter", "config.toml"))
 		}
-		return "native-debug-models-v1:" + root + ":" + fingerprintConfigPaths(paths)
+		return "native-debug-models-v2:" + providers + ":" + root + ":" + fingerprintConfigPaths(paths)
 	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
@@ -1417,6 +1424,61 @@ func parseOpenInterpreterModels(output []byte) ([]ports.AgentModelInfo, error) {
 		models = append(models, model)
 	}
 	return models, nil
+}
+
+// openInterpreterProviderModels lists the models of each generated provider
+// whose key the session would receive. `debug models` reports only the active
+// provider, so a saved DeepSeek key would otherwise offer no DeepSeek model.
+// IDs carry the provider so launch can select it; a provider that fails to
+// list is left out rather than failing the active provider's catalog.
+func openInterpreterProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) []ports.AgentModelInfo {
+	var models []ports.AgentModelInfo
+	for _, provider := range openinterpreter.GeneratedProviders {
+		if !openInterpreterHasKey(env, provider.EnvKey) {
+			continue
+		}
+		runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
+		output, err := modelCommand(runCtx, binary, []string{"debug", "models", "-c", "model_provider=" + strconv.Quote(provider.ID)}, workingDir, env).CombinedOutput()
+		cancel()
+		if err != nil {
+			continue
+		}
+		listed, err := parseOpenInterpreterModels(output)
+		if err != nil {
+			continue
+		}
+		for _, model := range listed {
+			label := model.Label
+			if label == "" {
+				label = model.ID
+			}
+			model.Label = label + " (" + provider.Label + ")"
+			model.ID = openinterpreter.ProviderModelID(provider.ID, model.ID)
+			model.Provider = provider.ID
+			models = append(models, model)
+		}
+	}
+	return models
+}
+
+// openInterpreterHasKey reports whether the session environment carries name:
+// env overrides the daemon environment, and an empty override withholds it.
+func openInterpreterHasKey(env map[string]string, name string) bool {
+	value, set := env[name]
+	if !set {
+		value = os.Getenv(name)
+	}
+	return strings.TrimSpace(value) != ""
+}
+
+func openInterpreterKeyedProviders(env map[string]string) string {
+	var ids []string
+	for _, provider := range openinterpreter.GeneratedProviders {
+		if openInterpreterHasKey(env, provider.EnvKey) {
+			ids = append(ids, provider.ID)
+		}
+	}
+	return strings.Join(ids, ",")
 }
 
 func parseJSONModels(output []byte) ([]ports.AgentModelInfo, error) {

@@ -103,7 +103,13 @@ func (p *Plugin) command(ctx context.Context, resume, workspace, prompt string, 
 	if workspace != "" {
 		cmd = append(cmd, "--cd", workspace)
 	}
-	agentbase.AppendModelFlag(&cmd, config, "--model")
+	// A generated provider's model also selects that provider; the active
+	// native provider would otherwise receive a model it does not serve.
+	if provider, slug, ok := SplitProviderModel(strings.TrimSpace(config.Model)); ok {
+		cmd = append(cmd, "-c", "model_provider="+tomlString(provider), "--model", slug)
+	} else {
+		agentbase.AppendModelFlag(&cmd, config, "--model")
+	}
 	if effort := strings.TrimSpace(config.Effort); effort != "" {
 		cmd = append(cmd, "-c", "model_reasoning_effort="+tomlString(effort))
 	}
