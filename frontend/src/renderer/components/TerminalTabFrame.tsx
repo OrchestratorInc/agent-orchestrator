@@ -32,7 +32,7 @@ type TerminalTabFrameProps = {
 
 /** Shows a tab's hover-only control on hover, keyboard focus or a drag; clickable only while shown. */
 export const tabHoverRevealClassName =
-	"pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100";
+	"pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible-in-group:pointer-events-auto focus-visible-in-group:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100";
 
 /**
  * Fades the end of a tab's title under its control. The control's 16px box sits
@@ -42,7 +42,7 @@ export const tabFadeClassName = "[mask-image:linear-gradient(to_left,transparent
 
 /** The same fade for a hover-only control, with its triggers. */
 export const tabHoverFadeClassName =
-	"group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)] group-has-[:focus-visible]:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)] in-data-dragging:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]";
+	"group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)] focus-visible-in-group:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)] in-data-dragging:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]";
 
 /** A tab's close button or menu, shared so they match. A pure ghost: hover only brightens the glyph, never a fill. */
 export const terminalTabActionClassName =
