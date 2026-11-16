@@ -1336,8 +1336,7 @@ describe("ArtifactsView", () => {
 		expect(mocks.post).toHaveBeenCalledWith("/api/v1/sessions", {
 			body: { kind: "worker", requestedOutput: "artifact", displayName: "New artifact", harness: "codex" },
 		});
-		expect(mocks.capture).not.toHaveBeenCalledWith("ao.renderer.artifact_create_requested", expect.anything());
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_succeeded", { scope: "standalone" });
+		expect(mocks.capture).toHaveBeenCalledWith("ao.artifacts.session_started", { scope: "standalone" });
 	});
 
 	it("starts a project artifact session with the project's worker agent", async () => {
@@ -1354,13 +1353,13 @@ describe("ArtifactsView", () => {
 		expect(mocks.post).toHaveBeenCalledWith("/api/v1/sessions", {
 			body: { kind: "worker", requestedOutput: "artifact", displayName: "New artifact", projectId: "px0", harness: "claude-code" },
 		});
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_succeeded", { scope: "project" });
+		expect(mocks.capture).toHaveBeenCalledWith("ao.artifacts.session_started", { scope: "project" });
 	});
 
 	it("shows the daemon error and stays on the screen when the start fails", async () => {
 		const user = userEvent.setup();
 		mocks.workspaces = withoutArtifacts;
-		mocks.post.mockResolvedValue({ error: { error: "conflict", code: "AGENT_NOT_READY", message: "Agent is not ready" } });
+		mocks.post.mockResolvedValue({ error: { error: "conflict", code: "AGENT_NOT_READY", message: "Agent is not ready" }, response: { status: 409 } });
 		renderView();
 
 		await user.click(screen.getByRole("button", { name: "Create artifact" }));
@@ -1368,7 +1367,7 @@ describe("ArtifactsView", () => {
 
 		await waitFor(() => expect(useUiStore.getState().globalToast).toMatchObject({ title: "Agent is not ready" }));
 		expect(mocks.navigate).not.toHaveBeenCalled();
-		expect(mocks.capture).toHaveBeenCalledWith("ao.renderer.artifact_create_failed", { scope: "standalone" });
+		expect(mocks.capture).toHaveBeenCalledWith("ao.artifacts.session_start_failed", { scope: "standalone", error_code: "AGENT_NOT_READY", http_status: 409 });
 		expect(screen.getByRole("button", { name: "Create artifact" })).toBeEnabled();
 	});
 
