@@ -155,11 +155,7 @@ func newSpawnCommand(ctx *commandContext) *cobra.Command {
 				opts.project = project.ID
 			}
 
-			harness, err := resolveSpawnHarness(opts.harness, opts.kind, project)
-			if err != nil {
-				return err
-			}
-			opts.harness = harness
+			opts.harness = resolveSpawnHarness(opts.harness, opts.kind, project)
 
 			if isScratchProject(project) {
 				if strings.TrimSpace(opts.branch) != "" {
@@ -458,24 +454,24 @@ func pathContains(root, child string) bool {
 	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func resolveSpawnHarness(explicit, kind string, project projectDetails) (string, error) {
+func resolveSpawnHarness(explicit, kind string, project projectDetails) string {
 	if harness := strings.TrimSpace(explicit); harness != "" {
-		return harness, nil
+		return harness
 	}
 	if project.Config != nil {
 		if kind == "orchestrator" {
 			if harness := strings.TrimSpace(project.Config.Orchestrator.Agent); harness != "" {
-				return harness, nil
+				return harness
 			}
 		} else {
 			if harness := strings.TrimSpace(project.Config.Worker.Agent); harness != "" {
-				return harness, nil
+				return harness
 			}
 		}
 	}
 	// The project names no agent for this role. The daemon gives the project
 	// its most preferred agent for every empty role and spawns on it.
-	return "", nil
+	return ""
 }
 
 func (c *commandContext) preflightSpawnAgentAuth(ctx context.Context, cmd *cobra.Command, agentID string) error {

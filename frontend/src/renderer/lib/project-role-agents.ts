@@ -22,6 +22,9 @@ export async function fillMissingProjectRoleAgents(queryClient: QueryClient, pro
 	if (current.error) throw apiErrorException(current.error);
 	if (current.data?.status !== "ok" || !current.data.project) return;
 	const project = current.data.project;
+	// A project whose folder can't be resolved has no config to fill; the start
+	// that follows reports that problem itself.
+	if ("resolveError" in project) return;
 	const config = structuredClone(project.config ?? {});
 	if (config.worker?.agent && config.orchestrator?.agent) return;
 	const defaults = await loadProjectAgentDefaults(queryClient, hostId);
