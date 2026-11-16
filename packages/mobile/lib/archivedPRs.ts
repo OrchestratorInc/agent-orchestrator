@@ -170,7 +170,10 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 		}
 	}, [configForHost, update]);
 
-	const plan = sources.map((source) => `${sourceKey(source)}=${source.archived}`).join("\t");
+	// Whether each machine can be reached is part of the plan: its config appears
+	// without the lookup itself changing, and a source skipped while its machine
+	// was offline must be read once it answers.
+	const plan = sources.map((source) => `${sourceKey(source)}=${source.archived}=${configForHost(source.hostId) ? "on" : "off"}`).join("\t");
 	const wanted = options.states.join(",");
 	useEffect(() => {
 		const current = new Set(sourcesRef.current.map(sourceKey));

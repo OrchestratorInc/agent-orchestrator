@@ -6,7 +6,8 @@ import type { HostedSession } from "./hostedRows";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const fixtures = vi.hoisted(() => ({
-	configForHost: (hostId: string) => (hostId === "offline" ? null : { host: `${hostId}.test`, httpPort: "3011", muxPort: "3011", secure: false, password: "pw" }),
+	offline: new Set(["offline"]),
+	configForHost: (hostId: string) => (fixtures.offline.has(hostId) ? null : { host: `${hostId}.test`, httpPort: "3011", muxPort: "3011", secure: false, password: "pw" }),
 	getArchivedPRSessions: vi.fn(),
 }));
 
@@ -116,7 +117,10 @@ describe("useArchivedPRs", () => {
 	const mac: ArchivedPRSource = { hostId: "mac", hostName: "Mac", archived: 12 };
 	const calls = () => fixtures.getArchivedPRSessions.mock.calls.map((call) => call[1] as { prState: string; cursor: string | null });
 
-	beforeEach(() => fixtures.getArchivedPRSessions.mockReset());
+	beforeEach(() => {
+		fixtures.getArchivedPRSessions.mockReset();
+		fixtures.offline = new Set(["offline"]);
+	});
 	afterEach(() => {
 		act(() => renderer?.unmount());
 		renderer = null;
@@ -189,5 +193,39 @@ describe("useArchivedPRs", () => {
 		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
 		await render({ sources: [], states: ["merged"], refreshToken: 0 });
 		expect(latest.sessions).toEqual([]);
+	});
+});
+
+describe("useArchivedPRs reconnects", () => {
+	let renderer: ReactTestRenderer | null = null;
+	let latest: ReturnType<typeof useArchivedPRs>;
+
+	function Probe(props: { sources: ArchivedPRSource[] }) {
+		latest = useArchivedPRs(props.sources, { states: ["merged"], refreshToken: 0 });
+		return null;
+	}
+
+	afterEach(() => {
+		act(() => renderer?.unmount());
+		renderer = null;
+		fixtures.offline = new Set(["offline"]);
+	});
+
+	// The machine's config appears without the lookup changing identity, and
+	// the archive count from its last poll is the same: only its being
+	// reachable changes, and that alone must read the source it skipped.
+	it("reads a source skipped while its machine was offline once the machine answers", async () => {
+		fixtures.getArchivedPRSessions.mockReset();
+		fixtures.getArchivedPRSessions.mockResolvedValue(page(["s1"], null, 1));
+		fixtures.offline = new Set(["laptop"]);
+		const sources: ArchivedPRSource[] = [{ hostId: "laptop", hostName: "Laptop", archived: 4 }];
+		await act(async () => { renderer = create(<Probe sources={sources} />); });
+		expect(fixtures.getArchivedPRSessions).not.toHaveBeenCalled();
+
+		fixtures.offline = new Set();
+		await act(async () => { renderer!.update(<Probe sources={[...sources]} />); });
+		await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s1"]);
 	});
 });
