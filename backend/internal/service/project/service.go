@@ -109,8 +109,9 @@ type Deps struct {
 	DefaultHarness domain.AgentHarness
 	// PreferredAgent ranks this machine's agents the way the desktop does
 	// (installed and signed in first, then AO's priority) and returns the top
-	// one, or "" when none can launch. A new project gets it for any role it
-	// names no agent for. Left nil, DefaultHarness is used.
+	// one, or "" when AO has found no launchable agent installed. A new project
+	// gets it for any role it names no agent for. Left nil or "",
+	// DefaultHarness is used.
 	PreferredAgent func(context.Context) domain.AgentHarness
 	Store          Store
 	Sessions       SessionTeardowner

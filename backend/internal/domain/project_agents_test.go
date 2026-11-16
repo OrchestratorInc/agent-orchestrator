@@ -66,6 +66,24 @@ func TestPreferredProjectAgent(t *testing.T) {
 	}
 }
 
+func TestPreferredInstalledProjectAgent(t *testing.T) {
+	unchecked := []AgentReadinessSnapshot{
+		readinessSnapshot("claude-code", AgentInstallationUnknown, AgentAuthenticationUnknown),
+		readinessSnapshot("codex", AgentInstallationUnknown, AgentAuthenticationUnknown),
+	}
+	if got := PreferredInstalledProjectAgent(unchecked); got != "" {
+		t.Fatalf("with no agent found installed, PreferredInstalledProjectAgent = %q, want none", got)
+	}
+	found := append(unchecked, readinessSnapshot("cursor", AgentInstallationInstalled, AgentAuthenticationUnknown))
+	if got := PreferredInstalledProjectAgent(found); got != HarnessCursor {
+		t.Fatalf("PreferredInstalledProjectAgent = %q, want the installed agent %q", got, HarnessCursor)
+	}
+	signedOut := []AgentReadinessSnapshot{readinessSnapshot("codex", AgentInstallationInstalled, AgentAuthenticationUnauthorized)}
+	if got := PreferredInstalledProjectAgent(signedOut); got != "" {
+		t.Fatalf("a signed-out agent can't launch, PreferredInstalledProjectAgent = %q", got)
+	}
+}
+
 func TestPreferredProjectAgentNeedsChecks(t *testing.T) {
 	unchecked := []AgentReadinessSnapshot{
 		readinessSnapshot("claude-code", AgentInstallationUnknown, AgentAuthenticationUnknown),

@@ -1771,9 +1771,10 @@ func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarnes
 }
 
 // preferredProjectAgent ranks this machine's agents the way the desktop's
-// loadProjectAgentDefaults does: from the cached readiness snapshot, running
-// display checks first when the agent AO prefers most is not confirmed yet or
-// no agent can launch. It returns "" when no agent can launch.
+// loadRankedProjectAgentDefaults does: from the cached readiness snapshot,
+// running display checks first when the agent AO prefers most is not confirmed
+// yet or no agent has been found installed. It returns "" when the checks have
+// found no launchable agent installed, so a guess is never saved.
 func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domain.AgentHarness {
 	return func(ctx context.Context) domain.AgentHarness {
 		if agents == nil {
@@ -1784,7 +1785,7 @@ func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domai
 			return ""
 		}
 		snapshot := readiness.Agents
-		if domain.PreferredProjectAgentNeedsChecks(snapshot) || domain.PreferredProjectAgent(snapshot) == "" {
+		if domain.PreferredProjectAgentNeedsChecks(snapshot) || domain.PreferredInstalledProjectAgent(snapshot) == "" {
 			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			checked, err := agents.EnsureReadiness(checkCtx, nil, domain.AgentReadinessPurposeDisplay)
 			cancel()
@@ -1796,7 +1797,7 @@ func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domai
 				snapshot = latest.Agents
 			}
 		}
-		return domain.PreferredProjectAgent(snapshot)
+		return domain.PreferredInstalledProjectAgent(snapshot)
 	}
 }
 

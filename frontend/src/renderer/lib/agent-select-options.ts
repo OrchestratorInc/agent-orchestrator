@@ -172,6 +172,15 @@ export function isLaunchableAgent(agent: AgentInfo): boolean {
 	return agent.installation.state !== "not_installed" && agent.authentication.state !== "unauthorized";
 }
 
+/**
+ * Whether AO has found a launchable agent installed. A pick saved to an
+ * existing project needs one: with every agent unchecked the ranking always
+ * starts with Claude Code, installed or not.
+ */
+export function hasInstalledAgent(agents: readonly AgentInfo[]): boolean {
+	return agents.some((agent) => isLaunchableAgent(agent) && agent.installation.state === "installed");
+}
+
 export function buildRankedAgentOptions({
 	agents,
 	priorityRank,

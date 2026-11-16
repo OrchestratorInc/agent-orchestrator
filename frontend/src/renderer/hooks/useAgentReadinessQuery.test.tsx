@@ -136,6 +136,16 @@ describe("project agent defaults", () => {
 		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
 	});
 
+	it("saves no guess to an existing project while no agent has been found installed", async () => {
+		const unchecked = { installation: "unknown", authentication: "unknown" } as const;
+		const response = { data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", unchecked)] }, error: undefined };
+		getMock.mockResolvedValue(response);
+		postMock.mockResolvedValue(response);
+
+		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toBeNull();
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
+	});
+
 	it("rechecks a cached snapshot with no launchable agent and ranks what the daemon finds", async () => {
 		getMock.mockResolvedValue({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined });
 

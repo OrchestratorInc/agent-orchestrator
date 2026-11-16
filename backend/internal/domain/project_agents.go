@@ -73,6 +73,20 @@ func PreferredProjectAgent(agents []AgentReadinessSnapshot) AgentHarness {
 	return AgentHarness(best.ID)
 }
 
+// PreferredInstalledProjectAgent is PreferredProjectAgent when AO has found at
+// least one launchable agent installed, and "" otherwise. A pick saved to a
+// project outlives the checks, so it needs that evidence: with every agent
+// unchecked it would always save Claude Code.
+func PreferredInstalledProjectAgent(agents []AgentReadinessSnapshot) AgentHarness {
+	for _, agent := range agents {
+		if agentLaunchable(agent) && agent.Installation.State == AgentInstallationInstalled {
+			// Installed agents rank above unchecked ones, so the top pick is one.
+			return PreferredProjectAgent(agents)
+		}
+	}
+	return ""
+}
+
 func preferAgent(a, b AgentReadinessSnapshot) bool {
 	if at, bt := agentReadinessTier(a), agentReadinessTier(b); at != bt {
 		return at > bt

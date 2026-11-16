@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
-import { defaultProjectAgents, preferredAgentList, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
+import { defaultProjectAgents, hasInstalledAgent, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -66,7 +66,7 @@ const PROJECT_AGENT_DEFAULTS_DEADLINE_MS = 5000;
 
 // The readiness snapshot ranked for a project's default agents: the one the
 // renderer already holds, or one fetch when it holds none. When it hasn't
-// confirmed the agent AO prefers most, or has no agent that can launch (the
+// confirmed the agent AO prefers most, or hasn't found any agent installed (the
 // cache never expires, so one may have been installed since), it waits for the
 // daemon's checks (joining any already running) first. Null when it could not
 // be loaded.
@@ -81,7 +81,7 @@ async function readProjectAgentSnapshot(queryClient: QueryClient, hostId?: strin
 	} catch {
 		return null;
 	}
-	if (preferredAgentNeedsChecks(agents) || preferredAgentList(agents).length === 0) {
+	if (preferredAgentNeedsChecks(agents) || !hasInstalledAgent(agents)) {
 		try {
 			const checked = await ensureAgentReadiness([], "display", hostId);
 			cacheAgentReadiness(queryClient, checked, hostId);
@@ -126,12 +126,13 @@ export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?
 
 /**
  * Default agents ranked from this machine's (or host's) readiness, or null when
- * readiness could not be loaded or no agent can launch. Use it when the pick is
- * saved to an existing project, so an unranked fallback is never written.
+ * readiness could not be loaded or AO has found no launchable agent installed.
+ * Use it when the pick is saved to an existing project, so a guess (an
+ * unchecked agent or the fallback) is never written.
  */
 export async function loadRankedProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults | null> {
 	const agents = await readProjectAgentSnapshotWithDeadline(queryClient, hostId);
-	if (!agents || preferredAgentList(agents).length === 0) return null;
+	if (!agents || !hasInstalledAgent(agents)) return null;
 	return defaultProjectAgents(agents);
 }
 
