@@ -1764,7 +1764,10 @@ func (s *Store) SettleTurnWithFailureCode(
 		return fmt.Errorf("settle running activities for turn %s: %w", turn.ID, err)
 	}
 	if turn.HandledByReviewID.Valid {
-		if err := q.FailUnsubmittedReviewBatchForChatTurn(ctx, turn.ID); err != nil {
+		if err := q.FailUnsubmittedReviewBatchForChatTurn(ctx, gen.FailUnsubmittedReviewBatchForChatTurnParams{
+			EndedAt: sql.NullTime{Time: now, Valid: true},
+			TurnID:  turn.ID,
+		}); err != nil {
 			return fmt.Errorf("settle unsubmitted review batch for turn %s: %w", turn.ID, err)
 		}
 	}
