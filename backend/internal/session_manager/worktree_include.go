@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -23,7 +24,7 @@ import (
 // gitignored, so tracked files and ordinary untracked work are never
 // duplicated. Existing workspace files and anything but regular files are
 // left alone.
-func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string) error {
+func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string, workspace ports.Workspace) error {
 	includeFile := filepath.Join(projectPath, ".worktreeinclude")
 	if _, err := os.Lstat(includeFile); errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -46,6 +47,9 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string)
 		return err
 	}
 	defer func() { _ = target.Close() }()
+	type includedCopy struct{ rel, temporary string }
+	var copies []includedCopy
+	var gitPaths []string
 	for _, rel := range strings.Split(string(ignored), "\x00") {
 		if rel == "" {
 			continue
@@ -59,8 +63,44 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string)
 		if _, err := os.Lstat(filepath.Join(workspacePath, clean)); err == nil {
 			continue
 		}
-		if err := copyNewRegularFile(source, target, clean); err != nil {
-			return fmt.Errorf(".worktreeinclude %q: %w", rel, err)
+		info, err := source.Lstat(clean)
+		if err != nil {
+			return fmt.Errorf(".worktreeinclude %q: %w", clean, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		tmp := ".ao-include-" + rand.Text()
+		copies = append(copies, includedCopy{clean, tmp})
+		gitPaths = append(gitPaths, filepath.ToSlash(clean), filepath.ToSlash(filepath.Join(filepath.Dir(clean), tmp)))
+	}
+	if len(copies) == 0 {
+		return nil
+	}
+	if workspace == nil {
+		return errors.New(".worktreeinclude: workspace file protection is unavailable")
+	}
+	// A stopped daemon cannot remove its temporary copies. Keep them out of
+	// Git even when the worktree is resumed without provisioning again.
+	if err := workspace.AddExclude(ctx, ports.WorkspaceInfo{Path: workspacePath}, ".ao-include-*"); err != nil {
+		return fmt.Errorf(".worktreeinclude: protect temporary copies: %w", err)
+	}
+	protected, err := worktreeIncludeGit(ctx, workspacePath, []byte(strings.Join(gitPaths, "\x00")+"\x00"), "check-ignore", "-z", "--stdin")
+	if err != nil {
+		return err
+	}
+	ignoredPaths := make(map[string]bool)
+	for _, path := range strings.Split(string(protected), "\x00") {
+		ignoredPaths[path] = true
+	}
+	for _, path := range gitPaths {
+		if !ignoredPaths[path] {
+			return fmt.Errorf(".worktreeinclude %q: the session does not ignore this path; add it to the branch's .gitignore, then try again", path)
+		}
+	}
+	for _, copy := range copies {
+		if err := copyNewRegularFile(source, target, copy.rel, copy.temporary); err != nil {
+			return fmt.Errorf(".worktreeinclude %q: %w", copy.rel, err)
 		}
 	}
 	return nil
@@ -89,7 +129,7 @@ func worktreeIncludeGit(ctx context.Context, projectPath string, stdin []byte, a
 // copyNewRegularFile copies source to target with source's permissions. It
 // skips a source that is not a regular file and a target that already exists,
 // including a link applySymlinks placed there.
-func copyNewRegularFile(source, target *os.Root, rel string) error {
+func copyNewRegularFile(source, target *os.Root, rel, temporary string) error {
 	info, err := source.Lstat(rel)
 	if err != nil {
 		return err
@@ -102,10 +142,10 @@ func copyNewRegularFile(source, target *os.Root, rel string) error {
 		return err
 	}
 	defer func() { _ = src.Close() }()
-	return publishWorktreeIncludeFile(target, rel, src, info.Mode().Perm())
+	return publishWorktreeIncludeFile(target, rel, src, info.Mode().Perm(), temporary)
 }
 
-func publishWorktreeIncludeFile(target *os.Root, rel string, src io.Reader, mode fs.FileMode) error {
+func publishWorktreeIncludeFile(target *os.Root, rel string, src io.Reader, mode fs.FileMode, tmp string) error {
 	if _, err := target.Lstat(rel); err == nil {
 		return nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -119,7 +159,6 @@ func publishWorktreeIncludeFile(target *os.Root, rel string, src io.Reader, mode
 		return err
 	}
 	defer func() { _ = dir.Close() }()
-	tmp := ".ao-include-" + rand.Text()
 	dst, err := dir.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err

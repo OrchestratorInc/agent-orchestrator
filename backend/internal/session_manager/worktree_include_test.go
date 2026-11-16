@@ -33,11 +33,11 @@ func TestCopyWorktreeInclude(t *testing.T) {
 		}
 	}
 
-	workspace := t.TempDir()
+	workspace, adapter := newIncludedWorktree(t, project)
 	writeTestFile(t, filepath.Join(workspace, "README.md"), "hello\n")
 	writeTestFile(t, filepath.Join(workspace, "a.local"), "keep")
 
-	if err := copyWorktreeInclude(context.Background(), project, workspace); err != nil {
+	if err := copyWorktreeInclude(context.Background(), project, workspace, adapter); err != nil {
 		t.Fatalf("copyWorktreeInclude: %v", err)
 	}
 
@@ -71,7 +71,7 @@ func TestCopyWorktreeInclude(t *testing.T) {
 
 func TestCopyWorktreeIncludeWithoutIncludeFileIsNoop(t *testing.T) {
 	// Not a Git repository: without a .worktreeinclude, Git is never run.
-	if err := copyWorktreeInclude(context.Background(), t.TempDir(), t.TempDir()); err != nil {
+	if err := copyWorktreeInclude(context.Background(), t.TempDir(), t.TempDir(), nil); err != nil {
 		t.Fatalf("copyWorktreeInclude: %v", err)
 	}
 }

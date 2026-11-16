@@ -20,12 +20,11 @@ func TestProvisionWorkspaceWorktreeIncludeBeforeSetup(t *testing.T) {
 	writeTestFile(t, filepath.Join(project, ".env"), "local configuration\n")
 	runManagerGit(t, project, "add", ".gitignore", ".worktreeinclude")
 	runManagerGit(t, project, "commit", "-m", "include local configuration")
-	workspace := filepath.Join(t.TempDir(), "workspace")
-	runManagerGit(t, project, "worktree", "add", "--detach", workspace, "HEAD")
+	workspace, adapter := newIncludedWorktree(t, project)
 	record := domain.ProjectRecord{Path: project, Config: domain.ProjectConfig{
 		PostCreate: []string{"test -f .env && test ! -L .env && cp .env setup-read"},
 	}}
-	if err := (&Manager{}).provisionWorkspace(context.Background(), record, workspace); err != nil {
+	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), record, workspace); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(workspace, "setup-read")); err != nil || string(got) != "local configuration\n" {

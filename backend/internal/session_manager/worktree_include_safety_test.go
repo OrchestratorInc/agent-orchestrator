@@ -17,13 +17,16 @@ func TestCopyWorktreeIncludeRejectsEscapingDestination(t *testing.T) {
 	}
 	project := newManagerGitRepo(t)
 	writeTestFile(t, filepath.Join(project, ".gitignore"), "config/\n")
+	runManagerGit(t, project, "add", ".gitignore")
+	runManagerGit(t, project, "commit", "-m", "ignore private configuration")
 	writeTestFile(t, filepath.Join(project, ".worktreeinclude"), "config/\n")
 	writeTestFile(t, filepath.Join(project, "config", "secrets.json"), "private configuration")
-	workspace, outside := t.TempDir(), t.TempDir()
+	workspace, adapter := newIncludedWorktree(t, project)
+	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(workspace, "config")); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyWorktreeInclude(context.Background(), project, workspace); err == nil {
+	if err := copyWorktreeInclude(context.Background(), project, workspace, adapter); err == nil {
 		t.Error("copy through an escaping directory symlink succeeded")
 	}
 	if _, err := os.Lstat(filepath.Join(outside, "secrets.json")); !os.IsNotExist(err) {
@@ -58,7 +61,7 @@ func TestWorktreeIncludeCopyPublishesCompleteFiles(t *testing.T) {
 				}
 				return copy(p, "complete"), io.EOF
 			})
-			err = publishWorktreeIncludeFile(target, ".env", src, 0o600)
+			err = publishWorktreeIncludeFile(target, ".env", src, 0o600, ".ao-include-test")
 			if fail {
 				if !errors.Is(err, readErr) {
 					t.Fatalf("copy error = %v, want source error", err)
@@ -67,7 +70,7 @@ func TestWorktreeIncludeCopyPublishesCompleteFiles(t *testing.T) {
 					t.Fatalf("failed copy left files: %v, %v", entries, err)
 				}
 				// A retry must copy the full file rather than accept a partial one.
-				err = publishWorktreeIncludeFile(target, ".env", strings.NewReader("complete"), 0o600)
+				err = publishWorktreeIncludeFile(target, ".env", strings.NewReader("complete"), 0o600, ".ao-include-test")
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -94,7 +97,7 @@ func TestWorktreeIncludeCopyKeepsFileCreatedDuringCopy(t *testing.T) {
 		}
 		return copy(p, "source"), io.EOF
 	})
-	if err := publishWorktreeIncludeFile(target, ".env", src, 0o600); err != nil {
+	if err := publishWorktreeIncludeFile(target, ".env", src, 0o600, ".ao-include-test"); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := target.ReadFile(".env"); err != nil || string(got) != "session edit" {
@@ -113,7 +116,7 @@ func TestCopyNewRegularFileReportsSourceError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = target.Close() }()
-	if err := copyNewRegularFile(source, target, "missing"); !os.IsNotExist(err) {
+	if err := copyNewRegularFile(source, target, "missing", ".ao-include-test"); !os.IsNotExist(err) {
 		t.Fatalf("source error = %v, want missing file", err)
 	}
 }
