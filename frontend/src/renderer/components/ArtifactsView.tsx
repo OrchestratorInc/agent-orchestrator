@@ -11,17 +11,23 @@ import { useTranslation } from "react-i18next";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
 import { deleteSessionArtifactFile } from "../hooks/useSessionWorkspaceFiles";
-import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey, useKeptArtifacts } from "../hooks/useKeptArtifacts";
+import { useStartSessionFromArtifact } from "../hooks/useStartSessionFromArtifact";
 import {
 	ARTIFACT_SHARINGS,
 	ARTIFACT_TYPES,
 	artifactChangeError,
+	artifactContext,
 	artifactCount,
 	artifactKey,
 	artifactLocation,
 	canChangeSessionArtifacts,
 	filterArtifactGroups,
 	groupArtifactsByProject,
+	hostArtifactLocation,
+	withHostShareLinks,
+	withKeptArtifacts,
 	withShareAccess,
 	type ArtifactGroup,
 	type ArtifactLocation,
@@ -30,13 +36,17 @@ import {
 	type ArtifactType,
 } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
+import { LOCAL_HOST } from "../lib/hosts";
+import { useShellMaybe } from "../lib/shell-context";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore, type ArtifactViewMode } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
-import { useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
+import { useArtifactShareFile, useHostShareLinks, useReconciledShareLinks, useShareAccess } from "./ShareArtifactPopover";
+import { combinePublishedChecks, deleteTargets, prepareUnpublish, publishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -92,13 +102,23 @@ export function ArtifactsView() {
 	const cloudArtifacts = useCloudOffering().artifacts;
 	const workspaceQuery = useWorkspaceQuery({ includeCloud: cloudArtifacts });
 	const workspaces = workspaceQuery.data;
+	// Every saved remote host, so an offline host's last list still shows.
+	const remoteHosts = useShellMaybe()?.remoteHosts;
+	const remoteHostIds = useMemo(() => remoteHosts?.map((host) => host.hostId), [remoteHosts]);
+	const remote = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
+	const remoteWorkspaces = remote.data;
+	const hostLabels = useMemo(() => new Map((remoteHosts ?? []).map((host) => [host.hostId, host.label])), [remoteHosts]);
 	const orchestratorTitle = t("shell.orchestrator");
 	// Published marks and the Sharing filter read each file's shareUrl; bring
 	// the publish records behind it up to date first.
 	const shareAccess = useReconciledShareLinks();
+	const hostShareLinks = useHostShareLinks();
+	// Artifacts kept after their session was deleted or their project removed.
+	const kept = useKeptArtifacts().data;
+	const noProjectName = t("artifacts.noProject");
 	const groups = useMemo(
-		() => withShareAccess(groupArtifactsByProject(workspaces ?? [], orchestratorTitle), shareAccess),
-		[workspaces, orchestratorTitle, shareAccess],
+		() => withShareAccess(withHostShareLinks(withKeptArtifacts(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), kept, workspaces ?? [], noProjectName), hostShareLinks), shareAccess),
+		[workspaces, remoteWorkspaces, orchestratorTitle, kept, noProjectName, hostShareLinks, shareAccess],
 	);
 	const [query, setQuery] = useState("");
 	// Each filter keeps several values at once; an empty list shows every artifact.
@@ -131,12 +151,12 @@ export function ArtifactsView() {
 		return visibleGroups
 			.flatMap((group) => group.rows.map((row) => ({
 				row,
-				projectName: group.isScratchpad ? t("standalone.workspaceName") : group.name,
+				projectName: withHostLabel(group.isScratchpad ? t("standalone.workspaceName") : group.name, group.hostId && hostLabels.get(group.hostId)),
 				pinned: pinned.has(artifactKey(row)),
 			})))
 			.sort((left, right) => Number(right.pinned) - Number(left.pinned)
 				|| (Date.parse(right.row.updatedAt) || 0) - (Date.parse(left.row.updatedAt) || 0));
-	}, [visibleGroups, pinnedArtifactIds, t]);
+	}, [visibleGroups, pinnedArtifactIds, hostLabels, t]);
 	// Only the cards on screen and near it are built; a long list would otherwise build every card at once.
 	const grid = useVirtualGridRows(cards.length, scrollElement);
 	// Only the first few pages and PDFs render live; the rest show their thumbnail.
@@ -144,7 +164,8 @@ export function ArtifactsView() {
 		const live = new Set<string>();
 		for (const { row } of cards) {
 			if (live.size >= MAX_LIVE_PREVIEWS) break;
-			const page = row.kind === "html" && (row.cloud || (row.inlineUrl && row.rawUrl));
+			const remote = row.hostId && row.hostId !== LOCAL_HOST;
+			const page = row.kind === "html" && (row.cloud || (row.rawUrl && (row.inlineUrl || remote)));
 			const pdf = /\.pdf$/i.test(row.path) && (row.cloud || row.rawUrl);
 			if (page || pdf) live.add(artifactKey(row));
 		}
@@ -161,10 +182,16 @@ export function ArtifactsView() {
 	const locationOptions: { value: ArtifactLocation | undefined; label: string }[] = [
 		{ value: undefined, label: t("artifacts.locationAll") },
 		{ value: "local", label: t("artifacts.locationLocal") },
+		// One per saved remote host, under the name the host is listed by.
+		...(remoteHosts ?? []).map((host) => ({ value: hostArtifactLocation(host.hostId), label: host.label })),
 		// Cloud artifacts show only where the control plane keeps them.
 		...(cloudArtifacts ? [{ value: "cloud" as const, label: t("artifacts.locationCloud") }] : []),
 	];
-	const projectName = (group: ArtifactGroup) => (group.isScratchpad ? scratchpadName : group.name);
+	// Machines whose list did not load, among those shown: said so, with a retry, instead of
+	// leaving their artifacts silently missing.
+	const failedHosts = (remoteHosts ?? []).filter((host) => remote.failedHostIds.includes(host.hostId)
+		&& (location === undefined || location === hostArtifactLocation(host.hostId)));
+	const projectName = (group: ArtifactGroup) => withHostLabel(group.isScratchpad ? scratchpadName : group.name, group.hostId && hostLabels.get(group.hostId));
 	const selectedProjects = groups.filter((group) => projectIds.includes(group.id));
 	const filtering = projectIds.length > 0 || types.length > 0 || sharings.length > 0;
 	const queryClient = useQueryClient();
@@ -215,18 +242,34 @@ export function ArtifactsView() {
 	};
 	// Each file is deleted on its own; the ones that fail stay selected so
 	// the person can retry them.
+	// A published file's link is looked up before its delete and unpublished
+	// once that file is gone; a file that failed to delete keeps its link.
+	const { baseUrl: shareBaseUrl } = useShareAccess();
+	const selectedPublished = usePublishedLinkCount(
+		shareBaseUrl,
+		combinePublishedChecks(selectedRows.map((row) => publishedCheck(rowSession(row), [row]))),
+		confirmingBulkDelete,
+	);
 	const bulkDelete = useMutation({
 		mutationFn: async (rows: readonly ArtifactRow[]) => {
+			const links = await Promise.all(rows.map(async (row) => prepareUnpublish(shareBaseUrl, await deleteTargets(shareBaseUrl, rowSession(row), [row]), {
+				deleting: [{ hostId: row.hostId, sessionId: row.sessionId, path: row.path }],
+			})));
 			const results = await Promise.allSettled(rows.map((row) => row.cloud
 				? cloudClient.deleteSessionArtifact(row.cloud.orgId, row.sessionId, row.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
-				: deleteSessionArtifactFile({ path: row.path, sessionId: row.sessionId })));
+				: deleteSessionArtifactFile({ path: row.path, sessionId: row.sessionId, hostId: row.hostId })));
+			const linksLive = await Promise.all(links.map((link, index) => results[index]?.status === "fulfilled" ? link.unpublish() : 0));
+			warnLinksStillLive(t, linksLive.reduce((sum, count) => sum + count, 0));
 			const deleted = rows.filter((_, index) => results[index]?.status === "fulfilled").map(artifactKey);
 			const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
 			const { unpinArtifact } = useArtifactsViewStore.getState();
 			for (const id of deleted) unpinArtifact(id);
 			setSelectedIds((current) => new Set([...current].filter((id) => !deleted.includes(id))));
+			const hostIds = new Set(rows.flatMap((row) => row.hostId && !row.cloud ? [row.hostId] : []));
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }),
+				...(rows.some((row) => row.kept) ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
+				...[...hostIds].map((hostId) => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) })),
 				...(rows.some((row) => row.cloud) ? [queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey })] : []),
 			]);
 			if (failures.length > 0) {
@@ -386,6 +429,12 @@ export function ArtifactsView() {
 						)}
 					</div>
 				</div>
+				{failedHosts.map((host) => (
+					<div key={host.hostId} role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
+						<span className="min-w-0 truncate">{t("artifacts.hostLoadFailed", { host: host.label })}</span>
+						<Button type="button" size="sm" variant="quiet" onClick={() => void remote.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
+					</div>
+				))}
 				{hasArtifacts && filtering ? (
 					<div className="mt-2 flex flex-wrap items-center gap-1.5">
 						{([
@@ -417,7 +466,7 @@ export function ArtifactsView() {
 								<p role="alert" className="px-3 py-8 text-center text-sm text-destructive">{workspaceQuery.error.message}</p>
 							) : !hasArtifacts ? (
 								<EmptyArtifacts workspaces={workspaces ?? []} />
-							) : visibleGroups.length === 0 ? (
+							) : visibleGroups.length === 0 && location !== undefined && failedHosts.length > 0 ? null : visibleGroups.length === 0 ? (
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("artifacts.noMatches")}</p>
 									<Button variant="quiet" size="sm" onClick={clearFilters}>
@@ -444,7 +493,9 @@ export function ArtifactsView() {
 			<ConfirmDialog
 				busy={bulkDelete.isPending}
 				confirmLabel={t("artifacts.bulkDeleteConfirm", { count: selectedRows.length })}
-				description={t("artifacts.bulkDeleteDescription")}
+				description={selectedPublished > 0
+					? `${t("artifacts.bulkDeleteDescription")} ${t("artifacts.bulkDeletePublished", { count: selectedPublished })}`
+					: t("artifacts.bulkDeleteDescription")}
 				destructive
 				error={bulkDelete.error?.message ?? null}
 				onConfirm={() => bulkDelete.mutate(selectedRows)}
@@ -461,6 +512,11 @@ export function ArtifactsView() {
 			</ConfirmDialog>
 		</div>
 	);
+}
+
+/** A remote host's project name with the host's, so equal names on two machines tell apart. */
+function withHostLabel(name: string, hostLabel: string | false | undefined): string {
+	return hostLabel ? `${name} · ${hostLabel}` : name;
 }
 
 /** `values` with `value` added, or removed when it is already there. */
@@ -493,16 +549,22 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 	const share = useArtifactShareFile(row);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
+	const startSession = useStartSessionFromArtifact();
 	const KindIcon = artifactFileIcon(row);
 	const selectionDescriptionId = useId();
-	const context = `${projectName} · ${row.sessionTitle}`;
+	const context = artifactContext(t, row, projectName);
 
 	const open = () => {
 		onPreview(row, projectName);
 	};
+	// A kept file has no session to open; a new one can start from it.
 	const openInSession = () => {
-		requestWorkspaceFileOpen(row.sessionId, row.path, undefined, "artifact");
-		navigateToSession(row.projectId, row.sessionId);
+		if (row.kept) {
+			void startSession(row);
+			return;
+		}
+		requestWorkspaceFileOpen(row.sessionId, row.path, row.hostId, "artifact");
+		navigateToSession(row.projectId, row.sessionId, row.hostId ?? LOCAL_HOST);
 	};
 
 	if (view === "list") {
@@ -570,10 +632,12 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 					{selection ? null : <div className="relative z-[2] flex shrink-0 items-center gap-1 @max-lg:[&>button]:hidden">
 						{row.bundle ? null : <DeferredArtifactActionsMenu
 							artifact={row}
+							hostId={row.hostId}
 							session={{ id: row.sessionId, cloud: row.cloud }}
 							iconOnly
 							share={share}
 							onOpenInSession={openInSession}
+							startsSession={Boolean(row.kept)}
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
@@ -594,10 +658,12 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 			actions={selection || row.bundle ? null : (
 				<DeferredArtifactActionsMenu
 					artifact={row}
+					hostId={row.hostId}
 					session={{ id: row.sessionId, cloud: row.cloud }}
 					iconOnly
 					share={share}
 					onOpenInSession={openInSession}
+					startsSession={Boolean(row.kept)}
 					pinned={pinned}
 					onTogglePin={() => togglePinnedArtifact(id)}
 					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"
@@ -743,4 +809,9 @@ function CreateArtifactMenu({
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
+}
+
+/** The session of a row, as unpublishing names it. */
+function rowSession(row: ArtifactRow) {
+	return { id: row.sessionId, cloud: row.cloud, hostId: row.hostId, workspaceId: row.projectId };
 }

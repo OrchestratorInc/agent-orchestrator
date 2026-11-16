@@ -37,6 +37,7 @@ import {
 	CircleDashed as MynaCircleDashed,
 	Clock3 as MynaClock3,
 	ClockCircle as MynaClockCircle,
+	CloudSolid as MynaCloudSolid,
 	Cloudy as MynaCloudy,
 	Code as MynaCode,
 	Coffee as MynaCoffee,
@@ -177,6 +178,7 @@ import {
 	GitPullRequestDraft as LucideGitPullRequestDraft,
 	Hammer as LucideHammer,
 	History as LucideHistory,
+	Hourglass as LucideHourglass,
 	Import as LucideImport,
 	Laptop as LucideLaptop,
 	ListChevronsDownUp as LucideListChevronsDownUp,
@@ -319,6 +321,8 @@ export const Clock = fromMyna(MynaClockCircle, "clock");
 export const Clock3 = fromMyna(MynaClock3, "clock-3");
 // Myna's plain Cloud is an open arc that reads as clipped; Cloudy is closed.
 export const Cloud = fromMyna(MynaCloudy, "cloud", "full");
+// Filled single cloud for the small Cloud mark on rows; solid glyphs ignore stroke.
+export const CloudFilled = fromMyna(MynaCloudSolid, "cloud-filled", "full");
 export const Code2 = fromMyna(MynaCode, "code-xml");
 export const Coffee = fromMyna(MynaCoffee, "coffee");
 export const Columns2 = fromMyna(MynaColumns, "columns-2");
@@ -375,6 +379,7 @@ export const Heading4 = fromMyna(MynaHeading4, "heading-4");
 export const Heading5 = fromMyna(MynaHeading5, "heading-5");
 export const Hammer = fromLucide(LucideHammer, "hammer");
 export const History = fromLucide(LucideHistory, "history");
+export const Hourglass = fromLucide(LucideHourglass, "hourglass");
 export const House = fromMyna(MynaHome, "house");
 export const Image = fromMyna(MynaImage, "image");
 export const Import = fromLucide(LucideImport, "import");

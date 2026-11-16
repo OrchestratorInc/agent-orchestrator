@@ -159,6 +159,8 @@ const TRIGGER_CLASS = cn(
 );
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
 const DIVIDER = "mt-1 border-t border-border pt-1";
+// Shared with the review controls' reviewer picker, which is laid out like this menu.
+export { TRIGGER_CLASS as CHAT_PICKER_TRIGGER_CLASS, SUB_CLASS as CHAT_PICKER_SUB_CLASS, DIVIDER as CHAT_PICKER_DIVIDER };
 
 /** A variant-per-setting catalog as one model per family, with effort, thinking and speed as controls. */
 function variantSource(
@@ -832,7 +834,7 @@ export function DismissButton({ label, onClick, disabled, className }: { label: 
 
 /** An error from a switch, shown as a strip on top of the chat box. */
 export function ComposerErrorNotice(
-	{ title, message, onDismiss, dismissLabel }: { title: string; message: string; onDismiss: () => void; dismissLabel?: string },
+	{ title, message, action, onDismiss, dismissLabel }: { title: string; message: ReactNode; action?: ReactNode; onDismiss: () => void; dismissLabel?: string },
 ) {
 	const { t } = useTranslation();
 	return (
@@ -845,6 +847,7 @@ export function ComposerErrorNotice(
 			<div className="min-w-0 flex-1">
 				<p className="font-medium text-foreground">{title}</p>
 				<p className="break-words text-muted-foreground">{message}</p>
+				{action}
 			</div>
 			<DismissButton label={dismissLabel ?? t("agentSwitch.dismiss")} onClick={onDismiss} />
 		</div>

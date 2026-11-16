@@ -88,6 +88,10 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao project rm <id>`                | `DELETE /api/v1/projects/{id}`                 |
 | `ao agent ls`                       | `POST /api/v1/agents/readiness/ensure` (`display`) |
 | `ao agent ls --refresh`             | `POST /api/v1/agents/refresh` (forced checks) |
+| `ao account ls`                     | `GET /api/v1/agents/accounts`                  |
+| `ao account default <account-id>`   | `POST /api/v1/agents/accounts/{id}/default`    |
+| `ao account show [<session-id>]`    | `GET /api/v1/agents/accounts/sessions/{id}`    |
+| `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
@@ -129,6 +133,18 @@ branch, issue, or PR-claim options.
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
 explicitly with `ao session claim-pr <session-id> <pr-ref>`. The explicit form
 remains supported for backward compatibility and cross-session coordination.
+
+To review someone else's PR, claim it as a review:
+`ao session claim-pr <pr-ref> --no-takeover --review`, or
+`ao spawn --claim-pr <pr-ref> --no-takeover --review`. Before the claim, the CLI
+turns off the session's automatic CI and review-comment fixing
+(`PATCH /api/v1/sessions/{id}/auto-inject-ci` and `.../auto-inject-review`) and
+its native auto-review (`PUT /api/v1/sessions/{id}/auto-review`), so the session
+gets none of the PR's CI failures, merge conflicts, or review comments. These
+switches cover every PR the session owns; if the claim is refused, the CLI puts
+them back. `--review` implies `--no-takeover`, so it never takes the PR from a
+session that is working on it. To take the PR over, run `ao session claim-pr <pr-ref> --review=false`,
+which turns CI and review-comment fixing back on.
 
 Both `ao session claim-pr` and `ao spawn --claim-pr` claim ownership metadata
 only. The claim step does not check out a branch or change HEAD, so

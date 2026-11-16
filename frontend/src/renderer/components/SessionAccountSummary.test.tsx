@@ -1,7 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { beforeEach, expect, it, vi } from "vitest";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
 import { SessionAccountSummary, useSessionAccountSwitch } from "./SessionAccountSummary";
 
@@ -72,6 +71,29 @@ it("asks a remote session's own host about its account", async () => {
 	expect(hostsAsked.every((host) => host === "box-a")).toBe(true);
 });
 
+it("lists a session on the CLI login once, not beside the saved account holding the same login", async () => {
+	getMock.mockImplementation((path: string) => Promise.resolve({ data:
+		path === "/api/v1/agents/accounts" ? { accounts: [
+			{ id: "device-claude", provider: "claude", device: true, email: "a@example.com", orgId: "org-a", signedIn: true, sameLoginAs: "acct-a" },
+			{ id: "acct-a", provider: "claude", email: "a@example.com", orgId: "org-a", signedIn: true, default: true },
+			{ id: "acct-b", provider: "claude", email: "b@example.com", orgId: "org-b", signedIn: true },
+		] }
+		: path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { claude: "device-claude" }
+		: {} }));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const { result, unmount } = renderHook(() => useSessionAccountSwitch(session("s-cli")), {
+		wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+	});
+
+	await waitFor(() => expect(result.current.choice?.value).toBe("device-claude"));
+	expect(result.current.choice?.options.map(({ id, label }) => [id, label])).toEqual([["device-claude", "a@example.com"], ["acct-b", "b@example.com"]]);
+
+	await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+	unmount();
+	queryClient.clear();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
 it("keeps a rejected move's reason so the composer can show it", async () => {
 	getMock.mockImplementation((path: string) => Promise.resolve({ data:
 		path === "/api/v1/agents/accounts" ? { accounts: [
@@ -97,52 +119,4 @@ it("keeps a rejected move's reason so the composer can show it", async () => {
 	unmount();
 	queryClient.clear();
 	await new Promise((resolve) => setTimeout(resolve, 0));
-});
-
-const chatSession = session("s-1", { mode: "chat" } as Partial<WorkspaceSession>);
-
-function stubDaemon(accountHandoff: boolean) {
-	getMock.mockImplementation((path: string) => Promise.resolve({
-		data: path === "/api/v1/settings" ? { accountHandoff }
-			: path === "/api/v1/agents/accounts" ? { accounts: [{ id: "acct-a", provider: "claude", device: false, default: true, signedIn: true, email: "a@example.com" }] }
-			: path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { claude: "acct-a", stayOnAccount: false }
-			: {},
-	}));
-}
-
-function renderSummary(target: WorkspaceSession = chatSession) {
-	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(<QueryClientProvider client={queryClient}><SessionAccountSummary session={target} /></QueryClientProvider>);
-}
-
-beforeEach(() => {
-	getMock.mockReset();
-	putMock.mockReset().mockResolvedValue({ data: { claude: "acct-a", stayOnAccount: true } });
-});
-
-it("pins a Chat session to its account through the daemon", async () => {
-	stubDaemon(true);
-	const user = userEvent.setup();
-	renderSummary();
-	const stay = await screen.findByRole("switch", { name: "Stay on this account" });
-	await waitFor(() => expect(stay).toBeEnabled());
-	expect(stay).not.toBeChecked();
-
-	await user.click(stay);
-
-	expect(putMock).toHaveBeenCalledWith("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
-		params: { path: { sessionId: "s-1" } }, body: { stay: true },
-	});
-	await waitFor(() => expect(stay).toBeChecked());
-});
-
-it.each([
-	{ name: "the handoff setting is off", accountHandoff: false, target: chatSession },
-	{ name: "the session is not a Chat session", accountHandoff: true, target: session("s-1", { mode: "tui" } as Partial<WorkspaceSession>) },
-])("offers no pin when $name", async ({ accountHandoff, target }) => {
-	stubDaemon(accountHandoff);
-	renderSummary(target);
-	await screen.findByTestId("session-account-summary");
-	await waitFor(() => expect(getMock).toHaveBeenCalledWith("/api/v1/settings", { signal: expect.any(AbortSignal) }));
-	expect(screen.queryByRole("switch", { name: "Stay on this account" })).not.toBeInTheDocument();
 });

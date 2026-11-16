@@ -58,6 +58,19 @@ describe("locale-store", () => {
 		expect(getUiSettings).toHaveBeenCalledTimes(1);
 	});
 
+	it("loads persisted Turkish and can switch back to it without restarting", async () => {
+		getUiSettings.mockResolvedValue({ locale: "tr" });
+		await useLocaleStore.getState().load();
+		expect(document.documentElement.lang).toBe("tr");
+		expect(document.documentElement.dir).toBe("ltr");
+		expect(appI18n.t("settings.general")).toBe("Genel");
+		await useLocaleStore.getState().setLocale("en");
+		await useLocaleStore.getState().setLocale("tr");
+		expect(setUiSettings).toHaveBeenLastCalledWith({ locale: "tr" });
+		expect(useLocaleStore.getState().locale).toBe("tr");
+		expect(appI18n.t("settings.title")).toBe("Ayarlar");
+	});
+
 	it("shares one persisted read across concurrent startup callers", async () => {
 		let resolveGet: ((settings: { locale: "zh-CN" }) => void) | undefined;
 		getUiSettings.mockReturnValue(

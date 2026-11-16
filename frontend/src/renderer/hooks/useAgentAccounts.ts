@@ -1,5 +1,6 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -69,10 +70,16 @@ export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLogin
 	return accounts.filter((account) => account.id === keepId || !twinOf(account));
 }
 
+export function oneRowPerLogin<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: T[], keepId?: string): T[] {
+	const keptTwin = accounts.find((account) => account.id === keepId)?.sameLoginAs;
+	return withoutSameLogins(accounts, keepId).filter((account) => account.id !== keptTwin);
+}
+
 export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
 	const name = agentAccountName(account, t);
 	const email = account.email?.toLowerCase();
-	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
+	const orgKnown = (peer: Pick<AgentAccount, "orgId" | "orgName">) => Boolean(peer.orgId || peer.orgName);
+	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email && orgKnown(peer) === orgKnown(account)) : [];
 	if (twins.length === 0) return name;
 	const org = (peer: Pick<AgentAccount, "orgId" | "orgName">) => peer.orgId ?? `name:${peer.orgName ?? ""}`;
 	const otherOrgs = twins.filter((twin) => org(twin) !== org(account));
@@ -81,6 +88,26 @@ export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "
 	if (account.orgId && otherOrgs.some((twin) => (twin.orgName ?? "") === (account.orgName ?? ""))) parts.push(account.orgId.slice(0, 8));
 	if (account.device && twins.some((twin) => org(twin) === org(account))) parts.push(t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] }));
 	return parts.join(" · ");
+}
+
+/** A failed check of an account, said plainly. `detail` is the CLI's own
+ * error, kept for a Details tooltip; `actionable` needs the user, the rest
+ * clears on a later check. */
+export type AgentAccountProblem = { text: string; detail: string | null; actionable: boolean };
+
+export function describeAccountProblem(account: Pick<AgentAccount, "problem" | "problemKind" | "provider">, t: TFunction): AgentAccountProblem | null {
+	const detail = account.problem?.trim() || null;
+	if (!detail && !account.problemKind) return null;
+	const provider = agentAccountProviderNames[account.provider];
+	// A daemon from before problem kinds sends only the error text.
+	switch (account.problemKind ?? "unavailable") {
+		case "slow": return { text: t("settings.agentAccounts.problem.slow", { provider }), detail, actionable: false };
+		case "rate_limited": return { text: t("settings.agentAccounts.problem.rateLimited", { provider }), detail, actionable: false };
+		case "cli_missing": return { text: t("settings.agentAccounts.problem.cliMissing", { provider }), detail, actionable: true };
+		case "other_login": return { text: t("settings.agentAccounts.problem.otherLogin"), detail, actionable: true };
+		case "other_org": return { text: t("settings.agentAccounts.problem.otherOrg"), detail, actionable: true };
+		default: return { text: t("settings.agentAccounts.problem.unavailable"), detail, actionable: false };
+	}
 }
 
 /** Names an account by id in status text, such as "Moved from … to …". */
@@ -101,11 +128,16 @@ export function useAgentAccountUsage(days = 30, hostId?: HostId) {
 	});
 }
 
+/** The account a session runs on, for each provider. */
+export async function fetchSessionAgentAccounts(sessionId: string, hostId?: HostId) {
+	return unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId } } })) ?? {};
+}
+
 export function useSessionAgentAccounts(sessionId: string | undefined, hostId?: HostId) {
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? { stayOnAccount: false },
+		queryFn: () => fetchSessionAgentAccounts(sessionId ?? "", hostId),
 	});
 }
 
@@ -148,9 +180,5 @@ export function useAgentAccountActions(hostId?: HostId) {
 			return result.transition;
 		},
 		refreshSession: (sessionId: string) => queryClient.invalidateQueries({ queryKey: sessionAccountsKey(sessionId, hostId) }),
-		setStayOnAccount: async (sessionId: string, stay: boolean) =>
-			queryClient.setQueryData(sessionAccountsKey(sessionId, hostId), unwrap(await client(hostId).PUT("/api/v1/agents/accounts/sessions/{sessionId}/stay", {
-				params: { path: { sessionId } }, body: { stay },
-			}))),
 	};
 }

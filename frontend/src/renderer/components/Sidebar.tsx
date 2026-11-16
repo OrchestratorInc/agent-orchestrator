@@ -58,7 +58,8 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
+import { artifactCount, groupArtifactsByProject, withKeptArtifacts } from "../lib/artifacts";
+import { useKeptArtifacts } from "../hooks/useKeptArtifacts";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -139,6 +140,7 @@ import { Pressable } from "./ui/pressable";
 import { menuFocusReturnTarget } from "./ui/menu-focus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
+import { CloudMark } from "./CloudMark";
 import { ProjectIcon } from "./ProjectIcon";
 import { OrchestratorIcon } from "./icons";
 import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
@@ -634,7 +636,7 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 // A row flags only what the user has something to do about, a spinner while
 // its agent works (ahead of any marker), and otherwise a quiet dot. A marker that appears after the row is on screen pops in once; one already
 // there on mount does not.
-function SessionStatusDot({ session, indicator }: {
+export function SessionStatusDot({ session, indicator }: {
 	session: WorkspaceSession;
 	indicator: ReturnType<typeof getSessionRowIndicator>;
 }) {
@@ -742,9 +744,11 @@ export const Sidebar = memo(function Sidebar({
 	const developerMode = useUiStore((s) => s.developerMode);
 	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
 	const cloudArtifacts = useCloudOffering().artifacts;
+	// Kept artifacts are listed there too.
+	const kept = useKeptArtifacts().data;
 	const artifactTotal = useMemo(
-		() => artifactCount(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud"))),
-		[cloudArtifacts, workspaces],
+		() => artifactCount(withKeptArtifacts(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud")), kept, workspaces, "")),
+		[cloudArtifacts, workspaces, kept],
 	);
 	const existingProjectPaths = useMemo(
 		() => workspaces
@@ -1805,6 +1809,7 @@ const ProjectItem = memo(function ProjectItem({
 
 
 	const removeProject = () => setConfirmOpen(true);
+	const isCloudProject = !workspace.hostId && workspace.kind === CLOUD_PROJECT_KIND;
 	const copyToClipboard = useCopyToClipboard();
 	// Pins are a local list preference; remote host rows and the Scratchpad
 	// have their own sections and are not pinnable.
@@ -1902,14 +1907,16 @@ const ProjectItem = memo(function ProjectItem({
 						label: t("shell.projectSettings"),
 						onSelect: () => selection.goSettings(workspace.id, workspace.cloudOrgId),
 					},
-					{
+					// A project shared from another organization is its organization's to delete.
+					...(workspace.shared ? [] : [{
 						kind: "item" as const,
 						id: "remove",
 						icon: <Trash2 aria-hidden="true" />,
-						label: t("shell.removeProjectTitle"),
+						// A Cloud project is deleted for good; a local one only leaves the sidebar.
+						label: isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle"),
 						destructive: true,
 						onSelect: removeProject,
-					},
+					}]),
 				]
 				: []),
 		];
@@ -2045,12 +2052,7 @@ const ProjectItem = memo(function ProjectItem({
 										</Badge>
 									)}
 									{workspace.kind === "cloud" && (
-										<Badge
-											variant="outline"
-											className="sidebar-expanded-chrome relative z-[1] h-4 shrink-0 px-1.5 text-2xs group-data-[collapsible=icon]:hidden"
-										>
-											{t("shell.cloudProjectBadge")}
-										</Badge>
+										<CloudMark className="sidebar-expanded-chrome relative z-[1] translate-y-px group-data-[collapsible=icon]:hidden" />
 									)}
 								</SidebarMenuButton>
 								{/* Folder disclosure toggle: sibling of the nav button, absolutely positioned over
@@ -2259,15 +2261,16 @@ const ProjectItem = memo(function ProjectItem({
 					<ConfirmDialog
 						open={confirmOpen}
 						onOpenChange={setConfirmOpen}
-						title={t("shell.removeProjectTitle")}
+						title={isCloudProject ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle")}
 						description={
 							<>
-								<p className="text-sm font-medium text-foreground">{t("shell.removeProjectLead", { name: workspace.name })}</p>
-								<p className="mt-1 text-xs text-muted-foreground">
-									{workspace.kind === CLOUD_PROJECT_KIND
-										? t("shell.removeCloudProjectBody")
-										: t("shell.removeProjectBody")}
+								<p className="text-sm font-medium text-foreground">
+									{isCloudProject
+										? t("shell.deleteCloudProjectLead", { name: workspace.name })
+										: t("shell.removeProjectLead", { name: workspace.name })}
 								</p>
+								{/* The lead already says a Cloud project is deleted for good. */}
+								{isCloudProject ? null : <p className="mt-1 text-xs text-muted-foreground">{t("shell.removeProjectBody")}</p>}
 								{openPullRequestCount > 0 ? (
 									<p className="mt-2 text-xs font-medium text-error">
 										{t("shell.removeProjectOpenPrWarning", { count: openPullRequestCount })}
@@ -2275,7 +2278,7 @@ const ProjectItem = memo(function ProjectItem({
 								) : null}
 							</>
 						}
-						confirmLabel={t("shell.remove")}
+						confirmLabel={isCloudProject ? t("shell.deleteCloudProjectConfirm") : t("shell.remove")}
 						destructive
 						onConfirm={handleConfirmRemove}
 					/>
@@ -2530,14 +2533,14 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
-	hostLabel,
+	cloud,
 	onKilled,
 	onOpen,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
-	hostLabel?: string;
+	cloud?: boolean;
 	indented?: boolean;
 	layoutDependency?: string;
 	listIsDragging: boolean;
@@ -2561,7 +2564,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 		<SessionRow
 			session={session}
 			active={active}
-			hostLabel={hostLabel}
+			cloud={cloud}
 			indented={indented}
 			onKilled={onKilled}
 			onOpen={open}
@@ -2606,8 +2609,6 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	const { t } = useTranslation();
-	const hostLabelOf = (session: WorkspaceSession) => cloudBadge && session.cloud ? t("shell.cloudProjectBadge") : undefined;
 	// Suppress the vertical glide for the first 500ms after the list mounts, so the
 	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
 	const [layoutSettled, setLayoutSettled] = useState(false);
@@ -2657,7 +2658,7 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
-						hostLabel={hostLabelOf(session)}
+						cloud={cloudBadge && Boolean(session.cloud)}
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2685,7 +2686,7 @@ function SessionReorderList({
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
-							hostLabel={hostLabelOf(session)}
+							cloud={cloudBadge && Boolean(session.cloud)}
 							indented={indented}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
@@ -2711,6 +2712,7 @@ const SessionRow = memo(function SessionRow({
 	session,
 	active,
 	hostLabel,
+	cloud = false,
 	indented = true,
 	layoutDependency,
 	listIsDragging = false,
@@ -2721,6 +2723,8 @@ const SessionRow = memo(function SessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
+	/** Mark the row as a Cloud session, in a list (the Scratchpad) that mixes them with local ones. */
+	cloud?: boolean;
 	indented?: boolean;
 	/** The list order. Present only for rows in a reorderable list: the row then
 	 *  animates its vertical position (and nothing else) when the order changes. */
@@ -2881,7 +2885,7 @@ const SessionRow = memo(function SessionRow({
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
-							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
+							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
@@ -2949,6 +2953,7 @@ const SessionRow = memo(function SessionRow({
 									{session.title}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
+								{cloud ? <CloudMark /> : null}
 							</span>
 						</Pressable>
 					</div>

@@ -1,10 +1,12 @@
-import { LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, X } from "@/components/app-icons";
+import { Info, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
+import { formatRelativeTime } from "../../lib/usage-format";
+import { cn } from "../../lib/utils";
 import { useSettings, useUpdateAccountHandoff } from "../../hooks/useSettings";
 import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
@@ -45,6 +47,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
+	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => !account.device || account.signedIn).length > 1;
 	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[loginKey];
@@ -89,6 +92,14 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			setLogin(undefined);
 			if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
 			if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
+			if (result.status === "complete") {
+				// A chat turn that sent the user here to log in gets them back.
+				const ui = useUiStore.getState();
+				const waiting = ui.loginReturn;
+				if (waiting && agentAccountProviderFor(waiting.agentId) === provider) {
+					ui.completeLoginReturn(waiting.agentId, hostId, result.account?.id);
+				}
+			}
 		}
 	});
 	const closeLogin = (current: AgentAccountLogin) => {
@@ -134,7 +145,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>; })}
-			{hostId ? null : <AccountHandoffRow />}
+			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
@@ -191,9 +202,27 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="destructive-ghost" aria-label={t("settings.agentAccounts.remove")} disabled={busy !== null} onClick={onRemove}><Trash2 aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.remove")}</TooltipContent></Tooltip>}
 			</div>
 		</div>
-		{account.problem ? <p className="mt-2 text-xs text-warning">{account.problem}</p> : null}
+		<AccountProblemNote account={account} />
 		<AccountLimits account={account} />
 	</div>;
+}
+
+/** Why the account's last check failed, in plain words. A failure that clears
+ * on its own reads as a muted note beside the age of the numbers still shown;
+ * one that needs the user is a warning. The CLI's own error is under Details. */
+export function AccountProblemNote({ account }: { account: AgentAccount }) {
+	const { t, i18n } = useTranslation();
+	const problem = describeAccountProblem(account, t);
+	if (!problem) return null;
+	const fetchedAt = account.limits?.windows.length ? account.limits.fetchedAt : undefined;
+	const age = !problem.actionable && fetchedAt ? t("settings.agentAccounts.updatedAt", { value: formatRelativeTime(fetchedAt, new Date(), i18n.language) }) : null;
+	return <p className={cn("mt-2 flex items-start gap-1.5 text-xs", problem.actionable ? "text-warning" : "text-muted-foreground")} data-account-problem={account.problemKind ?? "unavailable"}>
+		{problem.actionable ? <TriangleAlert aria-hidden="true" className="mt-px size-icon-sm shrink-0" /> : null}
+		<span className="min-w-0">
+			{age ? `${age} · ${problem.text}` : problem.text}
+			{problem.detail ? <> <Tooltip><TooltipTrigger asChild><button type="button" className="text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground focus-visible:text-foreground">{t("settings.agentAccounts.problemDetails")}</button></TooltipTrigger><TooltipContent className="max-w-sm break-words font-mono">{problem.detail}</TooltipContent></Tooltip></> : null}
+		</span>
+	</p>;
 }
 
 function AccountHandoffRow() {
@@ -201,7 +230,17 @@ function AccountHandoffRow() {
 	const { settings, isLoading } = useSettings();
 	const { update, saving, error } = useUpdateAccountHandoff();
 	return <>
-		<HarnessDetailRow label={t("settings.agentAccounts.handoff")} description={t("settings.agentAccounts.handoffDescription")}>
+		<HarnessDetailRow label={<span className="inline-flex items-center gap-1.5">
+			{t("settings.agentAccounts.handoff")}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button type="button" size="icon-xs" variant="quiet" aria-label={t("settings.agentAccounts.problemDetails")}>
+						<Info className="size-icon-sm" aria-hidden="true" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent className="max-w-sm">{t("settings.agentAccounts.handoffDescription")}</TooltipContent>
+			</Tooltip>
+		</span>}>
 			<Switch
 				aria-label={t("settings.agentAccounts.handoff")}
 				checked={settings?.accountHandoff ?? false}

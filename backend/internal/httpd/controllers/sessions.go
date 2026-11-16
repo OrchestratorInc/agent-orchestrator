@@ -230,6 +230,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/preview/files/*", c.previewFile)
 	r.Get("/sessions/{sessionId}/preview/artifacts/*", c.previewArtifactFile)
 	r.Get("/sessions/{sessionId}/artifact-files/*", c.artifactFile)
+	r.Get("/kept-artifacts", c.listKeptArtifacts)
 	r.Delete("/sessions/{sessionId}/artifact-files", c.deleteArtifactFile)
 	r.Put("/sessions/{sessionId}/artifact-files", c.updateArtifactFile)
 	r.Post("/sessions/{sessionId}/artifact-registrations", c.registerArtifacts)
@@ -571,7 +572,7 @@ func (c *SessionsController) previewArtifactFile(w http.ResponseWriter, r *http.
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/preview/artifacts/*")
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	sess, _, err := c.artifactSession(r.Context(), sessionID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -591,7 +592,15 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/preview/files/*")
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	// Only artifact files outlive their session; workspace previews need it.
+	fromArtifacts := r.URL.Query().Get("source") == "artifact"
+	var sess domain.Session
+	var err error
+	if fromArtifacts {
+		sess, _, err = c.artifactSession(r.Context(), sessionID(r))
+	} else {
+		sess, err = c.Svc.Get(r.Context(), sessionID(r))
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -601,7 +610,7 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return
 	}
-	if r.URL.Query().Get("source") == "artifact" {
+	if fromArtifacts {
 		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
 			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
 			return
@@ -825,7 +834,7 @@ func (c *SessionsController) inlineArtifactOrigin(w http.ResponseWriter, r *http
 	}
 	// The session read fills in the default artifact directory for a row
 	// stored without one.
-	sess, err := c.Svc.Get(r.Context(), id)
+	sess, _, err := c.artifactSession(r.Context(), id)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -873,7 +882,14 @@ func (c *SessionsController) PreviewOrigin(w http.ResponseWriter, r *http.Reques
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return true
 	}
-	sess, err := c.Svc.Get(r.Context(), id)
+	var sess domain.Session
+	var err error
+	if artifactOrigin {
+		// A deleted session's kept artifacts are still served here.
+		sess, _, err = c.artifactSession(r.Context(), id)
+	} else {
+		sess, err = c.Svc.Get(r.Context(), id)
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return true
@@ -2192,6 +2208,11 @@ type sessionDeleteService interface {
 	Delete(ctx context.Context, id domain.SessionID, cleanup bool) error
 }
 
+// sessionKeepingDeleteService deletes a session but keeps its artifacts.
+type sessionKeepingDeleteService interface {
+	DeleteKeepingArtifacts(ctx context.Context, id domain.SessionID, cleanup bool) error
+}
+
 // deleteSession permanently removes a terminated session's record. The service
 // refuses a live session, and one whose worktree is not cleaned up yet unless
 // the caller asks it to clean it up first.
@@ -2201,7 +2222,19 @@ func (c *SessionsController) deleteSession(w http.ResponseWriter, r *http.Reques
 		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
 		return
 	}
-	if err := svc.Delete(r.Context(), sessionID(r), r.URL.Query().Get("cleanup") == "true"); err != nil {
+	cleanup := r.URL.Query().Get("cleanup") == "true"
+	var err error
+	if r.URL.Query().Get("keepArtifacts") == "true" {
+		keeping, ok := c.Svc.(sessionKeepingDeleteService)
+		if !ok {
+			apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
+			return
+		}
+		err = keeping.DeleteKeepingArtifacts(r.Context(), sessionID(r), cleanup)
+	} else {
+		err = svc.Delete(r.Context(), sessionID(r), cleanup)
+	}
+	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
@@ -3084,7 +3117,7 @@ func artifactRawURL(r *http.Request, id domain.SessionID, filePath string) (stri
 func sessionPRFacts(prs []domain.PRFacts) []SessionPRFacts {
 	out := make([]SessionPRFacts, 0, len(prs))
 	for _, pr := range prs {
-		out = append(out, SessionPRFacts{URL: pr.URL, Number: pr.Number, State: prState(pr), CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability, ReviewComments: pr.ReviewComments, UpdatedAt: pr.UpdatedAt})
+		out = append(out, SessionPRFacts{URL: pr.URL, Number: pr.Number, State: prState(pr), CI: pr.CI, Review: pr.Review, Mergeability: pr.Mergeability, ReviewComments: pr.ReviewComments, UpdatedAt: pr.UpdatedAt, StackParent: pr.StackParent})
 	}
 	return out
 }
@@ -3346,4 +3379,56 @@ func workspaceSnapshotQuery(query url.Values) (sessionsvc.WorkspaceSelectionRevi
 // Source selectors must never be silently answered with mutable worktree data.
 func workspaceSnapshotRequested(query url.Values) bool {
 	return query.Get("snapshot") == "true" || query.Has("branch") || query.Has("prNumber") || query.Has("sourceUrl") || query.Has("expectedTipSha") || query.Has("expectedBaseSha") || query.Has("commitShas")
+}
+
+// artifactSessionService finds the session whose artifact files a request
+// reads, including a deleted session whose artifacts were kept.
+type artifactSessionService interface {
+	ArtifactSession(ctx context.Context, id domain.SessionID) (domain.Session, bool, error)
+}
+
+// keptArtifactsService lists and forgets kept artifacts.
+type keptArtifactsService interface {
+	ListKeptArtifacts(ctx context.Context) ([]sessionsvc.KeptArtifacts, error)
+	ForgetKeptArtifact(ctx context.Context, id domain.SessionID, path string) error
+}
+
+// artifactSession returns the session whose artifact files a request reads,
+// and whether it is the stand-in for a deleted session's kept artifacts. Its
+// files are view only.
+func (c *SessionsController) artifactSession(ctx context.Context, id domain.SessionID) (domain.Session, bool, error) {
+	if svc, ok := c.Svc.(artifactSessionService); ok {
+		return svc.ArtifactSession(ctx, id)
+	}
+	sess, err := c.Svc.Get(ctx, id)
+	return sess, false, err
+}
+
+// listKeptArtifacts lists the artifacts no session or project lists: those of
+// sessions deleted with their artifacts kept, and of sessions in removed projects.
+func (c *SessionsController) listKeptArtifacts(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(keptArtifactsService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/kept-artifacts")
+		return
+	}
+	sets, err := svc.ListKeptArtifacts(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := make([]KeptArtifactsView, 0, len(sets))
+	for _, set := range sets {
+		files := domain.Session{ArtifactFiles: set.Files}
+		files.ID = set.SessionID
+		out = append(out, KeptArtifactsView{
+			SessionID:      set.SessionID,
+			ProjectID:      set.ProjectID,
+			Title:          set.Title,
+			SessionDeleted: set.SessionDeleted,
+			At:             set.At,
+			ArtifactFiles:  sessionArtifactFiles(r, files),
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListKeptArtifactsResponse{Sets: out})
 }

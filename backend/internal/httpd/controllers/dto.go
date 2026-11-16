@@ -683,7 +683,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak"`
 	Branch          string                 `json:"branch,omitempty"`
 	// BaseBranch starts the session's branch from this branch instead of the
 	// project's default, to stack its work on another pull request.
@@ -1422,7 +1422,29 @@ type RollbackSessionResponse struct {
 
 // DeleteSessionQuery is the query string accepted by DELETE /api/v1/sessions/{sessionId}.
 type DeleteSessionQuery struct {
-	Cleanup bool `query:"cleanup,omitempty" description:"When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete."`
+	Cleanup       bool `query:"cleanup,omitempty" description:"When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete."`
+	KeepArtifacts bool `query:"keepArtifacts,omitempty" description:"When true, the session's artifact files are kept, view only, and listed by GET /api/v1/kept-artifacts until they are deleted one by one. Otherwise they are deleted with the session."`
+}
+
+// ListKeptArtifactsResponse is the body of GET /api/v1/kept-artifacts.
+type ListKeptArtifactsResponse struct {
+	Sets []KeptArtifactsView `json:"sets"`
+}
+
+// KeptArtifactsView is one set of artifacts no session or project lists: a
+// session deleted with its artifacts kept, or a session in a removed project.
+// Its files are view only; DELETE /api/v1/sessions/{sessionId}/artifact-files
+// deletes one.
+type KeptArtifactsView struct {
+	SessionID domain.SessionID `json:"sessionId"`
+	// ProjectID is the session's project; absent when it has none any more.
+	ProjectID domain.ProjectID `json:"projectId,omitempty"`
+	Title     string           `json:"title"`
+	// SessionDeleted is set when the session itself was deleted; otherwise
+	// its project was removed.
+	SessionDeleted bool                  `json:"sessionDeleted"`
+	At             time.Time             `json:"at" description:"When the session was deleted, or last updated."`
+	ArtifactFiles  []SessionArtifactView `json:"artifactFiles"`
 }
 
 // DeleteSessionResponse is the body of DELETE /api/v1/sessions/{sessionId}.
@@ -1483,7 +1505,7 @@ type DelegateTaskRequest struct {
 	// BaseBranch starts the worker from this branch instead of the project's
 	// default, to stack its work on another pull request.
 	BaseBranch string              `json:"baseBranch,omitempty" maxLength:"255"`
-	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,fake"`
+	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,fake"`
 	Model      string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -1531,6 +1553,10 @@ type SessionPRFacts struct {
 	Mergeability   domain.Mergeability   `json:"mergeability" enum:"unknown,mergeable,conflicting,blocked,unstable"`
 	ReviewComments bool                  `json:"reviewComments"`
 	UpdatedAt      time.Time             `json:"updatedAt"`
+	// StackParent is the number of the open PR whose branch this PR targets.
+	// Absent when the PR's base branch has no open PR in a live session, e.g.
+	// the default branch.
+	StackParent int `json:"stackParent,omitempty"`
 }
 
 // SessionPRSummary is the concise desktop SCM read model returned by GET
@@ -3412,6 +3438,7 @@ type ConversationExcerptReferenceRequest struct {
 	MessageID      string                      `json:"messageId"`
 	Revision       int64                       `json:"revision"`
 	Text           string                      `json:"text"`
+	Comment        string                      `json:"comment,omitempty" maxLength:"4096"`
 }
 
 // ProviderSwitchRequest switches an idle session to another provider. See
@@ -3554,7 +3581,8 @@ type ConversationContentSummaryResponse struct {
 	URI             string                            `json:"uri,omitempty"`
 	Name            string                            `json:"name,omitempty"`
 	// Text is the readable chat excerpt, separate from captured raw source.
-	Text string `json:"text,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Comment string `json:"comment,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
 	// original transcript message without exposing the internal excerpt URI.
 	SourceConversationID string `json:"sourceConversationId,omitempty"`
@@ -3729,7 +3757,7 @@ type ConversationTurnResponse struct {
 	// HasHumanPrompt includes durable human prompts outside this timeline page.
 	HasHumanPrompt bool                            `json:"hasHumanPrompt,omitempty"`
 	ErrorMessage   string                          `json:"errorMessage,omitempty"`
-	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing"`
+	FailureCode    string                          `json:"failureCode,omitempty" enum:"provider_key_missing,auth_required"`
 	UsageLimit     *ConversationUsageLimitResponse `json:"usageLimit,omitempty"`
 	RequestedAt    string                          `json:"requestedAt"`
 	StartedAt      *string                         `json:"startedAt,omitempty"`
@@ -4551,12 +4579,14 @@ type AgentAccountResponse struct {
 	SignedIn  bool       `json:"signedIn"`
 	LoggedIn  bool       `json:"loggedIn"`
 	CreatedAt *time.Time `json:"createdAt,omitempty"`
-	// Problem says why identity or limits could not be read.
-	Problem     string                     `json:"problem,omitempty"`
-	Limits      *domain.AgentAccountLimits `json:"limits,omitempty"`
-	SameLoginAs string                     `json:"sameLoginAs,omitempty"`
-	OrgID       string                     `json:"orgId,omitempty"`
-	OrgName     string                     `json:"orgName,omitempty"`
+	// Problem is the error text of a failed identity or limits check, kept as
+	// detail; ProblemKind says what failed, for the app's own wording.
+	Problem     string                         `json:"problem,omitempty"`
+	ProblemKind domain.AgentAccountProblemKind `json:"problemKind,omitempty" enum:"slow,rate_limited,unavailable,cli_missing,other_login,other_org"`
+	Limits      *domain.AgentAccountLimits     `json:"limits,omitempty"`
+	SameLoginAs string                         `json:"sameLoginAs,omitempty"`
+	OrgID       string                         `json:"orgId,omitempty"`
+	OrgName     string                         `json:"orgName,omitempty"`
 }
 
 // AgentAccountsResponse is the body of GET /agents/accounts.
@@ -4625,14 +4655,8 @@ type AgentAccountUsageByModel struct {
 
 // SessionAgentAccountsResponse is the account a session uses per provider.
 type SessionAgentAccountsResponse struct {
-	Claude        string `json:"claude,omitempty"`
-	Codex         string `json:"codex,omitempty"`
-	StayOnAccount bool   `json:"stayOnAccount"`
-}
-
-// SetSessionStayOnAccountRequest records or clears "Stay on this account".
-type SetSessionStayOnAccountRequest struct {
-	Stay *bool `json:"stay"`
+	Claude string `json:"claude,omitempty"`
+	Codex  string `json:"codex,omitempty"`
 }
 
 // SwitchSessionAgentAccountRequest moves a session to another account.

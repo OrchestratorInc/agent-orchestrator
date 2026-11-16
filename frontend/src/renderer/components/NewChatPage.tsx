@@ -32,7 +32,7 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
-import { agentAccountLabel, useAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
+import { agentAccountLabel, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
 import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -53,7 +53,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const task = useTaskLaunch({ projectId, hostId });
 	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
-	const accountRows = withoutSameLogins(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
+	const accountRows = oneRowPerLogin(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
 	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
 		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !row.signedIn })),
 		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
@@ -153,15 +153,20 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		writeChatAttachments(draftScope, []);
 	}
 	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
-	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId), [hostId, task.agent.value, task.isCloudProject]);
+	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId, projectId), [hostId, projectId, task.agent.value, task.isCloudProject]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
 	);
 	// A session of this agent already reported its own settings: draw exactly those
 	// controls, holding this chat's choices, so the bar never changes on handoff.
+	// Those are this computer's agent's. A Cloud task's agent runs in its sandbox,
+	// and its session's bar lists Cloud's own models, so the bar here does too.
 	const harness = task.agent.value;
-	const template = useMemo(() => readChatSettingsTemplate(harness, hostId), [harness, hostId]);
+	const template = useMemo(
+		() => task.isCloudProject ? undefined : readChatSettingsTemplate(harness, hostId),
+		[harness, hostId, task.isCloudProject],
+	);
 	const barFor = (settings: TurnSettings): LaunchSettings => {
 		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.approvalModes) : undefined;
 		return {
@@ -528,13 +533,18 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
 	if (!model) return undefined;
+	// The agent's own rows, as its session's bar is given them. The bar folds a
+	// Default row into the model its description names; folded here as well, that
+	// model's row would be gone before the bar sees it (Fable, where it is this
+	// agent's default).
+	const rows = options.find((option) => option.id === model.id)?.choices ?? model.choices;
 	// A saved template predates the live catalog: a model it does not list means it
 	// can no longer show every choice, so AO's own controls take over.
-	const listed = (item: ChatModel) => model.choices.some((choice) =>
+	const listed = (item: ChatModel) => rows.some((choice) =>
 		choice.value === item.id || choice.name === agentModelDisplayLabel(harness, item.displayName));
 	if (models.some((item) => item.id !== "default" && !listed(item))) return undefined;
 	// Only choices a new task can start with: those AO's model list also has.
-	const modelChoices = model.choices.flatMap((choice) => {
+	const modelChoices = rows.flatMap((choice) => {
 		const listed = catalogModelFor(choice, harness, models);
 		return listed ? [listed.hint ? { ...choice, hint: listed.hint } : choice] : [];
 	});
