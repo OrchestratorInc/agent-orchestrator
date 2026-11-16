@@ -41,7 +41,7 @@ import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { useArtifactShareFile, useHostShareLinks, useReconciledShareLinks, useShareAccess } from "./ShareArtifactPopover";
-import { combinePublishedChecks, deleteUnpublishTargets, prepareUnpublish, publishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { combinePublishedChecks, deleteTargets, prepareUnpublish, publishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ArtifactShareMark } from "./ArtifactShareMark";
@@ -245,7 +245,7 @@ export function ArtifactsView() {
 	);
 	const bulkDelete = useMutation({
 		mutationFn: async (rows: readonly ArtifactRow[]) => {
-			const links = await Promise.all(rows.map((row) => prepareUnpublish(shareBaseUrl, deleteUnpublishTargets(rowSession(row), [row]), {
+			const links = await Promise.all(rows.map(async (row) => prepareUnpublish(shareBaseUrl, await deleteTargets(shareBaseUrl, rowSession(row), [row]), {
 				deleting: [{ sessionId: row.sessionId, path: row.path }],
 			})));
 			const results = await Promise.allSettled(rows.map((row) => row.cloud

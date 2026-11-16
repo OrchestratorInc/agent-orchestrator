@@ -160,14 +160,30 @@ export function sessionUnpublishTargets(session: WorkspaceSession, hostLinks: re
 }
 
 /**
- * sessionUnpublishTargets, reading this computer's host links for a remote
- * host's session. When they cannot be read, every file is looked up.
+ * deleteUnpublishTargets, reading this computer's host links at the delete for
+ * a remote host's files, rather than trusting a list that may not have loaded
+ * or may be empty while signed out. When they cannot be read, every file is
+ * looked up.
  */
-export async function sessionDeleteTargets(baseUrl: string, session: WorkspaceSession, bridge: UnpublishBridge = aoBridge.cloudShare): Promise<UnpublishTarget[]> {
-	if (!session.hostId || !baseUrl) return sessionUnpublishTargets(session);
+export async function deleteTargets(
+	baseUrl: string,
+	session: Pick<WorkspaceSession, "id" | "cloud" | "hostId"> & { workspaceId?: string },
+	artifacts: readonly DeletedArtifact[],
+	bridge: UnpublishBridge = aoBridge.cloudShare,
+): Promise<UnpublishTarget[]> {
+	const { hostId } = session;
+	if (!hostId || !baseUrl) return deleteUnpublishTargets(session, artifacts);
 	const hostLinks = await bridge.hostLinks(baseUrl).catch(() => undefined);
-	if (!hostLinks) return sessionArtifacts(session).map((artifact) => unpublishTarget(session, artifact));
-	return sessionUnpublishTargets(session, hostLinks);
+	if (!hostLinks) return artifacts.map((artifact) => unpublishTarget(session, artifact));
+	return deleteUnpublishTargets(session, artifacts.map((artifact) => {
+		const link = artifact.shareUrl ? undefined : findHostShareLink(hostLinks, hostId, session.id, artifact);
+		return link ? { ...artifact, shareUrl: link.url } : artifact;
+	}));
+}
+
+/** deleteTargets for every artifact of a session. */
+export function sessionDeleteTargets(baseUrl: string, session: WorkspaceSession, bridge: UnpublishBridge = aoBridge.cloudShare): Promise<UnpublishTarget[]> {
+	return deleteTargets(baseUrl, session, sessionArtifacts(session), bridge);
 }
 
 /**
