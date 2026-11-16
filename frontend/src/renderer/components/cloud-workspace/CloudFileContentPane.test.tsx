@@ -11,7 +11,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { CloudFileContentPane } from "./CloudFileContentPane";
 
 vi.mock("../ReadOnlyFileView", () => ({ ReadOnlyFileView: ({ detail, editing, onEditChange }: { detail: { content: string }; editing: boolean; onEditChange?: (value: string) => void }) => editing ? <textarea aria-label="editor" defaultValue={detail.content} onChange={(event) => onEditChange?.(event.target.value)} /> : <pre>{detail.content}</pre> }));
-vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: () => <div data-testid="cloud-diff" /> }));
+vi.mock("./CloudDiffFile", () => ({ CloudDiffFile: ({ chatReferences, surface }: { chatReferences?: boolean; surface: string }) => <div data-chat={String(chatReferences)} data-surface={surface} data-testid="cloud-diff" /> }));
 vi.mock("../markdown/MarkdownFileView", () => ({ MarkdownFileView: ({ content }: { content: string }) => <article>{content}</article> }));
 
 const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
@@ -26,6 +26,9 @@ describe("CloudFileContentPane", () => {
 		const client = { getWorkspaceReviewFile: vi.fn().mockResolvedValue(detail) } as unknown as CloudCpClient;
 		renderPane(client);
 		expect(await screen.findByTestId("cloud-diff")).toBeInTheDocument();
+		// Its comment boxes stay apart from the review pane's.
+		expect(screen.getByTestId("cloud-diff")).toHaveAttribute("data-surface", "focused");
+		expect(screen.getByTestId("cloud-diff")).toHaveAttribute("data-chat", "true");
 		await userEvent.click(screen.getByRole("tab", { name: "File" }));
 		expect(screen.getByText("# Hello")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("tab", { name: "Rich preview" }));

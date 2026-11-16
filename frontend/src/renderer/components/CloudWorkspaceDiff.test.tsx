@@ -32,6 +32,15 @@ describe("Cloud workspace compatibility exports", () => {
 		expect(contentProps).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: "https://cloud.test", client, orgId: "org-1", sessionId: "session-1", path: "README.md", scope: "committed", commitSha: "abc", initialEditing: true, initialMode: "rendered", initialRequestKey: 4, split: true }));
 	});
 
+	// A sibling repository's file is opened as ../<repository>/<path> and shown
+	// with its repository-relative path, which would not name it in the chat.
+	it("offers Add to chat in the main repository's diffs only", () => {
+		render(<CloudFileContentPane annotation={annotation} path="README.md" session={session} />);
+		expect(contentProps).toHaveBeenLastCalledWith(expect.objectContaining({ path: "README.md", chatReferences: true }));
+		render(<CloudFileContentPane annotation={annotation} path="../api/README.md" session={session} />);
+		expect(contentProps).toHaveBeenLastCalledWith(expect.objectContaining({ path: "README.md", chatReferences: false }));
+	});
+
 	it("keeps the dirty-state callback stable across parent renders", () => {
 		const onDirtyChange = vi.fn();
 		const { rerender } = render(<CloudFileContentPane annotation={annotation} onDirtyChange={onDirtyChange} path="README.md" session={session} />);
