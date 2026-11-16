@@ -3592,7 +3592,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	transform: translateY(-50%);
 }
 
-.chat-scroll-marker-visible {
+.chat-scroll-marker-current {
 	width: 13px;
 	background: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
 	opacity: 1;
@@ -3605,8 +3605,8 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	opacity: 0.96;
 }
 
-.group\/scroll:hover .chat-scroll-marker-visible,
-.group\/scroll:focus-visible .chat-scroll-marker-visible {
+.group\/scroll:hover .chat-scroll-marker-current,
+.group\/scroll:focus-visible .chat-scroll-marker-current {
 	width: 11px;
 	background: var(--color-text-muted);
 }
