@@ -1,10 +1,12 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -159,7 +161,7 @@ func TestTimestampRepairIndexedBounds(t *testing.T) {
 	}
 }
 
-func TestOpenFailsWhenStartupRepairRunsOutOfTime(t *testing.T) {
+func TestOpenContinuesWhenStartupRepairRunsOutOfTime(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`WITH RECURSIVE ids(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM ids WHERE i<2000)
@@ -167,25 +169,32 @@ func TestOpenFailsWhenStartupRepairRunsOutOfTime(t *testing.T) {
  SELECT 'late-'||i,i,'aider','idle','2026-10-21 09:00:00 +0530 IST',0,'2026-10-21 09:00:00 +0530 IST','2026-10-21 09:00:00 +0530 IST' FROM ids`); err != nil {
 		t.Fatal(err)
 	}
-	previous := timestampFenceTimeout
-	timestampFenceTimeout = time.Nanosecond
-	s, err := Open(dir)
-	timestampFenceTimeout = previous
-	if err == nil {
-		_ = s.Close()
-		t.Fatal("Open published readers over a partly repaired database")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "reopen to resume") {
-		t.Fatalf("error = %v", err)
-	}
-	// The next open resumes and finishes.
-	s, err = Open(dir)
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	counts, done := &repairScanCounts{}, make(chan struct{})
+	counts.expireAfterBatch.Store(true)
+	opts := repairScanOptions(t, counts, done)
+	// The driver holds the second session scan until this real deadline.
+	// The first committed batch must survive and the background pass resumes.
+	opts.fenceBudget = 15 * time.Second
+	s, err := openWithTimestampOptions(dir, opts)
 	if err != nil {
-		t.Fatalf("resumed open: %v", err)
+		t.Fatalf("deadline stopped startup after a committed batch: %v", err)
 	}
-	defer s.Close()
+	if n := counts.fenceRows.Load(); n != timestampRepairBatch {
+		t.Errorf("fence repaired %d rows before its deadline, want %d", n, timestampRepairBatch)
+	}
+	<-done
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "timestamp startup fence incomplete") || !strings.Contains(logs.String(), context.DeadlineExceeded.Error()) || strings.Contains(logs.String(), "timestamp startup fence completed") {
+		t.Fatalf("misleading deadline log: %s", logs.String())
+	}
 	var legacy int
 	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE CAST(created_at AS TEXT) LIKE '%IST'`).Scan(&legacy); err != nil || legacy != 0 {
-		t.Fatalf("resume left %d legacy rows: %v", legacy, err)
+		t.Fatalf("background resume left %d legacy rows: %v", legacy, err)
 	}
 }

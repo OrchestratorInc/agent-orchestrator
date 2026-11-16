@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -67,7 +68,11 @@ func TestTimestampLegacyFailureLedgerRetries(t *testing.T) {
 	}
 }
 
-type repairScanCounts struct{ connections, writer, reader atomic.Int64 }
+type repairScanCounts struct {
+	connections, writer, reader               atomic.Int64
+	expireAfterBatch, sessionBatch, committed atomic.Bool
+	fenceRows                                 atomic.Int64
+}
 type repairScanDriver struct {
 	driver.Driver
 	counts *repairScanCounts
@@ -93,6 +98,26 @@ func (d repairScanDriver) Open(name string) (driver.Conn, error) {
 	return repairScanConn{sqliteConn: conn, counts: d.counts, writer: d.counts.connections.Add(1) == 1}, nil
 }
 func (c repairScanConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.counts.committed.Load() && strings.Contains(query, `FROM "sessions" `) && strings.HasPrefix(query, "SELECT rowid,") && c.counts.expireAfterBatch.CompareAndSwap(true, false) {
+		rows, err := c.sqliteConn.QueryContext(ctx, `SELECT count(*) FROM sessions WHERE CAST(created_at AS TEXT) GLOB '* +0000 UTC'`, nil)
+		if err != nil {
+			return nil, err
+		}
+		values := make([]driver.Value, 1)
+		if err := rows.Next(values); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		n, ok := values[0].(int64)
+		if !ok {
+			return nil, fmt.Errorf("unexpected repaired row count %T", values[0])
+		}
+		c.counts.fenceRows.Store(n)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if strings.Contains(query, "GLOB") && (strings.HasPrefix(query, "SELECT rowid,") || strings.HasPrefix(query, "SELECT min(rowid),max(rowid)")) {
 		if c.writer {
 			c.counts.writer.Add(1)
@@ -102,6 +127,20 @@ func (c repairScanConn) QueryContext(ctx context.Context, query string, args []d
 	}
 	return c.sqliteConn.QueryContext(ctx, query, args)
 }
+func (c repairScanConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
+	if strings.HasPrefix(query, `UPDATE "sessions" SET`) {
+		c.counts.sessionBatch.Store(true)
+	}
+	return c.sqliteConn.PrepareContext(ctx, query)
+}
+func (c repairScanConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	result, err := c.sqliteConn.ExecContext(ctx, query, args)
+	if err == nil && query == "COMMIT" && c.counts.sessionBatch.Swap(false) {
+		c.counts.committed.Store(true)
+	}
+	return result, err
+}
+
 func repairScanOptions(t *testing.T, counts *repairScanCounts, done chan<- struct{}) timestampOpenOptions {
 	t.Helper()
 	base, err := sql.Open("ao-sqlite", "")

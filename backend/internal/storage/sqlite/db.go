@@ -118,9 +118,9 @@ func checkLegacyDatabasePath(dataDir string) error {
 	return nil
 }
 
-// timestampFenceTimeout bounds the startup repair that must finish before any
-// reader opens. Variable so tests can shorten it.
-var timestampFenceTimeout = 5 * time.Minute
+// timestampFenceTimeout bounds startup repair; unfinished tables continue in
+// the background after readers become available.
+const timestampFenceTimeout = 5 * time.Minute
 
 type timestampOpenOptions struct {
 	driver      string
@@ -185,16 +185,6 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 			repairErr = ctx.Err()
 		}
 		cancel()
-		if errors.Is(repairErr, context.DeadlineExceeded) {
-			_ = readDB.Close()
-			_ = writeDB.Close()
-			return nil, fmt.Errorf("timestamp repair incomplete after %s; reopen to resume: %w", time.Since(started).Round(time.Second), repairErr)
-		}
-		if errors.Is(repairErr, context.Canceled) {
-			_ = readDB.Close()
-			_ = writeDB.Close()
-			return nil, repairErr
-		}
 		if repairErr == nil {
 			slog.Info("timestamp startup fence completed", "duration", time.Since(started))
 		}

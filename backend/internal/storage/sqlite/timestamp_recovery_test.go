@@ -226,6 +226,15 @@ CREATE TRIGGER block_repair BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT,'
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Join the background pass while the trigger still blocks it.
+			// Reopen without a worker so the send alone exercises normalization.
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err = OpenPreMigrated(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
 			defer s.Close()
 			var before string
 			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT) FROM sessions WHERE id='pending'`).Scan(&before); err != nil || before != legacy {
