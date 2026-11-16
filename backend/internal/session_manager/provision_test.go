@@ -680,6 +680,24 @@ func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
 	}
 }
 
+func TestResolveTUIAgentConfigResetsPiEffortOnModelChangeWithoutCatalog(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		t.Run(string(harness), func(t *testing.T) {
+			m := &Manager{}
+			project := domain.ProjectConfig{Worker: domain.RoleOverride{
+				Harness: harness, AgentConfig: domain.AgentConfig{Model: "fixture/old", Effort: "high"},
+			}}
+			resolved, err := m.resolveTUIAgentConfig(t.Context(), ports.SpawnConfig{
+				Kind: domain.KindWorker, Harness: harness,
+				AgentConfig: ports.AgentConfig{Model: "fixture/new"},
+			}, project, ports.AgentConfig{Model: "fixture/new", Effort: "high"})
+			if err != nil || resolved.Model != "fixture/new" || resolved.Effort != "" {
+				t.Fatalf("model switch = %#v, %v; want new model with effort reset", resolved, err)
+			}
+		})
+	}
+}
+
 func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "sonnet", IsDefault: true, Efforts: []string{"low", "high"}},

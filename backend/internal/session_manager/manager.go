@@ -1893,7 +1893,8 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	// choice is rejected rather than silently dropped.
 	inheritedPiEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
 		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent)
-	clearUnconfirmedPiEffort := inheritedPiEffort && cfg.RequestedMode != domain.SessionModeTUI
+	clearUnconfirmedPiEffort := inheritedPiEffort &&
+		(cfg.RequestedMode != domain.SessionModeTUI || modelChangedWithoutExplicitEffort)
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
