@@ -603,7 +603,8 @@ describe("ended shell terminals", () => {
 });
 
 describe("closing an ended tab while it reopens", () => {
-	const ended: ShellTerminal = { ...shells[0], endedAt: "2026-11-10T20:44:00Z" };
+	// Its own handle: adoptions are module state shared with earlier tests.
+	const ended: ShellTerminal = { ...shells[0], handleId: "ptyhost-v1:shellterm-closed-while-reopening", endedAt: "2026-11-10T20:44:00Z" };
 	const replacement = { createdAt: ended.createdAt, handleId: "ptyhost-v1:shellterm-replacement", title: "one", workingDir: "/tmp" };
 
 	function setup() {
