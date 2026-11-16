@@ -515,6 +515,7 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 		return base, fmt.Errorf("%s model discovery: %w", agentID, err)
 	}
 	if agentID == "open-interpreter" {
+		models = pinOpenInterpreterOpenAIModels(models, env)
 		models = append(models, openInterpreterProviderModels(ctx, binary, workingDir, env)...)
 	}
 	base.Providers = reportedJSONProviders(output)
@@ -1434,7 +1435,7 @@ func parseOpenInterpreterModels(output []byte) ([]ports.AgentModelInfo, error) {
 func openInterpreterProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) []ports.AgentModelInfo {
 	var models []ports.AgentModelInfo
 	for _, provider := range openinterpreter.GeneratedProviders {
-		if !openInterpreterHasKey(env, provider.EnvKey) {
+		if !provider.Usable() || !openInterpreterHasKey(env, provider.EnvKey) {
 			continue
 		}
 		runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
@@ -1461,6 +1462,26 @@ func openInterpreterProviderModels(ctx context.Context, binary, workingDir strin
 	return models
 }
 
+// pinOpenInterpreterOpenAIModels gives the default OpenAI provider's models an
+// explicit provider. Without it, a provider chosen later inside Open
+// Interpreter (`/model`, which writes model_provider to the user config) would
+// receive an AO-selected GPT model it does not serve. Models of any other
+// configured provider keep following the native configuration.
+func pinOpenInterpreterOpenAIModels(models []ports.AgentModelInfo, env map[string]string) []ports.AgentModelInfo {
+	root, err := nativeconfig.Resolve(env, "INTERPRETER_HOME", ".openinterpreter")
+	if err != nil {
+		return models
+	}
+	if provider, ok := openinterpreter.ConfiguredProvider(root); !ok || provider != openinterpreter.OpenAIProvider {
+		return models
+	}
+	for i := range models {
+		models[i].ID = openinterpreter.ProviderModelID(openinterpreter.OpenAIProvider, models[i].ID)
+		models[i].Provider = openinterpreter.OpenAIProvider
+	}
+	return models
+}
+
 // openInterpreterHasKey reports whether the session environment carries name:
 // env overrides the daemon environment, and an empty override withholds it.
 func openInterpreterHasKey(env map[string]string, name string) bool {
@@ -1474,7 +1495,7 @@ func openInterpreterHasKey(env map[string]string, name string) bool {
 func openInterpreterKeyedProviders(env map[string]string) string {
 	var ids []string
 	for _, provider := range openinterpreter.GeneratedProviders {
-		if openInterpreterHasKey(env, provider.EnvKey) {
+		if provider.Usable() && openInterpreterHasKey(env, provider.EnvKey) {
 			ids = append(ids, provider.ID)
 		}
 	}

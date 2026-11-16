@@ -2,6 +2,8 @@ package openinterpreter
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,6 +24,7 @@ func TestSplitProviderModel(t *testing.T) {
 		{"deepseek/deepseek-chat:free", "", "deepseek/deepseek-chat:free", false},
 		{"unknown:model", "", "unknown:model", false},
 		{"deepseek:", "", "deepseek:", false},
+		{"openai:gpt-6-sol", "openai", "gpt-6-sol", true},
 	} {
 		provider, slug, ok := SplitProviderModel(tc.model)
 		if provider != tc.provider || slug != tc.slug || ok != tc.ok {
@@ -52,10 +55,52 @@ func TestLaunchSelectsGeneratedProvider(t *testing.T) {
 	}
 }
 
-func TestGeneratedProviderKeysMatchOfferedKeys(t *testing.T) {
-	want := []string{"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"}
-	if got := generatedProviderKeyNames(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("generated provider keys = %q, want %q", got, want)
+func TestGeneratedProviderKeysFollowPlatformWire(t *testing.T) {
+	previous := chatWireSupported
+	t.Cleanup(func() { chatWireSupported = previous })
+	chatWireSupported = true
+	if got, want := generatedProviderKeyNames(), []string{"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY", "ZAI_API_KEY"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys with Chat Completions support = %q, want %q", got, want)
+	}
+	chatWireSupported = false
+	if got, want := generatedProviderKeyNames(), []string{"ANTHROPIC_API_KEY"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys without Chat Completions support = %q, want %q", got, want)
+	}
+}
+
+func TestLaunchPinsOpenAIModel(t *testing.T) {
+	p := &Plugin{resolvedBinary: "/bin/interpreter"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Model: "openai:gpt-6-sol"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsRun(cmd, []string{"-c", `model_provider="openai"`, "--model", "gpt-6-sol"}) {
+		t.Fatalf("OpenAI launch argv: %q", cmd)
+	}
+}
+
+func TestConfiguredProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, want string
+		ok                 bool
+	}{
+		{"missing config", "", OpenAIProvider, true},
+		{"no provider", "model = \"gpt-6-sol\"\n", OpenAIProvider, true},
+		{"selected provider", "model_provider = \"zai\"\nmodel = \"glm-5.1\"\n", "zai", true},
+		{"named profile", "profile = \"work\"\n", "", false},
+		{"malformed", "model_provider = [", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tc.config != "" {
+				if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(tc.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got, ok := ConfiguredProvider(home); got != tc.want || ok != tc.ok {
+				t.Fatalf("ConfiguredProvider = %q, %v; want %q, %v", got, ok, tc.want, tc.ok)
+			}
+		})
 	}
 }
 

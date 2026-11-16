@@ -2,6 +2,7 @@ package openinterpreter
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -66,8 +67,8 @@ base_url = "https://example.invalid/v1"
 			t.Setenv("AO_INTERPRETER_TEST_KEY", tc.key)
 			t.Setenv("AO_INTERPRETER_MISSING_TEST_KEY", "")
 			t.Setenv("AO_INTERPRETER_TEST_LOGIN", tc.login)
-			for _, name := range generatedProviderKeys {
-				t.Setenv(name, "")
+			for _, provider := range GeneratedProviders {
+				t.Setenv(provider.EnvKey, "")
 			}
 			if tc.config != "" {
 				if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(tc.config), 0o600); err != nil {
@@ -88,31 +89,42 @@ base_url = "https://example.invalid/v1"
 	}
 }
 
-// A provider key saved in AO (or exported) for one of the generated providers
-// counts as configured even though native login covers only OpenAI.
+// A provider key saved in AO (or exported) for a generated provider this
+// platform can run counts as configured even though native login covers only
+// OpenAI. A Chat Completions provider's key does not where its wire is
+// unsupported.
 func TestAuthStatusGeneratedProviderKey(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("native login fixture requires a POSIX shell")
 	}
-	for _, name := range generatedProviderKeys {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv("HOME", t.TempDir())
-			t.Setenv("INTERPRETER_HOME", t.TempDir())
-			for _, other := range generatedProviderKeys {
-				t.Setenv(other, "")
-			}
-			binary := filepath.Join(t.TempDir(), "interpreter")
-			if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'Not logged in\\n'\nexit 1\n"), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			p := &Plugin{resolvedBinary: binary}
-			if got, err := p.AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusUnknown {
-				t.Fatalf("AuthStatus without a key = %q, %v; want unknown", got, err)
-			}
-			t.Setenv(name, "saved-key")
-			if got, err := p.AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusConfigured {
-				t.Fatalf("AuthStatus with %s = %q, %v; want configured", name, got, err)
-			}
-		})
+	for _, chatWire := range []bool{true, false} {
+		for _, provider := range GeneratedProviders {
+			t.Run(fmt.Sprintf("%s/chat-wire-%v", provider.ID, chatWire), func(t *testing.T) {
+				previous := chatWireSupported
+				chatWireSupported = chatWire
+				t.Cleanup(func() { chatWireSupported = previous })
+				t.Setenv("HOME", t.TempDir())
+				t.Setenv("INTERPRETER_HOME", t.TempDir())
+				for _, other := range GeneratedProviders {
+					t.Setenv(other.EnvKey, "")
+				}
+				binary := filepath.Join(t.TempDir(), "interpreter")
+				if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'Not logged in\\n'\nexit 1\n"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				p := &Plugin{resolvedBinary: binary}
+				if got, err := p.AuthStatus(context.Background()); err != nil || got != ports.AgentAuthStatusUnknown {
+					t.Fatalf("AuthStatus without a key = %q, %v; want unknown", got, err)
+				}
+				t.Setenv(provider.EnvKey, "saved-key")
+				want := ports.AgentAuthStatusConfigured
+				if provider.ChatWire && !chatWire {
+					want = ports.AgentAuthStatusUnknown
+				}
+				if got, err := p.AuthStatus(context.Background()); err != nil || got != want {
+					t.Fatalf("AuthStatus with %s = %q, %v; want %q", provider.EnvKey, got, err, want)
+				}
+			})
+		}
 	}
 }

@@ -16,6 +16,10 @@ var managedHooks = []struct{ event, key, action string }{
 	{"SessionStart", "session_start", "session-start"},
 	{"UserPromptSubmit", "user_prompt_submit", "user-prompt-submit"},
 	{"PostToolUse", "post_tool_use", "post-tool-use"},
+	// Stop carries the turn's final answer for AO's terminal history. It is
+	// not idle (native continuation or compaction may still run);
+	// DeriveActivityState reports no state for it.
+	{"Stop", "stop", "stop"},
 }
 
 func appendSessionHooks(cmd *[]string) error {

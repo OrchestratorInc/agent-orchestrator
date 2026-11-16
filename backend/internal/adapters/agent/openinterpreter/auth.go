@@ -16,11 +16,6 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// generatedProviderKeys are the variables Open Interpreter's generated
-// providers read. They match the provider keys AO offers for this harness, so
-// a key saved in AO counts as configured.
-var generatedProviderKeys = generatedProviderKeyNames()
-
 // AuthStatus reports local credential configuration only. Native login status
 // does not validate tokens and does not cover every custom model provider.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
@@ -39,8 +34,10 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if status := authStatus(output); status != ports.AgentAuthStatusUnknown {
 		return status, nil
 	}
-	// Native login status covers only the built-in OpenAI provider.
-	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, generatedProviderKeys...) != "" {
+	// Native login status covers only the built-in OpenAI provider. A key for
+	// a generated provider this platform can run, saved in AO or exported,
+	// also configures it.
+	if keys := generatedProviderKeyNames(); len(keys) > 0 && authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, keys...) != "" {
 		return ports.AgentAuthStatusConfigured, nil
 	}
 
