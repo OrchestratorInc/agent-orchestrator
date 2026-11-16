@@ -119,7 +119,7 @@ func TestRemoteRiskyClickAllowedIsForwardedOnce(t *testing.T) {
 }
 
 func TestRemoteBenignCommandsPassWithoutAsking(t *testing.T) {
-	remote := &fakeRemote{refs: checkoutRefs}
+	remote := &fakeRemote{refs: checkoutRefs, focused: `{"success":true,"data":{"result":{"role":"link","name":"Home"}}}`}
 	svc, gate, token := remoteService(t, remote)
 	for _, args := range [][]string{{"click", "@e1"}, {"snapshot", "--interactive"}, {"fill", "@e3", "x"}, {"press", "Tab"}} {
 		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); err != nil {
@@ -227,5 +227,44 @@ func TestRemoteBareAndAtRefsAreDescribedAlike(t *testing.T) {
 		if p := <-asked; p.Category != approval.CategoryPayment || p.Action != `Click "Place order" on shop.example` {
 			t.Fatalf("%s: prompt = %+v", ref, p)
 		}
+	}
+}
+
+func TestRemoteSpaceOnFocusedControlAsks(t *testing.T) {
+	for _, args := range [][]string{{"press", "Space"}, {"key", "NumpadEnter"}, {"keyboard", "press", "Space"}} {
+		remote := &fakeRemote{focused: `{"success":true,"data":{"result":{"role":"button","name":"Delete repository"}}}`}
+		svc, gate, token := remoteService(t, remote)
+		answer(t, gate, approval.DecisionDeny)
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+			t.Fatalf("%v: err=%v forwarded=%v", args, err, remote.sent())
+		}
+	}
+}
+
+func TestRemoteRefClickReadsTheFormBeforeAllowing(t *testing.T) {
+	// The snapshot only says "button Continue"; the element's form is a
+	// checkout form, so every-submit mode must ask.
+	refs := `{"success":true,"data":{"refs":{"e2":{"role":"button","name":"Continue"}}}}`
+	facts := `{"success":true,"data":{"result":{"role":"button","name":"Continue","isSubmit":true,"formMethod":"post","formHasPayment":true}}}`
+	for _, args := range [][]string{{"click", "@e2"}, {"find", "role", "button", "click", "--name", "Continue"}, {"find", "text", "Continue", "click"}} {
+		remote := &fakeRemote{refs: refs, focused: facts}
+		svc, gate, token := remoteService(t, remote)
+		_ = gate.SetSessionMode("s1", approval.ModeEverySubmit)
+		answer(t, gate, approval.DecisionDeny)
+		if _, err := svc.ExecuteRemote(context.Background(), "s1", token, args, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" || len(remote.sent()) != 0 {
+			t.Fatalf("%v: err=%v forwarded=%v", args, err, remote.sent())
+		}
+	}
+}
+
+func TestRemoteRefWithoutFormFactsAsks(t *testing.T) {
+	// The page could not resolve the ref to one element: its form is
+	// unknown, so even a benign-looking label asks.
+	refs := `{"success":true,"data":{"refs":{"e2":{"role":"button","name":"Continue"}}}}`
+	remote := &fakeRemote{refs: refs, focused: `{"success":true,"data":{"result":{"partial":true}}}`}
+	svc, gate, token := remoteService(t, remote)
+	answer(t, gate, approval.DecisionDeny)
+	if _, err := svc.ExecuteRemote(context.Background(), "s1", token, []string{"click", "@e2"}, nil); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+		t.Fatalf("err = %v", err)
 	}
 }
