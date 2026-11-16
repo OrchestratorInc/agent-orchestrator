@@ -1274,7 +1274,7 @@
 	"inspector.review.openReviewer": "Open",
 	"inspector.review.activeReviewers": "Revisores ativos",
 	"inspector.review.notEligible": "Não elegível para revisão",
-	"inspector.review.prActionLabel": "{{action}} PR #{{number}}",
+	"inspector.review.prActionLabel": "{{action}} {{repository}}PR #{{number}}",
 	"inspector.review.prRerun": "Repetir",
 	"inspector.review.prRun": "Revisar",
 	"inspector.review.requestedByAgent": "Requested by agent",

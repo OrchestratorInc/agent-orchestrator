@@ -1253,7 +1253,7 @@
 	"inspector.review.openReviewer": "Open",
 	"inspector.review.activeReviewers": "活跃的审阅者",
 	"inspector.review.notEligible": "不符合评审条件",
-	"inspector.review.prActionLabel": "{{action}} PR #{{number}}",
+	"inspector.review.prActionLabel": "{{action}} {{repository}}PR #{{number}}",
 	"inspector.review.prRerun": "重新运行",
 	"inspector.review.prRun": "评审",
 	"inspector.review.requestedByAgent": "Requested by agent",

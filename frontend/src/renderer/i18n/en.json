@@ -1250,7 +1250,7 @@
 	"inspector.review.openReviewer": "Open",
 	"inspector.review.activeReviewers": "Active reviewers",
 	"inspector.review.notEligible": "Not eligible for review",
-	"inspector.review.prActionLabel": "{{action}} PR #{{number}}",
+	"inspector.review.prActionLabel": "{{action}} {{repository}}PR #{{number}}",
 	"inspector.review.prRerun": "Re-run",
 	"inspector.review.prRun": "Review",
 	"inspector.review.requestedByAgent": "Requested by agent",

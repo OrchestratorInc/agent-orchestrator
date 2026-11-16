@@ -1254,7 +1254,7 @@
 	"inspector.review.openReviewer": "Open",
 	"inspector.review.activeReviewers": "アクティブなレビュアー",
 	"inspector.review.notEligible": "レビュー対象外です",
-	"inspector.review.prActionLabel": "{{action}} PR #{{number}}",
+	"inspector.review.prActionLabel": "{{action}} {{repository}}PR #{{number}}",
 	"inspector.review.prRerun": "再実行",
 	"inspector.review.prRun": "レビュー",
 	"inspector.review.requestedByAgent": "Requested by agent",
