@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 type timestampRepairResult struct{ Repaired, Skipped int }
@@ -123,8 +124,8 @@ func (s *timestampRepairState) complete(table, signature string) {
 func (s *timestampRepairState) saveProgress(ctx context.Context, db *sql.DB) error {
 	var err error
 	if s.dirty && len(s.completed) > 0 {
-		var busy, logged, checkpointed int
-		err = db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(FULL)").Scan(&busy, &logged, &checkpointed)
+		var busy int
+		busy, err = checkpointFull(ctx, db)
 		if err != nil || busy != 0 {
 			if err == nil {
 				err = fmt.Errorf("timestamp repair checkpoint busy: %d", busy)
@@ -138,3 +139,27 @@ func (s *timestampRepairState) saveProgress(ctx context.Context, db *sql.DB) err
 	}
 	return errors.Join(err, s.save())
 }
+
+// checkpointFull retries a busy checkpoint: a reader holding a snapshot for a
+// moment is normal, and giving up would discard the completion marker and force
+// a full rescan on the next launch.
+func checkpointFull(ctx context.Context, db *sql.DB) (busy int, err error) {
+	for attempt := 0; attempt < checkpointAttempts; attempt++ {
+		var logged, checkpointed int
+		if err = db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(FULL)").Scan(&busy, &logged, &checkpointed); err != nil || busy == 0 {
+			return busy, err
+		}
+		select {
+		case <-ctx.Done():
+			return busy, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * checkpointBackoff):
+		}
+	}
+	return busy, nil
+}
+
+// Variables so tests can shorten the wait.
+var (
+	checkpointAttempts = 20
+	checkpointBackoff  = 25 * time.Millisecond
+)
