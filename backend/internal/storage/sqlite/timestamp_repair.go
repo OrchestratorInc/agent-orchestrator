@@ -205,10 +205,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 			for _, value := range before {
 				args = append(args, value, value)
 			}
-			key, hash := timestampSkipKey(columns[0].table, args, len(columns))
-			if state.rows[key] != hash {
-				changes = append(changes, args)
-			}
+			changes = append(changes, args)
 		}
 	}
 	if err := rows.Err(); err != nil {

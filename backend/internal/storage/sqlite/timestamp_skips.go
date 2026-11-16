@@ -106,9 +106,10 @@ func (s *timestampRepairState) skip(table string, values []any, n int, err error
 	if errors.Is(err, errTimestampPolicySkip) {
 		s.rows[key] = hash
 		s.dirty = true
-	} else {
-		s.retry[table] = true
 	}
+	// An audit entry cannot prove a conflict still exists on a later open.
+	// Keep the table pending and re-evaluate the row after external changes.
+	s.retry[table] = true
 	s.Skipped++
 	slog.Warn("timestamp repair skipped row", "table", table, "rowid", values[n], "error", err)
 }

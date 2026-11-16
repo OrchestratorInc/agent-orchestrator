@@ -114,7 +114,7 @@ func TestTimestampFenceAccountBindingCollision(t *testing.T) {
 	}
 }
 
-func TestTimestampFencePreservesDistinctExecutionsAndStaysQuiet(t *testing.T) {
+func TestTimestampFencePreservesDistinctExecutionsWithoutPublishingReaders(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('p','/tmp/twins','2026-10-21 09:00:00 +0530 IST');
@@ -132,11 +132,9 @@ func TestTimestampFencePreservesDistinctExecutionsAndStaysQuiet(t *testing.T) {
 	}
 	before := snapshot()
 	s, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("unresolved occurrence collision published incorrectly ordered readers")
 	}
 	if after := snapshot(); after != before {
 		t.Fatalf("execution history changed: %s", after)
@@ -145,13 +143,33 @@ func TestTimestampFencePreservesDistinctExecutionsAndStaysQuiet(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE automation_run_id IN ('local','utc')`).Scan(&linked); err != nil || linked != 2 {
 		t.Fatalf("links=%d err=%v", linked, err)
 	}
-	// A row rejected for the same reason is retried but stays quiet: nothing
-	// changes, and the unchanged rejection is not counted again.
 	result, err := runTimestampRepair(context.Background(), db, true)
-	if err != nil || result.Skipped != 0 || result.Repaired != 0 {
-		t.Fatalf("unchanged rejection was reported again: %+v %v", result, err)
+	if err == nil || result.Skipped != 1 || result.Repaired != 0 || result.Deleted != 0 {
+		t.Fatalf("execution collision must remain pending: %+v %v", result, err)
 	}
 	if after := snapshot(); after != before {
 		t.Fatalf("retry changed execution history: %s", after)
+	}
+}
+
+func TestTimestampExecutionCollisionCanRecoverAfterKeyChanges(t *testing.T) {
+	db := openMigratedTestDB(t)
+	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('retry-policy','/tmp/retry-policy',CURRENT_TIMESTAMP);
+INSERT INTO automations(id,project_id,display_name,prompt,kind,rrule_text,timezone,next_run_at,created_at,updated_at) VALUES('a','retry-policy','test','test','worker','FREQ=DAILY','UTC',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+INSERT INTO automation_runs(id,automation_id,scheduled_for,status,attempt_count,created_at,updated_at) VALUES('local','a','2026-10-21 09:00:00 +0530 IST','completed',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),('utc','a','2026-10-21 03:30:00 +0000 UTC','completed',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runTimestampRepair(context.Background(), db, true); err == nil {
+		t.Fatal("collision was considered repaired")
+	}
+	if _, err := db.Exec(`UPDATE automation_runs SET scheduled_for='2026-10-22 03:30:00 +0000 UTC' WHERE id='utc'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runTimestampRepair(context.Background(), db, true); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT CAST(scheduled_for AS TEXT) FROM automation_runs WHERE id='local'`).Scan(&raw); err != nil || raw != "2026-10-21 03:30:00 +0000 UTC" {
+		t.Fatalf("policy audit prevented retry: %q %v", raw, err)
 	}
 }
