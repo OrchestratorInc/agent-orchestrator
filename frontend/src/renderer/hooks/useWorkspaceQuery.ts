@@ -721,18 +721,6 @@ function queryResultsData<T>(results: { data?: T }[]): (T | undefined)[] {
 	return results.map((result) => result.data);
 }
 
-/**
- * Each query's data, whether any is still on its first fetch, and which gave
- * up with no data. Structurally shared, so `data` keeps its identity.
- */
-function queryResultsDataAndLoading<T>(results: { data?: T; isLoading: boolean; isError: boolean }[]): { data: (T | undefined)[]; loading: boolean; failed: boolean[] } {
-	return {
-		data: queryResultsData(results),
-		loading: results.some((result) => result.isLoading),
-		failed: results.map((result) => result.isError && result.data === undefined),
-	};
-}
-
 export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
@@ -757,7 +745,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	// read in their own query, once per artifact version, without holding up
 	// the list.
 	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
-	const { data: fileData, loading: filesLoading, failed: fileFailures } = useQueries({
+	const fileData = useQueries({
 		queries: withFiles.map((session) => ({
 			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
 			enabled: orgId !== undefined && options.enabled !== false,
@@ -767,7 +755,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			queryFn: ({ signal }: { signal: AbortSignal }) =>
 				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(orgId ?? "", session.id, { signal })).artifacts),
 		})),
-		combine: queryResultsDataAndLoading,
+		combine: queryResultsData,
 	});
 	// A session keeps its last good list while a new version loads or after a
 	// failed read, so its Artifacts tab and open file stay.
@@ -782,16 +770,7 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 		});
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [list.data, fileData]);
-	// A read that gave up leaves a session with no cards only when it has no
-	// earlier list to keep showing.
-	const filesFailed = useMemo(
-		() => withFiles.some((session, index) => fileFailures[index] && !lastFiles.current.has(session.id)),
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[fileFailures, data],
-	);
-	// The list has loaded but a live session's first file read has not: its
-	// cards are still on the way.
-	return { ...list, data, filesLoading, filesFailed };
+	return { ...list, data };
 }
 
 /** Who shared a project and its sessions, how, and through which team. */
@@ -1086,7 +1065,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const cloud = useCloudProjectsQuery(cloudOptions);
 	const cloudSessions = useCloudSessionsQuery(cloudOptions);
 	const sharedWorkspaces = useSharedCloudWorkspacesQuery(cloudOptions);
-	const { org, ready, isLoading: orgLoading } = useCloudOrg();
+	const { org, ready } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
@@ -1121,17 +1100,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// removalVersion is read outside React by applyOptimisticProjectRemovals.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready, removalVersion]);
-	// True while the cloud org, a cloud list, or a cloud session's artifact
-	// files are still on their first fetch, or an empty cached session list is
-	// refreshing: the merged data may still grow. Disabled cloud queries
-	// (signed out, offering off) never count.
-	const cloudLoading = includeCloud && (orgLoading || cloud.isLoading || cloudSessions.isLoading || cloudSessions.filesLoading || sharedWorkspaces.isLoading
-		|| (cloudSessions.isFetching && cloudSessions.data?.length === 0));
-	// A cloud list that could not be read, so its cards are missing rather than
-	// absent. A 404 is a control plane without that list, not a failure.
-	const unreadable = (query: { isError: boolean; data?: unknown; error: unknown }) => query.isError && query.data === undefined && !isCloudNotFound(query.error);
-	const cloudFailed = includeCloud && (unreadable(cloud) || unreadable(cloudSessions) || unreadable(sharedWorkspaces) || cloudSessions.filesFailed);
-	return { ...local, data, cloudLoading, cloudFailed };
+	return { ...local, data };
 }
 
 /**

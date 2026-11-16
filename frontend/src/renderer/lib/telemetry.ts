@@ -1,18 +1,10 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import {
-	ARTIFACT_ACTION_SURFACES,
-	ARTIFACT_COUNT_BUCKETS,
-	ARTIFACT_EXTERNAL_TARGETS,
-	ARTIFACT_FILE_TYPES,
 	ARTIFACT_LINK_COPY_SURFACES,
-	ARTIFACT_LIST_OUTCOMES,
-	ARTIFACT_LIST_SURFACES,
-	ARTIFACT_OPEN_SURFACES,
-	ARTIFACT_OWNERS,
 	ARTIFACT_PUBLISH_FAILURES,
-	ARTIFACT_SHARE_ACCESSES,
-	ARTIFACT_SOURCES,
+	ARTIFACT_SESSION_SCOPES,
+	ARTIFACT_SIGN_IN_PROMPT_REASONS,
 } from "./artifact-telemetry";
 import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
@@ -75,6 +67,8 @@ export const LEGACY_EVENT_NAMES: Record<string, string[]> = {
 	"ao.updates.downloaded": ["ao.renderer.update_downloaded"],
 	"ao.mobile.connect_opened": ["ao.renderer.mobile_connect_opened"],
 	"ao.mobile.bridge_toggled": ["ao.renderer.mobile_bridge_toggled"],
+	"ao.artifacts.session_started": ["ao.renderer.artifact_create_succeeded"],
+	"ao.artifacts.session_start_failed": ["ao.renderer.artifact_create_failed"],
 };
 // Removed from PostHog by the rename; written to the renderer log instead.
 const LOG_ONLY_EVENTS = new Set(["ao.renderer.agents_available", "ao.renderer.cloud_offering_resolved"]);
@@ -930,6 +924,7 @@ async function sanitizeRendererContextProperties(properties?: TelemetryPropertie
 // reported as "other" so a free-form string can never leak through.
 const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "docker", "nodeops", "ecs", "daytona", "default"]);
 const CLOUD_SIGN_IN_METHODS = new Set(["workos", "local"]);
+const CLOUD_SIGN_IN_SOURCES = new Set(["artifact_publish", "other"]);
 const CLOUD_SESSION_KINDS = new Set(["worker", "orchestrator"]);
 const CLOUD_FAILURE_STAGES = new Set(["create", "startup"]);
 const CLOUD_UPGRADE_SOURCES = new Set(["settings", "plan_refusal", "banner", "other"]);
@@ -953,6 +948,8 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 	switch (event) {
 		case "ao.renderer.cloud_signed_in":
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
+			// Whether Publish's Sign in started it (artifact_publish) or anything else.
+			if (typeof properties?.source === "string" && CLOUD_SIGN_IN_SOURCES.has(properties.source)) safe.source = properties.source;
 			break;
 		case "ao.renderer.cloud_web_visitor_link_requested":
 			// The website's own pseudonymous PostHog id, never anything typed.
@@ -1036,34 +1033,41 @@ function oneOf(value: unknown, allowed: readonly string[]): string | undefined {
 	return typeof value === "string" && allowed.includes(value) ? value : undefined;
 }
 
-function boundedCount(value: unknown, max: number): number | undefined {
-	return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= max ? value : undefined;
-}
-
+/** The artifact publish funnel's properties: enums and booleans only, never a file name, path, URL, title or invitee. */
 function sanitizeArtifactProperties(event: string, properties?: TelemetryProperties): TelemetryProperties {
-	const surfaces: Record<string, readonly string[]> = {
-		"ao.artifacts.list_opened": ARTIFACT_LIST_SURFACES,
-		"ao.artifacts.opened": ARTIFACT_OPEN_SURFACES,
-		"ao.artifacts.opened_externally": ARTIFACT_ACTION_SURFACES,
-		"ao.artifacts.deleted": ARTIFACT_ACTION_SURFACES,
-		"ao.artifacts.share_link_copied": ARTIFACT_LINK_COPY_SURFACES,
-	};
-	const candidates: TelemetryProperties = {
-		surface: surfaces[event] ? oneOf(properties?.surface, surfaces[event]) : undefined,
-		file_type: oneOf(properties?.file_type, ARTIFACT_FILE_TYPES),
-		source: oneOf(properties?.source, ARTIFACT_SOURCES),
-		outcome: event === "ao.artifacts.list_opened" ? oneOf(properties?.outcome, ARTIFACT_LIST_OUTCOMES) : undefined,
-		artifact_count_bucket: event === "ao.artifacts.list_opened" ? oneOf(properties?.artifact_count_bucket, ARTIFACT_COUNT_BUCKETS) : undefined,
-		time_to_first_card_ms: event === "ao.artifacts.list_opened" ? boundedCount(properties?.time_to_first_card_ms, 10 * 60_000) : undefined,
-		target: event === "ao.artifacts.opened_externally" ? oneOf(properties?.target, ARTIFACT_EXTERNAL_TARGETS) : undefined,
-		count: event === "ao.artifacts.deleted" ? boundedCount(properties?.count, 10_000) : undefined,
-		access: oneOf(properties?.access, ARTIFACT_SHARE_ACCESSES),
-		invite_count: boundedCount(properties?.invite_count, 1_000),
-		republish: event === "ao.artifacts.published" && typeof properties?.republish === "boolean" ? properties.republish : undefined,
-		owner: oneOf(properties?.owner, ARTIFACT_OWNERS),
-		reason: event === "ao.artifacts.publish_failed" ? oneOf(properties?.reason, ARTIFACT_PUBLISH_FAILURES) : undefined,
-		comment_count: event === "ao.artifacts.feedback_sent" ? boundedCount(properties?.comment_count, 1_000) : undefined,
-	};
+	const flag = (value: unknown) => (typeof value === "boolean" ? value : undefined);
+	let candidates: TelemetryProperties = {};
+	switch (event) {
+		case "ao.artifacts.session_started":
+			candidates = { scope: oneOf(properties?.scope, ARTIFACT_SESSION_SCOPES) };
+			break;
+		case "ao.artifacts.session_start_failed": {
+			const code = properties?.error_code;
+			const status = properties?.http_status;
+			candidates = {
+				scope: oneOf(properties?.scope, ARTIFACT_SESSION_SCOPES),
+				error_code: typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : undefined,
+				http_status: typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : undefined,
+			};
+			break;
+		}
+		case "ao.artifacts.publish_clicked":
+			candidates = { already_published: flag(properties?.already_published), signed_in: flag(properties?.signed_in) };
+			break;
+		case "ao.artifacts.sign_in_prompt_shown":
+			candidates = { reason: oneOf(properties?.reason, ARTIFACT_SIGN_IN_PROMPT_REASONS) };
+			break;
+		case "ao.artifacts.published":
+			candidates = { is_republish: flag(properties?.is_republish) };
+			break;
+		case "ao.artifacts.publish_failed":
+			candidates = { is_republish: flag(properties?.is_republish), reason: oneOf(properties?.reason, ARTIFACT_PUBLISH_FAILURES) };
+			break;
+		case "ao.artifacts.link_copied":
+			candidates = { surface: oneOf(properties?.surface, ARTIFACT_LINK_COPY_SURFACES) };
+			break;
+		// sign_in_clicked and unpublished carry no properties.
+	}
 	const safe: TelemetryProperties = {};
 	for (const [key, value] of Object.entries(candidates)) if (value !== undefined) safe[key] = value;
 	return safe;
@@ -1182,27 +1186,15 @@ export async function sanitizeRendererProperties(
 			}
 			break;
 		}
-		case "ao.renderer.artifact_create_succeeded":
-		case "ao.renderer.artifact_create_failed":
-			// Where the session lives, never which project.
-			if (properties?.scope === "standalone" || properties?.scope === "project") safe.scope = properties.scope;
-			break;
-		case "ao.artifacts.list_opened":
-		case "ao.artifacts.opened":
-		case "ao.artifacts.opened_externally":
-		case "ao.artifacts.deleted":
-		case "ao.artifacts.share_opened":
+		case "ao.artifacts.session_started":
+		case "ao.artifacts.session_start_failed":
+		case "ao.artifacts.publish_clicked":
+		case "ao.artifacts.sign_in_prompt_shown":
+		case "ao.artifacts.sign_in_clicked":
 		case "ao.artifacts.published":
-		case "ao.artifacts.unpublished":
-		case "ao.artifacts.share_access_changed":
-		case "ao.artifacts.share_invited":
-		case "ao.artifacts.share_link_copied":
 		case "ao.artifacts.publish_failed":
-		case "ao.artifacts.feedback_sent":
-		case "ao.artifacts.edited":
-		case "ao.artifacts.version_restored":
-			// Enums, counts and durations only: never a file name, path, URL,
-			// title, session name, content or invitee address.
+		case "ao.artifacts.link_copied":
+		case "ao.artifacts.unpublished":
 			Object.assign(safe, sanitizeArtifactProperties(event, properties));
 			break;
 		case "ao.session_imports.offer_shown":

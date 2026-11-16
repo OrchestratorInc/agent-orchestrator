@@ -19,9 +19,10 @@ import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
-import { artifactFileType } from "../lib/artifact-telemetry";
+import { publishFailureReason } from "../lib/artifact-telemetry";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
+import { clearSignInSource, noteSignInSource } from "../lib/cloud-telemetry";
 import { captureRendererEvent } from "../lib/telemetry";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
@@ -546,7 +547,7 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	const amberDot = <span aria-hidden="true" className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-status-in-review ring-1 ring-background" data-share-outdated="" />;
 	const panel = (
 		<PopoverContent align="end" className={POPOVER_CLASS} data-browser-native-overlay="true">
-			{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} onChanged={recheck} republishOnOpen={republishOnOpen} /> : null}
+			{open ? <SharePanel alreadyPublished={Boolean(share) || (!checked && published)} file={file} name={name} onClose={() => onOpenChange(false)} onChanged={recheck} republishOnOpen={republishOnOpen} /> : null}
 		</PopoverContent>
 	);
 	// Not offered where the control plane does not serve share links.
@@ -602,10 +603,13 @@ function SharePanel({
 	onChanged,
 	republishOnOpen = false,
 	unpublishOnOpen = false,
+	alreadyPublished = false,
 }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
 	name: string;
 	onClose: () => void;
+	/** The file had an active link when Publish was clicked, as its button showed. */
+	alreadyPublished?: boolean;
 	/** The link changed: published, republished, unpublished or its access. */
 	onChanged?: () => void;
 	/** Opened from Republish: put the newer version on the link at once. */
@@ -644,26 +648,40 @@ function SharePanel({
 	// A file on this computer, or one downloaded from a remote host, is
 	// uploaded by the popover's own Publish.
 	const onThisComputer = file.source !== "cloud";
-	// Enums only: never the file's name, path, link or the people invited.
-	const telemetry = { source: onThisComputer ? "local" : "cloud", file_type: artifactFileType(file.path) } as const;
-	// Once per panel: opening it is the Publish click (Unpublish opens it on its confirmation instead).
-	const openedSent = useRef(false);
-	// A publish that did not go through. The panel's opening is the Publish
-	// click, so a refusal it opens on counts too, once per panel: a fresher
-	// link list can decide the panel a second time.
-	const openRefusals = useRef(new Set<string>());
-	const captureFailed = (reason: "limit" | "unsupported" | "not_owner" | "signed_out" | "error", onOpen = false) => {
-		if (onOpen) {
-			if (openRefusals.current.has(reason)) return;
-			openRefusals.current.add(reason);
-		}
-		void captureRendererEvent("ao.artifacts.publish_failed", { ...telemetry, reason });
-	};
+	// Publish funnel telemetry: enums only, never the file's name, path, link
+	// or the people invited. Opening the panel is the Publish click, once per
+	// panel; Unpublish opens it on its confirmation instead.
+	const clickSent = useRef(false);
 	useEffect(() => {
-		if (openedSent.current || unpublishOnOpen) return;
-		openedSent.current = true;
-		void captureRendererEvent("ao.artifacts.share_opened", telemetry);
+		if (clickSent.current || unpublishOnOpen) return;
+		clickSent.current = true;
+		void captureRendererEvent("ao.artifacts.publish_clicked", { already_published: alreadyPublished, signed_in: signedIn });
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+	// The sign-in prompt and a refusal the panel opens on count once per
+	// panel: it is decided again when the session or a fresher list arrives.
+	const reported = useRef(new Set<string>());
+	const reportOnce = (key: string, send: () => void) => {
+		if (reported.current.has(key)) return;
+		reported.current.add(key);
+		send();
+	};
+	const showSignIn = (reason: "signed_out" | "session_expired") => {
+		reportOnce("sign_in", () => void captureRendererEvent("ao.artifacts.sign_in_prompt_shown", { reason }));
+		setPhase({ kind: "signin" });
+	};
+	const refusedOnOpen = () => reportOnce("refused", () => void captureRendererEvent("ao.artifacts.publish_failed", { is_republish: false, reason: "refused" }));
+	// A sign-in started here is reported as Publish's (cloud_signed_in's
+	// source), unless the panel closes before it finishes.
+	const signInNoted = useRef(false);
+	useEffect(() => () => {
+		if (signInNoted.current) clearSignInSource("artifact_publish");
+	}, []);
+	const signIn = () => {
+		void captureRendererEvent("ao.artifacts.sign_in_clicked");
+		noteSignInSource("artifact_publish");
+		signInNoted.current = true;
+		void aoBridge.cloud.signIn();
+	};
 
 	// Every read or change of who the link is shared with takes the next
 	// number. A full list (a read, or an invite's answer) is shown only if
@@ -716,7 +734,7 @@ function SharePanel({
 			case "not_owner":
 				return setPhase({ kind: "notOwner" });
 			case "signed_out":
-				return setPhase({ kind: "signin" });
+				return showSignIn("session_expired");
 			case "error":
 				return setPhase({ kind: "error", message: result.message });
 		}
@@ -727,7 +745,7 @@ function SharePanel({
 	// computer opens on its setup. publishNow false (after a cancel) waits too.
 	const load = useCallback(({ publishNow = true }: { publishNow?: boolean } = {}) => {
 		if (!signedIn) {
-			setPhase({ kind: "signin" });
+			showSignIn("signed_out");
 			return () => undefined;
 		}
 		let cancelled = false;
@@ -760,7 +778,7 @@ function SharePanel({
 		const decide = (inspection: CloudShareInspection, links: CloudShareLinks, publishNow: boolean, shown?: CloudShareLinks) => {
 			setPrivateLinks(links.privateLinks);
 			if (inspection.unsupported) {
-				captureFailed("unsupported", true);
+				refusedOnOpen();
 				return setPhase({ kind: "unsupported" });
 			}
 			// The link this file was published to from here, while it is active.
@@ -781,7 +799,7 @@ function SharePanel({
 			// document; the server decides for sure when it uploads.
 			const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
 			if (!links.unlimited && likelyNew && links.used >= links.limit) {
-				captureFailed("limit", true);
+				refusedOnOpen();
 				return setPhase({ kind: "limit", limit: links.limit });
 			}
 			// A cloud session's file is already in the bucket: it publishes at once.
@@ -861,15 +879,13 @@ function SharePanel({
 		try {
 			const result = await pending.result;
 			// Sent here, not in settle: this runs once per publish even if the panel closed meanwhile.
-			if (result.status === "published") {
-				// invite_count is the people added with this publish; a republish adds none.
-				void captureRendererEvent("ao.artifacts.published", { ...telemetry, access, invite_count: share ? undefined : invited, republish: Boolean(share) });
-			} else if (result.status === "limit" || result.status === "unsupported" || result.status === "not_owner" || result.status === "signed_out" || result.status === "error") {
-				captureFailed(result.status);
-			}
+			void captureRendererEvent(result.status === "published" ? "ao.artifacts.published" : "ao.artifacts.publish_failed", {
+				is_republish: Boolean(share),
+				...(result.status === "published" ? {} : { reason: publishFailureReason(result) }),
+			});
 			settle(result, links, share);
 		} catch (error) {
-			captureFailed("error");
+			void captureRendererEvent("ao.artifacts.publish_failed", { is_republish: Boolean(share), reason: "other" });
 			setPhase({ kind: "error", message: errorMessage(error) });
 		} finally {
 			if (pendingShares.get(key) === pending) setPending(key, undefined);
@@ -881,7 +897,7 @@ function SharePanel({
 		setPhase({ ...shown, unpublishing: "busy" });
 		try {
 			await aoBridge.cloudShare.unpublish(baseUrl, shown.share.id);
-			void captureRendererEvent("ao.artifacts.unpublished", { source: telemetry.source });
+			void captureRendererEvent("ao.artifacts.unpublished");
 			refreshArtifacts();
 			onChanged?.();
 			if (unpublishOnOpen) return onClose();
@@ -896,7 +912,6 @@ function SharePanel({
 		setChangingAccess(true);
 		try {
 			const share = await aoBridge.cloudShare.setAccess(baseUrl, shown.share.id, access);
-			void captureRendererEvent("ao.artifacts.share_access_changed", { access });
 			setPhase((current) => current.kind === "published" && current.share.id === share.id
 				? { ...current, share: { ...current.share, ...share }, narrowed: !isPrivateShare(current.share) && access === "restricted", error: undefined }
 				: current);
@@ -916,7 +931,6 @@ function SharePanel({
 		const seq = ++grantsSeq.current;
 		try {
 			const grants = await aoBridge.cloudShare.invite(baseUrl, shown.share.id, emails);
-			void captureRendererEvent("ao.artifacts.share_invited", { invite_count: emails.length });
 			setPhase((current) => current.kind === "published" && current.share.id === shown.share.id && seq === grantsSeq.current
 				? { ...current, grants, share: { ...current.share, grantCount: grants.length }, grantsError: undefined, error: undefined }
 				: current);
@@ -988,7 +1002,7 @@ function SharePanel({
 				<>
 					{heading(t("artifacts.share.signInTitle"))}
 					{status(t("artifacts.share.signInDescription"))}
-					{footer(null, <Button onClick={() => void aoBridge.cloud.signIn()} size="sm" type="button" variant="primary">{t("artifacts.share.signIn")}</Button>)}
+					{footer(null, <Button onClick={signIn} size="sm" type="button" variant="primary">{t("artifacts.share.signIn")}</Button>)}
 				</>
 			);
 		case "unsupported":
@@ -1160,7 +1174,7 @@ function SharePanel({
 							<Button
 								onClick={() => void aoBridge.clipboard.writeText(link).then(() => {
 									setCopied(true);
-									void captureRendererEvent("ao.artifacts.share_link_copied", { surface: "panel" });
+									void captureRendererEvent("ao.artifacts.link_copied", { surface: "panel" });
 								})}
 								size="sm"
 								type="button"

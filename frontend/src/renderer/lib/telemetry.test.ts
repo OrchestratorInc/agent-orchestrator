@@ -647,45 +647,44 @@ describe("telemetry sanitizers", () => {
 		});
 	});
 
-	it("keeps only the scope enum on artifact_create events", async () => {
-		for (const event of [
-			"ao.renderer.artifact_create_succeeded",
-			"ao.renderer.artifact_create_failed",
-		]) {
-			expect(await sanitizeRendererProperties(event, { scope: "project", project_id: "demo-project", name: "plan.md" })).toEqual({ scope: "project" });
-			expect(await sanitizeRendererProperties(event, { scope: "standalone" })).toEqual({ scope: "standalone" });
-			expect(await sanitizeRendererProperties(event, { scope: "/Users/alice/secret" })).toEqual({});
-		}
+	it("keeps only the scope, error code and status on artifact session starts", async () => {
+		expect(await sanitizeRendererProperties("ao.artifacts.session_started", { scope: "project", project_id: "demo-project", name: "plan.md" })).toEqual({ scope: "project" });
+		expect(await sanitizeRendererProperties("ao.artifacts.session_started", { scope: "cloud" })).toEqual({ scope: "cloud" });
+		expect(await sanitizeRendererProperties("ao.artifacts.session_started", { scope: "/Users/alice/secret" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
+			scope: "standalone", error_code: "AGENT_NOT_READY", http_status: 409, message: "Agent is not ready",
+		})).toEqual({ scope: "standalone", error_code: "AGENT_NOT_READY", http_status: 409 });
+		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
+			scope: "standalone", error_code: "agent not ready at /Users/alice", http_status: 200,
+		})).toEqual({ scope: "standalone" });
 	});
 
-	it("keeps only enums, counts and durations on artifact usage events", async () => {
+	it("keeps only enums and booleans on the artifact publish funnel", async () => {
 		const leaks = { path: "/Users/alice/report.html", name: "report.html", url: "https://share.example/abc", title: "Q3 plan", session: "alice-session", emails: ["bob@example.com"] };
-		expect(await sanitizeRendererProperties("ao.artifacts.list_opened", {
-			...leaks, surface: "page", outcome: "loaded", artifact_count_bucket: "6-20", time_to_first_card_ms: 412,
-		})).toEqual({ surface: "page", outcome: "loaded", artifact_count_bucket: "6-20", time_to_first_card_ms: 412 });
-		expect(await sanitizeRendererProperties("ao.artifacts.opened", {
-			...leaks, surface: "chat_card", file_type: "html", source: "cloud", owner: "teammate",
-		})).toEqual({ surface: "chat_card", file_type: "html", source: "cloud", owner: "teammate" });
-		expect(await sanitizeRendererProperties("ao.artifacts.published", {
-			...leaks, access: "anyone", invite_count: 2, republish: false, source: "local", file_type: "pdf",
-		})).toEqual({ access: "anyone", invite_count: 2, republish: false, source: "local", file_type: "pdf" });
-		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { ...leaks, reason: "limit" })).toEqual({ reason: "limit" });
-		expect(await sanitizeRendererProperties("ao.artifacts.feedback_sent", { ...leaks, comment_count: 3 })).toEqual({ comment_count: 3 });
-		expect(await sanitizeRendererProperties("ao.artifacts.deleted", { ...leaks, surface: "page", count: 4 })).toEqual({ surface: "page", count: 4 });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_clicked", { ...leaks, already_published: false, signed_in: true }))
+			.toEqual({ already_published: false, signed_in: true });
+		expect(await sanitizeRendererProperties("ao.artifacts.sign_in_prompt_shown", { ...leaks, reason: "session_expired" })).toEqual({ reason: "session_expired" });
+		expect(await sanitizeRendererProperties("ao.artifacts.sign_in_clicked", leaks)).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.published", { ...leaks, is_republish: true })).toEqual({ is_republish: true });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { ...leaks, is_republish: false, reason: "too_large" }))
+			.toEqual({ is_republish: false, reason: "too_large" });
+		expect(await sanitizeRendererProperties("ao.artifacts.link_copied", { ...leaks, surface: "menu" })).toEqual({ surface: "menu" });
+		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", leaks)).toEqual({});
 	});
 
-	it("drops artifact values outside their vocabulary or bounds", async () => {
-		expect(await sanitizeRendererProperties("ao.artifacts.opened", {
-			surface: "viewer", file_type: "/Users/alice/a.html", source: "laptop", owner: "u_123",
-		})).toEqual({});
-		expect(await sanitizeRendererProperties("ao.artifacts.opened_externally", { target: "email", surface: "chat_card" })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.artifacts.list_opened", {
-			outcome: "loaded", time_to_first_card_ms: -1, artifact_count_bucket: "17",
-		})).toEqual({ outcome: "loaded" });
-		expect(await sanitizeRendererProperties("ao.artifacts.list_opened", { time_to_first_card_ms: 12.5 })).toEqual({});
-		// A property only travels on the events it belongs to.
-		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", { reason: "limit", count: 2, outcome: "loaded" })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.artifacts.share_invited", { invite_count: 5000 })).toEqual({});
+	it("drops artifact funnel values outside their vocabulary, and properties on events they do not belong to", async () => {
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_clicked", { already_published: "yes", signed_in: 1 })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.sign_in_prompt_shown", { reason: "Token expired for bob@example.com" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { reason: "limit" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.link_copied", { surface: "email" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.published", { reason: "refused", scope: "project" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", { is_republish: true, surface: "panel" })).toEqual({});
+	});
+
+	it("silences the renamed artifact session events by their old names", () => {
+		expect(isDeniedEvent("ao.artifacts.session_started", ["ao.renderer.artifact_create_succeeded"])).toBe(true);
+		expect(isDeniedEvent("ao.artifacts.session_start_failed", ["ao.renderer.artifact_create_*"])).toBe(true);
+		expect(isDeniedEvent("ao.artifacts.published", ["ao.renderer.artifact_create_*"])).toBe(false);
 	});
 
 	it("keeps bounded spawn source and typed failure fields", async () => {

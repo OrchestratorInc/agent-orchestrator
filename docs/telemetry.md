@@ -569,84 +569,72 @@ not emit creation events. This measures declared intent at creation, not current
 active usage, successful execution, or the exact contents of a customized prompt.
 Existing events cannot be used to reconstruct historical automation intent.
 
-## Artifact creation
+## Artifacts
 
-When desktop product telemetry is enabled, Orchestrator.inc records visits to the
-Artifacts page with `ao.routes.viewed` and `surface: artifacts`. It
-also records these events when you start an artifact session from that page:
-
-| Event | When it is sent | Artifact-specific properties |
-| --- | --- | --- |
-| `ao.renderer.artifact_create_succeeded` | The session starts | `scope` |
-| `ao.renderer.artifact_create_failed` | Starting the session fails | `scope` |
-
-`scope` is `standalone` for the Scratchpad and `project` otherwise. No project
-identifier, file name, or artifact content is sent.
-
-## Artifact usage
-
-When product telemetry is enabled, Orchestrator.inc records how artifacts are
-registered, viewed, shared, and removed. These events carry only the closed
-values listed below, counts, and durations. They never include a file name,
-path, URL, artifact content, title, session or project name, or an invitee's
-email address.
+When product telemetry is enabled, Orchestrator.inc records visits to the
+Artifacts page with `ao.routes.viewed` and `surface: artifacts`, and the events
+below: how artifacts are created, and how people publish them and copy their
+links. They carry only the closed values listed here and counts. They never
+include a file name, path, extension, URL, artifact content, title, session or
+project name, raw error message, or the people a link is shared with.
 
 | Event | When it is sent | Artifact-specific properties |
 | --- | --- | --- |
-| `ao.artifacts.registered` | The daemon registers new artifact files for a session (`ao artifact add`). One event per registration and file type; registering a path again sends nothing | `file_type`, `count` |
-| `ao.artifacts.list_opened` | The Artifacts page opens, or a session's Artifacts tab shows its cards while the inspector is open. Once per open; closing and reopening the page, tab or inspector counts again, and returning from one artifact to the cards does not | `surface` (`page`, `tab`), `outcome`, `artifact_count_bucket`, `time_to_first_card_ms` |
-| `ao.artifacts.opened` | You open an artifact | `surface` (`page`, `tab`, `chat_card`, `link`, `board`), `file_type`, `source`, `owner` |
-| `ao.artifacts.opened_externally` | You choose Show in Finder (or File Explorer or the file manager), Show in Terminal, Open in browser, or Download | `target` (`file_manager`, `terminal`, `browser`, `download`), `surface`, `file_type`, `source` |
-| `ao.artifacts.deleted` | Deleting one artifact, or several from the Artifacts page, succeeds | `surface`, `count`, `source` |
-| `ao.artifacts.feedback_sent` | Feedback you wrote on an open artifact reaches its agent | `comment_count`, `file_type`, `source` |
-| `ao.artifacts.edited` | Saving an edit to an artifact succeeds | `file_type`, `source` |
-| `ao.artifacts.version_restored` | Restoring an earlier version of an artifact succeeds | `file_type`, `source` |
-| `ao.artifacts.share_opened` | The publish panel opens | `source`, `file_type` |
-| `ao.artifacts.published` | A publish or republish succeeds | `access`, `invite_count`, `republish`, `source`, `file_type` |
-| `ao.artifacts.publish_failed` | A publish does not go through, or the publish panel opens on a refusal (once per panel) | `reason`, `source`, `file_type` |
-| `ao.artifacts.share_access_changed` | Changing who a published link opens for succeeds | `access` |
-| `ao.artifacts.share_invited` | Inviting people to a published link succeeds | `invite_count` |
-| `ao.artifacts.share_link_copied` | You copy a published link | `surface` (`panel`, `menu`) |
-| `ao.artifacts.unpublished` | Unpublishing succeeds | `source` |
+| `ao.artifacts.session_started` | New artifact on the Artifacts page starts its session (formerly `ao.renderer.artifact_create_succeeded`) | `scope` |
+| `ao.artifacts.session_start_failed` | Starting that session fails (formerly `ao.renderer.artifact_create_failed`) | `scope`, `error_code`, `http_status` |
+| `ao.artifacts.registered` | The daemon registers new artifacts for a session (`ao artifact add`). One event per content category and size band among them; registering a path again sends nothing | `source`, `content_category`, `size_bucket`, `count` |
+| `ao.artifacts.register_failed` | The daemon refuses an `ao artifact add` | `source`, `reason` |
+| `ao.artifacts.publish_clicked` | You click Publish (the toolbar button or the ⋯ menu item), before any sign-in check or upload | `already_published`, `signed_in` |
+| `ao.artifacts.sign_in_prompt_shown` | The Publish popover asks you to sign in, once per popover | `reason` |
+| `ao.artifacts.sign_in_clicked` | You click its Sign in button | none |
+| `ao.artifacts.published` | A publish or republish succeeds | `is_republish` |
+| `ao.artifacts.publish_failed` | A publish does not go through, or the popover opens on a refusal (once per popover) | `is_republish`, `reason` |
+| `ao.artifacts.link_copied` | You copy a published link | `surface` |
+| `ao.artifacts.unpublished` | Unpublishing succeeds | none |
 
-- `file_type` is a bucket worked out from the file's extension: `html`,
-  `markdown`, `pdf`, `image`, `video`, `audio`, `data`, `text`, `office`,
-  `code`, `archive`, `bundle` (a bundle directory), or `other`. The extension
-  itself is not sent.
-- `source` is where the artifact's session runs: `local`, `remote_host`, or
-  `cloud`. It is omitted where the app does not know it (chat cards and links)
-  and on a bulk delete from the Artifacts page, which can span both.
-  On share events it is `local` for a file on this computer and `cloud` for a
-  cloud session's file.
-- `surface` on `opened_externally` and `deleted` is `page` (the Artifacts
-  page), `tab` (a session's Artifacts tab), or `viewer` (the open artifact).
-- `outcome` is `loaded` (the first card appeared, even while cloud lists
-  were still loading), `empty` (no artifacts once every list loaded),
-  `failed` (the list could not be read, or no cards showed once every list
-  answered because a cloud list or a cloud session's files could not be
-  read), or `left` (closed before
-  either). `time_to_first_card_ms` is sent only with `loaded`.
-- `artifact_count_bucket` is `0`, `1`, `2-5`, `6-20`, `21-50`, `51-200`, or
-  `200+`: the artifacts listed when the first card appeared, or when every
-  list had loaded for `empty`.
-- `access` is `restricted` (only the owner and the people invited) or
-  `anyone` (anyone with the link). `invite_count` is the number of people
-  added in that action, never who they are. `republish` is true when an
-  existing link was updated with a newer version.
-- `owner` is sent only for a cloud session's artifact, when both accounts are
-  known: `self` when you started the session, `teammate` when another member
-  of your organization did. No account identifier is sent.
-- `reason` is `limit` (the plan's link limit is reached), `unsupported` (the
-  file cannot be published), `not_owner` (someone else's cloud session),
-  `signed_out`, or `error`.
-- `comment_count` is how many feedback comments one send delivered, never
-  their text.
+- `scope` is `standalone` for the Scratchpad, `project` for a project, and
+  `cloud` for an AO Cloud project.
+- `error_code` is the API's error code (such as `AGENT_NOT_READY`), never its
+  message; `http_status` is the 4xx or 5xx status when the daemon refused.
+- `source` is `artifacts_tab` for a worker started by New artifact, otherwise
+  `worker` or `orchestrator`: the kind of session that ran `ao artifact add`.
+- `content_category` comes from the file's extension: `markdown`, `html`,
+  `image`, `video`, `audio`, `pdf`, `text`, or `other` (a bundle directory is
+  `other`).
+- `size_bucket` is `xs` (under 10 KB), `s` (under 100 KB), `m` (under 1 MB),
+  `l` (under 10 MB), or `xl`. A bundle directory's size is that of the files in
+  it. It is omitted when the daemon could not list the files.
+- `reason` on `register_failed` is `outside_dir` (not in the session's
+  artifact directory), `not_found`, `not_registrable` (not a file or bundle
+  directory), or `internal`. A command that fails before it reaches the daemon
+  is not counted here.
+- `already_published` is whether the file had an active link when Publish was
+  clicked; `signed_in` is whether you were signed in to AO Cloud.
+- `reason` on `sign_in_prompt_shown` is `signed_out` (signed out when you
+  clicked Publish) or `session_expired` (a publish came back signed out).
+- `is_republish` is true when an existing link was being updated.
+- `reason` on `publish_failed` is `signed_out`, `too_large`, `upload_failed`
+  (the upload, or reading the file from its machine, failed), `cancelled`,
+  `refused` (the plan's link limit, a file type that cannot be published yet,
+  or someone else's cloud session), or `other`.
+- `surface` on `link_copied` is `panel` (the Publish popover) or `menu` (the
+  artifact's ⋯ menu).
 
-`ao.artifacts.registered` is sent by the daemon that registered the file, so it
-follows that daemon's telemetry setting; cloud sessions register artifacts in
-AO Cloud and do not send it. The other events are sent by the desktop app at
-most once per action or per open, never on re-renders, and stop when Share
-usage analytics is off.
+`ao.renderer.cloud_signed_in` also carries `source`: `artifact_publish` when
+the sign-in finished within 30 minutes of clicking Sign in in the Publish
+popover, while the popover stayed open, and `other` otherwise. That note is
+kept in memory only. Together these events give the sign-in drop-off funnel:
+`publish_clicked` (`signed_in` false) → `sign_in_prompt_shown` →
+`sign_in_clicked` → `cloud_signed_in` (`source` `artifact_publish`) →
+`published` → `link_copied`.
+
+The `ao.artifacts.registered` and `ao.artifacts.register_failed` events are
+sent by the daemon that registered the file, so they follow that daemon's
+telemetry setting; cloud sessions register artifacts in AO Cloud and do not
+send them. The other events are sent by the desktop app at most once per
+action or per open, never on re-renders, and stop when Share usage analytics
+is off. A kill-switch entry written against an old event name still silences
+the renamed event.
 
 The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.

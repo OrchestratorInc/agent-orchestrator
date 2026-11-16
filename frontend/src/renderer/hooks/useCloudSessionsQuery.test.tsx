@@ -62,20 +62,6 @@ describe("useCloudSessionsQuery artifact files", () => {
 		await result.current.refetch();
 		await waitFor(() => expect(cloud.listSessionArtifacts).toHaveBeenCalledTimes(2));
 		expect(result.current.data?.[0]?.artifactFiles).toEqual(files);
-		// Once the new read gives up, the earlier files still show: nothing is missing.
-		await waitFor(() => expect(queryClient.getQueryCache().findAll({ predicate: (query) => query.state.status === "error" })).toHaveLength(1), { timeout: 3000 });
-		expect(result.current.data?.[0]?.artifactFiles).toEqual(files);
-		expect(result.current.filesFailed).toBe(false);
-	});
-
-	it("reports a file read that failed with nothing to show", async () => {
-		cloud.listSessionArtifacts.mockRejectedValue(new Error("unavailable"));
-		cloud.listSessions.mockResolvedValue({ items: [session("s-1", { count: 1, artifactsUpdatedAt: "2026-10-16T10:00:00Z" })] });
-		const { result } = renderHook(() => useCloudSessionsQuery(), { wrapper });
-		// The file query retries once before it gives up.
-		await waitFor(() => expect(result.current.filesFailed).toBe(true), { timeout: 3000 });
-		expect(result.current.filesLoading).toBe(false);
-		expect(result.current.data?.[0]?.artifactFiles).toBeUndefined();
 	});
 
 	it("shows the session list before its file lists arrive", async () => {
@@ -85,11 +71,8 @@ describe("useCloudSessionsQuery artifact files", () => {
 		const { result } = renderHook(() => useCloudSessionsQuery(), { wrapper });
 		await waitFor(() => expect(result.current.data).toHaveLength(1));
 		expect(result.current.data?.[0]?.artifactFiles).toBeUndefined();
-		// The list is in, but its cards are still on the way.
-		await waitFor(() => expect(result.current.filesLoading).toBe(true));
 		release({ artifacts: files });
 		await waitFor(() => expect(result.current.data?.[0]?.artifactFiles).toEqual(files));
-		expect(result.current.filesLoading).toBe(false);
 	});
 
 	it("follows a change in how many sessions have files without a hook warning", async () => {

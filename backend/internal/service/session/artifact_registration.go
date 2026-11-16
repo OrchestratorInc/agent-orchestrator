@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	pathpkg "path"
 	"slices"
 	"strings"
 
@@ -36,11 +35,13 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 		return ArtifactRegistration{}, err
 	}
 	dir := cmp.Or(rec.Metadata.ArtifactDir, sessionartifacts.Dir(s.dataDir, id))
+	source := domain.ArtifactSource(rec.Kind, rec.RequestedOutput)
 	paths := make([]string, 0, len(references))
 	registrations := make([]domain.SessionArtifactRegistration, 0, len(references))
 	for _, reference := range references {
 		registration, err := sessionartifacts.Registrable(dir, reference)
 		if err != nil {
+			s.emitArtifactRegisterFailed(source, err)
 			return ArtifactRegistration{}, registrationError(reference, err)
 		}
 		paths = append(paths, registration.Path)
@@ -49,15 +50,17 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 	known, knownOK := s.registeredArtifactPaths(ctx, id)
 	registered, found, err := s.store.AddSessionArtifacts(ctx, id, registrations, s.clock())
 	if err != nil {
+		s.emitArtifactRegisterFailed(source, err)
 		return ArtifactRegistration{}, err
 	}
 	if !found {
 		return ArtifactRegistration{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
-	if knownOK {
-		s.emitArtifactsRegistered(paths, known)
-	}
 	files, err := sessionartifacts.ListRegistered(ctx, dir, registered)
+	// Sent before a failed listing returns: the registration itself went through.
+	if knownOK {
+		s.emitArtifactsRegistered(source, paths, known, files)
+	}
 	if err != nil {
 		return ArtifactRegistration{}, fmt.Errorf("list artifacts of %s: %w", id, err)
 	}
@@ -94,27 +97,80 @@ func (s *Service) registeredArtifactPaths(ctx context.Context, id domain.Session
 	return known, true
 }
 
-// emitArtifactsRegistered sends one ao.artifacts.registered per file type
-// among the newly registered paths, with how many there were. Only the type
-// bucket and the count are sent, never a path, name or session.
-func (s *Service) emitArtifactsRegistered(paths []string, known map[string]bool) {
-	counts := map[string]int{}
+// emitArtifactsRegistered sends one ao.artifacts.registered per content
+// category and size band among the newly registered paths, with how many
+// there were and where they came from. A path's size is read from files, the
+// listing this registration already made; the band is left out when the
+// listing does not have it. Never a path, name or session.
+func (s *Service) emitArtifactsRegistered(source string, paths []string, known map[string]bool, files []domain.SessionArtifactFile) {
+	type group struct{ category, size string }
+	counts := map[group]int{}
 	for _, path := range paths {
 		if known[path] {
 			continue
 		}
 		known[path] = true
-		counts[domain.ArtifactFileType(path, sessionartifacts.IsBundleDir(pathpkg.Base(path)))]++
+		size, listed := registeredSize(path, files)
+		g := group{category: domain.ArtifactContentCategory(path)}
+		if listed {
+			g.size = domain.ArtifactSizeBucket(size)
+		}
+		counts[g]++
 	}
-	for _, fileType := range slices.Sorted(maps.Keys(counts)) {
+	groups := slices.SortedFunc(maps.Keys(counts), func(a, b group) int {
+		return cmp.Or(cmp.Compare(a.category, b.category), cmp.Compare(a.size, b.size))
+	})
+	for _, g := range groups {
+		payload := map[string]any{"source": source, "content_category": g.category, "count": counts[g]}
+		if g.size != "" {
+			payload["size_bucket"] = g.size
+		}
 		s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 			Name:       "ao.artifacts.registered",
 			Source:     "session_service",
 			OccurredAt: s.now(),
 			Level:      ports.TelemetryLevelInfo,
-			Payload:    map[string]any{"file_type": fileType, "count": counts[fileType]},
+			Payload:    payload,
 		})
 	}
+}
+
+// registeredSize is the size of the file at path, or of every file in the
+// bundle directory at path, as files lists them, and whether any was listed.
+func registeredSize(path string, files []domain.SessionArtifactFile) (int64, bool) {
+	var size int64
+	listed := false
+	for _, file := range files {
+		if file.Path == path || strings.HasPrefix(file.Path, path+"/") {
+			size += file.Size
+			listed = true
+		}
+	}
+	return size, listed
+}
+
+// emitArtifactRegisterFailed sends ao.artifacts.register_failed with why the
+// daemon refused a registration: the reason category, never the path.
+func (s *Service) emitArtifactRegisterFailed(source string, err error) {
+	if s.telemetry == nil {
+		return
+	}
+	reason := domain.ArtifactRegisterInternal
+	switch {
+	case errors.Is(err, sessionartifacts.ErrOutsideDir):
+		reason = domain.ArtifactRegisterOutsideDir
+	case errors.Is(err, sessionartifacts.ErrNotFound):
+		reason = domain.ArtifactRegisterNotFound
+	case errors.Is(err, sessionartifacts.ErrNotRegistrable):
+		reason = domain.ArtifactRegisterNotRegistrable
+	}
+	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
+		Name:       "ao.artifacts.register_failed",
+		Source:     "session_service",
+		OccurredAt: s.now(),
+		Level:      ports.TelemetryLevelInfo,
+		Payload:    map[string]any{"source": source, "reason": reason},
+	})
 }
 
 // UnregisterArtifact forgets one registered path, after the user deleted it.

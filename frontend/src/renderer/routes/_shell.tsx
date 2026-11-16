@@ -58,7 +58,6 @@ import { cachedCloudBillingMode } from "../lib/cloud-offering";
 import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
-import { artifactFileType } from "../lib/artifact-telemetry";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
 import { ShellProvider } from "../lib/shell-context";
@@ -1485,10 +1484,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				useUiStore.getState().showGlobalToast(t("deepLink.sessionTerminated", { sessionId: resolved.sessionId }));
 				return;
 			}
-			if (artifact) {
-				void captureRendererEvent("ao.artifacts.opened", { surface: "link", file_type: artifactFileType(artifact.path) });
-				useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
-			}
+			if (artifact) useUiStore.getState().requestWorkspaceFileOpen(resolved.sessionId, artifact.path, workspace.hostId, "artifact");
 			void navigate(sessionNavigateTarget(resolved.projectId, resolved.sessionId, workspace.hostId));
 		},
 		[navigate, remoteFailedHostIds, t],

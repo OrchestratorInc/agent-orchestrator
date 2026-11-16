@@ -37,6 +37,30 @@ function errorStatus(error: unknown): number | undefined {
 	return typeof status === "number" ? status : undefined;
 }
 
+/** Where a sign-in can start, for cloud_signed_in's source. Anything without a note is "other". */
+export type CloudSignInSource = "artifact_publish";
+/** A sign-in started from a source counts as one for this long. */
+const SIGN_IN_SOURCE_TTL_MS = 30 * 60_000;
+/** The source of the sign-in in progress, kept in memory only. */
+let signInSource: { source: CloudSignInSource; expires: number } | undefined;
+
+/** Notes that a sign-in was started from source, e.g. Publish's Sign in button. */
+export function noteSignInSource(source: CloudSignInSource, now = Date.now()): void {
+	signInSource = { source, expires: now + SIGN_IN_SOURCE_TTL_MS };
+}
+
+/** Forgets a note from source, e.g. when the popover that set it closes. */
+export function clearSignInSource(source: CloudSignInSource): void {
+	if (signInSource?.source === source) signInSource = undefined;
+}
+
+/** The source of the sign-in that just finished, used up once read. */
+function takeSignInSource(now = Date.now()): CloudSignInSource | "other" {
+	const note = signInSource;
+	signInSource = undefined;
+	return note && note.expires > now ? note.source : "other";
+}
+
 /** The signed-in user as last seen by any hook instance; undefined before the first read. */
 let knownCloudUser: string | null | undefined;
 
@@ -53,7 +77,7 @@ export function noteCloudSession(
 	const previous = knownCloudUser;
 	knownCloudUser = userId;
 	if (initial || !account || previous === userId) return;
-	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider });
+	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider, source: takeSignInSource() });
 }
 
 interface OfferingShape {
@@ -193,6 +217,7 @@ export function observeCloudSessions(sessions: readonly CloudCpSession[], now = 
 export function resetCloudTelemetryForTest(): void {
 	pendingSessions.clear();
 	knownCloudUser = undefined;
+	signInSource = undefined;
 	reportedOfferings = new Set();
 	defaultProvider = "";
 }

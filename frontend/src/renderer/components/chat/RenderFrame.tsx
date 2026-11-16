@@ -1,5 +1,3 @@
-import { artifactFileType } from "../../lib/artifact-telemetry";
-import { captureRendererEvent } from "../../lib/telemetry";
 import { apiErrorException } from "../../lib/api-error-exception";
 import { Code2, Download, ExternalLink, FilePlus, FileText, Loader2, Maximize2, WrapText } from "@/components/app-icons";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -263,7 +261,6 @@ function OpenInPanelAction({ sessionId, path, onOpen }: { sessionId: string; pat
 			label={t("chat.artifact.openInPanel")}
 			onClick={() => {
 				onOpen();
-				void captureRendererEvent("ao.artifacts.opened", { surface: "chat_card", file_type: artifactFileType(path) });
 				requestWorkspaceFileOpen(sessionId, path, undefined, "artifact");
 			}}
 		>
@@ -393,7 +390,6 @@ export function RenderFrame(props: { render: RenderRef } | { artifact: ArtifactR
 					onClick={() => {
 						setShowSource(false);
 						setExpanded(true);
-						if ("artifact" in props) void captureRendererEvent("ao.artifacts.opened", { surface: "chat_card", file_type: artifactFileType(props.artifact.path) });
 					}}
 				>
 					<Maximize2 className="size-3.5" />

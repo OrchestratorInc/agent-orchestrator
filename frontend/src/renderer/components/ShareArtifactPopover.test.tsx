@@ -14,6 +14,19 @@ const mocks = vi.hoisted(() => ({
 	userId: "u-1",
 	baseUrl: "https://cp.test",
 	openSettings: vi.fn(),
+	capture: vi.fn(async () => true),
+	noteSignIn: vi.fn(),
+	clearSignIn: vi.fn(),
+}));
+
+vi.mock("../lib/telemetry", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/telemetry")>(),
+	captureRendererEvent: mocks.capture,
+}));
+vi.mock("../lib/cloud-telemetry", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/cloud-telemetry")>(),
+	noteSignInSource: mocks.noteSignIn,
+	clearSignInSource: mocks.clearSignIn,
 }));
 
 vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: mocks.baseUrl } }) }));
@@ -76,6 +89,9 @@ beforeEach(() => {
 	mocks.userId = "u-1";
 	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
+	mocks.capture.mockClear();
+	mocks.noteSignIn.mockReset();
+	mocks.clearSignIn.mockReset();
 	vi.restoreAllMocks();
 	resetShareCachesForTests();
 });
@@ -877,5 +893,67 @@ describe("useReconciledShareLinks", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(list).not.toHaveBeenCalled();
 		expect(invalidate).not.toHaveBeenCalled();
+	});
+});
+
+describe("publish telemetry", () => {
+	/** Every capture of event, by its properties. */
+	const sent = (event: string) => mocks.capture.mock.calls.filter((call) => (call as unknown[])[0] === event).map((call) => (call as unknown[])[1]);
+
+	it("counts the Publish click once and the link it made, then a copy, with no file details", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share });
+		vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue();
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
+		await screen.findByRole("button", { name: "Copied" });
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([{ already_published: false, signed_in: true }]);
+		expect(sent("ao.artifacts.published")).toEqual([{ is_republish: false }]);
+		expect(sent("ao.artifacts.link_copied")).toEqual([{ surface: "panel" }]);
+		expect(JSON.stringify(mocks.capture.mock.calls)).not.toMatch(/report|abc|viewer\.test|sess-|cloud-1/);
+	});
+
+	it("counts the sign-in prompt and the Sign in click, and forgets Publish's sign-in when the popover closes", async () => {
+		mocks.status = "unauthenticated";
+		vi.spyOn(aoBridge.cloud, "signIn").mockResolvedValue();
+		const user = userEvent.setup();
+		renderButton(cloudFile);
+		const trigger = await screen.findByRole("button", { name: "Publish: report.html" });
+		await user.click(trigger);
+		await user.click(await screen.findByRole("button", { name: "Sign in" }));
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([{ already_published: false, signed_in: false }]);
+		expect(sent("ao.artifacts.sign_in_prompt_shown")).toEqual([{ reason: "signed_out" }]);
+		expect(sent("ao.artifacts.sign_in_clicked")).toHaveLength(1);
+		expect(mocks.noteSignIn).toHaveBeenCalledExactlyOnceWith("artifact_publish");
+		expect(mocks.clearSignIn).not.toHaveBeenCalled();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(mocks.clearSignIn).toHaveBeenCalledWith("artifact_publish");
+	});
+
+	it("counts a publish that came back signed out as a failure and an expired session", async () => {
+		stub(inspection, links, { status: "signed_out" });
+		await openPopover(cloudFile);
+		await screen.findByRole("button", { name: "Sign in" });
+		expect(sent("ao.artifacts.publish_failed")).toEqual([{ is_republish: false, reason: "signed_out" }]);
+		expect(sent("ao.artifacts.sign_in_prompt_shown")).toEqual([{ reason: "session_expired" }]);
+	});
+
+	it("counts a refusal the panel opens on once", async () => {
+		const { publishSpy } = stub(inspection, { ...links, used: 3 });
+		await openPopover(cloudFile);
+		await waitFor(() => expect(sent("ao.artifacts.publish_failed")).toEqual([{ is_republish: false, reason: "refused" }]));
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("counts an unpublish, and does not count its confirmation as a Publish click", async () => {
+		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "unpublish").mockResolvedValue();
+		const onOpenChange = vi.fn();
+		await openMenuPanel(cloudFile, "unpublish", onOpenChange);
+		await userEvent.click(await screen.findByRole("button", { name: "Unpublish" }));
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sent("ao.artifacts.unpublished")).toEqual([undefined]);
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([]);
 	});
 });

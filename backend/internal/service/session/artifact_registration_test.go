@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -46,13 +47,20 @@ func TestRegisterArtifactsReportsWhatStaysUnlisted(t *testing.T) {
 	}
 }
 
-func TestRegisterArtifactsReportsOnlyNewFilesByType(t *testing.T) {
-	_, st, dir := registrationFixture(t, "brand.html", "notes.html", "shot.png")
+func TestRegisterArtifactsReportsOnlyNewFilesBySourceCategoryAndSize(t *testing.T) {
+	_, st, dir := registrationFixture(t, "brand.html", "notes.html", "shot.png", "app.icon/icon.json", "app.icon/a.png")
+	big := filepath.Join(dir, "deck.pdf")
+	if err := os.WriteFile(big, make([]byte, 200*1024), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec := st.sessions["mer-1"]
+	rec.Kind, rec.RequestedOutput = domain.KindWorker, domain.RequestedOutputArtifact
+	st.sessions["mer-1"] = rec
 	sink := &fakeTelemetrySink{}
 	svc := NewWithDeps(Deps{Store: st, DataDir: filepath.Dir(filepath.Dir(dir)), Telemetry: sink})
 	ctx := context.Background()
 
-	if _, err := svc.RegisterArtifacts(ctx, "mer-1", []string{"brand.html", "notes.html", "shot.png", "brand.html"}); err != nil {
+	if _, err := svc.RegisterArtifacts(ctx, "mer-1", []string{"brand.html", "notes.html", "shot.png", "app.icon", "deck.pdf", "brand.html"}); err != nil {
 		t.Fatal(err)
 	}
 	got := map[string]any{}
@@ -60,13 +68,15 @@ func TestRegisterArtifactsReportsOnlyNewFilesByType(t *testing.T) {
 		if ev.Name != "ao.artifacts.registered" {
 			t.Fatalf("unexpected event %q", ev.Name)
 		}
-		if len(ev.Payload) != 2 || ev.SessionID != nil || ev.ProjectID != nil {
-			t.Fatalf("event carries more than the type and count: %+v", ev)
+		if len(ev.Payload) != 4 || ev.Payload["source"] != "artifacts_tab" || ev.SessionID != nil || ev.ProjectID != nil {
+			t.Fatalf("event carries more than its source, category, size and count: %+v", ev)
 		}
-		got[ev.Payload["file_type"].(string)] = ev.Payload["count"]
+		got[ev.Payload["content_category"].(string)+"/"+ev.Payload["size_bucket"].(string)] = ev.Payload["count"]
 	}
-	if len(got) != 2 || got["html"] != 2 || got["image"] != 1 {
-		t.Fatalf("counts by type = %v", got)
+	// The bundle directory is one artifact, sized by the files in it.
+	want := map[string]any{"html/xs": 2, "image/xs": 1, "other/xs": 1, "pdf/m": 1}
+	if !maps.Equal(got, want) {
+		t.Fatalf("counts = %v, want %v", got, want)
 	}
 
 	// Registering a path again is not a new artifact.
@@ -76,6 +86,29 @@ func TestRegisterArtifactsReportsOnlyNewFilesByType(t *testing.T) {
 	}
 	if len(sink.events) != 0 {
 		t.Fatalf("re-registration sent %+v", sink.events)
+	}
+}
+
+func TestRegisterArtifactsReportsWhyARegistrationWasRefused(t *testing.T) {
+	_, st, dir := registrationFixture(t, "brand.html")
+	if err := os.MkdirAll(filepath.Join(dir, "folder"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Store: st, DataDir: filepath.Dir(filepath.Dir(dir)), Telemetry: sink})
+	for reference, reason := range map[string]string{
+		"/etc/passwd": "outside_dir",
+		"missing.md":  "not_found",
+		"folder":      "not_registrable",
+	} {
+		sink.events = nil
+		if _, err := svc.RegisterArtifacts(context.Background(), "mer-1", []string{reference}); err == nil {
+			t.Fatalf("registered %q", reference)
+		}
+		if len(sink.events) != 1 || sink.events[0].Name != "ao.artifacts.register_failed" ||
+			!maps.Equal(sink.events[0].Payload, map[string]any{"source": "worker", "reason": reason}) {
+			t.Fatalf("%q sent %+v", reference, sink.events)
+		}
 	}
 }
 

@@ -12,12 +12,10 @@ type UseFileAnnotationOptions = {
 	hostId?: string;
 	source?: string;
 	sendMessage?: (message: string) => Promise<void>;
-	/** Told once per send with how many comments reached the agent, including those before a failure. */
-	onSent?: (commentCount: number) => void;
 };
 
 export function useFileAnnotation(sessionId: string, options: UseFileAnnotationOptions = {}): FileAnnotationModel {
-	const { hostId, source, sendMessage, onSent } = options;
+	const { hostId, source, sendMessage } = options;
 	const { t } = useTranslation();
 	// The ref is the source of truth so a draft handed over on blur is already
 	// there when the click that caused the blur opens or sends a comment.
@@ -133,7 +131,6 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 				await send(message);
 				delivered += count;
 			}
-			onSent?.(delivered);
 			if (generation !== generationRef.current) return;
 			commitStatus("sent");
 			sentTimerRef.current = window.setTimeout(() => {
@@ -141,8 +138,6 @@ export function useFileAnnotation(sessionId: string, options: UseFileAnnotationO
 				settleSent();
 			}, 1_200);
 		} catch (submitError) {
-			// Comments that reached the agent before a later message failed still count.
-			if (delivered > 0) onSent?.(delivered);
 			if (generation !== generationRef.current) return;
 			// Comments that already reached the agent close; the rest stay to retry.
 			const deliveredKeys = new Set(pending.slice(0, delivered).map((entry) => fileAnnotationKey(entry.target)));

@@ -17,8 +17,10 @@ import { CloudCpError } from "./cloud-cp/errors";
 import type { CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
 import { createCloudSession } from "./cloud-session-create";
 import {
+	clearSignInSource,
 	instrumentCloudClient,
 	noteCloudSession,
+	noteSignInSource,
 	observeCloudSessions,
 	reportCloudOffering,
 	reportPlanRefusal,
@@ -159,6 +161,29 @@ describe("cloud funnel telemetry", () => {
 		captured.length = 0;
 		noteCloudSession(account, true);
 		expect(events()).toEqual([]);
+	});
+
+	it("says a sign-in came from Publish only within 30 minutes of its Sign in click, once", () => {
+		const account = { authProvider: "workos", user: { id: "user-1" } };
+		const sources = () => captured.map((entry) => entry.properties?.source);
+		noteCloudSession(null, true);
+		noteSignInSource("artifact_publish");
+		noteCloudSession(account, false);
+		// The note is used up: the next sign-in is not Publish's.
+		noteCloudSession(null, false);
+		noteCloudSession(account, false);
+		expect(sources()).toEqual(["artifact_publish", "other"]);
+
+		// Expired.
+		noteCloudSession(null, false);
+		noteSignInSource("artifact_publish", Date.now() - 31 * 60_000);
+		noteCloudSession(account, false);
+		// Cleared when the popover that set it closed.
+		noteCloudSession(null, false);
+		noteSignInSource("artifact_publish");
+		clearSignInSource("artifact_publish");
+		noteCloudSession(account, false);
+		expect(sources()).toEqual(["artifact_publish", "other", "other", "other"]);
 	});
 
 	it("records the offering from /me once and tolerates a control plane without it", async () => {
