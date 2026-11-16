@@ -27,7 +27,9 @@ vi.mock("../../hooks/useCloudCp", () => ({
 }));
 
 const LABEL = "Keep my cloud sessions for";
-const retention: CloudCpDataRetention = { retentionDays: 180, defaultDays: 180, options: [30, 60, 90, 180, 365], updatedAt: null };
+const retention: CloudCpDataRetention = {
+	retentionDays: 180, defaultDays: 180, followsDefault: true, options: [30, 60, 90, 180, 365], updatedAt: null,
+};
 const changed = (overrides: Partial<CloudCpDataRetentionChange>): CloudCpDataRetentionChange => ({ ...retention, sessionsToDelete: 0, ...overrides });
 
 function renderSection() {
@@ -69,21 +71,79 @@ describe("DataRetentionSection", () => {
 		delete (window.navigator as { onLine?: boolean }).onLine;
 	});
 
-	it("shows the user's period with the server's options, the default labelled", async () => {
+	it("shows the default first, then the server's options", async () => {
 		renderSection();
 		expect(await screen.findByRole("heading", { name: "Data retention" })).toBeInTheDocument();
 		const trigger = await screen.findByRole("button", { name: LABEL });
-		await waitFor(() => expect(trigger).toHaveTextContent("180 days (default)"));
+		await waitFor(() => expect(trigger).toHaveTextContent("Default (180 days)"));
 		expect(trigger).toBeEnabled();
-		expect(screen.getByText("Your cloud sessions, including team sessions you started, are deleted with their conversation content this many days after they were created.")).toBeInTheDocument();
+		expect(screen.getByText(
+			"Your cloud sessions, including team sessions you started, are deleted with their conversation content this many days after they were created. A session still running is deleted once it ends.",
+		)).toBeInTheDocument();
 		await userEvent.click(trigger);
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"30 days", "60 days", "90 days", "180 days (default)", "365 days",
+			"Default (180 days)", "30 days", "60 days", "90 days", "180 days", "365 days",
+		]);
+	});
+
+	it("shows a period the user chose as theirs, even one equal to the default", async () => {
+		mocks.client.getDataRetention.mockResolvedValue({ ...retention, followsDefault: false, updatedAt: "2026-11-01T00:00:00Z" });
+		renderSection();
+		await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent(/^180 days$/));
+	});
+
+	it("goes back to the default with null, after a dry run", async () => {
+		mocks.client.getDataRetention.mockResolvedValue({ ...retention, retentionDays: 365, followsDefault: false, updatedAt: "2026-11-01T00:00:00Z" });
+		mocks.client.putDataRetention
+			.mockResolvedValueOnce(changed({ retentionDays: 365, followsDefault: false, sessionsToDelete: 0 }))
+			.mockResolvedValueOnce(changed({ updatedAt: "2026-11-16T10:00:00Z" }));
+		renderSection();
+		await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("365 days"));
+		await choose("Default (180 days)");
+		await waitFor(() => expect(mocks.client.putDataRetention).toHaveBeenCalledTimes(2));
+		expect(mocks.client.putDataRetention.mock.calls.map(([body]) => body)).toEqual([
+			{ retentionDays: null, dryRun: true },
+			{ retentionDays: null, dryRun: false },
+		]);
+		await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("Default (180 days)"));
+		expect(screen.getByRole("status")).toHaveTextContent("Saved.");
+	});
+
+	it("confirms going back to a shorter default with the default's period", async () => {
+		mocks.client.getDataRetention.mockResolvedValue({ ...retention, retentionDays: 365, followsDefault: false, updatedAt: "2026-11-01T00:00:00Z" });
+		mocks.client.putDataRetention
+			.mockResolvedValueOnce(changed({ retentionDays: 365, followsDefault: false, sessionsToDelete: 2 }))
+			.mockResolvedValueOnce(changed({ updatedAt: "2026-11-16T10:00:00Z", sessionsToDelete: 2 }));
+		renderSection();
+		await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("365 days"));
+		await choose("Default (180 days)");
+		const dialog = await screen.findByRole("dialog");
+		expect(within(dialog).getByText(
+			"2 of your sessions older than 180 days will be deleted, along with their conversation content. This can't be undone.",
+		)).toBeInTheDocument();
+		await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(mocks.client.putDataRetention).toHaveBeenLastCalledWith({ retentionDays: null, dryRun: false });
+	});
+
+	it("sends the default's days to a control plane that predates going back to it", async () => {
+		const { followsDefault: _omitted, ...older } = retention;
+		mocks.client.getDataRetention.mockResolvedValue({ ...older, retentionDays: 30, updatedAt: "2026-11-01T00:00:00Z" });
+		mocks.client.putDataRetention
+			.mockResolvedValueOnce({ ...older, retentionDays: 30, updatedAt: "2026-11-01T00:00:00Z", sessionsToDelete: 0 })
+			.mockResolvedValueOnce({ ...older, updatedAt: "2026-11-16T10:00:00Z", sessionsToDelete: 0 });
+		renderSection();
+		await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("30 days"));
+		await choose("Default (180 days)");
+		await waitFor(() => expect(mocks.client.putDataRetention).toHaveBeenCalledTimes(2));
+		expect(mocks.client.putDataRetention.mock.calls.map(([body]) => body)).toEqual([
+			{ retentionDays: 180, dryRun: true },
+			{ retentionDays: 180, dryRun: false },
 		]);
 	});
 
 	it("keeps a period the deployment no longer offers visible as itself", async () => {
-		mocks.client.getDataRetention.mockResolvedValue({ ...retention, retentionDays: 45, updatedAt: "2026-11-01T00:00:00Z" });
+		mocks.client.getDataRetention.mockResolvedValue({ ...retention, retentionDays: 45, followsDefault: false, updatedAt: "2026-11-01T00:00:00Z" });
 		renderSection();
 		await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("45 days"));
 	});
@@ -121,7 +181,7 @@ describe("DataRetentionSection", () => {
 	it("checks a shorter period with a dry run and deletes only once confirmed", async () => {
 		mocks.client.putDataRetention
 			.mockResolvedValueOnce(changed({ sessionsToDelete: 12 }))
-			.mockResolvedValueOnce(changed({ retentionDays: 30, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 12 }));
+			.mockResolvedValueOnce(changed({ retentionDays: 30, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 12 }));
 		renderSection();
 		await choose("30 days");
 
@@ -133,7 +193,7 @@ describe("DataRetentionSection", () => {
 			"12 of your sessions older than 30 days will be deleted, along with their conversation content. This can't be undone.",
 		)).toBeInTheDocument();
 		// Nothing changed while the dialog asks.
-		expect(trigger()).toHaveTextContent("180 days (default)");
+		expect(trigger()).toHaveTextContent("Default (180 days)");
 
 		await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -160,14 +220,14 @@ describe("DataRetentionSection", () => {
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(mocks.client.putDataRetention).toHaveBeenCalledTimes(1);
 		expect(mocks.client.putDataRetention).toHaveBeenCalledWith({ retentionDays: 60, dryRun: true });
-		expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("180 days (default)");
+		expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("Default (180 days)");
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
 
 	it("applies directly when the new period deletes nothing", async () => {
 		mocks.client.putDataRetention
 			.mockResolvedValueOnce(changed({ sessionsToDelete: 0 }))
-			.mockResolvedValueOnce(changed({ retentionDays: 365, updatedAt: "2026-11-15T10:00:00Z" }));
+			.mockResolvedValueOnce(changed({ retentionDays: 365, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z" }));
 		renderSection();
 		await choose("365 days");
 		await waitFor(() => expect(mocks.client.putDataRetention).toHaveBeenCalledTimes(2));
@@ -182,7 +242,7 @@ describe("DataRetentionSection", () => {
 
 	it("does nothing when the current period is chosen again", async () => {
 		renderSection();
-		await choose("180 days (default)");
+		await choose("Default (180 days)");
 		expect(mocks.client.putDataRetention).not.toHaveBeenCalled();
 	});
 
@@ -195,7 +255,7 @@ describe("DataRetentionSection", () => {
 			await choose("30 days");
 			expect(await screen.findByRole("alert")).toHaveTextContent("Choose one of 30, 60, 90, 180 or 365 days.");
 			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-			expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("180 days (default)");
+			expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("Default (180 days)");
 		});
 
 		it("falls back to its own words for a 400 without an envelope", async () => {
@@ -223,13 +283,13 @@ describe("DataRetentionSection", () => {
 			mocks.client.putDataRetention
 				.mockResolvedValueOnce(changed({ sessionsToDelete: 5 }))
 				.mockRejectedValueOnce(new CloudCpError("boom", { status: 500 }))
-				.mockResolvedValueOnce(changed({ retentionDays: 30, sessionsToDelete: 5 }));
+				.mockResolvedValueOnce(changed({ retentionDays: 30, followsDefault: false, sessionsToDelete: 5 }));
 			renderSection();
 			await choose("30 days");
 			const dialog = await screen.findByRole("dialog");
 			await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
 			expect(await within(dialog).findByRole("alert")).toHaveTextContent("Couldn't save data retention. Try again.");
-			expect(trigger()).toHaveTextContent("180 days (default)");
+			expect(trigger()).toHaveTextContent("Default (180 days)");
 
 			await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
 			await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -243,7 +303,7 @@ describe("DataRetentionSection", () => {
 			renderSection();
 			expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load data retention.");
 			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-			await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("180 days (default)"));
+			await waitFor(() => expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("Default (180 days)"));
 			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		});
 
@@ -257,7 +317,7 @@ describe("DataRetentionSection", () => {
 		it("disables the select while the computer is offline", async () => {
 			renderSection();
 			const trigger = await screen.findByRole("button", { name: LABEL });
-			await waitFor(() => expect(trigger).toHaveTextContent("180 days (default)"));
+			await waitFor(() => expect(trigger).toHaveTextContent("Default (180 days)"));
 			act(() => setOnline(false));
 			expect(trigger).toBeDisabled();
 			expect(screen.getByRole("alert")).toHaveTextContent("Can't reach Cloud. Check your connection and try again.");

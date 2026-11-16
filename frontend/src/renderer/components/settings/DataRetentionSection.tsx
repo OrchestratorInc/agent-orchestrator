@@ -15,9 +15,10 @@ import { SettingsSection } from "./SettingsSection";
  * How long the signed-in user's cloud sessions and their conversation content
  * are kept, counted from each session's creation. It is the user's own setting
  * and covers every cloud session they started, team sessions included, so it
- * shows whenever they are signed in to Cloud. A new period is checked with a
- * dry run first; when it would delete sessions the change waits for
- * confirmation.
+ * shows whenever they are signed in to Cloud. "Default (N days)" follows the
+ * deployment's default, and keeps following it if it changes; a period of
+ * their own stays as chosen. A new period is checked with a dry run first;
+ * when it would delete sessions the change waits for confirmation.
  */
 export function DataRetentionSection() {
 	const { cloudEnabled } = useCloudGate();
@@ -26,6 +27,9 @@ export function DataRetentionSection() {
 }
 
 type Notice = { kind: "saved" } | { kind: "error"; message: string };
+
+/** The select's value for following the deployment's default. */
+const DEFAULT_CHOICE = "default";
 
 function subscribeOnline(onChange: () => void) {
 	window.addEventListener("online", onChange);
@@ -60,7 +64,8 @@ function DataRetentionSectionInner() {
 	const online = useOnline();
 	const [saving, setSaving] = useState(false);
 	const [notice, setNotice] = useState<Notice | null>(null);
-	const [pending, setPending] = useState<{ days: number; sessions: number } | null>(null);
+	// days null: back to the default.
+	const [pending, setPending] = useState<{ days: number | null; sessions: number } | null>(null);
 	const [confirming, setConfirming] = useState(false);
 	const [confirmError, setConfirmError] = useState<string | null>(null);
 
@@ -70,10 +75,15 @@ function DataRetentionSectionInner() {
 	const data = retention.data;
 	const period = (days: number) => t("settings.dataRetention.days", { count: days });
 	const label = t("settings.dataRetention.label");
+	// A control plane that predates followsDefault has no way back to the
+	// default; until the user chooses a period there (updatedAt), they follow it.
+	const followsDefault = data ? (data.followsDefault ?? data.updatedAt === null) : false;
+	const selected = data ? (followsDefault ? DEFAULT_CHOICE : String(data.retentionDays)) : "";
 
 	const change = async (next: string) => {
-		const days = Number(next);
-		if (!data || days === data.retentionDays) return;
+		if (!data || next === selected) return;
+		// Such a control plane takes the default's days instead of null.
+		const days = next === DEFAULT_CHOICE ? (data.followsDefault === undefined ? data.defaultDays : null) : Number(next);
 		setSaving(true);
 		setNotice(null);
 		try {
@@ -124,16 +134,18 @@ function DataRetentionSectionInner() {
 			note = { text: t(offline ? "settings.dataRetention.offline" : "settings.dataRetention.loadFailed"), role: "alert" };
 		}
 	} else {
-		// A period outside today's options (the deployment changed them) still shows as itself.
-		const days = data.options.includes(data.retentionDays) ? data.options : [...data.options, data.retentionDays].sort((a, b) => a - b);
-		const options: SettingsOption<string>[] = days.map((choice) => ({
-			value: String(choice),
-			label: choice === data.defaultDays ? t("settings.dataRetention.defaultDays", { count: choice }) : period(choice),
-		}));
+		// A period of their own outside today's options (the deployment changed them) still shows as itself.
+		const days = followsDefault || data.options.includes(data.retentionDays)
+			? data.options
+			: [...data.options, data.retentionDays].sort((a, b) => a - b);
+		const options: SettingsOption<string>[] = [
+			{ value: DEFAULT_CHOICE, label: t("settings.dataRetention.defaultDays", { count: data.defaultDays }) },
+			...days.map((choice) => ({ value: String(choice), label: period(choice) })),
+		];
 		control = (
 			<SettingsOptionMenu
 				aria-label={label}
-				value={String(data.retentionDays)}
+				value={selected}
 				options={options}
 				onChange={(next) => void change(next)}
 				disabled={!online || saving || pending !== null}
@@ -165,7 +177,9 @@ function DataRetentionSectionInner() {
 				open={pending !== null}
 				destructive
 				title={t("settings.dataRetention.confirmTitle")}
-				description={pending ? t("settings.dataRetention.confirmDescription", { count: pending.sessions, period: period(pending.days) }) : ""}
+				description={pending && data
+					? t("settings.dataRetention.confirmDescription", { count: pending.sessions, period: period(pending.days ?? data.defaultDays) })
+					: ""}
 				confirmLabel={t("settings.dataRetention.confirmAction")}
 				busy={confirming}
 				busyLabel={t("settings.dataRetention.saving")}

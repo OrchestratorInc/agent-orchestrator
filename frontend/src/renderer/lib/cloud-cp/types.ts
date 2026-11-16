@@ -1414,21 +1414,28 @@ export interface CloudCpHarnessVersionsResponse {
  * How long the signed-in user's Cloud sessions and their conversation content
  * are kept: every session they started, in any organization, team sessions
  * included. A session older than `retentionDays`, counted from its creation,
- * is ended and its content deleted. Each user sets their own.
+ * has its content deleted once it has ended (a running session is never ended
+ * for it). Each user sets their own.
  */
 export interface CloudCpDataRetention {
 	retentionDays: number;
 	/** The deployment's default period; always one of `options`. */
 	defaultDays: number;
+	/**
+	 * True while the user has no period of their own and follows `defaultDays`.
+	 * Absent from a control plane that predates going back to the default.
+	 */
+	followsDefault?: boolean;
 	/** The periods the user may choose, in days, ascending. */
 	options: number[];
-	/** When the user last chose the period; null while it is the default. */
+	/** When the user last chose the period; null while they never chose one. */
 	updatedAt: string | null;
 }
 
 /** PUT /me/data-retention. */
 export interface CloudCpPutDataRetentionRequest {
-	retentionDays: number;
+	/** One of `options`, or null to follow the deployment's default again. */
+	retentionDays: number | null;
 	/** Only count the sessions the period would delete; change nothing. */
 	dryRun?: boolean;
 }

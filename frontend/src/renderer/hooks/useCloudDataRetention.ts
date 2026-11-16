@@ -24,10 +24,10 @@ export interface CloudDataRetention {
 	isPending: boolean;
 	error: unknown;
 	refetch: () => void;
-	/** Counts the sessions `days` would delete, changing nothing. */
-	preview: (days: number) => Promise<CloudCpDataRetentionChange>;
-	/** Saves `days` as the user's period. */
-	apply: (days: number) => Promise<CloudCpDataRetentionChange>;
+	/** Counts the sessions `days` (null: the default) would delete, changing nothing. */
+	preview: (days: number | null) => Promise<CloudCpDataRetentionChange>;
+	/** Saves `days` as the user's period; null follows the default again. */
+	apply: (days: number | null) => Promise<CloudCpDataRetentionChange>;
 }
 
 export function useCloudDataRetention(): CloudDataRetention {
@@ -52,11 +52,11 @@ export function useCloudDataRetention(): CloudDataRetention {
 	}));
 
 	const preview = useCallback(
-		(days: number) => client.putDataRetention({ retentionDays: days, dryRun: true }),
+		(days: number | null) => client.putDataRetention({ retentionDays: days, dryRun: true }),
 		[client],
 	);
 
-	const apply = useCallback(async (days: number) => {
+	const apply = useCallback(async (days: number | null) => {
 		const change = await client.putDataRetention({ retentionDays: days, dryRun: false });
 		const { sessionsToDelete: _count, ...retention } = change;
 		queryClient.setQueryData<CloudCpDataRetention | null>(cloudDataRetentionQueryKey(baseUrl, userId), retention);

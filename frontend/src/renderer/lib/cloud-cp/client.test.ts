@@ -158,6 +158,13 @@ describe("cloud control-plane data retention", () => {
 		}
 	});
 
+	it("goes back to the default with retentionDays null", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => json({ ...retention, followsDefault: true, sessionsToDelete: 0 }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.putDataRetention({ retentionDays: null })).resolves.toMatchObject({ followsDefault: true });
+		expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual({ retentionDays: null });
+	});
+
 	it("surfaces the control plane's refusal with its code and message", async () => {
 		const fetchImpl = vi.fn()
 			.mockImplementationOnce(async () => json({ error: "Bad Request", code: "invalid_retention", message: "Choose one of the offered periods.", requestId: "r-1" }, 400))
