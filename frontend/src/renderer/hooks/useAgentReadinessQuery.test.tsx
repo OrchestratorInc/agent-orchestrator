@@ -131,6 +131,14 @@ describe("project agent defaults", () => {
 		postMock.mockResolvedValue(none);
 
 		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toBeNull();
+		// The cached snapshot was rechecked before giving up.
+		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: [], purpose: "display" } });
 		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
+	});
+
+	it("rechecks a cached snapshot with no launchable agent and ranks what the daemon finds", async () => {
+		getMock.mockResolvedValue({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined });
+
+		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
 	});
 });

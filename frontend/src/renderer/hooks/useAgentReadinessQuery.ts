@@ -66,8 +66,10 @@ const PROJECT_AGENT_DEFAULTS_DEADLINE_MS = 5000;
 
 // The readiness snapshot ranked for a project's default agents: the one the
 // renderer already holds, or one fetch when it holds none. When it hasn't
-// confirmed the agent AO prefers most, it waits for the daemon's checks
-// (joining any already running) first. Null when it could not be loaded.
+// confirmed the agent AO prefers most, or has no agent that can launch (the
+// cache never expires, so one may have been installed since), it waits for the
+// daemon's checks (joining any already running) first. Null when it could not
+// be loaded.
 async function readProjectAgentSnapshot(queryClient: QueryClient, hostId?: string): Promise<AgentReadinessSnapshot[] | null> {
 	let agents: AgentReadinessSnapshot[];
 	try {
@@ -79,7 +81,7 @@ async function readProjectAgentSnapshot(queryClient: QueryClient, hostId?: strin
 	} catch {
 		return null;
 	}
-	if (preferredAgentNeedsChecks(agents)) {
+	if (preferredAgentNeedsChecks(agents) || preferredAgentList(agents).length === 0) {
 		try {
 			const checked = await ensureAgentReadiness([], "display", hostId);
 			cacheAgentReadiness(queryClient, checked, hostId);
