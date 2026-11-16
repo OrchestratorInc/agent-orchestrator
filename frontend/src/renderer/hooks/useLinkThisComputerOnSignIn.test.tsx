@@ -120,3 +120,18 @@ test("remote access turned on after signing in is picked up", async () => {
 	await vi.advanceTimersByTimeAsync(30_000);
 	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01", "h_this", "pw-1", { ifUnlisted: true, url: undefined });
 });
+
+test("a failed link attempt is retried even if accountLinked became true", async () => {
+	vi.useFakeTimers();
+	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockImplementationOnce(async () => {
+		// Token issuance set accountLinked before the directory entry could be saved.
+		fake.status.accountLinked = true;
+		throw new Error("directory save failed");
+	});
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect(linkThisComputer).toHaveBeenCalledTimes(2);
+});

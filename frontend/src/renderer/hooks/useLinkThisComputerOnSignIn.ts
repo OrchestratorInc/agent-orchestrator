@@ -44,6 +44,9 @@ export function useLinkThisComputerOnSignIn(): void {
 		}
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		// Set once this sign-in starts linking. A token issued by a failed attempt
+		// makes accountLinked true before the directory entry exists.
+		let linkBegun = false;
 		const finish = () => {
 			done.current = key;
 		};
@@ -62,7 +65,7 @@ export function useLinkThisComputerOnSignIn(): void {
 			if (cancelled) return;
 			// An account holds this computer already, or removed it: neither is
 			// ours to undo here. Allow access links or relists it.
-			if (status.accountLinked) {
+			if (status.accountLinked && !linkBegun) {
 				finish();
 				return;
 			}
@@ -77,6 +80,7 @@ export function useLinkThisComputerOnSignIn(): void {
 			// An AO Cloud without fixed addresses lists it at the tunnel's address instead, as Allow access does.
 			const url = tunnelUrl(status);
 			try {
+				linkBegun = true;
 				// An account that uses all of its fixed addresses lists it at the tunnel's address too.
 				let { hostId, added } = await link().catch((cause: unknown) => {
 					if (cause instanceof AccountHostSyncError && cause.status === 409) return { hostId: "", added: false };
