@@ -5882,6 +5882,55 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("reviews only the chosen PR from its row in a multi-PR session", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review"), reviewState(4, "needs_review")]);
+    postMock.mockResolvedValue({ response: { status: 201 }, data: { reviews: [], runs: [], reviewerHandleId: "" } });
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />);
+    await openReviewsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Review PR #4" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).toEqual({ prUrl: "https://example.com/pr/4" });
+  });
+
+  it("confirms a same-commit re-review of one PR and sends only that PR", async () => {
+    mockCommonGets([approvedReview], "reviewer-pane", [reviewState(3, "up_to_date"), reviewState(4, "needs_review")]);
+    postMock.mockResolvedValue({ response: { status: 201 }, data: { reviews: [], runs: [], reviewerHandleId: "reviewer-pane" } });
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />);
+    await openReviewsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Re-run PR #3" }));
+    expect(await screen.findByText("This commit has already been reviewed, are you sure you want to re-review the same commit?")).toBeInTheDocument();
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Re-review commit" }));
+    await waitFor(() => expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")).toHaveLength(1));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/reviews/trigger")[0][1].body).toEqual({ rerun: true, prUrl: "https://example.com/pr/3" });
+  });
+
+  it("disables the per-PR row of a PR that is not eligible", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review"), reviewState(5, "ineligible")]);
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(5, "draft")])} />);
+    await openReviewsSection();
+    expect(await screen.findByRole("button", { name: "Review PR #3" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review PR #5" })).toBeDisabled();
+  });
+
+  it("shows no per-PR rows when the session has one open PR", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review")]);
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "merged")])} />);
+    await openReviewsSection();
+    expect(await screen.findByRole("button", { name: "Review now" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review PR #3" })).not.toBeInTheDocument();
+  });
+
+  it("keeps per-PR rows usable while auto-review is on, like Review now", async () => {
+    mockCommonGets([], "", [reviewState(3, "needs_review"), reviewState(4, "needs_review")]);
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")], { autoReviewEnabled: true })} />);
+    await openReviewsSection();
+    expect(await screen.findByRole("button", { name: "Review PR #3" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Review now" })).toBeEnabled();
+  });
+
   it("cancels the running review instead of allowing rerun", async () => {
     mockCommonGets([approvedReview], "reviewer-pane", [
       reviewState(3, "running", "abc123"),
