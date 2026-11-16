@@ -23,7 +23,9 @@ import {
 import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
 import { useInterfaceHandoff } from "../session/useInterfaceHandoff";
 import type { Theme } from "../theme";
-import { Frost, FROST_TAIL, frostStops } from "../frost";
+import { Frost, FROST_TAIL, pillFrostStops } from "../frost";
+import { headerBackOptions } from "../headerBack";
+import { HeaderPill, HeaderPillButton, pillBackOptions } from "../headerPill";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, type ForkOptions } from "./api";
@@ -368,18 +370,23 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useLayoutEffect(() => {
 		navigation.setOptions({ gestureEnabled: !cardShowing });
 	}, [cardShowing, navigation]);
+	// Android's title pill leads with the way back (see `HeaderPill`).
+	const goBack = useCallback(() => backOr(router), [router]);
 	useLayoutEffect(() => {
 		navigation.setOptions({
-			headerTitle: () => (
-				<ConversationTitle
-					title={title}
-					subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
-					harness={headerHarness}
-					state={headerState}
-				/>
-			),
+			headerTitle: () => {
+				const heading = (
+					<ConversationTitle
+						title={title}
+						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
+						harness={headerHarness}
+						state={headerState}
+					/>
+				);
+				return PILL_HEADER ? <HeaderPill onBack={goBack}>{heading}</HeaderPill> : heading;
+			},
 		});
-	}, [headerHarness, headerState, navigation, projectName, title, t]);
+	}, [goBack, headerHarness, headerState, navigation, projectName, title, t]);
 	// The route keeps its options when it swaps this screen for the terminal,
 	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
 	// stayed on this screen's last state: the Chat controller the switch stopped,
@@ -388,14 +395,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The conversation scrolls up under a clear bar. iOS 27's is the system's
 	// glass, which blurs it beneath the title, as Settings and the board do; the
 	// edge effect is the system's own: setting `scrollEdgeEffects` from here
-	// turned it off. Android's bar frosts it out with the page's colour (see
-	// `frost`), as the board tabs' bars do. Every other iOS keeps the stack's own
+	// turned it off. Android's bar floats its back button, title and actions on
+	// pills of their own (see `headerPill`) over a light frost of the page's
+	// colour (see `pillFrostStops`). Every other iOS keeps the stack's own
 	// bar (see `CLEAR_HEADER`). The route also holds terminal sessions, so the
 	// stack's own bar comes back when this screen goes.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;
-		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });
-		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle });
+		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" }, ...(PILL_HEADER ? pillBackOptions() : null) });
+		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle, ...(PILL_HEADER ? { headerBackVisible: undefined, headerLeft: undefined, ...headerBackOptions() } : null) });
 	}, [navigation, t]);
 
 	// Remounts the composer only for a different conversation, never because the
@@ -700,7 +708,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		const groups = latestMenuGroups.current;
 		if (groups) void presentSheet({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: runMenuAction });
 	}, [presentSheet, runMenuAction, subscribeMenuGroups, title]);
-	const headerItems = useMemo(() => menuReady ? (
+	// Android's "⋯" floats on a pill of its own, as the back button and title
+	// do, where the toolbar's would sit on the bar bare.
+	useLayoutEffect(() => {
+		if (!PILL_HEADER) return;
+		navigation.setOptions({
+			headerRight: menuReady ? () => <HeaderPillButton icon="more" label="Conversation actions" onPress={openActions} testID="header-more" /> : undefined,
+		});
+		return () => navigation.setOptions({ headerRight: undefined });
+	}, [menuReady, navigation, openActions]);
+	const headerItems = useMemo(() => menuReady && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
 		</Stack.Toolbar>
@@ -916,11 +933,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					/>
 				)
 			) : null}
-			{/* Android's frost behind the clear bar: solid under the title, then
-			    dissolving into the page, so the conversation frosts out as it
-			    passes under it rather than meeting a hard edge. */}
+			{/* Android's frost behind the clear bar's pills: dense at the status
+			    bar, then thinning through the bar and dissolving into the page,
+			    so the conversation shows around the pills and fades out as it
+			    passes under them rather than meeting a hard edge. */}
 			{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (
-				<Frost from="top" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
+				<Frost from="top" stops={pillFrostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
 			) : null}
 			{CLEAR_HEADER ? (
 				<View pointerEvents="box-none" style={[styles.floatingBanners, { top: headerOverlap }]} onLayout={(event) => setBannersHeight(event.nativeEvent.layout.height)}>
@@ -1025,6 +1043,12 @@ function Failure({ children }: { children: ReactNode }) {
  * this list, leaving the title over sharp text, and older versions have none.
  */
 const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";
+
+/**
+ * Android's bar floats its controls on pills over the conversation (see
+ * `headerPill`), as its board bar and composer float.
+ */
+const PILL_HEADER = Platform.OS === "android";
 
 /** How much of the screen the clear header covers; nothing under a solid one. */
 function useGlassHeaderOverlap(): number {
