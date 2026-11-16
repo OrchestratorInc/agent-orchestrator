@@ -1163,6 +1163,8 @@ export function HumanMessage({
 	branchPoint,
 	onActivateBranch,
 	activateBranchPending = false,
+	activateBranchDisabled = false,
+	activateBranchTarget,
 	activateBranchError,
 	onSelectAnnotation,
 	status,
@@ -1191,6 +1193,8 @@ export function HumanMessage({
 	branchPoint?: ConversationBranchPoint;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/**
@@ -1337,8 +1341,20 @@ export function HumanMessage({
 					{branchPoint && onActivateBranch ? (
 						<ConversationBranchNavigator
 							point={branchPoint}
-							pending={activateBranchPending}
-							error={activateBranchError}
+							pending={
+								(!activateBranchTarget ||
+									branchPoint.previousBranchId === activateBranchTarget ||
+									branchPoint.nextBranchId === activateBranchTarget) &&
+								activateBranchPending
+							}
+							disabled={activateBranchDisabled}
+							error={
+								!activateBranchTarget ||
+								branchPoint.previousBranchId === activateBranchTarget ||
+								branchPoint.nextBranchId === activateBranchTarget
+									? activateBranchError
+									: undefined
+							}
 							onActivate={onActivateBranch}
 						/>
 					) : null}
