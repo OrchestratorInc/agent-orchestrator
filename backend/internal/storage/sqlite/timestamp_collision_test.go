@@ -182,9 +182,11 @@ func TestTimestampFencePreservesCheckRejectedSwitchAndOpensStore(t *testing.T) {
 	const requested = "2026-10-21 09:00:00 -0400 EDT"
 	const updated = "2026-10-21 10:00:00 +0000 UTC"
 	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
- VALUES('check-switch',1,'aider','idle',?,0,?,?);
- INSERT INTO agent_switches(id,session_id,idempotency_key,request_fingerprint,from_harness,target_harness,source_generation_id,requested_at,updated_at)
- VALUES('check-switch','check-switch','key',?,'aider','codex','source',?,?)`, requested, requested, requested, "v1:"+strings.Repeat("0", 64), requested, updated); err != nil {
+ VALUES('check-switch',1,'aider','idle',?,0,?,?)`, requested, requested, requested); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO agent_switches(id,session_id,idempotency_key,request_fingerprint,from_harness,target_harness,source_generation_id,requested_at,updated_at)
+ VALUES('check-switch','check-switch','key',?,'aider','codex','source',?,?)`, "v1:"+strings.Repeat("0", 64), requested, updated); err != nil {
 		t.Fatal(err)
 	}
 	var logs bytes.Buffer
