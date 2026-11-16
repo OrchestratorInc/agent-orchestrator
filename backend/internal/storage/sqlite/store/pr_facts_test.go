@@ -300,6 +300,10 @@ func TestListPRFactsProjectsTheOpenStackParent(t *testing.T) {
 	// A merged parent and a same-named branch in another repository.
 	write(domain.PullRequest{URL: "landed", SessionID: parentSession.ID, Number: 8100, Merged: true, SourceBranch: "old-base", TargetBranch: "main"})
 	write(domain.PullRequest{URL: "elsewhere", SessionID: parentSession.ID, Number: 50, Repo: "acme/other", SourceBranch: "other-base", TargetBranch: "main"})
+	// Long-lived heads: a main -> release sync PR would parent every PR into
+	// main, and a fork's develop says nothing about this repository's develop.
+	write(domain.PullRequest{URL: "sync", SessionID: parentSession.ID, Number: 9100, SourceBranch: "main", TargetBranch: "release", HeadIsDefaultBranch: true})
+	write(domain.PullRequest{URL: "fork-develop", SessionID: parentSession.ID, Number: 9200, SourceBranch: "develop", TargetBranch: "main", HeadFromFork: true})
 	// An archived session's PR still reads open, but nothing polls it any more,
 	// so that state may be stale and it must not hold a PR back.
 	archivedSession, _ := s.CreateSession(ctx, sampleRecord("mer"))
@@ -315,8 +319,9 @@ func TestListPRFactsProjectsTheOpenStackParent(t *testing.T) {
 	write(domain.PullRequest{URL: "on-landed", SessionID: childSession.ID, Number: 8101, SourceBranch: "follow-up", TargetBranch: "old-base"})
 	write(domain.PullRequest{URL: "on-other-repo", SessionID: childSession.ID, Number: 8102, SourceBranch: "cross", TargetBranch: "other-base"})
 	write(domain.PullRequest{URL: "on-archived", SessionID: childSession.ID, Number: 8103, SourceBranch: "late", TargetBranch: "parked-base"})
+	write(domain.PullRequest{URL: "on-develop", SessionID: childSession.ID, Number: 8104, SourceBranch: "feature", TargetBranch: "develop"})
 
-	want := map[string]int{"stacked": 8277, "on-main": 0, "on-landed": 0, "on-other-repo": 0, "on-archived": 0}
+	want := map[string]int{"stacked": 8277, "on-main": 0, "on-landed": 0, "on-other-repo": 0, "on-archived": 0, "on-develop": 0}
 	check := func(label string, facts []domain.PRFacts) {
 		t.Helper()
 		if len(facts) != len(want) {
@@ -338,4 +343,16 @@ func TestListPRFactsProjectsTheOpenStackParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("batch", batch[childSession.ID])
+
+	// The flags survive a read, so a poll that rebuilds the row from storage
+	// keeps them.
+	for url, want := range map[string][2]bool{"sync": {false, true}, "fork-develop": {true, false}, "parent": {false, false}} {
+		got, ok, err := s.GetPR(ctx, url)
+		if err != nil || !ok {
+			t.Fatalf("get %s: ok=%v err=%v", url, ok, err)
+		}
+		if got.HeadFromFork != want[0] || got.HeadIsDefaultBranch != want[1] {
+			t.Fatalf("%s: fork=%v default=%v, want %v", url, got.HeadFromFork, got.HeadIsDefaultBranch, want)
+		}
+	}
 }

@@ -6,9 +6,10 @@ INSERT INTO pr (
     is_draft, is_merged, is_closed,
     provider_state, provider_mergeable, provider_merge_state_status, html_url,
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
-    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial, auto_inject_ci
+    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial,
+    head_from_fork, head_is_default_branch, auto_inject_ci
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
@@ -36,6 +37,8 @@ ON CONFLICT (url) DO UPDATE SET
     provider_id = CASE WHEN excluded.provider_id != '' THEN excluded.provider_id ELSE pr.provider_id END,
     source_branch = excluded.source_branch,
     target_branch = excluded.target_branch,
+    head_from_fork = excluded.head_from_fork,
+    head_is_default_branch = excluded.head_is_default_branch,
     head_sha = excluded.head_sha,
     title = excluded.title,
     additions = excluded.additions,
@@ -372,9 +375,12 @@ SELECT
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
-    -- never be a parent. Only a parent the SCM observer still polls counts:
-    -- an archived session's or project's PR keeps whatever state it had when
-    -- polling stopped, so its "open" may be long stale.
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
     CAST(COALESCE((
         SELECT parent.number
         FROM pr parent
@@ -386,6 +392,8 @@ SELECT
           AND pr.target_branch != ''
           AND pr.repo != ''
           AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
           AND parent.url != pr.url
           AND parent.pr_state IN ('open', 'draft')
           AND parent_session.is_terminated = 0
@@ -514,9 +522,12 @@ SELECT
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
-    -- never be a parent. Only a parent the SCM observer still polls counts:
-    -- an archived session's or project's PR keeps whatever state it had when
-    -- polling stopped, so its "open" may be long stale.
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
     CAST(COALESCE((
         SELECT parent.number
         FROM pr parent
@@ -528,6 +539,8 @@ SELECT
           AND pr.target_branch != ''
           AND pr.repo != ''
           AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
           AND parent.url != pr.url
           AND parent.pr_state IN ('open', 'draft')
           AND parent_session.is_terminated = 0

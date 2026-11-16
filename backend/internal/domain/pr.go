@@ -85,6 +85,12 @@ type PullRequest struct {
 	BaseSHA         string
 	MergeCommitSHA  string
 
+	// HeadFromFork and HeadIsDefaultBranch say the head is not a private
+	// branch of this repository: it lives in a fork, or it is the repository's
+	// default branch. Neither kind of PR can be a stack parent.
+	HeadFromFork        bool
+	HeadIsDefaultBranch bool
+
 	ProviderState            string
 	ProviderMergeable        string
 	ProviderMergeStateStatus string
