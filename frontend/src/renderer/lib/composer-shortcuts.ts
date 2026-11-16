@@ -5,13 +5,18 @@
  * (TurnSettingsBar's restoreComposerFocus reads the mark set here).
  */
 export function openComposerModelPicker(scope: ParentNode = document): boolean {
-	const picker = scope.querySelector<HTMLElement>("[data-shortcut-target='model-picker']:not([disabled])");
+	const picker = composerModelPicker(scope);
 	if (!picker) return false;
 	// Radix menu triggers open on pointerdown or Enter, never on a synthetic click.
 	picker.dataset.shortcutOpened = "";
 	picker.focus();
 	picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 	return true;
+}
+
+/** The enabled model menu in `scope`, if any: a chat still starting shows it disabled. */
+export function composerModelPicker(scope: ParentNode = document): HTMLElement | null {
+	return scope.querySelector<HTMLElement>("[data-shortcut-target='model-picker']:not([disabled])");
 }
 
 /** Dictate (⌥D on macOS): starts or finishes dictation in the focused chat composer, else the first one on screen. */

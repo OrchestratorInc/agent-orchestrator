@@ -2351,6 +2351,37 @@ describe("slash commands", () => {
 			expect(opened).not.toHaveBeenCalled();
 		});
 
+		it.each(["Enter", "Tab"])("is not AO's while a queued message is edited (%s)", async (key) => {
+			const { field, onSend, opened } = renderWithModelMenu({
+				editingQueuedTurnId: "queued-model-key",
+				draftSeed: { id: "queued-model-key", text: "" },
+			});
+			await typeInComposer(field, "/mod");
+			expect(screen.queryAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+			await typeInComposer(field, "el");
+			await userEvent.keyboard(`{${key}}`);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(opened).not.toHaveBeenCalled();
+			if (key === "Enter") await waitFor(() => expect(onSend).toHaveBeenCalledWith("/model", undefined, undefined, []));
+			else expect(composerWireText(field)).toBe("/model");
+		});
+
+		const unusableMenus = {
+			"a settings row with no model menu": <span>Context 12%</span>,
+			"a disabled model menu": <button type="button" disabled data-shortcut-target="model-picker">Opus 5.5</button>,
+		};
+		it.each(Object.entries(unusableMenus))("keeps /model in the box with %s", async (_, settings) => {
+			const { field, onSend } = renderComposer({ skills: SKILLS, settings });
+			await typeInComposer(field, "/mod");
+			expect(screen.queryAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+			await typeInComposer(field, "el");
+			await userEvent.keyboard("{Escape}");
+			await userEvent.keyboard("{Enter}");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("/model");
+		});
+
 		it("replaces an agent's own /model with AO's", async () => {
 			const { field } = renderWithModelMenu({
 				skills: [...SKILLS, { name: "model", displayName: "model", description: "Set the AI model", source: "agent" }],

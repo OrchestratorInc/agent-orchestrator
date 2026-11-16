@@ -79,7 +79,7 @@ import {
 	type ComposerTrigger,
 } from "./ComposerEditor";
 import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
-import { openComposerModelPicker } from "../../lib/composer-shortcuts";
+import { composerModelPicker, openComposerModelPicker } from "../../lib/composer-shortcuts";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import {
 	isSupportedImageAttachment,
@@ -800,8 +800,9 @@ export const ChatComposer = memo(function ChatComposer({
 			!stagedPath && data ? [{ mimeType, data, name }] : []), fileAttachments.preparing);
 	}, [fileAttachments.attachments, fileAttachments.preparing, holdAttachments, onHeldAttachmentsChange]);
 
-	// The model menu lives in the settings row, so /model is offered where one is shown.
-	const offersModelCommand = Boolean(settings);
+	// The model menu lives in the settings row, so /model is AO's where one is shown.
+	// A queued message being edited keeps `/model` as text, as it does /compact.
+	const offersModelCommand = Boolean(settings) && !editingQueuedTurnId;
 	const slashCommands = useMemo<ChatSkill[]>(() => {
 		const offersCompact = Boolean(onCompact) && compactUnavailable !== "This agent cannot compact its history";
 		const own: ChatSkill[] = [
@@ -829,16 +830,25 @@ export const ChatComposer = memo(function ChatComposer({
 			if (formRef.current) openComposerModelPicker(formRef.current);
 		}, 0);
 	}, []);
+	// Read when /model is listed or used, not at render: the settings row may hold
+	// no model menu yet, or show it disabled while the agent starts.
+	const modelMenuUsable = useCallback(
+		() => offersModelCommand && Boolean(formRef.current && composerModelPicker(formRef.current)),
+		[offersModelCommand],
+	);
 
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
 		// An empty candidate list is the whole reason the sigil stays ordinary: with
 		// no commands or skills there is nothing to open, so `/` types a slash.
 		if (currentTrigger.kind === "skill") {
-			return rankSkills(slashCommands, currentTrigger.query);
+			const commands = offersModelCommand && !modelMenuUsable()
+				? slashCommands.filter((skill) => skill.name !== MODEL_COMMAND)
+				: slashCommands;
+			return rankSkills(commands, currentTrigger.query);
 		}
 		return rankFiles(filePaths, currentTrigger.query);
-	}, [slashCommands, filePaths]);
+	}, [slashCommands, filePaths, offersModelCommand, modelMenuUsable]);
 
 	const suggestions: Suggestion[] = useMemo(
 		() => suggestionsFor(trigger),
@@ -1559,7 +1569,7 @@ export const ChatComposer = memo(function ChatComposer({
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
-		const opensModelMenu = offersModelCommand && currentTrigger.kind === "skill" && value === MODEL_COMMAND;
+		const opensModelMenu = currentTrigger.kind === "skill" && value === MODEL_COMMAND && modelMenuUsable();
 		if (opensModelMenu) editor.current?.removeTrigger(currentTrigger);
 		else editor.current?.insertToken(currentTrigger, value);
 		triggerRef.current = undefined;
@@ -1570,7 +1580,7 @@ export const ChatComposer = memo(function ChatComposer({
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
 		if (opensModelMenu) openModelMenu();
-	}, [offersModelCommand, openModelMenu]);
+	}, [modelMenuUsable, openModelMenu]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1617,7 +1627,7 @@ export const ChatComposer = memo(function ChatComposer({
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
-			if (offersModelCommand && currentTrigger.kind === "skill" && chosen.value === MODEL_COMMAND) {
+			if (currentTrigger.kind === "skill" && chosen.value === MODEL_COMMAND && modelMenuUsable()) {
 				// The editor removes the typed `/mod…`; nothing is inserted or sent.
 				triggerRef.current = undefined;
 				setTrigger(undefined);
@@ -1627,7 +1637,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return chosen.value;
 		},
-		[offersModelCommand, onCompact, openModelMenu, skills, suggestionsFor],
+		[modelMenuUsable, onCompact, openModelMenu, skills, suggestionsFor],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
@@ -1649,9 +1659,10 @@ export const ChatComposer = memo(function ChatComposer({
 			return submitInFlight.current;
 		}
 		if (typingLocked) return Promise.resolve();
-		// `/model` typed out with the menu dismissed still opens the model menu. A
-		// queued message being edited keeps it as text, as it does /compact.
-		if (offersModelCommand && !forceSteer && !savingQueuedEdit && textRef.current.trim() === `/${MODEL_COMMAND}`) {
+		// `/model` typed out with the menu dismissed still opens the model menu. With no
+		// usable menu it stays in the box: sent, the agent would only print its usage.
+		if (offersModelCommand && !forceSteer && textRef.current.trim() === `/${MODEL_COMMAND}`) {
+			if (!modelMenuUsable()) return Promise.resolve();
 			// The editor's programmatic clear publishes no change, so the composer
 			// state and the saved draft are cleared here, or /model would come back.
 			clearEditorView();
