@@ -1,7 +1,9 @@
 package session
 
 import (
+	"context"
 	"encoding/base64"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +26,9 @@ type ListPage struct {
 	// true) left out, so a client that does not fetch the archive can still say
 	// how big it is. Nil for any other filter.
 	Archived *ArchiveSummary
+	// Total counts every session a PR-state filter matched, across all pages.
+	// Nil when the list has no PR-state filter.
+	Total *int
 }
 
 // ArchiveSummary is the size of the archive behind an active-only list, under
@@ -87,17 +92,73 @@ func (a listPageKey) before(b listPageKey) bool {
 // cursor's row, and returns at most limit of them with the cursor for the rest.
 // The cursor is a position rather than an offset, so rows added or removed
 // between pages neither repeat nor go missing.
-func pageSessionRecords(recs []domain.SessionRecord, after *listPageKey, limit int) ([]domain.SessionRecord, string) {
-	sort.SliceStable(recs, func(i, j int) bool { return pageKeyOf(recs[i]).before(pageKeyOf(recs[j])) })
+func pageSessionRecords(recs []domain.SessionRecord, keyOf func(domain.SessionRecord) listPageKey, after *listPageKey, limit int) ([]domain.SessionRecord, string) {
+	sortSessionRecords(recs, keyOf)
 	if after != nil {
-		start := sort.Search(len(recs), func(i int) bool { return after.before(pageKeyOf(recs[i])) })
+		start := sort.Search(len(recs), func(i int) bool { return after.before(keyOf(recs[i])) })
 		recs = recs[start:]
 	}
 	if len(recs) <= limit {
 		return recs, ""
 	}
 	page := recs[:limit]
-	return page, encodeSessionCursor(pageKeyOf(page[len(page)-1]))
+	return page, encodeSessionCursor(keyOf(page[len(page)-1]))
+}
+
+func sortSessionRecords(recs []domain.SessionRecord, keyOf func(domain.SessionRecord) listPageKey) {
+	sort.SliceStable(recs, func(i, j int) bool { return keyOf(recs[i]).before(keyOf(recs[j])) })
+}
+
+// selectByPRState keeps the rows owning a pull request in state, with when
+// each row's newest such PR reached it. That is the state change the daemon
+// observed, or the PR's last update for a row stored before state changes were
+// timed. Every candidate's PR facts come from one batched read.
+func (s *Service) selectByPRState(ctx context.Context, recs []domain.SessionRecord, state domain.PRState) ([]domain.SessionRecord, map[domain.SessionID]time.Time, error) {
+	ids := make([]domain.SessionID, 0, len(recs))
+	for _, rec := range recs {
+		ids = append(ids, rec.ID)
+	}
+	prsBySession, err := s.store.ListPRFactsForSessions(ctx, ids)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list pr facts: %w", err)
+	}
+	kept := make([]domain.SessionRecord, 0, len(recs))
+	reachedAt := make(map[domain.SessionID]time.Time, len(recs))
+	for _, rec := range recs {
+		found := false
+		var newest time.Time
+		for _, pr := range prsBySession[rec.ID] {
+			if prFactsState(pr) != state {
+				continue
+			}
+			found = true
+			at := pr.StateChangedAt
+			if at.IsZero() {
+				at = pr.UpdatedAt
+			}
+			if at.After(newest) {
+				newest = at
+			}
+		}
+		if found {
+			kept = append(kept, rec)
+			reachedAt[rec.ID] = newest.UTC()
+		}
+	}
+	return kept, reachedAt, nil
+}
+
+func prFactsState(pr domain.PRFacts) domain.PRState {
+	switch {
+	case pr.Merged:
+		return domain.PRStateMerged
+	case pr.Closed:
+		return domain.PRStateClosed
+	case pr.Draft:
+		return domain.PRStateDraft
+	default:
+		return domain.PRStateOpen
+	}
 }
 
 func encodeSessionCursor(key listPageKey) string {

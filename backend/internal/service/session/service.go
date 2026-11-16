@@ -83,6 +83,11 @@ type ListFilter struct {
 	// order, as before paging.
 	Limit  int
 	Cursor string
+	// PRState keeps the sessions owning a pull request in that state, ordered
+	// by when their newest such PR reached it rather than pinned-then-updated,
+	// and has the page report how many sessions match. Empty keeps every
+	// session.
+	PRState domain.PRState
 }
 
 // commander is the command-side surface Service delegates to: the
@@ -1678,8 +1683,27 @@ func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, er
 	}
 	matched, archive := selectSessionRecords(recs, filter)
 	page := ListPage{Archived: archive}
+	keyOf := pageKeyOf
+	if filter.PRState != "" {
+		var reachedAt map[domain.SessionID]time.Time
+		matched, reachedAt, err = s.selectByPRState(ctx, matched, filter.PRState)
+		if err != nil {
+			return ListPage{}, err
+		}
+		total := len(matched)
+		page.Total = &total
+		// The archive summary sizes a list without the PR filter; with it the
+		// total is the count that matters.
+		page.Archived = nil
+		keyOf = func(rec domain.SessionRecord) listPageKey {
+			return listPageKey{updatedAt: reachedAt[rec.ID], id: rec.ID}
+		}
+		if filter.Limit == 0 {
+			sortSessionRecords(matched, keyOf)
+		}
+	}
 	if filter.Limit > 0 {
-		matched, page.NextCursor = pageSessionRecords(matched, after, filter.Limit)
+		matched, page.NextCursor = pageSessionRecords(matched, keyOf, after, filter.Limit)
 	}
 	page.Sessions, err = s.sessionsFromRecords(ctx, matched, recoveryRevision)
 	if err != nil {
