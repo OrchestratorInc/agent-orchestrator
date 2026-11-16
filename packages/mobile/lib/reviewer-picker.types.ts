@@ -109,9 +109,12 @@ function catalogModel(catalog: ReviewerModelState["catalog"], id: string) {
  */
 function runsWith({ catalog, saved, inherited }: ReviewerModelState): string {
 	const isMode = catalog?.selectionMode === "mode";
-	const own = isMode ? saved.mode : saved.model;
+	return resolveModel(catalog, isMode ? saved.mode : saved.model, isMode ? inherited.mode : inherited.model);
+}
+
+/** The first of the session's and the project's model that names one, else the catalog default. */
+function resolveModel(catalog: ReviewerModelState["catalog"], own: string | undefined, project: string | undefined): string {
 	if (isConcreteModelID(own)) return own;
-	const project = isMode ? inherited.mode : inherited.model;
 	if (isConcreteModelID(project)) return project;
 	return catalogDefaultModel(catalog);
 }
@@ -177,7 +180,7 @@ export function reviewerModelView(state: ReviewerModelState): ReviewerModelView 
  */
 export function reviewerModelPick({ catalog, saved, inherited }: ReviewerModelState, id: string): ReviewerAgentConfig {
 	const isMode = catalog?.selectionMode === "mode";
-	const target = catalogModel(catalog, id || (isMode ? inherited.mode : inherited.model) || catalogDefaultModel(catalog));
+	const target = catalogModel(catalog, resolveModel(catalog, id, isMode ? inherited.mode : inherited.model));
 	const offers = (level: string | undefined) => Boolean(level && target?.efforts?.includes(level));
 	let effort = offers(saved.effort) ? saved.effort! : "";
 	if (!effort && inherited.effort && target?.efforts && !offers(inherited.effort) && offers(target.defaultEffort)) effort = target.defaultEffort!;

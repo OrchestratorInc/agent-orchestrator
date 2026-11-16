@@ -113,6 +113,10 @@ describe("reviewerModelPick", () => {
 		expect(reviewerModelPick(state({ saved: { model: "sonnet", effort: "max" }, inherited: { model: "opus[1m]" } }), "")).toMatchObject({ model: "", effort: "max" });
 	});
 
+	it("checks the effort against the catalog default when the project names only \"default\"", () => {
+		expect(reviewerModelPick(state({ saved: { model: "sonnet", effort: "high" }, inherited: { model: "default" } }), "")).toMatchObject({ model: "", effort: "high" });
+	});
+
 	it("saves a mode as a mode", () => {
 		expect(reviewerModelPick(state({ catalog: amp }), "rush")).toMatchObject({ model: "", mode: "rush" });
 	});
