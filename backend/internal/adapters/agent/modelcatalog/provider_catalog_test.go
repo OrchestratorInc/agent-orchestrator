@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +124,54 @@ func TestOMPProviderCacheUsesModelProviderNotAccountCacheKey(t *testing.T) {
 	}
 	if len(catalog.ConfiguredProviders) != 0 {
 		t.Fatal("cached catalog isn't credential evidence")
+	}
+}
+
+// TestOMPProviderCacheReadsThinkingEfforts uses the record shape OMP writes to
+// models.db: reasoning models list their levels under thinking.efforts.
+func TestOMPProviderCacheReadsThinkingEfforts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	_, err = db.Exec(`CREATE TABLE model_cache (provider_id TEXT, models TEXT);
+ INSERT INTO model_cache VALUES ('anthropic', '[
+  {"id":"claude-opus-5-5","provider":"anthropic","reasoning":true,"thinking":{"mode":"anthropic-adaptive","efforts":["low","medium","high","xhigh","max"]}},
+  {"id":"gpt-6.1-sol","provider":"openai","reasoning":true,"thinking":{"mode":"effort","efforts":["minimal","low","auto","high","high"]}},
+  {"id":"plain","provider":"openai","reasoning":false,"thinking":{"efforts":["low"]}},
+  {"id":"unlisted","provider":"openai","reasoning":true}
+ ]');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][]string{
+		"anthropic/claude-opus-5-5": {"low", "medium", "high", "xhigh", "max"},
+		"openai/gpt-6.1-sol":        {"minimal", "low", "high"},
+		"openai/plain":              nil,
+		"openai/unlisted":           nil,
+	}
+	catalog := ompProviderCatalog(context.Background(), path)
+	if len(catalog.Models) != len(want) {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+	for _, model := range catalog.Models {
+		if !reflect.DeepEqual(model.Efforts, want[model.ID]) {
+			t.Errorf("%s efforts = %v, want %v", model.ID, model.Efforts, want[model.ID])
+		}
+	}
+}
+
+// TestOMPCatalogKeyReplacesSnapshotsWithoutThinkingEfforts keeps catalogs saved
+// before OMP's efforts were read from serving levelless models.
+func TestOMPCatalogKeyReplacesSnapshotsWithoutThinkingEfforts(t *testing.T) {
+	home := t.TempDir()
+	key := (Discoverer{}).CatalogFingerprint(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "omp", WorkingDir: home, Env: map[string]string{"HOME": home},
+	})
+	if !strings.HasSuffix(key, ":thinking-v1") {
+		t.Errorf("omp catalog key = %q, want a thinking-v1 suffix", key)
 	}
 }
 
