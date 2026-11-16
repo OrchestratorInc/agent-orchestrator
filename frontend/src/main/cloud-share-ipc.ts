@@ -19,6 +19,7 @@ import {
 	type CloudShareGrant,
 	type CloudShareInspection,
 	type CloudShareLinks,
+	type CloudSharePageFiles,
 	type CloudSharePublishResult,
 	type CloudSessionShareFile,
 	type CloudHostShareFile,
@@ -40,6 +41,9 @@ import {
 	resolveShareFile,
 	shareLinksAvailable,
 	shareCloudSessionArtifact,
+	MAX_SCANNED_PAGE,
+	type PageFileSnapshot,
+	readShareFileText,
 	type ShareSnapshot,
 	shareFileFingerprint,
 	snapshotHostShareFile,
@@ -49,6 +53,21 @@ import {
 	uploadShare,
 } from "./cloud-share";
 import { type ShareLinkRecordStore, artifactRecordKey, shareAccess, shareRecordKey } from "./cloud-share-links";
+import { collectPageFiles, isSharePage, type PageFileSkip } from "./cloud-share-page-files";
+
+/** Filesystem errors that say a file is no longer there to open, or is no longer a plain file. */
+const SOURCE_GONE_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP"]);
+
+/**
+ * Whether copying a page's file failed because the file changed since it was
+ * found: removed, swapped for a symlink or rewritten. Then only that file is
+ * left out. A cancel, a full disk or an error writing the copy is still fatal.
+ */
+function sourceFileGone(error: unknown, realPath: string): boolean {
+	if (error instanceof CloudShareError) return error.code !== "cancelled" && error.code !== "disk_full";
+	const failure = error as NodeJS.ErrnoException | null;
+	return typeof failure?.code === "string" && SOURCE_GONE_CODES.has(failure.code) && failure.path === realPath;
+}
 
 export interface CloudShareIpcDeps extends CloudShareApi {
 	ipcMain: Pick<IpcMain, "handle">;
@@ -471,6 +490,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			}
 		}
 		let snapshot: ShareSnapshot | undefined;
+		const fileSnapshots: ShareSnapshot[] = [];
 		try {
 			const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
 			if (isVideo(resolved.name)) return { status: "unsupported", message: "Sharing videos is coming soon." };
@@ -494,11 +514,18 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 					},
 				};
 			};
-			// Preparing the snapshot is the first half of the progress, uploading it the second.
+			// An HTML page's files go with it. They are found before it is
+			// copied, so the progress knows every byte from the start. A page
+			// rewritten after this is refused below, as any changed file is, so
+			// what is found is what the copy uses.
+			const html = isSharePage(resolved.name) ? await readShareFileText(resolved, MAX_SCANNED_PAGE) : null;
+			const found = html === null ? undefined : await collectPageFiles(deps.daemonDataDir(), file.sessionId, resolved.relativePath, html);
+			// Preparing the snapshots is the first half of the progress, uploading them the second.
+			const total = (resolved.size + (found?.files.reduce((sum, used) => sum + used.file.size, 0) ?? 0)) * 2;
 			try {
 				snapshot = await snapshotShareFile(resolved, deps.snapshotDir(), {
 					signal: controller.signal,
-					onProgress: (copied) => progress(copied, resolved.size * 2),
+					onProgress: (copied) => progress(copied, total),
 				});
 			} catch (error) {
 				// Written to while it was copied: nothing is published, and the newest version is offered.
@@ -509,6 +536,30 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			// Publish only the file as the panel showed it: one rewritten since is offered again.
 			if (!file.fingerprint || !sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
 			if (controller.signal.aborted) return { status: "cancelled" };
+			let copied = taken.size;
+			let pageFiles: { files: PageFileSnapshot[]; skipped: PageFileSkip[] } | undefined;
+			if (found) {
+				const files: PageFileSnapshot[] = [];
+				const skipped = [...found.skipped];
+				for (const used of found.files) {
+					if (controller.signal.aborted) return { status: "cancelled" };
+					const before = copied;
+					try {
+						const copy = await snapshotShareFile(used.file, deps.snapshotDir(), {
+							signal: controller.signal,
+							onProgress: (bytes) => progress(before + bytes, total),
+						});
+						fileSnapshots.push(copy);
+						files.push({ path: used.path, snapshot: copy });
+					} catch (error) {
+						// A file gone or rewritten while it was copied is left out, not the page.
+						if (!sourceFileGone(error, used.file.realPath)) throw error;
+						skipped.push({ reference: used.path, reason: "missing" });
+					}
+					copied = before + used.file.size;
+				}
+				pageFiles = { files, skipped };
+			}
 			// The document is the file's path in its session's artifacts, in its project.
 			const folder = path.posix.dirname(resolved.relativePath);
 			const result = await uploadShare(deps, {
@@ -520,15 +571,25 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 				shareId: file.shareId,
 				access: file.access,
 				emails: file.emails,
-			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
+				...(pageFiles ? { page: { files: pageFiles.files } } : {}),
+			}, (sentBytes) => progress(copied + sentBytes, total), controller.signal);
 			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share));
-			return { status: "published", share: result.share, replaced: result.replaced };
+			const outcome: CloudSharePageFiles | undefined = pageFiles && result.pageFiles ? {
+				included: result.pageFiles.included,
+				skipped: result.pageFiles.unsupported ? 0 : pageFiles.skipped.length,
+				videos: result.pageFiles.unsupported ? 0 : pageFiles.skipped.filter((skip) => skip.reason === "video").length,
+				// Said only when the page had files to include.
+				unsupported: result.pageFiles.unsupported && pageFiles.files.length > 0,
+			} : undefined;
+			return { status: "published", share: result.share, replaced: result.replaced, ...(outcome ? { pageFiles: outcome } : {}) };
 		} catch (error) {
 			if (controller.signal.aborted) return { status: "cancelled" };
 			return refusal(error);
 		} finally {
 			inFlight.delete(sender.id);
-			if (snapshot) await fs.rm(snapshot.path, { force: true });
+			for (const copy of [snapshot, ...fileSnapshots]) {
+				if (copy) await fs.rm(copy.path, { force: true });
+			}
 		}
 	});
 }

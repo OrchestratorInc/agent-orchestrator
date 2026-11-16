@@ -38,7 +38,7 @@ const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
 /** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
 type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void };
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact> } = {}) {
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact>; files?: boolean } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -85,6 +85,15 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 				const shares = options.shares ?? [];
 				if (options.listGate) await options.listGate;
 				return json({ shares, limit: 3, used: 1 });
+			}
+			if (pathname.endsWith("/uploads/files") && options.files) {
+				const { path: served } = JSON.parse(String(init.body)) as { path: string };
+				if (served === "") return json({ code: "invalid_request", message: "path" }, 400);
+				return json({ uploadToken: `file:${served}`, partSize: 1024, partCount: 1 }, 201);
+			}
+			if (pathname.endsWith("/uploads/files/complete") && options.files) {
+				const { uploadToken } = JSON.parse(String(init.body)) as { uploadToken: string };
+				return json({ fileToken: `ft:${uploadToken.slice("file:".length)}`, path: uploadToken.slice("file:".length), expiresAt: "" });
 			}
 			if (pathname.endsWith("/uploads")) return json({ uploadToken: "tok", partSize: 1024, partCount: 1 }, 201);
 			if (pathname.endsWith("/uploads/parts")) return json({ parts: [{ partNumber: 1, method: "PUT", url: "https://s3.test/p", headers: {}, size: 20 }] });
@@ -385,6 +394,57 @@ describe("cloudShare IPC", () => {
 		await expect(malformed.invoke("cloudShare:publish", { ...malformed.cloudFile, orgId: "../x", fingerprint: CLOUD_SHA256 })).resolves.toEqual({ status: "error", message: "Not a cloud session's artifact." });
 		await expect(malformed.invoke("cloudShare:publish", { ...malformed.cloudFile, orgId: undefined })).rejects.toThrow("Not a file to share");
 		await expect(malformed.invoke("cloudShare:inspect", { ...malformed.cloudFile, path: "missing.md" })).rejects.toThrow("no longer available");
+	});
+
+	it("uploads the images a page uses with it and says what it left out", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.mkdir(path.join(docs, "images"));
+		await fs.writeFile(path.join(docs, "images", "chart.png"), "png");
+		await fs.writeFile(path.join(docs, "photo.jpg"), "jpeg");
+		await fs.writeFile(path.join(docs, "clip.webm"), "video");
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="images/chart.png"><img src="photo.jpg"><video src="clip.webm"></video><img src="../clip.mp4"><img src="https://cdn.test/x.png">`);
+		const { publish, requests, bodies, sent } = setup({ files: true });
+		const result = await publish();
+		expect(result).toMatchObject({ status: "published", pageFiles: { included: 2, skipped: 2, videos: 1, unsupported: false } });
+		const starts = requests.filter((request) => request.endsWith("/uploads/files"));
+		expect(starts).toHaveLength(2);
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:images/chart.png" }, { fileToken: "ft:photo.jpg" }] });
+		// Progress ends at the page's and its files' bytes, copied and sent.
+		const last = sent.at(-1) as { sentBytes: number; totalBytes: number };
+		const pageSize = (await fs.stat(path.join(docs, "report.html"))).size;
+		expect(last).toMatchObject({ sentBytes: (pageSize + 3 + 4) * 2, totalBytes: (pageSize + 3 + 4) * 2 });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("leaves out a page's file that is removed before it is copied, and still publishes the page", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "photo.jpg"), "jpeg");
+		await fs.writeFile(path.join(docs, "chart.png"), "png");
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="photo.jpg"><img src="chart.png">`);
+		const { publish, bodies } = setup({ files: true });
+		// Removed once the page's files were found, as the page's copy is written.
+		const open = fs.open;
+		const spy = vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+			if (path.dirname(String(args[0])) === path.join(dataDir, "snapshots")) await fs.rm(path.join(docs, "photo.jpg"), { force: true });
+			return open(...args);
+		});
+		try {
+			await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 1, skipped: 1, unsupported: false } });
+		} finally {
+			spy.mockRestore();
+		}
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).toMatchObject({ files: [{ fileToken: "ft:chart.png" }] });
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("publishes a page alone to a control plane that cannot serve its images, and says so", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "photo.jpg"), "jpeg");
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="photo.jpg">`);
+		const { publish, bodies } = setup();
+		await expect(publish()).resolves.toMatchObject({ status: "published", pageFiles: { included: 0, skipped: 0, unsupported: true } });
+		expect(bodies.get("/api/cloud/v1/me/artifact-shares/finalize")).not.toHaveProperty("files");
+		expect(await snapshots()).toEqual([]);
 	});
 
 	it("publishes nothing when the file is rewritten while it is being copied", async () => {

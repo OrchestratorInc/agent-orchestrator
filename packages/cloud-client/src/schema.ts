@@ -215,7 +215,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. */
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId). An update may give the link a new name, after the file was renamed: the link keeps its address and serves the file under that name. The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit. Paid plans have no link limit. An older control plane refuses an update with another name with 409 artifact_share_name_changed. The images and other files an HTML page refers to by relative path are uploaded under this upload with createArtifactShareFileUpload and listed when finalizing. */
         post: operations["createArtifactShareUpload"];
         delete?: never;
         options?: never;
@@ -257,6 +257,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/artifact-shares/uploads/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts uploading one file the page being uploaded (uploadToken, from createArtifactShareUpload) refers to by relative path, such as an image. The link serves it at path under its root, so <img src="images/a.png"> in the page loads the file whose path is images/a.png. Any file type but video may be included, and there is no file size limit. Its parts go as the page's do (presignArtifactShareParts, PUT each, abortArtifactShareUpload to cancel); finish it with completeArtifactShareFileUpload. 400 invalid_request for a path that is absolute, has an empty, "." or ".." segment, a backslash or a control character, or is reserved (raw, or under _ao/ or a first segment starting with ~); 429 artifact_share_rate_limited past the hourly allowance. A control plane that predates included files answers 404. 415 artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm, .ogv, .avi, .mkv), as for a link's own file. */
+        post: operations["createArtifactShareFileUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/files/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Finishes an included file's upload from every one of its parts, in order, and answers the fileToken finalizeArtifactShare lists. Errors are finalizeArtifactShare's. A file no finalize lists before expiresAt is deleted. */
+        post: operations["completeArtifactShareFileUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/artifact-shares/finalize": {
         parameters: {
             query?: never;
@@ -266,7 +300,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired. */
+        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired, or a fileToken that is not one of this upload's link; 400 artifact_share_too_many_files for more than 200 files; 409 artifact_share_upload_gone when an included file's upload expired. */
         post: operations["finalizeArtifactShare"];
         delete?: never;
         options?: never;
@@ -779,6 +813,89 @@ export interface paths {
         /** @description Start a standalone agent: one worker session with no repository and no orchestrator, the caller's own. The control plane makes it a standalone project the caller owns (standaloneAgent) and starts its one session there, refused as a session create would be. Only its owner lists the agent or is a member of it; anyone else reaches it through a share. Offered when offering.features lists standalone_agents. */
         post: operations["createStandaloneAgent"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description The organization's automations, newest first, each with its latest run. Every member sees every automation of the organization's projects. Offered when offering.features lists automations; every /automations route answers 404 otherwise. */
+        get: operations["listAutomations"];
+        put?: never;
+        /** @description Schedule a prompt for a project's worker to run in AO Cloud. It runs as the caller, with their personal coding-agent credential for the harness (422 agent_provider_required without a validated one), and they are subscribed to its results. Refused with 409 AUTOMATION_LIMIT_REACHED when the organization has as many as it may, 422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project, and 422 validation_error for an invalid field or schedule. */
+        post: operations["createAutomation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        /** @description One automation of the organization, with its latest run. */
+        get: operations["getAutomation"];
+        put?: never;
+        post?: never;
+        /** @description Delete an automation and its run history. The session of a run in flight ends with it; every run's transcript and artifacts stay. Allowed to whoever may edit it. */
+        delete: operations["deleteAutomation"];
+        options?: never;
+        head?: never;
+        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or turning the automation on when the caller is not already its runAs, makes the caller the person it runs as (runAs), with their own credential: a caller without a validated credential for the harness gets 422 agent_provider_required. Turning it off changes only enabled. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
+        patch: operations["updateAutomation"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        /** @description The automation's runs, newest occurrence first. */
+        get: operations["listAutomationRuns"];
+        put?: never;
+        /** @description Run the automation now, as the caller with their own credential for its harness (422 agent_provider_required without a validated one). Any member may. Refused with 409 AUTOMATION_RUN_ACTIVE while a run is in flight. The control plane does not replay this command for a reused Idempotency-Key: a retry while the run is in flight gets AUTOMATION_RUN_ACTIVE, and one after it finished starts another run. The run starts within seconds; follow it in the run list. */
+        post: operations["runAutomationNow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/automations/{automationId}/subscription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Be notified when the automation's runs finish or fail. */
+        put: operations["subscribeAutomation"];
+        post?: never;
+        delete: operations["unsubscribeAutomation"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3263,7 +3380,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), automations when cloud automations can be scheduled (createAutomation). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -3607,6 +3724,154 @@ export interface components {
             lastPolledAt?: string;
             /** @description Why the last poll failed; absent when it did not. */
             lastError?: string;
+        };
+        /**
+         * @description Harnesses an automation can run: those with a Chat controller, whose opening turn tells the control plane the run finished.
+         * @enum {string}
+         */
+        AutomationHarness: "claude-code" | "codex" | "cursor";
+        /** @enum {string} */
+        AutomationMode: "standard" | "trusted";
+        /**
+         * @description pending, starting and running are in flight. completed means the session's opening turn finished. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), the automation was turned off before it started (AUTOMATION_DISABLED), or the organization or plan was full (the create-session refusal's code: SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL, ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED). failed means it started and did not finish, or its start was refused for any other reason. timed_out means it reached maxRuntimeMinutes. A run's session ends when the run reaches completed, failed or timed_out.
+         * @enum {string}
+         */
+        AutomationRunStatus: "pending" | "starting" | "running" | "completed" | "failed" | "skipped" | "timed_out";
+        AutomationRun: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            automationId: string;
+            /**
+             * Format: date-time
+             * @description The occurrence it ran for; the moment it was asked for, for a manual run.
+             */
+            scheduledFor: string;
+            /** @enum {string} */
+            trigger: "schedule" | "manual";
+            /**
+             * Format: uuid
+             * @description Who asked for a manual run.
+             */
+            triggeredByUserId?: string;
+            status: components["schemas"]["AutomationRunStatus"];
+            /**
+             * Format: uuid
+             * @description The session it ran in, once started. The session ends when the run does (completed, failed or timed_out), as deleteSession ends one: its sandbox is deleted and its transcript, artifacts and pull requests stay. It can be restored to continue the work; the automation's next run ends a restored one again, since it holds the shared branch.
+             */
+            sessionId?: string;
+            attemptCount: number;
+            /** Format: date-time */
+            startedAt?: string;
+            /** Format: date-time */
+            finishedAt?: string;
+            /** @description Why a skipped, failed or timed_out run did not finish: a skip's code (AutomationRunStatus), TIMED_OUT, AGENT_FAILED (the opening turn failed), SESSION_ENDED (its session was deleted first), START_FAILED, or the create-session refusal's own code (such as agent_provider_required). Clients show errorMessage for a code they do not know. */
+            errorCode?: string;
+            /** @description The reason in words, for a person to read. */
+            errorMessage?: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description A prompt a project's worker runs on a schedule in AO Cloud. Each run is one session, started as runAs. All runs share one branch and keep at most one open pull request per repository on it: a run updates the pull request an earlier run left open, and once that is merged or closed the next run moves to a new branch. Run sessions can be shared only to watch, with teams and by link. */
+        Automation: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            displayName: string;
+            prompt: string;
+            harness: components["schemas"]["AutomationHarness"];
+            model?: string;
+            reasoningEffort?: string;
+            mode: components["schemas"]["AutomationMode"];
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description The canonical rule, with its DTSTART anchor. */
+            rrule: string;
+            /** @description The IANA timezone the rule runs in. */
+            timezone: string;
+            enabled: boolean;
+            /**
+             * Format: date-time
+             * @description Absent while disabled.
+             */
+            nextRunAt?: string;
+            maxRuntimeMinutes: number;
+            /** @description The branch its runs work on. */
+            branch: string;
+            /** @description Whose credential its scheduled runs use: whoever last changed what it does or when, or turned it on. */
+            runAs: {
+                /** Format: uuid */
+                userId: string;
+                email?: string;
+                displayName?: string;
+            };
+            /** Format: uuid */
+            createdByUserId?: string;
+            /** @description Scheduled runs in a row that failed or timed out; a completed scheduled run resets it, and skipped and manual runs leave it. At 5 the automation is turned off. */
+            consecutiveFailures: number;
+            /** @description Why it was turned off automatically, such as after 5 scheduled runs in a row that failed or timed out, in words for a person to read. Absent while enabled or turned off by a person. */
+            disabledReason?: string;
+            /** @description Whether the caller is notified of its runs. */
+            subscribed: boolean;
+            /** @description Whether the caller may change or delete it. */
+            canEdit: boolean;
+            latestRun?: components["schemas"]["AutomationRun"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description Exactly one of rrule and cron. Occurrences must be at least an hour apart. */
+        CreateAutomationInput: {
+            /** Format: uuid */
+            projectId: string;
+            displayName: string;
+            prompt: string;
+            harness: components["schemas"]["AutomationHarness"];
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /** @default trusted */
+            mode: components["schemas"]["AutomationMode"];
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description An RFC 5545 rule (FREQ=HOURLY or slower, no COUNT or UNTIL). */
+            rrule?: string;
+            /** @description "minute hour * * weekdays", the desktop presets' subset of cron; converted to a rule. */
+            cron?: string;
+            /** @description An IANA timezone, or UTC. */
+            timezone: string;
+            /** @default 60 */
+            maxRuntimeMinutes: number;
+            /** @default true */
+            enabled: boolean;
+        };
+        /** @description Fields to change. rrule or cron replaces the schedule; timezone alone moves the saved rule into the new zone. */
+        UpdateAutomationInput: {
+            displayName?: string;
+            prompt?: string;
+            harness?: components["schemas"]["AutomationHarness"];
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["AutomationMode"];
+            /** @enum {string} */
+            requestedOutput?: "" | "artifact";
+            rrule?: string;
+            cron?: string;
+            timezone?: string;
+            maxRuntimeMinutes?: number;
+            enabled?: boolean;
+        };
+        AutomationList: {
+            items: components["schemas"]["Automation"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        AutomationRunList: {
+            items: components["schemas"]["AutomationRun"][];
+            page: components["schemas"]["PageInfo"];
+        };
+        AutomationSubscription: {
+            subscribed: boolean;
         };
         /** @description One of a project's reusable quick actions, run into a session from the desktop's top bar. */
         Cue: {
@@ -4718,6 +4983,11 @@ export interface components {
             requestedOutput?: components["schemas"]["RequestedOutput"];
             /**
              * Format: uuid
+             * @description The automation run the session was started for. Such a session is shared only to watch (viewer access), with teams and by link; other shares are refused with AUTOMATION_SESSION_VIEW_ONLY.
+             */
+            automationRunId?: string;
+            /**
+             * Format: uuid
              * @description The person who started the session (for a spawned worker, its orchestrator's). Only they share its files as public links (shareSessionArtifact) and change them (saveSessionArtifact, restoreSessionArtifactVersion, deleteSessionArtifact); every other member of the organization sees them read-only. Omitted when none is on record.
              */
             createdByUserId?: string;
@@ -4883,6 +5153,8 @@ export interface components {
             access?: components["schemas"]["ArtifactShareAccess"];
             /** @description How many emails the link is shared with. Absent from a control plane that predates private links. */
             grantCount?: number;
+            /** @description How many files the link serves beside its own, at their paths under contentUrl (see createArtifactShareFileUpload). Absent from a control plane that predates included files. */
+            fileCount?: number;
         };
         /**
          * @description Who a link opens for. restricted: only its owner and the emails it is shared with, once they sign in with that verified email; its file needs a view token (viewArtifactShare), so share viewerUrl, never contentUrl. anyone: everyone with the link, no sign-in. Absent from a control plane that predates private links, where every link is anyone.
@@ -4979,18 +5251,50 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
         };
+        ArtifactShareCompletedPart: {
+            partNumber: number;
+            sha256: string;
+            /** @description The ETag the part's PUT returned. */
+            etag: string;
+        };
+        /** @description An included file's upload and every one of its parts, in order. It takes no access, emails or files: those are the page's, set when the page is finalized. */
+        ArtifactShareFileCompleteInput: {
+            /** @description The file's uploadToken, from createArtifactShareFileUpload. */
+            uploadToken: string;
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
+        };
         ArtifactShareFinalizeInput: {
             uploadToken: string;
-            parts: {
-                partNumber: number;
-                sha256: string;
-                /** @description The ETag the part's PUT returned. */
-                etag: string;
-            }[];
+            parts: components["schemas"]["ArtifactShareCompletedPart"][];
             /** @description The access a new or restored link starts with. Absent, it is anyone, as before links could be private. An active link keeps its own access. */
             access?: components["schemas"]["ArtifactShareAccess"];
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
             emails?: string[];
+            /** @description Every file the link serves beside its own from now on, each from completeArtifactShareFileUpload under this upload, at most one per path; an empty list leaves it none. Absent, an active link keeps the files it has and a new or restored one has none. A private link's page that has files, opened at contentUrl with its view token in the query, is redirected to /~vt/<token>/ under the same host, so the files it refers to by relative path carry the token. */
+            files?: {
+                /** @description From completeArtifactShareFileUpload; opaque. */
+                fileToken: string;
+            }[];
+        };
+        ArtifactShareFileUploadInput: {
+            /** @description The page's upload, from createArtifactShareUpload. */
+            uploadToken: string;
+            /** @description Where the link serves the file: slash-separated, relative to the page, as a browser asks for it once it resolves the page's relative URL (images/a.png, not ./images/a.png). */
+            path: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The whole file's SHA-256, as for the page. */
+            sha256: string;
+        };
+        ArtifactShareFileUploaded: {
+            /** @description Lists the file in finalizeArtifactShare; opaque. */
+            fileToken: string;
+            path: string;
+            /**
+             * Format: date-time
+             * @description When the file can no longer be listed.
+             */
+            expiresAt: string;
         };
         SessionArtifactShareInput: {
             /** @description The file's path in the session's artifact directory, as SessionArtifact.path. */
@@ -6082,6 +6386,7 @@ export interface components {
     };
     parameters: {
         AgentAccountId: string;
+        AutomationId: string;
         CueId: string;
         ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
@@ -6580,6 +6885,56 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShareFileUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFileUploadInput"];
+            };
+        };
+        responses: {
+            /** @description The file's upload, ready for its parts. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    completeArtifactShareFileUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFileCompleteInput"];
+            };
+        };
+        responses: {
+            /** @description The finished file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareFileUploaded"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -7586,6 +7941,246 @@ export interface operations {
                         project: components["schemas"]["Project"];
                         session: components["schemas"]["Session"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAutomations: {
+        parameters: {
+            query?: {
+                projectId?: string;
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of automations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAutomationInput"];
+            };
+        };
+        responses: {
+            /** @description Automation created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The automation with its latest run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Automation deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAutomationInput"];
+            };
+        };
+        responses: {
+            /** @description Automation updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        automation: components["schemas"]["Automation"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAutomationRuns: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationRunList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    runAutomationNow: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Run queued. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        run: components["schemas"]["AutomationRun"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    subscribeAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscribed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationSubscription"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    unsubscribeAutomation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                automationId: components["parameters"]["AutomationId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unsubscribed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutomationSubscription"];
                 };
             };
             default: components["responses"]["Error"];
