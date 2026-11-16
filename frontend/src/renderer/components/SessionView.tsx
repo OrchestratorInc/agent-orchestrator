@@ -2802,7 +2802,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		},
 		hasInspector,
 	);
-	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); }, hasInspector);
 	useSessionShortcut("dictate", toggleComposerDictation, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);

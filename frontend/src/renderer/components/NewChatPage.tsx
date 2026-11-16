@@ -71,7 +71,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
-	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); });
 	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {

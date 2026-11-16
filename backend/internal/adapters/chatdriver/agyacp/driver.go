@@ -60,7 +60,8 @@ func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 
 func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Config {
 	return acpdriver.Config{
-		Harness: domain.HarnessAgy,
+		Harness:     domain.HarnessAgy,
+		HideCommand: hiddenCommands,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming: true,
 			ports.ChatCapabilityTools:     true,

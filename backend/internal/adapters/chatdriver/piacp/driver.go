@@ -51,7 +51,8 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 	totals := &sessionTotals{totals: map[string]int{}}
 	agentDirs := &piAgentDirs{}
 	return acpdriver.Config{
-		Harness: domain.HarnessPi,
+		Harness:     domain.HarnessPi,
+		HideCommand: hiddenCommands,
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityStreaming: true,
 			ports.ChatCapabilityTools:     true,

@@ -209,6 +209,15 @@ type Config struct {
 	// session (claude-agent-acp's task list), re-sent into later turns, rather
 	// than a plan for the turn it arrives in.
 	PlansSpanTurns bool
+	// HideCommand reports an advertised command that AO keeps out of the `/`
+	// menu. AO sends a picked command as ordinary prompt text, so a built-in
+	// that drives the agent's own terminal UI, or changes a setting AO has its
+	// own control for (Claude's `/model` switches the model behind AO's
+	// picker), misleads there. Agents report no command kind over ACP, so each
+	// binding names its own built-ins; see HideCommands. A hidden command still
+	// counts for capability checks such as compaction, and typing it by hand
+	// still sends it. Nil keeps every command.
+	HideCommand func(acpsdk.AvailableCommand) bool
 	// QuickStop marks a provider whose stop gains nothing from waiting (it never
 	// reacts to stdin closing): a short session/close wait, then a quick signal.
 	QuickStop bool
@@ -936,6 +945,7 @@ func (d *Driver) initialize(
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
+	conv.hideCommand = d.cfg.HideCommand
 	conv.historyUserChunkIsMessage = d.cfg.HistoryUserChunkIsMessage
 	conv.historyReconciler = d.cfg.HistoryReconciler
 	conv.plansSpanTurns = d.cfg.PlansSpanTurns

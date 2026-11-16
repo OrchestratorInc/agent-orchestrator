@@ -2289,6 +2289,62 @@ describe("slash commands", () => {
 		await userEvent.click(screen.getByText("Ship"));
 		expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/ship");
 	});
+
+	describe("/model", () => {
+		// Stands in for the settings row's model menu: openComposerModelPicker
+		// opens it with an Enter keydown, which a Radix trigger answers.
+		function renderWithModelMenu(props: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
+			const opened = vi.fn();
+			const rendered = renderComposer({
+				skills: SKILLS,
+				settings: (
+					<button type="button" data-shortcut-target="model-picker" onKeyDown={(event) => { if (event.key === "Enter") opened(); }}>
+						Opus 5.5
+					</button>
+				),
+				...props,
+			});
+			return { ...rendered, opened };
+		}
+
+		it("opens the model menu on Enter instead of sending", async () => {
+			const { field, onSend, opened } = renderWithModelMenu();
+			await typeInComposer(field, "/model");
+			// Typing the name only selects it; the menu waits for Enter.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(opened).not.toHaveBeenCalled();
+
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(opened).toHaveBeenCalledOnce());
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("");
+		});
+
+		it("still opens the menu when /model is sent with the suggestions dismissed", async () => {
+			const { field, onSend, opened } = renderWithModelMenu();
+			await typeInComposer(field, "/model");
+			await userEvent.keyboard("{Escape}");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(opened).toHaveBeenCalledOnce());
+			expect(onSend).not.toHaveBeenCalled();
+		});
+
+		it("replaces an agent's own /model with AO's", async () => {
+			const { field } = renderWithModelMenu({
+				skills: [...SKILLS, { name: "model", displayName: "model", description: "Set the AI model", source: "agent" }],
+			});
+			await typeInComposer(field, "/mode");
+			const options = screen.getAllByRole("option").filter((option) => /^Model/.test(option.textContent ?? ""));
+			expect(options).toHaveLength(1);
+			expect(options[0]?.textContent).toContain("Choose the agent, model and effort");
+		});
+
+		it("is not offered where the composer has no model menu", async () => {
+			const { field } = renderComposer({ skills: SKILLS });
+			await typeInComposer(field, "/");
+			expect(screen.getAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+		});
+	});
 });
 
 /* ---- file mentions ------------------------------------------------------- */

@@ -71,6 +71,7 @@ import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-clie
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
 	ComposerEditor,
+	CONSUME_TRIGGER,
 	type ComposerEditorHandle,
 	type ComposerImage,
 	type ComposerEditorSnapshot,
@@ -78,6 +79,7 @@ import {
 	type ComposerTrigger,
 } from "./ComposerEditor";
 import { messageTokenScope, recordSentComposerTokens, sessionTokenScope } from "./sentComposerTokens";
+import { openComposerModelPicker } from "../../lib/composer-shortcuts";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
 import {
 	isSupportedImageAttachment,
@@ -128,6 +130,13 @@ import { rememberSentAttachments } from "../../lib/sent-attachment-previews";
 import { isCloudAttachmentReference } from "../../lib/cloud-attachment-reference";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences, subscribeChatComposerText } from "../../lib/chat-context-bus";
+
+/**
+ * AO's own `/model`: it opens the composer's agent and model menu instead of
+ * sending text. An agent's `/model` only printed usage over chat, or switched
+ * the model behind the menu, so AO's command takes its place.
+ */
+const MODEL_COMMAND = "model";
 
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
@@ -590,6 +599,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const formRef = useRef<HTMLFormElement>(null);
 	const dictation = useDictation({
 		onText: (text) => editor.current?.dictate(text),
 		onEnd: (keep) => editor.current?.endDictation(keep),
@@ -790,18 +800,35 @@ export const ChatComposer = memo(function ChatComposer({
 			!stagedPath && data ? [{ mimeType, data, name }] : []), fileAttachments.preparing);
 	}, [fileAttachments.attachments, fileAttachments.preparing, holdAttachments, onHeldAttachmentsChange]);
 
+	// The model menu lives in the settings row, so /model is offered where one is shown.
+	const offersModelCommand = Boolean(settings);
 	const slashCommands = useMemo<ChatSkill[]>(() => {
-		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
-		return [
-			{
+		const offersCompact = Boolean(onCompact) && compactUnavailable !== "This agent cannot compact its history";
+		const own: ChatSkill[] = [
+			...(offersCompact ? [{
 				name: "compact",
 				displayName: "compact",
 				description: "Summarize earlier history to reclaim context",
 				source: "AO",
-			},
-			...skills.filter((skill) => skill.name !== "compact"),
+			}] : []),
+			...(offersModelCommand ? [{
+				name: MODEL_COMMAND,
+				displayName: MODEL_COMMAND,
+				description: "Choose the agent, model and effort",
+				source: "AO",
+			}] : []),
 		];
-	}, [compactUnavailable, onCompact, skills]);
+		if (own.length === 0) return skills;
+		return [...own, ...skills.filter((skill) => !own.some((command) => command.name === skill.name))];
+	}, [compactUnavailable, offersModelCommand, onCompact, skills]);
+
+	// After the key or click that chose /model has finished, so it cannot also
+	// act on the menu that opens.
+	const openModelMenu = useCallback(() => {
+		window.setTimeout(() => {
+			if (formRef.current) openComposerModelPicker(formRef.current);
+		}, 0);
+	}, []);
 
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
@@ -1532,7 +1559,9 @@ export const ChatComposer = memo(function ChatComposer({
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
-		editor.current?.insertToken(currentTrigger, value);
+		const opensModelMenu = offersModelCommand && currentTrigger.kind === "skill" && value === MODEL_COMMAND;
+		if (opensModelMenu) editor.current?.removeTrigger(currentTrigger);
+		else editor.current?.insertToken(currentTrigger, value);
 		triggerRef.current = undefined;
 		previousTrigger.current = undefined;
 		setTrigger(undefined);
@@ -1540,7 +1569,8 @@ export const ChatComposer = memo(function ChatComposer({
 		setHighlighted(0);
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
-	}, []);
+		if (opensModelMenu) openModelMenu();
+	}, [offersModelCommand, openModelMenu]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1551,6 +1581,8 @@ export const ChatComposer = memo(function ChatComposer({
 		if (!query) return;
 		const exact = slashCommands.find((skill) => skill.name.toLowerCase() === query);
 		if (!exact) return;
+		// /model runs on Enter, like a sent command; typing its name only selects it.
+		if (offersModelCommand && exact.name === MODEL_COMMAND) return;
 
 		// Do not eagerly accept a skill whose full name is also the start of another
 		// skill. The user must still be able to type `/review-pr` when `/review`
@@ -1560,7 +1592,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return name.length > query.length && name.startsWith(query);
 		});
 		if (!hasLongerPrefix) pick(exact.name);
-	}, [dismissedKey, isComposing, pick, slashCommands, trigger]);
+	}, [dismissedKey, isComposing, offersModelCommand, pick, slashCommands, trigger]);
 
 	useLayoutEffect(() => {
 		if (submitting || !restoreFocusAfterSubmission.current) return;
@@ -1573,7 +1605,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [submitting]);
 
 	const completeFromEditor = useCallback(
-		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
+		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | typeof CONSUME_TRIGGER | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
@@ -1585,9 +1617,17 @@ export const ChatComposer = memo(function ChatComposer({
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
+			if (offersModelCommand && currentTrigger.kind === "skill" && chosen.value === MODEL_COMMAND) {
+				// The editor removes the typed `/mod…`; nothing is inserted or sent.
+				triggerRef.current = undefined;
+				setTrigger(undefined);
+				setHighlighted(0);
+				openModelMenu();
+				return CONSUME_TRIGGER;
+			}
 			return chosen.value;
 		},
-		[onCompact, skills, suggestionsFor],
+		[offersModelCommand, onCompact, openModelMenu, skills, suggestionsFor],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
@@ -1609,6 +1649,12 @@ export const ChatComposer = memo(function ChatComposer({
 			return submitInFlight.current;
 		}
 		if (typingLocked) return Promise.resolve();
+		// `/model` typed out with the menu dismissed still opens the model menu.
+		if (offersModelCommand && !forceSteer && textRef.current.trim() === `/${MODEL_COMMAND}`) {
+			editor.current?.clear();
+			openModelMenu();
+			return Promise.resolve();
+		}
 		setHeldSubmit(null);
 		heldDuringSubmit.current = null;
 		submitAccepted.current = false;
@@ -2359,6 +2405,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 	return withQueueStack(
 		<form
+			ref={formRef}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
 			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {

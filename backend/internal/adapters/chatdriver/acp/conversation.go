@@ -211,6 +211,7 @@ type conversation struct {
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice                func(string) bool
+	hideCommand                  func(acpsdk.AvailableCommand) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.
 	promptErrorFailure func(error, bool) error
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.

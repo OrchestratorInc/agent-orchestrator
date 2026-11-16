@@ -6310,3 +6310,43 @@ func TestModelAliasAdmissionUsesTheBindingHarness(t *testing.T) {
 		})
 	}
 }
+
+func TestACPDriverHidesCommandsTheBindingNames(t *testing.T) {
+	agent := &fakeAgent{}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		HideCommand:  HideCommands("model", "compact"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+		SessionId: acpsdk.SessionId(conv.ProviderConversationID()),
+		Update: acpsdk.SessionUpdate{AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
+			AvailableCommands: []acpsdk.AvailableCommand{
+				{Name: "goal", Description: "Keep working until a condition is met"},
+				{Name: "model", Description: "Set the AI model"},
+				{Name: "compact", Description: "Summarize the conversation"},
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("SessionUpdate: %v", err)
+	}
+
+	skills := awaitSkillCount(t, conv.(ports.ChatSkillLister), 1)
+	if skills[0].Name != "goal" {
+		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+	// Hiding is presentation only: the agent's compaction stays usable.
+	if !conv.Capabilities().Has(ports.ChatCapabilityCompaction) {
+		t.Fatal("hiding compact from the menu also disabled compaction")
+	}
+}
