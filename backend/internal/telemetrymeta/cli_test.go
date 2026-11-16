@@ -8,6 +8,18 @@ func TestNormalizeCommandPath(t *testing.T) {
 	}
 }
 
+func TestCLIActorTypeReviewAutoInject(t *testing.T) {
+	for _, actor := range []string{"", "user", "agent"} {
+		want := actor
+		if want == "" {
+			want = "user"
+		}
+		if got := CLIActorType(actor, "ao review auto-inject"); got != want {
+			t.Fatalf("actor %q classified as %q, want %q", actor, got, want)
+		}
+	}
+}
+
 func TestIsRoutineInternalCLICommandNormalizesLegacyShapes(t *testing.T) {
 	for _, commandPath := range []string{
 		"ao hooks",
