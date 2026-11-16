@@ -482,7 +482,7 @@ func TestDeriveKanbanPresentationAOChangesRequestedNeedsActiveWorker(t *testing.
 		{name: "idle worker after delivered feedback requests changes", activity: contract.ActivityIdle, autoFix: true, want: contract.DisplayChangesRequested},
 		{name: "idle worker without auto fix requests changes", activity: contract.ActivityIdle, want: contract.DisplayChangesRequested},
 		{name: "active worker with auto fix addresses comments", activity: contract.ActivityActive, autoFix: true, want: contract.DisplayAddressingComments},
-		{name: "active worker without auto fix is working", activity: contract.ActivityActive, want: contract.DisplayWorking},
+		{name: "active worker without auto fix still addresses the changes", activity: contract.ActivityActive, want: contract.DisplayAddressingComments},
 		{name: "a running reviewer outranks the idle changes request", activity: contract.ActivityIdle, autoFix: true, running: true, want: contract.DisplayReviewing},
 		{name: "failing CI keeps its precedence", activity: contract.ActivityIdle, autoFix: true, ci: contract.CIFailing, want: contract.DisplayCIFailing},
 		{name: "blocked worker still needs attention", activity: contract.ActivityBlocked, autoFix: true, want: contract.DisplayBlocked},
@@ -1061,4 +1061,33 @@ func TestDeriveKanbanPresentationSpeaksForTheChosenPR(t *testing.T) {
 			t.Fatalf("presentation = %+v, want a pr-driven placement", got)
 		}
 	})
+}
+
+// A PR already in review with a person's changes request must hold the same
+// column and the same "addressing" phrase across the worker's idle/active
+// turns, instead of flipping between "Changes requested" and "Working".
+func TestDeriveKanbanPresentationExternalChangesRequestedDoesNotFlipWithActivity(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	pr := contract.KanbanPRFacts{
+		URL:            "pr/1",
+		Review:         contract.ReviewChangesRequest,
+		ExternalReview: contract.KanbanExternalReviewFacts{ChangesRequested: true},
+	}
+	for _, autoFix := range []bool{false, true} {
+		idle := contract.DeriveKanbanPresentation(contract.KanbanSessionFacts{
+			SessionFacts:     contract.SessionFacts{Activity: contract.ActivityIdle, HasSignal: true},
+			AutoInjectReview: autoFix,
+		}, []contract.KanbanPRFacts{pr}, now, time.Minute)
+		active := contract.DeriveKanbanPresentation(contract.KanbanSessionFacts{
+			SessionFacts:     contract.SessionFacts{Activity: contract.ActivityActive, HasSignal: true},
+			AutoInjectReview: autoFix,
+		}, []contract.KanbanPRFacts{pr}, now, time.Minute)
+		if idle.Column != contract.KanbanNeedsReview || active.Column != contract.KanbanNeedsReview {
+			t.Fatalf("autoFix=%v columns idle=%s active=%s, want in review", autoFix, idle.Column, active.Column)
+		}
+		if idle.DisplayStatus != contract.DisplayChangesRequested || active.DisplayStatus != contract.DisplayAddressingComments {
+			t.Fatalf("autoFix=%v display idle=%s active=%s", autoFix, idle.DisplayStatus, active.DisplayStatus)
+		}
+	}
 }
