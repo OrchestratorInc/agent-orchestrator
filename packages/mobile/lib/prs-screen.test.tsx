@@ -2,7 +2,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { HostedSession } from "./hostedRows";
 import type { HostSnapshot } from "./otherHosts";
-import type { SessionPRSummary } from "./api";
+import type { PRStatePage, SessionPRSummary } from "./api";
 
 const fixture = vi.hoisted(() => ({
 	allSessions: [] as HostedSession[], hostStates: [] as HostSnapshot[],
@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => ({
 	configForHost: vi.fn(() => ({ host: "ao.test", httpPort: "3011", muxPort: "3011", password: "test" })),
 	summaries: new Map<string, SessionPRSummary>(),
 	reload: vi.fn(), refreshAll: vi.fn(async () => {}), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
+	getArchivedPRSessions: vi.fn(),
 	theme: new Proxy({}, { get: () => "#888888" }),
 	router: { push: vi.fn(), navigate: vi.fn(), back: vi.fn(), canGoBack: () => true, replace: vi.fn() },
 }));
@@ -45,6 +46,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {} }));
 vi.mock("expo-secure-store", () => ({}));
 vi.mock("./installId", () => ({}));
 vi.mock("./sentry", () => ({}));
+vi.mock("./api", async (importOriginal) => ({ ...(await importOriginal<typeof import("./api")>()), getArchivedPRSessions: fixture.getArchivedPRSessions }));
 vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all" }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: object) => object) => factory(fixture.theme) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
@@ -94,6 +96,7 @@ beforeEach(() => {
 	}));
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
 	fixture.reload.mockClear(); fixture.refreshAll.mockReset(); fixture.refreshAll.mockImplementation(async () => {}); fixture.focus = undefined; fixture.summaryTargets = [];
+	fixture.getArchivedPRSessions.mockReset();
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -265,4 +268,32 @@ it("keeps the plain empty state when a machine fails but Orchestrator Cloud answ
 	} finally {
 		delete withCloud.cloud;
 	}
+});
+
+// The poll carries live workers only, so a PR merged by a session that has
+// ended comes from the machine's archive, read when Merged (or All) opens.
+it("lists the merged PRs of ended sessions once Merged is open", async () => {
+	fixture.hostStates = fixture.hostStates.map((host, index) => index === 0 ? { ...host, archive: { total: 5, byProject: {} } } : host);
+	const ended: HostedSession = { ...session("mac"), id: "ended", isTerminated: true, pr: undefined, prs: [{ number: 3, url: "https://github.com/ao/test/pull/3", state: "merged" }] };
+	let release!: (page: PRStatePage) => void;
+	fixture.getArchivedPRSessions.mockImplementation(() => new Promise((resolve) => { release = resolve; }));
+	act(() => { renderer = create(<PRsScreen />); });
+	expect(fixture.getArchivedPRSessions).not.toHaveBeenCalled();
+
+	// The filter heads the list, which this mock does not render.
+	const control = () => {
+		const header = renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as { props: { children: { type: unknown; props: Record<string, unknown> }[] } };
+		return header.props.children.find((child) => child?.type === "PRFilterControl")!;
+	};
+	await act(async () => (control().props.onChange as (filter: string) => void)("merged"));
+	// Only the machine with an archive is asked.
+	expect(fixture.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+	expect(fixture.getArchivedPRSessions.mock.calls[0]?.[1]).toMatchObject({ prState: "merged", cursor: null });
+
+	await act(async () => release({ sessions: [ended], nextCursor: null, total: 1 }));
+	const sections = renderer!.root.findByType("SectionList" as never).props.sections as { key: string; data: { session: HostedSession }[] }[];
+	expect(sections.map((section) => section.key)).toEqual(["merged"]);
+	expect(sections[0]?.data.map((item) => `${item.session.hostId}/${item.session.id}`)).toEqual(["mac/ended"]);
+	expect(control().props.counts).toMatchObject({ open: 2, merged: 1, all: 3 });
+	expect(fixture.summaryTargets.at(-1)).toContainEqual(expect.objectContaining({ sessionId: "ended" }));
 });

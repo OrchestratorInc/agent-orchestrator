@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform, RefreshControl, SectionList, StyleSheet, View, type ViewToken } from "react-native";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import type { Theme } from "../../lib/theme";
 import { groupedRowPosition } from "../../lib/groupedRow";
@@ -27,13 +27,25 @@ import { useToast } from "../../lib/useToast";
 import { Button, EmptyState } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
-import type { HostedSession } from "../../lib/hostedRows";
+import type { DashboardPR } from "../../lib/api";
+import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
+import { useArchivedMergedPRs, withArchivedPRSessions, type MergedPRSource } from "../../lib/archivedMergedPRs";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 type Filter = PRListFilter;
+type PRRow = { pr: DashboardPR; session: HostedSession };
+
+function prRowKey({ pr, session }: PRRow): string {
+	return `${session.hostId}:${session.projectId}#${pr.number}`;
+}
 
 type PRsParams = { hostId?: string; projectId?: string };
+
+// Rows past the last one seen whose details load ahead of the scroll. Only
+// archived rows wait for it: the merged history can run to hundreds of PRs, one
+// request each.
+const SUMMARY_LOOKAHEAD = 30;
 
 // Its rows share one width (see `MenuRowWidthScope`): a filter mounts a new
 // set of rows, and the ones past the list's first render batch are sized on
@@ -55,26 +67,42 @@ function PRList() {
 	const singleMachine = hostStates.length === 1 && !cloud;
 	const cloudShown = Boolean(cloud) && (!routeHostId || isCloudHost(routeHostId));
 	const projectFilter = routeHostId ? (routeProjectId ?? "all") : singleMachine ? activeProjectId : "all";
+	const [filter, setFilter] = useState<Filter>("open");
+	const [refreshToken, setRefreshToken] = useState(0);
+	// Each machine that pages its archive is read for the merged PRs of sessions
+	// that have ended, once Merged or All is open. A machine with an empty
+	// archive has none to read.
+	const mergedSources = useMemo<MergedPRSource[]>(() => visibleHosts.flatMap((host) => {
+		if (isCloudHost(host.hostId) || !host.archive) return [];
+		const projectId = projectFilter === "all" ? undefined : projectFilter;
+		const archived = projectId === undefined ? host.archive.total : host.archive.byProject[projectId] ?? 0;
+		return archived > 0 ? [{ hostId: host.hostId, hostName: host.name, appearance: host.appearance, projectId, archived }] : [];
+	}), [visibleHosts, projectFilter]);
+	const archivedMerged = useArchivedMergedPRs(mergedSources, { active: filter !== "open", refreshToken });
+	const archivedKeys = useMemo(() => new Set(archivedMerged.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archivedMerged.sessions]);
 	const prs = useMemo(() => {
 		// Hosted rows are structurally shared across sync/notification updates.
 		// Keep those identities, and deduplicate PRs within each machine only.
+		// Live rows come first, so a PR keeps its live session's row.
 		const byHost = new Map<string, HostedSession[]>();
-		for (const session of allSessions) {
+		for (const session of withArchivedPRSessions(allSessions, archivedMerged.sessions)) {
 			if (routeHostId && session.hostId !== routeHostId) continue;
 			const rows = byHost.get(session.hostId);
 			if (rows) rows.push(session);
 			else byHost.set(session.hostId, [session]);
 		}
 		return [...byHost.values()].flatMap(sessions => collectPRs(sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter));
-	}, [allSessions, routeHostId, projectFilter]);
+	}, [allSessions, archivedMerged.sessions, routeHostId, projectFilter]);
 	const configured = hostStates.length > 0 || Boolean(cloud);
 	const loading = visibleHosts.some((host) => host.loading) || (cloudShown && !cloudSessionsLoaded);
 	// A machine's failure fills the page only when nothing answers: with
 	// Orchestrator Cloud listed, an empty filter is just empty.
 	const error = !cloudShown && visibleHosts.every((host) => host.connection !== "open") ? visibleHosts.find((host) => host.error)?.error : null;
-	const [filter, setFilter] = useState<Filter>("open");
 	const toast = useToast();
 	const { show: showToast } = toast;
+	useEffect(() => {
+		if (archivedMerged.error) showToast(archivedMerged.error);
+	}, [archivedMerged.error, showToast]);
 	// Android 13 and later confirms every copy with its own clipboard preview.
 	const linkCopied = useCallback(() => {
 		if (Platform.OS === "android" && Number(Platform.Version) >= 33) return;
@@ -85,7 +113,12 @@ function PRList() {
 	// than presenting a flat stream in daemon order.
 	const filtered = useMemo(() => prs.filter(({ pr }) => prInFilter(filter, prLifecycle(pr))), [prs, filter]);
 	const sections = useMemo(() => prListSections(prs, filter), [prs, filter]);
-	const counts = useMemo(() => prFilterCounts(prs), [prs]);
+	// Archived sessions still loading each hold a merged PR, so the counts do
+	// not climb page by page.
+	const counts = useMemo(() => {
+		const loaded = prFilterCounts(prs);
+		return { ...loaded, merged: loaded.merged + archivedMerged.unloaded, all: loaded.all + archivedMerged.unloaded };
+	}, [prs, archivedMerged.unloaded]);
 	// Name each row's repository only when the list holds more than one.
 	const showProject = useMemo(() => new Set(prs.map(({ session }) => `${session.hostId}:${session.projectId}`)).size > 1, [prs]);
 	const now = useNow(MINUTE_MS);
@@ -93,10 +126,26 @@ function PRList() {
 	// The rich per-PR detail the cards show lives on a separate endpoint, fetched
 	// once per session and cached — see usePRSummaries. Pull-to-refresh is the
 	// only thing that re-fetches it.
-	const summaryTargets = useMemo(() => filtered.flatMap(({ session }) => {
+	// Archived rows load theirs as the list scrolls near them, in list order.
+	const shownRows = useMemo(() => sections.flatMap((section) => section.data), [sections]);
+	const [summaryReach, setSummaryReach] = useState(SUMMARY_LOOKAHEAD);
+	const rowIndex = useRef(new Map<string, number>());
+	rowIndex.current = new Map(shownRows.map((item, index) => [prRowKey(item), index]));
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<PRRow>[] }) => {
+		let last = -1;
+		for (const token of viewableItems) {
+			// A section header's token carries the section, not a row.
+			const item = token?.item as Partial<PRRow> | undefined;
+			const index = item?.pr && item.session ? rowIndex.current.get(prRowKey(item as PRRow)) : undefined;
+			if (index !== undefined && index > last) last = index;
+		}
+		if (last >= 0) setSummaryReach((reach) => Math.max(reach, last + 1 + SUMMARY_LOOKAHEAD));
+	}).current;
+	const summaryTargets = useMemo(() => shownRows.flatMap(({ session }, index) => {
+		if (index >= summaryReach && archivedKeys.has(hostedRowKey(session.hostId, session.id))) return [];
 		const config = configForHost(session.hostId);
 		return config ? [{ config, sessionId: session.id }] : [];
-	}), [filtered, configForHost]);
+	}), [shownRows, summaryReach, archivedKeys, configForHost]);
 	const summaries = usePRSummaries(summaryTargets);
 	// A cloud session's detail comes from Orchestrator Cloud, not a daemon,
 	// stamped with its pull requests' states: one merged or closed in Cloud
@@ -118,6 +167,7 @@ function PRList() {
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
 		cloudSummaries.reload();
+		setRefreshToken((token) => token + 1);
 	}, [summaries.reload, cloudSummaries.reload]));
 	const failure = useBoardFailure();
 
@@ -128,6 +178,7 @@ function PRList() {
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
 		cloudSummaries.reload();
+		setRefreshToken((token) => token + 1);
 		await refreshAll();
 	});
 
@@ -164,7 +215,8 @@ function PRList() {
 			    over the sheet taking every touch. */}
 			<SectionList
 				sections={sections}
-				keyExtractor={({ pr, session }) => `${session.hostId}:${session.projectId}#${pr.number}`}
+				keyExtractor={prRowKey}
+				onViewableItemsChanged={onViewableItemsChanged}
 				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
 				stickySectionHeadersEnabled={false}
@@ -185,8 +237,13 @@ function PRList() {
 						onLinkCopied={linkCopied}
 					/>;
 				}}
+				ListFooterComponent={filter !== "open" && archivedMerged.loading && filtered.length > 0 ? (
+					<View style={styles.footer}>
+						<Spinner color={t.accent} accessibilityLabel="Loading merged pull requests" />
+					</View>
+				) : null}
 				ListEmptyComponent={
-					loading && prs.length === 0 ? (
+					(loading && prs.length === 0) || (filter !== "open" && archivedMerged.loading && filtered.length === 0) ? (
 						<View style={styles.center}>
 							<Spinner color={t.accent} accessibilityLabel="Loading pull requests" />
 						</View>
@@ -222,4 +279,5 @@ const makeStyles = (t: Theme) =>
 		// first native view, and the bar found no scroll view to inset it for.
 		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center" },
+		footer: { alignItems: "center", paddingVertical: space.lg },
 	});

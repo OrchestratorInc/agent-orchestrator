@@ -650,6 +650,39 @@ export async function getArchivedSessions(
 	};
 }
 
+/** Archived workers owning a pull request in one state, a page at a time. */
+export type PRStatePage = ArchivePage & {
+	/** How many archived workers match, across every page. */
+	total: number;
+};
+
+/** Pages of archived workers by PR state are larger than the archive's: they are read to the end. */
+export const PR_STATE_PAGE_SIZE = 100;
+
+/**
+ * One page of a machine's archived workers that own a PR in `prState`, newest
+ * state change first. Null from a daemon that predates the filter: it ignores
+ * the parameter and so does not echo it, and its page is the plain archive.
+ */
+export async function getArchivedPRSessions(
+	cfg: ServerConfig,
+	options: { prState: "merged"; cursor?: string | null; projectId?: string },
+	init?: Pick<RequestInit, "signal">,
+): Promise<PRStatePage | null> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", prState: options.prState, limit: String(PR_STATE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	if (data?.prState !== options.prState) return null;
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+		total: typeof data?.total === "number" ? data.total : raw.length,
+	};
+}
+
 // ---- Preview (in-app browser) ----------------------------------------------
 
 // Load the session's selected app preview, never a discovered repository file.
