@@ -16,7 +16,7 @@ import { artifactChangeError, artifactKey, canChangeSessionArtifacts, findHostSh
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { captureRendererEvent } from "../lib/telemetry";
-import { mayBePublished, prepareUnpublish, publishedCheck, unpublishTarget, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { deleteTargets, prepareUnpublish, publishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
@@ -147,12 +147,13 @@ export function ArtifactActionsMenu({
 	const deletesLink = usePublishedLinkCount(shareBaseUrl, publishedCheck({ ...session, hostId }, [deleted]), confirmingDelete) > 0;
 	// The deleted file leaves the session's artifact list on the next read.
 	// Its link is looked up while the file is there and unpublished once it is
-	// gone; a remote host's file has no link recorded on this computer.
+	// gone; a remote host's file is matched to this computer's host links then.
 	const remove = useMutation({
 		mutationFn: async () => {
+			const targets = await deleteTargets(shareBaseUrl, { ...session, hostId }, [deleted]);
 			const links = await prepareUnpublish(
 				shareBaseUrl,
-				mayBePublished(session, deleted) ? [share ?? unpublishTarget({ ...session, hostId }, artifact)] : [],
+				share ? targets.map(() => share) : targets,
 				{ deleting: [{ sessionId: session.id, path: artifact.path }] },
 			);
 			await (session.cloud

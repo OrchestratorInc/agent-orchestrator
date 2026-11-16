@@ -5,6 +5,7 @@ import type { CloudCpSession } from "./cloud-cp/types";
 import { STANDALONE_WORKSPACE_ID, type SessionArtifact, type WorkspaceSession } from "../types/workspace";
 import {
 	countPublished,
+	deleteTargets,
 	onArtifactLinksUnpublished,
 	prepareUnpublish,
 	publishedCheck,
@@ -228,5 +229,22 @@ describe("a publish still running when its file is deleted", () => {
 		await (await preparing).unpublish();
 		expect(unpublished).toEqual(["share-new"]);
 		await done;
+	});
+});
+
+describe("deleteTargets", () => {
+	const remote = { id: "ao-1", hostId: "host-1", workspaceId: "ao" };
+	const target = { source: "host", hostId: "host-1", sessionId: "ao-1", path: "a.md", projectId: "ao" };
+
+	it("reads this computer's host links at the delete, not a list that may be empty", async () => {
+		const { fake } = bridge({}, {}, [{ hostId: "host-1", sessionId: "ao-1", path: "a.md", url: "https://l/a" }]);
+		await expect(deleteTargets(BASE, remote, [{ path: "a.md" }], fake)).resolves.toEqual([target]);
+		await expect(deleteTargets(BASE, remote, [{ path: "b.md" }], fake)).resolves.toEqual([]);
+	});
+
+	it("looks a remote file up when the host links cannot be read", async () => {
+		const { fake } = bridge({});
+		fake.hostLinks = vi.fn(async () => { throw new Error("unavailable"); });
+		await expect(deleteTargets(BASE, remote, [{ path: "a.md" }], fake)).resolves.toEqual([target]);
 	});
 });
