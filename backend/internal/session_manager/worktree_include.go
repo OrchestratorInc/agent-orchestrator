@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -27,8 +28,6 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string)
 	if _, err := os.Lstat(includeFile); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	// ponytail: ls-files walks every untracked directory, so a huge ignored
-	// tree such as node_modules slows each spawn; prune with --directory if it shows up.
 	matched, err := worktreeIncludeGit(ctx, projectPath, nil, "ls-files", "-z", "--others", "--ignored", "--exclude-from="+includeFile)
 	if err != nil || len(matched) == 0 {
 		return err
@@ -37,6 +36,16 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string)
 	if err != nil {
 		return err
 	}
+	source, err := os.OpenRoot(projectPath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = source.Close() }()
+	target, err := os.OpenRoot(workspacePath)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = target.Close() }()
 	for _, rel := range strings.Split(string(ignored), "\x00") {
 		if rel == "" {
 			continue
@@ -45,7 +54,12 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string)
 		if err != nil {
 			return fmt.Errorf(".worktreeinclude %q: %w", rel, err)
 		}
-		if err := copyNewRegularFile(filepath.Join(projectPath, clean), filepath.Join(workspacePath, clean)); err != nil {
+		// Configured directory symlinks can point back into the project.
+		// Keep their existing files, but confine every new write with os.Root.
+		if _, err := os.Lstat(filepath.Join(workspacePath, clean)); err == nil {
+			continue
+		}
+		if err := copyNewRegularFile(source, target, clean); err != nil {
 			return fmt.Errorf(".worktreeinclude %q: %w", rel, err)
 		}
 	}
@@ -75,34 +89,57 @@ func worktreeIncludeGit(ctx context.Context, projectPath string, stdin []byte, a
 // copyNewRegularFile copies source to target with source's permissions. It
 // skips a source that is not a regular file and a target that already exists,
 // including a link applySymlinks placed there.
-func copyNewRegularFile(source, target string) (err error) {
-	info, err := os.Lstat(source)
-	if err != nil || !info.Mode().IsRegular() {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-		return err
-	}
-	dst, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
-	if errors.Is(err, fs.ErrExist) {
-		return nil
-	}
+func copyNewRegularFile(source, target *os.Root, rel string) error {
+	info, err := source.Lstat(rel)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if closeErr := dst.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			_ = os.Remove(target)
-		}
-	}()
-	src, err := os.Open(source)
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	src, err := source.Open(rel)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = src.Close() }()
-	_, err = io.Copy(dst, src)
+	return publishWorktreeIncludeFile(target, rel, src, info.Mode().Perm())
+}
+
+func publishWorktreeIncludeFile(target *os.Root, rel string, src io.Reader, mode fs.FileMode) error {
+	if _, err := target.Lstat(rel); err == nil {
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := target.MkdirAll(filepath.Dir(rel), 0o750); err != nil {
+		return err
+	}
+	dir, err := target.OpenRoot(filepath.Dir(rel))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	tmp := ".ao-include-" + rand.Text()
+	dst, err := dir.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Remove(tmp) }()
+	defer func() { _ = dst.Close() }()
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	if err := dst.Chmod(mode); err != nil {
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		return err
+	}
+	// A hard link publishes the complete copy without replacing a file
+	// created while we were copying. A stopped daemon leaves no partial destination.
+	err = dir.Link(tmp, filepath.Base(rel))
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
 	return err
 }
