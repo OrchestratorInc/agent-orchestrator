@@ -588,7 +588,9 @@ project name, raw error message, or the people a link is shared with.
 | `ao.artifacts.sign_in_prompt_shown` | The Publish popover asks you to sign in, once per popover | `reason` |
 | `ao.artifacts.sign_in_clicked` | You click its Sign in button | none |
 | `ao.artifacts.published` | A publish or republish succeeds | `is_republish` |
-| `ao.artifacts.publish_failed` | A publish does not go through, or the popover opens on a refusal (once per popover) | `is_republish`, `reason` |
+| `ao.artifacts.publish_failed` | A publish attempt fails | `is_republish`, `reason` |
+| `ao.artifacts.publish_cancelled` | You cancel a publish before its upload finishes | `is_republish` |
+| `ao.artifacts.publish_blocked` | The Publish popover opens on a refusal, before any attempt: the link limit, or a file type that cannot be published yet (once per popover) | `is_republish`, `reason` |
 | `ao.artifacts.link_copied` | You copy a published link | `surface` |
 | `ao.artifacts.unpublished` | Unpublishing succeeds | none |
 
@@ -606,26 +608,35 @@ project name, raw error message, or the people a link is shared with.
   it. It is omitted when the daemon could not list the files.
 - `reason` on `register_failed` is `outside_dir` (not in the session's
   artifact directory), `not_found`, `not_registrable` (not a file or bundle
-  directory), or `internal`. A command that fails before it reaches the daemon
-  is not counted here.
+  directory), `session_not_found` (the session was deleted while its artifacts
+  were being registered), or `internal`. A command that fails before it reaches
+  the daemon is not counted here.
+- `registered` is not sent when the daemon cannot read which paths the session
+  had already registered, since it could not tell new artifacts from old ones.
+  Those registrations go uncounted.
 - `already_published` is whether the file had an active link when Publish was
   clicked; `signed_in` is whether you were signed in to AO Cloud.
 - `reason` on `sign_in_prompt_shown` is `signed_out` (signed out when you
   clicked Publish) or `session_expired` (a publish came back signed out).
 - `is_republish` is true when an existing link was being updated.
 - `reason` on `publish_failed` is `signed_out`, `too_large`, `upload_failed`
-  (the upload, or reading the file from its machine, failed), `cancelled`,
-  `refused` (the plan's link limit, a file type that cannot be published yet,
-  or someone else's cloud session), or `other`.
+  (the upload, or reading the file from its machine, failed), `refused` (the
+  server refused the upload: the plan's link limit, a file type that cannot be
+  published yet, or someone else's cloud session), or `other`. Cancelling is
+  `publish_cancelled` and a refusal shown on open is `publish_blocked`, so
+  neither counts as a failure.
+- `reason` on `publish_blocked` is `limit` or `unsupported`.
 - `surface` on `link_copied` is `panel` (the Publish popover) or `menu` (the
   artifact's ⋯ menu).
 
 `ao.renderer.cloud_signed_in` also carries `source`: `artifact_publish` when
 the sign-in finished within 30 minutes of clicking Sign in in the Publish
-popover, while the popover stayed open, and `other` otherwise. Signing in
-again as the account that is already signed in, as after an expired session,
-counts as a sign-in too; a token refresh does not. That note is
-kept in memory only. Together these events give the sign-in drop-off funnel:
+popover, while the popover stayed open, and `other` otherwise. That note is
+kept in memory only. It also carries `same_account`: true when you signed in
+again as the account that was already signed in, as after a server refused an
+expired session. Those sign-ins were not counted before, so filtering on
+`same_account` not true reproduces the earlier count. A token refresh is not a
+sign-in. Together these events give the sign-in drop-off funnel:
 `publish_clicked` (`signed_in` false) → `sign_in_prompt_shown` →
 `sign_in_clicked` → `cloud_signed_in` (`source` `artifact_publish`) →
 `published` → `link_copied`.
@@ -1070,7 +1081,9 @@ renamed event. Events not listed keep their names.
 | `ao.usage.daily_summary` | not shipped; nothing to rename |
 | `ao.http.5xx` | unchanged |
 | (new) | `ao.setup.checked` |
-| (new) | `ao.artifacts.*` (see "Artifact usage") |
+| `ao.renderer.artifact_create_succeeded` | `ao.artifacts.session_started` |
+| `ao.renderer.artifact_create_failed` | `ao.artifacts.session_start_failed` |
+| (new) | other `ao.artifacts.*` events (see "Artifacts") |
 
 
 ## Questions or corrections

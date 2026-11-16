@@ -58,6 +58,9 @@ func TestArtifactSource(t *testing.T) {
 			t.Errorf("ArtifactSource(%q, %q) = %q, want %q", tc.kind, tc.requested, got, tc.want)
 		}
 	}
+	if !ValidArtifactRegisterFailure(ArtifactRegisterSessionNotFound) {
+		t.Error("refused session_not_found")
+	}
 	if ValidArtifactSource("mer-1") || ValidArtifactRegisterFailure("ARTIFACT_PATH_OUTSIDE_DIR") {
 		t.Error("accepted a value outside the vocabulary")
 	}

@@ -19,7 +19,7 @@ import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
-import { publishFailureReason } from "../lib/artifact-telemetry";
+import { publishResultEvent } from "../lib/artifact-telemetry";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
 import { clearSignInSource, noteSignInSource } from "../lib/cloud-telemetry";
@@ -659,6 +659,8 @@ function SharePanel({
 	}, []); // eslint-disable-line react-hooks/exhaustive-deps
 	// The sign-in prompt and a refusal the panel opens on count once per
 	// panel: it is decided again when the session or a fresher list arrives.
+	// A refusal on open is publish_blocked, not publish_failed: nothing was
+	// attempted. Unpublish's confirmation is not a publish, so it is not blocked.
 	const reported = useRef(new Set<string>());
 	const reportOnce = (key: string, send: () => void) => {
 		if (reported.current.has(key)) return;
@@ -669,7 +671,10 @@ function SharePanel({
 		reportOnce("sign_in", () => void captureRendererEvent("ao.artifacts.sign_in_prompt_shown", { reason }));
 		setPhase({ kind: "signin" });
 	};
-	const refusedOnOpen = () => reportOnce("refused", () => void captureRendererEvent("ao.artifacts.publish_failed", { is_republish: false, reason: "refused" }));
+	const blockedOnOpen = (reason: "limit" | "unsupported", isRepublish: boolean) => {
+		if (unpublishOnOpen) return;
+		reportOnce("blocked", () => void captureRendererEvent("ao.artifacts.publish_blocked", { reason, is_republish: isRepublish }));
+	};
 	// A sign-in started here is reported as Publish's (cloud_signed_in's
 	// source), unless the panel closes before it finishes.
 	const signInNoted = useRef(false);
@@ -777,12 +782,12 @@ function SharePanel({
 		// people added) are kept; only what the server says is updated.
 		const decide = (inspection: CloudShareInspection, links: CloudShareLinks, publishNow: boolean, shown?: CloudShareLinks) => {
 			setPrivateLinks(links.privateLinks);
-			if (inspection.unsupported) {
-				refusedOnOpen();
-				return setPhase({ kind: "unsupported" });
-			}
 			// The link this file was published to from here, while it is active.
 			const current = inspection.shareId ? links.shares.find((share) => share.id === inspection.shareId && !share.revokedAt) : undefined;
+			if (inspection.unsupported) {
+				blockedOnOpen("unsupported", Boolean(current));
+				return setPhase({ kind: "unsupported" });
+			}
 			if (current) {
 				if (unpublishOnOpen) return showPublished(current, { unpublishing: "confirm" });
 				// The link may still have the old content or the old filename.
@@ -799,7 +804,8 @@ function SharePanel({
 			// document; the server decides for sure when it uploads.
 			const likelyNew = !links.shares.some((share) => !share.revokedAt && share.name === inspection.name);
 			if (!links.unlimited && likelyNew && links.used >= links.limit) {
-				refusedOnOpen();
+				// No active link here, so this would be a new one.
+				blockedOnOpen("limit", false);
 				return setPhase({ kind: "limit", limit: links.limit });
 			}
 			// A cloud session's file is already in the bucket: it publishes at once.
@@ -879,10 +885,7 @@ function SharePanel({
 		try {
 			const result = await pending.result;
 			// Sent here, not in settle: this runs once per publish even if the panel closed meanwhile.
-			void captureRendererEvent(result.status === "published" ? "ao.artifacts.published" : "ao.artifacts.publish_failed", {
-				is_republish: Boolean(share),
-				...(result.status === "published" ? {} : { reason: publishFailureReason(result) }),
-			});
+			void captureRendererEvent(...publishResultEvent(result, Boolean(share)));
 			settle(result, links, share);
 		} catch (error) {
 			void captureRendererEvent("ao.artifacts.publish_failed", { is_republish: Boolean(share), reason: "other" });

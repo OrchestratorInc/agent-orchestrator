@@ -72,9 +72,15 @@ let reportedSignIn: string | undefined;
 
 type SignedInAccount = { authProvider: string; user: { id: string }; storedAt?: string };
 
-function reportSignIn(account: SignedInAccount): void {
+/**
+ * same_account is true for signing in again as the account already signed in
+ * (after a server refused its session). Before it was counted, every
+ * cloud_signed_in was a change of account, so same_account != true
+ * reproduces the earlier count.
+ */
+function reportSignIn(account: SignedInAccount, sameAccount: boolean): void {
 	if (account.storedAt) reportedSignIn = account.storedAt;
-	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider, source: takeSignInSource() });
+	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider, source: takeSignInSource(), same_account: sameAccount });
 }
 
 /**
@@ -91,7 +97,7 @@ export function noteCloudSession(
 	knownCloudUser = userId;
 	if (initial || !account || previous === userId) return;
 	if (account.storedAt && account.storedAt === reportedSignIn) return;
-	reportSignIn(account);
+	reportSignIn(account, false);
 }
 
 /**
@@ -101,9 +107,11 @@ export function noteCloudSession(
  * tell from a token refresh.
  */
 export function noteCloudSignInCompleted(account: SignedInAccount): void {
+	// Either path may run first; the user before this sign-in is known either way.
+	const sameAccount = knownCloudUser === account.user.id;
 	knownCloudUser = account.user.id;
 	if (account.storedAt && account.storedAt === reportedSignIn) return;
-	reportSignIn(account);
+	reportSignIn(account, sameAccount);
 }
 
 interface OfferingShape {

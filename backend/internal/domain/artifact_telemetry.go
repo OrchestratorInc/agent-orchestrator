@@ -106,13 +106,15 @@ const (
 	ArtifactRegisterOutsideDir     = "outside_dir"
 	ArtifactRegisterNotFound       = "not_found"
 	ArtifactRegisterNotRegistrable = "not_registrable"
-	ArtifactRegisterInternal       = "internal"
+	// The session was deleted while its artifacts were being registered.
+	ArtifactRegisterSessionNotFound = "session_not_found"
+	ArtifactRegisterInternal        = "internal"
 )
 
 // ValidArtifactRegisterFailure reports whether value is one of the ArtifactRegister* reasons.
 func ValidArtifactRegisterFailure(value string) bool {
 	switch value {
-	case ArtifactRegisterOutsideDir, ArtifactRegisterNotFound, ArtifactRegisterNotRegistrable, ArtifactRegisterInternal:
+	case ArtifactRegisterOutsideDir, ArtifactRegisterNotFound, ArtifactRegisterNotRegistrable, ArtifactRegisterSessionNotFound, ArtifactRegisterInternal:
 		return true
 	}
 	return false

@@ -50,6 +50,8 @@ describe("cloud funnel event allowlist", () => {
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", email: "a@b.c" })).toEqual({ method: "workos" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "artifact_publish" })).toEqual({ method: "workos", source: "artifact_publish" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "/Users/a/plan.md" })).toEqual({ method: "workos" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", same_account: true })).toEqual({ method: "workos", same_account: true });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", same_account: "user-1" })).toEqual({ method: "workos" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_limit_reached", { code: "WEEKLY_LIMIT_REACHED", shown: true })).toEqual({
 			code: "WEEKLY_LIMIT_REACHED",
 			shown: true,

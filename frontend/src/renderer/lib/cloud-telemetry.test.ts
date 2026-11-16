@@ -157,6 +157,7 @@ describe("cloud funnel telemetry", () => {
 		noteCloudSession(null, false);
 		noteCloudSession(account, false);
 		expect(events()).toEqual(["ao.renderer.cloud_signed_in", "ao.renderer.cloud_signed_in"]);
+		expect(captured.map((entry) => entry.properties?.same_account)).toEqual([false, false]);
 
 		resetCloudTelemetryForTest();
 		captured.length = 0;
@@ -173,7 +174,7 @@ describe("cloud funnel telemetry", () => {
 		noteCloudSession(again, false);
 		expect(events()).toEqual([]);
 		noteCloudSignInCompleted(again);
-		expect(captured).toEqual([{ event: "ao.renderer.cloud_signed_in", properties: { method: "workos", source: "artifact_publish" } }]);
+		expect(captured).toEqual([{ event: "ao.renderer.cloud_signed_in", properties: { method: "workos", source: "artifact_publish", same_account: true } }]);
 
 		// A new account: the notification reports it, and main's completed sign-in does not again.
 		const other = { authProvider: "workos", user: { id: "user-2" }, storedAt: "2026-11-16T11:00:00Z" };
@@ -186,6 +187,8 @@ describe("cloud funnel telemetry", () => {
 		noteCloudSignInCompleted(third);
 		noteCloudSession(third, false);
 		expect(events()).toHaveLength(3);
+		// Only the re-sign-in is marked, so same_account != true is the count before it was added.
+		expect(captured.map((entry) => entry.properties?.same_account)).toEqual([true, false, false]);
 	});
 
 	it("says a sign-in came from Publish only within 30 minutes of its Sign in click, once", () => {

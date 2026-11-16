@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -109,6 +110,27 @@ func TestRegisterArtifactsReportsWhyARegistrationWasRefused(t *testing.T) {
 			!maps.Equal(sink.events[0].Payload, map[string]any{"source": "worker", "reason": reason}) {
 			t.Fatalf("%q sent %+v", reference, sink.events)
 		}
+	}
+}
+
+// goneStore has the session deleted between reading its record and
+// registering its artifacts.
+type goneStore struct{ *fakeStore }
+
+func (goneStore) AddSessionArtifacts(context.Context, domain.SessionID, []domain.SessionArtifactRegistration, time.Time) ([]string, bool, error) {
+	return nil, false, nil
+}
+
+func TestRegisterArtifactsReportsASessionDeletedMidRegistration(t *testing.T) {
+	_, st, dir := registrationFixture(t, "brand.html")
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Store: goneStore{st}, DataDir: filepath.Dir(filepath.Dir(dir)), Telemetry: sink})
+	if _, err := svc.RegisterArtifacts(context.Background(), "mer-1", []string{"brand.html"}); err == nil {
+		t.Fatal("registered artifacts of a deleted session")
+	}
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.artifacts.register_failed" ||
+		!maps.Equal(sink.events[0].Payload, map[string]any{"source": "worker", "reason": "session_not_found"}) {
+		t.Fatalf("sent %+v", sink.events)
 	}
 }
 

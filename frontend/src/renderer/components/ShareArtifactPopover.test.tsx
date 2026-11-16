@@ -939,11 +939,26 @@ describe("publish telemetry", () => {
 		expect(sent("ao.artifacts.sign_in_prompt_shown")).toEqual([{ reason: "session_expired" }]);
 	});
 
-	it("counts a refusal the panel opens on once", async () => {
+	it("counts a refusal the panel opens on once, as blocked rather than failed", async () => {
 		const { publishSpy } = stub(inspection, { ...links, used: 3 });
 		await openPopover(cloudFile);
-		await waitFor(() => expect(sent("ao.artifacts.publish_failed")).toEqual([{ is_republish: false, reason: "refused" }]));
+		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "limit", is_republish: false }]));
+		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
 		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("counts an unsupported file that already has a live link as a blocked republish", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, unsupported: true }, { ...links, shares: [share] });
+		await openPopover(cloudFile, "report.html", "Published");
+		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "unsupported", is_republish: true }]));
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("counts a cancelled upload as cancelled, not failed", async () => {
+		stub(inspection, links, { status: "cancelled" });
+		await openPopover(cloudFile);
+		await waitFor(() => expect(sent("ao.artifacts.publish_cancelled")).toEqual([{ is_republish: false }]));
+		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
 	});
 
 	it("counts an unpublish, and does not count its confirmation as a Publish click", async () => {

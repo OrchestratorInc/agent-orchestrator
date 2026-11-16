@@ -10,26 +10,38 @@ export const ARTIFACT_SESSION_SCOPES = ["standalone", "project", "cloud"] as con
 /** Why Publish asked to sign in: signed out when clicked, or a publish came back signed out. */
 export const ARTIFACT_SIGN_IN_PROMPT_REASONS = ["signed_out", "session_expired"] as const;
 
-/** Why a publish did not go through. `refused` is the plan's link limit, a file type not shared yet, or not the session's owner. */
-export const ARTIFACT_PUBLISH_FAILURES = ["signed_out", "too_large", "upload_failed", "cancelled", "refused", "other"] as const;
+/** Why a publish attempt failed. `refused` is the server refusing the upload: the plan's link limit, a file type not shared yet, or not the session's owner. */
+export const ARTIFACT_PUBLISH_FAILURES = ["signed_out", "too_large", "upload_failed", "refused", "other"] as const;
 export type ArtifactPublishFailure = (typeof ARTIFACT_PUBLISH_FAILURES)[number];
+
+/** Why the Publish popover opened on a refusal, before any attempt: the plan's link limit, or a file type not shared yet. */
+export const ARTIFACT_PUBLISH_BLOCKS = ["limit", "unsupported"] as const;
 
 /** Where a public link was copied: the publish popover or the artifact's ⋯ menu. */
 export const ARTIFACT_LINK_COPY_SURFACES = ["panel", "menu"] as const;
 
-/** The failure category of a publish that did not go through. */
-export function publishFailureReason(result: Exclude<CloudSharePublishResult, { status: "published" }>): ArtifactPublishFailure {
+/**
+ * The event for a publish attempt's result: published, cancelled by the
+ * person (not a failure), or failed with its category.
+ */
+export function publishResultEvent(
+	result: CloudSharePublishResult,
+	isRepublish: boolean,
+): [event: string, properties: { is_republish: boolean; reason?: ArtifactPublishFailure }] {
 	switch (result.status) {
-		case "signed_out":
+		case "published":
+			return ["ao.artifacts.published", { is_republish: isRepublish }];
 		case "cancelled":
-			return result.status;
+			return ["ao.artifacts.publish_cancelled", { is_republish: isRepublish }];
+		case "signed_out":
+			return ["ao.artifacts.publish_failed", { is_republish: isRepublish, reason: "signed_out" }];
 		case "limit":
 		case "unsupported":
 		case "not_owner":
-			return "refused";
+			return ["ao.artifacts.publish_failed", { is_republish: isRepublish, reason: "refused" }];
 		case "error":
-			return result.failure ?? "other";
+			return ["ao.artifacts.publish_failed", { is_republish: isRepublish, reason: result.failure ?? "other" }];
 		case "changed":
-			return "other";
+			return ["ao.artifacts.publish_failed", { is_republish: isRepublish, reason: "other" }];
 	}
 }

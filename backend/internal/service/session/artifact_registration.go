@@ -41,7 +41,7 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 	for _, reference := range references {
 		registration, err := sessionartifacts.Registrable(dir, reference)
 		if err != nil {
-			s.emitArtifactRegisterFailed(source, err)
+			s.emitArtifactRegisterFailed(source, artifactRegisterFailure(err))
 			return ArtifactRegistration{}, registrationError(reference, err)
 		}
 		paths = append(paths, registration.Path)
@@ -50,10 +50,12 @@ func (s *Service) RegisterArtifacts(ctx context.Context, id domain.SessionID, re
 	known, knownOK := s.registeredArtifactPaths(ctx, id)
 	registered, found, err := s.store.AddSessionArtifacts(ctx, id, registrations, s.clock())
 	if err != nil {
-		s.emitArtifactRegisterFailed(source, err)
+		s.emitArtifactRegisterFailed(source, domain.ArtifactRegisterInternal)
 		return ArtifactRegistration{}, err
 	}
 	if !found {
+		// Deleted since its record was read above.
+		s.emitArtifactRegisterFailed(source, domain.ArtifactRegisterSessionNotFound)
 		return ArtifactRegistration{}, apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
 	}
 	files, err := sessionartifacts.ListRegistered(ctx, dir, registered)
@@ -149,20 +151,25 @@ func registeredSize(path string, files []domain.SessionArtifactFile) (int64, boo
 	return size, listed
 }
 
-// emitArtifactRegisterFailed sends ao.artifacts.register_failed with why the
-// daemon refused a registration: the reason category, never the path.
-func (s *Service) emitArtifactRegisterFailed(source string, err error) {
-	if s.telemetry == nil {
-		return
-	}
-	reason := domain.ArtifactRegisterInternal
+// artifactRegisterFailure is the reason category of a path the daemon
+// refused to register.
+func artifactRegisterFailure(err error) string {
 	switch {
 	case errors.Is(err, sessionartifacts.ErrOutsideDir):
-		reason = domain.ArtifactRegisterOutsideDir
+		return domain.ArtifactRegisterOutsideDir
 	case errors.Is(err, sessionartifacts.ErrNotFound):
-		reason = domain.ArtifactRegisterNotFound
+		return domain.ArtifactRegisterNotFound
 	case errors.Is(err, sessionartifacts.ErrNotRegistrable):
-		reason = domain.ArtifactRegisterNotRegistrable
+		return domain.ArtifactRegisterNotRegistrable
+	}
+	return domain.ArtifactRegisterInternal
+}
+
+// emitArtifactRegisterFailed sends ao.artifacts.register_failed with why the
+// daemon refused a registration: the reason category, never the path.
+func (s *Service) emitArtifactRegisterFailed(source, reason string) {
+	if s.telemetry == nil {
+		return
 	}
 	s.telemetry.Emit(context.Background(), ports.TelemetryEvent{
 		Name:       "ao.artifacts.register_failed",

@@ -2,6 +2,7 @@ import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import {
 	ARTIFACT_LINK_COPY_SURFACES,
+	ARTIFACT_PUBLISH_BLOCKS,
 	ARTIFACT_PUBLISH_FAILURES,
 	ARTIFACT_SESSION_SCOPES,
 	ARTIFACT_SIGN_IN_PROMPT_REASONS,
@@ -950,6 +951,8 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
 			// Whether Publish's Sign in started it (artifact_publish) or anything else.
 			if (typeof properties?.source === "string" && CLOUD_SIGN_IN_SOURCES.has(properties.source)) safe.source = properties.source;
+			// Signing in again as the account already signed in; absent on events sent before it was counted.
+			if (typeof properties?.same_account === "boolean") safe.same_account = properties.same_account;
 			break;
 		case "ao.renderer.cloud_web_visitor_link_requested":
 			// The website's own pseudonymous PostHog id, never anything typed.
@@ -1059,7 +1062,11 @@ function sanitizeArtifactProperties(event: string, properties?: TelemetryPropert
 			candidates = { reason: oneOf(properties?.reason, ARTIFACT_SIGN_IN_PROMPT_REASONS) };
 			break;
 		case "ao.artifacts.published":
+		case "ao.artifacts.publish_cancelled":
 			candidates = { is_republish: flag(properties?.is_republish) };
+			break;
+		case "ao.artifacts.publish_blocked":
+			candidates = { is_republish: flag(properties?.is_republish), reason: oneOf(properties?.reason, ARTIFACT_PUBLISH_BLOCKS) };
 			break;
 		case "ao.artifacts.publish_failed":
 			candidates = { is_republish: flag(properties?.is_republish), reason: oneOf(properties?.reason, ARTIFACT_PUBLISH_FAILURES) };
@@ -1194,6 +1201,8 @@ export async function sanitizeRendererProperties(
 		case "ao.artifacts.sign_in_clicked":
 		case "ao.artifacts.published":
 		case "ao.artifacts.publish_failed":
+		case "ao.artifacts.publish_cancelled":
+		case "ao.artifacts.publish_blocked":
 		case "ao.artifacts.link_copied":
 		case "ao.artifacts.unpublished":
 			Object.assign(safe, sanitizeArtifactProperties(event, properties));

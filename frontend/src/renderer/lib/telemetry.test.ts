@@ -672,6 +672,9 @@ describe("telemetry sanitizers", () => {
 		expect(await sanitizeRendererProperties("ao.artifacts.published", { ...leaks, is_republish: true })).toEqual({ is_republish: true });
 		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { ...leaks, is_republish: false, reason: "too_large" }))
 			.toEqual({ is_republish: false, reason: "too_large" });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_cancelled", { ...leaks, is_republish: true })).toEqual({ is_republish: true });
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_blocked", { ...leaks, reason: "unsupported", is_republish: false }))
+			.toEqual({ reason: "unsupported", is_republish: false });
 		expect(await sanitizeRendererProperties("ao.artifacts.link_copied", { ...leaks, surface: "menu" })).toEqual({ surface: "menu" });
 		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", leaks)).toEqual({});
 	});
@@ -680,6 +683,10 @@ describe("telemetry sanitizers", () => {
 		expect(await sanitizeRendererProperties("ao.artifacts.publish_clicked", { already_published: "yes", signed_in: 1 })).toEqual({});
 		expect(await sanitizeRendererProperties("ao.artifacts.sign_in_prompt_shown", { reason: "Token expired for bob@example.com" })).toEqual({});
 		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { reason: "limit" })).toEqual({});
+		// Cancelling is its own event, not a failure reason.
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_failed", { reason: "cancelled" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_blocked", { reason: "refused" })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.artifacts.publish_cancelled", { reason: "other" })).toEqual({});
 		expect(await sanitizeRendererProperties("ao.artifacts.link_copied", { surface: "email" })).toEqual({});
 		expect(await sanitizeRendererProperties("ao.artifacts.published", { reason: "refused", scope: "project" })).toEqual({});
 		expect(await sanitizeRendererProperties("ao.artifacts.unpublished", { is_republish: true, surface: "panel" })).toEqual({});
