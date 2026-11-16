@@ -13,6 +13,8 @@ export type SavedRemoteHost = {
 	hostId: HostId;
 	label: string;
 	status: "connecting" | "connected" | "offline";
+	/** Why its connection ended, when the machine said: a refused password or an AO this desktop cannot talk to. */
+	failureReason?: "unauthorized" | "incompatible";
 };
 
 const listeners = new Set<() => void>();
@@ -31,9 +33,10 @@ export function subscribeSavedRemoteHosts(listener: () => void): () => void {
 export function publishSavedRemoteHosts(hosts: readonly SavedRemoteHost[]): void {
 	const same = hosts.length === snapshot.length && hosts.every((host, index) => {
 		const previous = snapshot[index];
-		return previous?.hostId === host.hostId && previous.label === host.label && previous.status === host.status;
+		return previous?.hostId === host.hostId && previous.label === host.label && previous.status === host.status
+			&& previous.failureReason === host.failureReason;
 	});
 	if (same) return;
-	snapshot = hosts.map(({ hostId, label, status }) => ({ hostId, label, status }));
+	snapshot = hosts.map(({ hostId, label, status, failureReason }) => ({ hostId, label, status, ...(failureReason ? { failureReason } : {}) }));
 	for (const listener of listeners) listener();
 }

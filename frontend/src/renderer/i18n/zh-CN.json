@@ -4956,6 +4956,7 @@
 	"search.machineNeedsUpdate": "请在该机器上更新 AO 后再搜索",
 	"search.machineUnauthorized": "已保存的密码被拒绝",
 	"search.machineFailed": "返回了错误",
+	"search.machineSearchOff": "该机器上的搜索已关闭",
 	"command.sessionText": "过去的会话",
 	"command.searchingSessions": "正在搜索过去的会话…",
 	"command.searchSessionsError": "无法搜索过去的会话。",

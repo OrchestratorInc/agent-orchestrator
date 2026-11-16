@@ -4974,6 +4974,7 @@
 	"search.machineNeedsUpdate": "dort AO aktualisieren, um es zu durchsuchen",
 	"search.machineUnauthorized": "das gespeicherte Passwort wurde abgelehnt",
 	"search.machineFailed": "es hat einen Fehler gemeldet",
+	"search.machineSearchOff": "die Suche ist dort ausgeschaltet",
 	"command.sessionText": "Frühere Sitzungen",
 	"command.searchingSessions": "Frühere Sitzungen werden durchsucht…",
 	"command.searchSessionsError": "Frühere Sitzungen konnten nicht durchsucht werden.",

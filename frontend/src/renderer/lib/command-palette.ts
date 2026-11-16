@@ -140,6 +140,12 @@ export type CommandItem = {
 	group: CommandGroupId;
 	title: string;
 	subtitle?: string;
+	/**
+	 * The other AO machine the row is on, shown as a badge beside the title. It
+	 * is not part of the subtitle: a long title would truncate it away, and on a
+	 * row from another machine that is the one thing that must stay readable.
+	 */
+	machine?: string;
 	keywords?: string[];
 	disabled?: boolean;
 	disabledReason?: string;
@@ -1248,9 +1254,10 @@ export function buildSessionSearchCommands(
 			id: `search:${hit.hostId ?? ""}:${hit.sessionId}:${hit.messageId || hit.kind}:${index}`,
 			group: "search" as CommandGroupId,
 			title: sessionName,
-			// A session on another machine says which one first: the same id can
-			// exist on two machines, and it opens over there.
-			subtitle: [hit.hostId ? hit.machineLabel || hit.hostId : "", kindLabel, matches, hit.projectName || hit.projectId, hit.harness]
+			// A session on another machine says which one: the same id can exist
+			// on two machines, and it opens over there.
+			...(hit.hostId ? { machine: hit.machineLabel || hit.hostId } : {}),
+			subtitle: [kindLabel, matches, hit.projectName || hit.projectId, hit.harness]
 				.filter(Boolean).join(" · "),
 			// The snippet is what the query matched, so it must also be searchable
 			// text for cmdk's own filtering and for a keyword hit.

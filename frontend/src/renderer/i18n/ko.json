@@ -4974,6 +4974,7 @@
 	"search.machineNeedsUpdate": "검색하려면 해당 머신의 AO를 업데이트하세요",
 	"search.machineUnauthorized": "저장된 비밀번호가 거부되었습니다",
 	"search.machineFailed": "오류가 반환되었습니다",
+	"search.machineSearchOff": "해당 머신에서 검색이 꺼져 있습니다",
 	"command.sessionText": "지난 세션",
 	"command.searchingSessions": "지난 세션 검색 중…",
 	"command.searchSessionsError": "지난 세션을 검색할 수 없습니다.",

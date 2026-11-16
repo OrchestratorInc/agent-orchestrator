@@ -5118,6 +5118,7 @@
 	"search.machineNeedsUpdate": "atualize o AO lá para pesquisar nele",
 	"search.machineUnauthorized": "a senha salva foi recusada",
 	"search.machineFailed": "retornou um erro",
+	"search.machineSearchOff": "a pesquisa está desativada lá",
 	"command.sessionText": "Sessões anteriores",
 	"command.searchingSessions": "Buscando em sessões anteriores…",
 	"command.searchSessionsError": "Não foi possível buscar em sessões anteriores.",

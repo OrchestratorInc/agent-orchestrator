@@ -98,6 +98,28 @@ it("shows password rejected when a connected host rejects its saved credential",
 	await act(async () => result.current.refresh());
 	expect(result.current.hosts[0]).toMatchObject({ status: "offline", failureReason: "unauthorized" });
 	expect(connectedHosts()).not.toContain("box-a");
+	// Search across machines names the reason too, rather than "offline".
+	await waitFor(() => expect(savedRemoteHosts()).toEqual([
+		{ hostId: "box-a", label: "Box A", status: "offline", failureReason: "unauthorized" },
+	]));
+});
+
+// The account sync re-checks every saved machine each 30 s. A machine already
+// known to be down stays shown as down, with its reason, while it is checked,
+// rather than flickering to "connecting"; a refresh someone asks for shows it.
+it("keeps an offline host offline during a quiet re-check, and shows connecting on a requested one", async () => {
+	remotes.list.mockResolvedValue([{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }]);
+	remotes.connect.mockRejectedValueOnce(new Error("host http://box-a:3001 is unauthorized"));
+	useUiStore.setState({ remoteHosts: true });
+	const { result } = renderHook(() => useRemoteHosts());
+	await waitFor(() => expect(result.current.hosts[0]).toMatchObject({ status: "offline", failureReason: "unauthorized" }));
+	remotes.connect.mockImplementation(() => new Promise(() => {}));
+	act(() => { void result.current.refresh({ quiet: true }); });
+	await waitFor(() => expect(remotes.connect).toHaveBeenCalledTimes(2));
+	expect(result.current.hosts[0]).toMatchObject({ status: "offline", failureReason: "unauthorized" });
+	act(() => { void result.current.refresh(); });
+	await waitFor(() => expect(result.current.hosts[0]?.status).toBe("connecting"));
+	expect(result.current.hosts[0]).not.toHaveProperty("failureReason");
 });
 
 it("turns a connected host offline when a remote request asks for a connection recheck", async () => {

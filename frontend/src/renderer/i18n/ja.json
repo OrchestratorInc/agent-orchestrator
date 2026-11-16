@@ -4974,6 +4974,7 @@
 	"search.machineNeedsUpdate": "検索するにはそのマシンの AO を更新してください",
 	"search.machineUnauthorized": "保存したパスワードが拒否されました",
 	"search.machineFailed": "エラーが返されました",
+	"search.machineSearchOff": "そのマシンでは検索がオフになっています",
 	"command.sessionText": "過去のセッション",
 	"command.searchingSessions": "過去のセッションを検索中…",
 	"command.searchSessionsError": "過去のセッションを検索できませんでした。",

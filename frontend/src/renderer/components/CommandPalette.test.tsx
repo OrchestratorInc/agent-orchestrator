@@ -12,7 +12,8 @@ const navigateMock = vi.hoisted(() => vi.fn());
 const spawnMock = vi.hoisted(() => vi.fn());
 const choosePathMock = vi.hoisted(() => vi.fn());
 const getMock = vi.hoisted(() => vi.fn());
-const NO_CONNECTED_HOSTS = vi.hoisted((): never[] => []);
+// The other AO machines connected; none unless a test connects some.
+const connectedHostsMock = vi.hoisted(() => ({ value: [] as string[] }));
 const postMock = vi.hoisted(() => vi.fn());
 const openExternalMock = vi.hoisted(() => vi.fn());
 const writeTextMock = vi.hoisted(() => vi.fn());
@@ -184,7 +185,10 @@ const remoteSearchMock = vi.hoisted(() => {
 	const none = { answers: [] as unknown[], settled: true };
 	return { none, value: none };
 });
-vi.mock("../hooks/useRemoteMachineSearch", () => ({ useRemoteMachineSearch: () => remoteSearchMock.value }));
+vi.mock("../hooks/useRemoteMachineSearch", () => ({
+	// The answers are for the words the palette asked about.
+	useRemoteMachineSearch: (request: { query: string }) => ({ query: request.query.trim(), ...remoteSearchMock.value }),
+}));
 
 vi.mock("../lib/host-clients", () => ({
 	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
@@ -192,7 +196,7 @@ vi.mock("../lib/host-clients", () => ({
 	// The session menu's hooks read the connected hosts.
 	subscribeConnectedHosts: () => () => {},
 	connectedHost: () => undefined,
-	connectedHosts: () => NO_CONNECTED_HOSTS,
+	connectedHosts: () => connectedHostsMock.value,
 }));
 
 
@@ -1530,6 +1534,7 @@ describe("CommandPalette session-text search", () => {
 	beforeEach(() => {
 		resetSessionSearchReveals();
 		remoteSearchMock.value = remoteSearchMock.none;
+		connectedHostsMock.value = [];
 	});
 
 	function searchResponse(results: unknown[], coverage: Record<string, unknown> = { state: "ready" }) {
@@ -1690,7 +1695,10 @@ describe("CommandPalette session-text search", () => {
 		// and the remote one says where it is.
 		const remoteRow = await screen.findByText("fix flake on azure", {}, { timeout: 2_000 });
 		expect(screen.getByText("fix flake")).toBeInTheDocument();
-		expect(screen.getByText("AzureLinux · you · app · codex")).toBeInTheDocument();
+		// The machine is a badge beside the title, so a long title cannot hide it.
+		const remoteItem = remoteRow.closest("[cmdk-item]");
+		expect(remoteItem?.querySelector('[data-slot="command-item-machine"]')?.textContent).toBe("AzureLinux");
+		expect(remoteItem?.textContent).toContain("you · app · codex");
 		expect(screen.getByTestId("palette-machines-not-searched").textContent).toBe("Not searched on Old desk (update AO there to search it).");
 
 		fireEvent.click(remoteRow);
@@ -1703,18 +1711,23 @@ describe("CommandPalette session-text search", () => {
 		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
 	});
 
-	it("keeps this machine's answer until every machine has answered", async () => {
+	// QA: one slow machine held every other machine's rows back for six seconds.
+	it("shows the machines that have answered without waiting for a slow one", async () => {
 		mockSearch([hit]);
 		remoteSearchMock.value = { settled: false, answers: [
 			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, sessionName: "fix flake on azure" }] },
+			{ hostId: "h_home", label: "Laptop", outcome: "offline", total: 0, results: [] },
 		] };
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
 
-		expect(await screen.findByText("fix flake", {}, { timeout: 2_000 })).toBeInTheDocument();
-		expect(screen.queryByText("fix flake on azure")).not.toBeInTheDocument();
-		expect(screen.queryByTestId("palette-machines-not-searched")).not.toBeInTheDocument();
+		expect(await screen.findByText("fix flake on azure", {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(screen.getByText("fix flake")).toBeInTheDocument();
+		// The slow machine is still being asked, and the one whose reason is known
+		// is named at once.
+		expect(screen.getByText("Searching past sessions…")).toBeInTheDocument();
+		expect(screen.getByTestId("palette-machines-not-searched").textContent).toBe("Not searched on Laptop (offline).");
 	});
 
 	// This machine's index can be off (AO_SESSION_SEARCH=off) or unopenable while
@@ -1740,6 +1753,29 @@ describe("CommandPalette session-text search", () => {
 		expect(screen.getByText(/Session search is not available on this daemon/)).toBeInTheDocument();
 	});
 
+	// QA: at 150 ms a steady typist sent one search per keystroke to every machine.
+	it("waits for a longer pause before searching while other machines are connected", async () => {
+		mockSearch([hit]);
+		connectedHostsMock.value = ["h_azure"];
+		useUiStore.setState({ remoteHosts: true });
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		const searchedFor = (q: string) => getMock.mock.calls.some(([path, init]) =>
+			path === "/api/v1/search/sessions" && (init as { params?: { query?: { q?: string } } })?.params?.query?.q === q);
+		vi.useFakeTimers();
+		try {
+			fireEvent.change(input, { target: { value: "flaky" } });
+			await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+			expect(searchedFor("flaky")).toBe(false);
+			await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+			expect(searchedFor("flaky")).toBe(true);
+		} finally {
+			vi.useRealTimers();
+			useUiStore.setState({ remoteHosts: false });
+		}
+	});
+
 	it("opens a remote standalone session's match on that machine's standalone route", async () => {
 		mockSearch([]);
 		remoteSearchMock.value = { settled: true, answers: [
@@ -1754,6 +1790,17 @@ describe("CommandPalette session-text search", () => {
 			to: "/host/$hostId/session/$sessionId",
 			params: { hostId: "h_azure", sessionId: "standalone-9" },
 		});
+	});
+
+	// QA: a span past the end of the snippet cut the whole line down to "…".
+	it("still shows the snippet when a matched span does not fit it", async () => {
+		mockSearch([{ ...hit, snippet: "a longer line that mentions the flaky login test in passing", highlights: [{ start: 9_999, end: 10_010 }] }]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		const row = (await screen.findByText("fix flake", {}, { timeout: 2_000 })).closest("[cmdk-item]");
+		expect(row?.textContent).toContain("a longer line that mentions the flaky login test in passing");
 	});
 
 	it("opens a tool-output match without inventing a message anchor", async () => {

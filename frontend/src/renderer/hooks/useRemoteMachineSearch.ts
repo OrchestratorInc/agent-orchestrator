@@ -1,11 +1,14 @@
 import { useQueries } from "@tanstack/react-query";
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { apiErrorCode } from "../lib/api-client";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import type { HostId } from "../lib/hosts";
 import { savedRemoteHosts, subscribeSavedRemoteHosts } from "../lib/saved-remote-hosts";
 import {
+	boundMachineResult,
 	classifyMachineSearchFailure,
 	MACHINE_SEARCH_TIMEOUT_MS,
+	savedMachineOutcome,
 	type MachineSearchAnswer,
 } from "../lib/session-search-machines";
 import { useConnectedHosts } from "./useHostConnection";
@@ -21,13 +24,17 @@ export type RemoteMachineSearchRequest = {
 };
 
 export type RemoteMachineSearch = {
-	/** One answer per saved remote machine, in the order they were saved. */
+	/** The words these answers are for. */
+	query: string;
+	/**
+	 * The answers so far: every connected machine that has answered (or timed
+	 * out), in the order they connected, then every saved machine that is not
+	 * connected, with the reason.
+	 */
 	answers: MachineSearchAnswer[];
 	/** Every connected machine has answered (or timed out) for this request. */
 	settled: boolean;
 };
-
-const NO_ANSWERS: RemoteMachineSearch = { answers: [], settled: true };
 const NO_HOSTS: HostId[] = [];
 
 /**
@@ -44,10 +51,11 @@ export function useRemoteMachineSearch(request: RemoteMachineSearchRequest, enab
 	const query = request.query.trim();
 	const active = enabled && query.length > 0;
 	const asked = active ? connected : NO_HOSTS;
+	const idle = useMemo((): RemoteMachineSearch => ({ query, answers: [], settled: true }), [query]);
 	// Stable while nothing it reads changes, so callers get the same answers
 	// object until an answer, or the set of machines, actually changes.
 	const combine = useCallback((results: { data?: MachineSearchAnswer }[]): RemoteMachineSearch => {
-		if (!active) return NO_ANSWERS;
+		if (!active) return idle;
 		const answers: MachineSearchAnswer[] = [];
 		let settled = true;
 		asked.forEach((_, index) => {
@@ -60,13 +68,13 @@ export function useRemoteMachineSearch(request: RemoteMachineSearchRequest, enab
 			answers.push({
 				hostId: host.hostId,
 				label: host.label || host.hostId,
-				outcome: host.status === "connecting" ? "connecting" : "offline",
+				outcome: savedMachineOutcome(host),
 				results: [],
 				total: 0,
 			});
 		}
-		return { answers, settled };
-	}, [active, asked, saved]);
+		return { query, answers, settled };
+	}, [active, asked, idle, query, saved]);
 	return useQueries({
 		queries: asked.map((hostId) => ({
 			queryKey: [
@@ -99,15 +107,17 @@ async function searchRemoteMachine(
 	const cancel = () => controller.abort();
 	signal.addEventListener("abort", cancel, { once: true });
 	try {
-		const { data, response } = await clientForHost(hostId).GET("/api/v1/search/sessions", {
+		const { data, error, response } = await clientForHost(hostId).GET("/api/v1/search/sessions", {
 			signal: controller.signal,
 			params: {
 				query: { q: query, limit: request.limit },
 			},
 		});
-		if (!response.ok || !data) return failed(classifyMachineSearchFailure(response.status));
-		const results = data.results ?? [];
-		return { hostId, label, outcome: "searched", results, total: data.total ?? results.length, sort: data.sort };
+		if (!response.ok || !data) return failed(classifyMachineSearchFailure(response.status, undefined, apiErrorCode(error)));
+		// Another machine's AO may be older, newer or broken: take no more rows
+		// than were asked for, each bounded before the palette shows it.
+		const results = (Array.isArray(data.results) ? data.results : []).slice(0, request.limit).map(boundMachineResult);
+		return { hostId, label, outcome: "searched", results, total: typeof data.total === "number" ? data.total : results.length, sort: data.sort };
 	} catch (error) {
 		// Replaced by a newer query: let the query layer drop this one.
 		if (signal.aborted) throw error;

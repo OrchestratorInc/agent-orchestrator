@@ -44,7 +44,7 @@ describe("useRemoteMachineSearch", () => {
 		connected.hosts = ["h_air"];
 		getMocks.set("h_air", vi.fn());
 		const idle = renderHook(() => useRemoteMachineSearch({ query: "  ", limit: 8 }, true), { wrapper });
-		expect(idle.result.current).toEqual({ answers: [], settled: true });
+		expect(idle.result.current).toEqual({ query: "", answers: [], settled: true });
 		renderHook(() => useRemoteMachineSearch({ query: "flaky", limit: 8 }, false), { wrapper });
 		expect(getMocks.get("h_air")).not.toHaveBeenCalled();
 	});
@@ -65,6 +65,25 @@ describe("useRemoteMachineSearch", () => {
 			{ hostId: "h_air", label: "MacBook Air", outcome: "searched", total: 3, results: [{ sessionId: "air-1" }] },
 			{ hostId: "h_box", label: "Build box", outcome: "searched", results: [{ sessionId: "box-1" }] },
 		]);
+		// The answers say which words they are for, so a caller never mixes them
+		// with another query's.
+		expect(result.current.query).toBe("flaky harness:codex");
+	});
+
+	// Another machine's AO is the person's own, but may be older, newer or broken.
+	it("bounds what a machine sends: no more rows than asked, no oversized snippet", async () => {
+		connected.hosts = ["h_air"];
+		const big = { sessionId: "big", projectId: "p", harness: "codex", kind: "user", seq: 1, snippet: `flaky ${"x".repeat(50_000)}`, highlights: [{ start: 0, end: 5 }], rank: 0, createdAt: "2026-10-01T00:00:00Z" };
+		getMocks.set("h_air", vi.fn().mockResolvedValue({
+			data: { query: "flaky", results: Array.from({ length: 30 }, (_, index) => ({ ...big, sessionId: `big-${index}` })), total: 30, limit: 8, offset: 0, sort: "relevance", coverage: { state: "ready" } },
+			response: { ok: true, status: 200 },
+		}));
+		const { result } = renderHook(() => useRemoteMachineSearch({ query: "flaky", limit: 8 }, true), { wrapper });
+		await waitFor(() => expect(result.current.settled).toBe(true));
+		const [air] = result.current.answers;
+		expect(air?.results).toHaveLength(8);
+		expect(air?.results[0]?.snippet.length).toBeLessThanOrEqual(302);
+		expect(air?.results[0]?.highlights).toEqual([{ start: 0, end: 5 }]);
 	});
 
 	it("reports a machine that cannot answer, and why, without failing the others", async () => {
@@ -78,6 +97,17 @@ describe("useRemoteMachineSearch", () => {
 			["MacBook Air", "needs_update"],
 			["Build box", "offline"],
 		]);
+	});
+
+	it("says a machine's search is turned off rather than that it failed", async () => {
+		connected.hosts = ["h_air"];
+		getMocks.set("h_air", vi.fn().mockResolvedValue({
+			error: { code: "SESSION_SEARCH_UNAVAILABLE", message: "Session search is not available on this daemon" },
+			response: { ok: false, status: 503 },
+		}));
+		const { result } = renderHook(() => useRemoteMachineSearch({ query: "flaky", limit: 8 }, true), { wrapper });
+		await waitFor(() => expect(result.current.settled).toBe(true));
+		expect(result.current.answers).toMatchObject([{ label: "MacBook Air", outcome: "search_off" }]);
 	});
 
 	it("gives a slow machine six seconds, then reports it", async () => {
@@ -103,6 +133,10 @@ describe("useRemoteMachineSearch", () => {
 			{ hostId: "h_air", label: "MacBook Air", status: "connected" },
 			{ hostId: "h_home", label: "Laptop at home", status: "offline" },
 			{ hostId: "h_new", label: "New box", status: "connecting" },
+			// The connection ended because the machine refused the saved password,
+			// or runs an AO this desktop cannot talk to.
+			{ hostId: "h_locked", label: "Locked box", status: "offline", failureReason: "unauthorized" },
+			{ hostId: "h_old", label: "Old box", status: "offline", failureReason: "incompatible" },
 		]);
 		const { result } = renderHook(() => useRemoteMachineSearch({ query: "flaky", limit: 8 }, true), { wrapper });
 		await waitFor(() => expect(result.current.settled).toBe(true));
@@ -110,6 +144,8 @@ describe("useRemoteMachineSearch", () => {
 			["MacBook Air", "searched"],
 			["Laptop at home", "offline"],
 			["New box", "connecting"],
+			["Locked box", "unauthorized"],
+			["Old box", "needs_update"],
 		]);
 	});
 });

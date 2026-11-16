@@ -71,8 +71,10 @@ import { LOCAL_HOST } from "../lib/hosts";
 import { isMacPlatform } from "../lib/platform";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
 import { PALETTE_SESSION_SEARCH_LIMIT, usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
+import { useConnectedHosts } from "../hooks/useHostConnection";
+import { useMachineSearchRows } from "../hooks/useMachineSearchRows";
 import { useRemoteMachineSearch } from "../hooks/useRemoteMachineSearch";
-import { machinesNotSearched, mergeMachineSearchResults, mergeNewestFirst } from "../lib/session-search-machines";
+import { machinesNotSearched } from "../lib/session-search-machines";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
@@ -98,6 +100,7 @@ import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
+import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "./ui/command";
 import { Switch } from "./ui/switch";
@@ -105,6 +108,11 @@ import { Switch } from "./ui/switch";
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
 const PALETTE_REVIEW_DEFER_MS = 120;
 const PALETTE_FILE_SEARCH_DEBOUNCE_MS = 150;
+// With other AO machines connected, session-text search waits for a longer
+// pause: each search goes to every machine, and at 150 ms a steady typist (about
+// 200 ms between keys) sends one per keystroke to each of them. At 250 ms only
+// the word they stop on is searched; this machine alone keeps the quicker one.
+const PALETTE_MACHINE_SEARCH_DEBOUNCE_MS = 250;
 /** Rows the file view lists; beside commands each search group shows a few. */
 const PALETTE_FILE_VIEW_ROWS = 50;
 const isMac = isMacPlatform();
@@ -178,6 +186,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const [view, setView] = useState<PaletteView>({ mode: "root" });
 	const [query, setQuery] = useState("");
 	const [debouncedQuery, setDebouncedQuery] = useState("");
+	const [debouncedSessionQuery, setDebouncedSessionQuery] = useState("");
 	const [selectedValue, setSelectedValue] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [pendingId, setPendingId] = useState<string | null>(null);
@@ -266,6 +275,16 @@ export const CommandPalette = memo(function CommandPalette() {
 		const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), PALETTE_FILE_SEARCH_DEBOUNCE_MS);
 		return () => window.clearTimeout(timer);
 	}, [isOpen, query, view.mode]);
+	const otherMachinesConnected = useConnectedHosts().length > 0;
+	useEffect(() => {
+		if (!isOpen) {
+			setDebouncedSessionQuery("");
+			return;
+		}
+		const delay = otherMachinesConnected ? PALETTE_MACHINE_SEARCH_DEBOUNCE_MS : PALETTE_FILE_SEARCH_DEBOUNCE_MS;
+		const timer = window.setTimeout(() => setDebouncedSessionQuery(query.trim()), delay);
+		return () => window.clearTimeout(timer);
+	}, [isOpen, otherMachinesConnected, query, view.mode]);
 
 	const activeFileTarget = view.mode === "file-search"
 		? view.target
@@ -273,7 +292,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			? currentFileTarget
 			: undefined;
 	const normalizedFileQuery = debouncedQuery.trim();
-	const normalizedSessionQuery = debouncedQuery.trim();
+	const normalizedSessionQuery = debouncedSessionQuery.trim();
 	const fileSearchEnabled = isOpen
 		&& normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS
 		&& commandPaletteFileSearchAvailable(activeFileTarget, cloud.ready);
@@ -335,39 +354,35 @@ export const CommandPalette = memo(function CommandPalette() {
 			|| normalizedSessionQuery.length >= PALETTE_SESSION_SEARCH_MIN_CHARS);
 	const sessionSearchQuery = usePaletteSessionSearch(normalizedSessionQuery, LOCAL_HOST, sessionSearchEnabled);
 	const sessionSearchIndexStatus = useSessionSearchIndexStatus(LOCAL_HOST, isOpen && sessionSearchEnabled);
-	// The same words on every connected remote AO machine. This machine's answer
-	// shows at once; the merged list replaces it once every machine has answered
-	// or timed out, and never while this machine's answer still belongs to an
-	// earlier query. Recents (no words) stay this machine's.
+	// The same words on every connected remote AO machine, merged with this
+	// machine's answer as the machines answer (see useMachineSearchRows). Recents
+	// (no words) stay this machine's.
 	const remoteSessionSearch = useRemoteMachineSearch(
 		{ query: normalizedSessionQuery, limit: PALETTE_SESSION_SEARCH_LIMIT },
 		sessionSearchEnabled,
 	);
-	const localSessionSearch = sessionSearchQuery.isPlaceholderData ? undefined : sessionSearchQuery.data;
 	// This machine's search finished and failed (its index is off or could not
 	// be opened). That is one machine not answering, not a pending answer: the
 	// machines that did answer still show, beside the local error notice.
 	const localSessionSearchFailed = sessionSearchQuery.isError && !sessionSearchQuery.isFetching;
-	const sessionSearchHits = useMemo(() => {
-		const local = sessionSearchQuery.data?.results ?? [];
-		const firstRemoteAnswer = remoteSessionSearch.answers.find((answer) => answer.outcome === "searched");
-		if (!remoteSessionSearch.settled || !firstRemoteAnswer) return local;
-		if (localSessionSearch) {
-			return mergeMachineSearchResults([
-				{ hostId: LOCAL_HOST, label: "", outcome: "searched", results: localSessionSearch.results ?? [], total: localSessionSearch.total ?? 0 },
-				...remoteSessionSearch.answers,
-			], mergeNewestFirst(localSessionSearch)).slice(0, PALETTE_SESSION_SEARCH_LIMIT);
-		}
-		if (localSessionSearchFailed) {
-			return mergeMachineSearchResults(remoteSessionSearch.answers, mergeNewestFirst(firstRemoteAnswer))
-				.slice(0, PALETTE_SESSION_SEARCH_LIMIT);
-		}
-		return local;
-	}, [sessionSearchQuery.data, localSessionSearch, localSessionSearchFailed, remoteSessionSearch]);
+	const sessionSearchRows = useMachineSearchRows({
+		query: normalizedSessionQuery,
+		local: sessionSearchQuery.isPlaceholderData ? undefined : sessionSearchQuery.data,
+		localFailed: localSessionSearchFailed,
+		remote: remoteSessionSearch,
+		limit: PALETTE_SESSION_SEARCH_LIMIT,
+	});
+	const sessionSearchHits = sessionSearchRows.rows;
+	// Machines are named as soon as their reason is known: one that is offline
+	// does not wait for a slow one to time out.
 	const sessionSearchMachinesNotSearched = useMemo(
-		() => (remoteSessionSearch.settled ? machinesNotSearched(remoteSessionSearch.answers, t) : []),
-		[remoteSessionSearch, t],
+		() => (remoteSessionSearch.query === normalizedSessionQuery ? machinesNotSearched(remoteSessionSearch.answers, t) : []),
+		[normalizedSessionQuery, remoteSessionSearch, t],
 	);
+	const sessionSearchPending = sessionSearchQuery.isFetching
+		|| !sessionSearchRows.current
+		|| remoteSessionSearch.query !== normalizedSessionQuery
+		|| !remoteSessionSearch.settled;
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -1463,12 +1478,12 @@ export const CommandPalette = memo(function CommandPalette() {
 									{t("command.machinesNotSearched", { machines: sessionSearchMachinesNotSearched.join(", ") })}
 								</div>
 							)}
-							{sessionSearchEnabled && sessionSearchSettled && (sessionSearchQuery.isFetching || !remoteSessionSearch.settled) && (
+							{sessionSearchEnabled && sessionSearchSettled && sessionSearchPending && (
 								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchingSessions")}</div>
 							)}
 							{/* An empty session-text result over an incomplete index is not the
 							    same answer as one over a complete index. */}
-							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchQuery.isFetching && (
+							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchPending && (
 								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">
 									{sessionSearchIndexStatus.data?.state === "backfilling"
 										? t("command.searchSessionsBackfilling", { count: sessionSearchIndexStatus.data.pendingSources })
@@ -1615,7 +1630,7 @@ function PaletteRow({
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className="flex min-w-0 items-baseline gap-2">
-					<span className="max-w-full shrink-0 truncate" data-slot="command-item-title">
+					<span className={cn("truncate", item.machine ? "min-w-0" : "max-w-full shrink-0")} data-slot="command-item-title">
 						{item.group === "content" && item.title.includes(":") ? (
 							<>
 								{item.title.slice(0, item.title.lastIndexOf(":"))}
@@ -1625,6 +1640,13 @@ function PaletteRow({
 							<Highlighted text={item.title} spans={item.contentMatch ? [] : titleHighlights(query, item.title)} />
 						)}
 					</span>
+					{/* The other machine's name, drawn as the sidebar draws it beside a
+					    remote project: it may shorten, but a long title never hides it. */}
+					{item.machine ? (
+						<Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink-0 justify-start self-center px-1.5 text-2xs" data-slot="command-item-machine">
+							<span className="truncate">{item.machine}</span>
+						</Badge>
+					) : null}
 					{item.subtitle ? (
 						pathSubtitle ? (
 							// Right-to-left layout puts the ellipsis at the start of a long
@@ -1708,7 +1730,9 @@ const SNIPPET_LEAD = 16;
  */
 function HighlightedSnippet({ snippet }: { snippet: NonNullable<CommandItemModel["snippet"]> }) {
 	const parts: { text: string; hit: boolean }[] = [];
-	const firstMatch = snippet.highlights[0]?.start ?? 0;
+	// The lead-in is measured from the first span that fits the text; a span
+	// past its end would otherwise cut the whole line away.
+	const firstMatch = snippet.highlights.find((span) => span.start >= 0 && span.start < span.end && span.end <= snippet.text.length)?.start ?? 0;
 	const offset = firstMatch > SNIPPET_LEAD * 2 ? firstMatch - SNIPPET_LEAD : 0;
 	if (offset > 0) parts.push({ text: "…", hit: false });
 	let cursor = offset;

@@ -4954,6 +4954,7 @@
 	"search.machineNeedsUpdate": "update AO there to search it",
 	"search.machineUnauthorized": "its saved password was refused",
 	"search.machineFailed": "it returned an error",
+	"search.machineSearchOff": "search is turned off there",
 	"command.sessionText": "Past sessions",
 	"command.searchingSessions": "Searching past sessions…",
 	"command.searchSessionsError": "Could not search past sessions.",

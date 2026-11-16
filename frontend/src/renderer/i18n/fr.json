@@ -5118,6 +5118,7 @@
 	"search.machineNeedsUpdate": "mettez AO à jour sur cette machine pour la rechercher",
 	"search.machineUnauthorized": "son mot de passe enregistré a été refusé",
 	"search.machineFailed": "elle a renvoyé une erreur",
+	"search.machineSearchOff": "la recherche y est désactivée",
 	"command.sessionText": "Sessions passées",
 	"command.searchingSessions": "Recherche dans les sessions passées…",
 	"command.searchSessionsError": "Impossible de rechercher dans les sessions passées.",
