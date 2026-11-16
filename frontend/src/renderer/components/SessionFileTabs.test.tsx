@@ -44,9 +44,9 @@ describe("SessionFileTabs", () => {
 		);
 
 		// Keyboard focus swaps the dot for the close icon just like hover does.
-		expect(screen.getByTestId("unsaved-tab-indicator")).toHaveClass("group-hover:hidden", "group-has-[:focus-visible]:hidden");
+		expect(screen.getByTestId("unsaved-tab-indicator")).toHaveClass("group-hover:hidden", "focus-visible-in-group:hidden");
 		const closeIcon = screen.getByRole("button", { name: "Close App.tsx" }).querySelector("svg:not([data-testid])");
-		expect(closeIcon).toHaveClass("hidden", "group-hover:block", "group-has-[:focus-visible]:block");
+		expect(closeIcon).toHaveClass("hidden", "group-hover:block", "focus-visible-in-group:block");
 		expect(screen.getByTestId("unsaved-tab-indicator")).toHaveClass("rounded-full", "bg-foreground", "group-hover:hidden");
 		const slot = screen.getByRole("button", { name: "Close App.tsx" }).closest("[data-terminal-tab-action]");
 		expect(slot).not.toHaveClass("opacity-0");
