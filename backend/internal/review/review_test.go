@@ -3132,7 +3132,7 @@ func TestListReturnsActiveOneShotOverrideHandle(t *testing.T) {
 	}
 	worker := liveWorker()
 	worker.ReviewerHarness = domain.ReviewerCodex
-	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{})
+	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true})
 
 	got, err := eng.List(context.Background(), "mer-1")
 	if err != nil {
