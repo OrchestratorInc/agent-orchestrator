@@ -228,6 +228,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		}
 		defer func() { _ = stmt.Close() }()
 		var repaired int
+		var bindingDrops []*timestampBindingDrop
 		err = timestamps.PreserveRepresentation(ctx, tx, func() (int64, error) {
 			var expected int64
 			for _, v := range changes {
@@ -239,6 +240,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 					return 0, err
 				}
 				var writes int64
+				var bindingDrop *timestampBindingDrop
 				apply := func() error {
 					if columns[0].table == "sessions" {
 						var revision int64
@@ -264,7 +266,9 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 						if !errors.As(err, &constraint) || (constraint.Code() != 2067 && constraint.Code() != 1555) {
 							return err
 						}
-						if resolved := resolveTimestampCollision(ctx, tx, columns, v); resolved != nil {
+						var resolved error
+						bindingDrop, resolved = resolveTimestampCollision(ctx, tx, columns, v)
+						if resolved != nil {
 							return errors.Join(err, resolved)
 						}
 						// One redundant key row was deleted.
@@ -297,6 +301,9 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 					expected += writes
 					if writes > 0 {
 						repaired++
+						if bindingDrop != nil {
+							bindingDrops = append(bindingDrops, bindingDrop)
+						}
 					}
 				}
 				if _, err := tx.ExecContext(ctx, "RELEASE timestamp_row"); err != nil {
@@ -312,6 +319,10 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 			return 0, false, err
 		}
 		state.Repaired += repaired
+		for _, drop := range bindingDrops {
+			slog.Warn("timestamp repair dropped same-instant account binding", "session", drop.session, "provider", drop.provider,
+				"kept_account", drop.keptAccount, "dropped_account", drop.droppedAccount, "dropped_rowid", drop.rowid)
+		}
 
 	}
 	return last + 1, n < timestampRepairBatch || last == math.MaxInt64, nil
@@ -352,13 +363,19 @@ func timestampRepairBounds(ctx context.Context, db *sql.DB, columns []timestampC
 	return first.Int64, last.Int64, !first.Valid, err
 }
 
+type timestampBindingDrop struct {
+	session, provider, keptAccount, droppedAccount string
+	rowid                                          int64
+}
+
 // Resolve only collisions whose logical winner is known. Never replace a run
 // carrying execution history with a freshly materialized pending occurrence.
-func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []timestampColumn, values []any) error {
+func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []timestampColumn, values []any) (*timestampBindingDrop, error) {
+	var binding *timestampBindingDrop
 	table := columns[0].table
 	id, ok := values[len(columns)].(int64)
 	if !ok {
-		return errors.New("timestamp collision has an invalid row identity")
+		return nil, errors.New("timestamp collision has an invalid row identity")
 	}
 	key := "bound_at"
 	if table == "automation_runs" {
@@ -373,20 +390,24 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []time
 	var twin int64
 	switch table {
 	case "session_agent_accounts":
-		if err := tx.QueryRowContext(ctx, `SELECT twin.rowid FROM session_agent_accounts original JOIN session_agent_accounts twin
+		binding = &timestampBindingDrop{}
+		if err := tx.QueryRowContext(ctx, `SELECT twin.rowid,original.session_id,original.provider,original.account_id,twin.account_id
+ FROM session_agent_accounts original JOIN session_agent_accounts twin
  ON twin.session_id=original.session_id AND twin.provider=original.provider AND twin.bound_at=?
- WHERE original.rowid=? AND twin.rowid<>original.rowid`, at, id).Scan(&twin); err != nil {
-			return err
+ WHERE original.rowid=? AND twin.rowid<>original.rowid`, at, id).Scan(&twin, &binding.session, &binding.provider, &binding.droppedAccount, &binding.keptAccount); err != nil {
+			return nil, err
 		}
 		// The last inserted same-instant binding is the effective bind.
 		if id > twin {
 			id = twin
+			binding.keptAccount, binding.droppedAccount = binding.droppedAccount, binding.keptAccount
 		}
+		binding.rowid = id
 	case "automation_runs":
 		if err := tx.QueryRowContext(ctx, `SELECT twin.rowid FROM automation_runs original JOIN automation_runs twin
  ON twin.automation_id=original.automation_id AND twin.scheduled_for=?
  WHERE original.rowid=? AND twin.rowid<>original.rowid`, at, id).Scan(&twin); err != nil {
-			return err
+			return nil, err
 		}
 		empty := func(row any) (bool, error) {
 			var unused bool
@@ -398,31 +419,31 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []time
 		}
 		originalEmpty, err := empty(id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		twinEmpty, err := empty(twin)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !originalEmpty && !twinEmpty {
 			var automation string
 			if err := tx.QueryRowContext(ctx, `SELECT automation_id FROM automation_runs WHERE rowid=?`, id).Scan(&automation); err != nil {
-				return err
+				return nil, err
 			}
-			return fmt.Errorf("automation %s instant %v has two execution histories (rowids %v and %d): %w", automation, at, id, twin, errTimestampPolicySkip)
+			return nil, fmt.Errorf("automation %s instant %v has two execution histories (rowids %v and %d): %w", automation, at, id, twin, errTimestampPolicySkip)
 		}
 		if !originalEmpty {
 			id = twin
 		}
 	default:
-		return fmt.Errorf("unhandled timestamp key collision in %s", table)
+		return nil, fmt.Errorf("unhandled timestamp key collision in %s", table)
 	}
 	var deletion strings.Builder
 	deletion.WriteString("DELETE FROM ")
 	deletion.WriteString(quoteIdentifier(table))
 	deletion.WriteString(" WHERE rowid=?")
 	_, err := tx.ExecContext(ctx, deletion.String(), id)
-	return err
+	return binding, err
 }
 
 type timestampColumn struct{ table, column string }

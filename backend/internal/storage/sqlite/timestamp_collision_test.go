@@ -1,7 +1,10 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,6 +77,10 @@ func TestTimestampFenceAccountBindingCollision(t *testing.T) {
 			if err := db.QueryRow(`SELECT max(rowid) FROM session_agent_accounts`).Scan(&last); err != nil {
 				t.Fatal(err)
 			}
+			var logs bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			defer slog.SetDefault(previous)
 			s, err := Open(dir)
 			if err != nil {
 				t.Fatal(err)
@@ -88,6 +95,20 @@ func TestTimestampFenceAccountBindingCollision(t *testing.T) {
 			current, bound, err := s.GetSessionAgentAccount(context.Background(), "s", domain.AgentAccountProviderCodex)
 			if err != nil || !bound || current != "last" {
 				t.Fatalf("effective account=%q bound=%v: %v", current, bound, err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runTimestampRepair(context.Background(), db, true); err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(logs.String(), "timestamp repair dropped same-instant account binding"); n != 1 {
+				t.Fatalf("drop warning occurred %d times: %s", n, logs.String())
+			}
+			for _, field := range []string{"session=s", "provider=codex", "kept_account=last", "dropped_account=first", "dropped_rowid=1"} {
+				if !strings.Contains(logs.String(), field) {
+					t.Errorf("drop warning missing %q: %s", field, logs.String())
+				}
 			}
 		})
 	}
