@@ -347,6 +347,23 @@ export async function snapshotHostShareFile(
 	}
 }
 
+/** The largest page whose files are looked for; a larger one is shared alone. */
+export const MAX_SCANNED_PAGE = 32 << 20;
+
+/**
+ * A resolved file's text, read the way a snapshot reads it (see
+ * openResolved), or null when it is larger than limit bytes.
+ */
+export async function readShareFileText(file: ResolvedShareFile, limit: number): Promise<string | null> {
+	const handle = await openResolved(file);
+	try {
+		if ((await handle.stat()).size > limit) return null;
+		return await handle.readFile("utf8");
+	} finally {
+		await handle.close();
+	}
+}
+
 /** Removes snapshots left by an earlier run. */
 export async function clearShareSnapshots(snapshotDir: string): Promise<void> {
 	await fs.rm(snapshotDir, { recursive: true, force: true });
@@ -597,6 +614,29 @@ export interface ShareUploadInput extends ShareAccessInput {
 	feature: string;
 	/** Update this active link instead. */
 	shareId?: string;
+	/**
+	 * The snapshot is an HTML page: files are the files it uses, uploaded with
+	 * it, and from now on the only files its link serves beside it (none when
+	 * empty). See cloud-share-page-files.ts.
+	 */
+	page?: { files: PageFileSnapshot[] };
+}
+
+/** One file a page uses, as it was copied, and where its link serves it. */
+export interface PageFileSnapshot {
+	path: string;
+	snapshot: ShareSnapshot;
+}
+
+/** What publishing a page did with the files it uses. */
+export interface PageFilesOutcome {
+	/** How many the link serves beside the page now. */
+	included: number;
+	/**
+	 * The control plane cannot serve a page's files (it predates them): the
+	 * page was published alone, and an active link kept the files it had.
+	 */
+	unsupported: boolean;
 }
 
 interface UploadStart {
@@ -611,6 +651,12 @@ interface PresignedPart {
 	url: string;
 	headers: Record<string, string>;
 	size: number;
+}
+
+interface CompletedPart {
+	partNumber: number;
+	sha256: string;
+	etag: string;
 }
 
 function partRange(start: UploadStart, size: number, number: number): { offset: number; length: number } {
@@ -631,33 +677,25 @@ async function hashRange(handle: fs.FileHandle, range: { offset: number; length:
 }
 
 /**
- * Uploads a snapshot as a share link's file: starts the upload, presigns and
- * puts its parts, and finalizes it. A failure or cancel before finalizing
- * aborts the upload so its parts are discarded.
+ * Presigns and puts every part of one started upload of snapshot, and returns
+ * the parts in order, ready to finish it. One failed part stops the others
+ * before this throws. onSent gets the bytes of each part as it is sent.
  */
-export async function uploadShare(
+async function putSnapshotParts(
 	api: CloudShareApi,
-	input: ShareUploadInput,
-	onProgress: (sentBytes: number) => void,
+	baseUrl: string,
+	start: UploadStart,
+	snapshot: ShareSnapshot,
+	onSent: (bytes: number) => void,
 	signal?: AbortSignal,
-): Promise<{ share: CloudShareLink; replaced: boolean }> {
-	const { baseUrl, snapshot } = input;
-	// An update names where the file is now too, so its link follows a file
-	// moved to another folder.
-	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", {
-		name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature,
-		...(input.shareId ? { shareId: input.shareId } : {}),
-	}, signal);
+): Promise<CompletedPart[]> {
 	const handle = await fs.open(snapshot.path, "r");
-	// One failed part stops the others before the upload is aborted and the
-	// snapshot closed.
 	const batch = new AbortController();
 	const stop = () => batch.abort();
 	signal?.addEventListener("abort", stop, { once: true });
 	const running: Array<Promise<void>> = [];
 	try {
-		const completed: Array<{ partNumber: number; sha256: string; etag: string }> = [];
-		let sent = 0;
+		const completed: CompletedPart[] = [];
 		for (let first = 1; first <= start.partCount; first += PRESIGN_BATCH) {
 			const numbers = Array.from({ length: Math.min(PRESIGN_BATCH, start.partCount - first + 1) }, (_, index) => first + index);
 			const parts: Array<{ partNumber: number; sha256: string }> = [];
@@ -681,26 +719,119 @@ export async function uploadShare(
 					const etag = response.headers.get("etag");
 					if (!response.ok || !etag) throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${response.status}).`, response.status);
 					completed.push({ partNumber: part.partNumber, sha256: signed.sha256, etag });
-					sent += body.byteLength;
-					onProgress(sent);
+					onSent(body.byteLength);
 				}
 			};
 			const workers = Array.from({ length: UPLOAD_CONCURRENCY }, worker);
 			running.push(...workers);
 			await Promise.all(workers);
 		}
-		completed.sort((a, b) => a.partNumber - b.partNumber);
-		return await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize",
-			{ uploadToken: start.uploadToken, parts: completed, ...accessFields(input) }, signal, SHARE_TIMEOUTS.publish);
+		return completed.sort((a, b) => a.partNumber - b.partNumber);
 	} catch (error) {
 		batch.abort();
 		await Promise.allSettled(running);
-		// The upload was never finalized: discard its parts. Finalize itself
-		// failing leaves nothing to discard but aborting is harmless.
-		await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
 		throw error;
 	} finally {
 		signal?.removeEventListener("abort", stop);
 		await handle.close();
+	}
+}
+
+/** Whether a control-plane refusal says it has no such route: it predates it. */
+function isMissingRoute(error: unknown): boolean {
+	return error instanceof CloudShareError && error.status === 404;
+}
+
+/**
+ * Uploads the files a page uses under the page's upload (pageToken) and
+ * returns their file tokens for finalizing, or null when the control plane
+ * predates included files: it then cannot take a files list either, since it
+ * refuses fields it does not know. With no files, one request that is refused
+ * either way tells which: an unknown route (404) or a path it checks (400).
+ */
+async function uploadPageFiles(
+	api: CloudShareApi,
+	baseUrl: string,
+	pageToken: string,
+	files: PageFileSnapshot[],
+	onSent: (bytes: number) => void,
+	signal?: AbortSignal,
+): Promise<string[] | null> {
+	if (files.length === 0) {
+		try {
+			await callApi<unknown>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files",
+				{ uploadToken: pageToken, path: "", size: 0, sha256: "0".repeat(64) }, signal);
+		} catch (error) {
+			if (isMissingRoute(error)) return null;
+			if (error instanceof CloudShareError && error.status === 400) return [];
+			throw error;
+		}
+		return [];
+	}
+	const tokens: string[] = [];
+	for (const [index, file] of files.entries()) {
+		let start: UploadStart;
+		try {
+			start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files",
+				{ uploadToken: pageToken, path: file.path, size: file.snapshot.size, sha256: file.snapshot.sha256 }, signal);
+		} catch (error) {
+			if (index === 0 && isMissingRoute(error)) return null;
+			throw error;
+		}
+		try {
+			const parts = await putSnapshotParts(api, baseUrl, start, file.snapshot, onSent, signal);
+			const done = await callApi<{ fileToken: string }>(api, baseUrl, "POST", "/me/artifact-shares/uploads/files/complete",
+				{ uploadToken: start.uploadToken, parts }, signal, SHARE_TIMEOUTS.publish);
+			tokens.push(done.fileToken);
+		} catch (error) {
+			await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
+			throw error;
+		}
+	}
+	return tokens;
+}
+
+/**
+ * Uploads a snapshot as a share link's file: starts the upload, presigns and
+ * puts its parts, and finalizes it. A page's files go first, under the same
+ * upload, and finalizing lists them. A failure or cancel before finalizing
+ * aborts the upload so its parts are discarded; a file uploaded but never
+ * listed is deleted by the control plane in time. onProgress gets the bytes
+ * sent so far, the page's files included.
+ */
+export async function uploadShare(
+	api: CloudShareApi,
+	input: ShareUploadInput,
+	onProgress: (sentBytes: number) => void,
+	signal?: AbortSignal,
+): Promise<{ share: CloudShareLink; replaced: boolean; pageFiles?: PageFilesOutcome }> {
+	const { baseUrl, snapshot } = input;
+	// An update names where the file is now too, so its link follows a file
+	// moved to another folder.
+	const start = await callApi<UploadStart>(api, baseUrl, "POST", "/me/artifact-shares/uploads", {
+		name: input.name, size: snapshot.size, sha256: snapshot.sha256, project: input.project, feature: input.feature,
+		...(input.shareId ? { shareId: input.shareId } : {}),
+	}, signal);
+	let sent = 0;
+	const onSent = (bytes: number) => {
+		sent += bytes;
+		onProgress(sent);
+	};
+	try {
+		const fileTokens = input.page ? await uploadPageFiles(api, baseUrl, start.uploadToken, input.page.files, onSent, signal) : null;
+		const parts = await putSnapshotParts(api, baseUrl, start, snapshot, onSent, signal);
+		const result = await callApi<{ share: CloudShareLink; replaced: boolean }>(api, baseUrl, "POST", "/me/artifact-shares/finalize", {
+			uploadToken: start.uploadToken,
+			parts,
+			...accessFields(input),
+			...(fileTokens ? { files: fileTokens.map((fileToken) => ({ fileToken })) } : {}),
+		}, signal, SHARE_TIMEOUTS.publish);
+		if (!input.page) return result;
+		return { ...result, pageFiles: { included: fileTokens?.length ?? 0, unsupported: fileTokens === null } };
+	} catch (error) {
+		// The upload was never finalized: discard its parts. Finalize itself
+		// failing leaves nothing to discard but aborting is harmless.
+		await callApi<void>(api, baseUrl, "POST", "/me/artifact-shares/uploads/abort", { uploadToken: start.uploadToken }).catch(() => undefined);
+		throw error;
 	}
 }
