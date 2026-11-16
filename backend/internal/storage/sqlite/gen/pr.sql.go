@@ -540,6 +540,7 @@ external_review AS (
     )
 )
 SELECT
+    pr.session_id,
     pr.url,
     pr.number,
     pr.pr_state,
@@ -628,6 +629,7 @@ ORDER BY pr.updated_at DESC
 `
 
 type ListPRFactsBySessionRow struct {
+	SessionID                domain.SessionID
 	URL                      string
 	Number                   int64
 	PRState                  domain.PRState
@@ -663,6 +665,7 @@ func (q *Queries) ListPRFactsBySession(ctx context.Context, sessionID domain.Ses
 	for rows.Next() {
 		var i ListPRFactsBySessionRow
 		if err := rows.Scan(
+			&i.SessionID,
 			&i.URL,
 			&i.Number,
 			&i.PRState,
