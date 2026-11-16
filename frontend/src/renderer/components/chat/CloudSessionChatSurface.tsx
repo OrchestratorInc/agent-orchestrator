@@ -537,7 +537,7 @@ const PLAN_REFUSAL_CODE_ALTERNATION = [...PLAN_REFUSAL_CODES].join("|");
 const PLAN_REFUSAL_PATTERN = new RegExp(
 	`\\((${PLAN_REFUSAL_CODE_ALTERNATION})\\)|"code"\\s*:\\s*"(${PLAN_REFUSAL_CODE_ALTERNATION})"`,
 );
-const CLI_PLAN_REFUSAL_PATTERN = new RegExp(`(?:^|[\\s>|:(\\[])ao: (${PLAN_REFUSAL_CODE_ALTERNATION}): \\S`);
+const CLI_PLAN_REFUSAL_PATTERN = new RegExp(`^\\s*(?:[\\w./][\\w./-]*\\s+=>\\s+)?ao: (${PLAN_REFUSAL_CODE_ALTERNATION}): \\S`);
 
 /** A command or MCP tool that failed, by the same rule the timeline rows use. */
 function failedTool(item: ConversationItem): item is ConversationItem & { kind: "activity" } {
@@ -557,9 +557,7 @@ export function planRefusalCode(item: ConversationItem): string | undefined {
 	if (item.kind === "activity" && item.activityKind === "command" && typeof item.detail?.output === "string") {
 		// A shell loop can finish successfully after individual spawns are refused.
 		for (const line of item.detail.output.split(/\r?\n/)) {
-			const text = line.trimStart();
-			if (/^\S+:\d+[:-]/.test(text) || /^(?:FAIL|PASS|RUN)\s|^AssertionError:/.test(text)) continue;
-			const match = CLI_PLAN_REFUSAL_PATTERN.exec(text);
+			const match = CLI_PLAN_REFUSAL_PATTERN.exec(line);
 			if (match) return match[1];
 		}
 	}
@@ -577,14 +575,21 @@ export function planRefusalCode(item: ConversationItem): string | undefined {
 function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: boolean; onDismiss: () => void }) {
 	const { data, offering } = useCloudBilling();
 	const plan = shared ? undefined : data?.limits?.plan ?? data?.plan;
-	const reason = appI18n.t(code.endsWith("_SLOTS_FULL") ? "cloud.planLimit.slotsFull" : "cloud.planLimit.refused");
-	const onPlan = plan ? appI18n.t("cloud.planLimit.onPlan", { plan: plan.charAt(0).toUpperCase() + plan.slice(1) }) : undefined;
+	const planName = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
+	const limit = data?.limits?.maxRunningSandboxes;
+	const canUpgrade = offering.selfServeBilling && offering.canManageBilling;
+	const reason = !code.endsWith("_SLOTS_FULL") ? appI18n.t("cloud.planLimit.refused")
+		: !planName ? appI18n.t("cloud.planLimit.slotsFull")
+			: typeof limit === "number" && Number.isFinite(limit) && limit >= 0
+				? appI18n.t("cloud.planLimit.slotsFullWithLimit", { plan: planName, limit })
+				: appI18n.t("cloud.planLimit.slotsFullOnPlan", { plan: planName });
+	const nextStep = appI18n.t(canUpgrade ? "cloud.planLimit.stopOrUpgrade" : "cloud.planLimit.contactAdmin");
 	return (
 		<ComposerErrorNotice
 			title={appI18n.t("cloud.planLimit.title")}
-			message={shared ? appI18n.t("cloud.planLimit.contactOwner") : <>{reason}{onPlan && <span className="block">{onPlan}</span>}</>}
+			message={shared ? appI18n.t("cloud.planLimit.contactOwner") : <>{reason}<span className="block">{nextStep}</span></>}
 			onDismiss={onDismiss}
-			action={shared ? undefined : offering.selfServeBilling && offering.canManageBilling ? (
+			action={!shared && canUpgrade ? (
 				<Button
 					type="button"
 					variant="link"
@@ -595,7 +600,7 @@ function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: bo
 				>
 					{appI18n.t("cloud.planLimit.upgrade")}
 				</Button>
-			) : <p className="text-muted-foreground">{appI18n.t("cloud.planLimit.contactAdmin")}</p>}
+			) : undefined}
 		/>
 	);
 }

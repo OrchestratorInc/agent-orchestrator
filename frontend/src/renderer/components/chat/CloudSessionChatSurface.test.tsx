@@ -41,14 +41,14 @@ const cloudMocks = vi.hoisted(() => ({
 	startInterfaceTransition: vi.fn(),
 	chatProps: vi.fn(),
 }));
-const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManageBilling: true } }));
+const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManageBilling: true }, plan: "starter", limit: 15 as number | undefined }));
 vi.mock("../../lib/cloud-telemetry", async (original) => ({
 	...await original<typeof import("../../lib/cloud-telemetry")>(),
 	reportPlanRefusal: vi.fn(),
 	reportUpgradeViewed: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudBilling", () => ({
-	useCloudBilling: () => ({ data: { plan: "starter" }, offering: billing.offering }),
+	useCloudBilling: () => ({ data: { plan: billing.plan, limits: { maxRunningSandboxes: billing.limit } }, offering: billing.offering }),
 }));
 // The control plane's base URL and attachment limit, for the tests that attach files.
 const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined, features: [] as string[], agentSwitchHarnesses: [] as string[], meUserId: "user-1" }));
@@ -119,6 +119,8 @@ describe("CloudSessionChatSurface", () => {
 		vi.mocked(reportPlanRefusal).mockClear();
 		vi.mocked(reportUpgradeViewed).mockClear();
 		billing.offering = { selfServeBilling: true, canManageBilling: true };
+		billing.plan = "starter";
+		billing.limit = 15;
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
 		cloudSetup.maxAttachmentBytes = undefined;
@@ -2609,14 +2611,13 @@ describe("CloudSessionChatSurface", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 		await act(() => queryClient.refetchQueries({ queryKey: key }));
 		const notice = await screen.findByRole("alert");
-		expect(notice.textContent).toContain("all running sessions on your plan are in use.");
-		// The plan sits on its own line, so no language needs a joining space.
-		expect(screen.getByText("You're on the Starter plan.").tagName).toBe("SPAN");
+		expect(notice.textContent).toContain("Some sessions didn't start because your Starter plan allows 15 running at once and all are in use.");
+		expect(notice.textContent).toContain("Stop a session or upgrade to run more.");
 		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
 		const originalOpenGlobalSettings = useUiStore.getState().openGlobalSettings;
 		const openGlobalSettings = vi.fn();
 		useUiStore.setState({ openGlobalSettings });
-		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));
+		fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("billing");
 		expect(reportPlanRefusal).toHaveBeenCalledTimes(1);
 		// BillingSection records the visit when Settings mounts.
@@ -2625,14 +2626,14 @@ describe("CloudSessionChatSurface", () => {
 		// A member cannot buy a plan, so the notice sends them to an admin instead.
 		billing.offering = { selfServeBilling: true, canManageBilling: false };
 		rerender(view(session.id));
-		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
-		expect(screen.getByRole("alert").textContent).toContain("Contact your organization's admin to raise it.");
+		expect(screen.queryByRole("button", { name: "Upgrade plan" })).toBeNull();
+		expect(screen.getByRole("alert").textContent).toContain("Stop a session or ask your organization's admin to upgrade.");
 		// A guest's shared session runs on its owner's plan: not the guest org's plan, and no link to its billing.
 		billing.offering = { selfServeBilling: true, canManageBilling: true };
 		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1", shared: true } }} /></QueryClientProvider>);
-		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Upgrade plan" })).toBeNull();
 		expect(screen.getByRole("alert").textContent).not.toContain("Starter");
-		expect(screen.getByRole("alert").textContent).toContain("Ask them to raise it.");
+		expect(screen.getByRole("alert").textContent).toContain("Some sessions didn't start because the project owner's plan has no free running sessions.");
 		expect(screen.getByRole("alert").textContent).not.toContain("your plan");
 		rerender(view(session.id));
 		// The same surface shows another chat and comes back: the old notice stays gone.
@@ -2641,6 +2642,31 @@ describe("CloudSessionChatSurface", () => {
 		rerender(view(session.id));
 		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(3));
 		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it.each([
+		{ plan: "starter", limit: 15, expected: "your Starter plan allows 15 running at once" },
+		{ plan: "pro", limit: 40, expected: "your Pro plan allows 40 running at once" },
+		{ plan: "pro", limit: undefined, expected: "all running sessions on your Pro plan are in use" },
+	])("uses the billing limit for $plan ($limit), with a no-number fallback", async ({ plan, limit, expected }) => {
+		billing.plan = plan;
+		billing.limit = limit;
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
+			.mockResolvedValue({ events: [{
+				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+			}], hasMore: false, hasOlder: false, nextAfter: 1 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.status).toBe("success"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		const notice = await screen.findByRole("alert");
+		expect(notice.textContent).toContain(expected);
+		if (limit === 40) expect(notice.textContent).not.toContain("15");
+		if (limit === undefined) expect(notice.textContent).not.toContain("allows");
 	});
 
 
@@ -2700,15 +2726,23 @@ describe("CloudSessionChatSurface", () => {
 	});
 
 	it.each(["running", "completed", "failed"] as const)("reads CLI plan refusals in %s command output", (status) => {
-		const output = "[3/20] ao: WORKER_SLOTS_FULL: All your plan's running sessions are in use.";
+		const output = "  backend/internal/service => ao: WORKER_SLOTS_FULL: All your plan's running sessions are in use.";
 		expect(planRefusalCode({ kind: "activity", id: "spawn", sequence: 1, revision: 1, createdAt: session.updatedAt, summary: "Start worker", activityKind: "command", status, detail: { output } })).toBe("WORKER_SLOTS_FULL");
 	});
 
 	it.each([
 		"src/x.ts:12: ao: WORKER_SLOTS_FULL: All sessions are in use.",
 		"src/x.ts:12- ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"src/x.ts:ao: WORKER_SLOTS_FULL: All sessions are in use.",
 		"FAIL worker.test.ts > ao: WORKER_SLOTS_FULL: All sessions are in use.",
-		'AssertionError: expected "ao: WORKER_SLOTS_FULL: All sessions are in use."',
+		"× worker.test.ts > ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"● worker > ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		'const output = "[3/20] ao: WORKER_SLOTS_FULL: All sessions are in use.";',
+		'"browserruntime => ao: WORKER_SLOTS_FULL: All sessions are in use."',
+		"`browserruntime => ao: WORKER_SLOTS_FULL: All sessions are in use.`",
+		"+ ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"- browserruntime => ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"E  - ao: WORKER_SLOTS_FULL: All sessions are in use.",
 		"WORKER_SLOTS_FULL: All sessions are in use.",
 		"ao: WORKER_SLOTS_FULL:",
 	])("ignores search hits, test output and incomplete CLI refusals: %s", (output) => {
