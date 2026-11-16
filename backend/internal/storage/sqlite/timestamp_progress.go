@@ -140,7 +140,7 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 			return err
 		}
 		up := strings.SplitN(string(migration), "-- +goose Down", 2)[0]
-		up = strings.ReplaceAll(up, "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+		up = strings.ReplaceAll(up, "CREATE TABLE timestamp_", "CREATE TABLE IF NOT EXISTS timestamp_")
 		up = strings.ReplaceAll(up, "INSERT INTO timestamp_repair_control", "INSERT OR IGNORE INTO timestamp_repair_control")
 		if _, err := db.ExecContext(ctx, up); err != nil {
 			return err
@@ -211,6 +211,7 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 		fresh = append(fresh, after)
 		changed = append(changed, "(OLD."+name+" IS NOT NEW."+name+" AND (("+before+") OR ("+after+")))")
 	}
+	changed = append(changed, "(OLD.rowid IS NOT NEW.rowid AND ("+strings.Join(old, " OR ")+"))")
 	predicates := map[string]string{
 		"insert": strings.Join(fresh, " OR "),
 		"update": strings.Join(changed, " OR "),

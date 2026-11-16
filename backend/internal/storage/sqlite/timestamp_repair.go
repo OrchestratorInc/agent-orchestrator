@@ -101,7 +101,11 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 			}
 			state.rejectedOnly = true
 			// Deleted rows cannot be returned by the row-ID lookup below.
-			if _, err := db.ExecContext(ctx, `DELETE FROM timestamp_repair_rejections WHERE table_name=? AND NOT EXISTS(SELECT 1 FROM `+quoteIdentifier(table)+` WHERE rowid=timestamp_repair_rejections.row_id)`, table); err != nil {
+			cleanup := strings.Join([]string{
+				`DELETE FROM timestamp_repair_rejections WHERE table_name=? AND NOT EXISTS(SELECT 1 FROM`,
+				quoteIdentifier(table), `WHERE rowid=timestamp_repair_rejections.row_id)`,
+			}, " ")
+			if _, err := db.ExecContext(ctx, cleanup, table); err != nil {
 				return result, err
 			}
 		} else if _, err := db.ExecContext(ctx, `DELETE FROM timestamp_repair_rejections WHERE table_name=?`, table); err != nil {
@@ -373,7 +377,11 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		// commit can flag them again without invalidating the whole table.
 		if len(selected) > 0 {
 			args := append([]any{columns[0].table}, selected...)
-			if _, err := tx.ExecContext(ctx, `DELETE FROM timestamp_repair_rejections WHERE table_name=? AND row_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(selected)), ",")+`)`, args...); err != nil {
+			deletion := strings.Join([]string{
+				`DELETE FROM timestamp_repair_rejections WHERE table_name=? AND row_id IN (`,
+				strings.TrimSuffix(strings.Repeat("?,", len(selected)), ","), ")",
+			}, "")
+			if _, err := tx.ExecContext(ctx, deletion, args...); err != nil {
 				return 0, false, err
 			}
 		}

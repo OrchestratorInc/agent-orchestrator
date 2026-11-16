@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -298,5 +299,58 @@ func TestTimestampProgressOlderMigrationSetRemainsReadable(t *testing.T) {
 	}
 	if _, err := db.Exec(`UPDATE projects SET registered_at='2026-10-22 03:30:00 +0000 UTC' WHERE id='older-reader'`); err != nil {
 		t.Fatalf("write with installed repair triggers failed: %v", err)
+	}
+}
+
+func TestTimestampProgressRetriesMovedRejectedRow(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	if _, err := db.Exec(`CREATE TABLE moved_times(id INTEGER PRIMARY KEY, at TIMESTAMP,
+ CHECK(id<>1 OR CAST(at AS TEXT) NOT GLOB '* +0000 UTC'));
+ INSERT INTO moved_times VALUES(1,'2026-10-21 09:00:00 +0530 IST')`); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runTimestampRepair(ctx, db, false); err != nil || result.Skipped != 1 {
+		t.Fatalf("kept fixture: %+v %v", result, err)
+	}
+	if _, err := db.Exec(`UPDATE moved_times SET id=2 WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runTimestampRepair(ctx, db, false); err != nil || result.Repaired != 1 {
+		t.Fatalf("moved legacy row was not retried: %+v %v", result, err)
+	}
+	var at string
+	if err := db.QueryRow(`SELECT CAST(at AS TEXT) FROM moved_times WHERE id=2`).Scan(&at); err != nil || at != "2026-10-21 03:30:00 +0000 UTC" {
+		t.Fatalf("moved timestamp=%q err=%v", at, err)
+	}
+}
+
+func TestTimestampProgressRejectionMigrationReapplies(t *testing.T) {
+	db := openMigratedTestDB(t)
+	migration, err := migrationsFS.ReadFile("migrations/20261116210724592_timestamp_repair_rejections.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := strings.SplitN(string(migration), "-- +goose Down", 2)
+	if _, err := db.Exec(`INSERT INTO timestamp_repair_rejections(table_name,row_id) VALUES('kept',1)`); err != nil {
+		t.Fatal(err)
+	}
+	columns, err := timestampColumns(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		for _, statement := range []string{sections[1], sections[0]} {
+			if _, err := db.Exec(statement); err != nil {
+				t.Fatalf("reapply rejection tracking migration: %v", err)
+			}
+		}
+		if err := prepareTimestampProgress(context.Background(), db, columns); err != nil {
+			t.Fatalf("standalone preparation after reapply: %v", err)
+		}
+	}
+	var kept int
+	if err := db.QueryRow(`SELECT count(*) FROM timestamp_repair_rejections WHERE table_name='kept'`).Scan(&kept); err != nil || kept != 1 {
+		t.Fatalf("reapply lost kept rows: count=%d err=%v", kept, err)
 	}
 }

@@ -1,5 +1,5 @@
 -- +goose Up
-CREATE TABLE timestamp_repair_rejections (
+CREATE TABLE IF NOT EXISTS timestamp_repair_rejections (
     table_name TEXT NOT NULL,
     row_id INTEGER NOT NULL,
     pending INTEGER NOT NULL DEFAULT 0,
