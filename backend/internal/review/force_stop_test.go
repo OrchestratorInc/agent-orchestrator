@@ -34,6 +34,7 @@ type scriptedTable struct {
 	// startedAt is each process's wall-clock start, for root start bounds.
 	startedAt map[int]time.Time
 	killed    []int
+	frozen    []int
 }
 
 func newScriptedTable(lines ...string) *scriptedTable {
@@ -59,6 +60,13 @@ func (t *scriptedTable) identities(context.Context) (map[int]procmem.Identity, e
 		out[pid] = procmem.Identity{PPID: p.PPID, Start: t.started[pid], StartedAt: t.startedAt[pid]}
 	}
 	return out, nil
+}
+
+func (t *scriptedTable) freeze(pid int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.frozen = append(t.frozen, pid)
+	return nil
 }
 
 func (t *scriptedTable) kill(pid int) error {
@@ -135,5 +143,37 @@ func TestForceStopNeverWalksDownFromAReusedRootPid(t *testing.T) {
 	}
 	if len(table.killed) != 0 {
 		t.Fatalf("killed unrelated processes %v that took the dead host's pid", table.killed)
+	}
+}
+
+// A survivor kept from an earlier attempt can exit and have its pid reused
+// before the retry. The replacement and the children it starts are not the
+// reviewer's: none is frozen or killed. A child the original left behind
+// (Windows keeps the dead parent's pid on it) is still killed.
+func TestForceStopRetryLeavesAReusedSurvivorPidAndItsChildrenAlone(t *testing.T) {
+	table := newScriptedTable(
+		"500 1 100 0:00 someone-elses-server",
+		"501 500 100 0:00 someone-elses-worker",
+		"502 500 100 0:00 claude-tool",
+	)
+	original := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	table.startedAt[500] = original.Add(100 * time.Second)
+	table.startedAt[501] = original.Add(101 * time.Second)
+	table.startedAt[502] = original.Add(50 * time.Second)
+	l := forceStopLauncher(&rootedRuntime{fakeRuntime: &fakeRuntime{}}, table)
+	l.forceStop.freeze = table.freeze
+	l.stops.keep("review-mer-1", []capturedProcess{{pid: 500, start: "reviewer", startedAt: original}})
+
+	stopped, err := l.ForceStop(context.Background(), "review-mer-1")
+	if err != nil || !stopped {
+		t.Fatalf("ForceStop = %v, %v; want confirmed", stopped, err)
+	}
+	for _, pid := range append(append([]int{}, table.frozen...), table.killed...) {
+		if pid == 500 || pid == 501 {
+			t.Fatalf("signalled unrelated process %d: frozen=%v killed=%v", pid, table.frozen, table.killed)
+		}
+	}
+	if len(table.killed) != 1 || table.killed[0] != 502 {
+		t.Fatalf("killed = %v, want only the reviewer's orphan 502", table.killed)
 	}
 }

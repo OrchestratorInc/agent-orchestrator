@@ -163,39 +163,47 @@ func (l *agentLauncher) ForceStop(ctx context.Context, handleID string) (bool, e
 }
 
 // freezeTree stops every process in tree and keeps re-reading until no new
-// descendant appears. It returns the frozen tree, or an error when the tree
+// descendant appears. A process is frozen only while its current start
+// identity matches the captured one, so a pid that was reused (a survivor kept
+// from an earlier attempt, say) is never stopped. A round that freezes nothing
+// new read the tree with every live member already stopped, so nothing can
+// have spawned since. It returns the frozen tree, or an error when the tree
 // cannot be trusted or does not settle.
 func freezeTree(ctx context.Context, tree []capturedProcess, hooks forceStopHooks) ([]capturedProcess, error) {
 	frozen := map[int]bool{}
 	for range maxFreezeRounds {
-		for _, p := range tree {
-			if !frozen[p.pid] {
-				frozen[p.pid] = true
-				_ = hooks.freeze(p.pid)
-			}
-		}
 		identities, err := hooks.identities(ctx)
 		if err != nil {
 			return tree, fmt.Errorf("read process identities: %w", err)
 		}
-		extended, err := extendTree(tree, identities)
-		if err != nil {
+		if tree, err = extendTree(tree, identities); err != nil {
 			return tree, err
 		}
-		if len(extended) == len(tree) {
+		froze := false
+		for _, p := range tree {
+			current, ok := identities[p.pid]
+			if frozen[p.pid] || !ok || !current.Known() || current.Start != p.start {
+				continue
+			}
+			frozen[p.pid] = true
+			froze = true
+			_ = hooks.freeze(p.pid)
+		}
+		if !froze {
 			return tree, nil
 		}
-		tree = extended
 	}
 	return tree, errors.New("reviewer process tree kept growing while being frozen")
 }
 
 // extendTree adds every descendant of tree that identities shows. A child of
-// a captured process that is still alive (same start identity) is genuine. A
-// child whose captured parent is gone counts only if it started after that
-// parent did: Windows keeps a dead parent's pid on its children, but a later
-// process may reuse that pid. A possible child whose identity or parent
-// cannot be read makes the tree untrustworthy.
+// a captured process that is still alive (same start identity) is genuine.
+// Windows keeps a dead parent's pid on its children, so a child whose
+// captured parent is gone counts too, if it started at or after that parent
+// did. When another process has since taken the parent's pid, the child must
+// also have started before that replacement, or it is the replacement's. A
+// possible child whose identity or parent cannot be read makes the tree
+// untrustworthy.
 func extendTree(tree []capturedProcess, identities map[int]procmem.Identity) ([]capturedProcess, error) {
 	members := make(map[int]capturedProcess, len(tree))
 	for _, p := range tree {
@@ -217,12 +225,7 @@ func extendTree(tree []capturedProcess, identities map[int]procmem.Identity) ([]
 			if !identity.Known() {
 				return tree, fmt.Errorf("cannot read the identity of reviewer process %d", pid)
 			}
-			parentNow, alive := identities[parent.pid]
-			genuine := alive && parentNow.Start == parent.start
-			if !genuine {
-				genuine = !identity.StartedAt.IsZero() && !parent.startedAt.IsZero() && !identity.StartedAt.Before(parent.startedAt)
-			}
-			if !genuine {
+			if !childOf(parent, identity, identities) {
 				continue
 			}
 			child := capturedProcess{pid: pid, start: identity.Start, startedAt: identity.StartedAt}
@@ -234,6 +237,25 @@ func extendTree(tree []capturedProcess, identities map[int]procmem.Identity) ([]
 			return tree, nil
 		}
 	}
+}
+
+// childOf reports whether a process naming parent's pid as its parent is
+// really the captured parent's child, rather than a child of a later process
+// that reused that pid.
+func childOf(parent capturedProcess, child procmem.Identity, identities map[int]procmem.Identity) bool {
+	parentNow, present := identities[parent.pid]
+	if present && parentNow.Start == parent.start {
+		return true
+	}
+	if child.StartedAt.IsZero() || parent.startedAt.IsZero() || child.StartedAt.Before(parent.startedAt) {
+		return false
+	}
+	if !present {
+		return true
+	}
+	// The pid belongs to a replacement now: only a child that started before
+	// the replacement existed can be the original's.
+	return !parentNow.StartedAt.IsZero() && child.StartedAt.Before(parentNow.StartedAt)
 }
 
 // StopSurvivors kills only the processes an earlier force-stop of handleID
