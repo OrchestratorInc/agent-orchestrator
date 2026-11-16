@@ -75,6 +75,7 @@ export const DISPLAY_STATUSES = [
 	"Merge conflicts",
 	"Commented",
 	"Changes requested",
+	"Waiting on base PR",
 	"Mergeable",
 	"Approved",
 	"Merged",

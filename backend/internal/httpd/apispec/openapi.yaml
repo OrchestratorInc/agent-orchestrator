@@ -18947,6 +18947,7 @@ components:
           - Merge conflicts
           - Commented
           - Changes requested
+          - Waiting on base PR
           - Mergeable
           - Approved
           - Merged
@@ -23895,6 +23896,8 @@ components:
           type: string
         reviewComments:
           type: boolean
+        stackParent:
+          type: integer
         state:
           enum:
           - draft
