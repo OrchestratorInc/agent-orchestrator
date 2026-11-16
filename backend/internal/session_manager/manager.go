@@ -540,6 +540,10 @@ type Manager struct {
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
+	// turnStops holds, per session, the turn StopTUITurn already interrupted,
+	// so a repeat for that turn is refused.
+	turnStopsMu sync.Mutex
+	turnStops   map[domain.SessionID]tuiTurn
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context
@@ -5493,7 +5497,10 @@ func semanticMessageAccepted(rec domain.SessionRecord, clientMessageID string) b
 		rec.Metadata.ConversationCheckpointTurnID == clientMessageID
 }
 
-// InterruptTUI requests cancellation through the session's owned runtime.
+// InterruptTUI requests cancellation through the session's owned runtime
+// before a report is delivered. It requires semantic acceptance: the report
+// coordinator retries a batch whose delivery is not confirmed, and each retry
+// would interrupt the orchestrator again.
 func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -5510,6 +5517,120 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 		return ErrSemanticAcceptanceUnsupported
 	}
 	return interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID})
+}
+
+var (
+	// ErrNoActiveTurn means StopTUITurn found no turn to stop. Ctrl+C on an
+	// idle agent prompt arms "press again to exit", so it is refused.
+	ErrNoActiveTurn = errors.New("session: no active turn")
+	// ErrInterruptUnsupported means the harness has no declared turn interrupt
+	// key or its runtime cannot send it.
+	ErrInterruptUnsupported = errors.New("session: interrupt unsupported")
+	// ErrTurnStopPending means StopTUITurn already interrupted this turn and
+	// the session has not reported a new state since. A second Ctrl+C could
+	// reach an idle prompt and arm "press again to exit".
+	ErrTurnStopPending = errors.New("session: turn stop already requested")
+)
+
+// tuiTurn identifies one turn of a TUI session. LastActivityAt alone is not
+// enough, because a stopped turn can stay active (Claude Code reports nothing
+// on Ctrl+C) and a prompt submitted then keeps active without moving it. The
+// prompt facts do move, and coordination prompts set a checkpoint turn ID.
+type tuiTurn struct {
+	activityAt time.Time
+	promptAt   time.Time
+	prompt     string
+	turnID     string
+}
+
+func tuiTurnOf(rec domain.SessionRecord) tuiTurn {
+	return tuiTurn{
+		activityAt: rec.Activity.LastActivityAt,
+		promptAt:   rec.Metadata.LatestUserPromptAt,
+		prompt:     rec.Metadata.LatestUserPrompt,
+		turnID:     rec.Metadata.ConversationCheckpointTurnID,
+	}
+}
+
+func (t tuiTurn) same(o tuiTurn) bool {
+	return t.activityAt.Equal(o.activityAt) && t.promptAt.Equal(o.promptAt) &&
+		t.prompt == o.prompt && t.turnID == o.turnID
+}
+
+// StopTUITurn interrupts a TUI session's active turn on an explicit user
+// request. Unlike InterruptTUI it needs no delivery confirmation, since
+// nothing is sent after it.
+func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
+	release, ok := m.AcquireSessionInput(id)
+	if !ok {
+		return ErrOperationInProgress
+	}
+	defer release()
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	if rec.IsTerminated {
+		return ErrTerminated
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		return ErrInterruptUnsupported
+	}
+	if rec.Activity.State == domain.ActivityActive {
+		busy, releaseInput := m.composerBusyCheck()(ctx, rec)
+		if busy {
+			return ErrComposerBusy
+		}
+		if releaseInput != nil {
+			defer releaseInput()
+		}
+	}
+	turn := tuiTurnOf(rec)
+	m.turnStopsMu.Lock()
+	if rec.Activity.State != domain.ActivityActive {
+		delete(m.turnStops, id)
+		m.turnStopsMu.Unlock()
+		return ErrNoActiveTurn
+	}
+	if stopped, ok := m.turnStops[id]; ok && stopped.same(turn) {
+		m.turnStopsMu.Unlock()
+		return ErrTurnStopPending
+	}
+	if m.agents == nil {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	agent, found := m.agents.Agent(rec.Harness)
+	interrupt, supported := agent.(ports.TurnInterruptKey)
+	if !found || !supported || interrupt.InterruptKey() == "" {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	input, ok := m.runtime.(interface {
+		SendInput(context.Context, ports.RuntimeHandle, string) error
+	})
+	if !ok || rec.Metadata.RuntimeHandleID == "" {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	if m.turnStops == nil {
+		m.turnStops = make(map[domain.SessionID]tuiTurn)
+	}
+	m.turnStops[id] = turn
+	m.turnStopsMu.Unlock()
+	if err := input.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, interrupt.InterruptKey()); err != nil {
+		// Nothing reached the agent, so a retry for this turn is allowed.
+		m.turnStopsMu.Lock()
+		if stopped, ok := m.turnStops[id]; ok && stopped.same(turn) {
+			delete(m.turnStops, id)
+		}
+		m.turnStopsMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // send carries an optional idempotency key used by durable transition-message
@@ -5695,6 +5816,8 @@ Your next action for any implementation, fix, UI change, test, PR, or code-revie
 ao spawn --project %s --name "<label, max 100 chars>" --prompt "<clear worker task>"
 
 If a suitable worker already exists, use ao send to redirect that worker instead. After spawning or redirecting, report the worker session id and stop. Do not do the worker's task in this orchestrator session.
+
+If a worker is stuck in an active turn, use ao session interrupt <session-id> to stop that turn without terminating the session; use ao session kill <session-id> only when the session cannot be recovered.
 
 USER MESSAGE:
 %s`, project, project, message)

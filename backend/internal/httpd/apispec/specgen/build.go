@@ -1846,6 +1846,18 @@ func shellTerminalOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/stop-turn", id: "stopSessionTurn", tag: "sessions",
+			summary:    "Stop an active turn without ending the session",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusNoContent, nil},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/interrupt", id: "interruptSessionConversationTurn", tag: "conversations",
 			summary:    "Cancel the in-flight turn in a chat session",
 			pathParams: []any{controllers.SessionIDParam{}},

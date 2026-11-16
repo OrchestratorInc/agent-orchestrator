@@ -643,6 +643,12 @@ type TerminalActivityOptionsProvider interface {
 	TerminalActivityOptions() TerminalActivityOptions
 }
 
+// TurnInterruptKey declares a key that stops a running turn without exiting
+// the harness. Harnesses without this capability refuse explicit Stop turn.
+type TurnInterruptKey interface {
+	InterruptKey() string
+}
+
 // EmptyComposerDetector is an opt-in safety capability for unsolicited
 // coordination sent to an already-running interactive agent. It must return
 // true only when current terminal evidence positively proves that the active
