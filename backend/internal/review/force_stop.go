@@ -110,14 +110,16 @@ func (l *agentLauncher) ForceStop(ctx context.Context, handleID string) (bool, e
 	previous := l.stops.take(handleID)
 	tree, captureErr := l.captureReviewerTree(ctx, handle, hooks)
 	if captureErr != nil {
-		if len(previous) == 0 {
-			// Nothing trustworthy is known about this reviewer's processes:
-			// tearing the runtime down now would lose its roots for good.
-			return false, fmt.Errorf("capture reviewer process tree: %w", captureErr)
+		// Nothing trustworthy is known about the runtime's current tree, and
+		// tearing it down now would lose its roots for good. That holds even
+		// with survivors from an earlier attempt: a torn-down runtime reports
+		// no roots rather than an error, so a runtime that errors may be a
+		// replacement reviewer on the same handle. Stop only the survivors
+		// already known by identity, and leave the runtime for a later pass.
+		if _, err := l.stopCaptured(ctx, handleID, previous, hooks); err != nil {
+			captureErr = errors.Join(captureErr, err)
 		}
-		// An earlier attempt already tore the runtime down; what it captured
-		// is what is left to stop.
-		tree = nil
+		return false, fmt.Errorf("capture reviewer process tree: %w", captureErr)
 	}
 	tree = mergeCaptured(previous, tree)
 	destroyErr := l.runtime.Destroy(ctx, handle)
