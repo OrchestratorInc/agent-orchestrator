@@ -3,6 +3,7 @@ package timestamps
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -15,7 +16,28 @@ type RepresentationDB interface {
 // PreserveRepresentation runs inside the caller's write transaction. Its
 // callback counts direct writes and compensated revision writes. Any other
 // trigger effect makes the caller roll back instead of publishing changed facts.
-func PreserveRepresentation(ctx context.Context, db RepresentationDB, rewrite func() (int64, error)) error {
+func PreserveRepresentation(ctx context.Context, db RepresentationDB, rewrite func() (int64, error)) (err error) {
+	var progress bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='timestamp_repair_control')`).Scan(&progress); err != nil {
+		return err
+	}
+	if progress {
+		var paused int
+		if err := db.QueryRowContext(ctx, `SELECT paused FROM timestamp_repair_control WHERE id=1`).Scan(&paused); err != nil {
+			return err
+		}
+		if paused == 0 {
+			// The caller owns the write transaction. Other writers cannot see this
+			// pause, and rollback restores it if normalization or cleanup fails.
+			if _, err := db.ExecContext(ctx, `UPDATE timestamp_repair_control SET paused=1 WHERE id=1`); err != nil {
+				return err
+			}
+			defer func() {
+				_, restoreErr := db.ExecContext(ctx, `UPDATE timestamp_repair_control SET paused=0 WHERE id=1`)
+				err = errors.Join(err, restoreErr)
+			}()
+		}
+	}
 	var start, water int64
 	var sequence sql.NullInt64
 	var logs bool

@@ -17,16 +17,15 @@ import (
 type timestampRepairResult struct{ Repaired, Skipped, Deleted int }
 type timestampRepairState struct {
 	timestampRepairResult
-	path      string
-	rows      map[string]string
-	dirty     bool
-	reader    *sql.DB
-	completed map[string]string
-	retry     map[string]bool
+	path   string
+	rows   map[string]string
+	dirty  bool
+	reader *sql.DB
+	retry  map[string]bool
 }
 
 func loadTimestampSkips(ctx context.Context, db *sql.DB) (*timestampRepairState, error) {
-	state := &timestampRepairState{rows: map[string]string{}, completed: map[string]string{}, retry: map[string]bool{}}
+	state := &timestampRepairState{rows: map[string]string{}, retry: map[string]bool{}}
 	var file string
 	if err := db.QueryRowContext(ctx, `SELECT file FROM pragma_database_list WHERE name='main'`).Scan(&file); err != nil {
 		return nil, err
@@ -103,19 +102,13 @@ func timestampSkipKey(table string, values []any, n int) (string, string) {
 }
 func (s *timestampRepairState) skip(table string, values []any, n int, err error) {
 	key, hash := timestampSkipKey(table, values, n)
-	if errors.Is(err, errTimestampPolicySkip) {
+	if preserveRejectedTimestamp(err) {
 		s.rows[key] = hash
 		s.dirty = true
+	} else {
+		s.retry[table] = true
 	}
-	// An audit entry cannot prove a conflict still exists on a later open.
-	// Keep the table pending and re-evaluate the row after external changes.
-	s.retry[table] = true
+	// Audit entries do not suppress a later repair after the database changes.
 	s.Skipped++
 	slog.Warn("timestamp repair skipped row", "table", table, "rowid", values[n], "error", err)
-}
-
-// Only cache completed tables within this Open. Every later Open checks the
-// database again, including after an older writer or a database restore.
-func (s *timestampRepairState) complete(table, signature string) {
-	s.completed[table] = signature
 }

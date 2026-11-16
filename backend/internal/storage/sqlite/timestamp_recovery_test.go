@@ -233,7 +233,7 @@ CREATE TRIGGER block_repair BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT,'
 			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT) FROM sessions WHERE id='pending'`).Scan(&before); err != nil || before != legacy {
 				t.Fatalf("fixture was repaired before send: %q %v", before, err)
 			}
-			// The trigger made the startup fence skip the session row; lift it so only the send itself can normalize.
+			// Lift the startup blocker so only the send itself can normalize.
 			if _, err := db.Exec(`DROP TRIGGER block_repair`); err != nil {
 				t.Fatal(err)
 			}

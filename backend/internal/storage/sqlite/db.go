@@ -153,8 +153,6 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 	if err := checkLegacyDatabasePath(dataDir); err != nil {
 		return nil, err
 	}
-	_, statErr := os.Stat(filepath.Join(dataDir, "ao.db"))
-	newDatabase := errors.Is(statErr, os.ErrNotExist)
 	dsn := databaseURI(dataDir) + pragmas
 
 	writeDB, err := sql.Open(opts.driver, dsn)
@@ -178,7 +176,7 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, fmt.Errorf("load timestamp repair state: %w", err)
 	}
-	if !newDatabase {
+	{
 		started := time.Now()
 		slog.Info("checking legacy timestamps before opening readers")
 		ctx, cancel := context.WithTimeout(context.Background(), opts.fenceBudget)
@@ -190,7 +188,7 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		if repairErr != nil {
 			_ = readDB.Close()
 			_ = writeDB.Close()
-			return nil, fmt.Errorf("timestamp startup repair incomplete; reopen to retry committed progress: %w", repairErr)
+			return nil, fmt.Errorf("timestamp startup repair incomplete; committed batches retained: %w", repairErr)
 		}
 		slog.Info("timestamp startup fence completed", "duration", time.Since(started), "repaired", result.Repaired, "skipped", result.Skipped, "deleted", result.Deleted)
 	}
@@ -200,17 +198,13 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, err
 	}
-	if !newDatabase {
-		store.StartTimestampRepair(func(ctx context.Context) error {
-			if opts.repairDone != nil {
-				defer close(opts.repairDone)
-			}
-			_, err := runTimestampRepairState(ctx, writeDB, readDB, false, state)
-			return err
-		})
-	} else if opts.repairDone != nil {
-		close(opts.repairDone)
-	}
+	store.StartTimestampRepair(func(ctx context.Context) error {
+		if opts.repairDone != nil {
+			defer close(opts.repairDone)
+		}
+		_, err := runTimestampRepairState(ctx, writeDB, readDB, false, state)
+		return err
+	})
 
 	return store, nil
 }

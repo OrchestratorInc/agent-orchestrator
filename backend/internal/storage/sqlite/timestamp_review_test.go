@@ -196,8 +196,8 @@ func TestTimestampReopenChecksForOlderWriters(t *testing.T) {
 	if first.reader.Load() == 0 {
 		t.Error("first pass did not scan on reader pool")
 	}
-	if second.writer.Load() != 0 || second.reader.Load() == 0 {
-		t.Fatal("reopen must detect legacy values on readers")
+	if second.writer.Load() != 0 || second.reader.Load() != 0 {
+		t.Fatalf("clean reopen rescanned timestamps: writer=%d reader=%d", second.writer.Load(), second.reader.Load())
 	}
 	if second.committed.Load() {
 		t.Fatal("clean reopen rewrote a session")

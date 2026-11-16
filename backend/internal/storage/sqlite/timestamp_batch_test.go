@@ -102,7 +102,7 @@ func TestTimestampBatchFastPathUsesOneSavepoint(t *testing.T) {
 func TestTimestampBatchConstraintFallbackPreservesChangesAndCounters(t *testing.T) {
 	db, counts := openTimestampBatchDB(t)
 	if _, err := db.Exec(`INSERT INTO repair_times VALUES(1,'2026-10-21 09:00:00 +0530 IST'),(2,'2026-10-21 09:00:00 +0530 IST'),(3,'2026-10-21 09:00:00 +0530 IST');
- CREATE TRIGGER reject_second BEFORE UPDATE ON repair_times WHEN OLD.id=2 BEGIN SELECT RAISE(ABORT,'hold row'); END;`); err != nil {
+ ALTER TABLE repair_times ADD COLUMN keep_local INTEGER CHECK(id<>2 OR at NOT GLOB '* +0000 UTC');`); err != nil {
 		t.Fatal(err)
 	}
 	result, err := runTimestampRepair(context.Background(), db, false)
@@ -118,6 +118,22 @@ func TestTimestampBatchConstraintFallbackPreservesChangesAndCounters(t *testing.
 	}
 	if err := db.QueryRow(`SELECT count(*) FROM change_log`).Scan(&logs); err != nil || logs != 1 {
 		t.Fatalf("change logs=%d err=%v", logs, err)
+	}
+}
+
+func TestTimestampBatchTriggerFailureAborts(t *testing.T) {
+	db, _ := openTimestampBatchDB(t)
+	if _, err := db.Exec(`INSERT INTO repair_times VALUES(1,'2026-10-21 09:00:00 +0530 IST'),(2,'2026-10-21 09:00:00 +0530 IST');
+ CREATE TRIGGER reject_second BEFORE UPDATE ON repair_times WHEN OLD.id=2 BEGIN SELECT RAISE(ABORT,'hold row'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runTimestampRepair(context.Background(), db, false)
+	if err == nil || !strings.Contains(err.Error(), "hold row") || result.Repaired != 0 || result.Skipped != 0 {
+		t.Fatalf("trigger failure was swallowed: repair=%+v err=%v", result, err)
+	}
+	var normalized int
+	if err := db.QueryRow(`SELECT count(*) FROM repair_times WHERE CAST(at AS TEXT)='2026-10-21 03:30:00 +0000 UTC'`).Scan(&normalized); err != nil || normalized != 0 {
+		t.Fatalf("failed batch committed changes: normalized=%d err=%v", normalized, err)
 	}
 }
 

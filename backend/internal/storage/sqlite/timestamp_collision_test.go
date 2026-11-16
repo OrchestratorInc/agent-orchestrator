@@ -114,7 +114,7 @@ func TestTimestampFenceAccountBindingCollision(t *testing.T) {
 	}
 }
 
-func TestTimestampFencePreservesDistinctExecutionsWithoutPublishingReaders(t *testing.T) {
+func TestTimestampFencePreservesDistinctExecutionsAndOpensStore(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('p','/tmp/twins','2026-10-21 09:00:00 +0530 IST');
@@ -132,9 +132,11 @@ func TestTimestampFencePreservesDistinctExecutionsWithoutPublishingReaders(t *te
 	}
 	before := snapshot()
 	s, err := Open(dir)
-	if err == nil {
-		_ = s.Close()
-		t.Fatal("unresolved occurrence collision published incorrectly ordered readers")
+	if err != nil {
+		t.Fatalf("preserved execution history blocked startup: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
 	}
 	if after := snapshot(); after != before {
 		t.Fatalf("execution history changed: %s", after)
@@ -144,8 +146,8 @@ func TestTimestampFencePreservesDistinctExecutionsWithoutPublishingReaders(t *te
 		t.Fatalf("links=%d err=%v", linked, err)
 	}
 	result, err := runTimestampRepair(context.Background(), db, true)
-	if err == nil || result.Skipped != 1 || result.Repaired != 0 || result.Deleted != 0 {
-		t.Fatalf("execution collision must remain pending: %+v %v", result, err)
+	if err != nil || result.Skipped != 0 || result.Repaired != 0 || result.Deleted != 0 {
+		t.Fatalf("completed collision must not be rescanned: %+v %v", result, err)
 	}
 	if after := snapshot(); after != before {
 		t.Fatalf("retry changed execution history: %s", after)
@@ -159,8 +161,8 @@ INSERT INTO automations(id,project_id,display_name,prompt,kind,rrule_text,timezo
 INSERT INTO automation_runs(id,automation_id,scheduled_for,status,attempt_count,created_at,updated_at) VALUES('local','a','2026-10-21 09:00:00 +0530 IST','completed',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),('utc','a','2026-10-21 03:30:00 +0000 UTC','completed',1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runTimestampRepair(context.Background(), db, true); err == nil {
-		t.Fatal("collision was considered repaired")
+	if result, err := runTimestampRepair(context.Background(), db, true); err != nil || result.Skipped != 1 {
+		t.Fatalf("collision was not preserved: %+v %v", result, err)
 	}
 	if _, err := db.Exec(`UPDATE automation_runs SET scheduled_for='2026-10-22 03:30:00 +0000 UTC' WHERE id='utc'`); err != nil {
 		t.Fatal(err)
@@ -171,5 +173,44 @@ INSERT INTO automation_runs(id,automation_id,scheduled_for,status,attempt_count,
 	var raw string
 	if err := db.QueryRow(`SELECT CAST(scheduled_for AS TEXT) FROM automation_runs WHERE id='local'`).Scan(&raw); err != nil || raw != "2026-10-21 03:30:00 +0000 UTC" {
 		t.Fatalf("policy audit prevented retry: %q %v", raw, err)
+	}
+}
+
+func TestTimestampFencePreservesCheckRejectedSwitchAndOpensStore(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	const requested = "2026-10-21 09:00:00 -0400 EDT"
+	const updated = "2026-10-21 10:00:00 +0000 UTC"
+	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
+ VALUES('check-switch',1,'aider','idle',?,0,?,?);
+ INSERT INTO agent_switches(id,session_id,idempotency_key,request_fingerprint,from_harness,target_harness,source_generation_id,requested_at,updated_at)
+ VALUES('check-switch','check-switch','key',?,'aider','codex','source',?,?)`, requested, requested, requested, "v1:"+strings.Repeat("0", 64), requested, updated); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	for range 2 {
+		s, err := Open(dir)
+		if err != nil {
+			t.Fatalf("CHECK-rejected legacy switch blocked startup: %v", err)
+		}
+		_, found, readErr := s.GetSession(context.Background(), "check-switch")
+		closeErr := s.Close()
+		if readErr != nil || !found || closeErr != nil {
+			t.Fatalf("store unavailable after preserving switch: found=%v read=%v close=%v", found, readErr, closeErr)
+		}
+		var gotRequested, gotUpdated string
+		if err := db.QueryRow(`SELECT CAST(requested_at AS TEXT),CAST(updated_at AS TEXT) FROM agent_switches WHERE id='check-switch'`).Scan(&gotRequested, &gotUpdated); err != nil || gotRequested != requested || gotUpdated != updated {
+			t.Fatalf("rejected switch changed: requested=%q updated=%q err=%v", gotRequested, gotUpdated, err)
+		}
+		var sessionUpdated string
+		if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT) FROM sessions WHERE id='check-switch'`).Scan(&sessionUpdated); err != nil || sessionUpdated != "2026-10-21 13:00:00 +0000 UTC" {
+			t.Fatalf("repair stopped before sessions: %q %v", sessionUpdated, err)
+		}
+	}
+	if !strings.Contains(logs.String(), "timestamp repair skipped row") || !strings.Contains(logs.String(), "table=agent_switches") {
+		t.Fatalf("preserved switch was not reported: %s", logs.String())
 	}
 }

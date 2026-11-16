@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -264,31 +265,32 @@ func TestRepairKeepsAHigherUserVersion(t *testing.T) {
 }
 
 // A failed batch rolls back and leaves detection enabled for the next open.
-func TestRepairFailureIsRecordedWithoutStopping(t *testing.T) {
+func TestRepairTriggerFailureRollsBackAndRetries(t *testing.T) {
 	db := openRepairDB(t)
 	if _, err := db.Exec(`INSERT INTO repair_times(id,at) VALUES(1,'2026-10-21 18:15:40 +0200 +0200'),(2,'2026-10-21 18:15:40 +0200 +0200');
  CREATE TRIGGER block_rewrite BEFORE UPDATE ON repair_times WHEN NEW.id=1 BEGIN SELECT RAISE(ABORT,'blocked'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairTimestamps(context.Background(), db); err != nil {
-		t.Fatal(err)
+	if err := repairTimestamps(context.Background(), db); err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("trigger failure was not retained: %v", err)
 	}
-	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=2`); err != nil {
-		t.Fatalf("later row stalled: %v", err)
-	}
-	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err == nil {
-		t.Fatal("blocked row changed")
+	for _, id := range []int{1, 2} {
+		if err := canScanTime(db, fmt.Sprintf(`SELECT at FROM repair_times WHERE id=%d`, id)); err == nil {
+			t.Fatalf("failed batch changed row %d", id)
+		}
 	}
 	if _, err := db.Exec(`DROP TRIGGER block_rewrite`); err != nil {
 		t.Fatal(err)
 	}
-	// The blocker is gone, so the skipped row is retried and repaired.
+	// The blocker is gone, so both rolled-back rows are retried and repaired.
 	result, err := runTimestampRepair(context.Background(), db, false)
-	if err != nil || result.Skipped != 0 || result.Repaired != 1 {
-		t.Fatalf("skipped row was not retried once unblocked: %+v %v", result, err)
+	if err != nil || result.Skipped != 0 || result.Repaired != 2 {
+		t.Fatalf("failed batch was not retried once unblocked: %+v %v", result, err)
 	}
-	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err != nil {
-		t.Fatalf("retried row is still unreadable: %v", err)
+	for _, id := range []int{1, 2} {
+		if err := canScanTime(db, fmt.Sprintf(`SELECT at FROM repair_times WHERE id=%d`, id)); err != nil {
+			t.Fatalf("retried row %d is still unreadable: %v", id, err)
+		}
 	}
 }
 

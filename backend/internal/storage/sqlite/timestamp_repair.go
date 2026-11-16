@@ -66,6 +66,9 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 	if err != nil {
 		return result, err
 	}
+	if err := prepareTimestampProgress(ctx, db, columns); err != nil {
+		return result, err
+	}
 	var failures []error
 	for i := 0; i < len(columns); {
 		if err := ctx.Err(); err != nil {
@@ -85,9 +88,30 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 		for j, column := range group {
 			names[j] = column.column
 		}
-		signature := strings.Join(names, "\x00") + "\x00"
-		if state.completed[table] == signature {
+		var schema string
+		if err := reader.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&schema); err != nil {
+			return result, err
+		}
+		signature := "v1\x00" + strings.Join(names, "\x00") + "\x00" + schema
+		generation, completed, err := beginTimestampProgress(ctx, db, table, signature)
+		if err != nil {
+			return result, err
+		}
+		if completed {
 			continue
+		}
+		// Rebuild audit entries for this table, dropping resolved/deleted keys.
+		for key := range state.rows {
+			if strings.HasPrefix(key, table+"/") {
+				delete(state.rows, key)
+				state.dirty = true
+			}
+		}
+		skippedBefore := state.Skipped
+		complete := func() {
+			if err := finishTimestampProgress(ctx, db, table, signature, generation, state.Skipped > skippedBefore); err != nil {
+				failures = append(failures, err)
+			}
 		}
 		cursor, lastRow := int64(math.MinInt64), int64(math.MaxInt64)
 		if fence {
@@ -98,7 +122,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 				continue
 			}
 			if done {
-				state.complete(table, signature)
+				complete()
 				continue
 			}
 		}
@@ -110,7 +134,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 			}
 			if done {
 				if !state.retry[table] {
-					state.complete(table, signature)
+					complete()
 				} else if fence {
 					failures = append(failures, fmt.Errorf("timestamp ordering repair remains pending for %s", table))
 				}
@@ -304,7 +328,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 					}
 				}
 				if rowErr != nil {
-					if !errors.As(rowErr, &constraint) || constraint.Code()&255 != 19 {
+					if !preserveRejectedTimestamp(rowErr) {
 						return 0, rowErr
 					}
 					if _, err := tx.ExecContext(ctx, "ROLLBACK TO timestamp_row"); err != nil {
@@ -350,6 +374,16 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 
 	}
 	return last + 1, n < timestampRepairBatch || last == math.MaxInt64, nil
+}
+
+// A representation change must not discard execution history or rewrite a row
+// into a CHECK violation. Other failures still abort repair and startup.
+func preserveRejectedTimestamp(err error) bool {
+	if errors.Is(err, errTimestampPolicySkip) {
+		return true
+	}
+	var constraint *modernsqlite.Error
+	return errors.As(err, &constraint) && constraint.Code() == 275 // SQLITE_CONSTRAINT_CHECK
 }
 
 // applyTimestampUpdate counts only direct writes and the session revision

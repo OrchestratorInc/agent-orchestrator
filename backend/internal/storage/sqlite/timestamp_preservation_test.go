@@ -62,12 +62,9 @@ VALUES('preserved',1,'aider','idle',?,0,?,?,?,?);`, legacy, legacy, legacy, lega
 				t.Fatal(err)
 			}
 			err = repairTimestamps(context.Background(), db)
-			if name == "validation error" && err != nil {
-				t.Fatal(err)
-			}
 			if strings.HasSuffix(name, "error") {
 				want := strings.TrimSuffix(name, " error") + " retained"
-				if name == "cleanup error" && (err == nil || !strings.Contains(err.Error(), want)) {
+				if err == nil || !strings.Contains(err.Error(), want) {
 					t.Fatalf("%s was not retained: %v", name, err)
 				}
 				var afterTime string
@@ -90,6 +87,13 @@ func TestPointTimestampNormalizationPreservesNoOpFacts(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_interaction_at) VALUES('ended',1,'aider','idle',CURRENT_TIMESTAMP,1,CURRENT_TIMESTAMP,'2026-10-21 09:00:00 +0530 IST','2026-10-21 09:00:00 +0530 IST')`); err != nil {
 		t.Fatal(err)
 	}
+	columns, err := timestampColumns(context.Background(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepareTimestampProgress(context.Background(), db, columns); err != nil {
+		t.Fatal(err)
+	}
 	s, err := OpenPreMigrated(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -108,6 +112,14 @@ func TestPointTimestampNormalizationPreservesNoOpFacts(t *testing.T) {
 	}
 	if after := facts(); after != before {
 		t.Fatalf("no-op normalization published facts: %s -> %s", before, after)
+	}
+	var normalized string
+	if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT) FROM sessions WHERE id='ended'`).Scan(&normalized); err != nil || normalized != "2026-10-21 03:30:00 +0000 UTC" {
+		t.Fatalf("point normalization did not run with progress triggers installed: %q %v", normalized, err)
+	}
+	var paused int
+	if err := db.QueryRow(`SELECT paused FROM timestamp_repair_control WHERE id=1`).Scan(&paused); err != nil || paused != 0 {
+		t.Fatalf("point normalization left progress tracking paused: paused=%d err=%v", paused, err)
 	}
 }
 
