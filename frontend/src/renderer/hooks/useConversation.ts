@@ -2031,6 +2031,11 @@ export function useConversationSkills(
 		skills,
 		/** True while `skills` is the remembered stand-in rather than the agent's own answer. */
 		remembered: standIn && !live?.length,
+		/**
+		 * `skills` is the agent's own answer and is believed, empty included: the
+		 * list to remember. An early empty answer or a stand-in is not.
+		 */
+		settled,
 		loading: Boolean(sessionId) && enabled && !settled && skills.length === 0 && !query.error,
 		isLoading: query.isLoading,
 	};

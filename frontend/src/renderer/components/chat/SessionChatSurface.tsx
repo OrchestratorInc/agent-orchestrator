@@ -420,16 +420,18 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		() => session.cloud ? [] : readChatSkills(skillsHarness ?? "", hostId, session.workspaceId),
 		[hostId, session.cloud, session.workspaceId, skillsHarness],
 	);
-	const { skills, remembered: skillsRemembered, loading: skillsLoading } = useConversationSkills(
+	const { skills, settled: skillsSettled, loading: skillsLoading } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
 		rememberedSkills,
 	);
+	// Only the agent's believed answer is kept, an empty one included, so a skill
+	// removed from the project stops being offered from memory.
 	useEffect(() => {
-		if (session.kind !== "worker" || !snapshot?.harness || skillsRemembered || skills.length === 0) return;
+		if (session.kind !== "worker" || !snapshot?.harness || !skillsSettled) return;
 		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
-	}, [hostId, session.kind, session.workspaceId, skills, skillsRemembered, snapshot?.harness]);
+	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and

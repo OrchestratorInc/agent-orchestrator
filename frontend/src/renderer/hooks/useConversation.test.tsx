@@ -1665,6 +1665,8 @@ describe("useConversationSkills polling", () => {
 			});
 			expect(getMock).toHaveBeenCalledTimes(1);
 			expect(result.current.loading).toBe(true);
+			// Not yet the list to remember: it may still be filled in.
+			expect(result.current.settled).toBe(false);
 
 			await act(async () => {
 				await vi.advanceTimersByTimeAsync(10_000);
@@ -1674,9 +1676,11 @@ describe("useConversationSkills polling", () => {
 			await act(async () => {
 				await vi.advanceTimersByTimeAsync(15_000);
 			});
-			// Believed now: `/` is an ordinary character again.
+			// Believed now: `/` is an ordinary character again, and the empty list is
+			// what gets remembered, so removed skills stop being offered.
 			expect(result.current.loading).toBe(false);
 			expect(result.current.skills).toEqual([]);
+			expect(result.current.settled).toBe(true);
 			const settledCalls = getMock.mock.calls.length;
 
 			await act(async () => {
@@ -1758,6 +1762,7 @@ describe("useConversationSkills polling", () => {
 		expect(result.current.skills).toEqual(remembered);
 		expect(result.current.remembered).toBe(true);
 		expect(result.current.loading).toBe(false);
+		expect(result.current.settled).toBe(false);
 
 		const live = [{ name: "new-skill", displayName: "new-skill", source: "agent" }];
 		await act(async () => {
@@ -1765,6 +1770,7 @@ describe("useConversationSkills polling", () => {
 		});
 		await waitFor(() => expect(result.current.skills).toEqual(live));
 		expect(result.current.remembered).toBe(false);
+		expect(result.current.settled).toBe(true);
 	});
 
 	it("keeps the remembered list while an early empty answer may still be filled in", async () => {

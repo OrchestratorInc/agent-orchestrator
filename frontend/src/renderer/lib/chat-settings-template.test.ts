@@ -18,6 +18,13 @@ describe("remembered chat skills", () => {
 		expect(readChatSkills("claude-code")).toEqual([skill("repo-b")]);
 	});
 
+	it("forgets a project's skills once it reports none", () => {
+		rememberChatSkills("claude-code", undefined, [skill("removed")], "project-a");
+		rememberChatSkills("claude-code", undefined, [], "project-a");
+
+		expect(readChatSkills("claude-code", undefined, "project-a")).toEqual([]);
+	});
+
 	it("keeps each agent and host apart", () => {
 		rememberChatSkills("claude-code", undefined, [skill("claude")], "project-a");
 		rememberChatSkills("codex", undefined, [skill("codex")], "project-a");
