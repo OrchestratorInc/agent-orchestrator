@@ -446,6 +446,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 
 		ChatRecoveryDone: reviewerRecoveryDone,
+		// The reaper's first pass settles runs a previous daemon left active.
+		AwaitBootPass: true,
 	})
 	reviewOpts := []reviewsvc.Option{
 		reviewsvc.WithTelemetry(telemetry),

@@ -5481,6 +5481,10 @@ components:
           type: string
         limits:
           $ref: "#/components/schemas/PlanLimits"
+        trialDays:
+          type: integer
+          minimum: 1
+          description: Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial.
     PutPushDeviceInput:
       type: object
       additionalProperties: false
