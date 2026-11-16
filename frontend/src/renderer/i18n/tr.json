@@ -4725,7 +4725,7 @@
 	"automations.cloud.noConnectedAgent": "Önce bir aracıda oturum açın",
 	"automations.cloud.connectAgentHint": "Otomasyon, AO Cloud'daki aracı girişinizle çalışır. Önce bir aracıda oturum açın.",
 	"automations.cloud.error.agent_provider_required": "Önce AO Cloud'da aracı hesabınızı bağlayın: otomasyon bu hesapla çalışır.",
-	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "Çalışma alanınız olabilecek en fazla bulut otomasyonu sayısına ulaştı. Önce birini silin.",
+	"automations.cloud.error.AUTOMATION_LIMIT_REACHED": "Çalışma alanınız, sahip olabileceği en fazla bulut otomasyonu sayısına ulaştı. Önce birini silin.",
 	"automations.cloud.error.AUTOMATION_RUN_ACTIVE": "Bu otomasyon zaten çalışıyor. Çalıştırmanın bitmesini bekleyin.",
 	"automations.cloud.error.AUTOMATION_EDIT_FORBIDDEN": "Bu otomasyonu yalnızca adına çalıştığı kişi, onu oluşturan kişi veya bir yönetici değiştirebilir.",
 	"automations.cloud.error.AUTOMATION_PROJECT_UNSUPPORTED": "Bağımsız aracıların otomasyonu olamaz. Bir proje seçin.",
