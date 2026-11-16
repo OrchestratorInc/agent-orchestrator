@@ -3,6 +3,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AccountHostSyncError } from "../lib/account-remote-hosts";
+import { apiErrorException } from "../lib/api-error-exception";
 import { apiClient } from "../lib/api-client";
 import { linkThisComputer } from "../lib/link-this-computer";
 
@@ -16,7 +17,10 @@ const fake = vi.hoisted(() => ({
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ session: fake.signedIn ? { user: { id: "user_01" } } : null }) }));
 vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "https://cp.example.test" } }) }));
 vi.mock("../lib/link-this-computer", () => ({ linkThisComputer: vi.fn(async () => ({ hostId: "h_this", added: true })) }));
-vi.mock("../lib/api-client", () => ({ apiClient: { POST: vi.fn(async () => ({ data: {} })) } }));
+vi.mock("../lib/api-client", () => ({
+	apiClient: { POST: vi.fn(async () => ({ data: {} })) },
+	apiErrorMessage: (err: any) => (typeof err === "object" && err?.message ? err.message : "failed"),
+}));
 vi.mock("../components/settings/ConnectMobileContent", () => ({
 	fetchMobileStatus: async () => {
 		if (fake.failNextStatusRead) {
@@ -183,6 +187,51 @@ test("isRetryableLinkError classifies 429 as retryable and permanent 4xx as non-
 	expect(isRetryableLinkError(new AccountHostSyncError("forbidden", 403))).toBe(false);
 	expect(isRetryableLinkError({ status: 403 })).toBe(false);
 	expect(isRetryableLinkError(new Error("wrapped", { cause: { status: 403 } }))).toBe(false);
+});
+
+test("isRetryableLinkError recognizes daemon API error envelopes including wrapped 403 response shape", () => {
+	const daemon403Envelope = {
+		error: "forbidden",
+		code: "REMOTE_HOST_ACCOUNT_TOKEN",
+		message: "connection password required",
+	};
+	// Direct daemon envelope
+	expect(isRetryableLinkError(daemon403Envelope)).toBe(false);
+	// Wrapped by apiErrorException
+	expect(isRetryableLinkError(apiErrorException(daemon403Envelope))).toBe(false);
+	// Deeply wrapped in an outer Error
+	expect(isRetryableLinkError(new Error("link failed", { cause: apiErrorException(daemon403Envelope) }))).toBe(false);
+	// With preserved HTTP status
+	expect(isRetryableLinkError(Object.assign(apiErrorException(daemon403Envelope), { status: 403 }))).toBe(false);
+
+	// Other permanent daemon error envelopes
+	expect(isRetryableLinkError({ error: "unauthorized", code: "DEVICE_REVOKED" })).toBe(false);
+	expect(isRetryableLinkError({ error: "bad_request", code: "INVALID_JSON" })).toBe(false);
+	expect(isRetryableLinkError({ error: "not_found", code: "ROUTE_NOT_FOUND" })).toBe(false);
+	expect(isRetryableLinkError({ error: "not_implemented", code: "REMOTE_HOST_ACCOUNT_TOKEN" })).toBe(false);
+
+	// Retryable daemon error envelopes
+	expect(isRetryableLinkError(apiErrorException({ error: "conflict", code: "REMOTE_ACCESS_OFF" }))).toBe(true);
+	expect(isRetryableLinkError(apiErrorException({ error: "too_many_requests", code: "LOCKED_OUT" }))).toBe(true);
+	expect(isRetryableLinkError(apiErrorException({ error: "unavailable", code: "SERVICE_UNAVAILABLE" }))).toBe(true);
+	expect(isRetryableLinkError(apiErrorException({ error: "internal", code: "INTERNAL_ERROR" }))).toBe(true);
+});
+
+test("stops retrying immediately on a wrapped 403 error from the account-token endpoint", async () => {
+	vi.useFakeTimers();
+	fake.signedIn = true;
+	const accountToken403 = apiErrorException({
+		error: "forbidden",
+		code: "REMOTE_HOST_ACCOUNT_TOKEN",
+		message: "connection password required",
+	});
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(accountToken403);
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+	// After advancing time, no retry should occur:
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
 });
 
 test("HTTP 429 rate limit is treated as retryable by the link attempt", async () => {

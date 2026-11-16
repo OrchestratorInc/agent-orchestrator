@@ -13,27 +13,70 @@ export const LINK_RETRY_INIT_MS = 30_000;
 export const LINK_RETRY_MAX_MS = 300_000;
 export const LINK_MAX_RETRIES = 5;
 
-export function isRetryableLinkError(cause: unknown): boolean {
-	if (cause instanceof AccountHostSyncError) {
-		return cause.status === 409 || cause.status === 429 || cause.status >= 500;
+function extractErrorInfo(cause: unknown): {
+	status?: number;
+	error?: string;
+	code?: string;
+} {
+	let current: unknown = cause;
+	let status: number | undefined;
+	let error: string | undefined;
+	let code: string | undefined;
+
+	while (current && typeof current === "object") {
+		if (current instanceof AccountHostSyncError && typeof current.status === "number") {
+			status ??= current.status;
+		}
+		if ("status" in current && typeof (current as { status: unknown }).status === "number") {
+			status ??= (current as { status: number }).status;
+		}
+		if ("error" in current) {
+			const errVal = (current as { error: unknown }).error;
+			if (typeof errVal === "string") {
+				error ??= errVal;
+			} else if (typeof errVal === "object" && errVal !== null) {
+				if ("error" in errVal && typeof (errVal as { error: unknown }).error === "string") {
+					error ??= (errVal as { error: string }).error;
+				}
+				if ("code" in errVal && typeof (errVal as { code: unknown }).code === "string") {
+					code ??= (errVal as { code: string }).code;
+				}
+				if ("status" in errVal && typeof (errVal as { status: unknown }).status === "number") {
+					status ??= (errVal as { status: number }).status;
+				}
+			}
+		}
+		if ("code" in current && typeof (current as { code: unknown }).code === "string") {
+			code ??= (current as { code: string }).code;
+		}
+		if ("cause" in current && current.cause) {
+			current = current.cause;
+		} else {
+			break;
+		}
 	}
-	if (typeof cause === "object" && cause !== null) {
-		const status = "status" in cause && typeof (cause as { status: unknown }).status === "number"
-			? (cause as { status: number }).status
-			: (cause instanceof Error && typeof cause.cause === "object" && cause.cause !== null && "status" in cause.cause && typeof (cause.cause as { status: unknown }).status === "number"
-				? (cause.cause as { status: number }).status
-				: undefined);
-		if (status !== undefined) {
-			return status === 409 || status === 429 || status >= 500;
-		}
-		const code = "code" in cause && typeof (cause as { code: unknown }).code === "string"
-			? (cause as { code: string }).code
-			: (cause instanceof Error && typeof cause.cause === "object" && cause.cause !== null && "code" in cause.cause && typeof (cause.cause as { code: unknown }).code === "string"
-				? (cause.cause as { code: string }).code
-				: undefined);
-		if (code === "forbidden" || code === "unauthorized" || code === "bad_request" || code === "not_found") {
-			return false;
-		}
+
+	return { status, error, code };
+}
+
+export function isRetryableLinkError(cause: unknown): boolean {
+	const { status, error, code } = extractErrorInfo(cause);
+	if (status !== undefined) {
+		return status === 409 || status === 429 || status >= 500;
+	}
+	if (
+		error === "forbidden" ||
+		error === "unauthorized" ||
+		error === "bad_request" ||
+		error === "not_found" ||
+		error === "not_implemented" ||
+		error === "method_not_allowed" ||
+		code === "forbidden" ||
+		code === "unauthorized" ||
+		code === "bad_request" ||
+		code === "not_found"
+	) {
+		return false;
 	}
 	return true;
 }
