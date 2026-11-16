@@ -572,6 +572,8 @@ type PR struct {
 	ProviderID               string
 	AuthorAvatarURL          string
 	ReviewPartial            bool
+	HeadFromFork             bool
+	HeadIsDefaultBranch      bool
 }
 
 type PRCheck struct {
@@ -1010,6 +1012,19 @@ type TelemetryEvent struct {
 type TelemetryLifetimeSession struct {
 	Singleton int64
 	Count     int64
+}
+
+type TimestampRepairControl struct {
+	ID     int64
+	Paused int64
+}
+
+type TimestampRepairProgress struct {
+	TableName  string
+	Signature  string
+	Generation int64
+	Completed  int64
+	Rejected   int64
 }
 
 type UsageBinding struct {
