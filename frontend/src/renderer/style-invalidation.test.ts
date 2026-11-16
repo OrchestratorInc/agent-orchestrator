@@ -16,9 +16,14 @@ import { describe, expect, it } from "vitest";
  *   pseudo-class: `:last-child` on any ancestor, so adding a node to <body>
  *   restyles the whole document. Match the one ancestor with child
  *   combinators instead, e.g. `[:last-child>*>&]`.
+ *
+ * The rule only has to exist in the stylesheet to cost this, and Tailwind
+ * generates CSS for class names it finds in any file it scans, tests included.
+ * So every scanned file is checked, and the samples below are escaped
+ * (\u005b is "[", \u002d is "-") so Tailwind does not read them as classes.
  */
 
-const ROOTS = [path.resolve(process.cwd(), "src/renderer"), path.resolve(process.cwd(), "../packages/product-ui/src")];
+const ROOTS = [path.resolve(process.cwd(), "src"), path.resolve(process.cwd(), "../packages/product-ui/src")];
 
 const STRUCTURAL = "has|first|last|only|odd|even|empty|nth-[\\w-]+|first-of-type|last-of-type|only-of-type";
 const FORBIDDEN = [
@@ -30,7 +35,7 @@ function sourceFiles(directory: string): string[] {
 	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
 		const absolute = path.join(directory, entry.name);
 		if (entry.isDirectory()) return sourceFiles(absolute);
-		if (!/\.tsx?$/.test(entry.name) || entry.name.includes(".test.")) return [];
+		if (!/\.(tsx?|jsx?|html|md)$/.test(entry.name)) return [];
 		return [absolute];
 	});
 }
@@ -46,12 +51,12 @@ describe("style invalidation", () => {
 
 	it("catches the forms it is meant to catch", () => {
 		const hits = (value: string) => FORBIDDEN.some((pattern) => value.match(new RegExp(pattern.source)) !== null);
-		expect(hits("group-has-[:focus-visible]/session-row:opacity-100")).toBe(true);
-		expect(hits("group-has-[:focus-visible]:block")).toBe(true);
-		expect(hits("group-has-data-[state=open]:opacity-100")).toBe(true);
-		expect(hits("group-last/inspector-section:pb-0")).toBe(true);
-		expect(hits("peer-first:mt-0")).toBe(true);
-		expect(hits("in-[tr:first-child]:pt-3")).toBe(true);
+		expect(hits("group-has-\u005b:focus-visible]/session-row:opacity-100")).toBe(true);
+		expect(hits("group-has-\u005b:focus-visible]:block")).toBe(true);
+		expect(hits("group-has-data-\u005bstate=open]:opacity-100")).toBe(true);
+		expect(hits("group\u002dlast/inspector-section:pb-0")).toBe(true);
+		expect(hits("peer\u002dfirst:mt-0")).toBe(true);
+		expect(hits("in-\u005btr:first-child]:pt-3")).toBe(true);
 		expect(hits("focus-visible-in-session-row:opacity-100")).toBe(false);
 		expect(hits("[:last-child>*>&]:pb-0")).toBe(false);
 		expect(hits("group-hover/session-row:opacity-100")).toBe(false);
