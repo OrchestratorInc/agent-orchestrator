@@ -218,11 +218,12 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 	// Being behind the base doesn't hold up a merge the provider allows: merging
 	// leads then, and the update waits in the menu.
 	const updateYields = !git?.pending && git?.primary?.kind === "updateBase" && pr.state === "open" && mergeAllowed;
+	const stackPending = stackQuery.isLoading && canMerge && pr.state === "open" && git?.primary?.kind === "updateBase";
 	// The next step: the branch's work first, then what the PR is waiting for.
 	const gitPrimary = updateYields ? undefined : git?.pending
 		? { label: git.pending, aria: git.pending, icon: Loader2, run: () => {}, disabled: true, tone: "secondary" as const, spinning: true }
 		: git?.primary
-			? { label: git.primary.label, aria: git.primary.label, icon: gitIcon[git.primary.kind], run: () => git.run(git.primary!.kind), disabled: busy, tone: "secondary" as const, spinning: false }
+			? { label: git.primary.label, aria: git.primary.label, icon: gitIcon[git.primary.kind], run: () => git.run(git.primary!.kind), disabled: busy || stackPending, tone: "secondary" as const, spinning: false }
 			: undefined;
 	const prPrimary = pr.state === "draft"
 		? { label: t("pr.state.action.ready"), aria: t("pr.state.action.ready"), icon: GitPullRequest, run: () => change.mutate("ready"), disabled: busy, tone: "secondary" as const }
@@ -248,6 +249,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 						primary.tone === "go" ? "[--button-color:var(--color-success)] text-on-foreground" : "",
 					)}
 					disabled={primary.disabled}
+					key={gitPrimary ? "git" : "pr"}
 					onClick={primary.run}
 					size="sm"
 					title={!gitPrimary && pr.state === "open" && blocker ? blocker : undefined}

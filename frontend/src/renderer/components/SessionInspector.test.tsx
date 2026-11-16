@@ -11,7 +11,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPRFocus, SessionInspector } from "./SessionInspector";
+import { PRSummaryCard, resetPRFocus, SessionInspector } from "./SessionInspector";
 import { subscribeChatComposerText } from "../lib/chat-context-bus";
 import { sessionUiKey } from "../lib/hosts";
 import { resetPRMergeMethods } from "./PRActions";
@@ -6796,6 +6796,30 @@ describe("SessionInspector branch summary", () => {
     expect(await screen.findByRole("menuitem", { name: "Update from main" })).toBeInTheDocument();
   });
 
+  it("waits for the stack before replacing update with a separate merge button", async () => {
+    const ready = prSummary(7, "open", { provider: "github", sourceBranch: "feat/ns", review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+    const stackRead = Promise.withResolvers<{ data: unknown }>();
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [ready] });
+    const respond = getMock.getMockImplementation() ?? commonGetsResponder();
+    getMock.mockImplementation((path: string) => path === "/api/v1/prs/{id}/stack" ? stackRead.promise : respond(path));
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [ready]),
+    );
+
+    const update = await screen.findByRole("button", { name: "Update from main" });
+    expect(update).toBeDisabled();
+    fireEvent.mouseDown(update);
+    await act(async () => stackRead.resolve({ data: {} }));
+    const merge = await screen.findByRole("button", { name: "Squash and merge: PR #7" });
+    expect(merge).toBeEnabled();
+    expect(merge).not.toBe(update);
+    fireEvent.mouseUp(update);
+    expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
+    expect(postCallsFor("/api/v1/prs/{id}/stack/merge")).toHaveLength(0);
+  });
+
   it("asks the agent to resolve conflicts with the base, naming the conflicting files", async () => {
     const conflicting = prSummary(7, "open", {
       sourceBranch: "feat/ns",
@@ -6879,6 +6903,24 @@ describe("SessionInspector branch summary", () => {
     const meta = within(card.getByTestId("pr-meta"));
     expect(meta.getByText("2 files")).toBeInTheDocument();
     expect(meta.queryByText("+5")).toBeNull();
+  });
+
+  it("keeps diff counts on standalone cards even when matching work is supplied", async () => {
+    const summary = prSummary(7, "open", { additions: 5, deletions: 2 });
+    renderWithQuery(
+      <PRSummaryCard
+        canOpenReviews={false}
+        onOpenReviews={() => {}}
+        pr={summary}
+        sessionId="sess-1"
+        work={{ content: <div>Branch work</div>, hasRows: true, diff: { additions: 5, deletions: 2 } }}
+      />,
+    );
+
+    const meta = within(await screen.findByTestId("pr-meta"));
+    expect(meta.getByText("+5")).toBeInTheDocument();
+    expect(meta.getByText("−2")).toBeInTheDocument();
+    expect(screen.queryByText("Branch work")).not.toBeInTheDocument();
   });
 
   it("keeps both sets of numbers when the branch differs from the PR", async () => {
