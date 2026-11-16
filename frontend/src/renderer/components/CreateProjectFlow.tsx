@@ -75,7 +75,6 @@ import { RemoteDirectoryPicker } from "./RemoteDirectoryPicker";
 import { GitHubSetupPanel, WithGitHubState } from "./FirstRunSteps";
 import { GitHubIcon } from "./GitHubIcon";
 import CloneRepositoryDialog, { type CloneRepositoryDetails, type CloneRepositorySelection } from "./CloneRepositoryDialog";
-// GitHubTokenField is used via inline Input components in CloudProjectCard
 import { PathRow } from "./PathRow";
 import { Button } from "./ui/button";
 import { CloseButton } from "./ui/close-button";
@@ -914,6 +913,10 @@ export function CreateProjectFlow({
 								setCloneDialogOpen(false);
 								onCreateStandaloneAgent?.();
 							}}
+							onChatsImported={firstRunClone ? () => {
+								onFirstRunDismiss?.("import");
+								setCloneDialogOpen(false);
+							} : undefined}
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}

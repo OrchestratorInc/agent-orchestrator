@@ -220,7 +220,6 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersUpdateSessionRetentionRequest":             "UpdateSessionRetentionRequest",
 	"ControllersUpdateAccountHandoffRequest":               "UpdateAccountHandoffRequest",
-	"ControllersSetSessionStayOnAccountRequest":            "SetSessionStayOnAccountRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -689,18 +688,24 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDevImportProjectsRequest":  "DevImportProjectsRequest",
 	"ControllersDevImportProjectsResponse": "DevImportProjectsResponse",
 	// httpd/controllers: mobile wire envelopes
-	"ControllersMobileStatusResponse":          "MobileStatusResponse",
-	"ControllersSetBrowserRemoteAccessRequest": "SetBrowserRemoteAccessRequest",
-	"MobilebridgeEndpoint":                     "MobileEndpoint",
-	"MobilebridgeTunnelStatus":                 "MobileTunnelStatus",
-	"ControllersIdentityResponse":              "IdentityResponse",
-	"ControllersEndpointsResponse":             "EndpointsResponse",
-	"ControllersLinkPreviewQuery":              "LinkPreviewQuery",
-	"ControllersLinkPreviewResponse":           "LinkPreviewResponse",
-	"ControllersMobileDeviceResponse":          "MobileDeviceResponse",
-	"ControllersMobileDevicesResponse":         "MobileDevicesResponse",
-	"ControllersMobileDeviceIDParam":           "MobileDeviceIDParam",
-	"ControllersPushPairingIDParam":            "PushPairingIDParam",
+	"ControllersMobileStatusResponse":             "MobileStatusResponse",
+	"ControllersSetBrowserRemoteAccessRequest":    "SetBrowserRemoteAccessRequest",
+	"MobilebridgeEndpoint":                        "MobileEndpoint",
+	"MobilebridgeTunnelStatus":                    "MobileTunnelStatus",
+	"ControllersIdentityResponse":                 "IdentityResponse",
+	"ControllersEndpointsResponse":                "EndpointsResponse",
+	"ControllersLinkPreviewQuery":                 "LinkPreviewQuery",
+	"ControllersLinkPreviewResponse":              "LinkPreviewResponse",
+	"ControllersSessionSearchQuery":               "SessionSearchQuery",
+	"ControllersSessionSearchResponse":            "SessionSearchResponse",
+	"ControllersSessionSearchResult":              "SessionSearchResult",
+	"ControllersSessionSearchHighlight":           "SessionSearchHighlight",
+	"ControllersSessionSearchCoverage":            "SessionSearchCoverage",
+	"ControllersSessionSearchIndexStatusResponse": "SessionSearchIndexStatusResponse",
+	"ControllersMobileDeviceResponse":             "MobileDeviceResponse",
+	"ControllersMobileDevicesResponse":            "MobileDevicesResponse",
+	"ControllersMobileDeviceIDParam":              "MobileDeviceIDParam",
+	"ControllersPushPairingIDParam":               "PushPairingIDParam",
 	// devimport report
 	"DevimportReport":   "DevImportProjectsReport",
 	"DevimportConflict": "DevImportProjectsConflict",
@@ -771,8 +776,8 @@ func validNullableReferenceUnions(p jsonschema.InterceptNullabilityParams) {
 	}
 }
 
-// requiredFromJSONTag marks a property required when its json tag lacks
-// `omitempty` (the Go convention for "always present"). Runs after default
+// requiredFromJSONTag marks a property required when its json tag has neither
+// `omitempty` nor `omitzero` (the Go convention for "always present"). Runs after default
 // processing so ParentSchema exists; skips fields without a json tag (e.g. path
 // params, which swaggest marks required on their own).
 func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
@@ -789,7 +794,7 @@ func requiredFromJSONTag(p jsonschema.InterceptPropParams) error {
 		name = p.Name
 	}
 	for _, opt := range parts[1:] {
-		if opt == "omitempty" {
+		if opt == "omitempty" || opt == "omitzero" {
 			return nil
 		}
 	}
@@ -840,6 +845,7 @@ func operations() []operation {
 	ops = append(ops, awakeOperations()...)
 	ops = append(ops, mobileDeviceOperations()...)
 	ops = append(ops, browserOperations()...)
+	ops = append(ops, paneOperations()...)
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
@@ -848,6 +854,7 @@ func operations() []operation {
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	ops = append(ops, sessionSearchOperations()...)
 	return ops
 }
 
@@ -866,6 +873,42 @@ func automationOperations() []operation {
 		{method: http.MethodPatch, path: "/api/v1/automations/{automationId}", id: "updateAutomation", tag: "automations", summary: "Update a recurring automation", pathParams: id, reqBody: controllers.UpdateAutomationRequest{}, resps: append([]respUnit{{http.StatusOK, controllers.AutomationEnvelope{}}}, commonErrors...)},
 		{method: http.MethodDelete, path: "/api/v1/automations/{automationId}", id: "deleteAutomation", tag: "automations", summary: "Delete an automation and its run history", pathParams: id, resps: append([]respUnit{{http.StatusNoContent, nil}}, commonErrors...)},
 		{method: http.MethodGet, path: "/api/v1/automations/{automationId}/runs", id: "listAutomationRuns", tag: "automations", summary: "List durable automation run history", pathParams: []any{controllers.AutomationIDParam{}, controllers.ListAutomationRunsQuery{}}, resps: append([]respUnit{{http.StatusOK, controllers.ListAutomationRunsResponse{}}}, commonErrors...)},
+	}
+}
+
+// sessionSearchOperations declares the ranked search over past sessions. Must
+// stay 1:1 with the routes SessionSearchController.Register mounts (enforced by
+// the parity test).
+func sessionSearchOperations() []operation {
+	commonErrors := []respUnit{
+		{http.StatusBadRequest, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+	}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/search/sessions", id: "searchSessions", tag: "sessions",
+			summary:    "Search past sessions by title, message text, tool output, and touched file paths",
+			pathParams: []any{controllers.SessionSearchQuery{}},
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.SessionSearchResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/search/index-status", id: "getSessionSearchIndexStatus", tag: "sessions",
+			summary: "Report what the session search index covers",
+			resps: append([]respUnit{
+				{http.StatusOK, controllers.SessionSearchIndexStatusResponse{}},
+			}, commonErrors...),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/search/reindex", id: "reindexSessionSearch", tag: "sessions",
+			summary: "Empty the session search index and rebuild it from scratch in the background",
+			resps: append([]respUnit{
+				{http.StatusAccepted, controllers.SessionSearchIndexStatusResponse{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			}, commonErrors...),
+		},
 	}
 }
 
@@ -1086,6 +1129,71 @@ func computerUseOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+	}
+}
+
+func paneOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/panes", id: "getSessionPanes", tag: "sessions",
+			summary:    "Read the split-pane layout the desktop window shows for a session",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneLayoutResponse{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/panes/input", id: "typeIntoSessionPane", tag: "sessions",
+			summary:    "Type into, or interrupt, one of the session's own terminal tabs",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			reqBody:    controllers.PaneInputRequest{},
+			resps: []respUnit{
+				{http.StatusNoContent, nil},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/panes/output", id: "readSessionPaneOutput", tag: "sessions",
+			summary:    "Read what one of the session's own terminal tabs shows",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.PaneOutputQuery{}, controllers.BrowserCapabilityHeader{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneOutputResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/panes", id: "commandSessionPanes", tag: "sessions",
+			summary:    "Ask the desktop window to split, unsplit or focus a session's tabs",
+			pathParams: []any{controllers.SessionIDParam{}, controllers.BrowserCapabilityHeader{}},
+			reqBody:    controllers.PaneCommandRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.PaneLayoutResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+				{http.StatusGatewayTimeout, envelope.APIError{}},
 			},
 		},
 	}
@@ -2371,12 +2479,6 @@ func agentOperations() []operation {
 			summary: "Start moving a session to another account through the durable controller handoff", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
 			reqBody: controllers.SwitchSessionAgentAccountRequest{},
 			resps:   []respUnit{{http.StatusAccepted, controllers.StartSessionInterfaceTransitionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
-		},
-		{
-			method: http.MethodPut, path: "/api/v1/agents/accounts/sessions/{sessionId}/stay", id: "setSessionStayOnAccount", tag: "agents",
-			summary: "Keep a session on its account, or let a usage limit move it", pathParams: []any{controllers.AgentAccountSessionIDParam{}},
-			reqBody: controllers.SetSessionStayOnAccountRequest{},
-			resps:   []respUnit{{http.StatusOK, controllers.SessionAgentAccountsResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/login", id: "signInAgentAccountAgain", tag: "agents",

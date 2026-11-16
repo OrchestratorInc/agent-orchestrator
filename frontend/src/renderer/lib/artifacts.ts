@@ -7,10 +7,11 @@ import {
 	type WorkspaceSession,
 } from "../types/workspace";
 import type { ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
-import type { CloudShareAccess } from "../../shared/cloud-share";
+import type { CloudShareAccess, HostShareLink } from "../../shared/cloud-share";
 import { CloudCpError } from "./cloud-cp/errors";
 import { fileMediaKind } from "./file-media";
 import { isSvgPath } from "./image-files";
+import { sessionUiKey } from "./hosts";
 import { isArchivedSession } from "./standalone-archive";
 
 /** One artifact file in the Artifacts list, with the session that wrote it. */
@@ -72,8 +73,16 @@ export function artifactChangeError(error: unknown, viewOnly: string): unknown {
 	return error instanceof CloudCpError && error.code === "artifact_not_owner" ? new Error(viewOnly) : error;
 }
 
-export function artifactKey(artifact: Pick<ArtifactRow, "sessionId" | "path">): string {
-	return JSON.stringify([artifact.sessionId, artifact.path]);
+/**
+ * An artifact's identity across hosts, for pins, selection and list keys. A
+ * remote host's session ID can equal one on this computer, so its key names
+ * the host too; this computer's keep their earlier form, so saved pins still
+ * match.
+ */
+export function artifactKey(artifact: Pick<ArtifactRow, "sessionId" | "path"> & { hostId?: string }): string {
+	return artifact.hostId
+		? JSON.stringify([artifact.sessionId, artifact.path, artifact.hostId])
+		: JSON.stringify([artifact.sessionId, artifact.path]);
 }
 
 /** One project's artifacts, newest first. */
@@ -84,21 +93,24 @@ export type ArtifactGroup = {
 	isScratchpad: boolean;
 	/** A Cloud project's group. */
 	cloud: boolean;
+	/** The remote host the project is on; undefined for this computer's and Cloud projects. */
+	hostId?: string;
 	rows: ArtifactRow[];
 };
 
 /**
- * Groups the listed artifacts of live local and cloud sessions by project,
- * orchestrators included: they get the same artifact directory and listing rule
- * as workers. Remote-host projects, archived sessions and projects without
- * artifacts are left out; rows sort newest first and groups by their newest
- * row. An orchestrator's rows carry `orchestratorTitle` as their session title
+ * Groups the listed artifacts of live local, remote-host and cloud sessions by
+ * project, orchestrators included: they get the same artifact directory and
+ * listing rule as workers. Archived sessions and projects without artifacts
+ * are left out; rows sort newest first and groups by their newest row. A
+ * remote host's group ID names the host, since its project IDs can equal this
+ * computer's. An orchestrator's rows carry `orchestratorTitle` as their session title
  * when given, since its own title is only its session ID.
  */
 export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[], orchestratorTitle?: string): ArtifactGroup[] {
 	const groups: ArtifactGroup[] = [];
 	for (const workspace of workspaces) {
-		if (workspace.hostId) continue;
+		const { hostId } = workspace;
 		const isScratchpad = workspace.id === STANDALONE_WORKSPACE_ID;
 		const rows = workspace.sessions
 			.filter((session) => !isArchivedSession(session))
@@ -115,6 +127,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 					sessionId: session.id,
 					sessionTitle: orchestratorTitle && isOrchestratorSession(session) ? orchestratorTitle : session.title,
 					cloud: session.cloud,
+					...(hostId ? { hostId } : {}),
 					projectId: isScratchpad ? undefined : workspace.id,
 					bundle: artifact.bundle,
 					...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
@@ -124,7 +137,7 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 			)
 			.sort(newestFirst);
 		if (rows.length === 0) continue;
-		groups.push({ id: workspace.id, name: workspace.name, isScratchpad, cloud: workspace.kind === "cloud", rows });
+		groups.push({ id: sessionUiKey(workspace.id, hostId), name: workspace.name, isScratchpad, cloud: workspace.kind === "cloud", ...(hostId ? { hostId } : {}), rows });
 	}
 	return groups.sort((left, right) => newestFirst(left.rows[0], right.rows[0]));
 }
@@ -134,8 +147,13 @@ export function artifactCount(groups: readonly ArtifactGroup[]): number {
 	return groups.reduce((total, group) => total + group.rows.length, 0);
 }
 
-/** Where an artifact lives: written on this machine or in a cloud session. */
-export type ArtifactLocation = "local" | "cloud";
+/** Where an artifact lives: written on this machine, on one remote host, or in a cloud session. */
+export type ArtifactLocation = "local" | "cloud" | `host:${string}`;
+
+/** The location of one remote host's artifacts. */
+export function hostArtifactLocation(hostId: string): ArtifactLocation {
+	return `host:${hostId}`;
+}
 
 /** The file type the Artifacts page filters by; pages, Markdown, PDFs and other files are documents. */
 export type ArtifactType = "image" | "video" | "document";
@@ -150,9 +168,10 @@ export function artifactType(row: Pick<ArtifactRow, "path">): ArtifactType {
 	return "document";
 }
 
-/** Whether a row lives in a cloud session; a Cloud project's rows always do. */
-export function artifactLocation(row: Pick<ArtifactRow, "cloud">, group: Pick<ArtifactGroup, "cloud">): ArtifactLocation {
-	return group.cloud || row.cloud ? "cloud" : "local";
+/** Where a row lives: a cloud session (a Cloud project's rows always are), a remote host, or this computer. */
+export function artifactLocation(row: Pick<ArtifactRow, "cloud" | "hostId">, group: Pick<ArtifactGroup, "cloud">): ArtifactLocation {
+	if (group.cloud || row.cloud) return "cloud";
+	return row.hostId ? hostArtifactLocation(row.hostId) : "local";
 }
 
 /**
@@ -178,9 +197,10 @@ export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "shared"
 
 /**
  * Whether an artifact is known to be public, shared privately or not shared,
- * or undefined when it cannot be told. Only a local session's files carry
- * their link (the daemon reads it from this computer's publish records); a
- * cloud session's file list says nothing about publishing, so its state is
+ * or undefined when it cannot be told. Only a local or remote-host session's
+ * files carry their link (read from this computer's publish records: by the
+ * daemon for a local file, by withHostShareLinks for a remote one); a cloud
+ * session's file list says nothing about publishing, so its state is
  * unknown rather than "not shared". A published file is unknown too until the
  * link list says who its link opens for: until then, or when the list cannot
  * be read, it is neither called public nor counted as such.
@@ -200,6 +220,39 @@ export function withShareAccess(groups: readonly ArtifactGroup[], accessByUrl: R
 			return access ? { ...row, shareAccess: access } : row;
 		}),
 	}));
+}
+
+/**
+ * The link this computer published one remote host's file to, by its
+ * artifact ID and else by its path, as the local daemon matches its own
+ * files. A remote daemon has no copy of the records, so its list carries no
+ * link.
+ */
+export function findHostShareLink(
+	links: readonly HostShareLink[],
+	hostId: string,
+	sessionId: string,
+	artifact: { id?: string; path: string },
+): HostShareLink | undefined {
+	const ofSession = links.filter((link) => link.hostId === hostId && link.sessionId === sessionId);
+	return (artifact.id ? ofSession.find((link) => link.artifactId === artifact.id) : undefined)
+		?? ofSession.find((link) => !link.artifactId && link.path === artifact.path);
+}
+
+/** Sets the link of each remote-host row this computer published; see findHostShareLink. */
+export function withHostShareLinks(groups: readonly ArtifactGroup[], links: readonly HostShareLink[]): ArtifactGroup[] {
+	if (links.length === 0) return [...groups];
+	return groups.map((group) => {
+		const { hostId } = group;
+		if (!hostId) return group;
+		return {
+			...group,
+			rows: group.rows.map((row) => {
+				const link = findHostShareLink(links, hostId, row.sessionId, row);
+				return link ? { ...row, shareUrl: link.url, ...(link.access ? { shareAccess: link.access } : {}) } : row;
+			}),
+		};
+	});
 }
 
 /**

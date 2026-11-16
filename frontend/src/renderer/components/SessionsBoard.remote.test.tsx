@@ -194,7 +194,7 @@ it("archives and restores through the selected host with host-scoped navigation"
 it("keeps actions unavailable while the host is offline", () => {
 	mocks.connected = [];
 	renderBoard("box-a");
-	expect(screen.getByTestId("board-host-offline")).toHaveTextContent("Offline");
+	expect(screen.getByTestId("host-offline")).toHaveTextContent("Offline");
 	expect(screen.queryByRole("button", { name: "Archive Fix login" })).toBeNull();
 	expect(screen.queryByRole("button", { name: "New task" })).toBeNull();
 	expect(mocks.remotePost).not.toHaveBeenCalled();
@@ -205,7 +205,7 @@ it("names the offline host and retries it from the board", () => {
 	mocks.remoteHosts = [{ hostId: "box-a", label: "Azure box", url: "http://box-a", status: "offline" }];
 	renderBoard("box-a");
 	expect(screen.getByTestId("board-topbar-label")).toHaveTextContent("Azure box");
-	expect(screen.getByTestId("board-host-offline")).toHaveTextContent("Updated 12m ago");
+	expect(screen.getByTestId("host-offline")).toHaveTextContent("Updated 12m ago");
 	expect(screen.queryByRole("alert")).toBeNull();
 	expect(screen.getByText("Fix login")).toBeVisible();
 	fireEvent.click(screen.getByRole("button", { name: "Retry Azure box" }));

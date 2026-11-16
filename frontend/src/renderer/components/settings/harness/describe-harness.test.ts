@@ -32,8 +32,52 @@ describe("configured harness authentication summary", () => {
 	});
 });
 
+// The Account and Health tabs both read this tone, so they never disagree.
+describe("harness sign-in tone", () => {
+	it("is green only for a fresh, successful sign-in check", () => {
+		expect(tone({ authentication: "authorized" })).toBe("ok");
+		expect(tone({ authentication: "authorized", freshness: "stale" })).toBe("off");
+		expect(tone({ authentication: "authorized", freshness: "checking" })).toBe("off");
+		expect(tone({ authentication: "authorized" }, true)).toBe("off");
+		expect(tone({ authentication: "unauthorized" })).toBe("error");
+		expect(tone({ authentication: "configured" })).toBe("off");
+	});
+});
+
+function tone(options: Parameters<typeof agentReadiness>[2], authCheckFailed = false) {
+	return describeHarness({
+		agentId: "codex", readinessAgent: agentReadiness("codex", "codex", options), t: ((key: string) => key) as TFunction, language: "en",
+		installed: true, pending: false, readinessPending: false, readinessFailed: false,
+		authPlansPending: false, authPlansFailed: false, authWorkflow: null, authCheckFailed,
+	}).authTone;
+}
+
+describe("authorized harness whose login the CLI could not confirm", () => {
+	it("says the login is not confirmed instead of Connected", () => {
+		const details = describe_("cursor", "cursor-agent status", "account_unconfirmed", "authorized");
+		expect(details.authSummary).toBe("settings.harness.loginUnconfirmed");
+		expect(details.loginUnconfirmed).toBe(true);
+		expect(details.authTone).toBe("off");
+	});
+
+	it("keeps a confirmed login Connected", () => {
+		const details = describe_("cursor", "cursor-agent status", "cli_signed_in", "authorized");
+		expect(details.authSummary).toBe("settings.harness.loggedIn");
+		expect(details.loginUnconfirmed).toBe(false);
+		expect(details.authTone).toBe("ok");
+	});
+
+	it("ignores the caveat when the harness is not signed in", () => {
+		expect(describe_("cursor", "cursor-agent status", "account_unconfirmed", "configured").loginUnconfirmed).toBe(false);
+	});
+});
+
 function summary(agentId: AgentId, method?: string, code?: string) {
-	const readinessAgent = agentReadiness(agentId, agentId, { authentication: "configured" });
+	return describe_(agentId, method, code).authSummary;
+}
+
+function describe_(agentId: AgentId, method?: string, code?: string, authentication: "configured" | "authorized" = "configured") {
+	const readinessAgent = agentReadiness(agentId, agentId, { authentication });
 	if (method && code) readinessAgent.authentication.diagnostics = [{
 		method, code, reason: "Test observation", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0,
 	}];
@@ -41,5 +85,5 @@ function summary(agentId: AgentId, method?: string, code?: string) {
 		agentId, readinessAgent, t: ((key: string) => key) as TFunction, language: "en",
 		installed: true, pending: false, readinessPending: false, readinessFailed: false,
 		authPlansPending: false, authPlansFailed: false, authWorkflow: null,
-	}).authSummary;
+	});
 }

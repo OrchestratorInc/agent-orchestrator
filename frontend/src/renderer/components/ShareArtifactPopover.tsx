@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, Copy, Loader2, Share } from "@/components/app-icons";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Copy, Loader2, Share } from "@/components/app-icons";
 import {
 	type CloudShareAccess,
 	type CloudShareFile,
@@ -10,6 +10,7 @@ import {
 	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudSharePublishResult,
+	type HostShareLink,
 	artifactShareUrl,
 	isPrivateShare,
 	sameShareFingerprint,
@@ -98,8 +99,9 @@ function usePublishing(key: string): boolean {
 	return useSyncExternalStore(subscribePending, () => pendingShares.has(key));
 }
 
-function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "path">): string {
-	return JSON.stringify([baseUrl, file.sessionId, file.path]);
+function pendingKey(baseUrl: string, file: Pick<CloudShareFile, "sessionId" | "path" | "hostId">): string {
+	// A remote host's session ID can equal one on this computer.
+	return JSON.stringify(file.hostId ? [baseUrl, file.sessionId, file.path, file.hostId] : [baseUrl, file.sessionId, file.path]);
 }
 
 /** The panel names a file without its extension: `report.html` is `report`. A dotfile keeps its name. */
@@ -297,11 +299,35 @@ export function useReconciledShareLinks(): ShareAccessByUrl {
 		if (reconciledReads.has(read)) return;
 		reconciledReads.add(read);
 		read
-			.then(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }))
+			.then(() => Promise.all([
+				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }),
+				queryClient.invalidateQueries({ queryKey: HOST_SHARE_LINKS_KEY }),
+			]))
 			// Offline or signed out: the records stay as they are until the next list.
 			.catch(() => undefined);
 	}, [available, signedIn, scope, queryClient, revision]);
 	return available && signedIn && cached ? shareAccessOf(cached.links) : NO_SHARE_ACCESS;
+}
+
+const HOST_SHARE_LINKS_KEY = ["host-share-links"] as const;
+const NO_HOST_SHARE_LINKS: readonly HostShareLink[] = [];
+
+/**
+ * The links this computer published remote hosts' files to, for the files'
+ * Published marks: a remote daemon has no copy of the records, so its list
+ * carries no link. Read again whenever a panel changes a link.
+ */
+export function useHostShareLinks(): readonly HostShareLink[] {
+	const available = useShareAvailable();
+	const { baseUrl, signedIn } = useShareAccess();
+	const revision = useSyncExternalStore(subscribeShareLinks, () => shareLinksRevision);
+	const query = useQuery({
+		queryKey: [...HOST_SHARE_LINKS_KEY, baseUrl, revision],
+		queryFn: () => aoBridge.cloudShare.hostLinks(baseUrl),
+		enabled: Boolean(available) && signedIn,
+		staleTime: 60_000,
+	});
+	return available && signedIn ? query.data ?? NO_HOST_SHARE_LINKS : NO_HOST_SHARE_LINKS;
 }
 
 /** The control plane URL and whether the person is signed in to share. */
@@ -326,7 +352,7 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean; scope: S
  * and not once they are shared. A Scratchpad file belongs to the Scratchpad
  * workspace, as in the session view.
  */
-export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" | "sessionId" | "path" | "projectId" | "sha256"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
+export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" | "hostId" | "sessionId" | "path" | "projectId" | "sha256"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
 	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
 	if (!artifact) return undefined;
 	// The artifact's ID survives a rename, so the renamed file finds its link.
@@ -338,7 +364,10 @@ export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" 
 		const version = artifact.sha256 ? { fingerprint: artifact.sha256 } : {};
 		return { source: "cloud", orgId: artifact.cloud.orgId, sessionId: artifact.sessionId, path: artifact.path, projectId: "", ...artifactId, ...version };
 	}
-	return { sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? STANDALONE_WORKSPACE_ID, ...artifactId };
+	const projectId = artifact.projectId ?? STANDALONE_WORKSPACE_ID;
+	// A remote host's file is downloaded from the host through its proxy, then uploaded from here.
+	if (artifact.hostId) return { source: "host", hostId: artifact.hostId, sessionId: artifact.sessionId, path: artifact.path, projectId, ...artifactId };
+	return { sessionId: artifact.sessionId, path: artifact.path, projectId, ...artifactId };
 }
 
 const POPOVER_CLASS = "w-[min(22rem,90vw)] p-4";
@@ -473,9 +502,9 @@ function usePublishedShare(file: CloudShareFile | null, scope: ShareScope, revis
  * popover first, to choose who it is for, and its Publish there uploads it.
  * Once published, the button reads Published, with the same Publish icon: who
  * the link opens for is shown in the popover, not guessed at on the button.
- * Once the file changed since, it splits: Republish puts the newer version on
- * the same link, and the chevron opens the popover without republishing. For
- * a video the button is disabled and says why.
+ * Once the file changed since, it reads Republish with an amber dot, and one
+ * click puts the newer version on the same link and opens the popover on it.
+ * For a video the button is disabled and says why.
  */
 export function ShareArtifactButton({ file, name, className, iconOnly = false, revision = "", published = false }: {
 	file: Omit<CloudShareFile, "baseUrl" | "shareId">;
@@ -500,10 +529,6 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	// What the panel does on opening is fixed when it opens, so a check that
 	// lands while it is open never starts a second publish.
 	const [republishOnOpen, setRepublishOnOpen] = useState(false);
-	const openPanel = (republish: boolean) => {
-		setRepublishOnOpen(republish);
-		setOpen(true);
-	};
 	const onOpenChange = (next: boolean) => {
 		if (next) setRepublishOnOpen(outdated);
 		else recheck();
@@ -539,40 +564,6 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 			</Tooltip>
 		);
 	}
-	// The file changed since it was published: Republish on the left, the link's
-	// access on the right, which opens the popover as it is.
-	if (outdated && share && !publishing && !iconOnly) {
-		return (
-			<Popover open={open} onOpenChange={onOpenChange}>
-				<PopoverAnchor asChild>
-					<span className={cn("inline-flex items-center", className)} data-share-split="">
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button aria-label={`${label}: ${name}`} className="relative" onClick={() => openPanel(true)} size="sm" type="button" variant="quiet">
-									<Share aria-hidden="true" className="size-icon-sm" />
-									{label}
-									{amberDot}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("artifacts.share.republishHint")}</TooltipContent>
-						</Tooltip>
-						<Button
-							aria-label={t("artifacts.share.options", { name })}
-							className="gap-0.5 px-1.5"
-							data-state={open ? "open" : "closed"}
-							onClick={() => openPanel(false)}
-							size="sm"
-							type="button"
-							variant="quiet"
-						>
-							<ChevronDown aria-hidden="true" className="size-3" />
-						</Button>
-					</span>
-				</PopoverAnchor>
-				{panel}
-			</Popover>
-		);
-	}
 	const button = (
 		<Button
 			aria-label={`${label}: ${name}`}
@@ -591,10 +582,10 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 	// Closing the popover mid-publish keeps the publish going; only Cancel stops it.
 	return (
 		<Popover open={open} onOpenChange={onOpenChange}>
-			{iconOnly ? (
+			{iconOnly || (outdated && !publishing) ? (
 				<Tooltip>
 					<TooltipTrigger asChild>{popoverTrigger}</TooltipTrigger>
-					<TooltipContent side="bottom">{outdated ? t("artifacts.share.republishHint") : label}</TooltipContent>
+					<TooltipContent side="bottom">{outdated && !publishing ? t("artifacts.share.republishHint") : label}</TooltipContent>
 				</Tooltip>
 			) : popoverTrigger}
 			{panel}
@@ -648,7 +639,8 @@ function SharePanel({
 	const shareFile = { ...file, baseUrl };
 	const key = pendingKey(baseUrl, file);
 	// A cloud session's file is already in the bucket: the click publishes it.
-	// A file on this computer is uploaded by the popover's own Publish.
+	// A file on this computer, or one downloaded from a remote host, is
+	// uploaded by the popover's own Publish.
 	const onThisComputer = file.source !== "cloud";
 
 	// Every read or change of who the link is shared with takes the next

@@ -8,7 +8,7 @@ import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import {
 	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
-	sessionIsActive,
+	canArchiveWorkerSession,
 	sessionCueTargetAvailable,
 	CLOUD_PROJECT_KIND,
 	isScratchpadWorkspace,
@@ -113,7 +113,7 @@ export function SessionTopbarActions({
 		captureTopbarAction("open_board", view);
 		void navigate(projectId ? projectNavigateTarget(projectId, hostId) : { to: "/" });
 	};
-	const archiveTarget = !isOrchestrator && session && !session.cloud && sessionIsActive(session) ? session : undefined;
+	const archiveTarget = !isOrchestrator && session && canArchiveWorkerSession(session) ? session : undefined;
 
 	// Reading order, left to right. Workers: Orchestrator (quiet, labeled), then
 	// the editor and cue icons; no emphasized action, the session is the focus.

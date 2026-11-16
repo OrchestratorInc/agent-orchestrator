@@ -27,8 +27,11 @@ export const GLASS_HEADER_OPTIONS: NativeStackNavigationOptions | null = SYSTEM_
  * stack needs on top, so each one pushes, tints and titles its pages the same
  * way.
  *
- * No `animation`: Android then runs the system's own push transition, the one
- * every other app on the device uses, instead of a slide picked for it.
+ * Android pushes with `ios_from_right`, the same slide iOS's UIKit push makes.
+ * Left on the default, Android ran react-native-screens' "default" transition:
+ * an 83ms fade with a 10% nudge (a quick scale on older versions), which read
+ * as the page appearing in place rather than being pushed. iOS keeps the
+ * platform's own push.
  *
  * The bar is painted in the page's own background rather than the navigation
  * theme's `card` surface, so the header reads as part of the page instead of a
@@ -40,6 +43,7 @@ export const GLASS_HEADER_OPTIONS: NativeStackNavigationOptions | null = SYSTEM_
  */
 export function stackScreenOptions(t: Theme): NativeStackNavigationOptions {
 	return {
+		...(Platform.OS === "android" ? { animation: "ios_from_right" as const } : null),
 		headerStyle: { backgroundColor: t.bgBase },
 		// The app's tint: the system back button and every native header item
 		// draw in it, as bar buttons do in any app on either platform.

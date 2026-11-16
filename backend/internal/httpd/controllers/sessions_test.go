@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,6 +39,7 @@ import (
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -66,6 +68,7 @@ type fakeSessionService struct {
 	sentDeliveryOptions        ports.MessageDeliveryOptions
 	delegationInput            sessionsvc.DelegateTaskInput
 	delegationErr              error
+	sendErr                    error
 	preparedProject            domain.ProjectID
 	canceledPreparation        string
 	cleanupProjects            []domain.ProjectID
@@ -499,14 +502,14 @@ func (f *fakeSessionService) Rename(_ context.Context, id domain.SessionID, disp
 func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
 	f.sent = message
 	f.sentAttachment = attachment
-	return nil
+	return f.sendErr
 }
 
 func (f *fakeSessionService) SendWithOptions(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
 	f.sent = message
 	f.sentAttachment = attachment
 	f.sentDeliveryOptions = options
-	return nil
+	return f.sendErr
 }
 
 func (f *fakeSessionService) DelegateTask(_ context.Context, in sessionsvc.DelegateTaskInput) (sessionsvc.DelegateTaskOutcome, error) {
@@ -1983,6 +1986,29 @@ func TestSessionsAPI_SpawnPassesModelToService(t *testing.T) {
 	}
 	if svc.lastSpawn.AgentConfig.Model != "sonnet" {
 		t.Fatalf("service AgentConfig.Model = %q, want sonnet", svc.lastSpawn.AgentConfig.Model)
+	}
+}
+
+func TestSessionsAPI_SpawnAndDelegatePassAccountToService(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions",
+		`{"kind":"worker","harness":"claude-code","prompt":"fix","accountId":" acct-b "}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.AgentAccountID != "acct-b" {
+		t.Fatalf("spawn AgentAccountID = %q, want acct-b", svc.lastSpawn.AgentAccountID)
+	}
+
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate",
+		`{"projectId":"ao","brief":"Fix it","agent":"codex","accountId":"acct-c"}`)
+	if status != http.StatusAccepted {
+		t.Fatalf("POST delegate = %d, want 202; body=%s", status, body)
+	}
+	if svc.delegationInput.AccountID != "acct-c" {
+		t.Fatalf("delegate AccountID = %q, want acct-c", svc.delegationInput.AccountID)
 	}
 }
 
@@ -4990,6 +5016,15 @@ func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	if svc.sentDeliveryOptions.AuthoredByUser {
 		t.Fatal("ordinary automation send was marked user-authored")
 	}
+}
+
+func TestSessionsAPI_SendToAChatOpenElsewhereIsAConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrChatOpenElsewhere)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Do the next step","senderSessionId":"ao-orchestrator"}`)
+	assertErrorCode(t, body, status, http.StatusConflict, "CHAT_OPEN_ELSEWHERE")
 }
 
 func TestSessionsAPI_SendCarriesUserAuthorshipSeparatelyFromDelivery(t *testing.T) {

@@ -77,6 +77,8 @@ type Manager struct {
 
 	shellAgentsMu sync.Mutex
 	shellAgents   ShellAgentSource
+	panesMu       sync.Mutex
+	panes         PaneSource
 
 	// inputMu guards inputBlocked and lastInputAt. It is held only briefly, never
 	// across a pane write.
@@ -129,6 +131,27 @@ type Option func(*Manager)
 // called with the source's lock held, so it must not block.
 type ShellAgentSource interface {
 	SubscribeShellAgents(fn func(snapshot json.RawMessage)) (unsubscribe func())
+}
+
+// PaneSource connects a desktop window to the split-pane relay (see
+// internal/service/panes). send delivers an encoded command to the window and
+// must not block.
+type PaneSource interface {
+	ConnectPanes(send func(command json.RawMessage)) PaneConn
+}
+
+// PaneConn is one window's link to the split-pane relay.
+type PaneConn interface {
+	Report(sessionID string, layout json.RawMessage)
+	Resolve(result json.RawMessage)
+	Close()
+}
+
+// SetPanes late-binds the split-pane relay.
+func (m *Manager) SetPanes(src PaneSource) {
+	m.panesMu.Lock()
+	m.panes = src
+	m.panesMu.Unlock()
 }
 
 // SetShellAgents late-binds the shell agent source; the manager is built
@@ -574,6 +597,7 @@ type connState struct {
 	terms       map[string]*attachment // terminal id -> this conn's own attach PTY
 	unsubEvts   func()
 	unsubAgents func()
+	panes       PaneConn
 	closed      bool
 
 	// writers holds each terminal's newest writer. It is only touched by the
@@ -674,6 +698,8 @@ func (c *connState) handle(msg clientMsg) {
 		c.handleSubscribe(msg)
 	case chShellAgents:
 		c.handleShellAgents(msg)
+	case chPanes:
+		c.handlePanes(msg)
 	case chSystem:
 		if msg.Type == msgPing {
 			c.enqueue(serverMsg{Ch: chSystem, Type: msgPong})
@@ -845,6 +871,62 @@ func (c *connState) handleShellAgents(msg clientMsg) {
 	}
 	c.unsubAgents = unsub
 	c.mu.Unlock()
+}
+
+// handlePanes links the connection to the split-pane relay on "subscribe" and
+// passes on its layout reports and command results.
+func (c *connState) handlePanes(msg clientMsg) {
+	if msg.Type == msgSubscribe {
+		// Only the desktop app's own page drives panes. The terminal socket also
+		// accepts local programs that send no Origin, and those must not be able
+		// to receive pane requests or answer them.
+		if !paneClientAllowed(c.conn) {
+			return
+		}
+		c.mgr.panesMu.Lock()
+		src := c.mgr.panes
+		c.mgr.panesMu.Unlock()
+		if src == nil {
+			return
+		}
+		c.mu.Lock()
+		subscribed := c.panes != nil || c.closed
+		c.mu.Unlock()
+		if subscribed {
+			return
+		}
+		conn := src.ConnectPanes(func(command json.RawMessage) {
+			c.enqueue(serverMsg{Ch: chPanes, Type: msgCommand, Command: command})
+		})
+		c.mu.Lock()
+		if c.closed || c.panes != nil {
+			c.mu.Unlock()
+			conn.Close()
+			return
+		}
+		c.panes = conn
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Lock()
+	conn := c.panes
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	switch msg.Type {
+	case msgLayout:
+		conn.Report(msg.SessionID, msg.Layout)
+	case msgResult:
+		conn.Resolve(msg.Result)
+	}
+}
+
+// paneClientAllowed reports whether the connection may use the panes channel:
+// the transport vouches for it by implementing AllowsPanes.
+func paneClientAllowed(conn wsConn) bool {
+	p, ok := conn.(interface{ AllowsPanes() bool })
+	return ok && p.AllowsPanes()
 }
 
 // outQueue is the per-connection write queue. A buffered channel cannot serve
@@ -1023,6 +1105,8 @@ func (c *connState) cleanup() {
 	c.unsubEvts = nil
 	unsubAgents := c.unsubAgents
 	c.unsubAgents = nil
+	panes := c.panes
+	c.panes = nil
 	c.mu.Unlock()
 
 	// Drop this connection from every shared terminal so the grid follows the
@@ -1046,6 +1130,9 @@ func (c *connState) cleanup() {
 	}
 	if unsubAgents != nil {
 		unsubAgents()
+	}
+	if panes != nil {
+		panes.Close()
 	}
 	_ = c.conn.Close("server: connection closed")
 }
