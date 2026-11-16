@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, EyeOff, FolderOpen, Link, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, ExternalLink, EyeOff, FolderOpen, Link, MessageSquarePlus, MoreVertical, Pencil, Pin, PinOff, Share, SquareTerminal, Trash2 } from "@/components/app-icons";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { isBrowserArtifactPath } from "../../shared/editor-handoff";
 import { useOpenArtifactInBrowser, useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
@@ -86,6 +87,7 @@ export function ArtifactActionsMenu({
 	pinned = false,
 	onTogglePin,
 	onOpenInSession,
+	startsSession = false,
 	onDeleted,
 	errorClassName,
 	className,
@@ -110,6 +112,8 @@ export function ArtifactActionsMenu({
 	pinned?: boolean;
 	onTogglePin?: () => void;
 	onOpenInSession?: () => void;
+	/** Shows onOpenInSession as Start a session with this, for a file no session lists. */
+	startsSession?: boolean;
 	onDeleted?: () => void;
 	errorClassName?: string;
 	className?: string;
@@ -165,10 +169,15 @@ export function ArtifactActionsMenu({
 			warnLinksStillLive(t, linksLive);
 			useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path, hostId }));
 			onDeleted?.();
-			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) }),
+				...(local ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
+			]);
 		},
 	});
 	const markdown = /\.(md|markdown)$/i.test(artifact.path);
+	const openLabel = t(startsSession ? "artifacts.startSession" : "artifacts.openInSession");
+	const OpenIcon = startsSession ? MessageSquarePlus : ArrowUpRight;
 	const confirmDelete = () => {
 		remove.reset();
 		setConfirmingDelete(true);
@@ -313,17 +322,17 @@ export function ArtifactActionsMenu({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
-							aria-label={`${t("artifacts.openInSession")}: ${artifact.name}`}
+							aria-label={`${openLabel}: ${artifact.name}`}
 							className={actionClassName}
 							onClick={onOpenInSession}
 							size="icon-sm"
 							type="button"
 							variant="quiet"
 						>
-							<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+							<OpenIcon aria-hidden="true" className="size-icon-sm" />
 						</Button>
 					</TooltipTrigger>
-					<TooltipContent side="bottom">{t("artifacts.openInSession")}</TooltipContent>
+					<TooltipContent side="bottom">{openLabel}</TooltipContent>
 				</Tooltip>
 			) : null}
 			{!sidebar || local || session.cloud ? <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -375,8 +384,8 @@ export function ArtifactActionsMenu({
 							) : null}
 							{onOpenInSession ? (
 								<DropdownMenuItem onSelect={onOpenInSession}>
-									<ArrowUpRight aria-hidden="true" />
-									{t("artifacts.openInSession")}
+									<OpenIcon aria-hidden="true" />
+									{openLabel}
 								</DropdownMenuItem>
 							) : null}
 							<DropdownMenuSeparator />
@@ -493,7 +502,7 @@ type ArtifactActionsMenuProps = Parameters<typeof ArtifactActionsMenu>[0];
  */
 export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 	const { t } = useTranslation();
-	const { artifact, session, className, pinned = false, onTogglePin, pinInMenu = false, onOpenInSession, verticalDots = false } = props;
+	const { artifact, session, className, pinned = false, onTogglePin, pinInMenu = false, onOpenInSession, startsSession = false, verticalDots = false } = props;
 	const [active, setActive] = useState(false);
 	const pinRef = useRef<HTMLButtonElement>(null);
 	const openRef = useRef<HTMLButtonElement>(null);
@@ -663,7 +672,7 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 			{onOpenInSession ? (
 				<Button
 					ref={openRef}
-					aria-label={`${t("artifacts.openInSession")}: ${artifact.name}`}
+					aria-label={`${t(startsSession ? "artifacts.startSession" : "artifacts.openInSession")}: ${artifact.name}`}
 					className={actionClassName}
 					data-slot="tooltip-trigger"
 					data-state="closed"
@@ -671,7 +680,7 @@ export function DeferredArtifactActionsMenu(props: ArtifactActionsMenuProps) {
 					type="button"
 					variant="quiet"
 				>
-					<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+					{startsSession ? <MessageSquarePlus aria-hidden="true" className="size-icon-sm" /> : <ArrowUpRight aria-hidden="true" className="size-icon-sm" />}
 				</Button>
 			) : null}
 			<span className="inline-flex">

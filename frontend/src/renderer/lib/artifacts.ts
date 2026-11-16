@@ -6,7 +6,9 @@ import {
 	type WorkspaceSummary,
 	type WorkspaceSession,
 } from "../types/workspace";
-import type { ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
+import { deliverableArtifacts, type ArtifactBundle } from "../../../../packages/shared/artifacts/deliverables";
+import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
+import type { TFunction } from "i18next";
 import type { CloudShareAccess, HostShareLink } from "../../shared/cloud-share";
 import { CloudCpError } from "./cloud-cp/errors";
 import { fileMediaKind } from "./file-media";
@@ -49,6 +51,12 @@ export type ArtifactRow = {
 	 * be previewed, shared, downloaded or deleted, not edited or sent feedback.
 	 */
 	archived?: boolean;
+	/**
+	 * Set on a row no session lists any more, archived as well: its session was
+	 * deleted with its artifacts kept, or its project was removed. It opens no
+	 * session; a new one can start from it.
+	 */
+	kept?: "session-deleted" | "project-removed";
 };
 
 /**
@@ -146,6 +154,80 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[],
 		groups.push({ id: sessionUiKey(workspace.id, hostId), name: workspace.name, isScratchpad, cloud: workspace.kind === "cloud", ...(hostId ? { hostId } : {}), rows });
 	}
 	return groups.sort((left, right) => newestFirst(left.rows[0], right.rows[0]));
+}
+
+/** The group of kept artifacts whose project is gone, or that never had one. */
+export const NO_PROJECT_GROUP_ID = "__no-project__";
+
+/**
+ * Adds this computer's kept artifacts to the groups. A set whose project is
+ * still listed joins that project's group, made if the project has no other
+ * artifacts; every other set joins one group with no project, `noProjectName`.
+ * Rows are view only and sort with the rest, newest first.
+ */
+export function withKeptArtifacts(
+	groups: readonly ArtifactGroup[],
+	kept: readonly KeptArtifactSet[] | undefined,
+	projects: readonly Pick<WorkspaceSummary, "id" | "name" | "kind" | "hostId">[],
+	noProjectName: string,
+): ArtifactGroup[] {
+	if (!kept?.length) return [...groups];
+	const out = [...groups];
+	const touched = new Set<number>();
+	for (const set of kept) {
+		const project = set.projectId
+			? projects.find((candidate) => candidate.id === set.projectId && !candidate.hostId && candidate.kind !== "cloud" && candidate.id !== STANDALONE_WORKSPACE_ID)
+			: undefined;
+		const rows = keptArtifactRows(set, project?.id);
+		if (rows.length === 0) continue;
+		const groupId = project ? sessionUiKey(project.id) : NO_PROJECT_GROUP_ID;
+		let index = out.findIndex((group) => group.id === groupId);
+		if (index === -1) {
+			index = out.push({ id: groupId, name: project?.name ?? noProjectName, isScratchpad: false, cloud: false, rows: [] }) - 1;
+		} else if (!touched.has(index)) {
+			out[index] = { ...out[index], rows: [...out[index].rows] };
+		}
+		touched.add(index);
+		out[index].rows.push(...rows);
+	}
+	for (const index of touched) out[index].rows.sort(newestFirst);
+	return out.sort((left, right) => newestFirst(left.rows[0], right.rows[0]));
+}
+
+function keptArtifactRows(set: KeptArtifactSet, projectId: string | undefined): ArtifactRow[] {
+	const files = [...set.artifactFiles].sort(
+		(a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || a.path.localeCompare(b.path),
+	);
+	return deliverableArtifacts(files).map((artifact): ArtifactRow => ({
+		...(artifact.id ? { id: artifact.id } : {}),
+		path: artifact.path,
+		name: artifact.name,
+		kind: artifact.kind,
+		previewUrl: artifact.previewUrl,
+		inlineUrl: artifact.inlineUrl,
+		rawUrl: artifact.rawUrl,
+		updatedAt: artifact.updatedAt,
+		sessionId: set.sessionId,
+		sessionTitle: set.title,
+		...(projectId ? { projectId } : {}),
+		bundle: artifact.bundle,
+		...(artifact.shareUrl ? { shareUrl: artifact.shareUrl } : {}),
+		...(artifact.shareUrl && artifact.shareAccess ? { shareAccess: artifact.shareAccess } : {}),
+		archived: true,
+		kept: set.sessionDeleted ? "session-deleted" : "project-removed",
+	}));
+}
+
+/**
+ * Where a row comes from, after its name: its project and session, and why it
+ * is view only. An archived session's files stay listed, and so do those of a
+ * deleted session or removed project that were kept.
+ */
+export function artifactContext(t: TFunction, row: Pick<ArtifactRow, "archived" | "kept" | "sessionTitle">, projectName: string): string {
+	const reason = row.kept === "session-deleted"
+		? t("artifacts.deletedSession")
+		: row.kept === "project-removed" ? t("artifacts.removedProject") : row.archived ? t("artifacts.archivedSession") : "";
+	return reason ? `${projectName} · ${row.sessionTitle} · ${reason}` : `${projectName} · ${row.sessionTitle}`;
 }
 
 /** Total artifacts across groups, for the sidebar badge. */

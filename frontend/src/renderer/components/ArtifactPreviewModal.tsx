@@ -1,4 +1,4 @@
-import { ArrowUpRight } from "@/components/app-icons";
+import { ArrowUpRight, MessageSquarePlus } from "@/components/app-icons";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
@@ -10,6 +10,7 @@ import { artifactContentUrl } from "../lib/artifact-content-url";
 import { artifactKey, type ArtifactRow } from "../lib/artifacts";
 import { LOCAL_HOST } from "../lib/hosts";
 import { useNavigateToSession } from "../lib/navigate-to-session";
+import { useStartSessionFromArtifact } from "../hooks/useStartSessionFromArtifact";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
@@ -37,9 +38,15 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
 	const share = useArtifactShareFile(artifact);
+	const startSession = useStartSessionFromArtifact();
 	const openInSession = () => {
 		if (!artifact) return;
 		onClose();
+		// A kept file has no session to open; a new one can start from it.
+		if (artifact.kept) {
+			void startSession(artifact);
+			return;
+		}
 		requestWorkspaceFileOpen(artifact.sessionId, artifact.path, artifact.hostId, "artifact");
 		navigateToSession(artifact.projectId, artifact.sessionId, artifact.hostId ?? LOCAL_HOST);
 	};
@@ -78,11 +85,11 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							/>
 							<Tooltip>
 								<TooltipTrigger asChild>
-									<Button aria-label={t("artifacts.openInSession")} className="shrink-0" onClick={openInSession} size="icon-sm" type="button" variant="quiet">
-										<ArrowUpRight aria-hidden="true" className="size-icon-sm" />
+									<Button aria-label={t(artifact.kept ? "artifacts.startSession" : "artifacts.openInSession")} className="shrink-0" onClick={openInSession} size="icon-sm" type="button" variant="quiet">
+										{artifact.kept ? <MessageSquarePlus aria-hidden="true" className="size-icon-sm" /> : <ArrowUpRight aria-hidden="true" className="size-icon-sm" />}
 									</Button>
 								</TooltipTrigger>
-								<TooltipContent side="bottom">{t("artifacts.openInSession")}</TooltipContent>
+								<TooltipContent side="bottom">{t(artifact.kept ? "artifacts.startSession" : "artifacts.openInSession")}</TooltipContent>
 							</Tooltip>
 							<DialogClose asChild>
 								<CloseButton aria-label={t("common.close")} className="shrink-0" size="icon-sm" />

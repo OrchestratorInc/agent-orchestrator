@@ -58,7 +58,8 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
+import { artifactCount, groupArtifactsByProject, withKeptArtifacts } from "../lib/artifacts";
+import { useKeptArtifacts } from "../hooks/useKeptArtifacts";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -743,9 +744,11 @@ export const Sidebar = memo(function Sidebar({
 	const developerMode = useUiStore((s) => s.developerMode);
 	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
 	const cloudArtifacts = useCloudOffering().artifacts;
+	// Kept artifacts are listed there too.
+	const kept = useKeptArtifacts().data;
 	const artifactTotal = useMemo(
-		() => artifactCount(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud"))),
-		[cloudArtifacts, workspaces],
+		() => artifactCount(withKeptArtifacts(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud")), kept, workspaces, "")),
+		[cloudArtifacts, workspaces, kept],
 	);
 	const existingProjectPaths = useMemo(
 		() => workspaces

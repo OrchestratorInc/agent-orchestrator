@@ -147,6 +147,9 @@ func TestDeleteKeepingArtifactsKeepsTheFilesUntilEachIsDeleted(t *testing.T) {
 		t.Fatalf("kept files = %v", paths)
 	}
 
+	if location, err := f.svc.ArtifactLocation(ctx, id); err != nil || location != dir {
+		t.Fatalf("ArtifactLocation = %q, %v; want %q", location, err, dir)
+	}
 	stand, kept, err := f.svc.ArtifactSession(ctx, id)
 	if err != nil || !kept || stand.Metadata.ArtifactDir != dir || !stand.IsTerminated || len(stand.ArtifactFiles) != 2 {
 		t.Fatalf("ArtifactSession = %+v, %v, %v", stand, kept, err)
