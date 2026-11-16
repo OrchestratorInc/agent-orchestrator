@@ -435,8 +435,6 @@ export interface ChatWorkspaceProps {
 	headerActions?: ReactNode;
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
 	sessionTabAction?: ReactNode;
-	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
-	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	/** File tabs coordinated by SessionView, appended to the native chat tab strip. */
@@ -832,7 +830,6 @@ function ChatWorkspaceContent({
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -2149,7 +2146,6 @@ function ChatWorkspaceContent({
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -2276,7 +2272,7 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
@@ -2869,7 +2865,6 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -2898,7 +2893,6 @@ function ChatHeader({
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
@@ -2977,7 +2971,6 @@ function ChatHeader({
 											onRenamed={onSessionRenamed}
 											session={session}
 											tabAction={sessionTabAction}
-											tabActionPinned={sessionTabActionPinned}
 										/>
 									) : (
 										<SessionPaneTab
