@@ -152,6 +152,7 @@ export type WorkspaceSession = {
 	reviewerConfig?: {
 		model?: string;
 		mode?: string;
+		effort?: string;
 		permissions?: string;
 	};
 	/** Whether the daemon may automatically review this session after it becomes idle. */
@@ -477,6 +478,16 @@ export function sessionWorkspaceReady(session: Pick<WorkspaceSession, "workspace
 
 export function sessionIsActive(session: WorkspaceSession): boolean {
 	return session.isTerminated !== true && session.status !== "terminated";
+}
+
+/**
+ * Whether a live worker can be archived from its own tab, topbar shortcut, or
+ * inspector: local, remote, or Cloud alike. The orchestrator goes with its
+ * project, and a Cloud session shared from another organization is the
+ * sharer's to archive.
+ */
+export function canArchiveWorkerSession(session: WorkspaceSession): boolean {
+	return !isOrchestratorSession(session) && session.cloud?.shared !== true && sessionIsActive(session);
 }
 
 /**

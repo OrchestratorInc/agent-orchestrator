@@ -42,7 +42,7 @@ describe("telemetry sanitizers", () => {
 		for (const variant of ["prompt", "control"]) {
 			expect(await sanitizeRendererProperties("ao.onboarding.first_run_experiment_exposed", { variant, path: "/private/repo" })).toEqual({ variant });
 		}
-		for (const action of ["clone", "local_folder", "standalone", "dismissed"]) {
+		for (const action of ["clone", "local_folder", "standalone", "import", "dismissed"]) {
 			expect(await sanitizeRendererProperties("ao.onboarding.first_run_prompt_action", { action, url: "https://private/repo" })).toEqual({ action });
 		}
 		for (const value of ["unknown", "/private/repo", 0, null, undefined]) {
@@ -222,7 +222,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("reports chat import counts and agents without titles, paths or ids", async () => {
-		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "home", project_id: "p1" })).toEqual({ surface: "home" });
+		expect(await sanitizeRendererProperties("ao.session_imports.offer_shown", { surface: "onboarding", project_id: "p1" })).toEqual({ surface: "onboarding" });
 		expect(await sanitizeRendererProperties("ao.session_imports.scan_completed", {
 			outcome: "succeeded",
 			candidate_count: 42,

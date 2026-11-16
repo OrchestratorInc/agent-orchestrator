@@ -176,7 +176,14 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		if err != nil {
 			return fmt.Errorf("list persisted comments for %s: %w", o.URL, err)
 		}
-		o.Comments = prCommentObservations(comments)
+		// The worker posts with the PR author's account, so its own replies
+		// ("Fixed in abc123") come back as review comments; never inject them.
+		// Unknown author (no PR row yet): nothing is filtered.
+		var prAuthor string
+		if pr, ok, err := m.store.GetPR(ctx, o.URL); err == nil && ok {
+			prAuthor = pr.Author
+		}
+		o.Comments = prCommentObservations(withoutPRAuthorReplies(comments, prAuthor))
 
 		if o.CI == domain.CIFailing {
 			pr, ok, err := m.store.GetPR(ctx, o.URL)
@@ -250,16 +257,33 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// and re-polls.
 	var blockedCheckErr error
 	if o.Mergeability == domain.MergeConflicting {
-		// Only the bottom of a stack is eligible for the rebase nudge. A PR
-		// stacked on an open parent is expected to report conflicts against its
-		// parent branch until the parent merges and it retargets, so nudging the
-		// agent to rebase it now would be noise. Mergeability UNKNOWN (the brief
-		// post-retarget recompute window) never reaches here.
-		blocked, err := m.prBlockedByOpenParent(ctx, id, o.URL)
+		// The session's "Automatically fix CI failures" switch also covers merge
+		// conflicts, so a session reviewing someone else's PR with the switch off
+		// is never told to rebase it. Fail closed: an unreadable policy skips
+		// this nudge and is surfaced below, like the parent-stack check.
+		pr, prFound, prErr := m.store.GetPR(ctx, o.URL)
+		var skip bool
+		var err error
+		switch {
+		case prErr != nil:
+			err = fmt.Errorf("load CI injection policy for %s: %w", o.URL, prErr)
+		case !prFound:
+			err = fmt.Errorf("load CI injection policy for %s: PR not found", o.URL)
+		case !pr.AutoInjectCI:
+			skip = true
+		default:
+			// Only the bottom of a stack is eligible for the rebase nudge. A PR
+			// stacked on an open parent is expected to report conflicts against
+			// its parent branch until the parent merges and it retargets, so
+			// nudging the agent to rebase it now would be noise. Mergeability
+			// UNKNOWN (the brief post-retarget recompute window) never reaches
+			// here.
+			skip, err = m.prBlockedByOpenParent(ctx, id, o.URL)
+		}
 		switch {
 		case err != nil:
 			blockedCheckErr = err
-		case !blocked:
+		case !skip:
 			msg := "There are merge conflicts on " + ident + ". Rebase onto the base branch and resolve them."
 			if o.URL != "" {
 				msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
@@ -608,6 +632,40 @@ func scmToPRObservation(o ports.SCMObservation) ports.PRObservation {
 		})
 	}
 	return pr
+}
+
+// withoutPRAuthorReplies drops the PR author's replies in review threads.
+// The worker uses the author's account, so a reply by the author is the
+// worker answering feedback (or the author answering it), not feedback for
+// the worker. A thread the author starts is kept: that is the author
+// reviewing their own PR, which the worker should act on. Comments arrive
+// oldest first, so a thread's first comment is its root.
+func withoutPRAuthorReplies(comments []domain.PullRequestComment, prAuthor string) []domain.PullRequestComment {
+	author := normalizeCommentAuthor(prAuthor)
+	if author == "" {
+		return comments
+	}
+	seenThread := make(map[string]bool, len(comments))
+	out := make([]domain.PullRequestComment, 0, len(comments))
+	for _, comment := range comments {
+		thread := strings.TrimSpace(comment.ThreadID)
+		reply := thread != "" && seenThread[thread]
+		if thread != "" {
+			seenThread[thread] = true
+		}
+		if reply && normalizeCommentAuthor(comment.Author) == author {
+			continue
+		}
+		out = append(out, comment)
+	}
+	return out
+}
+
+// normalizeCommentAuthor compares logins as GitHub does: case-insensitive,
+// with a leading "@" ignored. "[bot]" stays, so an app named after the
+// author is still a different author.
+func normalizeCommentAuthor(login string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(login), "@"))
 }
 
 func prCommentObservations(comments []domain.PullRequestComment) []ports.PRCommentObservation {

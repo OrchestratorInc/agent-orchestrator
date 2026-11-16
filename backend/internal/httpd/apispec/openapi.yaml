@@ -19940,6 +19940,7 @@ components:
         failureCode:
           enum:
           - provider_key_missing
+          - auth_required
           type: string
         hasHumanPrompt:
           type: boolean
@@ -20281,11 +20282,14 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
           - fake
           type: string
         approvalMode:
@@ -21063,11 +21067,14 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
           - cloudflared
           - cua-driver
           type: string
@@ -23367,6 +23374,8 @@ components:
           type: string
         behind:
           type: integer
+        branch:
+          type: string
         commits:
           type: integer
         conflicts:
@@ -25305,11 +25314,14 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
           type: string
         issueId:
           type: string

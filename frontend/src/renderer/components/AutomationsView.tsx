@@ -36,6 +36,7 @@ import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { CLOUD_PROJECT_KIND } from "../types/workspace";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -566,7 +567,7 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 	</article>;
 }
 
-type WorkspaceOption = { id: string; name: string; standaloneAgent?: boolean; kind?: string; cloudOrgId?: string; shared?: unknown };
+type WorkspaceOption = { id: string; name: string; kind?: string; standaloneAgent?: boolean; cloudOrgId?: string; shared?: unknown };
 type RunsOn = "local" | "cloud";
 type AutomationFormSubmit = {
 	/** Where the automation runs: this Mac's daemon, or AO Cloud. */
@@ -713,12 +714,14 @@ function AutomationFormDialog({
 	// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [open, automation, cloudAutomation, initialTemplateId]);
 
-	// A Cloud standalone agent takes no session but its own, so it is no project for an automation.
-	// With AO Cloud automations offered, This Mac lists local projects and AO Cloud the organization's own cloud projects.
+	// A Cloud standalone agent takes no session but its own: it is no project
+	// for an automation. This Mac's daemon knows no Cloud project (it answers
+	// "Unknown project"), so This Mac lists local projects only; AO Cloud lists
+	// the organization's own cloud projects (not ones shared in).
 	const projectOptions = workspaces
 		.filter((item) => !item.standaloneAgent && (isCloud
-			? item.kind === "cloud" && item.cloudOrgId === cloudOrgId && !item.shared
-			: !cloudOrgId || item.kind !== "cloud"))
+			? item.kind === CLOUD_PROJECT_KIND && item.cloudOrgId === cloudOrgId && !item.shared
+			: item.kind !== CLOUD_PROJECT_KIND))
 		.map((item) => ({ value: item.id, label: item.name }));
 	if (edited && !projectOptions.some((option) => option.value === edited.projectId)) {
 		projectOptions.unshift({ value: edited.projectId, label: edited.projectId });

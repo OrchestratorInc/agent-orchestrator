@@ -64,13 +64,17 @@ describe("live turn", () => {
 	});
 });
 
-// A reader who scrolled up into a running turn keeps their place when it settles
-// and its steps fold under "Worked for" all at once.
+// A reader who scrolled up into a running turn, or above it, keeps their place when
+// it settles and its steps fold under "Worked for" all at once.
 describe("settling under a reader who scrolled up", () => {
 	const secondNote: ConversationItem = { kind: "message", id: "note-2", turnId: "t", sequence: 4, revision: 0, role: "assistant", origin: "provider", text: "Now the tests.", streaming: false, createdAt: at };
 	const testRun: ConversationItem = { kind: "activity", id: "cmd-2", turnId: "t", sequence: 5, revision: 0, activityKind: "command", status: "completed", summary: "npm test", detail: { command: "npm test", exitCode: 0 }, createdAt: at };
 	const reply: ConversationItem = { kind: "message", id: "reply", turnId: "t", sequence: 6, revision: 0, role: "assistant", origin: "provider", text: "All green.", streaming: false, createdAt: at };
 	const items = [user, note, command, secondNote, testRun, reply];
+	// A terminal switch hands its note over as the turn's prompt, which is not drawn,
+	// so the turn opens on a step that folds away.
+	const handoff: ConversationItem = { kind: "message", id: "handoff", turnId: "t", sequence: 1, revision: 0, role: "user", origin: "human", text: "<ao-handoff-request>Carry on from the terminal.</ao-handoff-request>", content: [], streaming: false, delivery: "accepted", createdAt: at };
+	const handedOff = [handoff, ...items.slice(1)];
 	let restoreLayout: (() => void) | undefined;
 	afterEach(async () => {
 		cleanup();
@@ -83,8 +87,12 @@ describe("settling under a reader who scrolled up", () => {
 		restoreLayout = undefined;
 	});
 
-	/** jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row reserved for it are 28px) under a scrollable log. */
-	function stubTurnLayout(log: HTMLElement, scrollTop: number) {
+	/**
+	 * jsdom has no layout: stack the turn's rows 100px apart ("Worked for" and the row
+	 * reserved for it are 28px) from `turnTop` down a scrollable log, as if earlier
+	 * conversation filled the space above.
+	 */
+	function stubTurnLayout(log: HTMLElement, scrollTop: number, turnTop = 20) {
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
 		// The empty row reserved under the prompt is as tall as "Worked for", which
 		// takes its place as the turn settles.
@@ -94,7 +102,7 @@ describe("settling under a reader who scrolled up", () => {
 			if (this === log) return { ...bounds.call(this), top: 0, bottom: 800, height: 800 } as DOMRect;
 			const turn = this.parentElement;
 			if (!turn?.parentElement?.hasAttribute("data-chat-turn")) return bounds.call(this);
-			let top = 20 - log.scrollTop;
+			let top = turnTop - log.scrollTop;
 			for (const row of turn.children) {
 				if (row === this) break;
 				top += height(row);
@@ -112,8 +120,8 @@ describe("settling under a reader who scrolled up", () => {
 		fireEvent.scroll(log);
 	}
 
-	function settle(rerender: (ui: ReactElement) => void) {
-		rerender(<TooltipProvider><ChatWorkspace snapshot={snapshot("completed", items)} /></TooltipProvider>);
+	function settle(rerender: (ui: ReactElement) => void, turnItems = items) {
+		rerender(<TooltipProvider><ChatWorkspace snapshot={snapshot("completed", turnItems)} /></TooltipProvider>);
 	}
 
 	it("lands Worked for at the top of the view when the reader was among the steps", () => {
@@ -140,5 +148,29 @@ describe("settling under a reader who scrolled up", () => {
 
 		// Folded, the reply starts at 148: still 40px above the top edge.
 		expect(log.scrollTop).toBe(188);
+	});
+
+	it("holds the view still when the whole turn is below it", () => {
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", handedOff)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		// The view runs from 100 to 900; the turn starts below it, at 1200.
+		stubTurnLayout(log, 100, 1200);
+
+		settle(rerender, handedOff);
+
+		expect(screen.getByRole("button", { name: /Worked for/ })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(100);
+	});
+
+	it("holds the view still when the turn starts partway down it", () => {
+		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running", handedOff)} />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		// The view runs from 700 to 1500: the turn starts 500px down it.
+		stubTurnLayout(log, 700, 1200);
+
+		settle(rerender, handedOff);
+
+		// "Worked for" opens where the first step was, 500px down the view.
+		expect(log.scrollTop).toBe(700);
 	});
 });

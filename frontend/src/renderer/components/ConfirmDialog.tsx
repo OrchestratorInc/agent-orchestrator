@@ -32,6 +32,8 @@ type ConfirmDialogProps = {
 	/** Starts here rather than on a button, for a dialog with a field to fill. */
 	initialFocusRef?: React.RefObject<HTMLElement | null>;
 	busy?: boolean;
+	busyLabel?: string;
+	onCloseAutoFocus?: (event: Event) => void;
 	confirmDisabled?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
@@ -49,6 +51,8 @@ export function ConfirmDialog({
 	children,
 	initialFocusRef,
 	busy,
+	busyLabel,
+	onCloseAutoFocus,
 	confirmDisabled,
 	error,
 	onConfirm,
@@ -62,6 +66,7 @@ export function ConfirmDialog({
 	return (
 		<Dialog open={open} onOpenChange={(next) => { if (busy && !next) return; onOpenChange(next); }}>
 			<DialogContent
+				aria-busy={busy || undefined}
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(420px,calc(100vw-24px))]")}
 				// React portals re-dispatch synthetic events up the React tree, not the
@@ -85,7 +90,7 @@ export function ConfirmDialog({
 					event.preventDefault();
 					target.focus();
 				}}
-				onCloseAutoFocus={restoreFocusOnClose}
+				onCloseAutoFocus={onCloseAutoFocus ?? restoreFocusOnClose}
 				overlay={<DialogOverlay onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()} />}
 			>
 				<DialogClose asChild>
@@ -106,6 +111,7 @@ export function ConfirmDialog({
 				</div>
 
 				{children ? <div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>{children}</div> : null}
+				{busy && busyLabel ? <span role="status" aria-live="polite" className="sr-only">{busyLabel}</span> : null}
 
 				{error ? (
 					<div className={cn(settingsDialogBodyClass, "px-5 pt-0 pb-3")}>

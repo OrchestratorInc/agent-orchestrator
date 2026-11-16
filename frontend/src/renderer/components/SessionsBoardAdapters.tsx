@@ -13,7 +13,7 @@ import {
 	type BoardUsagePresentation,
 	type ProductUITranslator,
 } from "@aoagents/product-ui";
-import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Trash2 } from "@/components/app-icons";
+import { Archive, Check, Copy, File, GitBranch, LoaderCircle, RotateCcw, Share2, Trash2 } from "@/components/app-icons";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
@@ -114,6 +114,7 @@ export function BoardSessionCardAdapter({
 	onOpen,
 	onOpenArtifact,
 	onOpenArtifacts,
+	onShare,
 	onTerminate,
 	session,
 }: {
@@ -125,6 +126,8 @@ export function BoardSessionCardAdapter({
 	/** Opens the session with this artifact (by path) shown in the inspector. */
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
+	/** Opens the share dialog for this session; set only where this person can share it. */
+	onShare?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
 	/** The people in this session when it is shared. */
@@ -141,6 +144,7 @@ export function BoardSessionCardAdapter({
 			onOpen={onOpen}
 			onOpenArtifact={onOpenArtifact}
 			onOpenArtifacts={onOpenArtifacts}
+			onShare={onShare}
 			onTerminate={onTerminate}
 			session={session}
 		/>
@@ -239,6 +243,7 @@ function DesktopSessionCard({
 	onOpen,
 	onOpenArtifact,
 	onOpenArtifacts,
+	onShare,
 	onTerminate,
 	selected,
 	session,
@@ -258,6 +263,7 @@ function DesktopSessionCard({
 	onOpen?: () => void;
 	onOpenArtifact?: (path: string) => void;
 	onOpenArtifacts?: () => void;
+	onShare?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	selected?: boolean;
 	session: WorkspaceSession;
@@ -332,6 +338,31 @@ function DesktopSessionCard({
 		/>
 	) : undefined;
 
+	// Share sits beside Archive and shows the same way: on hover or focus.
+	const share = interactive && onShare ? onShare : undefined;
+	const shareButton = share ? (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					aria-label={t("share.titleNamed", { name: session.title })}
+					className="rounded-sm pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+					onClick={(event) => {
+						event.stopPropagation();
+						share();
+					}}
+					size="icon-sm"
+					type="button"
+					variant="quiet"
+					data-board-share-session=""
+				>
+					<Share2 className="size-icon-sm" aria-hidden="true" />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{t("share.button")}</TooltipContent>
+		</Tooltip>
+	) : null;
+	const people = participants && participants.length > 0 ? participants : undefined;
+
 	const card = (
 		<SessionCardView
 			action={action}
@@ -361,9 +392,11 @@ function DesktopSessionCard({
 			}}
 			onOpen={onOpen}
 			resource={resourcePresentation}
-			overlay={participants && participants.length > 0 ? (
+			overlay={people || shareButton ? (
 				<span className="inline-flex items-center gap-1">
-					<SessionPeopleStack people={participants} me={me} />
+					{/* The circles open the same share dialog, as they do in the session header. */}
+					{people ? <SessionPeopleStack people={people} me={me} onActivate={share} /> : null}
+					{shareButton}
 					{terminationOverlay}
 				</span>
 			) : terminationOverlay}
