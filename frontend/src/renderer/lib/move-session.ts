@@ -1,6 +1,7 @@
-import { apiErrorCode, apiErrorMessage } from "./api-client";
+import { apiErrorCode, apiErrorDetails, apiErrorMessage } from "./api-client";
 import { CloudCpError, type CloudCpClient } from "./cloud-cp";
 import type { clientForSessionHost } from "./host-clients";
+import { repoKey } from "./repo-key";
 
 type DaemonClient = ReturnType<typeof clientForSessionHost>;
 
@@ -11,7 +12,7 @@ export interface MoveTarget {
 	harness: string;
 }
 
-export type MoveStep = "stop" | "export" | "import" | "complete";
+export type MoveStep = "clone" | "stop" | "export" | "import" | "complete";
 
 export interface MoveResult {
 	sessionId: string;
@@ -168,12 +169,22 @@ export interface MoveHereDeps {
 	daemon: DaemonClient;
 	cloud: Pick<CloudCpClient, "exportSessionMove" | "restartSessionAgent" | "deleteSession">;
 	onStep?: (step: MoveStep) => void;
+	/** Called with the project a clone made, so Try again moves into it instead of cloning again. */
+	onCloned?: (projectId: string) => void;
+}
+
+/** The repository to clone when no project here has it, and the folder to clone it into. */
+export interface MoveHereClone {
+	remoteUrl: string;
+	destinationParent: string;
+	repoKey: string;
 }
 
 /** The Cloud session's settings the session keeps here; Cloud's export does not carry them. */
 export type MoveHereSettings = { autoReview: boolean; terminateOnPrMerge: boolean; autoInjectReview: boolean; autoInjectCI: boolean };
 
 export interface MoveHereResult {
+	projectId: string;
 	sessionId: string;
 	conversation: "transcript" | "note";
 	/** What did not carry over, such as subagent transcripts that stayed in Cloud. */
@@ -185,17 +196,30 @@ export interface MoveHereResult {
 }
 
 /**
- * Moves an Orchestrator Cloud session to a project on this computer: Cloud
+ * Moves an Orchestrator Cloud session to a project on this computer, cloning
+ * the repository first when no project here has it. Cloud
  * stops its agent and pushes its branch, this computer starts the session on
  * that branch, then the Cloud session is deleted, unless part of its
  * conversation did not move here. Until this computer has the session a
  * failure starts the Cloud agent again. moveId makes each call safe to retry.
  */
 export async function moveSessionHere(
-	input: { orgId: string; cloudSessionId: string; projectId: string; moveId: string; settings: MoveHereSettings },
+	input: { orgId: string; cloudSessionId: string; projectId?: string; clone?: MoveHereClone; moveId: string; settings: MoveHereSettings },
 	deps: MoveHereDeps,
 ): Promise<MoveHereResult> {
 	const { orgId, cloudSessionId } = input;
+	let projectId = input.projectId;
+	if (!projectId) {
+		if (!input.clone) throw new MoveError("No project here to move the session into", "clone", undefined, true);
+		// Nothing in Cloud has stopped yet, so a failed clone leaves the session as it was.
+		deps.onStep?.("clone");
+		try {
+			projectId = await cloneForMove(deps.daemon, input.clone);
+		} catch (error) {
+			throw error instanceof MoveError ? error : new MoveError(apiErrorMessage(error, "Could not clone the repository"), "clone", undefined, true);
+		}
+		deps.onCloned?.(projectId);
+	}
 	const restart = () => deps.cloud.restartSessionAgent(orgId, cloudSessionId).then(() => true, () => false);
 
 	// One Cloud call stops the agent and pushes; a failure is shown on the push.
@@ -213,7 +237,7 @@ export async function moveSessionHere(
 	const m = exported.manifest;
 	const imported = await deps.daemon.POST("/api/v1/sessions/move/import", {
 		body: {
-			projectId: input.projectId,
+			projectId,
 			moveId: input.moveId,
 			manifest: { ...m, ...input.settings },
 			handoffNote: exported.handoffNote,
@@ -231,6 +255,7 @@ export async function moveSessionHere(
 	}
 
 	const moved = {
+		projectId,
 		sessionId: imported.data.session.id,
 		conversation: exported.transcript ? "transcript" : "note",
 		warnings: imported.data.warnings ?? [],
@@ -247,6 +272,30 @@ export async function moveSessionHere(
 		}
 	}
 	return { ...moved, ...(deleteError ? { deleteError } : {}) };
+}
+
+/**
+ * Clones the repository into destinationParent and adds it as a project. A
+ * checkout of the same repository already at that path is added instead.
+ */
+async function cloneForMove(daemon: DaemonClient, clone: MoveHereClone): Promise<string> {
+	const fail = (error: unknown, fallback: string): never => {
+		throw new MoveError(apiErrorMessage(error, fallback), "clone", apiErrorCode(error), true);
+	};
+	const cloned = await daemon.POST("/api/v1/projects/clone", { body: { remoteUrl: clone.remoteUrl, destinationParent: clone.destinationParent } });
+	if (cloned.data) return cloned.data.project.id;
+	const existing = apiErrorCode(cloned.error) === "CLONE_DESTINATION_EXISTS" ? apiErrorDetails(cloned.error)?.path : undefined;
+	if (typeof existing !== "string") return fail(cloned.error, "Could not clone the repository");
+	const otherRepository = `${existing} holds another repository. Move or rename it, then try again.`;
+	const added = await daemon.POST("/api/v1/projects", { body: { path: existing } });
+	// A project there with this repository would have been listed as a target.
+	if (apiErrorCode(added.error) === "PATH_ALREADY_REGISTERED") return fail(undefined, otherRepository);
+	if (!added.data) return fail(added.error, `Could not add ${existing} as a project`);
+	if (repoKey(added.data.project.repo ?? "") !== clone.repoKey) {
+		await daemon.DELETE("/api/v1/projects/{id}", { params: { path: { id: added.data.project.id } } });
+		return fail(undefined, otherRepository);
+	}
+	return added.data.project.id;
 }
 
 function errorCode(error: unknown): string | undefined {

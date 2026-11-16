@@ -12,7 +12,7 @@ function fakeDaemon(replies: Record<string, Reply>, calls: string[]) {
 		if (!reply) throw new Error(`unexpected ${route}`);
 		return { ...reply, request: init };
 	});
-	return { POST: answer, GET: answer } as unknown as MoveDeps["source"];
+	return { POST: answer, GET: answer, DELETE: answer } as unknown as MoveDeps["source"];
 }
 
 const exported = {
@@ -219,7 +219,7 @@ describe("moveSessionHere", () => {
 		const local = daemon(ok({ session: { id: "local-9" }, warnings: ["w"] }));
 		const steps: string[] = [];
 		const result = await moveSessionHere(input, { daemon: local, cloud: cp, onStep: (step) => steps.push(step) });
-		expect(result).toEqual({ sessionId: "local-9", conversation: "transcript", warnings: ["w"] });
+		expect(result).toEqual({ projectId: "proj-1", sessionId: "local-9", conversation: "transcript", warnings: ["w"] });
 		expect(steps).toEqual(["stop", "import", "complete"]);
 		const body = (local.POST as ReturnType<typeof vi.fn>).mock.calls[0][1].body;
 		expect(body).toEqual({
@@ -270,7 +270,7 @@ describe("moveSessionHere", () => {
 			cloud: cp,
 			onStep: (step) => steps.push(step),
 		});
-		expect(result).toEqual({ sessionId: "local-9", conversation: "transcript", warnings: [warning], keptInCloud: true });
+		expect(result).toEqual({ projectId: "proj-1", sessionId: "local-9", conversation: "transcript", warnings: [warning], keptInCloud: true });
 		expect(steps).toEqual(["stop", "import"]);
 		expect(cp.deleteSession).not.toHaveBeenCalled();
 	});
@@ -280,6 +280,74 @@ describe("moveSessionHere", () => {
 		const result = await moveSessionHere(input, { daemon: daemon(ok({ session: { id: "local-9" }, warnings: ["Could not claim https://github.com/acme/app/pull/1: gone"] })), cloud: cp });
 		expect(result.keptInCloud).toBeUndefined();
 		expect(cp.deleteSession).toHaveBeenCalledWith("org-1", "cloud-1");
+	});
+
+	describe("when no project here has the repository", () => {
+		const clone = { remoteUrl: "https://github.com/acme/app", destinationParent: "~/ao/projects", repoKey: "github.com/acme/app" };
+		const { projectId: _unused, ...rest } = input;
+		const cloneInput = { ...rest, clone };
+		const exists = { error: { code: "CLONE_DESTINATION_EXISTS", message: "exists", details: { path: "/Users/me/ao/projects/app" } } };
+		const imported = ok({ session: { id: "local-9" } });
+
+		it("clones it before anything in Cloud stops, then moves into the new project", async () => {
+			const cp = cloudFake();
+			const calls: string[] = [];
+			const local = fakeDaemon({ "/api/v1/projects/clone": ok({ project: { id: "app" } }), "/api/v1/sessions/move/import": imported }, calls) as unknown as MoveHereDeps["daemon"];
+			const steps: string[] = [];
+			const onCloned = vi.fn();
+			const result = await moveSessionHere(cloneInput, { daemon: local, cloud: cp, onStep: (step) => steps.push(step), onCloned });
+			expect(result).toMatchObject({ projectId: "app", sessionId: "local-9" });
+			expect(steps).toEqual(["clone", "stop", "import", "complete"]);
+			expect(onCloned).toHaveBeenCalledWith("app");
+			expect((local.POST as ReturnType<typeof vi.fn>).mock.calls[0][1].body).toEqual({ remoteUrl: clone.remoteUrl, destinationParent: "~/ao/projects" });
+			expect((local.POST as ReturnType<typeof vi.fn>).mock.calls[1][1].body.projectId).toBe("app");
+		});
+
+		it("uses a checkout of the same repository already where the clone would go", async () => {
+			const calls: string[] = [];
+			const local = fakeDaemon({
+				"/api/v1/projects/clone": exists,
+				"/api/v1/projects": ok({ project: { id: "app-2", repo: "git@github.com:Acme/App.git" } }),
+				"/api/v1/sessions/move/import": imported,
+			}, calls) as unknown as MoveHereDeps["daemon"];
+			const result = await moveSessionHere(cloneInput, { daemon: local, cloud: cloudFake() });
+			expect(result.projectId).toBe("app-2");
+			expect((local.POST as ReturnType<typeof vi.fn>).mock.calls[1][1].body).toEqual({ path: "/Users/me/ao/projects/app" });
+		});
+
+		it("removes and refuses a folder there that holds another repository, leaving Cloud as it was", async () => {
+			const cp = cloudFake();
+			const calls: string[] = [];
+			const local = fakeDaemon({
+				"/api/v1/projects/clone": exists,
+				"/api/v1/projects": ok({ project: { id: "app-2", repo: "https://github.com/acme/other" } }),
+				"/api/v1/projects/{id}": ok(),
+			}, calls) as unknown as MoveHereDeps["daemon"];
+			const error = await moveSessionHere(cloneInput, { daemon: local, cloud: cp }).catch((e: unknown) => e);
+			expect(error).toMatchObject({ step: "clone", rolledBack: true, message: "/Users/me/ao/projects/app holds another repository. Move or rename it, then try again." });
+			expect(calls).toEqual(["/api/v1/projects/clone", "/api/v1/projects", "/api/v1/projects/{id}"]);
+			expect(cp.exportSessionMove).not.toHaveBeenCalled();
+		});
+
+		it("refuses a folder there that is already a project for another repository", async () => {
+			const cp = cloudFake();
+			const local = fakeDaemon({
+				"/api/v1/projects/clone": exists,
+				"/api/v1/projects": fail("PATH_ALREADY_REGISTERED", "A project at this path is already registered"),
+			}, []) as unknown as MoveHereDeps["daemon"];
+			const error = await moveSessionHere(cloneInput, { daemon: local, cloud: cp }).catch((e: unknown) => e);
+			expect(error).toMatchObject({ step: "clone", message: "/Users/me/ao/projects/app holds another repository. Move or rename it, then try again." });
+			expect(cp.exportSessionMove).not.toHaveBeenCalled();
+		});
+
+		it("leaves Cloud as it was when the clone fails", async () => {
+			const cp = cloudFake();
+			const local = fakeDaemon({ "/api/v1/projects/clone": fail("CLONE_EMPTY_REPOSITORY", "Orchestrator needs a repository with at least one commit.") }, []) as unknown as MoveHereDeps["daemon"];
+			const error = await moveSessionHere(cloneInput, { daemon: local, cloud: cp }).catch((e: unknown) => e);
+			expect(error).toMatchObject({ step: "clone", code: "CLONE_EMPTY_REPOSITORY", message: "Orchestrator needs a repository with at least one commit." });
+			expect(cp.exportSessionMove).not.toHaveBeenCalled();
+			expect(cp.restartSessionAgent).not.toHaveBeenCalled();
+		});
 	});
 
 	it("treats a Cloud session that is already gone as deleted", async () => {

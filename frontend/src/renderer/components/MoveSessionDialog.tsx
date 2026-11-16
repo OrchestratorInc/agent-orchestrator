@@ -21,6 +21,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { formatBytes } from "./ReadOnlyFileView";
+import { LAST_CLONE_DESTINATION_KEY } from "./CloneRepositoryDialog";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -237,7 +238,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 							error={error}
 							finished={Boolean(result)}
 							lastFailed={Boolean(result?.completeError)}
-							label={(candidate) => t(`move.step.${candidate}`, { branch })}
+							label={(candidate) => t(`move.step.${candidate as Exclude<MoveStep, "clone">}`, { branch })}
 						/>
 					)}
 					{error ? (
@@ -313,16 +314,17 @@ function UncommittedList({ changes }: { changes: { path: string; status: keyof t
 }
 
 /** The move's four steps; finished is set once the session runs at its destination. */
-function MoveStepList({ step, error, finished, lastFailed, label }: {
+function MoveStepList({ steps = STEPS, step, error, finished, lastFailed, label }: {
+	steps?: MoveStep[];
 	step: MoveStep;
 	error?: Error;
 	finished: boolean;
 	lastFailed: boolean;
 	label: (step: MoveStep) => string;
 }) {
-	const current = STEPS.indexOf(step);
+	const current = steps.indexOf(step);
 	const stepState = (candidate: MoveStep): "done" | "running" | "failed" | "pending" => {
-		const index = STEPS.indexOf(candidate);
+		const index = steps.indexOf(candidate);
 		if (error instanceof MoveError && error.step === candidate) return "failed";
 		if (finished && candidate === "complete" && lastFailed) return "failed";
 		if (index < current || (finished && index <= current)) return "done";
@@ -330,7 +332,7 @@ function MoveStepList({ step, error, finished, lastFailed, label }: {
 	};
 	return (
 		<ol className="flex flex-col gap-2" aria-live="polite">
-			{STEPS.map((candidate) => {
+			{steps.map((candidate) => {
 				const state = stepState(candidate);
 				return (
 					<li key={candidate} className="flex items-center gap-2.5 text-sm">
@@ -357,7 +359,6 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const queryClient = useQueryClient();
 	const navigateToSession = useNavigateToSession();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const requestCreateProject = useUiStore((state) => state.requestCreateProject);
 	const { client: cloudClient } = useCloudCp();
 	const cloudProjects = useCloudProjectsQuery();
 	const localProjects = useQuery(workspaceQueryOptions);
@@ -366,12 +367,19 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const [result, setResult] = useState<MoveHereResult>();
 	const [error, setError] = useState<Error>();
 	const [chosen, setChosen] = useState<string>();
+	const [steps, setSteps] = useState<MoveStep[]>(STEPS);
 	const moving = step !== undefined && !result && !error;
 	// One move per dialog: Try again reuses its id, so this computer returns
 	// the session it already started instead of starting a second one.
 	const moveId = useRef(crypto.randomUUID()).current;
+	// A project the move cloned; Try again moves into it instead of cloning again.
+	const cloned = useRef<string>(undefined);
+	// The folder the New project flow last cloned into, as it defaults to.
+	const cloneParent = useRef(window.localStorage.getItem(LAST_CLONE_DESTINATION_KEY) || "~/ao/projects").current;
 
-	const repo = repoKey(cloudProjects.data?.find((project) => project.id === session.workspaceId)?.repositoryUrl ?? "");
+	const repositoryUrl = cloudProjects.data?.find((project) => project.id === session.workspaceId)?.repositoryUrl ?? "";
+	const repo = repoKey(repositoryUrl);
+	const repoName = repo.split("/").slice(1).join("/");
 	const preview = useQuery({
 		queryKey: ["move-here-preview", orgId, session.id],
 		queryFn: () => cloudClient!.previewSessionMove(orgId, session.id),
@@ -380,7 +388,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 		gcTime: 0,
 	});
 	const branch = preview.data?.branch ?? "";
-	// Refetched when a project is added here, so Add project… comes back to this dialog ready.
+	// Refetched when a project is added here.
 	const localProjectIds = (localProjects.data ?? []).map((project) => project.id).sort().join(",");
 	const targets = useQuery({
 		queryKey: ["move-here-targets", repo, branch, localProjectIds],
@@ -399,7 +407,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	const loading = Boolean(cloudClient) && (preview.isPending || cloudProjects.isPending || (Boolean(repo && branch) && targets.isPending));
 	const candidates = targets.data ?? [];
 	const target = candidates.find((candidate) => candidate.projectId === chosen) ?? candidates.find((candidate) => !candidate.refusal) ?? candidates[0];
-	const noProject = !loading && targets.isSuccess && candidates.length === 0;
+	// No project here has the repository: the move clones it first.
+	const cloneInto = !loading && targets.isSuccess && candidates.length === 0 ? cloneParent : undefined;
 	const unavailable = !cloudClient
 		? t("move.signedOut")
 		: loading
@@ -414,15 +423,15 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 						? t("moveHere.agentNotSetUp", { agent: agent.label })
 						: targets.error
 							? targets.error.message
-							: noProject
-								? t("moveHere.noProject", { repo: repo.split("/").slice(1).join("/") })
-								: target?.refusal?.message;
-	const ready = !loading && !unavailable && target !== undefined;
+							: target?.refusal?.message;
+	const ready = !loading && !unavailable && (target !== undefined || cloneInto !== undefined);
 	const changes = preview.data?.changes ?? [];
 	const transcript = session.provider === "claude-code" ? preview.data?.transcript : undefined;
 
 	const start = async () => {
-		if (!ready || !cloudClient || !target) return;
+		if (!ready || !cloudClient) return;
+		const projectId = cloned.current ?? target?.projectId;
+		if (!projectId && step === undefined) setSteps(["clone", ...STEPS]);
 		setError(undefined);
 		setResult(undefined);
 		try {
@@ -430,7 +439,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 				{
 					orgId,
 					cloudSessionId: session.id,
-					projectId: target.projectId,
+					...(projectId ? { projectId } : { clone: { remoteUrl: repositoryUrl, destinationParent: cloneParent, repoKey: repo } }),
 					moveId,
 					settings: {
 						autoReview: session.autoReviewEnabled ?? false,
@@ -439,7 +448,14 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 						autoInjectCI: session.autoInjectCI ?? false,
 					},
 				},
-				{ daemon: clientForSessionHost(LOCAL_HOST), cloud: cloudClient, onStep: setStep },
+				{
+					daemon: clientForSessionHost(LOCAL_HOST),
+					cloud: cloudClient,
+					onStep: setStep,
+					onCloned: (id) => {
+						cloned.current = id;
+					},
+				},
 			);
 			if (moved.deleteError) {
 				// The session runs here; deleting the Cloud copy is retried until it lands.
@@ -448,8 +464,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 				return;
 			}
 			onClose();
-			navigateToSession(target.projectId, moved.sessionId);
-			const body = [t("moveHere.doneBody", { title: session.title, project: target.name }), ...(moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
+			navigateToSession(moved.projectId, moved.sessionId);
+			const body = [t("moveHere.doneBody", { title: session.title, project: target?.name ?? repoName.split("/").at(-1) }), ...(moved.keptInCloud ? [t("moveHere.doneKeptInCloud")] : []), ...moved.warnings];
 			showGlobalToast(t("moveHere.done"), body.join(" "), { tone: "success" });
 		} catch (failure) {
 			setError(failure instanceof Error ? failure : new Error(String(failure)));
@@ -460,9 +476,9 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	};
 
 	const openMoved = () => {
-		if (!result || !target) return;
+		if (!result) return;
 		onClose();
-		navigateToSession(target.projectId, result.sessionId);
+		navigateToSession(result.projectId, result.sessionId);
 	};
 
 	return (
@@ -515,6 +531,14 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 													)}
 												</dd>
 											</>
+										) : cloneInto ? (
+											<>
+												<dt className="text-settings-muted">{t("moveHere.project")}</dt>
+												<dd className="flex min-w-0 gap-2">
+													<span className="truncate text-settings-label">{repoName.split("/").at(-1)}</span>
+													<span className="truncate text-settings-muted">{t("moveHere.cloneInto", { path: homePath(cloneParent) })}</span>
+												</dd>
+											</>
 										) : null}
 										<dt className="text-settings-muted">{t("move.conversation")}</dt>
 										<dd className="text-settings-label">
@@ -547,11 +571,17 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 						)
 					) : (
 						<MoveStepList
+							steps={steps}
 							step={step}
 							error={error}
 							finished={Boolean(result)}
 							lastFailed={Boolean(result?.deleteError)}
-							label={(candidate) => (candidate === "export" ? t("move.step.export", { branch }) : t(`moveHere.step.${candidate}`))}
+							label={(candidate) =>
+								candidate === "export"
+									? t("move.step.export", { branch })
+									: candidate === "clone"
+										? t("moveHere.step.clone", { repo: repoName, path: homePath(cloneParent) })
+										: t(`moveHere.step.${candidate}`)}
 						/>
 					)}
 					{error ? (
@@ -565,7 +595,11 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 								</p>
 							) : null}
 							<p className="text-settings-muted">
-								{error instanceof MoveError && !error.rolledBack ? t("moveHere.failedNotRestarted") : t("moveHere.failedRestarted")}
+								{error instanceof MoveError && error.step === "clone"
+									? t("moveHere.failedClone")
+									: error instanceof MoveError && !error.rolledBack
+										? t("moveHere.failedNotRestarted")
+										: t("moveHere.failedRestarted")}
 							</p>
 						</div>
 					) : null}
@@ -583,15 +617,9 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 							<Button type="button" variant="secondary" onClick={onClose} disabled={moving}>
 								{t("confirm.cancel")}
 							</Button>
-							{noProject && step === undefined ? (
-								<Button type="button" variant="primary" onClick={() => requestCreateProject()}>
-									{t("moveHere.addProject")}
-								</Button>
-							) : (
-								<Button type="button" variant="primary" onClick={() => void start()} disabled={!ready || moving}>
-									{moving ? t("move.moving") : error ? t("move.retry") : t("moveHere.submit")}
-								</Button>
-							)}
+							<Button type="button" variant="primary" onClick={() => void start()} disabled={!ready || moving}>
+								{moving ? t("move.moving") : error ? t("move.retry") : t("moveHere.submit")}
+							</Button>
 						</>
 					)}
 				</div>

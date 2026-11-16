@@ -286,7 +286,6 @@ describe("moving a Cloud session to this computer", () => {
 	});
 
 	it.each([
-		["no project here has the repository", () => { daemon.targets = { data: { targets: [] } }; }, "No project on this computer has acme/app."],
 		["the branch is checked out here", () => {
 			daemon.targets = { data: { targets: [{ ...local, refusal: { code: "MOVE_BRANCH_CHECKED_OUT", message: "feat/login is checked out here by Fix login (old). Archive that session first." } }] } };
 		}, "feat/login is checked out here by Fix login (old). Archive that session first."],
@@ -299,14 +298,30 @@ describe("moving a Cloud session to this computer", () => {
 		expect(screen.queryByRole("button", { name: "Move to this computer" })?.hasAttribute("disabled") ?? true).toBe(true);
 	});
 
-	it("offers to add a project when none has the repository", async () => {
+	it("clones the repository when no project here has it, then moves into it", async () => {
 		daemon.targets = { data: { targets: [] } };
-		const requestCreateProject = vi.fn();
-		useUiStore.setState({ requestCreateProject });
+		daemon.posts = {
+			"/api/v1/projects/clone": { data: { project: { id: "app-new" } } },
+			"/api/v1/sessions/move/import": { data: { session: { id: "local-9" } } },
+		};
 		renderHere();
 		const user = userEvent.setup();
-		await user.click(await screen.findByRole("button", { name: "Add project…" }));
-		expect(requestCreateProject).toHaveBeenCalled();
+		expect(await screen.findByText("New clone in ~/ao/projects")).toBeTruthy();
+		await user.click(screen.getByRole("button", { name: "Move to this computer" }));
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app-new", "local-9"));
+		expect(cloud.exportSessionMove).toHaveBeenCalled();
+	});
+
+	it("says nothing moved when the clone fails", async () => {
+		daemon.targets = { data: { targets: [] } };
+		daemon.posts = { "/api/v1/projects/clone": { error: { code: "CLONE_EMPTY_REPOSITORY", message: "Orchestrator needs a repository with at least one commit." } } };
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		expect(await screen.findByText("Orchestrator needs a repository with at least one commit.")).toBeTruthy();
+		expect(screen.getByText("Clone acme/app into ~/ao/projects")).toBeTruthy();
+		expect(screen.getByText("Nothing moved. The session stays in Orchestrator Cloud as it was.")).toBeTruthy();
+		expect(cloud.exportSessionMove).not.toHaveBeenCalled();
 	});
 
 	it("starts the Cloud agent again and names the pushed commit when this computer refuses", async () => {
