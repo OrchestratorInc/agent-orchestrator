@@ -664,17 +664,18 @@ func TestResolveAgentConfigValidatesPiEffort(t *testing.T) {
 		}
 	}
 
-	// An inherited effort with no model and no catalog default clears silently
-	// instead of returning ErrModelCapabilitiesUnavailable.
+	// With no model or catalog default, a terminal leaves inherited effort to
+	// the CLI's default model, as it did before catalog validation.
 	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
 		m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 			{ID: "openai/gpt-6.1-sol", Efforts: []string{"low", "high"}},
 		}}}}
 		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
 			ProjectID: "p", Kind: domain.KindWorker, Harness: harness,
+			RequestedMode: domain.SessionModeTUI,
 		}, domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "high"}}})
-		if err != nil || resolved.Effort != "" {
-			t.Fatalf("harness %q inherited effort without a resolvable model = %#v, %v, want cleared", harness, resolved, err)
+		if err != nil || resolved.Effort != "high" {
+			t.Fatalf("harness %q inherited effort without a resolvable model = %#v, %v, want high", harness, resolved, err)
 		}
 	}
 }

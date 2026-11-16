@@ -8250,6 +8250,66 @@ func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
 	}
 }
 
+func TestSpawn_TUIPiInheritedEffortWithoutModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for _, source := range []string{"project", "role"} {
+			for _, mode := range []domain.SessionMode{"", domain.SessionModeTUI} {
+				for _, tc := range []struct {
+					name    string
+					catalog *tuningCatalog
+					want    string
+				}{
+					{name: "no catalog", want: "high"},
+					{name: "no saved models", catalog: &tuningCatalog{}, want: "high"},
+					{name: "no default", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/other", Efforts: []string{"low"}},
+					}}}, want: "high"},
+					{name: "catalog read error", catalog: &tuningCatalog{err: errors.New("saved catalog unavailable")}, want: "high"},
+					{name: "default supports effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low", "high"}},
+					}}}, want: "high"},
+					{name: "default rejects effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low"}},
+					}}}},
+				} {
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", harness, source, mode, tc.name), func(t *testing.T) {
+						m, st, rt, _ := newManager()
+						m.dataDir = t.TempDir()
+						agent := &recordingAgent{}
+						m.agents = singleAgent{agent: agent}
+						if tc.catalog != nil {
+							m.SetModelCatalog(tc.catalog)
+						}
+						project := st.projects["mer"]
+						project.Config = domain.ProjectConfig{Worker: domain.RoleOverride{Harness: harness}}
+						if source == "project" {
+							project.Config.AgentConfig.Effort = "high"
+						} else {
+							project.Config.Worker.AgentConfig.Effort = "high"
+						}
+						st.projects["mer"] = project
+
+						rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+							ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+							RequestedMode: mode, Prompt: "do the work",
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if agent.lastConfig.Effort != tc.want || agent.launchCalls != 1 || rt.created != 1 {
+							t.Fatalf("launch effort=%q, launches=%d, runtimes=%d; want %q, 1, 1", agent.lastConfig.Effort, agent.launchCalls, rt.created, tc.want)
+						}
+						if got := st.sessions[rec.ID].Metadata.Effort; got != tc.want {
+							t.Fatalf("saved effort=%q, want %q", got, tc.want)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 func TestSpawn_RejectsFreshClaudeAuthInWorkspaceLaunchContext(t *testing.T) {
 	m, st, rt, ws := newManager()
 	project := st.projects["mer"]

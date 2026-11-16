@@ -1842,6 +1842,7 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 // unavailable, stale, lacks a custom model or lists other efforts, the session
 // launches with the unvalidated config, as it would without a catalog.
 func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, unvalidated ports.AgentConfig) (ports.AgentConfig, error) {
+	cfg.RequestedMode = domain.SessionModeTUI
 	resolved, err := m.resolveAgentConfig(ctx, cfg, project)
 	// Only the spawn's own cancellation stops the launch; a catalog lookup's
 	// internal timeout is one more way the catalog can be unavailable.
@@ -1861,8 +1862,9 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 // harnesses (codex, claude-code, pi, prime-agent) confirm the selected model
 // advertises the level. It returns ErrUnsupportedEffort when a model does not
 // offer an explicitly requested level and ErrModelCapabilitiesUnavailable when
-// the catalog cannot confirm the launch. An inherited (non-override) effort that
-// Pi or Prime Agent cannot validate is cleared rather than failing the launch.
+// the catalog cannot confirm the launch. Unsupported inherited Pi or Prime
+// Agent effort is cleared. Terminals leave unconfirmed inherited levels to the
+// CLI; chat clears them.
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
 	resolved, err := m.resolveAgentConfigOnce(ctx, cfg, project)
 	if err != nil && cfg.Fork != nil && cfg.AgentConfig.Model != "" && errors.Is(err, ErrUnsupportedModel) {
@@ -1884,13 +1886,14 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
 	// Role or project settings may carry a stale Pi or Prime Agent effort that
-	// the selected model does not advertise, or a model the catalog cannot
-	// resolve. Such an inherited level is cleared instead of failing the launch.
+	// the selected model does not advertise. Clear that level instead of failing
+	// the launch; terminals let the CLI judge levels the catalog cannot confirm.
 	// A level the request carries itself (a flagged override, or a nonempty effort
 	// in the spawn request) is explicit and still validated, so an unsupported
 	// choice is rejected rather than silently dropped.
 	inheritedPiEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
 		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent)
+	clearUnconfirmedPiEffort := inheritedPiEffort && cfg.RequestedMode != domain.SessionModeTUI
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
@@ -1931,7 +1934,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		if validateClaudeModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
-		if inheritedPiEffort {
+		if clearUnconfirmedPiEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -1954,7 +1957,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
 		}
 		NoteSpawnModel(ctx, modelID, false)
-		if modelChangedWithoutExplicitEffort || inheritedPiEffort {
+		if modelChangedWithoutExplicitEffort || clearUnconfirmedPiEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -1999,10 +2002,10 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	}
 	if selected == nil {
 		// The saved catalog does not list the model, so the CLI owns its
-		// capabilities. For Pi and Prime Agent an inherited level cannot be
-		// confirmed here, so clear it rather than forward an unvalidated level.
+		// capabilities, including its default model when none was selected.
+		// Terminals preserve inherited effort for the CLI to validate.
 		// A level no Claude model accepts is still certain.
-		if inheritedPiEffort {
+		if clearUnconfirmedPiEffort {
 			resolved.Effort = ""
 			return resolved, nil
 		}
