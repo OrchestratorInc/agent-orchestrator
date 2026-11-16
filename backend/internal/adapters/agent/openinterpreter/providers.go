@@ -83,6 +83,10 @@ func SplitProviderModel(model string) (provider, slug string, ok bool) {
 // the user layer (core config loader in the pinned release).
 var systemConfigPath = defaultSystemConfigPath()
 
+// SystemConfigPath is the native system configuration file ConfiguredProvider
+// reads below the user layer.
+func SystemConfigPath() string { return systemConfigPath }
+
 func defaultSystemConfigPath() string {
 	if runtime.GOOS != "windows" {
 		return "/etc/codex/config.toml"

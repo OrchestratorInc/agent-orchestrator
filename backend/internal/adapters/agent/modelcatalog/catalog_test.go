@@ -512,6 +512,38 @@ func TestOpenInterpreterCatalogFingerprintTracksAncestorLayerAndHomePath(t *test
 	}
 }
 
+// The system layer selects the provider when the user layer names none and can
+// name a model_catalog_json file, so both are discovery inputs.
+func TestOpenInterpreterCatalogFingerprintTracksSystemLayer(t *testing.T) {
+	root := t.TempDir()
+	systemDir := t.TempDir()
+	system := filepath.Join(systemDir, "config.toml")
+	previous := openInterpreterSystemConfig
+	openInterpreterSystemConfig = func() string { return system }
+	t.Cleanup(func() { openInterpreterSystemConfig = previous })
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(system, `model_provider = "anthropic"`+"\n")
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", Env: map[string]string{"INTERPRETER_HOME": root}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	anthropic := fingerprint()
+	write(system, `model_provider = "openai"`+"\n"+`model_catalog_json = "models.json"`+"\n")
+	write(filepath.Join(systemDir, "models.json"), `{"models":[{"slug":"one"}]}`)
+	withCatalog := fingerprint()
+	if withCatalog == anthropic {
+		t.Fatal("changing the system provider did not invalidate the catalog")
+	}
+	write(filepath.Join(systemDir, "models.json"), `{"models":[{"slug":"two"}]}`)
+	if fingerprint() == withCatalog {
+		t.Fatal("editing the catalog named by the system layer did not invalidate the catalog")
+	}
+}
+
 func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
 	got, err := parseMiMoModels([]byte("mimo/mimo-auto — window 1M, compacts at 900K\nxiaomi/mimo-v2.5 — window 1.05M\n"))
 	if err != nil {

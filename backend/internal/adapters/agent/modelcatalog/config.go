@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -412,6 +413,10 @@ func openInterpreterModelCatalogFiles(configs []string, env map[string]string) [
 	}
 	return files
 }
+
+// openInterpreterSystemConfig is the native system configuration layer; tests
+// point it at a fixture.
+var openInterpreterSystemConfig = openinterpreter.SystemConfigPath
 
 // openInterpreterUserHome is the home directory a session's native process
 // sees: the session environment's override first, then the daemon's.
