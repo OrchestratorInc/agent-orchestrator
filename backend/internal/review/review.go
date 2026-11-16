@@ -1615,7 +1615,7 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 	// A pass-only override reviewer retires once its runs are terminal: the
 	// --agent flag documents "for this pass only", so a temporary reviewer must
 	// not linger in the pane forever (#6862). The session's selected reviewer
-	// and any reviewer with a running pass always stay. A live idle pane is
+	// and any reviewer with an active pass always stay. A live idle pane is
 	// destroyed with the row: retiring the record alone would orphan the
 	// reviewer process.
 	for i := range reviewRows {
@@ -1623,20 +1623,13 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		if row.IsArchived || row.Harness == selectedHarness {
 			continue
 		}
-		running := false
-		for _, run := range runs {
-			if run.ReviewID == row.ID && run.Status == domain.ReviewRunRunning {
-				running = true
-				break
-			}
-		}
-		if running {
+		if reviewRunsContainRunningForReview(runs, row) {
 			continue
 		}
-		if row.ReviewerHandleID != "" {
-			// Best-effort: List must not fail because a dying pane refused to
-			// die; the archived row below keeps it out of every surface anyway.
-			_ = e.launcher.Destroy(ctx, row.ReviewerHandleID)
+		if handle := reviewerProbeHandle(row); handle != "" {
+			if err := e.launcher.Destroy(ctx, handle); err != nil {
+				return SessionReviews{}, fmt.Errorf("retire reviewer %s: %w", row.ID, err)
+			}
 		}
 		retired := row
 		retired.IsArchived = true

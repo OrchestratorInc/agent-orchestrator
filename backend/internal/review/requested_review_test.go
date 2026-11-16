@@ -573,3 +573,69 @@ func TestListDestroysThePaneOfARetiredOverrideReviewer(t *testing.T) {
 		}
 	}
 }
+
+func TestListRetriesOverrideRetirementAfterDestroyFails(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []domain.ReviewerInterfaceMode{domain.ReviewerInterfaceTUI, domain.ReviewerInterfaceChat} {
+		t.Run(string(mode), func(t *testing.T) {
+			row := domain.Review{ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex,
+				InterfaceMode: mode, ReviewerHandleID: "codex-pane", ReviewerLaunchID: "launch-1",
+				ControllerGeneration: "generation-1", ReviewerActivityState: domain.ActivityIdle}
+			if mode == domain.ReviewerInterfaceChat {
+				row.ReviewerHandleID = ""
+			}
+			store := &fakeStore{reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: row},
+				runs: []domain.ReviewRun{requestedRun("run-codex", domain.ReviewerCodex, domain.ReviewRunFailed, domain.VerdictNone, 2)}}
+			stopErr := errors.New("shutdown failed")
+			launcher := &fakeLauncher{destroyErr: stopErr, destroyErrCall: 1}
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+			if _, err := eng.List(ctx, "mer-1"); !errors.Is(err, stopErr) {
+				t.Fatalf("List error = %v, want shutdown failure", err)
+			}
+			if got := store.reviews[domain.ReviewerCodex]; got.IsArchived || got.ReviewerHandleID != row.ReviewerHandleID || got.ReviewerLaunchID != row.ReviewerLaunchID || got.ControllerGeneration != row.ControllerGeneration || got.ReviewerActivityState != row.ReviewerActivityState {
+				t.Fatalf("failed shutdown changed the tracked reviewer: %+v", got)
+			}
+			got, err := eng.List(ctx, "mer-1")
+			if err != nil {
+				t.Fatalf("retry List: %v", err)
+			}
+			if launcher.destroyCalls != 2 || launcher.destroyedHandle != reviewerProbeHandle(row) {
+				t.Fatalf("shutdown was not retried on the original handle: %+v", launcher)
+			}
+			if retired := store.reviews[domain.ReviewerCodex]; !retired.IsArchived || retired.ReviewerHandleID != "" || retired.ReviewerLaunchID != "" || retired.ControllerGeneration != "" || retired.ReviewerActivityState != domain.ActivityExited {
+				t.Fatalf("successful retry did not retire reviewer: %+v", retired)
+			}
+			if got.ReviewerSurface.ReviewID != "" || len(got.ActiveReviewers) != 0 {
+				t.Fatalf("retired fallback reviewer is still visible: %+v", got)
+			}
+			if _, err := eng.List(ctx, "mer-1"); err != nil || launcher.destroyCalls != 2 {
+				t.Fatalf("retired reviewer was destroyed again: calls=%d err=%v", launcher.destroyCalls, err)
+			}
+		})
+	}
+}
+
+func TestListKeepsOverridesWithActivePasses(t *testing.T) {
+	for _, status := range domain.ActiveReviewRunStatuses {
+		t.Run(string(status), func(t *testing.T) {
+			store := &fakeStore{reviews: map[domain.ReviewerHarness]domain.Review{
+				domain.ReviewerCodex: {ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "codex-pane"},
+			}, runs: []domain.ReviewRun{requestedRun("run-codex", domain.ReviewerCodex, status, domain.VerdictNone, 2)}}
+			launcher := &fakeLauncher{alive: true}
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+			eng.runs.awaitBoot = true
+			eng.runs.startedAt = time.Unix(3, 0)
+			got, err := eng.List(context.Background(), "mer-1")
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if launcher.destroyCalls != 0 || store.reviews[domain.ReviewerCodex].IsArchived {
+				t.Fatal("an override with an active pass was retired")
+			}
+			if len(got.ActiveReviewers) != 1 || got.ActiveReviewers[0].ReviewID != "rev-codex" {
+				t.Fatalf("active override is not visible: %+v", got.ActiveReviewers)
+			}
+		})
+	}
+}
