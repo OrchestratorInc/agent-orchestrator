@@ -3,10 +3,14 @@ import { FileDiff } from "@pierre/diffs/react";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { CloudCpClient, CloudCpWorkspaceReviewFileSummary, CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
+import { useAskInChat } from "../../lib/chat-context-bus";
 import { parseUnifiedDiff } from "../../lib/diff-parser";
+import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useUiStore } from "../../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, type FileAnnotationModel } from "../WorkspaceDiffView";
 import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "../diffs/pierreTheme";
+import { SelectionAskButton } from "../diffs/SelectionAskButton";
+import { codeReference, useCodeSelection } from "../diffs/useCodeSelection";
 
 function metadataForPath(patch: string, path: string): FileDiffMetadata | null {
 	if (!patch) return null;
@@ -19,11 +23,13 @@ function metadataForPath(patch: string, path: string): FileDiffMetadata | null {
 }
 
 export function CloudDiffFile({
-	annotation, client, commitSha, fallback, file, onActiveSelectionChange, orgId, patch, scope,
-	sessionId, split, workspaceVersion,
+	annotation, chatReferences = true, client, commitSha, fallback, file, onActiveSelectionChange, orgId, patch, scope,
+	sessionId, split, surface, workspaceVersion,
 }: {
 	annotation: FileAnnotationModel;
 	baseUrl: string;
+	/** Highlighted code can be added to the chat; off where the path would not name the file in the session. */
+	chatReferences?: boolean;
 	client: CloudCpClient;
 	commitSha?: string;
 	fallback?: ReactNode;
@@ -34,6 +40,8 @@ export function CloudDiffFile({
 	scope: CloudCpWorkspaceReviewScope;
 	sessionId: string;
 	split: boolean;
+	/** Where this diff is shown: comment boxes opened here stay apart from the other surface's, as in local review. */
+	surface: "focused" | "review";
 	workspaceVersion: string;
 }) {
 	const { t } = useTranslation();
@@ -41,7 +49,8 @@ export function CloudDiffFile({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const metadata = useMemo(() => metadataForPath(patch, file.path), [file.path, patch]);
 	const rows = useMemo(() => parseUnifiedDiff(patch), [patch]);
-	const activeTargets = annotation.targets.filter((target) => target.surface !== "focused" && target.path === file.path && target.side !== "file" && target.line != null);
+	const otherSurface = surface === "focused" ? "review" : "focused";
+	const activeTargets = annotation.targets.filter((target) => target.surface !== otherSurface && target.path === file.path && target.side !== "file" && target.line != null);
 	const annotations: DiffLineAnnotation<"feedback">[] | undefined = activeTargets.length > 0
 		? activeTargets.map((target) => ({ lineNumber: target.line as number, side: target.side === "old" ? "deletions" : "additions", metadata: "feedback" }))
 		: undefined;
@@ -71,9 +80,18 @@ export function CloudDiffFile({
 		annotation.begin({
 			path: file.path, previousPath: file.previousPath, side: side === "deletions" ? "old" : "new", line,
 			oldLine: row.oldNo ?? undefined, newLine: row.newNo ?? undefined, lineKind: row.kind, lineText: row.text,
-			rowIndex, scope, surface: "review", workspaceVersion, fileFingerprint: file.fileFingerprint,
+			rowIndex, scope, surface, workspaceVersion, fileFingerprint: file.fileFingerprint,
 		});
-	}, [annotation, file.fileFingerprint, file.path, file.previousPath, rows, scope, workspaceVersion]);
+	}, [annotation, file.fileFingerprint, file.path, file.previousPath, rows, scope, surface, workspaceVersion]);
+
+	// Highlighted code gets an "Add to chat" button (or Cmd/Ctrl+L) while the
+	// session has a Chat composer, as in a local diff.
+	const askInChat = useAskInChat(sessionId);
+	const captureSource = fileReferenceSource(undefined, commitSha);
+	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.({
+		...codeReference(file.path, selection, true), ...captureSource, scope: scope === "untracked" ? "combined" : scope,
+		previousPath: file.previousPath, fileFingerprint: file.fileFingerprint, workspaceVersion,
+	}) ?? false, chatReferences && askInChat !== undefined);
 
 	if (!metadata) return <>{fallback}</>;
 	return <div className="ao-pierre-surface relative min-w-0 select-text" ref={containerRef}>
@@ -98,5 +116,6 @@ export function CloudDiffFile({
 				if (line) beginLineAnnotation(line.side, line.lineNumber);
 			}} />}
 		/>
+		<SelectionAskButton onAsk={codeSelection.ask} onDismiss={codeSelection.dismiss} source={codeSelection.source} />
 	</div>;
 }

@@ -48,7 +48,7 @@ export function CloudFileContentPane({ active, annotation, commitSha, initialEdi
 	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(annotation, target.repository), [annotation, target.repository]);
 	return <section className="relative flex h-full min-h-0 flex-col bg-background">
 		<div className="board-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
-			<CloudFileContent active={active} annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} commitSha={commitSha} initialEditing={initialEditing} initialLine={initialLine} initialMode={initialMode} initialRequestKey={initialRequestKey} onDirtyChange={handleDirtyChange} orgId={session.cloud?.orgId ?? ""} path={target.path} ready={ready} scope={scope} sessionId={session.id} split={split} />
+			<CloudFileContent active={active} annotation={scopedAnnotation} baseUrl={baseUrl} chatReferences={target.repository === undefined} client={scopedClient} commitSha={commitSha} initialEditing={initialEditing} initialLine={initialLine} initialMode={initialMode} initialRequestKey={initialRequestKey} onDirtyChange={handleDirtyChange} orgId={session.cloud?.orgId ?? ""} path={target.path} ready={ready} scope={scope} sessionId={session.id} split={split} />
 		</div>
 	</section>;
 }

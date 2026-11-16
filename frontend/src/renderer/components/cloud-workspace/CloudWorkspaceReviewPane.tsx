@@ -7,8 +7,9 @@ import type { CloudCpClient, CloudCpWorkspaceReviewCommit, CloudCpWorkspaceRevie
 import { cn } from "../../lib/utils";
 import { useUiStore, type CloudReviewUiState } from "../../stores/ui-store";
 import type { FileAnnotationModel } from "../WorkspaceDiffView";
-import { cancelFileAnnotations, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
+import { cancelFileAnnotations, FileAnnotationComposer, FileAnnotationSendBar, PanelMessage, RetryButton } from "../WorkspaceDiffView";
 import { Button } from "../ui/button";
+import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Pressable } from "../ui/pressable";
 import { Checkbox } from "../ui/checkbox";
 import { CloudDiffFile } from "./CloudDiffFile";
@@ -198,17 +199,38 @@ export function CloudWorkspaceReviewPane({
 				const deferred = deferredByDefault(file) && !fileStates[file.path]?.loadedDeferred;
 				const reason = deferredReasonByPath.get(file.path);
 				const closed = fileStates[file.path]?.collapsed;
+				const fileAnnotationTarget = annotation.targets.find((target) => target.surface !== "focused" && target.path === file.path && target.side === "file");
 				return <section className="border-b border-border" key={`${selectionKey}:${file.path}`}>
+					<Popover onOpenChange={(open) => { if (!open && fileAnnotationTarget) annotation.cancel(fileAnnotationTarget); }} open={fileAnnotationTarget != null}>
+					<PopoverAnchor asChild>
 					<header className="flex h-10 min-w-0 items-center gap-2 bg-surface px-2">
 						<Button aria-label={closed ? t("files.expandFile", { file: file.path }) : t("files.collapseFile", { file: file.path })} onClick={() => toggleCollapsed(file.path)} size="icon-sm" variant="ghost">{closed ? <ChevronRight /> : <ChevronDown />}</Button>
 						<span className={cn("font-mono text-xs font-semibold", statusTone[file.status])}>{statusLabel[file.status]}</span>
 						<Pressable className="min-w-0 flex-1 truncate font-mono text-xs hover:underline" onClick={() => toggleCollapsed(file.path)}>{file.path}</Pressable>
 						<span className="text-caption text-success">+{file.additions}</span><span className="text-caption text-error">−{file.deletions}</span>
-						<Button aria-label={t("files.addFeedback")} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion: data.workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button>
+						<Button aria-label={t("files.addFeedback")} aria-pressed={fileAnnotationTarget != null} onClick={() => annotation.begin({ path: file.path, previousPath: file.previousPath, side: "file", scope, surface: "review", workspaceVersion: data.workspaceVersion, fileFingerprint: file.fileFingerprint })} size="icon-sm" variant="ghost"><MessageSquarePlus /></Button>
 						<Button aria-label={t("files.openFullFileGeneric")} onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="icon-sm" variant="ghost"><FileCode2 /></Button>
 						<Checkbox aria-label={isViewed(file) ? t("files.markUnviewed", { file: file.path }) : t("files.markViewed", { file: file.path })} checked={isViewed(file)} onCheckedChange={(checked) => markViewed(file, checked === true)} />
 					</header>
-					{!closed && patch ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} client={client} commitSha={selectedCommit?.sha} file={file} onActiveSelectionChange={() => undefined} orgId={orgId} patch={patch} scope={scope} sessionId={sessionId} split={split} workspaceVersion={data.workspaceVersion} /> : null}
+					</PopoverAnchor>
+					{/* Whole-file feedback floats under the header's right edge, as in a
+					    local review: it stays open on outside clicks so a draft isn't lost;
+					    its close button, Esc, or this file's feedback button close it. */}
+					<PopoverContent
+						align="end"
+						aria-label={t("files.addFeedback")}
+						className="w-[min(32rem,var(--radix-popover-trigger-width))] rounded-2xl border-0 bg-transparent p-0"
+						hideWhenDetached
+						onInteractOutside={(event) => event.preventDefault()}
+						onOpenAutoFocus={(event) => event.preventDefault()}
+						side="bottom"
+						sideOffset={0}
+					>
+						{fileAnnotationTarget ? <FileAnnotationComposer annotation={annotation} target={fileAnnotationTarget} /> : null}
+					</PopoverContent>
+					</Popover>
+					{/* A sibling repository's paths are relative to it, so they would not name the file in the session's chat. */}
+					{!closed && patch ? <CloudDiffFile annotation={annotation} baseUrl={baseUrl} chatReferences={repository === undefined} client={client} commitSha={selectedCommit?.sha} file={file} onActiveSelectionChange={() => undefined} orgId={orgId} patch={patch} scope={scope} sessionId={sessionId} split={split} surface="review" workspaceVersion={data.workspaceVersion} /> : null}
 					{!closed && !patch ? <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><span className="min-w-0 flex-1">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : reason ? t("files.diffUnavailableReason", { reason }) : t("files.loadingDiff")}</span>{deferred ? <Button onClick={() => setFileStates({ ...fileStates, [file.path]: { ...fileStates[file.path], loadedDeferred: true } })} size="sm" variant="secondary">{t("files.loadDiff")}</Button> : null}<Button onClick={() => onOpenFile?.(file.path, { commitSha: selectedCommit?.sha, mode: "file", scope })} size="sm" variant="secondary">{t("files.fileView")}</Button></div> : null}
 				</section>;
 			})}
