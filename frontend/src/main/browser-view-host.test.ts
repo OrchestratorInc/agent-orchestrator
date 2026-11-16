@@ -3913,6 +3913,52 @@ describe("agent browser runtime", () => {
 		expect(views[6].webContents.close).toHaveBeenCalledTimes(1);
 	});
 
+	it("lets the agent work on a person's tab while its slow page is still loading", async () => {
+		let finishLoad!: () => void;
+		const slowLoad = new Promise<void>((resolve) => (finishLoad = resolve));
+		const { activeTargets, host, invoke, runtime } = setupTabHost(undefined, false, (_viewIndex, url) =>
+			url === "https://slow.example/" ? slowLoad : Promise.resolve(),
+		);
+		await host.execute("sess-1", "snapshot");
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		vi.mocked(runtime.runAction).mockClear();
+
+		const opening = invoke("browser:openTab", { viewId, url: "https://slow.example/" }) as Promise<BrowserTabsState>;
+		await vi.waitFor(() => expect(runtime.reconcileTargets).toHaveBeenCalledWith("sess-1"));
+
+		// The page is still loading; the agent's next command runs on that tab.
+		await host.execute("sess-1", "snapshot");
+		expect(runtime.runAction).toHaveBeenCalledWith("sess-1", "tab-select", { tabId: "t2" }, expect.anything(), undefined);
+		expect(activeTargets.get("sess-1")).toBe("t2");
+
+		finishLoad();
+		expect((await opening).activeTabId).toBe("t2");
+	});
+
+	it("opens a person's tab at once while an agent command is running, and announces it after", async () => {
+		const { host, invoke, runtime, views } = setupTabHost();
+		await host.execute("sess-1", "snapshot");
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		vi.mocked(runtime.reconcileTargets).mockClear();
+		let finishCommand: (() => void) | undefined;
+		const runAction = vi.mocked(runtime.runAction);
+		const implementation = runAction.getMockImplementation()!;
+		runAction.mockImplementationOnce(
+			(...args) => new Promise((resolve) => (finishCommand = () => resolve(implementation(...args)))),
+		);
+		const command = host.execute("sess-1", "snapshot").catch(() => undefined);
+		await vi.waitFor(() => expect(finishCommand).toBeDefined());
+
+		const opened = (await invoke("browser:openTab", { viewId, url: "https://example.com/" })) as BrowserTabsState;
+		expect(opened.activeTabId).toBe("t2");
+		expect(views).toHaveLength(2);
+		expect(runtime.reconcileTargets).not.toHaveBeenCalled();
+
+		finishCommand!();
+		await command;
+		await vi.waitFor(() => expect(runtime.reconcileTargets).toHaveBeenCalledWith("sess-1"));
+	});
+
 	it("keeps stable logical tab IDs, separate targets, and the selected tab active", async () => {
 		const { emit, host, invoke, views } = setupTabHost();
 		await host.execute("sess-1", "open", { url: "http://localhost:3000" });

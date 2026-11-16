@@ -2331,26 +2331,27 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     url?: string,
   ): Promise<BrowserTabsState> => {
-    if (!options.agentBrowserRuntime) {
-      await openTab(session, url, true);
-      return listTabs(session);
+    // A tab the person opens (a link clicked in chat, the + button) is made
+    // and shown here at once: not through agent-browser's `tab new`, which ran
+    // the CLI twice and, the first time, started its daemon before the page
+    // began to load, and not behind the native queue, so an agent command in
+    // progress cannot delay it. That command already pinned its own tab
+    // (runNative's targetTabId) and never overrides a newer human selection
+    // (activationRevision), the same as a popup the page opens mid-command.
+    const opened = openTab(session, url, true);
+    if (options.agentBrowserRuntime) {
+      // In queue order, after whatever command is running: agent-browser
+      // hears about the tab from the bridge, and its next command selects the
+      // person's tab by CDP identity first (ensureNativeActiveTab), as after a
+      // person closes a tab.
+      void queueNativeOperation(session, async () => {
+        session.nativeActiveTabId = undefined;
+        session.snapshotDeltaBaseline = undefined;
+        options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
+      }).catch(() => undefined);
     }
-    return queueNativeOperation(session, async () => {
-      // A tab the person opens (a link clicked in chat, the + button) is made
-      // here, not through agent-browser's `tab new`. That ran the CLI twice and,
-      // the first time, started its daemon, all before the page began to load,
-      // so the first link took seconds to appear. The bridge's createTarget
-      // ends in this same openTab call anyway. agent-browser hears about the
-      // tab from the bridge, and its next command selects the person's tab by
-      // CDP identity first (ensureNativeActiveTab), as after a person closes a
-      // tab. Creating it directly also keeps a first tab from racing the
-      // bootstrap page agent-browser makes when it connects to zero targets.
-      await openTab(session, url, true);
-      session.nativeActiveTabId = undefined;
-      session.snapshotDeltaBaseline = undefined;
-      options.agentBrowserRuntime!.reconcileTargets(session.sessionId);
-      return listTabs(session);
-    });
+    await opened;
+    return listTabs(session);
   };
 
   const closeNativeTab = async (
