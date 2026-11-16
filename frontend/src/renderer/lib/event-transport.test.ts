@@ -1367,7 +1367,7 @@ describe("local chat tail refresh", () => {
 			remoteGetMock.mockResolvedValueOnce(wire({ afterSequence: 2, oldestSequence: 3, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "partial and more")] }));
 			emit();
 			await vi.waitFor(() => expect(text("r2")).toBe("partial and more"));
-			expect(queries()).toEqual([{ beforeSequence: undefined, limit: 200 }, { afterSequence: 2, limit: 200 }]);
+			expect(queries()).toEqual([{ beforeSequence: undefined, limit: 30 }, { afterSequence: 2, limit: 30 }]);
 
 			// The turn settles: the tail no longer merges, so the whole chat is read as before.
 			remoteGetMock
@@ -1375,7 +1375,7 @@ describe("local chat tail refresh", () => {
 				.mockResolvedValueOnce(wire({ oldestSequence: 1, turns: [wireTurn("t1", "completed"), wireTurn("t2", "completed")], messages: [wireMessage("m1", "t1", 1), wireMessage("r1", "t1", 2), wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "done")] }));
 			emit();
 			await vi.waitFor(() => expect(text("r2")).toBe("done"));
-			expect(queries().slice(2)).toEqual([{ afterSequence: 2, limit: 200 }, { beforeSequence: undefined, limit: 200 }]);
+			expect(queries().slice(2)).toEqual([{ afterSequence: 2, limit: 30 }, { beforeSequence: undefined, limit: 30 }]);
 		} finally {
 			disconnect();
 			unsubscribe();

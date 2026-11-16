@@ -48,8 +48,8 @@ describe("refreshLocalConversationTail", () => {
 		getMock.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4), wireMessage("r2", "t2", 6, "partial and more")] }));
 		await expect(refreshLocalConversationTail(client, "s1")).resolves.toBe(true);
 		expect(getMock).toHaveBeenCalledOnce();
-		// A local page keeps whole outputs and the local page size.
-		expect(getMock.mock.calls[0][1].params.query).toEqual({ afterSequence: 3, limit: 200 });
+		// A local tail keeps whole outputs and asks for at most a live page.
+		expect(getMock.mock.calls[0][1].params.query).toEqual({ afterSequence: 3, limit: 30 });
 		const data = cached()!;
 		expect(data.pages).toHaveLength(2);
 		expect(data.pages[1]).toBe(older);

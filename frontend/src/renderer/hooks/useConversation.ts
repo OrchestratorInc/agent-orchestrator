@@ -545,6 +545,10 @@ function applyLiveConversationPage(queryClient: QueryClient, key: QueryKey, late
  * the live page during the read; the caller then refetches the chat as before.
  */
 export async function refreshLocalConversationTail(queryClient: QueryClient, sessionId: string): Promise<boolean> {
+	// The open read of a chat that changed while it was closed writes a whole live
+	// page when it lands, possibly one read before this event. A tail merged first
+	// would be overwritten by it, while a full reload started now lands after it.
+	if (localConversationRefreshes.get(queryClient)?.has(sessionId)) return false;
 	const key = conversationQueryKey(sessionId);
 	const loaded = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages;
 	const prior = loaded?.[0];
@@ -556,7 +560,9 @@ export async function refreshLocalConversationTail(queryClient: QueryClient, ses
 	if (loaded.length > 1 && remoteConversationFloor(mergeConversationPages(loaded) ?? prior) < prior.oldestSequence - 1) return false;
 	let wire: WireSnapshot;
 	try {
-		wire = await fetchConversationWire(sessionId, undefined, { afterSequence: floor, limit: CONVERSATION_PAGE_SIZE });
+		// The live page's size: the rows above its floor fit in it, and a tail that
+		// does not reach the floor is refused below.
+		wire = await fetchConversationWire(sessionId, undefined, { afterSequence: floor, limit: LOCAL_INITIAL_PAGE_SIZE });
 	} catch {
 		return false;
 	}

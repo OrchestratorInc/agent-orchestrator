@@ -24,6 +24,7 @@ import {
 	conversationConfigOptionsQueryKey,
 	conversationQueryKey,
 	conversationSkillsQueryKey,
+	refreshLocalConversationTail,
 	useConversation,
 	ProviderSwitchFailed,
 	useConversationCommands,
@@ -1977,6 +1978,29 @@ describe("opening a local chat it has cached", () => {
 	});
 	const mount = (queryClient: QueryClient) => renderHook(() => useConversation("ao-1"), {
 		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+	});
+
+	it("leaves an open read in flight to land instead of merging a tail it would overwrite", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockReturnValueOnce(openRead.promise)
+			.mockRejectedValue(new Error("read during the open read"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		// An event for the open chat arrives while its open read is in flight.
+		await expect(refreshLocalConversationTail(queryClient, "ao-1")).resolves.toBe(false);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await act(async () => { openRead.resolve(page(21, 1, false)); });
+		await waitFor(() => expect(second.result.current.snapshot?.latestSequence).toBe(21));
+		second.unmount();
 	});
 
 	it("reads only the live page when the chat changed while closed, keeping older pages", async () => {
