@@ -147,9 +147,10 @@ type Driver interface {
 
 // Service runs Cua Driver for the settings page and the computer-use tools.
 type Service struct {
-	driver Driver
-	images imageStore
-	goos   string
+	driver   Driver
+	images   imageStore
+	timeline timelineLog
+	goos     string
 
 	background context.Context
 	stop       context.CancelFunc
@@ -348,6 +349,14 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	if err != nil {
 		return CallResult{}, err
 	}
+	started := time.Now()
+	result, err := s.run(ctx, binary, scope, tool, request.SessionID, arguments)
+	s.recordCall(scope, tool, request.Arguments, started, result.Images, err)
+	return result, err
+}
+
+// run makes one driver call for Call, which has checked the request.
+func (s *Service) run(ctx context.Context, binary, scope, tool, sessionID string, arguments map[string]any) (CallResult, error) {
 	saved := &savedImages{store: s.images, scope: scope, tool: tool, images: []Image{}}
 	screenshot := saved.requestScreenshotFile(tool, arguments)
 	dropImageFiles(arguments)
@@ -358,7 +367,7 @@ func (s *Service) Call(ctx context.Context, request CallRequest) (CallResult, er
 	_, named := arguments["session"]
 	injected := !named && !s.isSessionless(tool)
 	if injected {
-		arguments["session"] = driverSession(request.SessionID)
+		arguments["session"] = driverSession(sessionID)
 	}
 	if tool == "run_steps" {
 		if observed := s.prepareObserve(saved, arguments); observed != "" {
