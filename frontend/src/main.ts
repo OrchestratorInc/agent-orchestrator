@@ -1171,7 +1171,7 @@ async function createWindowInternal(): Promise<void> {
 		// artifact's inline origin) is not the page navigating away.
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
-		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+		if (blocksRenderFrameNavigation(event.frame.url, event.url, (url) => remoteRegistry.isRenderUrl(url))) event.preventDefault();
 	});
 
 	// A cloud artifact frame's page can open another file of its session; the
@@ -1196,11 +1196,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
 		// Loading an agent page into a frame is always allowed: the page's own
 		// CSP sandboxes it, and it is judged by its own rule from then on.
-		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
+		if (details.resourceType === "subFrame" && (isAgentPageUrl(details.url) || remoteRegistry.isRenderUrl(details.url))) return callback({});
 		let pageUrl: string | undefined;
 		try {
 			for (let frame = details.frame; frame && !pageUrl; frame = frame.parent) {
-				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
+				if (isAgentPageUrl(frame.url) || remoteRegistry.isRenderUrl(frame.url)) pageUrl = frame.url;
 			}
 		} catch {
 			// The frame went away mid-request; nothing of its page is left to load.

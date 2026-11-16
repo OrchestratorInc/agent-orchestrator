@@ -23,6 +23,8 @@ const pendingSessions = new Map<string, { requestedAt: number; provider: string;
 /** A pending session is forgotten after this long without becoming ready. */
 const PENDING_SESSION_TTL_MS = 60 * 60_000;
 const PENDING_CHECKOUT_KEY = "ao.telemetry.cloudCheckoutPending";
+/** Per org, the plans whose Checkout the control plane last said starts a free trial (trialDays). */
+const trialOffers = new Map<string, ReadonlySet<string>>();
 
 let reportedOfferings = new Set<string>();
 let defaultProvider = "";
@@ -162,10 +164,15 @@ const LIMIT_CODES = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
-/** The control plane refused a request for plan reasons; `shown` is whether Upgrade opened. */
-export function reportPlanRefusal(code: string, shown: boolean): void {
+/**
+ * The control plane refused a request for plan reasons; `shown` is whether
+ * Upgrade opened. `source` is "chat" for a refusal read from an agent's tool
+ * output, which the desktop never saw itself, so it stays out of the rate of
+ * refusals the desktop's own requests turned into an Upgrade prompt.
+ */
+export function reportPlanRefusal(code: string, shown: boolean, source?: "chat"): void {
 	const event = LIMIT_CODES.has(code) ? "ao.renderer.cloud_limit_reached" : "ao.renderer.cloud_plan_refusal_shown";
-	void captureRendererEvent(event, { code, shown });
+	void captureRendererEvent(event, source ? { code, shown, source } : { code, shown });
 }
 
 function storage(): Pick<Storage, "getItem" | "setItem" | "removeItem"> | undefined {
@@ -204,6 +211,8 @@ export function observeBillingSummary(summary: { entitled?: boolean; subscriptio
 	const elapsed = typeof pending.at === "number" ? Math.max(0, Date.now() - pending.at) : undefined;
 	void captureRendererEvent("ao.renderer.cloud_checkout_completed", {
 		plan: summary.plan ?? pending.plan ?? "unknown",
+		// A free trial starts a subscription too; Stripe marks it trialing until it converts or ends.
+		trial: status === "trialing",
 		...(elapsed === undefined ? {} : { duration_ms: elapsed }),
 	});
 }
@@ -255,6 +264,7 @@ export function resetCloudTelemetryForTest(): void {
 	signInSource = undefined;
 	reportedOfferings = new Set();
 	defaultProvider = "";
+	trialOffers.clear();
 }
 
 function projectProvider(config: Record<string, unknown> | undefined): string {
@@ -380,11 +390,12 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 	instrumented.createBillingCheckout = async (orgId, plan, options) => {
 		const response = await client.createBillingCheckout(orgId, plan, options);
 		markCheckoutPending(plan, Date.now());
-		void captureRendererEvent("ao.renderer.cloud_checkout_started", { plan });
+		void captureRendererEvent("ao.renderer.cloud_checkout_started", { plan, trial: trialOffers.get(orgId)?.has(plan) ?? false });
 		return response;
 	};
 	instrumented.getBilling = async (orgId, options) => {
 		const summary = await client.getBilling(orgId, options);
+		trialOffers.set(orgId, new Set((summary.plans ?? []).filter((offer) => (offer.trialDays ?? 0) > 0).map((offer) => offer.name)));
 		observeBillingSummary(summary);
 		return summary;
 	};

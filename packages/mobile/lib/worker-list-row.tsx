@@ -405,7 +405,7 @@ const makeStyles = (t: Theme) =>
 			paddingVertical: space.sm,
 			gap: space.hair,
 		},
-		// Inset to the text, as T3 Code's list rows are, and drawn inside the row
+		// Inset to the text, and drawn inside the row
 		// so it travels with a swipe instead of staying behind on the rail.
 		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
 		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xs },

@@ -3026,6 +3026,7 @@ html.sidebar-reordering * {
 }
 
 /* Join only a notice that actually rendered, after the floating queue. */
+[data-composer-notice] + [data-composer-notice],
 [data-composer-notice] + .cursor-chat-composer {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
@@ -5767,6 +5768,11 @@ html[data-shell-linux] body > .files-popout-overlay {
  * their room. */
 .browser-panel__tab-strip:has(> .browser-panel__tab:nth-child(8)) > .browser-panel__tab:not(:has([data-active])) [data-terminal-tab-action] {
 	display: none;
+}
+
+/* With its close gone, the title does not fade out under it. */
+.browser-panel__tab-strip:has(> .browser-panel__tab:nth-child(8)) > .browser-panel__tab:not(:has([data-active])) [data-terminal-tab-frame] > button {
+	mask-image: none;
 }
 
 .browser-panel__tab--drag-placeholder {

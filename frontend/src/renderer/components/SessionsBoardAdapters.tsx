@@ -21,10 +21,14 @@ import { clientForHost } from "../lib/host-clients";
 import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
+import { useSettings } from "../hooks/useSettings";
+import { prepareUnpublish, sessionDeleteTargets, sessionPublishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { sessionPRMix } from "../lib/session-pr-mix";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { canonicalTrackerIssueId, sessionDeliverables } from "../types/workspace";
@@ -47,6 +51,8 @@ import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
+import { useHostShareLinks } from "./ShareArtifactPopover";
+import { Checkbox } from "./ui/checkbox";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
@@ -89,6 +95,7 @@ export function toBoardSessionPresentation(
 		isTerminated: session.isTerminated,
 		kanbanColumn: session.kanbanColumn,
 		displayStatus: session.displayStatus,
+		prMix: sessionPRMix(session),
 		provider: session.provider,
 		status: session.status,
 		statusReadiness: session.statusReadiness,
@@ -823,19 +830,37 @@ export function DeleteArchivedSessionDialog({
 	const queryClient = useQueryClient();
 	const [deleting, setDeleting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	// Each opening starts without the last attempt's error.
+	const [deleteArtifacts, setDeleteArtifacts] = useState(false);
+	// Each opening starts without the last attempt's error, keeping the artifacts.
 	const [wasOpen, setWasOpen] = useState(open);
 	if (open !== wasOpen) {
 		setWasOpen(open);
-		if (open) setError(null);
+		if (open) {
+			setError(null);
+			setDeleteArtifacts(false);
+		}
 	}
 	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
+	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
+	// Only a local or remote host's session is deleted here: its files, matched
+	// to this computer's host links on a remote host, say which are published.
+	const publishedCount = sessionPublishedCheck(session, useHostShareLinks()).known;
+	// This computer's session keeps its artifacts unless the box is checked;
+	// they stay on the Artifacts page. A remote host's are deleted with it.
+	const keepable = !session.hostId;
+	const artifactCount = sessionDeliverables(session).length;
+	const checkboxId = useId();
+	// An empty or stale list is no proof the folder is empty; the daemon deletes
+	// a session without files plainly.
+	const keeping = keepable && !deleteArtifacts;
 	const confirmDelete = async () => {
 		setDeleting(true);
 		setError(null);
 		try {
+			// Looked up while the files are there; unpublished only once they are gone.
+			const links = keeping ? null : await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ hostId: session.hostId, sessionId: session.id }] });
 			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
-				params: { path: { sessionId: session.id }, query: { cleanup: true } },
+				params: { path: { sessionId: session.id }, query: { cleanup: true, ...(keeping ? { keepArtifacts: true } : {}) } },
 			});
 			if (deleteError) {
 				setError(apiErrorMessage(deleteError, t("deleteSession.failed")));
@@ -843,26 +868,56 @@ export function DeleteArchivedSessionDialog({
 			}
 			onOpenChange(false);
 			onDeleted?.();
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			if (links) warnLinksStillLive(t, await links.unpublish());
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
+				...(keepable ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
+			]);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : t("deleteSession.failed"));
 		} finally {
 			setDeleting(false);
 		}
 	};
+	const body = keepable
+		? released ? t("deleteSession.bodyKeep") : t("deleteSession.bodyKeepCleanup")
+		: released ? t("deleteSession.body") : t("deleteSession.bodyCleanup");
 	return (
 		<ConfirmDialog
 			busy={deleting}
 			confirmAriaLabel={t("deleteSession.confirmAria")}
 			confirmLabel={deleting ? t("deleteSession.deleting") : t("deleteSession.confirm")}
-			description={released ? t("deleteSession.body") : t("deleteSession.bodyCleanup")}
+			description={body}
 			destructive
 			error={error}
 			onConfirm={() => void confirmDelete()}
 			onOpenChange={onOpenChange}
 			open={open}
 			title={t("deleteSession.dialog")}
-		/>
+		>
+			{keepable && artifactCount > 0 ? (
+				<div className="flex items-start gap-2">
+					<Checkbox
+						id={checkboxId}
+						className="mt-0.5"
+						checked={deleteArtifacts}
+						onCheckedChange={(next) => setDeleteArtifacts(next === true)}
+					/>
+					<div className="min-w-0 text-control leading-5">
+						<label htmlFor={checkboxId} className="text-foreground">
+							{t("deleteSession.deleteArtifacts", { count: artifactCount })}
+						</label>
+						<p className="text-settings-muted">
+							{deleteArtifacts
+								? publishedCount > 0 ? t("deleteSession.published", { count: publishedCount }) : t("deleteSession.deleteArtifactsHint", { count: artifactCount })
+								: t("deleteSession.keepArtifactsHint", { count: artifactCount })}
+						</p>
+					</div>
+				</div>
+			) : publishedCount > 0 ? (
+				<p className="text-control leading-5 text-foreground">{t("deleteSession.published", { count: publishedCount })}</p>
+			) : null}
+		</ConfirmDialog>
 	);
 }
 

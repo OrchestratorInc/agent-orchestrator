@@ -115,3 +115,22 @@ it("lists the focused member's tab menu below Ungroup", () => {
 
 	expect(getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Ungroup", "Close tab"]);
 });
+
+it.each([true, false])("lays the focused member's close over its name's end, shown at rest only while selected (active: %s)", (active) => {
+	const member = (key: string, label: string) => ({ key, label, icon: <svg />, onSelect: vi.fn(), onClose: vi.fn() });
+	const { getByRole, getAllByRole } = render(
+		<TooltipProvider>
+			<SplitGroupTab active={active} focusedKey="sh-1" members={[member("session", "Greeting"), member("sh-1", "Terminal 1")]} menu={{ kind: "group", onUngroup: vi.fn() }} />
+		</TooltipProvider>,
+	);
+	const focused = getByRole("tab", { name: "Terminal 1" });
+	const slot = getAllByRole("button").find((button) => button.closest("[data-terminal-tab-action]"))!.closest("[data-terminal-tab-action]")!;
+	expect(slot.previousElementSibling).toBe(focused);
+	expect(slot).toHaveClass("absolute", "right-2");
+	expect(slot).not.toHaveClass("mr-2");
+	expect(slot.classList.contains("opacity-0")).toBe(!active);
+	expect(focused).toHaveClass("min-w-shell-tab-min");
+	expect(focused).toHaveClass(active ? "[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]" : "group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]");
+	// The member keeps its icon on hover.
+	expect(focused.querySelector("svg")?.parentElement).not.toHaveClass("group-hover:opacity-0");
+});

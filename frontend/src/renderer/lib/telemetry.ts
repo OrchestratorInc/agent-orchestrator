@@ -994,6 +994,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 		case "ao.renderer.cloud_checkout_started":
 		case "ao.renderer.cloud_checkout_completed": {
 			safe.plan = cloudPlan(properties?.plan);
+			if (typeof properties?.trial === "boolean") safe.trial = properties.trial;
 			const duration = nonNegativeNumber(properties?.duration_ms);
 			if (duration !== undefined && event === "ao.renderer.cloud_checkout_completed") safe.duration_ms = duration;
 			break;
@@ -1002,6 +1003,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 		case "ao.renderer.cloud_limit_reached":
 			safe.code = cloudCode(properties?.code);
 			if (typeof properties?.shown === "boolean") safe.shown = properties.shown;
+			if (properties?.source === "chat") safe.source = "chat";
 			break;
 	}
 	return safe;
