@@ -79,15 +79,45 @@ func SplitProviderModel(model string) (provider, slug string, ok bool) {
 	return "", model, false
 }
 
-// ConfiguredProvider reports the provider the user configuration in home
-// selects: OpenAIProvider when none is named. ok is false when the selection
-// cannot be read exactly (a named profile, or an unreadable or malformed
-// file), because profile and project overrides need native resolution.
+// systemConfigPath is the native system configuration layer, which sits below
+// the user layer (core config loader in the pinned release).
+var systemConfigPath = defaultSystemConfigPath()
+
+func defaultSystemConfigPath() string {
+	if runtime.GOOS != "windows" {
+		return "/etc/codex/config.toml"
+	}
+	programData := os.Getenv("ProgramData")
+	if programData == "" {
+		programData = `C:\ProgramData`
+	}
+	return filepath.Join(programData, "OpenAI", "Codex", "config.toml")
+}
+
+// ConfiguredProvider reports the provider native configuration selects: the
+// user configuration in home, else the system configuration, else
+// OpenAIProvider. Project layers cannot set model_provider. ok is false when
+// the selection cannot be read exactly (a named profile, or an unreadable or
+// malformed file), because those need native resolution.
 func ConfiguredProvider(home string) (provider string, ok bool) {
-	path := filepath.Join(home, "config.toml")
+	for _, path := range []string{filepath.Join(home, "config.toml"), systemConfigPath} {
+		provider, ok := providerSelection(path)
+		if !ok {
+			return "", false
+		}
+		if provider != "" {
+			return provider, true
+		}
+	}
+	return OpenAIProvider, true
+}
+
+// providerSelection reads one configuration layer's model_provider: "" when
+// the file is absent or names none, ok false when it cannot be read exactly.
+func providerSelection(path string) (provider string, ok bool) {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
-		return OpenAIProvider, true
+		return "", true
 	}
 	const maxConfigBytes = 1 << 20
 	if err != nil || !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
@@ -108,9 +138,6 @@ func ConfiguredProvider(home string) (provider string, ok bool) {
 	}
 	if toml.Unmarshal(data, &config) != nil || config.Profile != "" {
 		return "", false
-	}
-	if config.ModelProvider == "" {
-		return OpenAIProvider, true
 	}
 	return config.ModelProvider, true
 }

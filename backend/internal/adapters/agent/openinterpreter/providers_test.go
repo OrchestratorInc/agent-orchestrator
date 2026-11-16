@@ -81,14 +81,20 @@ func TestLaunchPinsOpenAIModel(t *testing.T) {
 
 func TestConfiguredProvider(t *testing.T) {
 	for _, tc := range []struct {
-		name, config, want string
-		ok                 bool
+		name, config, system, want string
+		ok                         bool
 	}{
-		{"missing config", "", OpenAIProvider, true},
-		{"no provider", "model = \"gpt-6-sol\"\n", OpenAIProvider, true},
-		{"selected provider", "model_provider = \"zai\"\nmodel = \"glm-5.1\"\n", "zai", true},
-		{"named profile", "profile = \"work\"\n", "", false},
-		{"malformed", "model_provider = [", "", false},
+		{"missing config", "", "", OpenAIProvider, true},
+		{"no provider", "model = \"gpt-6-sol\"\n", "", OpenAIProvider, true},
+		{"selected provider", "model_provider = \"zai\"\nmodel = \"glm-5.1\"\n", "", "zai", true},
+		{"named profile", "profile = \"work\"\n", "", "", false},
+		{"malformed", "model_provider = [", "", "", false},
+		// The system layer selects a provider when the user layer names none,
+		// so native discovery would list that provider's models, not OpenAI's.
+		{"system provider", "", "model_provider = \"anthropic\"\n", "anthropic", true},
+		{"system provider below unnamed user config", "model = \"claude\"\n", "model_provider = \"anthropic\"\n", "anthropic", true},
+		{"user provider overrides system", "model_provider = \"openai\"\n", "model_provider = \"anthropic\"\n", OpenAIProvider, true},
+		{"malformed system config", "", "model_provider = [", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -97,6 +103,15 @@ func TestConfiguredProvider(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			system := filepath.Join(t.TempDir(), "config.toml")
+			if tc.system != "" {
+				if err := os.WriteFile(system, []byte(tc.system), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			previous := systemConfigPath
+			systemConfigPath = system
+			t.Cleanup(func() { systemConfigPath = previous })
 			if got, ok := ConfiguredProvider(home); got != tc.want || ok != tc.ok {
 				t.Fatalf("ConfiguredProvider = %q, %v; want %q, %v", got, ok, tc.want, tc.ok)
 			}
