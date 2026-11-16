@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
@@ -23,18 +26,23 @@ import (
 // are different instructions, and a generic internal error is neither.
 
 type fakeChatService struct {
-	discarded   int
-	title       string
-	rollback    error
-	setTitle    error
-	edit        chatsvc.EditMessageResult
-	editErr     error
-	activate    string
-	activateErr error
-	retryTurn   domain.ConversationTurn
-	retryErr    error
+	discarded     int
+	title         string
+	rollback      error
+	preview       chatsvc.RollbackPreview
+	setTitle      error
+	edit          chatsvc.EditMessageResult
+	editErr       error
+	activate      string
+	activateErr   error
+	retryTurn     domain.ConversationTurn
+	retryErr      error
+	autoResumeErr error
+	gotAutoResume *bool
+	snapshot      chatsvc.Snapshot
 
 	gotTurnID      string
+	gotFilePlanID  string
 	gotTitle       string
 	gotEditTurnID  string
 	gotEditMessage ports.ChatUserMessage
@@ -53,7 +61,7 @@ func (f *fakeChatService) ActivateBranch(_ context.Context, _ domain.SessionID, 
 }
 
 func (f *fakeChatService) Snapshot(context.Context, domain.SessionID) (chatsvc.Snapshot, error) {
-	return chatsvc.Snapshot{}, nil
+	return f.snapshot, nil
 }
 
 func (f *fakeChatService) Send(context.Context, domain.SessionID, ports.ChatUserMessage) (domain.ConversationTurn, error) {
@@ -86,12 +94,18 @@ func (f *fakeChatService) SetTurnSettings(context.Context, domain.SessionID, dom
 	return domain.ConversationSettings{}, nil
 }
 
-func (f *fakeChatService) Rollback(_ context.Context, _ domain.SessionID, turnID string) (int, error) {
+func (f *fakeChatService) Rollback(_ context.Context, _ domain.SessionID, turnID, filePlanID string) (int, error) {
 	f.gotTurnID = turnID
+	f.gotFilePlanID = filePlanID
 	if f.rollback != nil {
 		return 0, f.rollback
 	}
 	return f.discarded, nil
+}
+
+func (f *fakeChatService) RollbackPreview(_ context.Context, _ domain.SessionID, turnID string) (chatsvc.RollbackPreview, error) {
+	f.gotTurnID = turnID
+	return f.preview, f.rollback
 }
 
 func (f *fakeChatService) RetryTurn(_ context.Context, _ domain.SessionID, turnID string) (domain.ConversationTurn, error) {
@@ -100,6 +114,74 @@ func (f *fakeChatService) RetryTurn(_ context.Context, _ domain.SessionID, turnI
 		return domain.ConversationTurn{}, f.retryErr
 	}
 	return f.retryTurn, nil
+}
+
+func (f *fakeChatService) SetTurnAutoResume(_ context.Context, _ domain.SessionID, turnID string, enabled bool) error {
+	f.gotTurnID = turnID
+	f.gotAutoResume = &enabled
+	return f.autoResumeErr
+}
+
+func TestSetTurnAutoResumeRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		enabled    *bool
+		err        error
+	}{
+		{"enable", `{"enabled":true}`, http.StatusNoContent, boolPointer(true), nil},
+		{"cancel", `{"enabled":false}`, http.StatusNoContent, boolPointer(false), nil},
+		{"missing", `{}`, http.StatusBadRequest, nil, nil},
+		{"null", `{"enabled":null}`, http.StatusBadRequest, nil, nil},
+		{"wrong type", `{"enabled":"yes"}`, http.StatusBadRequest, nil, nil},
+		{"unknown reset", `{"enabled":true}`, http.StatusConflict, boolPointer(true), chatsvc.ErrUsageLimitResetUnknown},
+		{"superseded", `{"enabled":true}`, http.StatusConflict, boolPointer(true), chatsvc.ErrUsageLimitAutoResumeInvalid},
+		{"account changed", `{"enabled":true}`, http.StatusConflict, boolPointer(true), ports.ErrAgentAccountChanged},
+		{"wrong turn", `{"enabled":true}`, http.StatusNotFound, boolPointer(true), domain.ErrNoConversationTurn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeChatService{autoResumeErr: tc.err}
+			srv := newChatTestServer(t, svc)
+			body, status, _ := doRequest(t, srv, http.MethodPatch, "/api/v1/sessions/ao-1/conversation/turns/turn-7/auto-resume", tc.body)
+			if status != tc.status {
+				t.Fatalf("status = %d, want %d: %s", status, tc.status, body)
+			}
+			if (svc.gotAutoResume == nil) != (tc.enabled == nil) || (tc.enabled != nil && *svc.gotAutoResume != *tc.enabled) {
+				t.Fatalf("auto-resume = %v, want %v", svc.gotAutoResume, tc.enabled)
+			}
+			if tc.enabled != nil && svc.gotTurnID != "turn-7" {
+				t.Fatalf("turn = %q", svc.gotTurnID)
+			}
+		})
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
+
+func TestConversationUsageLimitWireProjection(t *testing.T) {
+	reset := time.Date(2026, 10, 14, 16, 50, 0, 0, time.UTC)
+	svc := &fakeChatService{snapshot: chatsvc.Snapshot{Turns: []domain.ConversationTurn{{
+		ID: "limited", State: domain.TurnStateFailed,
+		UsageLimit: &domain.ConversationUsageLimit{ResetsAt: &reset, AutoResume: true, ResumeError: "Auto-resume stopped"},
+	}}}}
+	srv := newChatTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-1/conversation", "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	var payload struct {
+		Turns []struct {
+			UsageLimit struct {
+				ResetsAt    string `json:"resetsAt"`
+				AutoResume  bool   `json:"autoResume"`
+				ResumeError string `json:"resumeError"`
+			} `json:"usageLimit"`
+		} `json:"turns"`
+	}
+	mustJSON(t, body, &payload)
+	if len(payload.Turns) != 1 || payload.Turns[0].UsageLimit.ResetsAt != "2026-10-14T16:50:00Z" || !payload.Turns[0].UsageLimit.AutoResume || payload.Turns[0].UsageLimit.ResumeError != "Auto-resume stopped" {
+		t.Fatalf("projection = %+v", payload)
+	}
 }
 
 // Compaction belongs to a sibling slice; this fake only has to satisfy the
@@ -113,6 +195,18 @@ func (f *fakeChatService) ReloadMCPServers(
 	domain.SessionID,
 ) ([]domain.ConversationMCPServer, error) {
 	return nil, nil
+}
+
+func (f *fakeChatService) SwitchProvider(context.Context, domain.SessionID, domain.ProviderSwitchRequest) error {
+	return nil
+}
+
+func (f *fakeChatService) SwitchProviderAndSend(context.Context, domain.SessionID, domain.ProviderSwitchRequest, ports.ChatUserMessage) (domain.ConversationTurn, bool, error) {
+	return domain.ConversationTurn{}, true, nil
+}
+
+func (f *fakeChatService) SessionHistory(context.Context, domain.SessionID, int, int) ([]domain.HandoffTurn, int, error) {
+	return nil, 0, nil
 }
 
 func (f *fakeChatService) SetTitle(_ context.Context, _ domain.SessionID, title string) (string, error) {
@@ -151,12 +245,90 @@ func TestRollbackRouteReportsWhatWasDiscarded(t *testing.T) {
 	if svc.gotTurnID != "turn-7" {
 		t.Errorf("turn id = %q, want turn-7", svc.gotTurnID)
 	}
+	// Mobile and older desktops post no body and tell their users files stay put.
+	if svc.gotFilePlanID != "" {
+		t.Error("a rollback without a body restored files")
+	}
 	var got struct {
 		TurnsDiscarded int `json:"turnsDiscarded"`
 	}
 	mustJSON(t, body, &got)
 	if got.TurnsDiscarded != 3 {
 		t.Errorf("turnsDiscarded = %d, want 3", got.TurnsDiscarded)
+	}
+}
+
+func TestRollbackRouteRestoresFilesOnlyWhenAsked(t *testing.T) {
+	svc := &fakeChatService{discarded: 1}
+	srv := newChatTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST",
+		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", `{"restoreFiles":true,"planId":"plan-1"}`)
+	if status != http.StatusOK || svc.gotFilePlanID != "plan-1" {
+		t.Fatalf("status = %d, plan = %q; want 200 restoring plan-1; body=%s", status, svc.gotFilePlanID, body)
+	}
+
+	// A plan id alone does not ask for files back.
+	svc.gotFilePlanID = ""
+	body, status, _ = doRequest(t, srv, "POST",
+		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", `{"planId":"plan-1"}`)
+	if status != http.StatusOK || svc.gotFilePlanID != "" {
+		t.Fatalf("status = %d, plan = %q; want 200 without files; body=%s", status, svc.gotFilePlanID, body)
+	}
+
+	// Files are restored only against a list the user was shown.
+	body, status, _ = doRequest(t, srv, "POST",
+		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", `{"restoreFiles":true}`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "CHAT_ROLLBACK_PLAN_REQUIRED")
+
+	body, status, _ = doRequest(t, srv, "POST",
+		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", `{"restoreFiles":`)
+	assertErrorCode(t, body, status, http.StatusBadRequest, "INVALID_BODY")
+}
+
+func TestRollbackPreviewRouteListsEveryFile(t *testing.T) {
+	changes := []filesnapshot.Change{
+		{Path: "a.go", Kind: filesnapshot.ChangeReverted},
+		{Path: "gone.go", Kind: filesnapshot.ChangeRestored},
+	}
+	for i := len(changes); i < 201; i++ {
+		changes = append(changes, filesnapshot.Change{Path: fmt.Sprintf("gen/%03d.txt", i), Kind: filesnapshot.ChangeRemoved})
+	}
+	svc := &fakeChatService{preview: chatsvc.RollbackPreview{Changes: changes, CommitsSince: 2, PlanID: "plan-1"}}
+	srv := newChatTestServer(t, svc)
+
+	body, status, headers := doRequest(t, srv, "GET",
+		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", "")
+	assertJSON(t, headers)
+	if status != http.StatusOK || svc.gotTurnID != "turn-7" {
+		t.Fatalf("status = %d, turn = %q; want 200 for turn-7; body=%s", status, svc.gotTurnID, body)
+	}
+	var got controllers.RollbackPreviewResponse
+	mustJSON(t, body, &got)
+	if !got.FilesRestorable || got.Reason != "" || got.TotalFiles != 201 || len(got.Files) != 201 || got.CommitsSince != 2 || got.PlanID != "plan-1" {
+		t.Fatalf("preview = restorable %v, reason %q, %d of %d files, %d commits, plan %q; want restorable, 201 of 201, 2 commits, plan-1",
+			got.FilesRestorable, got.Reason, len(got.Files), got.TotalFiles, got.CommitsSince, got.PlanID)
+	}
+	if got.Files[0] != (controllers.RollbackFileChange{Path: "a.go", Change: "reverted"}) ||
+		got.Files[1] != (controllers.RollbackFileChange{Path: "gone.go", Change: "restored"}) ||
+		got.Files[200].Change != "removed" {
+		t.Fatalf("files = %+v ... %+v, want the service's order and kinds", got.Files[:2], got.Files[200])
+	}
+}
+
+func TestRollbackPreviewRouteSaysWhyFilesCannotBeRestored(t *testing.T) {
+	svc := &fakeChatService{preview: chatsvc.RollbackPreview{Unavailable: "the workspace is not a git repository"}}
+	srv := newChatTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET",
+		"/api/v1/sessions/ao-1/conversation/turns/turn-7/rollback", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, body)
+	}
+	var got controllers.RollbackPreviewResponse
+	mustJSON(t, body, &got)
+	if got.FilesRestorable || got.Reason != "the workspace is not a git repository" || got.Files == nil || len(got.Files) != 0 {
+		t.Fatalf("preview = %+v, want not restorable with the reason and an empty file list", got)
 	}
 }
 
@@ -350,7 +522,13 @@ func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 		{"never dispatched", chatsvc.ErrTurnNotRollbackable, http.StatusConflict, "CHAT_TURN_NOT_ROLLBACKABLE"},
 		{"previous agent provider", chatsvc.ErrTurnProviderMismatch, http.StatusConflict, "CHAT_TURN_PROVIDER_MISMATCH"},
 		{"unsupported", chatsvc.ErrRollbackUnsupported, http.StatusConflict, "CHAT_ROLLBACK_UNSUPPORTED"},
+		{"files not restorable", fmt.Errorf("%w: no snapshot", chatsvc.ErrFilesNotRestorable), http.StatusConflict, "CHAT_ROLLBACK_FILES_UNAVAILABLE"},
+		{"files changed since the preview", chatsvc.ErrFilesChanged, http.StatusConflict, "CHAT_ROLLBACK_FILES_CHANGED"},
 		{"provider refused", fmt.Errorf("%w: no", chatsvc.ErrProviderRefused), http.StatusConflict, "CHAT_PROVIDER_REFUSED"},
+		// A steer into a lost session is a refusal too, but the client needs the
+		// resume guidance rather than "the conversation is fine".
+		{"refusal for a lost provider session", fmt.Errorf("%w: %w", chatsvc.ErrProviderRefused,
+			fmt.Errorf("%w: Session not found", ports.ErrChatProviderSessionLost)), http.StatusConflict, "CHAT_PROVIDER_SESSION_LOST"},
 		{"no controller", chatsvc.ErrNoController, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"stopped before queue append", chatsvc.ErrNotProvisioning, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH"},
@@ -428,6 +606,7 @@ func TestConversationHistoryRoutesStubWithoutAService(t *testing.T) {
 	for _, tc := range []struct{ method, path, body string }{
 		{"POST", "/api/v1/sessions/ao-1/conversation/turns/turn-1/rollback", ""},
 		{"POST", "/api/v1/sessions/ao-1/conversation/turns/turn-1/retry", ""},
+		{"PATCH", "/api/v1/sessions/ao-1/conversation/turns/turn-1/auto-resume", `{"enabled":true}`},
 		{"PUT", "/api/v1/sessions/ao-1/conversation/title", `{"title":"A Name"}`},
 	} {
 		body, status, headers := doRequest(t, srv, tc.method, tc.path, tc.body)

@@ -284,15 +284,17 @@ func TestGetRestoreCommandNoID(t *testing.T) {
 
 func TestGetLaunchCommandExplicitlyLoadsManagedExtension(t *testing.T) {
 	workspace := t.TempDir()
+	dataDir := t.TempDir()
 	p := &Plugin{resolvedBinary: "pi"}
 	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
 		WorkspacePath: workspace,
+		DataDir:       dataDir,
 		Prompt:        "fix the bug",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"pi", "--extension", filepath.Join(workspace, ".pi", "extensions", "ao-activity.ts"), "fix the bug"}
+	want := []string{"pi", "--session-dir", filepath.Join(dataDir, "pi", "sessions"), "--extension", filepath.Join(workspace, ".pi", "extensions", "ao-activity.ts"), "fix the bug"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -300,11 +302,16 @@ func TestGetLaunchCommandExplicitlyLoadsManagedExtension(t *testing.T) {
 
 func TestGetRestoreCommandExplicitlyLoadsManagedExtension(t *testing.T) {
 	workspace := t.TempDir()
+	dataDir := t.TempDir()
 	p := &Plugin{resolvedBinary: "pi"}
 	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		DataDir: dataDir,
 		Session: ports.SessionRef{
 			WorkspacePath: workspace,
-			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "native-pi-1"},
+			Metadata: map[string]string{
+				ports.MetadataKeyAgentSessionID:       "native-pi-1",
+				ports.MetadataKeyNativeTranscriptPath: filepath.Join(dataDir, "pi", "sessions", "native-pi-1.jsonl"),
+			},
 		},
 	})
 	if err != nil {
@@ -313,7 +320,27 @@ func TestGetRestoreCommandExplicitlyLoadsManagedExtension(t *testing.T) {
 	if !ok {
 		t.Fatal("ok=false, want true")
 	}
-	want := []string{"pi", "--extension", filepath.Join(workspace, ".pi", "extensions", "ao-activity.ts"), "--session", "native-pi-1"}
+	want := []string{"pi", "--session-dir", filepath.Join(dataDir, "pi", "sessions"), "--extension", filepath.Join(workspace, ".pi", "extensions", "ao-activity.ts"), "--session", "native-pi-1"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("cmd = %#v, want %#v", cmd, want)
+	}
+}
+
+func TestGetRestoreCommandKeepsLegacySessionDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	dataDir := t.TempDir()
+	p := &Plugin{resolvedBinary: "pi"}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		DataDir: dataDir,
+		Session: ports.SessionRef{
+			WorkspacePath: workspace,
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "legacy-pi-1"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = %#v, ok=%v err=%v", cmd, ok, err)
+	}
+	want := []string{"pi", "--extension", filepath.Join(workspace, ".pi", "extensions", "ao-activity.ts"), "--session", "legacy-pi-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}
@@ -412,5 +439,20 @@ func TestResolvePiBinaryContextCanceled(t *testing.T) {
 	cancel()
 	if _, err := ResolvePiBinary(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("ResolvePiBinary err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRestorePreservesThinkingLevel(t *testing.T) {
+	p := &Plugin{resolvedBinary: "pi"}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config:  ports.AgentConfig{Model: "anthropic/claude-sonnet-4", Effort: "high"},
+		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "019e950e-52e0-7411-961b-d380ca7e610f"}},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = %v, %v", ok, err)
+	}
+	want := []string{"pi", "--model", "anthropic/claude-sonnet-4", "--thinking", "high", "--session", "019e950e-52e0-7411-961b-d380ca7e610f"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("argv = %q, want %q", cmd, want)
 	}
 }

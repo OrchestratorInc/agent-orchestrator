@@ -23,16 +23,20 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/deepseekharness"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/devin"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/droid"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/fx"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/gemini"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/goose"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/grok"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kilocode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
@@ -41,6 +45,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/stakpak"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -86,9 +91,14 @@ func Constructors() []adapters.Adapter {
 		autohand.New(),
 		fx.New(),
 		commandcode.New(),
+		hermes.New(),
 		unrealagent.New(),
 		mimocode.New(),
+		minimaxcode.New(),
+		memcode.New(),
 		deepseekharness.New(),
+		dockeragent.New(),
+		stakpak.New(),
 	}
 }
 

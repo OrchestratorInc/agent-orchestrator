@@ -20,8 +20,17 @@ import (
 // ReportInterruptWindow is the durable per-worker urgent interruption limit.
 const ReportInterruptWindow = 3 * time.Minute
 
+// OrchestratorBusyRetry is how long a batch refused with ErrOrchestratorBusy
+// waits before its next delivery attempt.
+const OrchestratorBusyRetry = 30 * time.Second
+
 // ErrReportDeliveryModeUnsupported reports a target without semantic delivery.
 var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a semantic conversation")
+
+// ErrOrchestratorBusy marks a Submit refused because the orchestrator cannot
+// take the batch right now — its composer holds the operator's unsent draft —
+// and should be retried later rather than immediately.
+var ErrOrchestratorBusy = errors.New("orchestrator cannot take reports right now")
 
 // DeliveryStore is the durable report scheduling and routing boundary.
 type DeliveryStore interface {
@@ -156,7 +165,10 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err != nil || len(batch.Reports) == 0 {
 		return err
 	}
-	if batch.hasState(domain.ReportStuck) {
+	// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
+	// there cancels the running turn or a prompt that was just submitted, so
+	// stuck reports are delivered to them like any other report.
+	if batch.hasState(domain.ReportStuck) && domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat {
 		interrupted := false
 		var nextInterrupt time.Time
 		for _, worker := range batch.stuckWorkers() {
@@ -179,7 +191,13 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		}
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
-		return c.release(ctx, batch, err)
+		if errors.Is(err, ErrOrchestratorBusy) {
+			// Released, the batch would stay the earliest due and every retry would
+			// stop RunDue before any other project's reports. Back off instead.
+			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), err.Error())
+			return deferErr
+		}
+		return c.retryLater(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err
@@ -263,6 +281,17 @@ func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause er
 	_, releaseErr := c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
 	if releaseErr != nil {
 		return errors.Join(cause, releaseErr)
+	}
+	return cause
+}
+
+// retryLater queues a refused submission behind every report that is already
+// due. Schedule selection takes the earliest pending report across projects,
+// so an orchestrator that keeps refusing must not hold that place.
+func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause error) error {
+	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), cause.Error())
+	if deferErr != nil {
+		return errors.Join(cause, deferErr)
 	}
 	return cause
 }

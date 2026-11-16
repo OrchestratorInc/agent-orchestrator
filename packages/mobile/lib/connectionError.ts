@@ -8,6 +8,9 @@
 // debug the wrong thing.
 
 // Type-only, so erased at runtime: this module stays free of native imports.
+import type { Endpoint } from "./endpoints";
+// Plain classes and copy, with no imports of their own.
+import { CloudError, cloudErrorMessage } from "./cloud/errors";
 import type { FeatherIconName } from "./icons";
 
 export type ConnectionFailure =
@@ -200,21 +203,27 @@ export function describeConnectionFailure(
 			// The connection itself worked, so "disconnected" would be wrong here —
 			// and re-scanning is the actual fix, not retrying the same password.
 			return {
-				title: "Your machine rejected the password",
+				title: "Your machine rejected this phone",
 				icon: "monitor-off",
-				message: "That password was rotated. Re-scan the code on that machine.",
+				message: "It was removed from that machine, or the password changed. Scan a new code there.",
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":
-			// The daemon locks a device out for one minute after 5 failed auths, and
-			// clears it automatically. Saying so stops people from power-cycling
-			// things that were never the problem.
+			// The daemon blocks a source for one minute after 5 wrong passwords from
+			// it, and clears it automatically. Saying so stops people from
+			// power-cycling things that were never the problem. On the LAN and over
+			// Tailscale the source is this phone's own address, so the password it
+			// sent is the cause. Through a tunnel it is the visitor's public IP, which
+			// other devices on the same network share, so this password may be right.
 			return {
 				title: "Too many attempts",
 				icon: "timer",
 				message:
-					"Your machine locked this device out after too many failed attempts. " +
-					"It clears on its own in about a minute — check the password, then try again.",
+					isLocalNetworkHost(target.host) || isTailscaleHost(target.host)
+						? "Your machine paused this phone after too many wrong passwords. " +
+							"Check the password, then try again. It clears on its own in about a minute."
+						: "Your machine is pausing connections from this network after too many wrong passwords, " +
+							"possibly from another device on the same network. It clears on its own in about a minute.",
 				showLocalNetworkHint: false,
 			};
 		case "server-error":
@@ -227,9 +236,61 @@ export function describeConnectionFailure(
 	}
 }
 
+/**
+ * Copy for a scanned code none of whose endpoints answered.
+ *
+ * The phone races every endpoint the code carries, so the copy speaks to the
+ * code as a whole rather than naming one address. And a code with no tunnel
+ * in it — shown by the desktop before remote access was ready — can only ever
+ * work on the machine's own network: telling someone on mobile data to check
+ * their Wi-Fi, without saying the code itself is the limit, sends them to
+ * debug the wrong thing. Seen in the field from a photographed code.
+ */
+export function describeUnreachableCode(
+	endpoints: readonly Endpoint[],
+	platform: "ios" | "android" | string,
+): ConnectionErrorCopy {
+	const local = endpoints.find((e) => e.kind === "lan") ?? endpoints[0];
+	const base = describeConnectionFailure("unreachable", {
+		host: local?.host ?? "",
+		port: local ? String(local.port) : "",
+		platform,
+	});
+	// Shown under the scanner, so each message is the fix in one line; the
+	// address that failed is left out because it does not change what to do.
+	const rescan = "scan a new code once remote access is on.";
+	if (endpoints.some((e) => e.kind === "tunnel" || e.kind === "relay")) {
+		// Every path failed, the internet one included, so this is not a Wi-Fi
+		// problem. The Local Network hint stays (base keeps it for an iOS code
+		// with a LAN address): a tunnel that is briefly down plus a denied
+		// permission fails both probes, and granting the permission recovers.
+		return {
+			...base,
+			hint: "Make sure Orchestrator is running on that machine.",
+			message: "Make sure Orchestrator is running there with Connect Mobile on.",
+		};
+	}
+	// Tailscale is a remote path too, just not a public one: it works from any
+	// network once both devices are on the tailnet. What the code lacks is the
+	// public tunnel, which is the only path that needs nothing on the phone.
+	if (endpoints.some((e) => e.kind === "tailscale")) {
+		return {
+			...base,
+			title: "Turn on Tailscale",
+			hint: "Connect Tailscale on both devices, or scan a new code.",
+			message: `Connect Tailscale on this phone and that machine, or ${rescan}`,
+		};
+	}
+	return {
+		...base,
+		title: "This code only works nearby",
+		hint: "Scan a new code once remote access has started.",
+		message: `Join the same Wi-Fi as that machine, or ${rescan}`,
+	};
+}
+
 /** The extra line shown when {@link ConnectionErrorCopy.showLocalNetworkHint} is set. */
-export const LOCAL_NETWORK_HINT =
-	"If you denied the Local Network prompt, enable it in Settings › Privacy & Security › Local Network › Orchestrator.";
+export const LOCAL_NETWORK_HINT = "If Local Network access is off, turn it on in Settings.";
 
 // ---- Failed actions ----------------------------------------------------------
 
@@ -252,6 +313,13 @@ export class UnreachableError extends Error {
 /** Shown when a request never reached the desktop. */
 export const UNREACHABLE_ACTION_COPY =
 	"Couldn't reach your machine. Make sure Orchestrator is running there, then try again.";
+
+/**
+ * Shown for an action taken while a paired machine's connection is being
+ * re-established: after an app switch, or while its endpoints are raced.
+ */
+export const RECONNECTING_ACTION_COPY =
+	"Still reconnecting to your machine. Try again in a moment.";
 
 /** Shown in place of a missing server config ("No AO server configured"). */
 export const NOT_PAIRED_ACTION_COPY =
@@ -312,14 +380,19 @@ export function daemonDetail(error: unknown): string | undefined {
  *   request ID is kept, for matching against the desktop's logs
  * - an error the app threw itself → its message, which is already user copy
  * - a JS engine error (a code defect) → the fallback, never its text
+ *
+ * Orchestrator Cloud is not a paired machine, so its refusals get Cloud's own
+ * copy (`cloudErrorMessage`): its 429 is a plan's usage limit, not a password
+ * lockout, and its 401 an expired sign-in.
  */
 export function userFacingError(error: unknown, fallback = "Something went wrong. Try again."): string {
+	if (error instanceof CloudError) return cloudErrorMessage(error);
 	if (isUnreachableError(error)) return UNREACHABLE_ACTION_COPY;
 	const failure = answeredFailure(error);
 	if (failure) {
 		const { status } = failure;
 		if (status === 401 || status === 403) return "Your machine rejected this phone's password. Re-scan the pairing code on that machine.";
-		if (status === 429) return "Your machine locked this device out after too many failed attempts. It clears on its own in about a minute.";
+		if (status === 429) return "Your machine is pausing connections from this network after too many wrong passwords. It clears on its own in about a minute.";
 		if (status >= 500) {
 			if (status === 503) return "Your machine is busy or still starting up. Try again in a moment.";
 			const ref = typeof failure.requestId === "string" && failure.requestId ? ` (Reference: ${failure.requestId})` : "";

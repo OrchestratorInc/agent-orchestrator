@@ -3,13 +3,18 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agentbase"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -131,14 +136,203 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return bin, nil
 }
 
-// AuthStatus remains unknown because Gemini has no cheap credential-validation command.
-// Key or OAuth-file presence alone cannot establish that an account works.
+// AuthStatus reports configured when Gemini has locally cached credentials.
+// This is deliberately not authorized: checking a file or environment variable
+// cannot establish that the credential is still valid.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
-	_, err := p.ResolveBinary(ctx)
-	return ports.AgentAuthStatusUnknown, err
+	if _, err := p.ResolveBinary(ctx); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	configDir, err := geminiConfigDir()
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if configDir != "" {
+		status, err := geminiLocalAuthStatus(ctx, filepath.Dir(configDir))
+		if err != nil || status == ports.AgentAuthStatusConfigured {
+			return status, err
+		}
+	}
+	configured, err := hasCachedCredentials(ctx)
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	if configured {
+		return ports.AgentAuthStatusConfigured, nil
+	}
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+var (
+	geminiUserHomeDir        = os.UserHomeDir
+	statGeminiCredentialFile = os.Stat
+)
+
+func hasCachedCredentials(ctx context.Context) (bool, error) {
+	if strings.TrimSpace(authprobe.Getenv(ctx, "GEMINI_API_KEY")) != "" {
+		return true, nil
+	}
+	configDir, err := geminiConfigDir()
+	if err != nil {
+		return false, err
+	}
+	if configDir == "" {
+		return false, nil
+	}
+	configured, err := geminiAPIKeySelected(filepath.Join(configDir, "settings.json"))
+	if err != nil || configured {
+		return configured, err
+	}
+	return geminiCredentialFileConfigured(filepath.Join(configDir, "oauth_creds.json"), statGeminiCredentialFile)
+}
+
+func geminiAPIKeySelected(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var settings struct {
+		Security struct {
+			Auth struct {
+				SelectedType string `json:"selectedType"`
+			} `json:"auth"`
+		} `json:"security"`
+	}
+	if err := json.Unmarshal(stripGeminiJSONComments(data), &settings); err != nil {
+		return false, err
+	}
+	return settings.Security.Auth.SelectedType == "gemini-api-key", nil
+}
+
+// geminiLocalAuthStatus records file evidence only when the selected API-key
+// method also has a nonempty key in Gemini's own environment file.
+func geminiLocalAuthStatus(ctx context.Context, home string) (ports.AgentAuthStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	configDir := filepath.Join(home, ".gemini")
+	selected, err := geminiAPIKeySelected(filepath.Join(configDir, "settings.json"))
+	if err != nil || !selected {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	envPath := filepath.Join(configDir, ".env")
+	data, err := os.ReadFile(envPath)
+	if os.IsNotExist(err) {
+		return ports.AgentAuthStatusUnknown, nil
+	}
+	if err != nil {
+		return ports.AgentAuthStatusUnknown, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "export ")
+		if value, ok := strings.CutPrefix(line, "GEMINI_API_KEY="); ok && strings.Trim(strings.TrimSpace(value), `"'`) != "" {
+			ports.RecordAuthEvidence(ctx, authprobe.FileSource(envPath).WithMethod(domain.AgentAccountMethodAPIKey))
+			return ports.AgentAuthStatusConfigured, nil
+		}
+	}
+	return ports.AgentAuthStatusUnknown, nil
+}
+
+// StripJSONComments applies the comment handling Gemini CLI uses for
+// settings.json, for code outside this package that reads or edits it.
+func StripJSONComments(data []byte) []byte { return stripGeminiJSONComments(data) }
+
+// Gemini CLI accepts comments in settings.json. Replace them with whitespace
+// so quoted strings and the remaining JSON retain their original boundaries.
+func stripGeminiJSONComments(data []byte) []byte {
+	out := append([]byte(nil), data...)
+	inString, escaped := false, false
+	for i := 0; i < len(out); i++ {
+		switch {
+		case inString:
+			if escaped {
+				escaped = false
+			} else if out[i] == '\\' {
+				escaped = true
+			} else if out[i] == '"' {
+				inString = false
+			}
+		case out[i] == '"':
+			inString = true
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '/':
+			for i < len(out) && out[i] != '\n' && out[i] != '\r' {
+				out[i] = ' '
+				i++
+			}
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '*':
+			out[i], out[i+1] = ' ', ' '
+			i += 2
+			for i+1 < len(out) && (out[i] != '*' || out[i+1] != '/') {
+				if out[i] != '\n' && out[i] != '\r' {
+					out[i] = ' '
+				}
+				i++
+			}
+			if i+1 < len(out) {
+				out[i], out[i+1] = ' ', ' '
+				i++
+			}
+		}
+	}
+	return out
+}
+
+// ConfigHome is the directory Gemini CLI treats as home: GEMINI_CLI_HOME
+// when set, else the user's home. Its .gemini folder holds settings.json and
+// the user-wide .env.
+func ConfigHome() (string, error) {
+	dir, err := geminiConfigDir()
+	if err != nil || dir == "" {
+		return "", err
+	}
+	return filepath.Dir(dir), nil
+}
+
+func geminiConfigDir() (string, error) {
+	home := strings.TrimSpace(os.Getenv("GEMINI_CLI_HOME"))
+	if home == "" {
+		var err error
+		home, err = geminiUserHomeDir()
+		if err != nil {
+			return "", err
+		}
+	}
+	if home == "" {
+		return "", nil
+	}
+	return filepath.Join(home, ".gemini"), nil
+}
+
+func geminiCredentialFileConfigured(path string, stat func(string) (os.FileInfo, error)) (bool, error) {
+	info, err := stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !info.IsDir() && info.Size() > 0, nil
 }
 
 // ResolveBinaryPresence keeps initial inventory discovery free of child processes.
 func (p *Plugin) ResolveBinaryPresence(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, binarySpec)
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into idle restarts using the captured
+// native session ID. Restore preserves session model and permission options.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

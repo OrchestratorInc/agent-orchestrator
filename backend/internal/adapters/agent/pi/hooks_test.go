@@ -85,6 +85,7 @@ func TestPiExtensionStopEventOrderingFollowsProbedSupport(t *testing.T) {
 				`import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";`+"\n", "",
 				`function callHookSync(hookName: string, payload: Record<string, unknown>)`, `function callHookSync(hookName, payload)`,
 				`function sessionID(ctx: any): string`, `function sessionID(ctx)`,
+				`function usagePayload(ctx: any, payload: Record<string, unknown> = {}): Record<string, unknown>`, `function usagePayload(ctx, payload = {})`,
 				`export default function (pi: ExtensionAPI)`, `export default function (pi)`,
 			).Replace(piActivityExtensionSource(tc.settledSupported))
 			if err := os.WriteFile(modulePath, []byte(source), 0o600); err != nil {
@@ -107,13 +108,19 @@ process.stdin.on("end", () => {
 const handlers = new Map();
 const loaded = await import(pathToFileURL(process.argv[2]).href);
 loaded.default({ on(name, handler) { handlers.set(name, handler); } });
-const ctx = { sessionManager: { getSessionId() { return "pi-session-1"; } } };
+const ctx = { sessionManager: {
+  getSessionId() { return "pi-session-1"; },
+  getSessionFile() { return "/ao/data/pi/sessions/pi-session-1.jsonl"; }
+} };
 process.env.PI_EVENT_SOURCE = "session_start";
 await handlers.get("session_start")({}, ctx);
 process.env.PI_EVENT_SOURCE = "before_agent_start";
 await handlers.get("before_agent_start")({ prompt: "fix bug" }, ctx);
 process.env.PI_EVENT_SOURCE = "agent_end";
-await handlers.get("agent_end")({}, ctx);
+await handlers.get("agent_end")({ messages: [
+  { role: "user", content: "fix bug" },
+  { role: "assistant", content: [{ type: "thinking", text: "private reasoning" }, { type: "text", text: "Bug fixed." }] },
+] }, ctx);
 process.env.PI_EVENT_SOURCE = "agent_settled";
 await handlers.get("agent_settled")({}, ctx);
 process.env.PI_EVENT_SOURCE = "session_shutdown";
@@ -140,8 +147,16 @@ await handlers.get("session_shutdown")({ reason: "quit" }, ctx);
 			if !strings.Contains(text, `"source":"`+tc.wantStopFrom+`"`) {
 				t.Fatalf("stop hook did not come from %s:\n%s", tc.wantStopFrom, text)
 			}
+			// The run's final assistant text rides on the stop hook, whichever
+			// event fires it, and nothing but its text parts is taken.
+			if !strings.Contains(text, `last_assistant_message\":\"Bug fixed.\"`) || strings.Contains(text, "private reasoning") {
+				t.Fatalf("stop hook did not carry only the final assistant text:\n%s", text)
+			}
 			if !strings.Contains(text, `["hooks","pi","session-start"]`) || !strings.Contains(text, `["hooks","pi","user-prompt-submit"]`) || !strings.Contains(text, `["hooks","pi","session-end"]`) {
 				t.Fatalf("expected lifecycle hook calls missing:\n%s", text)
+			}
+			if !strings.Contains(text, `\"transcript_path\":\"/ao/data/pi/sessions/pi-session-1.jsonl\"`) {
+				t.Fatalf("Pi transcript path missing from hook payloads:\n%s", text)
 			}
 		})
 	}

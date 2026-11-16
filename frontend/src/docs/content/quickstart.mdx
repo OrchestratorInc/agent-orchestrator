@@ -32,9 +32,9 @@ Open Orchestrator, choose **Add project**, and select the local repository. The 
 
 ### Create a worker
 
-Create a new task from the project and enter a short name plus a specific prompt. Select an available coding agent. External agents appear after installation; Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux. Orchestrator lists agents under **Harness** in Settings.
+Click **New task** in the project to open a new chat, select an available coding agent, and send a specific prompt. The session starts when you send it. External agents appear after installation; Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux. Orchestrator lists agents under **Harness** in Settings.
 
-Choose the interface that fits the task:
+New sessions open in the interface set under **Settings → General**; agents without Chat support start in their Terminal UI:
 
 - **Chat** for structured conversation, activities, approvals, plans, and durable history.
 - **Terminal UI** for the harness's native interactive terminal.
@@ -101,7 +101,7 @@ ao session ls
 ao send --session <session-id> --message "Run the focused tests before you finish."
 ```
 
-Choose the default interface in **Settings → General**, or choose one for the new task. Project agent settings choose the coding agent, model, reasoning effort, and provider execution mode. They do not set the global Chat or Terminal UI default.
+Choose the default interface in **Settings → General**. Project agent settings choose the coding agent, model, reasoning effort, and provider execution mode. They do not set the global Chat or Terminal UI default.
 
 <span id="next" />
 

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { CloudAuthError, CloudError } from "./cloud/errors";
 import {
 	classifyConnectionFailure,
 	daemonDetail,
 	describeConnectionFailure,
+	describeUnreachableCode,
+	LOCAL_NETWORK_HINT,
 	isDesktopUnreachable,
 	isLocalNetworkHost,
 	isUnreachableError,
@@ -120,9 +123,10 @@ describe("describeConnectionFailure", () => {
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
 
-	it("blames the password, not the network, on a 401", () => {
+	it("blames the credential, not the network, on a 401", () => {
 		const d = describeConnectionFailure("auth", target());
-		expect(d.message).toContain("rotated");
+		// A removed phone and a changed password have the same fix.
+		expect(d.message).toContain("Scan a new code");
 		expect(d.message).not.toContain("Wi-Fi");
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
@@ -139,10 +143,22 @@ describe("describeConnectionFailure", () => {
 		expect(describeConnectionFailure("unreachable", target()).title).toContain("offline");
 	});
 
-	it("explains the lockout on a 429, and that it clears itself", () => {
-		const d = describeConnectionFailure("rate-limited", target());
-		expect(d.message).toContain("locked this device out");
+	// On the LAN listener and over Tailscale the lockout is keyed on the phone's
+	// own address, so only this phone's wrong passwords can cause it.
+	it.each(["192.168.1.5", "100.101.102.103"])("blames this phone's password on a 429 from %s", (host) => {
+		const d = describeConnectionFailure("rate-limited", target({ host }));
 		expect(d.message).toContain("about a minute");
+		expect(d.message).toMatch(/check the password/i);
+		expect(d.message).not.toMatch(/another device|same network/i);
+	});
+
+	// Through a tunnel every device behind the visitor's public IP shares one
+	// lockout, so this phone's password may be right (#7980).
+	it("points at other devices on the network on a 429 through a tunnel", () => {
+		const d = describeConnectionFailure("rate-limited", target({ host: "build-box.trycloudflare.com", port: "443" }));
+		expect(d.message).toContain("about a minute");
+		expect(d.message).toContain("same network");
+		expect(d.message).not.toMatch(/check the password/i);
 	});
 
 	it("points at the machine logs on a server error", () => {
@@ -184,6 +200,67 @@ describe("describeConnectionFailure", () => {
 			const d = describeConnectionFailure("auth", target({ platform: "ios", host: "192.168.1.5" }));
 			expect(d.showLocalNetworkHint).toBe(false);
 		});
+	});
+});
+
+// The field report: a code photographed before remote access was ready held
+// only LAN and Tailscale addresses, and the phone on mobile data was told to
+// check its Wi-Fi with nothing saying the code itself was the limit.
+describe("describeUnreachableCode", () => {
+	const lan = { kind: "lan" as const, host: "192.168.88.7", port: 3011, secure: false };
+	const tailscale = { kind: "tailscale" as const, host: "100.72.46.7", port: 3011, secure: false };
+	const tunnel = { kind: "tunnel" as const, host: "abc.trycloudflare.com", port: 443, secure: true };
+
+	// Shown under the scanner, so it has to say what to do in a line or two:
+	// the reason the code failed is only worth naming when it changes the fix.
+	const short = (message: string) => expect(message.length).toBeLessThanOrEqual(100);
+
+	it("names Tailscale as the remote path when the code has no public tunnel", () => {
+		const copy = describeUnreachableCode([lan, tailscale], "ios");
+		expect(copy.title).toBe("Turn on Tailscale");
+		expect(copy.message).toContain("Tailscale on this phone and that machine");
+		expect(copy.message).toContain("scan a new code once remote access is on");
+		expect(copy.message).not.toMatch(/same Wi-Fi/);
+		short(copy.message);
+		// Still possibly at home with the Local Network prompt denied.
+		expect(copy.showLocalNetworkHint).toBe(true);
+	});
+
+	it("keeps Tailscale as the remote path when it is the only endpoint", () => {
+		const copy = describeUnreachableCode([tailscale], "ios");
+		expect(copy.title).toBe("Turn on Tailscale");
+		expect(copy.message).toContain("Tailscale on this phone and that machine");
+		short(copy.message);
+		expect(copy.showLocalNetworkHint).toBe(false);
+	});
+
+	it("says a LAN-only code works only on the same Wi-Fi", () => {
+		const copy = describeUnreachableCode([lan], "android");
+		expect(copy.title).toBe("This code only works nearby");
+		expect(copy.message).toContain("same Wi-Fi");
+		expect(copy.message).toContain("scan a new code once remote access is on");
+		expect(copy.message).not.toContain("Tailscale");
+		short(copy.message);
+	});
+
+	it("does not blame Wi-Fi when the internet path failed too", () => {
+		const copy = describeUnreachableCode([lan, tunnel], "ios");
+		expect(copy.title).toBe("Your machine is offline");
+		expect(copy.message).toContain("Connect Mobile");
+		expect(copy.message).not.toMatch(/same Wi-Fi/);
+		short(copy.message);
+		// A briefly-down tunnel plus a denied Local Network prompt fails both
+		// probes, and granting the permission is what recovers the LAN path.
+		expect(copy.showLocalNetworkHint).toBe(true);
+	});
+
+	it("shows the Local Network hint for a tunnel code only where it can help", () => {
+		expect(describeUnreachableCode([lan, tunnel], "android").showLocalNetworkHint).toBe(false);
+		expect(describeUnreachableCode([tunnel], "ios").showLocalNetworkHint).toBe(false);
+	});
+
+	it("keeps the Local Network hint to one line", () => {
+		expect(LOCAL_NETWORK_HINT.length).toBeLessThanOrEqual(60);
 	});
 });
 
@@ -248,6 +325,26 @@ describe("userFacingError", () => {
 		expect(copy).not.toContain("500");
 		expect(copy).toContain("Reference: req-42");
 		expect(userFacingError(answered(503))).toMatch(/still starting up/);
+	});
+
+	// A Cloud host's actions (New task on AO Cloud, say) reach the shared screens
+	// through this too. Cloud is not a paired machine: its 429 is a plan's usage
+	// limit, not a password lockout, and its 401 is an expired sign-in.
+	it("speaks for Orchestrator Cloud, not a paired machine, when Cloud refused", () => {
+		const windowLimit = new CloudError("You've reached your plan's usage limit for now.", {
+			status: 429,
+			code: "WINDOW_LIMIT_REACHED",
+			resetsAt: new Date(Date.now() + 2 * 3_600_000).toISOString(),
+		});
+		const copy = userFacingError(windowLimit, "Couldn't start the worker. Try again.");
+		expect(copy).toMatch(/^You've reached your plan's usage limit for now\. Resets /);
+		expect(copy).not.toMatch(/password|your machine/i);
+		expect(userFacingError(new CloudError("You've reached your plan's weekly usage limit.", { status: 429, code: "WEEKLY_LIMIT_REACHED" })))
+			.toBe("You've reached your plan's weekly usage limit.");
+		expect(userFacingError(new CloudError("Choose a plan to use AO Cloud.", { status: 402, code: "PLAN_REQUIRED" })))
+			.toBe("Choose a plan to use AO Cloud.");
+		expect(userFacingError(new CloudAuthError("expired", { status: 401 }))).toMatch(/Orchestrator Cloud sign-in expired/);
+		expect(userFacingError(new CloudError("Session not found.", { status: 404 }))).toBe("Session not found.");
 	});
 
 	it("does not mistake a code defect for a lost connection, or show its text", () => {

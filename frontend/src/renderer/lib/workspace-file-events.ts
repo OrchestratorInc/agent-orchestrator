@@ -1,5 +1,5 @@
-import type { QueryClient } from "@tanstack/react-query";
-import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import type { InvalidateQueryFilters, QueryClient } from "@tanstack/react-query";
+import { eventStreamBaseUrl, getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
 import { baseUrlForHost, subscribeConnectedHosts } from "./host-clients";
 import { sessionUiKey } from "./hosts";
 import { probeRemoteSse } from "./remote-sse-probe";
@@ -7,7 +7,9 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
 const EVENTSOURCE_CLOSED = 2;
-const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file"] as const;
+// The commit selection is not here: its key (the SHAs, a view's fenced tip and base, or
+// the manifest version) names content that never changes.
+const CONTENT_QUERY_NAMES = ["session-workspace-history", "session-workspace-branches", "session-workspace-file", "session-workspace-file-revision", "session-workspace-diffs", "files-review-end-of-file", "files-preview-end-of-file"] as const;
 const INVENTORY_QUERY_NAMES = ["workspace-file-paths", "session-workspace-files", "session-workspace-search", "session-workspace-tree"] as const;
 const ALL_QUERY_NAMES = [...CONTENT_QUERY_NAMES, ...INVENTORY_QUERY_NAMES] as const;
 
@@ -95,7 +97,45 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	const stream = {} as WorkspaceStream;
 	const key = sessionUiKey(sessionId, hostId);
 	const queryPrefix = (name: string) => hostId ? [name, hostId, sessionId] : [name, sessionId];
+	let annotationTimer: ReturnType<typeof setTimeout> | undefined;
+	let annotationRunning = false;
+	let annotationDirty = false;
+	const scheduleAnnotations = () => {
+		annotationDirty = true;
+		if (stream.disposed || annotationTimer || annotationRunning) return;
+		// Event throttle, not a quiet-period debounce: continuous writes still refresh.
+		annotationTimer = setTimeout(() => {
+			annotationTimer = undefined;
+			annotationDirty = false;
+			annotationRunning = true;
+			const alreadyFetching = queryClient.isFetching({ queryKey: queryPrefix("file-annotation-source") }) > 0;
+			void Promise.resolve(queryClient.invalidateQueries({ queryKey: queryPrefix("file-annotation-source") }, { cancelRefetch: false }))
+				.finally(() => {
+					annotationRunning = false;
+					// A pre-existing request may have read the source before this event.
+					annotationDirty ||= alreadyFetching;
+					if (annotationDirty && !stream.disposed) scheduleAnnotations();
+				});
+		}, 2000);
+	};
+	const awaitingRead = new Set<string>();
+	const refreshRemote = (queryKey: string[]) => {
+		const refresh = (filters: InvalidateQueryFilters) => {
+			void queryClient.invalidateQueries(filters, { cancelRefetch: false });
+		};
+		const inFlight = queryClient.getQueryCache().findAll({ queryKey, fetchStatus: "fetching" });
+		refresh({ queryKey, predicate: (query) => query.state.fetchStatus !== "fetching" });
+		for (const query of inFlight) {
+			if (awaitingRead.has(query.queryHash)) continue;
+			awaitingRead.add(query.queryHash);
+			void Promise.allSettled([query.promise]).then(() => {
+				awaitingRead.delete(query.queryHash);
+				if (!stream.disposed) refresh({ queryKey: query.queryKey, exact: true });
+			});
+		}
+	};
 	const scheduleInvalidation = (names: readonly string[]) => {
+		if (names.includes("session-workspace-file")) scheduleAnnotations();
 		for (const name of names) stream.pendingInvalidations.add(name);
 		// Bound the wait from the first event: continuous agent writes must not
 		// postpone visible content refresh until the workspace becomes quiet.
@@ -105,7 +145,9 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			const pending = [...stream.pendingInvalidations];
 			stream.pendingInvalidations.clear();
 			for (const name of pending) {
-				void queryClient.invalidateQueries({ queryKey: queryPrefix(hostId && name === "workspace-file-paths" ? "remote-workspace-file-paths" : name) });
+				const queryKey = queryPrefix(hostId && name === "workspace-file-paths" ? "remote-workspace-file-paths" : name);
+				if (hostId) refreshRemote(queryKey);
+				else void queryClient.invalidateQueries({ queryKey });
 			}
 		}, INVALIDATE_DEBOUNCE_MS);
 	};
@@ -171,21 +213,37 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 			setWorkspaceFileConnectionState(key, "connecting");
 		}
 		if (hostId) {
-			if (stream.sourceBaseUrl === baseUrl) return;
+			if (stream.phase !== "idle") return;
 			stream.sourceBaseUrl = baseUrl;
+			stream.phase = "connecting";
+			const generation = ++stream.generation;
 			invalidate();
 			stream.poll = setInterval(invalidate, 2_000);
-			setWorkspaceFileConnectionState(key, "connected");
+			if (stream.failures === 0) setWorkspaceFileConnectionState(key, "connected");
+			const stopPolling = () => {
+				if (stream.poll !== undefined) clearInterval(stream.poll);
+				stream.poll = undefined;
+			};
 			stream.stopRemote = probeRemoteSse(
 				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
 				["workspace_changed"],
 				invalidate,
 				() => {
-					if (stream.poll !== undefined) clearInterval(stream.poll);
-					stream.poll = undefined;
+					stopPolling();
+					stream.phase = "open";
+					stream.failures = 0;
+					stream.retries = 0;
+					setWorkspaceFileConnectionState(key, "connected");
 					invalidate();
 				},
-				invalidate,
+				() => {
+					stopPolling();
+					stream.stopRemote = undefined;
+					stream.failures += 1;
+					setWorkspaceFileConnectionState(key, stream.failures >= 3 ? "degraded" : "connecting");
+					invalidate();
+					scheduleRetry(generation);
+				},
 			);
 			return;
 		}
@@ -200,7 +258,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 		const generation = ++stream.generation;
 		try {
 			const source = new EventSource(
-				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
+				`${eventStreamBaseUrl(baseUrl)}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
 			);
 			stream.source = source;
 			source.onopen = () => {
@@ -249,6 +307,7 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient, host
 	stream.disconnectBaseUrl = hostId ? subscribeConnectedHosts(stream.ensureConnected) : subscribeApiBaseUrl(stream.ensureConnected);
 	stream.dispose = () => {
 		stream.disposed = true;
+		if (annotationTimer) clearTimeout(annotationTimer);
 		if (stream.debounce) clearTimeout(stream.debounce);
 		stream.pendingInvalidations.clear();
 		stream.disconnectBaseUrl();

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 
-export type HarnessDetailTab = "account" | "models" | "health";
+export type HarnessDetailTab = "account" | "models" | "health" | "import";
 export type HarnessTone = "ok" | "error" | "off";
 
 const SPLIT_LAYOUT_MIN_WIDTH = 720;
@@ -41,20 +41,26 @@ export function HarnessStatusDot({ tone }: { tone: HarnessTone }) {
 	return <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", tone === "ok" ? "bg-success" : tone === "error" ? "bg-error" : "bg-settings-muted/50")} />;
 }
 
-export function HarnessDetailGroup({ title, children }: { title: string; children: ReactNode }) {
+export function HarnessDetailGroup({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
 	return <section className="flex min-w-0 max-w-full flex-col gap-1.5">
-		<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
+		{action ? <div className="flex min-h-7 items-center justify-between gap-3">
+			<h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>
+			{action}
+		</div> : <h3 className="text-xs font-medium leading-4 text-settings-muted">{title}</h3>}
 		<div className={HARNESS_CARD_CLASS}>{children}</div>
 	</section>;
 }
 
-export function HarnessDetailRow({ label, description, children }: { label: string; description?: string; children?: ReactNode }) {
+/** A row of a harness page card. `secondary` is a second, full-width line of
+ * the same row (AO Cloud's side of the harness), not a row of its own. */
+export function HarnessDetailRow({ label, description, children, secondary }: { label: ReactNode; description?: string; children?: ReactNode; secondary?: ReactNode }) {
 	return <div className={cn(HARNESS_CARD_ROW_CLASS, "min-w-0 flex-wrap gap-x-4 gap-y-1 [overflow-wrap:anywhere]")}>
 		<span className="min-w-0 flex-1">
 			<span className="block text-sm leading-5 text-settings-label">{label}</span>
 			{description ? <span className="mt-0.5 block text-pretty text-xs leading-4 text-settings-muted">{description}</span> : null}
 		</span>
 		<span className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-3 gap-y-1">{children}</span>
+		{secondary}
 	</div>;
 }
 

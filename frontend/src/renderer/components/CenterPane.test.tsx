@@ -3,32 +3,18 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentSwitch } from "../hooks/useAgentSwitches";
-import type { SwitchAgentInput } from "../hooks/useSwitchAgent";
 import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
+import { TabSplitMenuContext } from "./TabContextMenu";
 import { TooltipProvider } from "./ui/tooltip";
+
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
 
 const shortcutMocks = vi.hoisted(() => ({
 	closeListener: undefined as (() => void) | undefined,
 	nextTabListener: undefined as (() => void) | undefined,
 	previousTabListener: undefined as (() => void) | undefined,
 	closeableStates: [] as boolean[],
-}));
-
-const agentSwitchMocks = vi.hoisted(() => ({
-	refetch: vi.fn(),
-	switches: [] as AgentSwitch[],
-	mutation: {
-		error: null as string | null,
-		input: undefined as SwitchAgentInput | undefined,
-		isPending: false,
-	},
-}));
-
-const visibilityMocks = vi.hoisted(() => ({
-	presentation: vi.fn(),
-	route: vi.fn(),
 }));
 
 const reorderMocks = vi.hoisted(() => ({
@@ -53,46 +39,14 @@ vi.mock("motion/react", () => ({
 		),
 	},
 	useDragControls: () => ({ start: vi.fn() }),
-}));
-
-vi.mock("../hooks/useAgentSwitches", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("../hooks/useAgentSwitches")>();
-	return {
-		...actual,
-		useAgentSwitches: () => ({ data: agentSwitchMocks.switches, refetch: agentSwitchMocks.refetch }),
-	};
-});
-
-vi.mock("../hooks/useSwitchAgent", () => ({
-	useSwitchAgentState: () => agentSwitchMocks.mutation,
-}));
-
-vi.mock("../hooks/useAgentSwitchVisibility", () => ({
-	useAgentSwitchPresentationVisibility: visibilityMocks.presentation,
-	useAgentSwitchRouteVisibility: visibilityMocks.route,
-}));
-
-vi.mock("./TerminalSwitchAgentButton", () => ({
-	TerminalSwitchAgentButton: ({
-		session,
-		onOpenChange,
-	}: {
-		session: WorkspaceSession;
-		onOpenChange?: (open: boolean) => void;
-	}) => (
-		<button
-			aria-label="Switch agent"
-			data-testid="terminal-switch-agent"
-			onClick={() => onOpenChange?.(true)}
-			type="button"
-		>
-			{session.provider}
-		</button>
-	),
+	useMotionValue: () => ({ get: () => 0, set: vi.fn(), on: () => () => {} }),
 }));
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
+		editorHandoff: {
+			getState: async () => ({ workspaceAvailable: false, targets: [] }),
+		},
 		app: {
 			setCloseShellTerminalShortcutEnabled: (enabled: boolean) => shortcutMocks.closeableStates.push(enabled),
 			onCloseShellTerminalShortcut: (listener: () => void) => {
@@ -148,29 +102,11 @@ const worker = {
 	prs: [],
 } satisfies WorkspaceSession;
 
-function switchRecord(overrides: Partial<AgentSwitch> = {}): AgentSwitch {
-	return {
-		agentHandoffStatus: "not_attempted",
-		fromHarness: "claude-code",
-		id: "switch-1",
-		state: "preparing_handoff",
-		targetHarness: "codex",
-		...overrides,
-	};
-}
-
-const defaultSwitchAgentAction = (
-	<button aria-label="Switch agent" data-testid="terminal-switch-agent" type="button">
-		{worker.provider}
-	</button>
-);
-
 function renderCenterPane(props: Partial<ComponentProps<typeof CenterPane>> = {}) {
-	const { topbarActions = defaultSwitchAgentAction, ...rest } = props;
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
 		<TooltipProvider>
-			<CenterPane daemonReady theme="dark" topbarActions={topbarActions} {...rest} />
+			<CenterPane daemonReady theme="dark" {...props} />
 		</TooltipProvider>,
 		{
 			wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
@@ -183,14 +119,6 @@ beforeEach(() => {
 	shortcutMocks.nextTabListener = undefined;
 	shortcutMocks.previousTabListener = undefined;
 	shortcutMocks.closeableStates.length = 0;
-	agentSwitchMocks.switches.length = 0;
-	agentSwitchMocks.refetch.mockReset();
-	agentSwitchMocks.refetch.mockResolvedValue(undefined);
-	agentSwitchMocks.mutation.error = null;
-	agentSwitchMocks.mutation.input = undefined;
-	agentSwitchMocks.mutation.isPending = false;
-	visibilityMocks.presentation.mockReset();
-	visibilityMocks.route.mockReset();
 	reorderMocks.onReorder = undefined;
 	renameSessionMock.mockReset().mockResolvedValue(undefined);
 });
@@ -210,7 +138,6 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.queryByText("Claude Code")).not.toBeInTheDocument();
 		expect(screen.queryByText("sess-1")).not.toBeInTheDocument();
 		expect(screen.getByTestId("terminal-interaction-surface")).not.toHaveAttribute("inert");
-		expect(screen.queryByTestId("agent-switch-terminal-overlay")).not.toBeInTheDocument();
 	});
 
 	it("renames the owning session from a double-click on its terminal tab", async () => {
@@ -234,7 +161,7 @@ describe("CenterPane toolbar session label", () => {
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 		const renameItem = await screen.findByRole("menuitem", { name: "Rename do the thing" });
-		expect(renameItem).toHaveTextContent(/^Rename$/);
+		expect(renameItem).toHaveTextContent(/^RenameF2$/);
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
@@ -269,7 +196,7 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.contextMenu(tab);
 
 		expect(screen.queryByRole("textbox", { name: /^Rename/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("menuitem", { name: /^Rename/ })).not.toBeInTheDocument();
+		expect(await screen.findByRole("menuitem", { name: /^Rename/ })).toHaveAttribute("aria-disabled", "true");
 		expect(renameSessionMock).not.toHaveBeenCalled();
 	});
 
@@ -286,408 +213,6 @@ describe("CenterPane toolbar session label", () => {
 
 		expect(renameSessionMock).not.toHaveBeenCalled();
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).toBeInTheDocument();
-	});
-
-	it("blocks only the terminal interaction surface while the switch selector is open", () => {
-		renderCenterPane({ session: worker, handoffDialogOpen: true });
-
-		expect(screen.getByTestId("terminal-interaction-surface")).toHaveAttribute("inert");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "true");
-		expect(document.body.style.pointerEvents).not.toBe("none");
-	});
-
-	it("does not acknowledge a switch presentation hidden by files or the switch selector", () => {
-		const activeSwitch = switchRecord({ state: "starting_target", updatedAt: "2026-08-28T00:00:00Z" });
-		agentSwitchMocks.switches.push(activeSwitch);
-		const view = renderCenterPane({ session: { ...worker, activeAgentSwitch: activeSwitch }, workspaceFileActive: true });
-
-		expect(visibilityMocks.presentation).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false }));
-
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane
-					daemonReady
-					handoffDialogOpen
-					session={{ ...worker, activeAgentSwitch: activeSwitch }}
-					theme="dark"
-				/>
-			</TooltipProvider>,
-		);
-		expect(visibilityMocks.presentation).toHaveBeenLastCalledWith(expect.objectContaining({ visible: false }));
-	});
-
-	it("uses mutation input only while switch admission is still pending", () => {
-		agentSwitchMocks.mutation.input = {
-			idempotencyKey: "switch-request-1",
-			model: "",
-			session: worker,
-			targetHarness: "codex",
-		};
-		agentSwitchMocks.mutation.isPending = true;
-
-		renderCenterPane({ session: worker });
-
-		const overlay = screen.getByRole("status", { name: "Switching from Claude Code to Codex" });
-		const terminalPanel = screen.getByRole("tabpanel", { name: "do the thing terminal" });
-		expect(terminalPanel).toContainElement(overlay);
-		expect(overlay).toHaveClass("agent-switch-terminal-scrim");
-		expect(within(overlay).getByTestId("agent-switch-transition-card")).toHaveClass(
-			"animate-modal-in",
-		);
-		expect(screen.getByTestId("terminal-interaction-surface")).toHaveAttribute("inert");
-		expect(within(overlay).getByText("Claude Code")).toBeInTheDocument();
-		expect(within(overlay).getByText("Codex")).toBeInTheDocument();
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "true");
-	});
-
-	it("renders a connected transfer arrow and a coupled, wrapping lifecycle", () => {
-		agentSwitchMocks.mutation.input = {
-			idempotencyKey: "switch-request-visuals",
-			model: "",
-			session: worker,
-			targetHarness: "codex",
-		};
-		agentSwitchMocks.mutation.isPending = true;
-
-		renderCenterPane({ session: worker });
-
-		const card = screen.getByTestId("agent-switch-transition-card");
-		const arrow = within(card).getByTestId("agent-switch-transfer-arrow");
-		const shaft = within(arrow).getByTestId("agent-switch-transfer-shaft");
-		const arrowIcon = within(arrow).getByTestId("agent-switch-transfer-arrow-icon");
-		expect(arrowIcon).toHaveClass("lucide-arrow-right", "text-foreground/55");
-		expect(arrowIcon.querySelector(".agent-switch-transfer-pulse")).toBeNull();
-		expect(shaft.querySelector(".agent-switch-transfer-pulse")).not.toBeNull();
-
-		const statusGroup = within(card).getByTestId("agent-switch-status-group");
-		const progress = within(statusGroup).getByRole("list", { name: "Switching…" });
-		expect(within(statusGroup).getAllByText("Preparing handoff")).toHaveLength(2);
-		expect(statusGroup).toContainElement(progress);
-		for (const label of [
-			"Preparing handoff",
-			"Stopping source agent",
-			"Starting target agent",
-			"Delivering context",
-		]) {
-			expect(within(progress).getByText(label)).toHaveClass(
-				"max-w-16",
-				"break-words",
-				"whitespace-normal",
-				"text-center",
-			);
-			expect(within(progress).getByText(label)).not.toHaveClass("truncate");
-		}
-	});
-
-	it("shows one terminal scrim while the selector is open during admission", () => {
-		agentSwitchMocks.mutation.input = {
-			idempotencyKey: "switch-request-1",
-			model: "",
-			session: worker,
-			targetHarness: "codex",
-		};
-		agentSwitchMocks.mutation.isPending = true;
-
-		const view = renderCenterPane({ session: worker });
-		expect(screen.getByTestId("agent-switch-terminal-overlay")).toBeInTheDocument();
-
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane
-					daemonReady
-					theme="dark"
-					session={worker}
-					topbarActions={defaultSwitchAgentAction}
-					handoffDialogOpen
-				/>
-			</TooltipProvider>,
-		);
-
-		expect(screen.queryByTestId("agent-switch-terminal-overlay")).not.toBeInTheDocument();
-	});
-
-	it("keeps a new admission presented above unrelated settled completion history", () => {
-		const settledSession = {
-			...worker,
-			provider: "codex",
-			terminalHandleId: "settled-target-terminal",
-		} satisfies WorkspaceSession;
-		agentSwitchMocks.switches.push(switchRecord({ state: "completed" }));
-		agentSwitchMocks.mutation.input = {
-			idempotencyKey: "switch-request-2",
-			model: "",
-			session: settledSession,
-			targetHarness: "claude-code",
-		};
-		agentSwitchMocks.mutation.isPending = true;
-
-		renderCenterPane({ session: settledSession });
-
-		expect(
-			screen.getByRole("status", { name: "Switching from Codex to Claude Code" }),
-		).toHaveAttribute("aria-busy", "true");
-		expect(screen.getByTestId("terminal-interaction-surface")).toHaveAttribute("inert");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "true");
-	});
-
-	it.each([
-		["preparing_handoff", "Preparing handoff"],
-		["stopping_source", "Stopping source agent"],
-		["starting_target", "Starting target agent"],
-		["target_ready", "Target ready"],
-		["delivering_context", "Delivering context"],
-	] as const)("renders the shared title and description for %s", (state, description) => {
-		const activeSwitch = switchRecord({ state });
-		agentSwitchMocks.switches.push(activeSwitch);
-
-		renderCenterPane({ session: { ...worker, activeAgentSwitch: activeSwitch } });
-
-		const status = screen.getByRole("status", { name: "Switching from Claude Code to Codex" });
-		expect(within(status).getByText("Switching from Claude Code to Codex")).toBeInTheDocument();
-		expect(within(status).getAllByText(description).length).toBeGreaterThan(0);
-		expect(screen.getByRole("tab", { name: "do the thing · Claude Code · Working" })).toBeInTheDocument();
-	});
-
-	it("keeps the preparation stage active while the source handoff is requested", () => {
-		const activeSwitch = switchRecord({ agentHandoffStatus: "requested" });
-		agentSwitchMocks.switches.push(activeSwitch);
-
-		renderCenterPane({ session: { ...worker, activeAgentSwitch: activeSwitch } });
-
-		const status = screen.getByRole("status", { name: "Switching from Claude Code to Codex" });
-		expect(within(status).getAllByText("Preparing handoff").length).toBeGreaterThan(0);
-		expect(within(status).getAllByText("Preparing handoff").at(-1)?.closest("li")).toHaveAttribute(
-			"aria-current",
-			"step",
-		);
-	});
-
-	it("uses the matching history row to enrich the active session summary", () => {
-		const summary = switchRecord({ state: "starting_target" });
-		agentSwitchMocks.switches.push({ ...summary, state: "target_ready" });
-
-		renderCenterPane({ session: { ...worker, activeAgentSwitch: summary } });
-
-		expect(screen.getByRole("status")).toHaveTextContent("Target ready");
-	});
-
-	it("gates both DOM and byte input only for the worker during ordinary progress", () => {
-		const activeSwitch = switchRecord({ state: "starting_target" });
-		agentSwitchMocks.switches.push(activeSwitch);
-
-		renderCenterPane({ session: { ...worker, activeAgentSwitch: activeSwitch } });
-
-		expect(screen.getByTestId("terminal-interaction-surface")).toHaveAttribute("inert");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "true");
-		expect(screen.getByTestId("agent-switch-terminal-overlay")).toHaveFocus();
-	});
-
-	it("keeps an auxiliary shell interactive and offers the existing worker-selection action", async () => {
-		const [shell] = makeShells(1);
-		const activeSwitch = switchRecord({ state: "starting_target" });
-		const onSelectSessionTerminal = vi.fn();
-		agentSwitchMocks.switches.push(activeSwitch);
-
-		renderCenterPane({
-			onSelectSessionTerminal,
-			session: { ...worker, activeAgentSwitch: activeSwitch },
-			shellTerminals: [shell],
-			terminalTarget: { generation: shell.createdAt, kind: "shell", handleId: shell.handleId, title: shell.title },
-		});
-
-		expect(screen.getByTestId("terminal-interaction-surface")).not.toHaveAttribute("inert");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "false");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "true");
-		expect(screen.queryByTestId("agent-switch-terminal-overlay")).not.toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Back to agent terminal" }));
-		expect(onSelectSessionTerminal).toHaveBeenCalledOnce();
-	});
-
-	it("opens and focuses only source worker input once, then relocks on stage change", () => {
-		const [shell] = makeShells(1);
-		const requestedSwitch = switchRecord({ agentHandoffStatus: "requested" });
-		const onSelectSessionTerminal = vi.fn();
-		agentSwitchMocks.switches.push(requestedSwitch);
-		const sourceSession = {
-			...worker,
-			activeAgentSwitch: requestedSwitch,
-			activity: { state: "waiting_input", lastActivityAt: "2026-06-10T00:00:02Z" },
-		} satisfies WorkspaceSession;
-		const view = renderCenterPane({
-			onSelectSessionTerminal,
-			session: sourceSession,
-			shellTerminals: [shell],
-			terminalTarget: { generation: shell.createdAt, kind: "shell", handleId: shell.handleId, title: shell.title },
-		});
-
-		expect(onSelectSessionTerminal).toHaveBeenCalledOnce();
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane
-					daemonReady
-					onSelectSessionTerminal={onSelectSessionTerminal}
-					session={sourceSession}
-					shellTerminals={[shell]}
-					terminalTarget={{ kind: "worker" }}
-					theme="dark"
-				/>
-			</TooltipProvider>,
-		);
-		expect(onSelectSessionTerminal).toHaveBeenCalledOnce();
-		expect(screen.getByTestId("terminal-interaction-surface")).not.toHaveAttribute("inert");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "false");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "true");
-		expect(screen.getByTestId("agent-switch-terminal-overlay")).toHaveClass("agent-switch-source-input-strip");
-
-		const startingSwitch: AgentSwitch = {
-			...requestedSwitch,
-			agentHandoffStatus: "received",
-			state: "starting_target",
-		};
-		agentSwitchMocks.switches.splice(0, 1, startingSwitch);
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane
-					daemonReady
-					onSelectSessionTerminal={onSelectSessionTerminal}
-					session={{ ...worker, activeAgentSwitch: startingSwitch }}
-					terminalTarget={{ kind: "worker" }}
-					theme="dark"
-				/>
-			</TooltipProvider>,
-		);
-		expect(screen.getByTestId("terminal-interaction-surface")).toHaveAttribute("inert");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-input-disabled", "true");
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "false");
-	});
-
-	it.each([
-		["recovery", switchRecord({ errorCode: "target_start_unconfirmed", state: "starting_target" })],
-		["failure", switchRecord({ errorCode: "target_binary_missing", state: "failed" })],
-	] as const)("renders %s as a static alert without busy animation", (_name, terminalSwitch) => {
-		const activeSwitch = switchRecord({ id: terminalSwitch.id, state: "starting_target" });
-		agentSwitchMocks.switches.push(activeSwitch);
-		const view = renderCenterPane({ session: { ...worker, activeAgentSwitch: activeSwitch } });
-
-		agentSwitchMocks.switches.splice(0, 1, terminalSwitch);
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane daemonReady session={worker} theme="dark" />
-			</TooltipProvider>,
-		);
-
-		const status = screen.getByRole("status");
-		expect(status).not.toHaveAttribute("aria-busy");
-		expect(status.querySelector(".agent-switch-transfer-pulse")).not.toBeInTheDocument();
-		expect(screen.getByRole("alert")).toBeInTheDocument();
-	});
-
-	it("lets the user dismiss a terminal switch failure without dismissing recovery", async () => {
-		const activeSwitch = switchRecord({ state: "starting_target" });
-		const failedSwitch = switchRecord({ errorCode: "target_binary_missing", state: "failed" });
-		agentSwitchMocks.switches.push(activeSwitch);
-		const view = renderCenterPane({ session: { ...worker, activeAgentSwitch: activeSwitch } });
-
-		agentSwitchMocks.switches.splice(0, 1, failedSwitch);
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane daemonReady session={worker} theme="dark" />
-			</TooltipProvider>,
-		);
-
-		await userEvent.click(screen.getByRole("button", { name: "Close" }));
-		expect(screen.queryByTestId("agent-switch-terminal-overlay")).not.toBeInTheDocument();
-	});
-
-	it("settles a completed switch without reviving it after the target stops", () => {
-		vi.useFakeTimers();
-		const activeSwitch = switchRecord({ state: "delivering_context" });
-		const completedSwitch: AgentSwitch = { ...activeSwitch, state: "completed" };
-		const onSelectSessionTerminal = vi.fn();
-		agentSwitchMocks.switches.push(activeSwitch);
-		const view = renderCenterPane({ session: { ...worker, activeAgentSwitch: activeSwitch } });
-
-		agentSwitchMocks.switches.splice(0, 1, completedSwitch);
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane daemonReady onSelectSessionTerminal={onSelectSessionTerminal} session={worker} theme="dark" />
-			</TooltipProvider>,
-		);
-		expect(screen.getByTestId("terminal-interaction-surface")).toHaveAttribute("inert");
-		expect(screen.getByRole("status")).toHaveTextContent("Completed");
-
-		const settledSession = { ...worker, provider: "codex", terminalHandleId: "target-terminal" } satisfies WorkspaceSession;
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane daemonReady onSelectSessionTerminal={onSelectSessionTerminal} session={settledSession} theme="dark" />
-			</TooltipProvider>,
-		);
-		expect(onSelectSessionTerminal).not.toHaveBeenCalled();
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "true");
-		expect(screen.getByRole("status")).toHaveTextContent("Completed");
-
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane
-					daemonReady
-					onSelectSessionTerminal={onSelectSessionTerminal}
-					session={{ ...settledSession, terminalHandleId: undefined }}
-					theme="dark"
-				/>
-			</TooltipProvider>,
-		);
-		expect(onSelectSessionTerminal).not.toHaveBeenCalled();
-		expect(screen.getByRole("status")).toHaveTextContent("Completed");
-		expect(screen.getByTestId("terminal-interaction-surface")).not.toHaveAttribute("inert");
-
-		act(() => vi.advanceTimersByTime(3_100));
-		expect(screen.queryByTestId("agent-switch-terminal-overlay")).not.toBeInTheDocument();
-		expect(screen.getByTestId("terminal-interaction-surface")).not.toHaveAttribute("inert");
-		vi.useRealTimers();
-	});
-
-	it("never flashes success for a cold historical completion", () => {
-		agentSwitchMocks.switches.push(switchRecord({ state: "completed" }));
-
-		renderCenterPane({
-			session: { ...worker, provider: "codex", terminalHandleId: "target-terminal" },
-		});
-
-		expect(screen.queryByTestId("agent-switch-terminal-overlay")).not.toBeInTheDocument();
-	});
-
-	it("does not replay a cold historical failure", () => {
-		agentSwitchMocks.switches.push(switchRecord({ state: "failed" }));
-
-		renderCenterPane({ session: worker });
-
-		expect(screen.queryByTestId("agent-switch-terminal-overlay")).not.toBeInTheDocument();
-		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-	});
-
-	it("observes a cold unsettled completion without changing the selected terminal", () => {
-		const onSelectSessionTerminal = vi.fn();
-		agentSwitchMocks.switches.push(switchRecord({ state: "completed" }));
-
-		const view = renderCenterPane({ onSelectSessionTerminal, session: worker });
-
-		expect(screen.getByTestId("terminal-interaction-surface")).toHaveAttribute("inert");
-		expect(screen.getByRole("status")).toHaveTextContent("Completed");
-
-		view.rerender(
-			<TooltipProvider>
-				<CenterPane
-					daemonReady
-					onSelectSessionTerminal={onSelectSessionTerminal}
-					session={{ ...worker, provider: "codex", terminalHandleId: "target-terminal" }}
-					theme="dark"
-				/>
-			</TooltipProvider>,
-		);
-
-		expect(onSelectSessionTerminal).not.toHaveBeenCalled();
-		expect(screen.getByText("terminal body")).toHaveAttribute("data-focus-requested", "true");
-		expect(screen.getByRole("status")).toHaveTextContent("Completed");
 	});
 
 	it("renders only this session's own tab, never a sibling session", () => {
@@ -730,8 +255,7 @@ describe("CenterPane toolbar session label", () => {
 
 		const mainTab = screen.getByRole("tab", { name: /^do the thing/ });
 		const mainContainer = mainTab.closest("[data-terminal-tab-frame]");
-		expect(mainContainer).toHaveAttribute("data-terminal-role", "primary");
-		expect(mainContainer).toHaveClass("self-stretch", "w-shell-tab-connected");
+		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-session-tab-max");
 		expect(mainContainer).not.toHaveClass("bg-surface");
 		expect(mainContainer).not.toHaveClass("session-primary-tab");
 		expect(mainContainer).not.toHaveClass("rounded-md");
@@ -747,7 +271,6 @@ describe("CenterPane toolbar session label", () => {
 		expect(auxiliaryTab.parentElement?.querySelector("img")).not.toBeInTheDocument();
 		expect(screen.getByRole("button", { name: `Close terminal ${shell.title}` })).toBeInTheDocument();
 		expect(mainTab.querySelector('[title="Working"]')).not.toBeInTheDocument();
-		expect(within(mainContainer as HTMLElement).queryByTestId("terminal-switch-agent")).toBeNull();
 	});
 
 	it("keeps the owner tab in the scrollable terminal list", () => {
@@ -763,7 +286,7 @@ describe("CenterPane toolbar session label", () => {
 		expect(ownerCard).not.toHaveClass("w-full", "max-w-full");
 		expect(ownerTab).not.toHaveClass("min-w-flex-min");
 		expect(scrollRegion?.contains(ownerCard)).toBe(true);
-		expect(avatar?.classList.contains("size-terminal-agent-icon")).toBe(true);
+		expect(avatar?.classList.contains("size-icon-sm!")).toBe(true);
 	});
 
 	it("closes only the selected auxiliary terminal from the application shortcut", () => {
@@ -906,12 +429,12 @@ describe("CenterPane toolbar session label", () => {
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
 		const shellTab = screen.getByRole("tab", { name: shell.title });
 		expect(reviewerTab).toHaveAttribute("aria-current", "true");
-		expect(reviewerTab.querySelector("img")).toHaveClass("size-terminal-agent-icon");
+		expect(reviewerTab.querySelector('img, [style*="mask"]')).toHaveClass("size-icon-sm!");
 		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass(
 			"min-w-shell-tab-min",
 			"shrink-0",
 			"self-stretch",
-			"w-shell-tab-connected",
+			"max-w-shell-tab-max",
 			"border-r",
 			"border-border",
 			"bg-overlay",
@@ -921,10 +444,9 @@ describe("CenterPane toolbar session label", () => {
 			"self-stretch",
 			"max-w-shell-tab-max",
 		);
-		expect(shellTab.closest("[data-terminal-tab-frame]")).not.toHaveClass("w-shell-tab-connected");
-		expect(reviewerTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-terminal-role", "primary");
 		expect(screen.getByRole("tab", { name: /^do the thing/ })).not.toHaveAttribute("aria-current", "true");
-		expect(reviewerTab.querySelector("img")).toHaveAttribute("src");
+		// The reviewer's mark is drawn: an <img>, or a tinted mask for a single-colour logo.
+		expect(reviewerTab.querySelector('img, [style*="mask"]')).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Back to agent" })).not.toBeInTheDocument();
 	});
 
@@ -937,10 +459,8 @@ describe("CenterPane toolbar session label", () => {
 		});
 
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
-		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch", "w-shell-tab-connected");
-		expect(reviewerTab).toHaveClass("px-2", "cursor-pointer");
-		expect(reviewerTab).toHaveClass("focus-visible:outline-2", "focus-visible:outline-accent/50");
-		expect(reviewerTab.parentElement).not.toHaveClass("px-2", "w-shell-tab-connected");
+		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch", "max-w-shell-tab-max");
+		expect(reviewerTab).toHaveClass("h-full", "px-2", "cursor-pointer");
 
 		fireEvent.click(reviewerTab);
 		expect(onSelectReviewerTerminal).toHaveBeenCalledWith({ handleId: "review-sess-1", harness: "codex" });
@@ -985,16 +505,16 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByText("No session")).toBeInTheDocument();
 	});
 
-	it("uses the inspector tab height for the terminal header", () => {
+	it("uses the shared toolbar height for the terminal header", () => {
 		renderCenterPane({ session: worker });
 
 		const tablist = screen.getByRole("tablist", { name: "Open terminals" });
-		const header = tablist.closest(".h-inspector-tabs");
-		expect(header?.classList.contains("h-inspector-tabs")).toBe(true);
+		const header = tablist.closest(".h-toolbar");
+		expect(header?.classList.contains("h-toolbar")).toBe(true);
 		expect(tablist.classList.contains("h-full")).toBe(true);
 	});
 
-	it("keeps session tab actions on the primary agent tab and groups terminal creation with workspace actions", () => {
+	it("keeps session tab actions on the primary agent tab and puts terminal creation right after the last tab", () => {
 		renderCenterPane({
 			session: worker,
 			sessionTabAction: <button type="button">Session tab action</button>,
@@ -1007,28 +527,34 @@ describe("CenterPane toolbar session label", () => {
 		expect(workspaceTopbar).toHaveClass("session-topbar-surface");
 		expect(workspaceTopbar).toContainElement(terminalRegion);
 		expect(terminalRegion).toContainElement(screen.getByRole("tablist", { name: "Open terminals" }));
-		expect(terminalRegion).not.toContainElement(screen.getByRole("button", { name: "New terminal" }));
+		const tabStripAction = screen.getByTestId("session-tab-strip-action");
+		expect(terminalRegion).toContainElement(tabStripAction);
+		expect(screen.getByRole("tablist", { name: "Open terminals" })).not.toContainElement(tabStripAction);
+		expect(screen.getByRole("tablist", { name: "Open terminals" }).nextElementSibling).toBe(tabStripAction);
+		expect(screen.getByRole("tablist", { name: "Open terminals" })).not.toHaveClass("flex-1");
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 		expect(terminalRegion).toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("absolute", "right-1", "inset-y-0");
-		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1");
+		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("mr-2", "shrink-0");
+		expect(screen.getByTestId("session-tab-action").parentElement?.previousElementSibling).toBe(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1", "pl-2", "pr-1.5");
+		expect(screen.getByRole("tab", { name: /^do the thing/ }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-session-tab-max");
 		expect(terminalRegion).not.toContainElement(screen.getByTestId("session-action-region"));
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).not.toHaveClass("border-l");
-		expect(actionRegion).toHaveClass("gap-1");
-		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "New terminal" }));
+		expect(actionRegion).toHaveClass("session-topbar-actions");
+		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "New terminal" }));
 		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
 		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-strip-action")).toHaveTextContent("New terminal");
-		expect(document.querySelector(".session-tab-scroll-fade")).not.toBeInTheDocument();
+		expect(tabStripAction).toHaveTextContent("New terminal");
+		expect(document.querySelector("[data-tab-scroll-region]")).not.toHaveAttribute("data-fade-end");
 	});
 
 	it("keeps the tab strip flush with the action controls", () => {
 		renderCenterPane({ session: worker });
 
+		// Inline spacing lives on .session-topbar-actions in styles.css.
 		expect(screen.getByTestId("session-terminal-region")).not.toHaveClass("pr-3");
-		expect(screen.getByTestId("session-action-region")).toHaveClass("pr-3");
-		expect(screen.getByTestId("session-action-region")).toHaveClass("pl-2");
+		expect(screen.getByTestId("session-action-region")).toHaveClass("session-topbar-actions");
 		expect(screen.getByTestId("session-action-region")).not.toHaveClass("px-3");
 	});
 
@@ -1042,7 +568,11 @@ describe("CenterPane toolbar session label", () => {
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: pane });
 		act(() => document.dispatchEvent(new Event("fullscreenchange")));
 
-		expect(screen.queryByTestId("session-action-region")).not.toBeInTheDocument();
+		// Fullscreen hides the panel-owned bell, so the region keeps only its own copy.
+		const actionRegion = screen.getByTestId("session-action-region");
+		expect(actionRegion).toHaveAttribute("data-fullscreen", "true");
+		expect(within(actionRegion).queryByRole("button", { name: "Session action" })).not.toBeInTheDocument();
+		expect(within(actionRegion).getByRole("button", { name: /notifications/i })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Exit fullscreen" })).toBeNull();
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
 	});
@@ -1070,7 +600,6 @@ describe("CenterPane toolbar session label", () => {
 			const frame = tab.closest("[data-terminal-tab-frame]");
 			expect(frame?.classList.contains("max-w-shell-tab-max")).toBe(true);
 			expect(frame?.classList.contains("shrink-0")).toBe(true);
-			expect(frame?.classList.contains("w-shell-tab-connected")).toBe(false);
 			expect(frame?.classList.contains("min-w-16")).toBe(false);
 			expect(tab.classList.contains("min-w-0")).toBe(true);
 		}
@@ -1078,10 +607,11 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.queryByRole("button", { name: "Scroll tabs left" })).toBeNull();
 		expect(screen.queryByRole("button", { name: "Scroll tabs right" })).toBeNull();
 
-		// Both display actions live outside this topbar; the flexible scroll region
-		// can therefore consume the remaining terminal-region width.
+		// The tab list sizes to its tabs and shrinks into a scroll strip when
+		// they overflow, so New terminal can sit right after the last tab.
 		const tabList = screen.getByRole("tablist", { name: "Open terminals" });
-		expect(tabList).toHaveClass("flex-1");
+		expect(tabList).toHaveClass("min-w-0");
+		expect(tabList).not.toHaveClass("flex-1");
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 	});
 
@@ -1280,5 +810,97 @@ describe("CenterPane toolbar session label", () => {
 		fireEvent.keyDown(sessionTab, { key: "ArrowRight" });
 		expect(document.activeElement).toBe(firstShellTab);
 		expect(screen.queryByRole("textbox", { name: /rename terminal/i })).toBeNull();
+	});
+});
+
+describe("CenterPane tab context menu", () => {
+	const shells = ["one", "two"].map((title, index) => ({
+		handleId: `h-${index}`,
+		title,
+		workingDir: "/tmp/ws",
+		createdAt: "2026-07-22T00:00:00Z",
+	}));
+
+	it("closes a shell tab from its menu", async () => {
+		const onCloseShellTerminal = vi.fn();
+		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal });
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }));
+
+		expect(onCloseShellTerminal).toHaveBeenCalledExactlyOnceWith("h-1");
+	});
+
+	it("closes a file tab with its own close action", async () => {
+		const onClose = vi.fn();
+		renderCenterPane({
+			session: worker,
+			workspaceTabs: [{
+				key: "file:a.ts",
+				content: <button role="tab" type="button">a.ts</button>,
+				onSelect: vi.fn(),
+				onClose,
+				menu: { kind: "file", tabKey: "file:a.ts", onClose, file: { path: "a.ts", sessionId: "sess-1", remote: false } },
+			}],
+		});
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "a.ts" }));
+		fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }));
+
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("offers split actions only while split panes provide them", async () => {
+		const right = vi.fn();
+		const { unmount } = renderCenterPane({ session: worker, shellTerminals: shells });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(screen.queryByRole("menuitem", { name: "Split right" })).not.toBeInTheDocument();
+		unmount();
+
+		const split = vi.fn((key: string) => (key === "h-1" ? { right } : {}));
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<TabSplitMenuContext.Provider value={split}>
+						<CenterPane daemonReady session={worker} shellTerminals={shells} theme="dark" />
+					</TabSplitMenuContext.Provider>
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "two" }));
+		expect(await screen.findByRole("menuitem", { name: "Split down" })).toHaveAttribute("aria-disabled", "true");
+		fireEvent.click(screen.getByRole("menuitem", { name: "Split right" }));
+
+		expect(split).toHaveBeenCalledWith("h-1");
+		expect(right).toHaveBeenCalledOnce();
+	});
+
+	it("offers Archive only where the archive confirmation is mounted", async () => {
+		const { unmount } = renderCenterPane({ session: worker });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		unmount();
+
+		// A Cloud worker archives like a local one.
+		const cloud = renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		cloud.unmount();
+
+		// A Cloud session shared from another organization is the sharer's to archive.
+		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1", shared: true } } as WorkspaceSession });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		await screen.findByRole("menu");
+		expect(screen.queryByRole("menuitem", { name: /Archive session/ })).not.toBeInTheDocument();
+	});
+
+	it("lists no Close tab for the session's own tab", async () => {
+		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal: vi.fn() });
+
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Close tab" })).not.toBeInTheDocument();
 	});
 });

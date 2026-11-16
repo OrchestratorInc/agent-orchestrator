@@ -1,5 +1,4 @@
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
 import type {
 	CloudCpClient,
 	CloudCpClientEvent,
@@ -10,7 +9,7 @@ import type {
 	CloudCpWorkspaceReviewSearchQuery,
 } from "../lib/cloud-cp";
 import { CloudCpError, workspaceRepositoryOf } from "../lib/cloud-cp";
-import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
+import { useCloudSessionEventListener } from "./useCloudSessionEvents";
 
 export const cloudWorkspaceReviewQueryKey = (baseUrl: string, orgId: string, sessionId: string) =>
 	["cloud-workspace-review", baseUrl, orgId, sessionId] as const;
@@ -158,17 +157,14 @@ export function useCloudWorkspaceReviewEvents(args: {
 	enabled: boolean;
 }): void {
 	const queryClient = useQueryClient();
-	useEffect(() => {
-		if (!args.enabled || !args.orgId || !args.baseUrl) return;
-		const abort = new AbortController();
-		const key = cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId);
-		void subscribeSessionEventsBridged({
-			baseUrl: args.baseUrl,
-			orgId: args.orgId,
-			sessionId: args.sessionId,
-			signal: abort.signal,
-			onEvent: (event) => { void invalidateCloudWorkspaceReviewEvent(queryClient, key, event); },
-		});
-		return () => abort.abort();
-	}, [args.baseUrl, args.enabled, args.orgId, args.sessionId, queryClient]);
+	useCloudSessionEventListener({
+		baseUrl: args.baseUrl,
+		orgId: args.orgId,
+		sessionId: args.sessionId,
+		enabled: args.enabled,
+		onEvent: (event) => {
+			if (!args.orgId) return;
+			void invalidateCloudWorkspaceReviewEvent(queryClient, cloudWorkspaceReviewQueryKey(args.baseUrl, args.orgId, args.sessionId), event);
+		},
+	});
 }

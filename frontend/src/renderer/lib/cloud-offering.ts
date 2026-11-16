@@ -20,6 +20,23 @@ import type {
 
 export const CODER_PROVIDER = "coder";
 export const FREESTYLE_PROVIDER = "freestyle";
+/** Offering feature that lets an organization share sessions (WorkOS metadata feature=share). */
+export const SHARE_FEATURE = "share";
+/** Offering feature of a control plane that starts Cloud standalone agents (POST /orgs/{orgId}/standalone-agents). */
+export const STANDALONE_AGENTS_FEATURE = "standalone_agents";
+/** Offering feature the control plane sends while its session attachment routes are on. */
+export const ATTACHMENTS_FEATURE = "attachments";
+/** Offering feature the control plane sends when a queued chat message can be edited (editQueuedMessage). */
+export const QUEUED_EDIT_FEATURE = "queued-edit";
+/** Offering feature the control plane sends when a queued message can be deleted without stopping a started turn (deleteQueuedMessage). */
+export const QUEUED_DELETE_FEATURE = "queued-delete";
+/**
+ * Offering feature the control plane sends when a queued message can be steered into the
+ * running turn (steerQueuedMessage), with the outcome recorded on the queued turn's events.
+ */
+export const QUEUED_STEER_FEATURE = "queued-steer";
+/** The largest Cloud attachment when the control plane takes files but names no limit. */
+export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export interface ResolvedCloudOffering {
 	providers: string[];
@@ -30,12 +47,26 @@ export interface ResolvedCloudOffering {
 	billingMode: CloudCpBillingMode | undefined;
 	features: string[];
 	/**
+	 * The largest file a Cloud session takes as an attachment; undefined when
+	 * the control plane takes none (no attachments feature), so no surface
+	 * offers to attach.
+	 */
+	maxAttachmentBytes: number | undefined;
+	/**
 	 * The org may connect its own Coder deployment (it holds the coder
 	 * capability), which shows the Coder settings page. An older control plane
 	 * that does not send it offered Coder only to such orgs, so the provider
 	 * list stands in.
 	 */
 	customCoder: boolean;
+	/** Cloud sessions keep artifact files; false for a control plane that does not say. */
+	artifacts: boolean;
+	/**
+	 * An ao-worker Coder session checks out in the project's working folder.
+	 * Off when the control plane does not say so (an older one never does):
+	 * a working folder then applies only with the workspace user.
+	 */
+	coderWorkerWorkingFolder: boolean;
 	/** "server" when `/me` carried an offering, "fallback" when it was derived. */
 	source: "server" | "fallback";
 }
@@ -106,7 +137,12 @@ export function resolveCloudOffering(
 			kind: offering.kind ?? offeringKindFor(providers),
 			billingMode: offering.billingMode ?? billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 			features: offering.features ?? [],
+			maxAttachmentBytes: offering.features?.includes(ATTACHMENTS_FEATURE)
+				? (offering.maxAttachmentBytes && offering.maxAttachmentBytes > 0 ? offering.maxAttachmentBytes : CLOUD_MAX_ATTACHMENT_BYTES)
+				: undefined,
 			customCoder: offering.customCoder ?? providers.includes(CODER_PROVIDER),
+			artifacts: offering.artifacts ?? false,
+			coderWorkerWorkingFolder: offering.coderWorkerWorkingFolder === true,
 			source: "server",
 		};
 	}
@@ -120,7 +156,10 @@ export function resolveCloudOffering(
 		kind: offeringKindFor(providers),
 		billingMode: billingModeFromSummary(billing) ?? (billingFailed ? "off" : undefined),
 		features: [],
+		maxAttachmentBytes: undefined,
 		customCoder: providers.includes(CODER_PROVIDER),
+		artifacts: false,
+		coderWorkerWorkingFolder: false,
 		source: "fallback",
 	};
 }

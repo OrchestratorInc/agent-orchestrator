@@ -1,11 +1,13 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
-import { CalendarClock, ChevronRight, Clock3, History, Pencil, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import { ArrowDownUp, CalendarClock, ChevronDown, ChevronRight, Clock, Clock3, History, GitPullRequest, ListChecks, FileText, Filter, Pencil, Plus, Trash2, TriangleAlert } from "@/components/app-icons";
 import { Button } from "./ui/button";
+import { CloseButton } from "./ui/close-button";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { FilterChip, ToolbarSearch } from "./PageToolbar";
 import {
 	Dialog,
 	DialogClose,
@@ -13,14 +15,28 @@ import {
 	DialogDescription,
 	DialogTitle,
 } from "./ui/dialog";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
+import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { AgentModelField } from "./settings/ProjectAgentRoleControls";
 import { RequiredAgentField } from "./CreateProjectAgentSheet";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
-import { useProjectDefaultWorker } from "../hooks/useProjectDefaultWorker";
+import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import { CLOUD_PROJECT_KIND } from "../types/workspace";
 import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
@@ -31,6 +47,7 @@ import {
 	clampHourDraft,
 	clampMinuteDraft,
 	clampMonthDayDraft,
+	describeSchedule,
 	formatTimeDraft,
 	nowLocalHHMM,
 	parseHourMinute,
@@ -58,68 +75,218 @@ import {
 	onboardingFooterActionsEndClass,
 	onboardingFormLabelClass,
 } from "../lib/onboarding-ui";
+import { AUTOMATION_TEMPLATES, type AutomationTemplateID, type AutomationUseCase } from "../lib/automation-templates";
 import { automationPromptLengthBucket, captureRendererEvent } from "../lib/telemetry";
 import { cn } from "../lib/utils";
-import { hidesShellTopbar } from "../lib/platform";
+
+type StatusFilter = "all" | "enabled" | "paused";
+type SortOrder = "nextRun" | "name" | "created";
+type StarterTemplateID = Exclude<AutomationTemplateID, "custom">;
+
+const STATUS_FILTERS: StatusFilter[] = ["all", "enabled", "paused"];
+const SORT_ORDERS: SortOrder[] = ["nextRun", "name", "created"];
+const TEMPLATE_ICONS = { daily_pr_review_v1: GitPullRequest, daily_issue_triage_v1: ListChecks, weekly_release_notes_v1: FileText };
 
 function displayTime(value?: string, locale?: string) {
 	if (!value) return "—";
 	return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+function timestamp(value?: string) {
+	return value ? Date.parse(value) || 0 : 0;
+}
+
+/** Orders the list: soonest next run first with paused ones last, by name, or newest first. */
+function sortAutomations(items: Automation[], order: SortOrder) {
+	const byName = (left: Automation, right: Automation) => left.displayName.localeCompare(right.displayName);
+	return [...items].sort((left, right) => {
+		if (order === "name") return byName(left, right);
+		if (order === "created") return timestamp(right.createdAt) - timestamp(left.createdAt) || byName(left, right);
+		if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
+		const leftNext = timestamp(left.nextRunAt) || Number.POSITIVE_INFINITY;
+		const rightNext = timestamp(right.nextRunAt) || Number.POSITIVE_INFINITY;
+		return leftNext === rightNext ? byName(left, right) : leftNext - rightNext;
+	});
+}
+
+/** "Weekdays at 9:00 AM": a rule's cadence and clock time as a person reads it. */
+function useScheduleLabel() {
+	const { t, i18n } = useTranslation();
+	const locale = i18n.resolvedLanguage;
+	return (rrule: string) => {
+		const summary = describeSchedule(rrule);
+		// Rule times are wall-clock values in the automation's timezone, so format them without shifting.
+		const time = summary.time
+			? new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(Date.UTC(2000, 0, 1, summary.time.hour, summary.time.minute)))
+			: null;
+		const at = time ? "At" : "";
+		switch (summary.kind) {
+			case "daily":
+				return t(`automations.summary.daily${at}`, { time });
+			case "weekdays":
+				return t(`automations.summary.weekdays${at}`, { time });
+			case "weekly": {
+				const shortDay = (day: WeekdayCode) => new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + WEEKDAY_CODES.indexOf(day))));
+				const days = summary.days.length === 1 ? t(`automations.weekday.${summary.days[0]}`) : summary.days.map(shortDay).join(", ");
+				return t(`automations.summary.weekly${at}`, { days, time });
+			}
+			case "monthly":
+				return t(`automations.summary.monthly${at}`, { day: summary.day, time });
+			default:
+				return summary.frequency
+					? t(`automations.summary.other${at}`, { frequency: t(`automations.frequency.${summary.frequency}`, { defaultValue: summary.frequency }), time })
+					: t("automations.summary.custom");
+		}
+	};
+}
+
 export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
-	const showPageTitle = hidesShellTopbar();
 	const workspaces = useWorkspaceQuery().data ?? [];
 	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
 	const remove = useDeleteAutomation();
 	const [createOpen, setCreateOpen] = useState(false);
+	const [starter, setStarter] = useState<AutomationTemplateID>("custom");
+	const [search, setSearch] = useState("");
+	const [status, setStatus] = useState<StatusFilter>("all");
+	const [projectId, setProjectId] = useState("");
+	const [sort, setSort] = useState<SortOrder>("nextRun");
+	function openCreate(template: AutomationTemplateID = "custom") {
+		setStarter(template);
+		setCreateOpen(true);
+	}
 	const [editTarget, setEditTarget] = useState<Automation | null>(null);
 	const [deleteTarget, setDeleteTarget] = useState<Automation | null>(null);
 	const [expanded, setExpanded] = useState<string | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
-	const [filter, setFilter] = useState<"all" | "enabled" | "paused">("all");
-	const automations = query.data ?? [];
-	const visibleAutomations = automations.filter((item) => filter === "all" || (filter === "enabled" ? item.enabled : !item.enabled));
+	const automations = useMemo(() => query.data ?? [], [query.data]);
+	const projectName = (id: string) => workspaces.find((workspace) => workspace.id === id)?.name ?? id;
+	// Projects that own at least one automation, so the filter never offers an empty choice.
+	const projectOptions = [...new Set(automations.map((item) => item.projectId))].map((id) => ({ id, name: projectName(id) }));
+	const needle = search.trim().toLocaleLowerCase();
+	const visibleAutomations = sortAutomations(
+		automations.filter((item) =>
+			(status === "all" || (status === "enabled" ? item.enabled : !item.enabled)) &&
+			(!projectId || item.projectId === projectId) &&
+			`${item.displayName} ${projectName(item.projectId)}`.toLocaleLowerCase().includes(needle)),
+		sort,
+	);
+	const hasAutomations = automations.length > 0;
+	const clearFilters = () => {
+		setSearch("");
+		setStatus("all");
+		setProjectId("");
+	};
+	const statusCounts: Record<StatusFilter, number> = { all: automations.length, enabled: automations.filter((item) => item.enabled).length, paused: automations.filter((item) => !item.enabled).length };
+	const filterLabel = t("automations.filter.label");
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
-			<header className="workspace-topbar-container center-panel-titlebar flex h-toolbar shrink-0 items-center justify-between gap-3 border-b border-border-strong pr-2">
-				<div className="flex min-w-0 items-center gap-2">
-					<h1 className={showPageTitle ? cn(topbarProjectLabelClass, "inline-flex items-center gap-1.5") : "sr-only"}>{showPageTitle ? <CalendarClock className="size-icon-md" aria-hidden="true" /> : null}{t("automations.title")}</h1>
-					{!showPageTitle ? <p className="truncate text-xs text-muted-foreground">{t("automations.description")}</p> : null}
-				</div>
-				<div className="workspace-topbar-actions flex shrink-0 items-center">
-					<TopbarButton variant="primary" className="topbar-control--labeled" onClick={() => setCreateOpen(true)}><Plus className="size-icon-md" aria-hidden="true" />{t("automations.new")}</TopbarButton>
-				</div>
-			</header>
+			<PageTopbar lead={<PageTopbarTitle as="h1" icon={<CalendarClock className="size-icon-md" aria-hidden="true" />}>{t("automations.title")}</PageTopbarTitle>} />
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 			<main className="relative min-h-0 flex-1 overflow-hidden">
 				<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60" tabIndex={0}>
-				<div className="p-4">
-				{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
-				{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
-				{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
-				{!query.isLoading && !query.error && automations.length === 0 ? <EmptyAutomations onCreate={() => setCreateOpen(true)} /> : null}
-				{automations.length > 0 ? <>
-					<div className="mb-3 flex items-center gap-1" role="group" aria-label={t("automations.filter.label")}>
-						{(["all", "enabled", "paused"] as const).map((value) => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)} className={cn("inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60", filter === value ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/50 hover:text-foreground")}>
-							{t(`automations.filter.${value}`)}{" "}<span className="text-[10px] tabular-nums text-muted-foreground">{value === "all" ? automations.length : automations.filter((item) => value === "enabled" ? item.enabled : !item.enabled).length}</span>
-						</button>)}
-					</div>
-					<div className="overflow-hidden rounded-lg border border-border bg-background">
-						<div className="hidden grid-cols-[minmax(0,1fr)_180px_160px_132px] items-center gap-4 border-b border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground lg:grid" aria-hidden="true">
-							<span>{t("automations.field.name")}</span><span>{t("automations.field.schedule")}</span><span>{t("automations.nextRun")}</span><span className="text-right">{t("automations.status")}</span>
+				<div className="@container pt-4 pr-4 pb-4 pl-(--space-4_5)">
+					{actionError ? <p role="alert" className="mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{actionError}</p> : null}
+					{query.isLoading ? <p role="status" className="px-3 py-8 text-center text-sm text-muted-foreground">{t("automations.loading")}</p> : null}
+					{query.error ? <p role="alert" className="text-sm text-destructive">{query.error.message}</p> : null}
+					{!query.isLoading && !query.error ? (
+						<section aria-labelledby="automation-templates">
+							<h2 id="automation-templates" className="text-control font-medium text-foreground">{t("automations.templates.title")}</h2>
+							<p className="mt-1 mb-3 text-xs text-muted-foreground">{t("automations.templates.description")}</p>
+							<TemplateGrid onSelect={openCreate} />
+						</section>
+					) : null}
+					{!query.isLoading && !query.error && !hasAutomations ? (
+						<div className="mt-6 flex flex-col items-center gap-3 border-t border-border pt-12 pb-8 text-center">
+							<Clock aria-hidden="true" className="size-5 text-passive" />
+							<p className="text-control text-muted-foreground">{t("automations.empty.title")}</p>
+							<Button type="button" size="sm" variant="secondary" onClick={() => openCreate()}>{t("automations.new")}</Button>
 						</div>
-						{visibleAutomations.map((item) => (
-							<AutomationCard key={item.id} item={item} projectName={workspaces.find((workspace) => workspace.id === item.projectId)?.name ?? item.projectId} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
-						))}
-						{visibleAutomations.length === 0 ? <p className="px-4 py-10 text-center text-xs text-muted-foreground">{t("automations.filter.empty")}</p> : null}
-					</div>
-				</> : null}
+					) : null}
+					{hasAutomations ? (
+						<section aria-label={t("automations.title")} className="mt-6 border-t border-border pt-3">
+							<div className="mb-2">
+								<div className="flex min-h-control-md items-center gap-2">
+									<div role="group" aria-label={t("automations.filter.status")} className="flex min-w-0 items-center gap-1">
+										{STATUS_FILTERS.map((value) => (
+											<Button key={value} type="button" size="sm" variant="ghost" aria-pressed={status === value} onClick={() => setStatus(value)} className="gap-1.5">
+												{t(`automations.filter.${value}`)}{" "}
+												<span className="text-caption tabular-nums text-passive">{statusCounts[value]}</span>
+											</Button>
+										))}
+									</div>
+									<div className="ms-auto flex shrink-0 items-center gap-0.5">
+										<ToolbarSearch label={t("automations.search")} query={search} onQueryChange={setSearch} />
+										{projectOptions.length > 1 ? (
+											<DropdownMenu>
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<DropdownMenuTrigger asChild>
+															<Button type="button" size="icon-sm" variant="quiet" aria-label={filterLabel} data-active={projectId ? "true" : undefined}>
+																<Filter aria-hidden="true" className="size-icon-sm" />
+															</Button>
+														</DropdownMenuTrigger>
+													</TooltipTrigger>
+													<TooltipContent side="bottom">{filterLabel}</TooltipContent>
+												</Tooltip>
+												<DropdownMenuContent align="end" className="max-h-96 min-w-52 overflow-y-auto" data-browser-native-overlay="true">
+													<DropdownMenuLabel>{t("automations.filter.project")}</DropdownMenuLabel>
+													<DropdownMenuRadioGroup value={projectId} onValueChange={setProjectId}>
+														<DropdownMenuRadioItem value="">{t("automations.filter.allProjects")}</DropdownMenuRadioItem>
+														{projectOptions.map((option) => <DropdownMenuRadioItem key={option.id} value={option.id}><span className="truncate">{option.name}</span></DropdownMenuRadioItem>)}
+													</DropdownMenuRadioGroup>
+												</DropdownMenuContent>
+											</DropdownMenu>
+										) : null}
+										<DropdownMenu>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<DropdownMenuTrigger asChild>
+														<Button type="button" size="icon-sm" variant="quiet" aria-label={t("automations.sort.label")}>
+															<ArrowDownUp aria-hidden="true" className="size-icon-sm" />
+														</Button>
+													</DropdownMenuTrigger>
+												</TooltipTrigger>
+												<TooltipContent side="bottom">{t("automations.sort.label")}</TooltipContent>
+											</Tooltip>
+											<DropdownMenuContent align="end" className="min-w-44" data-browser-native-overlay="true">
+												<DropdownMenuRadioGroup value={sort} onValueChange={(value) => setSort(value as SortOrder)}>
+													{SORT_ORDERS.map((value) => <DropdownMenuRadioItem key={value} value={value}>{t(`automations.sort.${value}`)}</DropdownMenuRadioItem>)}
+												</DropdownMenuRadioGroup>
+											</DropdownMenuContent>
+										</DropdownMenu>
+										<NewAutomationMenu onCreate={openCreate} />
+									</div>
+								</div>
+								{projectId ? (
+									<div className="mt-2 flex flex-wrap items-center gap-1.5">
+										<FilterChip
+											label={t("automations.filter.project")}
+											value={projectName(projectId)}
+											removeLabel={t("automations.filter.remove", { filter: `${t("automations.filter.project")}: ${projectName(projectId)}` })}
+											onRemove={() => setProjectId("")}
+										/>
+									</div>
+								) : null}
+							</div>
+							{visibleAutomations.length > 0 ? (
+								<div className="divide-y divide-border">
+									{visibleAutomations.map((item) => (
+										<AutomationRow key={item.id} item={item} projectName={projectName(item.projectId)} busy={update.isPending} expanded={expanded === item.id} onExpand={() => setExpanded(expanded === item.id ? null : item.id)} onEdit={() => setEditTarget(item)} onDelete={() => setDeleteTarget(item)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: item.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
+									))}
+								</div>
+							) : (
+								<div className="flex flex-col items-center gap-1 py-16 text-center">
+									<p className="text-control font-medium text-foreground">{t("automations.noMatches")}</p>
+									<Button variant="quiet" size="sm" onClick={clearFilters}>{t("automations.clearFilters")}</Button>
+								</div>
+							)}
+						</section>
+					) : null}
 				</div>
 				</ScrollArea.Viewport>
 				<ScrollArea.Scrollbar orientation="vertical" className="z-10 flex w-2 touch-none select-none p-0.5">
@@ -127,80 +294,144 @@ export function AutomationsView() {
 				</ScrollArea.Scrollbar>
 			</main>
 			</ScrollArea.Root>
-			<AutomationFormDialog open={createOpen} workspaces={workspaces} harnesses={harnesses} busy={create.isPending} error={create.error?.message ?? null} onOpenChange={setCreateOpen} onSubmit={async (input) => { await create.mutateAsync(input as CreateAutomationInput); setCreateOpen(false); }} />
+			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} busy={create.isPending} error={create.error?.message ?? null} onOpenChange={setCreateOpen} onSubmit={async (input) => { await create.mutateAsync(input as CreateAutomationInput); setCreateOpen(false); }} />
 			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
 			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending} error={remove.error?.message ?? null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }} onConfirm={() => { if (!deleteTarget) return; remove.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) }); }} />
 		</div>
 	);
 }
 
-function EmptyAutomations({ onCreate }: { onCreate: () => void }) {
+/** The page's one primary action: a blank automation or one of the starters. */
+function NewAutomationMenu({ onCreate }: { onCreate: (template?: AutomationTemplateID) => void }) {
 	const { t } = useTranslation();
-	return <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-border p-8 text-center"><div><CalendarClock className="mx-auto mb-3 size-8 text-muted-foreground" /><h2 className="font-medium">{t("automations.empty.title")}</h2><p className="mt-1 text-sm text-muted-foreground">{t("automations.empty.description")}</p><Button className="mt-4" onClick={onCreate}>{t("automations.create")}</Button></div></div>;
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button type="button" size="sm" variant="primary" className="ms-1">
+					{t("automations.new")}
+					<ChevronDown aria-hidden="true" className="size-icon-sm" />
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="end" className="min-w-52" data-browser-native-overlay="true">
+				<DropdownMenuItem onSelect={() => onCreate()}>
+					<Plus aria-hidden="true" className="size-icon-sm" />
+					{t("automations.new.scratch")}
+				</DropdownMenuItem>
+				<DropdownMenuSeparator />
+				<DropdownMenuLabel>{t("automations.templates.label")}</DropdownMenuLabel>
+				{AUTOMATION_TEMPLATES.map((template) => {
+					const Icon = TEMPLATE_ICONS[template.id];
+					return (
+						<DropdownMenuItem key={template.id} onSelect={() => onCreate(template.id)}>
+							<Icon aria-hidden="true" className="size-icon-sm" />
+							{t(`automations.template.${template.id}`)}
+						</DropdownMenuItem>
+					);
+				})}
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
 }
 
-function AutomationCard({ item, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
+function TemplateGrid({ onSelect }: { onSelect: (template: StarterTemplateID) => void }) {
+	return (
+		<div className="grid grid-cols-1 gap-3 @lg:grid-cols-2 @3xl:grid-cols-3">
+			{AUTOMATION_TEMPLATES.map((template) => <TemplateTile key={template.id} id={template.id} rrule={template.rrule} onSelect={() => onSelect(template.id)} />)}
+		</div>
+	);
+}
+
+function TemplateTile({ id, rrule, onSelect }: { id: StarterTemplateID; rrule: string; onSelect: () => void }) {
+	const { t } = useTranslation();
+	const scheduleLabel = useScheduleLabel();
+	const Icon = TEMPLATE_ICONS[id];
+	return (
+		<Pressable aria-label={t(`automations.template.${id}`)} onClick={onSelect}
+			className="group flex min-w-0 flex-col items-start gap-4 rounded-lg bg-interactive-hover p-4 text-start hover:bg-interactive-active">
+			<Icon aria-hidden="true" className="size-5 shrink-0 text-muted-foreground group-hover:text-foreground" />
+			<span className="flex min-w-0 flex-col">
+				<span className="text-sm font-medium text-foreground">{t(`automations.template.${id}`)}</span>
+				<span className="mt-1 text-pretty text-xs leading-5 text-muted-foreground">{t(`automations.template.${id}.description`)}</span>
+				<span className="mt-3 flex items-center gap-1.5 text-caption tabular-nums text-passive">
+					<Clock aria-hidden="true" className="size-icon-xs shrink-0" />
+					{scheduleLabel(rrule)}
+				</span>
+			</span>
+		</Pressable>
+	);
+}
+
+function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle }: { item: Automation; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void> }) {
 	const runs = useAutomationRuns(expanded ? item.id : null);
 	const navigate = useNavigate();
 	const { t, i18n } = useTranslation();
 	const reduceMotion = useReducedMotion();
-	// The daemon serializes DTSTART + RRULE, while the form intentionally
-	// preserves those as legacy rules. Read the rule independently for display.
-	const rule = item.rrule.split(/\r?\n/).find((line) => line.startsWith("RRULE:"))?.slice(6) ?? item.rrule.replace(/^RRULE:/, "");
-	const parts: Record<string, string | undefined> = Object.fromEntries(rule.split(";").map((part) => part.split("=")));
-	const frequency = parts.FREQ?.toLowerCase();
-	const schedule = t(`automations.frequency.${frequency ?? "recurring"}`, { defaultValue: frequency ?? t("automations.frequency.recurring") });
-	const simpleRule = !parts.INTERVAL || parts.INTERVAL === "1";
-	const scheduleTime = parts.BYHOUR !== undefined && parts.BYMINUTE !== undefined ? parseHourMinute(parts.BYHOUR, parts.BYMINUTE) : null;
-	const clockTime = scheduleTime ? new Intl.DateTimeFormat(i18n.resolvedLanguage, { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(Date.UTC(2000, 0, 1, scheduleTime.hour, scheduleTime.minute))) : null;
-	const rawWeekdays = parts.BYDAY?.split(",") ?? [];
-	const weekdays = rawWeekdays.filter((day): day is WeekdayCode => WEEKDAY_CODES.includes(day as WeekdayCode));
-	const validWeekdays = weekdays.length > 0 && weekdays.length === rawWeekdays.length;
-	const shortWeekday = (day: WeekdayCode) => new Intl.DateTimeFormat(i18n.resolvedLanguage, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 5 + WEEKDAY_CODES.indexOf(day))));
-	const weekdayLabel = weekdays.length === 1 ? t(`automations.weekday.${weekdays[0]}`) : weekdays.join(",") === "MO,TU,WE,TH,FR" ? `${shortWeekday("MO")}–${shortWeekday("FR")}` : weekdays.map(shortWeekday).join(", ");
-	const scheduleLabel = simpleRule && frequency === "weekly" && validWeekdays ? weekdayLabel : simpleRule && frequency === "monthly" && /^[1-9]$|^[12]\d$|^3[01]$/.test(parts.BYMONTHDAY ?? "") ? t("automations.schedule.monthDay", { day: parts.BYMONTHDAY }) : schedule;
-
+	const scheduleLabel = useScheduleLabel();
 	const historyId = `automation-history-${item.id}`;
-	return <article className="group border-b border-border last:border-b-0">
-		<div className={cn("grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-4 py-3 transition-colors motion-reduce:transition-none lg:grid-cols-[minmax(0,1fr)_180px_160px_132px]", expanded ? "bg-muted/30" : "hover:bg-muted/20")}>
-			<button type="button" className="flex min-w-0 items-center gap-2.5 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
+	return <article className="group">
+		<div className={cn("flex items-center gap-3 rounded-md px-2 py-2.5", expanded ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
+			<Pressable className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
 				<ChevronRight aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none", expanded && "rotate-90")} />
-				<div className="min-w-0"><h2 className="truncate text-[13px] font-medium leading-5 text-foreground">{item.displayName}</h2><p className="truncate text-[11px] leading-5 text-muted-foreground">{projectName}</p></div>
-			</button>
-			<div className="col-start-1 flex items-start gap-2 pl-6 text-xs lg:col-start-auto lg:pl-0"><CalendarClock aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" /><div><p className="capitalize">{scheduleLabel}{clockTime ? ` · ${clockTime}` : ""}</p></div></div>
-			<div className="col-start-1 pl-6 text-xs lg:col-start-auto lg:pl-0"><span className="mr-2 text-muted-foreground lg:hidden">{t("automations.nextRun")}</span><span className={cn("tabular-nums", !item.enabled && "text-muted-foreground")}>{item.enabled ? displayTime(item.nextRunAt, i18n.resolvedLanguage) : t("automations.paused")}</span>{item.latestRun ? <p className="mt-1 text-[11px] capitalize text-muted-foreground">{item.latestRun.status}</p> : null}</div>
-			<div className="col-start-2 row-start-1 row-span-3 flex items-center justify-end gap-1 lg:col-start-auto lg:row-start-auto lg:row-span-1">
-				<Button variant="ghost" size="icon-sm" className="text-muted-foreground lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
-				<Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/60" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
+				<div className="min-w-0">
+					<h2 className="truncate text-control font-medium leading-5 text-foreground">{item.displayName}</h2>
+					<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
+						<Clock aria-hidden="true" className="size-icon-xs shrink-0 text-passive" />
+						<span className="truncate">{scheduleLabel(item.rrule)}</span>
+						<span aria-hidden="true" className="text-passive">·</span>
+						<span className="truncate">{projectName}</span>
+					</p>
+				</div>
+			</Pressable>
+			<div className="hidden shrink-0 text-end text-caption leading-5 @lg:block">
+				<p className={cn("tabular-nums", item.enabled ? "text-foreground" : "text-muted-foreground")}>
+					{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}
+				</p>
+				{item.latestRun ? <p className="text-muted-foreground">{t("automations.lastRun", { status: t(`automations.runStatus.${item.latestRun.status}`, { defaultValue: item.latestRun.status }) })}</p> : null}
+			</div>
+			<div className="flex shrink-0 items-center gap-1">
+				<Button variant="quiet" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
+				<Button variant="destructive-ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
 				<Switch checked={item.enabled} disabled={busy} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void onToggle(checked)} />
 			</div>
 		</div>
-		{item.latestRun?.errorMessage ? <p role="alert" className="mx-4 mb-3 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{item.latestRun.errorMessage}</p> : null}
+		{item.latestRun?.errorMessage ? <p role="alert" className="mx-2 mb-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{item.latestRun.errorMessage}</p> : null}
 		<AnimatePresence initial={false}>
 			{expanded ? <motion.div id={historyId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
-				<div className="border-t border-border bg-muted/10 px-4 py-4 pl-10">
-					<div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground"><span>{t("automations.timezone", { timezone: item.timezone })}</span><span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")} · {item.kind}</span></span><span>{t("automations.latestState")}: <span className="capitalize">{item.latestRun?.status ?? t("automations.neverRun")}</span></span></div>
-					<p className="mb-1 text-[11px] font-medium text-muted-foreground">{t("automations.field.prompt")}</p><p className="mb-4 whitespace-pre-wrap text-xs leading-5 text-foreground">{item.prompt}</p>
+				<div className="px-2 pt-3 pb-4 pl-8">
+					<div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
+						<span className="@lg:hidden tabular-nums">{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}</span>
+						<span>{t("automations.timezone", { timezone: item.timezone })}</span>
+						<span>{t("automations.agent")}: <span className="text-foreground">{item.harness || t("automations.projectDefault")}</span></span>
+					</div>
+					<p className="mb-1 text-caption font-medium text-muted-foreground">{t("automations.field.prompt")}</p>
+					<p className="mb-4 whitespace-pre-wrap text-xs leading-5 text-foreground">{item.prompt}</p>
 					<h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium"><History className="size-3.5 text-muted-foreground" aria-hidden="true" />{t("automations.runs.title")}</h3>
-					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium capitalize">{run.status}</span><span className="ml-3 text-[11px] text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
+					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{runs.error.message}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium">{t(`automations.runStatus.${run.status}`, { defaultValue: run.status })}</span><span className="ml-3 text-caption tabular-nums text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.errorMessage ? <p className="mt-1 text-xs text-destructive">{run.errorMessage}</p> : null}</div>{run.sessionId ? <Button variant="secondary" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>)}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
 				</div>
 			</motion.div> : null}
 		</AnimatePresence>
 	</article>;
 }
 
-type WorkspaceOption = { id: string; name: string };
+
+type WorkspaceOption = { id: string; name: string; kind?: string; standaloneAgent?: boolean };
 type AutomationFormSubmit = {
+	templateId?: AutomationTemplateID;
+	useCase?: AutomationUseCase;
 	projectId?: string;
 	displayName: string;
 	prompt: string;
 	kind?: "worker" | "orchestrator";
 	harness?: string;
+	model?: string;
+	mode?: string;
+	effort?: string;
 	timezone?: string;
 	rrule?: string;
 };
 type AutomationFormDialogProps = {
 	open: boolean;
+	initialTemplateId?: AutomationTemplateID;
 	automation?: Automation;
 	workspaces: WorkspaceOption[];
 	harnesses: AgentReadinessSnapshot[];
@@ -225,6 +456,7 @@ const AUTOMATION_FIELD_IDS: Record<AutomationField, string> = {
 
 function AutomationFormDialog({
 	open,
+	initialTemplateId = "custom",
 	automation,
 	workspaces,
 	harnesses,
@@ -237,10 +469,17 @@ function AutomationFormDialog({
 	const editing = Boolean(automation);
 	const timezone = automation?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 	const [projectId, setProjectId] = useState("");
-	const projectDefaultWorker = useProjectDefaultWorker(open ? (automation?.projectId || projectId) : "");
+	const projectDefaults = useProjectWorkerDefaults(open ? (automation?.projectId || projectId) : "");
+	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const [prompt, setPrompt] = useState("");
+	const templateId = automation?.templateId ?? initialTemplateId;
+	const template = AUTOMATION_TEMPLATES.find((item) => item.id === templateId);
 	const [harness, setHarness] = useState("");
+	const [model, setModel] = useState("");
+	const [mode, setMode] = useState("");
+	const [effort, setEffort] = useState("");
+	const [modelValid, setModelValid] = useState(true);
 	const [schedule, setSchedule] = useState<ScheduleFields>(() => ({
 		preset: "daily",
 		time: nowLocalHHMM(),
@@ -267,11 +506,15 @@ function AutomationFormDialog({
 
 	useEffect(() => {
 		if (!open) return;
-		if (!automation) void captureRendererEvent("ao.renderer.automation_create_opened");
+		if (!automation) void captureRendererEvent("ao.automations.create_opened");
 		setProjectId(automation?.projectId ?? "");
 		setName(automation?.displayName ?? "");
 		setPrompt(automation?.prompt ?? "");
 		setHarness(automation?.harness ?? "");
+		setModel(automation?.model ?? "");
+		setMode(automation?.mode ?? "");
+		setEffort(automation?.effort ?? "");
+		setModelValid(true);
 		const defaultTime = nowLocalHHMM();
 		const [defaultHour, defaultMinute] = defaultTime.split(":");
 		const nextSchedule = automation
@@ -286,12 +529,24 @@ function AutomationFormDialog({
 					minute: defaultMinute,
 					legacyRaw: null,
 				};
+		const starter = !automation ? AUTOMATION_TEMPLATES.find((item) => item.id === initialTemplateId) : undefined;
+		if (starter) {
+			setName(t(`automations.template.${starter.id}`));
+			setPrompt(starter.prompt);
+		}
 		setInitialSchedule(nextSchedule);
-		setSchedule(nextSchedule);
+		setSchedule(starter ? scheduleFieldsFromRRule(starter.rrule) : nextSchedule);
 		setValidationErrors({});
-	}, [open, automation]);
+	// Language changes must not discard edits to an open form.
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [open, automation, initialTemplateId]);
 
-	const projectOptions = workspaces.map((item) => ({ value: item.id, label: item.name }));
+	// Automations run on this machine's daemon, which knows no Cloud project (it
+	// answers "Unknown project"), and a Cloud standalone agent takes no session
+	// but its own: neither is a project for an automation.
+	const projectOptions = workspaces
+		.filter((item) => item.kind !== CLOUD_PROJECT_KIND && !item.standaloneAgent)
+		.map((item) => ({ value: item.id, label: item.name }));
 	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
 		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
 	}
@@ -305,6 +560,28 @@ function AutomationFormDialog({
 			fallbackAgents: [],
 		}).find(isReadyAgent)?.id ?? "";
 	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
+	const awaitingInheritedHarness = Boolean(automation && !automation.harness && !harness && !projectDefaults.loaded);
+	// Match the daemon's base config plus overrides for a matching worker harness.
+	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
+	const inheritedModel = inheritedWorker?.model || projectDefaults.agentConfig?.model || "";
+	const inheritedMode = inheritedWorker?.mode || projectDefaults.agentConfig?.mode || "";
+	const inheritedEffort = inheritedWorker?.effort || projectDefaults.agentConfig?.effort || "";
+	const displayedModel = model || (!mode ? inheritedModel : "");
+	const displayedMode = mode || (!model ? inheritedMode : "");
+	const displayedEffort = effort || (!model && !mode ? inheritedEffort : "");
+	const previousHarness = useRef<{ automation?: Automation; harness: string } | null>(null);
+	useEffect(() => {
+		if (!open || awaitingInheritedHarness) { previousHarness.current = null; return; }
+		if (!previousHarness.current || previousHarness.current.automation !== automation) {
+			// Opening an edit hydrates its saved harness in the preceding effect.
+			previousHarness.current = { automation, harness: automation?.harness || selectedHarness };
+			return;
+		}
+		if (previousHarness.current.harness !== selectedHarness) {
+			setModel(""); setMode(""); setEffort(""); setModelValid(true);
+			previousHarness.current.harness = selectedHarness;
+		}
+	}, [open, automation, selectedHarness, awaitingInheritedHarness]);
 
 	function clearValidationError(field: AutomationField) {
 		setValidationErrors((current) => {
@@ -317,10 +594,12 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
+		if (!modelValid || awaitingInheritedHarness) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
 		if (!prompt.trim()) nextErrors.prompt = t("automations.validation.prompt");
+		else if (new TextEncoder().encode(prompt.trim()).length > 4096) nextErrors.prompt = t("automations.validation.promptBytes");
 		if (schedule.preset === "daily" || schedule.preset === "weekly") {
 			if (!parseTimeValue(schedule.time)) nextErrors.time = t("automations.validation.time");
 		} else {
@@ -340,7 +619,12 @@ function AutomationFormDialog({
 		}
 		const nextRRule = buildRRuleFromSchedule(schedule);
 		const scheduleChanged = !(editing && automation && initialSchedule && schedulesEqual(schedule, initialSchedule));
-		const harnessChanged = !editing || harness !== (automation?.harness ?? "");
+		const tuning = {
+			...(!editing || model !== (automation?.model ?? "") ? { model } : {}),
+			...(!editing || mode !== (automation?.mode ?? "") ? { mode } : {}),
+			...(!editing || effort !== (automation?.effort ?? "") ? { effort } : {}),
+		};
+		const harnessChanged = !editing || harness !== (automation?.harness ?? "") || Object.keys(tuning).length > 0;
 		const funnel = editing
 			? null
 			: {
@@ -348,15 +632,16 @@ function AutomationFormDialog({
 					schedule_preset: schedule.preset,
 					prompt_length_bucket: automationPromptLengthBucket(prompt.trim()),
 				};
-		if (funnel) void captureRendererEvent("ao.renderer.automation_create_requested", funnel);
 		try {
 			await onSubmit({
 				// Kind is not a form choice: automations are workers, and editing
 				// leaves the stored kind untouched.
-				...(editing ? {} : { projectId, timezone, kind: "worker" as const }),
+				...(editing ? {} : { projectId, timezone, templateId, useCase: template?.useCase ?? "unknown", kind: "worker" as const }),
 				displayName: name,
 				prompt,
-				...(harnessChanged && selectedHarness ? { harness: selectedHarness } : {}),
+				...tuning,
+				// A new pin resets omitted backend fields, so persist the complete tuple.
+				...(harnessChanged && selectedHarness ? { harness: selectedHarness, model, mode, effort } : {}),
 				...(scheduleChanged ? { rrule: nextRRule } : {}),
 			});
 		} catch (error) {
@@ -374,16 +659,9 @@ function AutomationFormDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent showCloseButton={false} className={centeredOnboardingDialogClass}>
 				<DialogClose asChild>
-					<button
-						type="button"
-						disabled={busy}
-						className="settings-dialog-close-button settings-close-button"
-						aria-label={t("automations.create.close")}
-					>
-						<X className="size-4" aria-hidden="true" />
-					</button>
+					<CloseButton floating disabled={busy} aria-label={t("automations.create.close")} />
 				</DialogClose>
-				{/* Match New Task / project onboarding: title padding only, no header band or hairline. */}
+
 				<DialogTitle className="settings-dialog-title px-4 pr-12 pt-3">
 					{t(editing ? "automations.edit" : "automations.create")}
 				</DialogTitle>
@@ -398,6 +676,9 @@ function AutomationFormDialog({
 								<span>{t("automations.validation.summary")}</span>
 							</div>
 						) : null}
+						<Field label={t("automations.field.name")} id={AUTOMATION_FIELD_IDS.name} error={validationErrors.name}>
+							<Input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }} />
+						</Field>
 						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId}>
 							<AutomationSelect
 								id={AUTOMATION_FIELD_IDS.projectId}
@@ -408,13 +689,11 @@ function AutomationFormDialog({
 								invalid={Boolean(validationErrors.projectId)}
 								describedBy={validationErrors.projectId ? `${AUTOMATION_FIELD_IDS.projectId}-error` : undefined}
 								value={projectId}
-								onValueChange={(value) => { setProjectId(value); clearValidationError("projectId"); }}
+								onValueChange={(value) => { setProjectId(value); setModel(""); setMode(""); setEffort(""); setModelValid(true); clearValidationError("projectId"); }}
 								options={projectOptions}
 							/>
 						</Field>
-						<Field label={t("automations.field.name")} id={AUTOMATION_FIELD_IDS.name} error={validationErrors.name}>
-							<Input id={AUTOMATION_FIELD_IDS.name} required maxLength={120} value={name} aria-invalid={Boolean(validationErrors.name) || undefined} aria-describedby={validationErrors.name ? `${AUTOMATION_FIELD_IDS.name}-error` : undefined} onChange={(event) => { setName(event.target.value); if (event.target.value.trim()) clearValidationError("name"); }} />
-						</Field>
+
 						<Field label={t("automations.field.prompt")} id={AUTOMATION_FIELD_IDS.prompt} error={validationErrors.prompt}>
 							<textarea
 								id={AUTOMATION_FIELD_IDS.prompt}
@@ -427,7 +706,6 @@ function AutomationFormDialog({
 								className="min-h-28 w-full resize-y rounded-md border border-transparent bg-input/50 px-3 py-2 text-[13px] leading-5 outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 aria-invalid:border-destructive"
 							/>
 						</Field>
-						{/* Agent/Schedule/Time share one labeled grid and Select/Input chrome. */}
 						<div className="grid grid-cols-2 gap-3">
 							<RequiredAgentField
 								id="automation-agent"
@@ -439,8 +717,27 @@ function AutomationFormDialog({
 								disabled={busy}
 								onChange={(value) => {
 									setHarness(value);
+									setModel(""); setMode(""); setEffort(""); setModelValid(true);
 								}}
 							/>
+							{open ? (
+								<div className="flex min-w-0 flex-col justify-end gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+									<AgentModelField
+										key={selectedHarness + ":" + projectId}
+										role="worker"
+										variant="task"
+										agentId={selectedHarness}
+										projectId={projectId}
+										model={displayedModel}
+										mode={displayedMode}
+										effort={displayedEffort}
+										onModelChange={setModel}
+										onModeChange={setMode}
+										onEffortChange={setEffort}
+										onValidityChange={setModelValid}
+									/>
+								</div>
+							) : null}
 							<Field label={t("automations.field.schedule")}>
 								<AutomationSelect
 									label={t("automations.field.schedule")}
@@ -507,6 +804,7 @@ function AutomationFormDialog({
 										}}
 										options={[
 											{ value: "daily", label: t("automations.customFrequency.daily") },
+											{ value: "weekdays", label: t("automations.customFrequency.weekdays") },
 											{ value: "weekly", label: t("automations.customFrequency.weekly") },
 											{ value: "monthly", label: t("automations.customFrequency.monthly") },
 										]}
@@ -588,14 +886,15 @@ function AutomationFormDialog({
 							</div>
 						) : null}
 						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
+						{templateId !== "custom" ? <p className="text-xs leading-5 text-muted-foreground">{t("automations.templates.setup")}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 					</div>
-					{/* Match onboarding/new-task action row: no footer hairline. */}
+
 					<div className={cn(onboardingFooterActionsEndClass, "px-4 pb-4")}>
-						<Button type="button" variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+						<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy}>
+						<Button type="submit" variant="primary" disabled={busy || !modelValid || awaitingInheritedHarness}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>

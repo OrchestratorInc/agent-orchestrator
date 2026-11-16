@@ -1,124 +1,88 @@
-import { Feather } from "./icons";
 import { Pressable, StyleSheet, View } from "react-native";
+import { AppSymbol } from "./AppSymbol";
+import { usePressFeedback, type PressTone } from "./pressFeedback";
+import type { PlatformSymbol } from "./symbols";
 import { type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { iconSize, press, type } from "./tokens";
-import { workerActionGlyph } from "./worker-action-model";
-
-const ACTION_WIDTH = 64;
-const CONTROL_SIZE = 44;
+import { iconSize, radius, space, touchTarget } from "./tokens";
+import { workerActionSymbol } from "./worker-action-model";
+import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 
 export function WorkerRowActions({
 	title,
 	pinned,
 	onSetPinned,
-	onDelete,
 }: {
 	title: string;
 	pinned: boolean;
 	onSetPinned(pinned: boolean): void;
-	onDelete(): void;
 }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const archiveGlyph = workerActionGlyph("delete");
 
 	return (
 		<View style={styles.actions}>
-			<PinAction
-				accessibilityLabel={pinned ? `Unpin ${title}` : `Pin ${title}`}
-				pinned={pinned}
-				onPress={() => onSetPinned(!pinned)}
-			/>
 			<Action
-				accessibilityLabel={`Archive ${title}`}
-				icon={archiveGlyph.name}
-				iconColor={t.textSecondary}
-				rippleColor={t.accentTint}
-				style={styles.archiveControl}
-				onPress={onDelete}
+				accessibilityLabel={pinned ? `Unpin ${title}` : `Pin ${title}`}
+				icon={workerActionSymbol(pinned ? "unpin" : "pin")}
+				tone="neutral"
+				onPress={() => onSetPinned(!pinned)}
 			/>
 		</View>
 	);
 }
 
-function PinAction({
+// A plain tonal icon button, the same on both platforms, set on the list's own
+// background rather than on a panel. Pin is a neutral one in foreground ink:
+// `amber` means "needs your attention" in this palette, and pinning asks for
+// nothing. Archive has no button here: the full swipe past the pin runs it,
+// and the long-press menu offers it too.
+function Action({
 	accessibilityLabel,
-	pinned,
+	icon,
+	tone,
 	onPress,
 }: {
 	accessibilityLabel: string;
-	pinned: boolean;
+	icon: PlatformSymbol;
+	tone: Extract<PressTone, "neutral">;
 	onPress(): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("button", { tone });
 	return (
-		<View style={styles.slot}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={accessibilityLabel}
-				android_ripple={{ color: t.accentTint, borderless: false, radius: CONTROL_SIZE / 2 }}
-				onPress={onPress}
-				style={({ pressed }) => [styles.control, styles.pinControl, pressed && styles.pressed]}
-			>
-				<Feather
-					name={pinned ? "pin-off" : "pin"}
-					size={20}
-					// Foreground ink: `amber` means "needs your attention" in this palette,
-					// and a pinned row is not asking for anything.
-					color={t.textPrimary}
-				/>
-			</Pressable>
-		</View>
-	);
-}
-
-function Action({
-	accessibilityLabel,
-	icon,
-	iconColor,
-	rippleColor,
-	style,
-	onPress,
-}: {
-	accessibilityLabel: string;
-	icon: keyof typeof Feather.glyphMap;
-	iconColor: string;
-	rippleColor: string;
-	style: object;
-	onPress(): void;
-}) {
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<View style={styles.slot}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={accessibilityLabel}
-				android_ripple={{ color: rippleColor, borderless: false, radius: CONTROL_SIZE / 2 }}
-				onPress={onPress}
-				style={({ pressed }) => [styles.control, style, pressed && styles.pressed]}
-			>
-				<Feather name={icon} size={iconSize.lg} color={iconColor} />
-			</Pressable>
-		</View>
+		<Pressable
+			accessibilityRole="button"
+			accessibilityLabel={accessibilityLabel}
+			android_ripple={feedback.android_ripple}
+			onPress={onPress}
+			style={({ pressed }) => [styles.control, styles.neutral, pressed && feedback.pressed]}
+		>
+			<AppSymbol name={icon} size={iconSize.lg} color={t.textPrimary} />
+		</Pressable>
 	);
 }
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		actions: { width: ACTION_WIDTH * 2, height: 76, flexDirection: "row" },
-		slot: { width: ACTION_WIDTH, height: 76, alignItems: "center", justifyContent: "center" },
+		// Ends on the row's own 16pt gutter, so the pin lines up with the status
+		// above it once the row slides over.
+		actions: {
+			width: WORKER_ACTION_REVEAL_WIDTH,
+			flexDirection: "row",
+			alignItems: "center",
+			justifyContent: "flex-end",
+			gap: space.md,
+			paddingRight: space.lg,
+		},
 		control: {
-			width: CONTROL_SIZE,
-			height: CONTROL_SIZE,
-			borderRadius: CONTROL_SIZE / 2, borderCurve: "continuous",
-			borderWidth: StyleSheet.hairlineWidth,
+			width: touchTarget,
+			height: touchTarget,
+			borderRadius: radius.pill,
+			borderCurve: "continuous",
 			alignItems: "center",
 			justifyContent: "center",
 			overflow: "hidden",
 		},
-		pinControl: { borderColor: t.accent, backgroundColor: t.accentTint },
-		archiveControl: { borderColor: t.borderSubtle, backgroundColor: t.bgElevated },
-		pressed: { opacity: press.opacity },
+		neutral: { backgroundColor: t.bgElevated },
 	});

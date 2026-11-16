@@ -5,7 +5,10 @@
 //   config.coder.extraRepos when config.repos is absent;
 // - every session clones them side by side, each additional one into the
 //   folder repoDirName gives it beside the main checkout;
-// - a standalone project has no repository (a scratch.ao.local placeholder).
+// - a standalone project has no repository (a scratch.ao.local placeholder);
+// - a workspace (config.layout "workspace") checks every repository out side
+//   by side in one folder, where the agent starts, like a local workspace. Its
+//   first repository is the project's main one only for authorization.
 
 import type { CloudCpAgentStartsIn, CloudCpProject, CloudCpProjectRepo } from "./cloud-cp/types";
 
@@ -13,6 +16,10 @@ export const STANDALONE_REPOSITORY_HOST = "scratch.ao.local";
 export const STANDALONE_PROJECT_SOURCE = "standalone";
 export const MAX_PROJECT_ADDITIONAL_REPOS = 10;
 export const MAX_PROJECT_RULES_BYTES = 16 * 1024;
+
+export const CLOUD_WORKSPACE_LAYOUT = "workspace";
+/** A workspace's repositories: the main one and every additional one. */
+export const MAX_WORKSPACE_REPOSITORIES = MAX_PROJECT_ADDITIONAL_REPOS + 1;
 
 /** Folders beside the main checkout that AO itself uses. */
 const RESERVED_REPO_DIR_NAMES = ["repository", ".ao"];
@@ -28,6 +35,49 @@ export function isStandaloneCloudProject(project: Pick<CloudCpProject, "reposito
 	} catch {
 		return false;
 	}
+}
+
+/** True for a project laid out as a workspace (config.layout "workspace"). */
+export function isCloudWorkspaceProject(project: Pick<CloudCpProject, "config"> | undefined): boolean {
+	return (project?.config as ConfigLike)?.layout === CLOUD_WORKSPACE_LAYOUT;
+}
+
+/** Every repository of a project, the main one first. */
+export function projectRepositoryUrls(project: Pick<CloudCpProject, "repositoryUrl" | "config">): string[] {
+	return [project.repositoryUrl, ...projectAdditionalRepos(project.config).map((repo) => repo.url)].filter((url) => url.trim() !== "");
+}
+
+/**
+ * The GitHub repository name for a local folder: GitHub's own rule (letters,
+ * digits, ".", "-" and "_", at most 100) with every other run of characters
+ * made one "-". A trailing ".git" is dropped (the control plane refuses it,
+ * since the git endpoint adds its own). A name that is left empty, or only
+ * dots, becomes "repo".
+ */
+export function gitHubRepositoryNameFromFolder(folderName: string): string {
+	let name = folderName.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "").slice(0, 100);
+	while (/[-.]$/.test(name) || /\.git$/i.test(name)) name = name.replace(/\.git$/i, "").replace(/[-.]+$/g, "");
+	return name === "" ? "repo" : name;
+}
+
+/** Whether GitHub and the control plane accept name for a new repository. */
+export function isValidGitHubRepositoryName(name: string): boolean {
+	return /^[A-Za-z0-9._-]{1,100}$/.test(name) && !name.startsWith(".") && name !== "." && name !== ".." && !/\.git$/i.test(name);
+}
+
+/**
+ * Checks a workspace's repositories, the first being its main one, the way
+ * the control plane does for a project's: each in its own folder, none twice,
+ * at most MAX_WORKSPACE_REPOSITORIES.
+ */
+export function workspaceRepositoriesProblem(urls: readonly string[]): ReturnType<typeof additionalReposProblem> {
+	const [main, ...rest] = urls.filter((url) => url.trim() !== "");
+	if (main === undefined) return undefined;
+	if (repoDirName(main).startsWith(".")) return { kind: "hidden", url: main, folder: repoDirName(main) };
+	if (RESERVED_REPO_DIR_NAMES.includes(repoDirName(main).toLowerCase())) return { kind: "reserved", url: main, folder: repoDirName(main) };
+	const problem = additionalReposProblem(main, rest);
+	// Naming the main one would read as a rule a workspace does not have.
+	return problem?.kind === "main" ? { kind: "duplicate", url: problem.url } : problem;
 }
 
 /**
@@ -126,8 +176,21 @@ export function additionalReposProblem(mainUrl: string | undefined, urls: readon
 /**
  * One Setup or Cleanup step as the editor holds it. folder is the repository
  * folder the step runs in ("" for the main repository), as repoDirName gives it.
+ * timeout is the step's own time limit in minutes as typed ("" or absent for
+ * the default); see scriptStepTimeoutMinutes.
  */
-export type ScriptStepDraft = { command: string; folder: string };
+export type ScriptStepDraft = { command: string; folder: string; timeout?: string };
+
+/**
+ * A step's time limit, in whole minutes, mirroring the control plane's
+ * domain.ScriptStepTimeout bounds and defaults: a Setup step without its own
+ * limit runs for 30 minutes (local and Cloud), a Cloud Cleanup step for 10. A
+ * local Cleanup step without one has no limit.
+ */
+export const DEFAULT_SETUP_STEP_TIMEOUT_MINUTES = 30;
+export const DEFAULT_CLOUD_CLEANUP_STEP_TIMEOUT_MINUTES = 10;
+export const MIN_SCRIPT_STEP_TIMEOUT_MINUTES = 1;
+export const MAX_SCRIPT_STEP_TIMEOUT_MINUTES = 120;
 
 // The stored form of a step in another repository, written by the control
 // plane's domain.RepoScriptCommand: the command run in a subshell from that
@@ -135,6 +198,11 @@ export type ScriptStepDraft = { command: string; folder: string };
 // control plane or desktop release without per-repository steps still runs
 // and keeps the step.
 const repoScriptCommandPattern = /^\(\ncd -- '\.\.\/([A-Za-z0-9_.-]+)' \|\| exit 1\n([\s\S]*)\n\)$/;
+
+// The stored form of a step with its own time limit (domain.TimedScriptCommand,
+// in the control plane and the local daemon): a first line that is a shell
+// comment, so a release without per-step limits keeps and runs the step.
+const timedScriptCommandPattern = /^# ao-timeout: ([0-9]{1,4})m\r?\n/;
 
 /** The stored command for a step that runs in folder beside the main checkout. */
 export function repoScriptCommand(folder: string, command: string): string {
@@ -148,20 +216,77 @@ export function parseRepoScriptCommand(stored: string): ScriptStepDraft {
 }
 
 /**
+ * The stored step with its own time limit; one without (undefined) is the
+ * command as is and runs with its kind's default. A typed limit equal to a
+ * default is kept: Setup and Cleanup have different defaults, and the limit
+ * stays the step's own if a default changes.
+ */
+export function timedScriptCommand(minutes: number | undefined, command: string): string {
+	if (minutes === undefined || minutes <= 0) return command;
+	return `# ao-timeout: ${minutes}m\n${command}`;
+}
+
+/** Splits a stored step into its time limit in minutes (undefined when it sets none) and the rest. */
+export function parseTimedScriptCommand(stored: string): { minutes?: number; command: string } {
+	const match = timedScriptCommandPattern.exec(stored);
+	if (!match) return { command: stored };
+	return { minutes: Number(match[1]), command: stored.slice(match[0].length) };
+}
+
+/**
+ * A typed time limit as whole minutes: undefined for "" (the default), null
+ * when it is not a whole number from MIN to MAX.
+ */
+export function scriptStepTimeoutMinutes(text: string | undefined): number | undefined | null {
+	const value = (text ?? "").trim();
+	if (value === "") return undefined;
+	if (!/^[0-9]+$/.test(value)) return null;
+	const minutes = Number(value);
+	return minutes >= MIN_SCRIPT_STEP_TIMEOUT_MINUTES && minutes <= MAX_SCRIPT_STEP_TIMEOUT_MINUTES ? minutes : null;
+}
+
+/**
+ * A stored step as the editor holds it, without its repository folder (a local
+ * step). Every limit it sets shows, a default's value too.
+ */
+export function parseLocalScriptStep(stored: string): ScriptStepDraft {
+	const { minutes, command } = parseTimedScriptCommand(stored);
+	return { command, folder: "", ...timeoutText(minutes) };
+}
+
+/**
+ * The stored form of a local step: its command with the time limit typed for
+ * it, a default's value included (a local Cleanup step without one runs
+ * without a limit).
+ */
+export function serializeLocalScriptStep(step: ScriptStepDraft): string {
+	return timedScriptCommand(scriptStepTimeoutMinutes(step.timeout) ?? undefined, step.command);
+}
+
+/** A draft's time limit for a stored one: none when the step sets none. */
+function timeoutText(minutes: number | undefined): Pick<ScriptStepDraft, "timeout"> {
+	return minutes === undefined ? {} : { timeout: String(minutes) };
+}
+
+/**
  * Reads stored steps. Each is a plain command, the per-repository form above,
- * or (from an earlier build of this feature) {command, repository}. A step in
- * the main repository's own folder counts as a main repository step.
+ * either led by its own time limit, or (from an earlier build of this feature)
+ * {command, repository, timeoutMinutes}. A step in the main repository's own
+ * folder counts as a main repository step.
  */
 export function parseScriptSteps(value: unknown, mainUrl?: string): ScriptStepDraft[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const mainFolder = mainUrl ? repoDirName(mainUrl) : undefined;
 	const normalize = (step: ScriptStepDraft): ScriptStepDraft => step.folder === mainFolder ? { ...step, folder: "" } : step;
 	return value.flatMap((item): ScriptStepDraft[] => {
-		if (typeof item === "string") return [normalize(parseRepoScriptCommand(item))];
+		if (typeof item === "string") {
+			const { minutes, command } = parseTimedScriptCommand(item);
+			return [normalize({ ...parseRepoScriptCommand(command), ...timeoutText(minutes) })];
+		}
 		if (item && typeof item === "object" && typeof (item as { command?: unknown }).command === "string") {
-			const { command, repository } = item as { command: string; repository?: unknown };
+			const { command, repository, timeoutMinutes } = item as { command: string; repository?: unknown; timeoutMinutes?: unknown };
 			const folder = typeof repository === "string" && repository.trim() !== "" ? repoDirName(repository) : "";
-			return [normalize({ command, folder })];
+			return [normalize({ command, folder, ...timeoutText(typeof timeoutMinutes === "number" ? timeoutMinutes : undefined) })];
 		}
 		return [];
 	});
@@ -169,12 +294,16 @@ export function parseScriptSteps(value: unknown, mainUrl?: string): ScriptStepDr
 
 /**
  * The stored form of the steps: a step in the main repository stays the plain
- * command, any other is wrapped to run from its folder. Blank commands are dropped.
+ * command, any other is wrapped to run from its folder, and a step with its own
+ * time limit is led by it. Blank commands are dropped.
  */
 export function serializeScriptSteps(steps: readonly ScriptStepDraft[]): string[] {
 	return steps
 		.filter((step) => step.command.trim() !== "")
-		.map((step) => step.folder === "" ? step.command : repoScriptCommand(step.folder, step.command));
+		.map((step) => timedScriptCommand(
+			scriptStepTimeoutMinutes(step.timeout) ?? undefined,
+			step.folder === "" ? step.command : repoScriptCommand(step.folder, step.command),
+		));
 }
 
 /** The folders the stored Setup and Cleanup steps run in, other than the main repository's. */
@@ -196,7 +325,7 @@ export const MAX_WORKING_DIRECTORY_LENGTH = 512;
  * domain.ValidateCoderWorkingDirectory on the trimmed value; undefined when it
  * is accepted ("" keeps the connection's).
  */
-export function workingDirectoryProblem(value: string, options: { standalone?: boolean } = {}): "length" | "characters" | "form" | "segments" | "placeholder" | "standaloneRepo" | undefined {
+export function workingDirectoryProblem(value: string, options: { standalone?: boolean } = {}): "length" | "characters" | "form" | "segments" | "aoState" | "placeholder" | "standaloneRepo" | undefined {
 	const directory = value.trim();
 	if (directory === "") return undefined;
 	if ([...directory].length > MAX_WORKING_DIRECTORY_LENGTH) return "length";
@@ -206,10 +335,26 @@ export function workingDirectoryProblem(value: string, options: { standalone?: b
 	const rest = prefix === undefined ? undefined : directory.slice(prefix.length);
 	if (rest === undefined || rest.replace(/^\/+|\/+$/g, "") === "") return "form";
 	if (rest.split("/").some((segment) => segment === "." || segment === "..")) return "segments";
+	// AO's own state (~/.ao, or the durable root's .ao) holds the worker's token.
+	if (rest.split("/").includes(".ao")) return "aoState";
 	if (/[{}$`\\]/.test(rest.split("{repo}").join(""))) return "placeholder";
 	// A standalone project has no repository to name the folder after.
 	if (options.standalone && rest.includes("{repo}")) return "standaloneRepo";
 	return undefined;
+}
+
+/**
+ * A working folder as the control plane stores it
+ * (domain.NormalizeCoderWorkingDirectory): trimmed, without repeated or
+ * trailing slashes after its ~/, $HOME/ or / prefix ("/work/{repo}/" becomes
+ * "/work/{repo}"). Anything else comes back trimmed.
+ */
+export function normalizeWorkingDirectory(value: string): string {
+	const directory = value.trim();
+	const prefix = ["~/", "$HOME/", "/"].find((candidate) => directory.startsWith(candidate));
+	if (prefix === undefined) return directory;
+	const segments = directory.slice(prefix.length).split("/").filter((segment) => segment !== "");
+	return segments.length === 0 ? directory : prefix + segments.join("/");
 }
 
 /** UTF-8 byte length, for the 16 KB rules limit. */

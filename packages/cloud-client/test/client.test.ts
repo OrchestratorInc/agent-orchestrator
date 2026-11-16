@@ -354,6 +354,30 @@ describe("CloudClient", () => {
     );
   });
 
+  it("lists artifacts and requests an access prefix", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, _init?: RequestInit) =>
+        String(input).endsWith("/access")
+          ? jsonResponse({ filesPrefix: "/api/cloud/v1/artifact-files/t/", expiresAt: "2026-10-16T00:30:00Z" })
+          : jsonResponse({ artifacts: [] }),
+    );
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listArtifacts("org", "session one")).resolves.toEqual({ artifacts: [] });
+    await expect(client.getArtifactAccess("org", "session one")).resolves.toMatchObject({
+      filesPrefix: "/api/cloud/v1/artifact-files/t/",
+    });
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+      "https://cloud.example.com/api/cloud/v1/orgs/org/sessions/session%20one/artifacts",
+      "https://cloud.example.com/api/cloud/v1/orgs/org/sessions/session%20one/artifacts/access",
+    ]);
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("POST");
+  });
+
   it("writes a workspace file through the typed client", async () => {
     const file = { path: "src/main.ts", content: "export {};\n", size: 11 };
     const fetchMock = vi.fn(
@@ -751,6 +775,25 @@ describe("CloudClient", () => {
     );
   });
 
+  it("loads the model catalog a new task's agent runs with", async () => {
+    const catalog = {
+      models: [{ id: "claude-sonnet-test", displayName: "Sonnet", default: true }],
+      source: "release" as const,
+      cliVersion: "2.1.287",
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse(catalog));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.listUserAgentModels("org/a", "claude-code")).resolves.toEqual(catalog);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/org%2Fa/providers/claude-code/models",
+    );
+  });
+
   it("streams replayed SSE events from an explicit cursor", async () => {
     const abort = new AbortController();
     const encoder = new TextEncoder();
@@ -956,6 +999,72 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the existing parser" }));
     expect(requestHeaders(fetchMock, 0).get("Idempotency-Key")).toBe("steer-one");
+  });
+
+  it("edits a queued message through the public client", async () => {
+    const event = {
+      sessionId: "session", sequence: 3, type: "chat.user_message_edited",
+      payload: { turnId: "turn", messageSequence: 2, text: "Use the new parser" }, createdAt: "2026-11-12T00:00:00Z",
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event }, 200));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.editQueuedMessage("tenant", "session", "turn one", {
+      text: "Use the new parser", attachmentIds: ["file"],
+    })).resolves.toEqual({ event });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/edit",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the new parser", attachmentIds: ["file"] }));
+  });
+
+  it("steers a queued message through the public client", async () => {
+    const event = {
+      sessionId: "session", sequence: 9, type: "chat.turn_steer_requested", createdAt: "2026-11-13T00:00:00Z",
+      payload: { turnId: "running", text: "report progress", clientMessageId: "steer-key", queuedTurnId: "turn one" },
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.steerQueuedMessage("tenant", "session", "turn one", { idempotencyKey: "steer-key", composerEpoch: 3 }))
+      .resolves.toEqual({ event });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/steer-queued",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ composerEpoch: 3 }));
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Idempotency-Key")).toBe("steer-key");
+  });
+
+  it("deletes a queued message through the public client", async () => {
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ ok: true }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.deleteQueuedMessage("tenant", "session", "turn one")).resolves.toEqual({ ok: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/delete",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBeUndefined();
   });
 
   it("submits an approval decision through the public client", async () => {

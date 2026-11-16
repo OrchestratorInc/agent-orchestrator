@@ -5,15 +5,17 @@ import { FusesPlugin } from "@electron-forge/plugin-fuses";
 import { FuseV1Options, FuseVersion } from "@electron/fuses";
 import { rebuild } from "@electron/rebuild";
 import electronPackage from "electron/package.json";
+import appPackage from "./package.json";
 import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
 import MakerAppImage from "./makers/maker-appimage";
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BUNDLED_TMUX_VERSION } from "./scripts/tmux-version.mjs";
+import { checkMacDmgLayout } from "./scripts/build-mac-dmg.mjs";
 
 // Default GitHub release target (production). Releases land on Untrivial-ai
 // (the org the repo was transferred to in July 2026; AgentWrapper and aoagents
@@ -28,8 +30,9 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // shortcut/launcher at the SAME name. Drift here means a broken Start menu
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
+export const WINDOWS_DISPLAY_NAME = "Orchestrator.inc";
 const AUTH_PROTOCOL = {
-	name: "Agent Orchestrator authentication callback",
+	name: "Orchestrator authentication callback",
 	schemes: ["ao-app"],
 };
 const AUTH_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao-app";
@@ -41,7 +44,8 @@ const PACKAGED_EXTERNAL_DEPENDENCIES = [
 
 function ignoreFromVitePackage(file: string): boolean {
 	if (!file) return false;
-	if (file.startsWith("/.vite")) return false;
+	// Release source maps are uploaded to Sentry, never shipped (vite.sentry.ts).
+	if (file.startsWith("/.vite")) return file.endsWith(".map");
 	if (file === "/node_modules") return false;
 	return !PACKAGED_EXTERNAL_DEPENDENCIES.some(
 		(dependency) => file === dependency || file.startsWith(`${dependency}/`),
@@ -62,17 +66,56 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 	});
 }
 
+// Packager app name. It sets the bundle filename ("<name>.app"), which the
+// installed path, updater, and `ao start` keep using, so it is not the label
+// people see in Finder.
+const PACKAGER_NAME = "Agent Orchestrator";
+
+// Finder uses the localized label only when the base display name matches the
+// bundle filename, but the packager defaults it to the executable name. Set it,
+// then copy the localized label into every regional lproj Finder might pick.
+// Must run before signing so the plist and localized strings are sealed.
+// Throws on failure so the Forge hook can pass it to its callback.
+export function labelMacBundle(
+	buildPath: string,
+	setDisplayName: (plistPath: string, name: string) => void = setPlistDisplayName,
+): void {
+	const contents = path.join(buildPath, `${PACKAGER_NAME}.app`, "Contents");
+	setDisplayName(path.join(contents, "Info.plist"), PACKAGER_NAME);
+	const resources = path.join(contents, "Resources");
+	const label = readFileSync(path.join(resources, "en.lproj", "InfoPlist.strings"));
+	for (const locale of readdirSync(resources).filter((entry) => entry.endsWith(".lproj"))) {
+		writeFileSync(path.join(resources, locale, "InfoPlist.strings"), label);
+	}
+}
+
+function setPlistDisplayName(plistPath: string, name: string): void {
+	const result = spawnSync("plutil", ["-replace", "CFBundleDisplayName", "-string", name, plistPath], {
+		encoding: "utf8",
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) throw new Error(`Setting macOS display name failed: ${result.stderr}`);
+}
+
 export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 	return [
 		"daemon",
+		// AO Browser Bridge (Chrome extension); the daemon finds it beside daemon/.
+		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper", "wake-helper"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "dictation-helper", "cloudflared", "assets/mac/en.lproj"] : []),
+		// macOS 26+ Liquid Glass app icon (CFBundleIconName below), precompiled
+		// from assets/brand/AO.icon by scripts/generate-brand-assets.swift.
+		...(platform === "darwin" ? ["assets/Assets.car"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
 		"assets/trayIconTemplate.png",
 		"assets/trayIconTemplate@2x.png",
+		"assets/trayAwakeIconTemplate.png",
+		"assets/trayAwakeIconTemplate@2x.png",
+		"assets/trayAwakeIcon.LICENSE",
 		"app-update.yml",
 	];
 }
@@ -94,7 +137,18 @@ const ACP_RUNTIME_NODE_ENTITLEMENTS = [
 	"com.apple.security.cs.allow-unsigned-executable-memory",
 ];
 
+// The dictation helper records the microphone itself, and the hardened runtime
+// blocks audio input without this entitlement. Its disclaim only helps dev and
+// terminal launches: signed and nested here, macOS checks the app's usage
+// strings instead (see extendInfo). osx-sign signs its executable, then its bundle.
+const DICTATION_HELPER_PATHS = [
+	"/Contents/Resources/dictation-helper/Orchestrator.app",
+	"/Contents/Resources/dictation-helper/Orchestrator.app/Contents/MacOS/Orchestrator",
+];
+const DICTATION_HELPER_ENTITLEMENTS = ["com.apple.security.device.audio-input"];
+
 export function macSignOptionsForFile(filePath: string): { entitlements?: string[] } {
+	if (DICTATION_HELPER_PATHS.some((helper) => filePath.endsWith(helper))) return { entitlements: DICTATION_HELPER_ENTITLEMENTS };
 	// Cheap gate first: optionsForFile is invoked for every Mach-O in the
 	// bundle, and only the nested Node path can need an override.
 	if (!filePath.endsWith(ACP_RUNTIME_NODE_PATH)) return {};
@@ -126,15 +180,47 @@ const config: ForgeConfig = {
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
 		appBundleId: "dev.agent-orchestrator.desktop",
-		name: "Agent Orchestrator",
+		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
+		// Match the Windows installer without changing the executable name.
+		win32metadata: {
+			FileDescription: WINDOWS_DISPLAY_NAME,
+			InternalName: WINDOWS_DISPLAY_NAME,
+			ProductName: WINDOWS_DISPLAY_NAME,
+		},
+		extendInfo: {
+			// macOS 26+ draws the Icon Composer icon from Resources/Assets.car;
+			// older macOS keeps using CFBundleIconFile (assets/icon.icns).
+			CFBundleIconName: "AppIcon",
+			LSHasLocalizedDisplayName: true,
+			CFBundleDevelopmentRegion: "en",
+			// In a signed build, macOS checks the dictation helper's speech and
+			// microphone requests against this app's Info.plist, despite the
+			// helper's own usage strings and its disclaim. Without the speech key
+			// it kills the helper. The microphone string also covers terminals and
+			// agents, which macOS attributes to this app.
+			NSSpeechRecognitionUsageDescription: "Orchestrator turns your speech into message text.",
+			NSMicrophoneUsageDescription: "Orchestrator uses the microphone for dictation and for tools you run in it.",
+		},
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
 		// (.icns on macOS, .ico on Windows); Linux menu icons come from the
 		// deb/rpm makers below, and the runtime window icon from src/main.ts.
+		// Keep the .icon bundle out of assets/: packager compiles an
+		// assets/icon.icon itself, which fails on macOS 15 build hosts. The
+		// precompiled Assets.car ships as an extra resource instead.
 		icon: "assets/icon",
 		extraResource: extraResourcesForPlatform(process.platform),
+		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
+			if (platform !== "darwin") return callback();
+			try {
+				labelMacBundle(buildPath);
+				callback();
+			} catch (error) {
+				callback(error as Error);
+			}
+		}],
 		// Notarization. Two paths:
 		//  - CI: an App Store Connect API key. APPLE_API_KEY is a PATH to the .p8
 		//    (the workflow decodes APPLE_API_KEY_BASE64 to a temp file), plus the
@@ -178,6 +264,9 @@ const config: ForgeConfig = {
                 const wakeBuild = spawnSync(process.execPath, [path.resolve("scripts/build-wake-helper.mjs"), "--arch", arch], { stdio: "inherit" });
                 if (wakeBuild.error) throw wakeBuild.error;
                 if (wakeBuild.status !== 0) throw new Error("macOS wake helper build failed");
+				const dictationBuild = spawnSync(process.execPath, [path.resolve("scripts/build-dictation-helper.mjs"), "--arch", arch], { stdio: "inherit" });
+				if (dictationBuild.error) throw dictationBuild.error;
+				if (dictationBuild.status !== 0) throw new Error("macOS dictation helper build failed");
 			}
 			const { owner, name } = parseReleaseRepo(process.env.AO_RELEASE_REPO);
 			const yml = [
@@ -216,6 +305,13 @@ const config: ForgeConfig = {
 					const helper = path.join(resourcesPath, "update-helper", "ao-update-progress");
 					if (!existsSync(helper)) throw new Error(`packaged macOS update helper missing from ${helper}`);
 					if (!existsSync(path.join(resourcesPath, "wake-helper", "ao-wake"))) throw new Error(`packaged macOS wake helper missing from ${resourcesPath}`);
+					if (!existsSync(path.join(resourcesPath, "Assets.car"))) throw new Error(`packaged macOS app icon catalog missing from ${resourcesPath}`);
+					if (!existsSync(path.join(resourcesPath, "dictation-helper", "Orchestrator.app", "Contents", "MacOS", "Orchestrator"))) throw new Error(`packaged macOS dictation helper missing from ${resourcesPath}`);
+					// Run it: remote access depends on this signed copy starting, not just existing.
+					const cloudflared = path.join(resourcesPath, "cloudflared", "cloudflared");
+					if (!existsSync(cloudflared)) throw new Error(`packaged cloudflared missing from ${cloudflared}`);
+					const cloudflaredVersion = spawnSync(cloudflared, ["--version"], { encoding: "utf8", timeout: 10_000 });
+					if (cloudflaredVersion.status !== 0) throw new Error(`packaged cloudflared failed to run at ${cloudflared}: ${cloudflaredVersion.error?.message || cloudflaredVersion.stderr}`);
 				}
 				const binary = path.join(resourcesPath, "tmux", "bin", "tmux");
 				if (!existsSync(binary)) throw new Error(`packaged tmux missing from ${binary}`);
@@ -266,11 +362,17 @@ const config: ForgeConfig = {
 		// the artifact CI ships for x64 — completely unverified: a regression of
 		// exactly the crash #3879 fixed could ship without any automated gate
 		// catching it.
+		//
+		// Before any of that, fail the build if the dmg lost its install window
+		// layout (.DS_Store, background, icon positions). Without them Finder
+		// shows a large plain window with two small icons in a corner, and
+		// nothing else would notice. Runs on unsigned builds too.
 		postMake: async (_forgeConfig, makeResults) => {
 			for (const result of makeResults) {
 				if (result.platform !== "darwin") continue;
 				for (const artifact of result.artifacts) {
 					if (artifact.endsWith(".dmg")) {
+						await checkMacDmgLayout(artifact);
 						if (await sealDmg(artifact)) await verifyDmg(artifact);
 					} else if (artifact.endsWith(".zip") && isSigningConfigured()) {
 						await verifyMacArtifact(artifact);
@@ -290,7 +392,7 @@ const config: ForgeConfig = {
 				appId: "dev.agent-orchestrator.desktop",
 				// The name shown in the installer, the updater, the shortcuts, and
 				// Windows Apps. It matches the app's display name in main.ts.
-				productName: "Orchestrator.inc",
+				productName: WINDOWS_DISPLAY_NAME,
 				// Match the packaged binary name so the Start menu shortcut targets
 				// the real "agent-orchestrator.exe" (not "Agent Orchestrator.exe").
 				executableName: EXECUTABLE_NAME,
@@ -323,7 +425,8 @@ const config: ForgeConfig = {
 		new MakerAppImage(
 			{
 				appId: "dev.agent-orchestrator.desktop",
-				productName: "Agent Orchestrator",
+				productName: "Orchestrator",
+				appImage: { artifactName: "Agent Orchestrator-${version}.${ext}" },
 				icon: "assets/icon.png",
 				protocols: [AUTH_PROTOCOL],
 			},
@@ -338,7 +441,7 @@ const config: ForgeConfig = {
 					// the Electron app binary". (Both are "agent-orchestrator".)
 					bin: EXECUTABLE_NAME,
 					icon: "assets/icon.png",
-					maintainer: "Agent Orchestrator",
+					maintainer: appPackage.author,
 					homepage: "https://github.com/aoagents/agent-orchestrator",
 					mimeType: [AUTH_PROTOCOL_MIME_TYPE],
 				},
@@ -387,6 +490,7 @@ const config: ForgeConfig = {
 				{ entry: "src/main.ts", config: "vite.main.config.ts", target: "main" },
 				{ entry: "src/preload.ts", config: "vite.preload.config.ts", target: "preload" },
 				{ entry: "src/annotate-preload.ts", config: "vite.preload.config.ts", target: "preload" },
+				{ entry: "src/privacy-guide-preload.ts", config: "vite.preload.config.ts", target: "preload" },
 			],
 			renderer: [{ name: "main_window", config: "vite.renderer.config.ts" }],
 		}),

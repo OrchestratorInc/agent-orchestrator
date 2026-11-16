@@ -98,6 +98,18 @@ func (s *transitionLifecycleStore) CommitSessionControllerEpoch(
 	)
 }
 
+func (s *transitionLifecycleStore) CommitSessionControllerEpochArchivedChat(
+	_ context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	_ time.Time,
+) (bool, error) {
+	return (&fakeLCM{store: s.fakeStore}).changeControllerEpoch(
+		id, source, target, nativeConversationID, false,
+	)
+}
+
 func (s *transitionLifecycleStore) RestoreSessionControllerEpoch(
 	_ context.Context,
 	id domain.SessionID,
@@ -274,6 +286,25 @@ func (s *transitionStore) AdvanceSessionInterfaceTransition(_ context.Context, i
 	return true, nil
 }
 
+func (s *transitionStore) CompleteSessionInterfaceTransition(_ context.Context, id string, expected domain.SessionInterfaceTransitionPhase, message string, now time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.transitions[id]
+	if !ok || rec.Phase != expected || rec.Phase.Terminal() {
+		return false, nil
+	}
+	rec.Phase = domain.SessionInterfaceTransitionCompleted
+	rec.ErrorCode, rec.ErrorDetail = "", ""
+	rec.UpdatedAt, rec.CompletedAt = now, now
+	s.nextMessage++
+	s.messages[id] = append(s.messages[id], domain.SessionInterfaceTransitionMessage{
+		ID: s.nextMessage, TransitionID: id, ClientMessageID: "interface-transition:" + id + ":context-boundary",
+		Message: message, CreatedAt: now,
+	})
+	s.transitions[id] = rec
+	return true, nil
+}
+
 func (s *transitionStore) AcknowledgeSessionInterfaceTransitionNotice(
 	_ context.Context,
 	sessionID domain.SessionID,
@@ -441,6 +472,7 @@ type transitionRuntime struct {
 	styledOutputCalls          int
 	styledOutputErr            error
 	blockAliveUntilContextDone bool
+	onCreate                   func() // runs as a target terminal starts
 }
 
 // unstyledTransitionRuntime models a legacy runtime that cannot return a
@@ -499,6 +531,9 @@ func (r *transitionRuntime) Destroy(ctx context.Context, handle ports.RuntimeHan
 
 func (r *transitionRuntime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	*r.log = append(*r.log, "start:tui")
+	if r.onCreate != nil {
+		r.onCreate()
+	}
 	if r.runtimeOccupied {
 		return ports.RuntimeHandle{}, fmt.Errorf("session %q already exists", cfg.SessionID)
 	}
@@ -545,6 +580,7 @@ type transitionChat struct {
 	relayMessages    []string
 	relayIDs         []string
 	supportsChat     bool
+	switchMarks      []string // account moves that told the chat why its turn stopped
 }
 
 type historyPolicyTransitionChat struct {
@@ -622,6 +658,17 @@ func (l *sqliteTransitionLifecycle) CommitControllerEpoch(
 		ctx, id, source, target, nativeConversationID, time.Now(),
 	)
 }
+func (l *sqliteTransitionLifecycle) CommitControllerEpochArchivedChat(
+	ctx context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	_ bool,
+) (bool, error) {
+	return l.store.CommitSessionControllerEpochArchivedChat(
+		ctx, id, source, target, nativeConversationID, time.Now(),
+	)
+}
 func (l *sqliteTransitionLifecycle) RestoreControllerEpoch(
 	ctx context.Context,
 	id domain.SessionID,
@@ -632,24 +679,6 @@ func (l *sqliteTransitionLifecycle) RestoreControllerEpoch(
 	return l.store.RestoreSessionControllerEpoch(
 		ctx, id, source, target, nativeConversationID, time.Now(),
 	)
-}
-func (l *sqliteTransitionLifecycle) ConfirmAgentSwitchSourceStopped(
-	ctx context.Context,
-	confirmation domain.AgentSwitchSourceStopConfirmation,
-) (bool, error) {
-	return l.store.ConfirmAgentSwitchSourceStopped(ctx, confirmation)
-}
-func (l *sqliteTransitionLifecycle) ActivateAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchTargetActivation,
-) (bool, error) {
-	return l.store.ActivateAgentSwitchTarget(ctx, activation)
-}
-func (l *sqliteTransitionLifecycle) ActivateChatAgentSwitchTarget(
-	ctx context.Context,
-	activation domain.AgentSwitchChatTargetActivation,
-) (bool, error) {
-	return l.store.ActivateChatAgentSwitchTarget(ctx, activation)
 }
 func (l *sqliteTransitionLifecycle) MarkTerminated(
 	ctx context.Context,
@@ -772,6 +801,10 @@ func (c *transitionChat) ArmChatHandoff(_ context.Context, _ domain.SessionID, p
 	default:
 	}
 	return c.armErr
+}
+func (c *transitionChat) MarkAccountSwitch(_ context.Context, _ domain.SessionID, accountID string) error {
+	c.switchMarks = append(c.switchMarks, accountID)
+	return nil
 }
 func (c *transitionChat) PrepareChatHandoff(_ context.Context, _ domain.SessionID, policy domain.SessionInterfaceTransitionPolicy) error {
 	c.preparedPolicy = policy

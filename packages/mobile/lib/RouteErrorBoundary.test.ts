@@ -13,15 +13,32 @@ const source = (route: string) => readFileSync(new URL(route, appDir), "utf8");
 const rootLayout = "_layout.tsx";
 
 const screenRoutes = [
-	"(tabs)/index.tsx",
-	"(tabs)/projects.tsx",
-	"(tabs)/prs.tsx",
-	"settings/environments.tsx",
-	"notifications.tsx",
+	"(tabs)/(workers)/index.tsx",
+	"(tabs)/(projects)/projects.tsx",
+	"prs/index.tsx",
+	"(tabs)/compose.tsx",
+	"artifact/[sessionId].tsx",
+	"artifact-version/[sessionId].tsx",
+	"artifacts/[sessionId].tsx",
+	"connect.tsx",
+	"conversation-actions.tsx",
+	"files/[sessionId]/file.tsx",
+	"files/[sessionId]/index.tsx",
+	"files/[sessionId]/folder.tsx",
+	"settings/machine/[id]/index.tsx",
+	"settings/machine/[id]/edit.tsx",
+	"settings/cloud/index.tsx",
+	"settings/cloud/agent/[agent].tsx",
+	"cloud/terminal.tsx",
+	"browser/[id].tsx",
+	"settings/theme.tsx",
+	"notifications/index.tsx",
 	"onboarding.tsx",
 	"pair.tsx",
+	"spawn.tsx",
 	"preview/[id].tsx",
 	"project/[id].tsx",
+	"render.tsx",
 	"review/[sessionId].tsx",
 	"reviewer/[reviewId].tsx",
 	"session/[id].tsx",
@@ -30,32 +47,39 @@ const screenRoutes = [
 ];
 
 const sheetRoutes = [
-	"spawn.tsx",
+	"cloud/new-project.tsx",
+	"sheets/account.tsx",
 	"sheets/agent.tsx",
-	"sheets/chat-settings.tsx",
+	"sheets/artifact-history.tsx",
+	"sheets/cloud-plan.tsx",
 	"sheets/composer-picker.tsx",
-	"sheets/connect.tsx",
-	"sheets/conversation-actions.tsx",
-	"sheets/conversation-map.tsx",
-	"sheets/conversation-rename.tsx",
+	"sheets/conversation-usage.tsx",
+	"sheets/files-branch.tsx",
+	"sheets/files-changes.tsx",
 	"sheets/machine-name.tsx",
 	"sheets/model.tsx",
-	"sheets/project.tsx",
 	"sheets/review-actions.tsx",
-	"sheets/store-update.tsx",
+	"files/[sessionId]/review.tsx",
 ];
 
-// The tab navigator alone: it renders no screen of its own, and a fallback there
-// would swallow the failure of whichever tab is mounted inside it.
-const deferredRoutes = ["(tabs)/_layout.tsx", "settings/_layout.tsx"];
+// The navigators alone: they render no screen of their own, and a fallback there
+// would swallow the failure of whichever page is mounted inside them.
+const deferredRoutes = [
+	"(tabs)/_layout.tsx",
+	"(tabs)/(workers)/_layout.tsx",
+	"(tabs)/(projects)/_layout.tsx",
+	"settings/_layout.tsx",
+	"notifications/_layout.tsx",
+	"prs/_layout.tsx",
+];
 
 describe("route error boundaries", () => {
 	it("places every route file on exactly one list", () => {
 		// expo-router takes any .js/.jsx/.ts/.tsx under app/ as a route, bar the
-		// `+api`, `+html`, `+middleware` and `+native-intent` files, of which this app
-		// has none. The recursive listing joins with the platform separator.
+		// `+api`, `+html`, `+middleware` and `+native-intent` files. This app has only
+		// `+native-intent`. The recursive listing joins with the platform separator.
 		const routes = readdirSync(appDir, { recursive: true, encoding: "utf8" })
-			.filter((file) => /\.[jt]sx?$/.test(file))
+			.filter((file) => /\.[jt]sx?$/.test(file) && !/^\+native-intent\.[jt]sx?$/.test(file))
 			.map((file) => file.split(sep).join("/"))
 			.sort();
 		const placed = [rootLayout, ...screenRoutes, ...sheetRoutes, ...deferredRoutes];

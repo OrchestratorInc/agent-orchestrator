@@ -40,7 +40,7 @@ func TestAutomationListFollowsAllPages(t *testing.T) {
 					}
 					page := automationListDTO{Automations: []automationDTO{}}
 					for i := start; i < min(start+100, 101); i++ {
-						page.Automations = append(page.Automations, automationDTO{ID: fmt.Sprintf("automation-%03d", i), ProjectID: "project & one", DisplayName: "Morning"})
+						page.Automations = append(page.Automations, automationDTO{ID: fmt.Sprintf("automation-%03d", i), ProjectID: "project & one", DisplayName: "Morning", Model: "capable", Effort: "high"})
 					}
 					if start+100 < 101 {
 						page.NextCursor = fmt.Sprintf("opaque+/%d=", start+100)
@@ -74,6 +74,9 @@ func TestAutomationListFollowsAllPages(t *testing.T) {
 						t.Fatal(err)
 					}
 					for _, item := range items {
+						if item.Model != "capable" || item.Effort != "high" {
+							t.Fatalf("model settings lost: %#v", item)
+						}
 						ids = append(ids, item.ID)
 					}
 				} else {
@@ -218,5 +221,38 @@ func TestAutomationGetRequiresIDAsUsageError(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "automation", "get")
 	if err == nil || ExitCode(err) != 2 {
 		t.Fatalf("err=%v exit=%d", err, ExitCode(err))
+	}
+}
+
+func TestAutomationIntentMetadataWireContract(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal/telemetry/cli-invoked" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests = append(requests, body)
+		_ = json.NewEncoder(w).Encode(automationEnvelopeDTO{Automation: automationDTO{ID: "one", TemplateID: "daily_pr_review_v1", UseCase: "pr_review"}})
+	}))
+	t.Cleanup(server.Close)
+	writeRunFileFor(t, cfg, server)
+	out, stderr, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "automation", "create", "--project", "demo", "--name", "Review", "--prompt", "Review", "--rrule", "FREQ=DAILY", "--timezone", "UTC", "--template-id", "daily_pr_review_v1", "--use-case", "pr_review", "--json")
+	if err != nil {
+		t.Fatalf("%v: %s", err, stderr)
+	}
+	if len(requests) != 1 || requests[0]["templateId"] != "daily_pr_review_v1" || requests[0]["useCase"] != "pr_review" || !strings.Contains(out, `"templateId": "daily_pr_review_v1"`) {
+		t.Fatalf("request=%#v output=%s", requests, out)
+	}
+	_, stderr, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "automation", "update", "one", "--use-case", "other")
+	if err != nil {
+		t.Fatalf("%v: %s", err, stderr)
+	}
+	if len(requests) != 2 || requests[1]["useCase"] != "other" || len(requests[1]) != 1 {
+		t.Fatalf("update request=%#v", requests)
 	}
 }

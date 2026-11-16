@@ -81,7 +81,26 @@ describe("spawnCloudOrchestrator", () => {
 			harness: "claude-code",
 			displayName: "Orchestrator",
 			prompt: "",
+			defaultInterfaceMode: "tui",
 		});
+	});
+
+	// The control plane starts the orchestrator in Chat as the local daemon does
+	// and keeps the default for the workers it spawns. "tui" is sent too: an
+	// orchestrator created without a default starts in the terminal.
+	it("is created with the user's default session interface", async () => {
+		for (const [defaultSessionMode, interfaceMode] of [["chat", "chat"], ["tui", "tui"]] as const) {
+			const queryClient = primeClient({ id: "project-1" });
+			queryClient.setQueryData<Settings>(settingsQueryKey, {
+				cloudControlPlaneUrl: "https://cloud.example.com",
+				defaultSessionMode,
+			} as Settings);
+			cloudMocks.listUserProviderConnections.mockResolvedValue({ providerConnections: [connection("codex")] });
+			cloudMocks.createSession.mockClear();
+
+			await spawnCloudOrchestrator(queryClient, "project-1");
+			expect(cloudMocks.createSession.mock.calls[0]?.[1]?.defaultInterfaceMode).toBe(interfaceMode);
+		}
 	});
 
 	it("leaves the provider to the project and org default on the control plane", async () => {

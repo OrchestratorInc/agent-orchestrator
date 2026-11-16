@@ -20,25 +20,31 @@ events had `actor_type = null` and no `$process_person_profile = false`, which
 identifies them as old uncapped clients. Current builds emit bounded, anonymous
 telemetry, but old installs cannot be forced to upgrade.
 
-Current code emits v2 PostHog event names for streams with noisy legacy
-producers:
+Three client generations share the project. Tell them apart by name and by
+`telemetry_schema_version`:
 
-| Internal/local event | PostHog event |
-| --- | --- |
-| `ao.app.active` | `ao.v2.app.active` |
-| `ao.cli.invoked` | `ao.v2.cli.invoked` |
-| `ao.renderer.route_viewed` | `ao.v2.renderer.route_viewed` |
-| `ao.renderer.loaded` | `ao.v2.renderer.loaded` |
-| `ao.renderer.api_error` | `ao.v2.renderer.api_error` |
-| `ao.renderer.daemon_failure` | `ao.v2.renderer.daemon_failure` |
+| Generation | Names | `telemetry_schema_version` |
+| --- | --- | --- |
+| Legacy, uncapped | `ao.cli.invoked`, `ao.app.active` (CLI firehose above) | absent |
+| Previous release | `ao.v2.app.active`, `ao.v2.cli.invoked`, `ao.v2.renderer.*`, `ao.v2.mobile_app.*`; `legacy_event_name` on renamed daemon events | `2` |
+| Current release | `{product}.{object}.{past_tense_verb}` names (full table in [Product telemetry](telemetry.md#event-names)), no `legacy_event_name` | `3` |
 
-The original event name is retained as `legacy_event_name` when the daemon
-renames an event during PostHog export. All current daemon and renderer events
-include `telemetry_schema_version = 2`.
+The current release exports `ao.cli.invoked` and `ao.app.active` again, the same
+names as the legacy firehose. Current traffic under those names is capped and
+carries `telemetry_schema_version = 3`; legacy traffic has no version. Every
+dashboard or rule that reads those two names must filter on
+`telemetry_schema_version` to separate them. CLI activity is `ao.cli.active` and
+phone activity is `mobile.app.active`, so `ao.app.active` from a current client
+is always the desktop.
 
 ## Ingestion Rules
 
 Configure PostHog ingestion controls for project `475752` in this order.
+
+**Release gate:** the live transformation must be updated to these rules, and
+any event-name allowlist must include the current names, *before* the release
+with `telemetry_schema_version = 3` ships. Rules written only against the
+`ao.v2.*` and `ao.session.*` names would drop or miss the renamed events.
 
 Define `normalized_command_path` as `command_path` lowercased, trimmed, and with
 repeated whitespace collapsed. A routine command is one where
@@ -54,20 +60,34 @@ followed by a space:
 - `ao project get`
 - `ao pty-host`
 
-1. Keep non-routine `ao.v2.*` events.
+1. Keep events with `telemetry_schema_version` 2 or 3 unless a rule below drops
+   them (`ao.v2.*` from the previous release, the renamed events from the
+   current one).
 2. Drop `ao.cli.invoked` when the command is routine, regardless of
    `actor_type`.
 3. Drop `ao.app.active` when `channel = 'cli'` and the command is routine,
    regardless of `actor_type`.
 4. Keep legacy `ao.app.active` where `channel = 'renderer'` so old desktop-only
    installs still contribute to DAU until they update.
-5. Keep low-volume reliability events such as `ao.session.spawned`,
-   `ao.session.spawn_failed`, `ao.session.waiting_input_entered`,
-   `ao.session.waiting_input_exited`, `ao.http.5xx`, and `ao.daemon.panic`.
-6. Drop `$web_vitals` unless a time-boxed performance investigation needs it.
-7. Apply the same routine-command drop as a defensive backstop to
-   `ao.v2.cli.invoked` and CLI-channel `ao.v2.app.active`, even though current
-   clients should suppress those routine events before transmission.
+5. Keep low-volume reliability events: `ao.sessions.spawned`,
+   `ao.sessions.spawn_failed`, `ao.sessions.spawn_cancelled`,
+   `ao.session.relaunch_failed`,
+   `ao.sessions.input_wait_started`, `ao.sessions.input_wait_ended`,
+   `ao.http.5xx`, `ao.daemon.panic`, `ao.requests.failed`, `ao.daemon.failed`,
+   and the harness-update rollout events `ao.harnesses.updated`,
+   `ao.harness.update_idle_wait` and `ao.harnesses.version_switched`. Keep the
+   previous names (`ao.session.spawned`, `ao.session.spawn_failed`,
+   `ao.session.waiting_input_entered`, `ao.session.waiting_input_exited`,
+   `ao.harness.update`, `ao.harness.version_switch`) for installs that have not
+   updated.
+6. Keep `ao.sessions.ended` (one per session end). The `ao.usage.*` summaries
+   stay batched for messages; new worker PR outcomes are one event per PR
+   (`count: 1`), which is low volume next to messages.
+7. Drop `$web_vitals` unless a time-boxed performance investigation needs it.
+8. Apply the same routine-command drop as a defensive backstop to
+   `ao.cli.invoked` and `ao.cli.active` with `telemetry_schema_version = 3`, and
+   to `ao.v2.cli.invoked` and CLI-channel `ao.v2.app.active`, even though
+   current clients suppress those routine events before transmission.
 
 `actor_type` is still useful for segmentation and analysis, but it must not be
 part of the ingestion cost-control predicate. The command describes the activity
@@ -87,13 +107,15 @@ Examples the ingestion rule should cover:
 When these project-side ingestion controls are enabled, the 7-day estimate is a
 reduction from roughly 2.4M total events to well under 250k, before organic
 adoption of current builds. That is a 10x+ reduction while keeping renderer
-DAU, current v2 CLI DAU, current v2 command adoption, and reliability events.
+DAU, current CLI DAU, current command adoption, and reliability events.
 The app code alone does not enforce these PostHog UI rules for already-deployed
 legacy clients.
 
 Deployment boundary checklist:
 
 - Merging this PR protects clients that receive the next release.
+- Update the live transformation to the renamed events before that release
+  ships (see the release gate above).
 - Updating this Markdown does not modify the live PostHog project.
 - Update the live PostHog transformation separately with the same
   actor-independent routine-command rule to stop already-deployed clients.
@@ -116,8 +138,8 @@ internal/read-only commands such as:
 - `ao pty-host`
 
 Keep meaningful failures, because they are reliability signal. A future
-failure-only event should use a separate v2 name such as `ao.v2.cli.failed`
-instead of reusing `ao.v2.cli.invoked`.
+failure-only event should use a separate name such as `ao.cli.failed`
+instead of reusing `ao.cli.invoked`.
 
 Safe properties:
 
@@ -139,7 +161,7 @@ polling failures while AO is starting, intentionally deleted resources, and
 commands that succeed after automatic retry.
 
 Repeated failures from polling should be deduplicated. Emit the same
-`ao.v2.cli.failed` shape at most once per install and time window, then include
+`ao.cli.failed` shape at most once per install and time window, then include
 `occurrence_count`, `window_start`, and `window_end` so 48 identical failures
 cost one event while still showing the true magnitude.
 
@@ -163,11 +185,19 @@ Use layered controls:
 3. Add a PostHog transformation for emergency abuse filtering. The
    transformation should return `null` for obviously invalid payloads, unknown
    event families, or event names outside AO's allowlist. Dropped events are
-   unrecoverable, so do not use this for normal sampling of DAU events.
+   unrecoverable, so do not use this for normal sampling of DAU events. If an
+   allowlist is live, it must accept the current families (`ao.sessions.*`,
+   `ao.projects.*`, `ao.tasks.*`, `ao.orchestrators.*`, `ao.reviews.*`,
+   `ao.harnesses.*`, `ao.requests.failed`, `ao.daemon.failed`, `ao.app.*`,
+   `ao.cli.*`, `ao.routes.viewed`, `ao.usage.*`, `ao.setup.checked`,
+   `mobile.app.*`, and the rest of the table in
+   [Product telemetry](telemetry.md#event-names)) before the release ships.
 4. Keep current-client caps in AO:
    - renderer captures are bounded per event name per minute and per day
    - daemon remote exports are bounded per event name per minute and per day
    - burst-prone daemon failures are aggregated before export
+   - `ao.usage.*` summaries skip the minute cap and use a 100,000 per-name
+     daily emergency cap, rather than the standard 200 per-name cap
 5. Use the AO kill switch for a stream that turns out to be noisy. Setting
    `AO_TELEMETRY_DISABLED_EVENTS` silences named streams (with `*` prefix
    matching) on installs that already exist, without shipping a release. Local
@@ -185,14 +215,14 @@ not fully protect a public project token from deliberate abuse.
 must not reach PostHog from the desktop or daemon:
 
 ```bash
-AO_TELEMETRY_DISABLED_EVENTS="ao.v2.app.active, ao.renderer.*"
+AO_TELEMETRY_DISABLED_EVENTS="ao.app.active, ao.renderer.*"
 ```
 
 Whitespace around entries is ignored. An entry ending in `*` after a non-empty
 prefix matches by prefix. Both exact and prefix matching are case-insensitive
-and check the internal event name (`ao.app.active`) and its exported PostHog
-alias (`ao.v2.app.active`), so operators can use the name visible in PostHog
-without translating it first.
+and check the event name and every name it was exported under before the
+rename (for example `ao.v2.app.active` or `ao.session.*`), so an entry written
+against an old name keeps silencing the renamed stream.
 
 The desktop supervisor passes the list to both remote producers: the daemon's
 PostHog sink and the renderer, which sends directly to PostHog. A stream is
@@ -240,26 +270,33 @@ and per time window.
 
 ## Dashboard Migration
 
-For current DAU, use this active-user event set:
+Active users are a union of people, not a sum of events: someone active on the
+desktop and the CLI on the same day counts once. Count distinct persons across
+the active events of every generation:
 
 ```sql
 SELECT
     toDate(timestamp) AS day,
-    uniqExact(distinct_id) AS active_installs
+    uniqExact(person_id) AS active_users
 FROM events
 WHERE timestamp >= now() - INTERVAL 30 DAY
   AND (
-    event = 'ao.v2.app.active'
-    OR (event = 'ao.app.active' AND properties.channel = 'renderer')
-    OR (
-      event = 'ao.app.active'
-      AND properties.channel = 'cli'
-      AND properties.actor_type = 'user'
-    )
+    -- Current release.
+    (event IN ('ao.app.active', 'ao.cli.active', 'mobile.app.active')
+      AND properties.telemetry_schema_version = 3)
+    -- Previous release.
+    OR event = 'ao.v2.app.active'
+    -- Legacy clients: desktop, plus CLI activity a person started.
+    OR (event = 'ao.app.active' AND properties.telemetry_schema_version IS NULL
+      AND (properties.channel = 'renderer'
+        OR (properties.channel = 'cli' AND properties.actor_type = 'user')))
   )
 GROUP BY day
 ORDER BY day
 ```
+
+Use `uniqExact(properties.install_id)` instead of `person_id` for active
+installations.
 
 For historical DAU before v2 rollout, keep existing `ao.app.active` charts but
 filter out legacy CLI automation:
@@ -305,24 +342,30 @@ GROUP BY day
 ORDER BY day
 ```
 
-For current command adoption, use `ao.v2.cli.invoked` and group by
-`command_path` and `actor_type`. Do not use raw legacy `ao.cli.invoked` for
-current dashboards after ingestion filtering is enabled.
+For current command adoption, use `ao.cli.invoked` with
+`telemetry_schema_version = 3` (and `ao.v2.cli.invoked` for the previous
+release), grouped by `command_path` and `actor_type`. Never read
+`ao.cli.invoked` without the version filter: the legacy firehose uses the same
+name.
 
-For current renderer surface usage, use `ao.v2.renderer.route_viewed`.
+For current renderer surface usage, use `ao.routes.viewed` (previously
+`ao.v2.renderer.route_viewed`).
 
-For API/UI reliability, union the v2 renderer names with the low-volume daemon
-reliability events:
+For API/UI reliability, union the renderer and daemon reliability events of
+both releases:
 
 ```sql
-SELECT event, count() AS events, uniqExact(distinct_id) AS installs
+SELECT event, count() AS events, uniqExact(properties.install_id) AS installs
 FROM events
 WHERE timestamp >= now() - INTERVAL 7 DAY
   AND event IN (
+    'ao.requests.failed',
+    'ao.daemon.failed',
+    'ao.sessions.spawn_failed',
     'ao.v2.renderer.api_error',
     'ao.v2.renderer.daemon_failure',
-    '$exception',
     'ao.session.spawn_failed',
+    '$exception',
     'ao.http.5xx',
     'ao.daemon.panic'
   )
@@ -333,24 +376,27 @@ ORDER BY events DESC
 ## Verification Queries
 
 After enabling ingestion rules, this query should show legacy CLI volume
-falling quickly while v2 volume remains:
+(no version) falling quickly while version 2 and 3 volume remains:
 
 ```sql
-SELECT event, properties.actor_type, properties.channel, count() AS events
+SELECT event, properties.telemetry_schema_version AS version,
+    properties.actor_type, properties.channel, count() AS events
 FROM events
 WHERE timestamp >= now() - INTERVAL 24 HOUR
   AND event IN (
     'ao.cli.invoked',
     'ao.app.active',
+    'ao.cli.active',
     'ao.v2.cli.invoked',
     'ao.v2.app.active'
   )
-GROUP BY event, properties.actor_type, properties.channel
+GROUP BY event, version, properties.actor_type, properties.channel
 ORDER BY events DESC
 ```
 
-If routine CLI commands still appear in `ao.cli.invoked`, `ao.app.active`,
-`ao.v2.cli.invoked`, or CLI-channel `ao.v2.app.active` after the rules are
-enabled, the drop rule is not broad enough. Check both exact and prefixed shapes
+If routine CLI commands still appear in `ao.cli.invoked`, `ao.cli.active`,
+CLI-channel `ao.app.active`, `ao.v2.cli.invoked`, or CLI-channel
+`ao.v2.app.active` after the rules are enabled, the drop rule is not broad
+enough. Check both exact and prefixed shapes
 such as `ao hooks`, `AO  HOOKS`, `ao hooks claude-code post-tool-use`, and
 `ao session get sess-123`.

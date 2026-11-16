@@ -13,7 +13,7 @@ function fakeWindow(loading = false): { webContents: FakeWebContents } {
 }
 
 function fakeTrayController() {
-	return { setState: vi.fn(), setLocale: vi.fn(), clear: vi.fn(), dispose: vi.fn() };
+	return { setState: vi.fn(), setLocale: vi.fn(), setAwakeState: vi.fn(), clear: vi.fn(), dispose: vi.fn() };
 }
 
 function setup(overrides: Partial<TrayLifecycleDeps> = {}) {

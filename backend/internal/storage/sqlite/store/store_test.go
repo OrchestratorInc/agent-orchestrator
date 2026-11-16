@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -357,7 +359,7 @@ func TestUpdateSessionPreservesConcurrentProvisionState(t *testing.T) {
 			if err != nil || !ok || published.ProvisionState != tc.state || published.ProvisionError != tc.cause {
 				t.Fatalf("published provision state: session=%+v ok=%v err=%v", published, ok, err)
 			}
-			stale.DisplayName = "lifecycle update"
+			stale.Metadata.Model = "lifecycle update"
 			if err := s.UpdateSession(ctx, stale); err != nil {
 				t.Fatal(err)
 			}
@@ -365,8 +367,8 @@ func TestUpdateSessionPreservesConcurrentProvisionState(t *testing.T) {
 			if err != nil || !ok {
 				t.Fatalf("get updated session: %v, %v", ok, err)
 			}
-			if got.DisplayName != stale.DisplayName || got.ProvisionState != tc.state || got.ProvisionError != tc.cause {
-				t.Fatalf("stale lifecycle update overwrote provisioning facts: name=%q state=%q error=%q", got.DisplayName, got.ProvisionState, got.ProvisionError)
+			if got.Metadata.Model != stale.Metadata.Model || got.ProvisionState != tc.state || got.ProvisionError != tc.cause {
+				t.Fatalf("stale lifecycle update overwrote provisioning facts: model=%q state=%q error=%q", got.Metadata.Model, got.ProvisionState, got.ProvisionError)
 			}
 		})
 	}
@@ -382,11 +384,19 @@ func TestDeleteTaskPreparationRemovesItsCDC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if deleted, err := s.DeleteTaskPreparation(ctx, created.ID); err != nil || !deleted {
 		t.Fatalf("delete preparation = %v, %v", deleted, err)
 	}
 	if _, ok, err := s.GetSession(ctx, created.ID); err != nil || ok {
 		t.Fatalf("get deleted preparation = %v, %v", ok, err)
+	}
+	// A preparation is never listed, so its delete asks no client to refetch.
+	if events, err := s.EventsAfter(ctx, before, 10); err != nil || len(events) != 0 {
+		t.Fatalf("events after deleting a preparation = %+v, %v; want none", events, err)
 	}
 }
 
@@ -707,7 +717,7 @@ func TestBrowserCapabilityRotationIsNarrowAndControllerOwnerFenced(t *testing.T)
 	expected := created.ControllerOwner()
 
 	concurrent := created
-	concurrent.DisplayName = "newer display name"
+	concurrent.Metadata.Model = "newer model"
 	concurrent.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: created.UpdatedAt.Add(2 * time.Second)}
 	concurrent.UpdatedAt = created.UpdatedAt.Add(2 * time.Second)
 	if err := s.UpdateSession(ctx, concurrent); err != nil {
@@ -724,7 +734,7 @@ func TestBrowserCapabilityRotationIsNarrowAndControllerOwnerFenced(t *testing.T)
 		t.Fatalf("GetSession: ok=%v err=%v", ok, err)
 	}
 	if updated.Metadata.BrowserCapabilityVerifier != "verifier-2" ||
-		updated.DisplayName != concurrent.DisplayName || updated.Activity != concurrent.Activity ||
+		updated.Metadata.Model != concurrent.Metadata.Model || updated.Activity != concurrent.Activity ||
 		!updated.UpdatedAt.Equal(concurrent.UpdatedAt) {
 		t.Fatalf("narrow verifier update changed unrelated facts: got=%+v", updated)
 	}
@@ -1402,6 +1412,78 @@ func TestPRCRUD(t *testing.T) {
 	}
 }
 
+func TestMarkPRMergedPreservesObservedFactsAndEmitsCDC(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	pr := domain.PullRequest{
+		URL: "https://github.com/acme/repo/pull/7", SessionID: r.ID, Number: 7,
+		CI: domain.CIPassing, Review: domain.ReviewApproved, Mergeability: domain.MergeMergeable,
+		Provider: "github", Host: "github.com", Repo: "acme/repo", ProviderID: "provider-pr-7",
+		SourceBranch: "feature", TargetBranch: "main", HeadSHA: "head-sha", Title: "keep this title",
+		MetadataHash: "metadata-v1", CIHash: "ci-v1", ReviewHash: "review-v1",
+		UpdatedAt: now, StateChangedAt: now, ObservedAt: now,
+	}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	base, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mergedAt := now.Add(time.Minute)
+	if err := s.MarkPRMerged(ctx, pr.URL, "merge-sha", mergedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" {
+		t.Fatalf("merge state = merged:%v draft:%v closed:%v sha:%q", got.Merged, got.Draft, got.Closed, got.MergeCommitSHA)
+	}
+	if !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("merge timestamps = state:%s updated:%s observed:%s, want %s", got.StateChangedAt, got.UpdatedAt, got.ObservedAt, mergedAt)
+	}
+	if got.Title != pr.Title || got.HeadSHA != pr.HeadSHA || got.CI != pr.CI || got.Review != pr.Review || got.Mergeability != pr.Mergeability ||
+		got.MetadataHash != pr.MetadataHash || got.CIHash != pr.CIHash || got.ReviewHash != pr.ReviewHash {
+		t.Fatalf("mark merged replaced observed facts: got=%+v want preserved=%+v", got, pr)
+	}
+
+	events, err := s.EventsAfter(ctx, base, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || string(events[0].Type) != "pr_updated" {
+		t.Fatalf("merge events = %+v, want one pr_updated", events)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["url"] != pr.URL || payload["state"] != "merged" {
+		t.Fatalf("merge event payload = %#v", payload)
+	}
+
+	// A provider poll may have fetched the old open state before the merge
+	// completed and reach SQLite afterward. That stale observation must not
+	// regress the authoritative merge result.
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err = s.GetPR(ctx, pr.URL)
+	if err != nil || !found {
+		t.Fatalf("get merged pr after stale observation: found=%v err=%v", found, err)
+	}
+	if !got.Merged || got.Draft || got.Closed || got.MergeCommitSHA != "merge-sha" || !got.StateChangedAt.Equal(mergedAt) || !got.UpdatedAt.Equal(mergedAt) || !got.ObservedAt.Equal(mergedAt) {
+		t.Fatalf("stale observation regressed merged state: %+v", got)
+	}
+}
+
 func TestGetPRByNumberPrefersActiveRow(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -1606,43 +1688,6 @@ func TestPRCommentsReplace(t *testing.T) {
 	_ = s.WritePR(ctx, domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: now}, nil, []domain.PullRequestComment{{ID: "c1", Body: "x", CreatedAt: now}})
 	if list, _ := s.ListPRComments(ctx, "pr1"); len(list) != 1 {
 		t.Fatalf("after replace, comments = %d, want 1", len(list))
-	}
-}
-
-func TestMarkPRCommentResolved(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	seedProject(t, s, "mer")
-	r, _ := s.CreateSession(ctx, sampleRecord("mer"))
-	now := time.Now().UTC().Truncate(time.Second)
-	pr := domain.PullRequest{URL: "pr1", SessionID: r.ID, UpdatedAt: now}
-	if err := s.WritePR(ctx, pr, nil, []domain.PullRequestComment{
-		{ID: "c1", Author: "a", Body: "nit", URL: "comment-1", CreatedAt: now},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	updated, err := s.MarkPRCommentResolved(ctx, "pr1", "c1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !updated {
-		t.Fatal("MarkPRCommentResolved updated = false, want true")
-	}
-	comments, err := s.ListPRComments(ctx, "pr1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(comments) != 1 || !comments[0].Resolved {
-		t.Fatalf("comments = %+v, want c1 resolved", comments)
-	}
-
-	updated, err = s.MarkPRCommentResolved(ctx, "pr1", "missing")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated {
-		t.Fatal("MarkPRCommentResolved missing updated = true, want false")
 	}
 }
 
@@ -2441,6 +2486,263 @@ func TestSessionProvisionStepsRoundTripAndCDC(t *testing.T) {
 	}
 }
 
+func TestSessionArtifacts(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() []string {
+		t.Helper()
+		rows, err := st.ListSessionArtifactsForSessions(ctx, []domain.SessionID{sess.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return registeredPaths(rows[sess.ID])
+	}
+	if got := read(); len(got) != 0 {
+		t.Fatalf("new session paths = %v, want none", got)
+	}
+	first := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	got, found, err := st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations("z.html", "b.md", "z.html"), first)
+	if err != nil || !found || !slices.Equal(got, []string{"b.md", "z.html"}) {
+		t.Fatalf("add = %v, %v, %v", got, found, err)
+	}
+	// Adding a path again keeps its row, and so its place: oldest first.
+	got, _, err = st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations("a.md", "b.md"), first.Add(time.Minute))
+	if err != nil || !slices.Equal(got, []string{"b.md", "z.html", "a.md"}) {
+		t.Fatalf("add again = %v, %v", got, err)
+	}
+	if err := st.RemoveSessionArtifact(ctx, sess.ID, "z.html"); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); !slices.Equal(got, []string{"a.md", "b.md"}) {
+		t.Fatalf("after remove = %v", got)
+	}
+	if err := st.ClearSessionArtifacts(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); len(got) != 0 {
+		t.Fatalf("after clear = %v", got)
+	}
+	if _, found, err := st.AddSessionArtifacts(ctx, "missing", artifactRegistrations("a.md"), first); err != nil || found {
+		t.Fatalf("add for an unknown session: found=%v err=%v", found, err)
+	}
+}
+
+func TestSessionArtifactsAreReadPerSessionAndGoWithTheSession(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	one := terminalSession(t, st, "p1", 0)
+	two, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, one.ID, artifactRegistrations("a.md"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, two.ID, artifactRegistrations("b.md"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.ListSessionArtifactsForSessions(ctx, []domain.SessionID{one.ID, two.ID, "missing"})
+	if err != nil || len(got) != 2 || !slices.Equal(registeredPaths(got[one.ID]), []string{"a.md"}) || !slices.Equal(registeredPaths(got[two.ID]), []string{"b.md"}) {
+		t.Fatalf("rows = %v, %v", got, err)
+	}
+	if deleted, err := st.DeleteTerminatedSession(ctx, one.ID); err != nil || !deleted {
+		t.Fatalf("delete session = %v, %v", deleted, err)
+	}
+	got, err = st.ListSessionArtifactsForSessions(ctx, []domain.SessionID{one.ID})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("rows after deleting the session = %v, %v", got, err)
+	}
+}
+
+func registeredPaths(rows []domain.SessionArtifactRecord) []string {
+	var paths []string
+	for _, row := range rows {
+		if row.RegisteredAt != nil {
+			paths = append(paths, row.Path)
+		}
+	}
+	return paths
+}
+
+// Registration is one row per path, so nothing bounds how many files a session
+// can register in total.
+func TestSessionArtifactsHaveNoSessionLimit(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 3*domain.MaxArtifactRegistrationPaths)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("f%d.md", i)
+	}
+	got, _, err := st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations(paths...), time.Now())
+	if err != nil || len(got) != len(paths) {
+		t.Fatalf("registered %d of %d, %v", len(got), len(paths), err)
+	}
+}
+
+// A rename moves an artifact's row and its versions to the new path, keeping
+// its ID; artifacts that take each other's paths do not collide on one.
+func TestApplySessionArtifactChangesMovesRowsAndVersions(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	file := func(n uint64) domain.FileIdentity { return domain.FileIdentity{Dev: 1, Ino: n, Birth: int64(n)} }
+	if _, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{Insert: []domain.SessionArtifactRecord{
+		{ID: "id-a", Path: "a.html", File: file(1), CreatedAt: now},
+		{ID: "id-b", Path: "b.html", File: file(2), CreatedAt: now},
+		{ID: "id-gone", Path: "gone.html", CreatedAt: now},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddSessionArtifacts(ctx, sess.ID, artifactRegistrations("a.html"), now); err != nil {
+		t.Fatal(err)
+	}
+	version := func(path, sha string) {
+		t.Helper()
+		if _, _, err := st.AppendSessionArtifactVersion(ctx, domain.SessionArtifactVersion{
+			SessionID: sess.ID, Path: path, SHA256: sha, ContentType: "text/html", ModTime: now, CreatedAt: now,
+		}, 50); err != nil {
+			t.Fatal(err)
+		}
+	}
+	version("a.html", "sha-a1")
+	version("a.html", "sha-a2")
+	version("b.html", "sha-b1")
+	version("gone.html", "sha-gone")
+
+	// a and b swap paths, and c.html, once a file that is gone, takes nothing.
+	freed, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{Move: []domain.SessionArtifactMove{
+		{ID: "id-a", From: "a.html", To: "b.html", File: file(1), PreviousPaths: []string{"a.html"}},
+		{ID: "id-b", From: "b.html", To: "a.html", File: file(2), PreviousPaths: []string{"b.html"}},
+	}})
+	if err != nil || len(freed) != 0 {
+		t.Fatalf("swap: freed=%v err=%v", freed, err)
+	}
+	rows, err := st.ListSessionArtifacts(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]domain.SessionArtifactRecord{}
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	if a := byID["id-a"]; a.Path != "b.html" || a.RegisteredAt == nil || !slices.Equal(a.PreviousPaths, []string{"a.html"}) {
+		t.Fatalf("a after the swap = %+v", a)
+	}
+	if b := byID["id-b"]; b.Path != "a.html" || b.RegisteredAt != nil {
+		t.Fatalf("b after the swap = %+v", b)
+	}
+	shas := func(path string) []string {
+		t.Helper()
+		vs, err := st.ListSessionArtifactVersions(ctx, sess.ID, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, v := range vs {
+			out = append(out, v.SHA256)
+		}
+		return out
+	}
+	if got := shas("b.html"); !slices.Equal(got, []string{"sha-a2", "sha-a1"}) {
+		t.Fatalf("versions at b.html = %v, want a's", got)
+	}
+	if got := shas("a.html"); !slices.Equal(got, []string{"sha-b1"}) {
+		t.Fatalf("versions at a.html = %v, want b's", got)
+	}
+
+	// A move onto the path of a file that was gone drops that row and its
+	// history, and returns the history's blobs.
+	freed, err = st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
+		Drop: []domain.SessionArtifactFileUpdate{{ID: "id-gone", Path: "gone.html"}},
+		Move: []domain.SessionArtifactMove{{ID: "id-a", From: "b.html", To: "gone.html", File: file(1), PreviousPaths: []string{"a.html", "b.html"}}},
+	})
+	if err != nil || !slices.Equal(freed, []string{"sha-gone"}) {
+		t.Fatalf("move onto a gone file: freed=%v err=%v", freed, err)
+	}
+	if got := shas("gone.html"); !slices.Equal(got, []string{"sha-a2", "sha-a1"}) {
+		t.Fatalf("versions at gone.html = %v", got)
+	}
+
+	// Changes planned from rows that have changed since apply nothing.
+	_, err = st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
+		Insert: []domain.SessionArtifactRecord{{ID: "id-new", Path: "new.html", CreatedAt: now}},
+		Move:   []domain.SessionArtifactMove{{ID: "id-a", From: "b.html", To: "c.html"}},
+	})
+	if !errors.Is(err, domain.ErrSessionArtifactsChanged) {
+		t.Fatalf("stale move err = %v", err)
+	}
+	if rows, _ := st.ListSessionArtifacts(ctx, sess.ID); len(rows) != 2 {
+		t.Fatalf("rows after a stale move = %+v", rows)
+	}
+}
+
+// A move onto a gone registered artifact's path takes its registration, and a
+// gone file is forgotten only when it was never registered nor versioned.
+func TestApplySessionArtifactChangesMovesOntoADroppedPathAndForgets(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, st, "p1")
+	sess, err := st.CreateSession(ctx, sampleRecord("p1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	if _, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{Insert: []domain.SessionArtifactRecord{
+		{ID: "id-draft", Path: "draft.html", CreatedAt: now},
+		{ID: "id-report", Path: "report.html", CreatedAt: now},
+		{ID: "id-tmp", Path: "page.tmp", CreatedAt: now},
+		{ID: "id-kept", Path: "kept.md", CreatedAt: now},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AppendSessionArtifactVersion(ctx, domain.SessionArtifactVersion{
+		SessionID: sess.ID, Path: "kept.md", SHA256: "sha-kept", ContentType: "text/markdown", ModTime: now, CreatedAt: now,
+	}, 50); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ApplySessionArtifactChanges(ctx, sess.ID, domain.SessionArtifactChanges{
+		Drop:   []domain.SessionArtifactFileUpdate{{ID: "id-report", Path: "report.html"}},
+		Move:   []domain.SessionArtifactMove{{ID: "id-draft", From: "draft.html", To: "report.html", PreviousPaths: []string{"draft.html"}}},
+		Forget: []domain.SessionArtifactFileUpdate{{ID: "id-tmp", Path: "page.tmp"}, {ID: "id-kept", Path: "kept.md"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListSessionArtifacts(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]domain.SessionArtifactRecord{}
+	for _, row := range rows {
+		byPath[row.Path] = row
+	}
+	if report := byPath["report.html"]; report.ID != "id-draft" || report.RegisteredAt != nil || report.HasVersions {
+		t.Fatalf("report.html = %+v, want draft's artifact, unregistered and with no history", report)
+	}
+	if _, ok := byPath["page.tmp"]; ok {
+		t.Fatal("an unregistered file with no history was kept")
+	}
+	// A scan reads which rows have history, so it can keep them at their path.
+	if kept, ok := byPath["kept.md"]; !ok || kept.ID != "id-kept" || !kept.HasVersions {
+		t.Fatalf("a file with history was forgotten or not marked: %+v", rows)
+	}
+}
+
 func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -2456,7 +2758,7 @@ func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	if applied, err := s.UpdateSessionArtifactOutput(ctx, created.ID, "/data/artifacts/x", domain.SessionOutputArtifact); err != nil || !applied {
 		t.Fatalf("narrow write: %v, %v", applied, err)
 	}
-	stale.DisplayName = "stale full-row write"
+	stale.Metadata.Model = "stale full-row write"
 	if err := s.UpdateSession(ctx, stale); err != nil {
 		t.Fatal(err)
 	}
@@ -2464,10 +2766,18 @@ func TestUpdateSessionDoesNotOverwriteArtifactOutputColumns(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("get session: %v, %v", ok, err)
 	}
-	if got.DisplayName != stale.DisplayName {
-		t.Fatalf("display name = %q, want the full-row write applied", got.DisplayName)
+	if got.Metadata.Model != stale.Metadata.Model {
+		t.Fatalf("model = %q, want the full-row write applied", got.Metadata.Model)
 	}
 	if got.OutputType != domain.SessionOutputArtifact || got.Metadata.ArtifactDir != "/data/artifacts/x" {
 		t.Fatalf("stale UpdateSession clobbered output columns: type=%q dir=%q", got.OutputType, got.Metadata.ArtifactDir)
 	}
+}
+
+func artifactRegistrations(paths ...string) []domain.SessionArtifactRegistration {
+	out := make([]domain.SessionArtifactRegistration, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, domain.SessionArtifactRegistration{Path: path})
+	}
+	return out
 }

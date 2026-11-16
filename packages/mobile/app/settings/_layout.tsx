@@ -1,29 +1,31 @@
 import { Stack } from "expo-router";
+import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../../lib/stackScreenOptions";
 import { useTheme } from "../../lib/ThemeProvider";
 
+// A link straight to a Settings page opens it over the Settings list, so its
+// back button returns to the list. Without this, the page would be the only
+// one in the stack and back would leave Settings.
+export const unstable_settings = { initialRouteName: "index" };
+
+// Settings is a page pushed over the board, like every other page, and its
+// own pages push and go back the same way, with the system's edge swipe.
+// On iOS 26 it paints no bar of its own: the bar is transparent, each page (a
+// SwiftUI Form or an automatically inset scroll view) lays out under it, and
+// the system blurs whatever scrolls beneath the title.
 export default function SettingsLayout() {
 	const t = useTheme();
 
 	return (
-		<Stack
-			screenOptions={{
-				headerStyle: { backgroundColor: t.bgBase },
-				headerTintColor: t.textSecondary,
-				headerTitleStyle: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
-				headerShadowVisible: false,
-				contentStyle: { backgroundColor: t.bgBase },
-			}}
-		>
-			<Stack.Screen name="index" options={{ headerShown: false }} />
-			<Stack.Screen
-				name="environments"
-				options={{
-					headerShown: false,
-					animation: "slide_from_right",
-					gestureEnabled: true,
-					fullScreenGestureEnabled: true,
-				}}
-			/>
+		<Stack screenOptions={{ ...stackScreenOptions(t), ...GLASS_HEADER_OPTIONS }}>
+			<Stack.Screen name="index" options={{ title: "Settings" }} />
+			<Stack.Screen name="theme" options={{ title: "Theme" }} />
+			{/* A machine's page renames itself to the machine once it loads. */}
+			<Stack.Screen name="machine/[id]/index" options={{ title: "Machine" }} />
+			<Stack.Screen name="machine/[id]/edit" options={{ title: "Edit machine" }} />
+			{/* Orchestrator Cloud's machine row opens its page; a coding agent's
+			    page renames itself to the agent. */}
+			<Stack.Screen name="cloud/index" options={{ title: "Orchestrator Cloud" }} />
+			<Stack.Screen name="cloud/agent/[agent]" options={{ title: "Coding agent" }} />
 		</Stack>
 	);
 }

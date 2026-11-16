@@ -35,6 +35,30 @@ vi.mock("./ReadOnlyFileView", () => ({
 	),
 }));
 
+vi.mock("./chat/MermaidBlock", () => ({ MermaidBlock: ({ code }: { code: string }) => <figure aria-label="Mermaid diagram">{code}</figure> }));
+vi.mock("pdfjs-dist/build/pdf.worker.min.mjs?url", () => ({ default: "pdf.worker.js" }));
+vi.mock("pdfjs-dist", () => ({
+	GlobalWorkerOptions: {},
+	getDocument: () => {
+		const page = {
+			getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale }),
+			render: () => ({ promise: Promise.resolve(), cancel: () => {} }),
+			streamTextContent: () => null,
+			cleanup: () => true,
+		};
+		return { promise: Promise.resolve({ numPages: 2, getPage: async () => page }), destroy: async () => {} };
+	},
+	TextLayer: class {
+		constructor(private readonly options: { container: HTMLElement }) {}
+		async render() {
+			const span = document.createElement("span");
+			span.textContent = "Revenue grew 12% quarter over quarter.";
+			this.options.container.append(span);
+		}
+		cancel() {}
+	},
+}));
+
 const fetchMock = vi.fn();
 
 function renderWithQuery(ui: ReactNode, queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
@@ -263,6 +287,52 @@ describe("ArtifactFileView", () => {
 		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
 	});
 
+	it("offers no feedback for an archived session's artifact, by button or by selection", async () => {
+		fetchMock.mockImplementation(async () => new Response("# Plan\n\nCache the session list.", { status: 200 }));
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+
+		const live = renderWithQuery(<ArtifactFileView artifactName="plan.md" path="plan.md" rawUrl={RAW_URL} sessionId="sess-1" />);
+		await screen.findByText("Cache the session list.");
+		expect(screen.getByRole("button", { name: "Add feedback" })).toBeInTheDocument();
+		live.unmount();
+
+		renderWithQuery(<ArtifactFileView artifactName="plan.md" noFeedback path="plan.md" rawUrl={RAW_URL} readOnly sessionId="sess-1" />);
+		const paragraph = await screen.findByText("Cache the session list.");
+		expect(screen.queryByRole("button", { name: "Add feedback" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Edit file" })).not.toBeInTheDocument();
+		const range = document.createRange();
+		range.selectNodeContents(paragraph);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(paragraph);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(screen.queryByRole("textbox", { name: /Feedback for plan\.md/ })).not.toBeInTheDocument();
+	});
+
+	it("closes feedback already open when the artifact's session is archived, and sends nothing", async () => {
+		fetchMock.mockImplementation(async () => new Response("content", { status: 200 }));
+		postMock.mockResolvedValue({ data: { status: "ok" } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = (noFeedback: boolean) => (
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider>
+					<ArtifactFileView artifactName="notes.txt" feedbackRequestKey={1} noFeedback={noFeedback} path="notes.txt" rawUrl={RAW_URL} sessionId="sess-1" />
+				</TooltipProvider>
+			</QueryClientProvider>
+		);
+
+		const { rerender } = render(view(false));
+		await userEvent.type(await screen.findByRole("textbox", { name: /Feedback for notes\.txt/ }), "Please tighten this.");
+		rerender(view(true));
+
+		await waitFor(() => expect(screen.queryByRole("textbox", { name: /Feedback for notes\.txt/ })).not.toBeInTheDocument());
+		expect(screen.queryByRole("button", { name: "Send feedback" })).not.toBeInTheDocument();
+		rerender(view(false));
+		await screen.findByText("content");
+		expect(screen.queryByRole("textbox", { name: /Feedback for notes\.txt/ })).not.toBeInTheDocument();
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
 	it("does not offer editing for a truncated artifact", async () => {
 		fetchMock.mockResolvedValue(new Response("a".repeat(256 * 1024 + 1), { status: 200 }));
 
@@ -415,5 +485,92 @@ describe("ArtifactFileView", () => {
 
 		const image = await screen.findByRole("img", { name: "chart" });
 		expect(image).toHaveAttribute("src", "http://ao-preview-artifact.abc123.localhost:3001/sub/chart.png");
+	});
+
+	it("previews a PDF's pages and sends feedback on text selected in a page", async () => {
+		const rawUrl = "http://ao-preview-artifact.abc123.localhost:3001/report.pdf?raw=true";
+		fetchMock.mockImplementation(async () => new Response(new Uint8Array([37, 80, 68, 70]), { headers: { ETag: "\"r1\"" }, status: 200 }));
+		postMock.mockResolvedValue({ data: { status: "ok" } });
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+		vi.stubGlobal("ResizeObserver", class {
+			constructor(private readonly callback: ResizeObserverCallback) {}
+			observe() {
+				this.callback([{ contentRect: { width: 600 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+			}
+			disconnect() {}
+		});
+
+		renderWithQuery(<ArtifactFileView artifactName="report.pdf" path="report.pdf" rawUrl={rawUrl} sessionId="sess-1" />);
+
+		await waitFor(() => expect(document.querySelectorAll("[data-page-number]")).toHaveLength(2));
+		expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/sessions/sess-1/preview/files/report.pdf?source=artifact&raw=true&v=%22r1%22");
+		expect(screen.queryByTestId("artifact-binary")).not.toBeInTheDocument();
+
+		const [text] = await screen.findAllByText("Revenue grew 12% quarter over quarter.");
+		const range = document.createRange();
+		range.selectNodeContents(text);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(text);
+
+		const textbox = await screen.findByRole("textbox", { name: "Feedback for report.pdf · selected text" });
+		await userEvent.type(textbox, "Cite the source");
+		await userEvent.click(screen.getByRole("button", { name: "Send feedback" }));
+
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		const message = postMock.mock.calls[0][1].body.message as string;
+		expect(message).toContain("Cite the source");
+		expect(message).toContain("- Selected text: Revenue grew 12% quarter over quarter.");
+		expect(message).toContain("- Path: report.pdf");
+	});
+
+	it("opens a CSV artifact as a table that sorts by a clicked column", async () => {
+		fetchMock.mockResolvedValue(new Response("name,count\nbeta,10\nalpha,9\n", { status: 200 }));
+
+		renderWithQuery(<ArtifactFileView artifactName="usage.csv" path="usage.csv" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		const table = await screen.findByRole("table");
+		const firstColumn = () => Array.from(table.querySelectorAll("tbody tr")).map((row) => row.firstElementChild?.textContent);
+		expect(firstColumn()).toEqual(["beta", "alpha"]);
+		const count = screen.getByRole("columnheader", { name: "count" });
+		expect(count).toHaveClass("text-right");
+
+		await userEvent.click(screen.getByRole("button", { name: "count" }));
+		expect(count).toHaveAttribute("aria-sort", "ascending");
+		expect(firstColumn()).toEqual(["alpha", "beta"]);
+		await userEvent.click(screen.getByRole("button", { name: "count" }));
+		expect(firstColumn()).toEqual(["beta", "alpha"]);
+		await userEvent.click(screen.getByRole("button", { name: "count" }));
+		expect(count).toHaveAttribute("aria-sort", "none");
+	});
+
+	it("sends feedback on a table cell selected in a CSV artifact", async () => {
+		fetchMock.mockResolvedValue(new Response("name,count\nalpha,9\n", { status: 200 }));
+		postMock.mockResolvedValue({ data: { status: "ok" } });
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 200, 120, 16));
+
+		renderWithQuery(<ArtifactFileView artifactName="usage.csv" path="usage.csv" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		const cell = await screen.findByRole("cell", { name: "alpha" });
+		const range = document.createRange();
+		range.selectNodeContents(cell);
+		window.getSelection()?.removeAllRanges();
+		window.getSelection()?.addRange(range);
+		fireEvent.pointerUp(cell);
+
+		const textbox = await screen.findByRole("textbox", { name: "Feedback for usage.csv · selected text" });
+		await userEvent.type(textbox, "Rename this");
+		await userEvent.click(screen.getByRole("button", { name: "Send feedback" }));
+
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		expect(postMock.mock.calls[0][1].body.message as string).toContain("- Selected text: alpha");
+	});
+
+	it("opens a Mermaid artifact as its diagram", async () => {
+		fetchMock.mockResolvedValue(new Response("graph TD\n  A-->B\n", { status: 200 }));
+
+		renderWithQuery(<ArtifactFileView artifactName="flow.mmd" path="flow.mmd" rawUrl={RAW_URL} sessionId="sess-1" />);
+
+		expect(await screen.findByRole("figure", { name: "Mermaid diagram" })).toHaveTextContent("graph TD A-->B");
 	});
 });

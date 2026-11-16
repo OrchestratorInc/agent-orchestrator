@@ -95,8 +95,8 @@ func (p *Plugin) BuildAfterStartPrompt(ctx context.Context, cfg ports.LaunchConf
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return "## AO Standing Instructions\n\n" + strings.TrimSpace(cfg.SystemPrompt) +
-		"\n\n## AO Task\n\n" + strings.TrimSpace(cfg.Prompt), nil
+	return "## Orchestrator Standing Instructions\n\n" + strings.TrimSpace(cfg.SystemPrompt) +
+		"\n\n## Orchestrator Task\n\n" + strings.TrimSpace(cfg.Prompt), nil
 }
 
 // ContinuationCapabilities reports that fx assigns native session ids and
@@ -143,7 +143,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd := commandWithOverrides(binary, cfg.Config, cfg.Permissions)
-	return append(cmd, "resume", agentSessionID), true, nil
+	return append(cmd, "--resume", agentSessionID), true, nil
 }
 
 // SessionInfo surfaces metadata reported by fx's lifecycle integration.

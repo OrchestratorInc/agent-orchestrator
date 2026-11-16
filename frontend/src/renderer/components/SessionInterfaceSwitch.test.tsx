@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
+import { appI18n } from "../i18n";
 import type { SessionInterfaceTransition } from "../hooks/useSessionInterfaceTransition";
 import {
 	SessionInterfaceActionGroup,
@@ -120,7 +122,7 @@ describe("SessionInterfaceSwitchButton", () => {
 
 	it("replaces progress with a non-interactive warning when target shutdown is unconfirmed", () => {
 		const detail =
-			"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.";
+			"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface.";
 		render(
 			<TooltipProvider>
 				<SessionInterfaceSwitchButton
@@ -144,15 +146,15 @@ describe("SessionInterfaceSwitchButton", () => {
 	});
 
 	it.each([
-		["chat", "Switch to chat UI", "lucide-message-square"],
-		["tui", "Switch to terminal UI", "lucide-square-terminal"],
-	] as const)("uses an icon-only %s destination control", (target, label, iconClass) => {
+		["chat", "Switch to chat UI", "[data-icon='rounded-chat']"],
+		["tui", "Switch to terminal UI", "[data-icon='rounded-terminal']"],
+	] as const)("uses an icon-only %s destination control", (target, label, iconSelector) => {
 		const { onClick } = renderSwitchButton(target);
 
 		const button = screen.getByRole("button", { name: label });
-		expect(button.classList.contains("topbar-control--icon")).toBe(true);
+		expect(button.classList.contains("size-control-md")).toBe(true);
 		expect(button.textContent).toBe("");
-		expect(button.querySelector(`.${iconClass}`)).not.toBeNull();
+		expect(button.querySelector(iconSelector)).not.toBeNull();
 		fireEvent.click(button);
 		expect(onClick).toHaveBeenCalledOnce();
 	});
@@ -193,6 +195,19 @@ describe("SessionInterfaceSwitchButton", () => {
 });
 
 describe("SessionInterfaceSwitchDialog", () => {
+	it.each(["chat", "tui"] as const)("discloses Hermes' fresh-context fallback before a switch to %s", (target) => {
+		render(<SessionInterfaceSwitchDialog open target={target} mayStartFresh onOpenChange={vi.fn()} onChoose={vi.fn()} />);
+		const dialog = screen.getByRole("dialog");
+		expect(dialog).toHaveTextContent("Hermes may start a fresh conversation");
+		expect(dialog).toHaveTextContent("Messages and tool results may not transfer into the target agent's context");
+		expect(dialog).not.toHaveTextContent("Completed messages and tool work stay in the agent's context");
+	});
+
+	it("keeps the context-continuity explanation for other harnesses", () => {
+		render(<SessionInterfaceSwitchDialog open target="chat" onOpenChange={vi.fn()} onChoose={vi.fn()} />);
+		expect(screen.getByRole("dialog")).toHaveTextContent("Completed messages and tool work stay in the agent's context");
+	});
+
 	it("requires an explicit Terminal stop for Cloud without claiming the agent is busy", () => {
 		const onChoose = vi.fn();
 		render(
@@ -206,7 +221,7 @@ describe("SessionInterfaceSwitchDialog", () => {
 		);
 
 		const dialog = screen.getByRole("dialog", { name: "Switch to Chat UI?" });
-		expect(dialog).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		expect(dialog).toHaveTextContent("Orchestrator cannot verify whether this Terminal is idle.");
 		expect(within(dialog).queryByRole("button", { name: /^Finish work, then switch/ })).not.toBeInTheDocument();
 		const action = within(dialog).getByRole("button", { name: /^Terminate and then switch/ });
 		expect(onChoose).not.toHaveBeenCalled();
@@ -249,7 +264,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		"keeps unconfirmed target shutdown visible without unsafe recovery or dismissal actions (%s)",
 		(noticeAcknowledgedAt) => {
 			const detail =
-				"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface. target still running";
+				"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface. target still running";
 			render(
 				<SessionInterfaceTransitionNotice
 					transition={{
@@ -284,7 +299,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		expect(screen.getByRole("alert")).toHaveTextContent(
-			"AO could not confirm the target controller stopped. Restart AO to retry shutdown before restoring the original interface.",
+			"Orchestrator could not confirm the target controller stopped. Restart Orchestrator to retry shutdown before restoring the original interface.",
 		);
 		expect(screen.queryByText(/original interface remains available/)).not.toBeInTheDocument();
 	});
@@ -348,7 +363,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 					...transition("recovery_required"),
 					historyPolicy: "provider_history",
 					errorCode: "DAEMON_RESTARTED",
-					errorDetail: "AO restored Terminal after the daemon restarted.",
+					errorDetail: "Orchestrator restored Terminal after the daemon restarted.",
 				}}
 				onDismiss={onDismiss}
 				onRetry={onRetry}
@@ -356,7 +371,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 			/>,
 		);
 
-		expect(screen.getByRole("status")).toHaveTextContent("AO restored Terminal");
+		expect(screen.getByRole("status")).toHaveTextContent("Orchestrator restored Terminal");
 		fireEvent.click(screen.getByRole("button", { name: "Retry switch to Chat UI" }));
 		fireEvent.click(screen.getByRole("button", { name: "Use provider history and switch" }));
 		fireEvent.click(screen.getByRole("button", { name: "Stay in Terminal" }));
@@ -413,7 +428,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 				transition={{
 					...transition("failed"),
 					errorCode: "DRAIN_DECISION_PENDING",
-					errorDetail: "AO found a provider decision waiting in Terminal.",
+					errorDetail: "Orchestrator found a provider decision waiting in Terminal.",
 				}}
 				onDismiss={vi.fn()}
 				onSwitchWithInterrupt={onSwitchWithInterrupt}
@@ -442,7 +457,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		const alert = screen.getByRole("alert");
-		expect(alert).toHaveTextContent("AO cannot verify whether this Terminal is idle.");
+		expect(alert).toHaveTextContent("Orchestrator cannot verify whether this Terminal is idle.");
 		const action = within(alert).getByRole("button", { name: "Terminate and then switch" });
 		expect(onSwitchWithInterrupt).not.toHaveBeenCalled();
 		fireEvent.click(action);
@@ -471,7 +486,7 @@ describe("SessionInterfaceTransitionNotice", () => {
 				transition={{
 					...transition("failed"),
 					errorCode: "DRAIN_QUIESCENCE_UNVERIFIED",
-					errorDetail: "AO could not classify the current Terminal screen.",
+					errorDetail: "Orchestrator could not classify the current Terminal screen.",
 				}}
 				onDismiss={vi.fn()}
 				onSwitchWithInterrupt={vi.fn()}
@@ -479,5 +494,181 @@ describe("SessionInterfaceTransitionNotice", () => {
 		);
 
 		expect(screen.queryByRole("button", { name: "Stop now and switch" })).not.toBeInTheDocument();
+	});
+});
+
+describe("a Cloud session that started in the terminal", () => {
+	it.each([
+		["CHAT_ADAPTER_UNAVAILABLE", "Chat for Claude needs the Claude ACP adapter, which this workspace doesn't have yet."],
+		["CHAT_START_UNSUPPORTED", "The Orchestrator service in this workspace is an older version that can't set up Chat for Claude. You can switch this session to Chat."],
+	])("reads as information, not a failed switch (%s)", (errorCode, message) => {
+		const onDismiss = vi.fn();
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{
+					...transition("failed"),
+					policy: "interrupt",
+					errorCode,
+					errorDetail: "Started in the terminal: control plane copy",
+				}}
+				onDismiss={onDismiss}
+				onRetry={vi.fn()}
+				onSwitchWithInterrupt={vi.fn()}
+			/>,
+		);
+
+		const status = screen.getByRole("status");
+		expect(status).toHaveTextContent("Started in the terminal");
+		expect(status).toHaveTextContent(message);
+		expect(status).not.toHaveTextContent(/failed|Interface switch/);
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+		expect(status.querySelector(".text-warning")).toBeNull();
+		const buttons = screen.getAllByRole("button");
+		expect(buttons).toHaveLength(1);
+		fireEvent.click(buttons[0]!);
+		expect(onDismiss).toHaveBeenCalledTimes(1);
+	});
+
+	it("centers in the part of the pane the harness update notice leaves clear", () => {
+		const pane = document.createElement("div");
+		document.body.append(pane);
+		vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(pane);
+		vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(260, 60, 1056, 800));
+		try {
+			const view = render(
+				<SessionInterfaceTransitionNotice
+					transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE" }}
+					onDismiss={vi.fn()}
+				/>,
+			);
+			const status = screen.getByRole("status");
+			vi.spyOn(status, "getBoundingClientRect").mockReturnValue(new DOMRect(516, 72, 544, 60));
+			expect(status.style.left).toBe("");
+			act(() => publishHarnessUpdateNoticeRect({ left: 1004, top: 72, right: 1304, bottom: 140 }));
+			// The pane reaches 1316px; the notice starts at 1004px, 12px of gap kept.
+			// The browser normalizes the calc(); both still subtract the 324px.
+			expect(status.style.left).toMatch(/^calc\(.*100% - 324px.*\)$/);
+			expect(status.style.maxWidth).toMatch(/^calc\(.*324px.*1\.5rem.*\)$/);
+			act(() => publishHarnessUpdateNoticeRect(null));
+			expect(status.style.left).toBe("");
+			view.unmount();
+		} finally {
+			act(() => publishHarnessUpdateNoticeRect(null));
+			vi.restoreAllMocks();
+			pane.remove();
+		}
+	});
+
+	it("stays centered in a wide pane where the harness update notice does not reach it", () => {
+		const pane = document.createElement("div");
+		document.body.append(pane);
+		vi.spyOn(HTMLElement.prototype, "offsetParent", "get").mockReturnValue(pane);
+		vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(new DOMRect(260, 60, 2000, 800));
+		try {
+			const view = render(
+				<SessionInterfaceTransitionNotice
+					transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE" }}
+					onDismiss={vi.fn()}
+				/>,
+			);
+			const status = screen.getByRole("status");
+			// Centered, the 544px notice spans 988px to 1532px, well left of the update notice.
+			vi.spyOn(status, "getBoundingClientRect").mockReturnValue(new DOMRect(988, 72, 544, 60));
+			act(() => publishHarnessUpdateNoticeRect({ left: 1956, top: 72, right: 2256, bottom: 140 }));
+			expect(status.style.left).toBe("");
+			expect(status.style.maxWidth).toBe("");
+			view.unmount();
+		} finally {
+			act(() => publishHarnessUpdateNoticeRect(null));
+			vi.restoreAllMocks();
+			pane.remove();
+		}
+	});
+
+	it("names its dismiss control and dismissal failure in the app's language", async () => {
+		await appI18n.changeLanguage("de");
+		try {
+			render(
+				<SessionInterfaceTransitionNotice
+					transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE" }}
+					onDismiss={vi.fn()}
+					dismissError="rejected"
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Meldung zum Oberflächenwechsel schließen" })).toBeInTheDocument();
+			expect(screen.getByRole("status")).toHaveTextContent("Diese Meldung konnte nicht geschlossen werden. Versuche es erneut.");
+		} finally {
+			await act(() => appI18n.changeLanguage("en"));
+		}
+	});
+
+	it("keeps an unrelated failed switch to Chat a failure", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{ ...transition("failed"), errorCode: "CHAT_ADAPTER_UNAVAILABLE", sourceMode: "chat", targetMode: "tui" }}
+				onDismiss={vi.fn()}
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("Interface switch failed");
+	});
+});
+
+describe("account moves", () => {
+	function accountMove(phase: SessionInterfaceTransition["phase"]): SessionInterfaceTransition {
+		return {
+			...transition(phase),
+			sourceMode: "chat",
+			targetMode: "chat",
+			sourceAccountId: "device-claude",
+			targetAccountId: "acct-b",
+		};
+	}
+
+	it("reports the account switch instead of an interface destination while it runs", () => {
+		render(
+			<TooltipProvider>
+				<SessionInterfaceSwitchButton target="tui" supported transition={accountMove("target_starting")} onClick={vi.fn()} onCancel={vi.fn()} />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("status", { name: "Resuming on the new account…" })).toBeInTheDocument();
+		expect(screen.queryByText(/Switching to/)).not.toBeInTheDocument();
+	});
+
+	it("keeps the agent on its previous account in the failure notice and offers no interface retry", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={{ ...accountMove("failed"), errorCode: "DRAIN_DECISION_PENDING" }}
+				onDismiss={vi.fn()}
+				onSwitchWithInterrupt={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Account switch failed")).toBeInTheDocument();
+		expect(screen.getByText("The agent stays on its previous account. You can retry the switch.")).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Cancel request and switch" })).not.toBeInTheDocument();
+	});
+});
+
+describe("an agent switch", () => {
+	const agentSwitch = (phase: SessionInterfaceTransition["phase"], extra: Partial<SessionInterfaceTransition> = {}) =>
+		({ ...transition(phase), sourceMode: "chat", targetMode: "chat", ...extra, ...{ sourceHarness: "codex", targetHarness: "claude-code" } }) as SessionInterfaceTransition;
+
+	it("names the agent it switches to while it runs", () => {
+		render(
+			<TooltipProvider>
+				<SessionInterfaceSwitchButton target="tui" supported transition={agentSwitch("target_starting")} onClick={vi.fn()} onCancel={vi.fn()} />
+			</TooltipProvider>,
+		);
+		expect(screen.getByRole("status", { name: "Starting the new agent… Switching to Claude Code." })).toBeInTheDocument();
+	});
+
+	it("says the agent switch failed and why", () => {
+		render(
+			<SessionInterfaceTransitionNotice
+				transition={agentSwitch("failed", { errorCode: "TARGET_PREFLIGHT_FAILED", errorDetail: "cursor could not be installed in this sandbox" })}
+				onDismiss={vi.fn()}
+			/>,
+		);
+		expect(screen.getByText("Agent switch failed")).toBeInTheDocument();
+		expect(screen.getByText("cursor could not be installed in this sandbox")).toBeInTheDocument();
 	});
 });

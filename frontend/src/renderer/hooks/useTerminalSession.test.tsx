@@ -7,6 +7,12 @@ import type { MuxConnectionState, TerminalMux } from "../lib/terminal-mux";
 import type { WorkspaceSession } from "../types/workspace";
 import { useTerminalSession, type AttachableTerminal } from "./useTerminalSession";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
+import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+
+vi.mock("../lib/session-management-telemetry", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/session-management-telemetry")>()),
+	recordDirectWorkerInteraction: vi.fn(),
+}));
 
 const session: WorkspaceSession = {
 	id: "sess-1",
@@ -98,6 +104,7 @@ type FakeTerminal = AttachableTerminal & {
 	compose(data: string): void;
 	shortcut(data: string): void;
 	wheel(data: string): void;
+	hover(data: string): void;
 	protocol(data: string): void;
 	emitResize(cols: number, rows: number): void;
 	completeWrites(): void;
@@ -150,6 +157,7 @@ function createFakeTerminal(): FakeTerminal {
 		compose: (data) => inputListeners.forEach((listener) => listener(data, "composition")),
 		shortcut: (data) => inputListeners.forEach((listener) => listener(data, "shortcut")),
 		wheel: (data) => inputListeners.forEach((listener) => listener(data, "wheel")),
+		hover: (data) => inputListeners.forEach((listener) => listener(data, "hover")),
 		protocol: (data) => inputListeners.forEach((listener) => listener(data, "protocol")),
 		emitResize: (cols, rows) => resizeListeners.forEach((listener) => listener({ cols, rows })),
 		completeWrites: () => {
@@ -168,6 +176,7 @@ type SetupOptions = {
 	isVisible?: boolean;
 	inputDisabled?: boolean;
 	hasMeasuredGrid?: boolean;
+	shellTerminalHandleId?: string;
 };
 
 function setup({
@@ -179,6 +188,7 @@ function setup({
 	isVisible = true,
 	inputDisabled = false,
 	hasMeasuredGrid = true,
+	shellTerminalHandleId,
 }: SetupOptions = {}) {
 	const muxes: FakeMux[] = [];
 	const createMux = () => {
@@ -206,6 +216,7 @@ function setup({
 				createMux,
 				inputDisabled: blocked,
 				isVisible: visible,
+				shellTerminalHandleId,
 			}),
 		{ initialProps, wrapper },
 	);
@@ -281,6 +292,30 @@ describe("useTerminalSession", () => {
 		]);
 	});
 
+	it("sends hover reports without counting them as the user acting on the session", () => {
+		const { view, terminal, muxes } = setup();
+		act(() => muxes[0].emitOpened("handle-1"));
+		// Replay is still being buffered behind the gate.
+		act(() => muxes[0].emitData("handle-1", "prompt$ "));
+		expect(view.result.current.replaySettled).toBe(false);
+		vi.mocked(recordDirectWorkerInteraction).mockClear();
+		const revealsBefore = terminal.latestOutputRequests;
+
+		act(() => terminal.hover("\x1b[<35;4;2M"));
+		expect(muxes[0].inputs).toEqual([["handle-1", "\x1b[<35;4;2M"]]);
+		expect(recordDirectWorkerInteraction).not.toHaveBeenCalled();
+		// Hover neither ends the gate nor flushes the buffered replay.
+		expect(view.result.current.replaySettled).toBe(false);
+		expect(terminal.lines).toEqual([]);
+		expect(terminal.latestOutputRequests).toBe(revealsBefore);
+
+		// Typing is the user acting: it counts and ends the gate.
+		act(() => terminal.typeKeys("a"));
+		expect(recordDirectWorkerInteraction).toHaveBeenCalledTimes(1);
+		expect(view.result.current.replaySettled).toBe(true);
+		expect(terminal.lines).toEqual(["prompt$ "]);
+	});
+
 	it("keeps the attachment live but refuses input while a controller handoff owns it", () => {
 		const { view, terminal, muxes } = setup({ inputDisabled: true });
 		act(() => muxes[0].emitOpened("handle-1"));
@@ -332,9 +367,14 @@ describe("useTerminalSession", () => {
 		act(() => void vi.advanceTimersByTime(500));
 
 		expect(muxes[0].inputs).toEqual([]);
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 120, 40]]);
+		// The only frame parking sends gives the grid up; it carries no size.
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 120, 40],
+			["handle-1", 0, 0],
+		]);
 		expect(terminal.lines).toContain("output while hidden");
 		expect(muxes).toHaveLength(1);
+		expect(muxes[0].closes).toEqual([]);
 
 		// The same attachment becomes interactive again on return.
 		view.rerender({ daemonReady: true, isVisible: true });
@@ -343,8 +383,77 @@ describe("useTerminalSession", () => {
 		expect(muxes[0].inputs).toEqual([["handle-1", "visible\r"]]);
 		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
 			["handle-1", 120, 40],
+			["handle-1", 0, 0],
 			["handle-1", 150, 55],
 		]);
+	});
+
+	// The daemon reads a client without a grid as "not showing this terminal".
+	it("gives its grid up when hidden and claims the same grid again when shown", () => {
+		const { view, terminal, muxes } = setup();
+		act(() => muxes[0].emitOpened("handle-1"));
+
+		view.rerender({ daemonReady: true, isVisible: false });
+		view.rerender({ daemonReady: true, isVisible: false, inputDisabled: true });
+		expect(muxes[0].resizes).toEqual([["handle-1", 0, 0]]);
+
+		view.rerender({ daemonReady: true, isVisible: true });
+		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
+		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
+		terminal.emitResize(80, 24);
+		expect(muxes[0].resizes).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 80, 24],
+		]);
+
+		// Rapid switching sends one frame per change and nothing else.
+		view.rerender({ daemonReady: true, isVisible: false });
+		view.rerender({ daemonReady: true, isVisible: true });
+		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
+		expect(muxes[0].resizes.slice(2)).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 80, 24],
+		]);
+		expect(muxes).toHaveLength(1);
+	});
+
+	it("gives its grid up while the window is hidden and claims it again on return", () => {
+		const { view, muxes } = setup();
+		act(() => muxes[0].emitOpened("handle-1"));
+		const visibility = vi.spyOn(document, "visibilityState", "get");
+		const setWindowShown = (shown: boolean) => {
+			visibility.mockReturnValue(shown ? "visible" : "hidden");
+			act(() => void document.dispatchEvent(new Event("visibilitychange")));
+		};
+
+		setWindowShown(false);
+		setWindowShown(false);
+		expect(muxes[0].resizes).toEqual([["handle-1", 0, 0]]);
+		setWindowShown(true);
+		setWindowShown(true);
+		expect(muxes[0].resizes).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 80, 24],
+		]);
+
+		// A pane parked behind another tab stays parked when the window returns.
+		view.rerender({ daemonReady: true, isVisible: false });
+		setWindowShown(false);
+		setWindowShown(true);
+		expect(muxes[0].resizes.slice(2)).toEqual([["handle-1", 0, 0]]);
+	});
+
+	it("sends no parking frame for a pane that never claimed a grid, or to a cloud terminal", () => {
+		const parked = setup({ isVisible: false });
+		parked.view.rerender({ daemonReady: true, isVisible: false, inputDisabled: true });
+		expect(parked.muxes[0].opens).toEqual([["handle-1", 0, 0]]);
+		expect(parked.muxes[0].resizes).toEqual([]);
+
+		const cloud = setup({ attachedSession: { ...session, cloud: { orgId: "org-1" } } });
+		cloud.view.rerender({ daemonReady: true, isVisible: false });
+		cloud.view.rerender({ daemonReady: true, isVisible: true });
+		act(() => cloud.view.result.current.syncVisibleSize(80, 24));
+		expect(cloud.muxes[0].resizes).toEqual([]);
 	});
 
 	it("publishes a locally refitted parked grid when the terminal becomes visible", () => {
@@ -360,7 +469,10 @@ describe("useTerminalSession", () => {
 		view.rerender({ daemonReady: true, isVisible: true });
 		act(() => view.result.current.syncVisibleSize(terminal.cols, terminal.rows));
 
-		expect(muxes[0].resizes.slice(initialResizes)).toEqual([["handle-1", 132, 47]]);
+		expect(muxes[0].resizes.slice(initialResizes)).toEqual([
+			["handle-1", 0, 0],
+			["handle-1", 132, 47],
+		]);
 	});
 
 	// A tab opened and immediately covered by the next one attaches before it
@@ -892,6 +1004,14 @@ describe("useTerminalSession", () => {
 		expect(terminal.lines.some((line) => line.includes("[process exited]"))).toBe(true);
 		expect(muxes[0].disposed).toBe(true);
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
+	});
+
+	it("refetches the shell terminal list when a shell exits, so its tab closes", () => {
+		const { view, muxes, invalidateSpy } = setup({ shellTerminalHandleId: "shell-1" });
+		act(() => muxes[0].emitExit("shell-1"));
+		expect(view.result.current.state).toBe("exited");
+		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["shell-terminals"] });
+		expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: workspaceQueryKey });
 	});
 
 	it("uses a contextual exit notice for intentionally short-lived terminals", () => {

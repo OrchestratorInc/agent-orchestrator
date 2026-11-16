@@ -9,7 +9,7 @@ import {
   PanelLeft,
   Square,
   X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { useCanGoForward } from "./TitlebarNav";
@@ -21,6 +21,7 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 // Windows-only: macOS keeps its system menu bar and inset traffic lights; Linux
@@ -67,14 +68,14 @@ function TopMenu({
       onOpenChange={(open) => setOpenMenu(open ? id : null)}
     >
       <DropdownMenuTrigger asChild>
-        <button
+        <Pressable
           className="window-titlebar__menu-btn"
           data-active={openMenu === id ? "" : undefined}
           onMouseEnter={() => setOpenMenu(openMenu === null ? null : id)}
           type="button"
         >
           {label}
-        </button>
+        </Pressable>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
@@ -101,15 +102,15 @@ function WindowControls({
       className="window-titlebar__controls"
       role="group"
     >
-      <button
+      <Pressable
         aria-label={t("titlebar.minimize")}
         className="window-titlebar__control"
         onClick={act("window.minimize")}
         type="button"
       >
         <Minus aria-hidden="true" className="window-titlebar__control-icon" />
-      </button>
-      <button
+      </Pressable>
+      <Pressable
         aria-label={t("titlebar.maximize")}
         className="window-titlebar__control"
         onClick={act("window.maximize")}
@@ -126,20 +127,20 @@ function WindowControls({
             className="window-titlebar__control-icon window-titlebar__control-icon--maximize"
           />
         )}
-      </button>
-      <button
+      </Pressable>
+      <Pressable
         aria-label={t("titlebar.close")}
         className="window-titlebar__control window-titlebar__control--close"
         onClick={act("window.close")}
         type="button"
       >
         <X aria-hidden="true" className="window-titlebar__control-icon" />
-      </button>
+      </Pressable>
     </div>
   );
 }
 
-export function WindowTitlebar() {
+export function WindowTitlebar({ onBack }: { onBack?: () => void }) {
   const { t } = useTranslation();
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const isSidebarOpen = useUiStore(sidebarIsVisible);
@@ -196,7 +197,7 @@ export function WindowTitlebar() {
 			    logo + name stay in the sidebar header instead of duplicating here. */}
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
+          <Pressable
             aria-label={
               isSidebarOpen
                 ? t("shell.collapseSidebar")
@@ -210,37 +211,37 @@ export function WindowTitlebar() {
               aria-hidden="true"
               className="window-titlebar__toggle-icon"
             />
-          </button>
+          </Pressable>
         </TooltipTrigger>
-        <TooltipContent side="bottom">
+        <TooltipContent shortcut="toggle-sidebar" side="bottom">
           {isSidebarOpen
-            ? t("shell.collapseSidebarTitle")
-            : t("shell.expandSidebarTitle")}
+            ? t("shell.collapseSidebar")
+            : t("shell.expandSidebar")}
         </TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex">
-            <button
+            <Pressable
               aria-label={t("titlebar.goBack")}
               className="window-titlebar__toggle"
-              disabled={!canGoBack}
-              onClick={() => router.history.back()}
+              disabled={!onBack && !canGoBack}
+              onClick={onBack ?? (() => router.history.back())}
               type="button"
             >
               <ArrowLeft
                 aria-hidden="true"
                 className="window-titlebar__toggle-icon"
               />
-            </button>
+            </Pressable>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{t("titlebar.goBack")}</TooltipContent>
+        <TooltipContent shortcut="history-back" side="bottom">{t("titlebar.goBack")}</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger asChild>
           <span className="inline-flex">
-            <button
+            <Pressable
               aria-label={t("titlebar.goForward")}
               className="window-titlebar__toggle"
               disabled={!canGoForward}
@@ -251,10 +252,10 @@ export function WindowTitlebar() {
                 aria-hidden="true"
                 className="window-titlebar__toggle-icon"
               />
-            </button>
+            </Pressable>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom">{t("titlebar.goForward")}</TooltipContent>
+        <TooltipContent shortcut="history-forward" side="bottom">{t("titlebar.goForward")}</TooltipContent>
       </Tooltip>
       <nav className="window-titlebar__menus">
         <TopMenu
@@ -263,15 +264,19 @@ export function WindowTitlebar() {
           openMenu={openMenu}
           setOpenMenu={setOpenMenu}
         >
-          <DropdownMenuItem onSelect={act("view.reload")}>
-            {t("titlebar.reload")}
-            <DropdownMenuShortcut>Ctrl+R</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={act("view.devtools")}>
-            {t("titlebar.devtools")}
-            <DropdownMenuShortcut>Ctrl+Shift+I</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
+          {import.meta.env.DEV && (
+            <>
+              <DropdownMenuItem onSelect={act("view.reload")}>
+                {t("titlebar.reload")}
+                <DropdownMenuShortcut>Ctrl+R</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={act("view.devtools")}>
+                {t("titlebar.devtools")}
+                <DropdownMenuShortcut>Ctrl+Shift+I</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
           <DropdownMenuItem onSelect={act("view.zoomIn")}>
             {t("titlebar.zoomIn")}
           </DropdownMenuItem>

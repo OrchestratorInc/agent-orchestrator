@@ -15,7 +15,7 @@
  */
 
 import type { CloudCpClient } from "./cloud-cp/client";
-import type { CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
+import type { CloudCpCreateSessionRequest, CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
 import { captureRendererEvent, setCloudTelemetryContext } from "./telemetry";
 
 /** Pending session creations, keyed by session id, for time-to-ready. */
@@ -23,6 +23,8 @@ const pendingSessions = new Map<string, { requestedAt: number; provider: string;
 /** A pending session is forgotten after this long without becoming ready. */
 const PENDING_SESSION_TTL_MS = 60 * 60_000;
 const PENDING_CHECKOUT_KEY = "ao.telemetry.cloudCheckoutPending";
+/** Per org, the plans whose Checkout the control plane last said starts a free trial (trialDays). */
+const trialOffers = new Map<string, ReadonlySet<string>>();
 
 let reportedOfferings = new Set<string>();
 let defaultProvider = "";
@@ -37,8 +39,51 @@ function errorStatus(error: unknown): number | undefined {
 	return typeof status === "number" ? status : undefined;
 }
 
+/** Where a sign-in can start, for cloud_signed_in's source. Anything without a note is "other". */
+export type CloudSignInSource = "artifact_publish";
+/** A sign-in started from a source counts as one for this long. */
+const SIGN_IN_SOURCE_TTL_MS = 30 * 60_000;
+/** The source of the sign-in in progress, kept in memory only. */
+let signInSource: { source: CloudSignInSource; expires: number } | undefined;
+
+/** Notes that a sign-in was started from source, e.g. Publish's Sign in button. */
+export function noteSignInSource(source: CloudSignInSource, now = Date.now()): void {
+	signInSource = { source, expires: now + SIGN_IN_SOURCE_TTL_MS };
+}
+
+/** Forgets a note from source, e.g. when the popover that set it closes. */
+export function clearSignInSource(source: CloudSignInSource): void {
+	if (signInSource?.source === source) signInSource = undefined;
+}
+
+/** The source of the sign-in that just finished, used up once read. */
+function takeSignInSource(now = Date.now()): CloudSignInSource | "other" {
+	const note = signInSource;
+	signInSource = undefined;
+	return note && note.expires > now ? note.source : "other";
+}
+
 /** The signed-in user as last seen by any hook instance; undefined before the first read. */
 let knownCloudUser: string | null | undefined;
+/**
+ * The session stamp (storedAt) of the last sign-in reported. Two paths see a
+ * sign-in, the session notification and main's completed sign-in, so each
+ * reports it only if the other has not.
+ */
+let reportedSignIn: string | undefined;
+
+type SignedInAccount = { authProvider: string; user: { id: string }; storedAt?: string };
+
+/**
+ * same_account is true for signing in again as the account already signed in
+ * (after a server refused its session). Before it was counted, every
+ * cloud_signed_in was a change of account, so same_account != true
+ * reproduces the earlier count.
+ */
+function reportSignIn(account: SignedInAccount, sameAccount: boolean): void {
+	if (account.storedAt) reportedSignIn = account.storedAt;
+	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider, source: takeSignInSource(), same_account: sameAccount });
+}
 
 /**
  * Tracks the cloud session and reports a genuine sign-in: a session for a
@@ -46,14 +91,29 @@ let knownCloudUser: string | null | undefined;
  * token refreshes (which re-send the same user) are not sign-ins.
  */
 export function noteCloudSession(
-	account: { authProvider: string; user: { id: string } } | null,
+	account: SignedInAccount | null,
 	initial: boolean,
 ): void {
 	const userId = account?.user.id ?? null;
 	const previous = knownCloudUser;
 	knownCloudUser = userId;
 	if (initial || !account || previous === userId) return;
-	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider });
+	if (account.storedAt && account.storedAt === reportedSignIn) return;
+	reportSignIn(account, false);
+}
+
+/**
+ * Reports a sign-in main says just completed, unless the session notification
+ * already did. This counts signing in again as the account already signed in,
+ * as after a link refused an expired session, which noteCloudSession cannot
+ * tell from a token refresh.
+ */
+export function noteCloudSignInCompleted(account: SignedInAccount): void {
+	// Either path may run first; the user before this sign-in is known either way.
+	const sameAccount = knownCloudUser === account.user.id;
+	knownCloudUser = account.user.id;
+	if (account.storedAt && account.storedAt === reportedSignIn) return;
+	reportSignIn(account, sameAccount);
 }
 
 interface OfferingShape {
@@ -104,10 +164,15 @@ const LIMIT_CODES = new Set([
 	"WEEKLY_LIMIT_REACHED",
 ]);
 
-/** The control plane refused a request for plan reasons; `shown` is whether Upgrade opened. */
-export function reportPlanRefusal(code: string, shown: boolean): void {
+/**
+ * The control plane refused a request for plan reasons; `shown` is whether
+ * Upgrade opened. `source` is "chat" for a refusal read from an agent's tool
+ * output, which the desktop never saw itself, so it stays out of the rate of
+ * refusals the desktop's own requests turned into an Upgrade prompt.
+ */
+export function reportPlanRefusal(code: string, shown: boolean, source?: "chat"): void {
 	const event = LIMIT_CODES.has(code) ? "ao.renderer.cloud_limit_reached" : "ao.renderer.cloud_plan_refusal_shown";
-	void captureRendererEvent(event, { code, shown });
+	void captureRendererEvent(event, source ? { code, shown, source } : { code, shown });
 }
 
 function storage(): Pick<Storage, "getItem" | "setItem" | "removeItem"> | undefined {
@@ -146,6 +211,8 @@ export function observeBillingSummary(summary: { entitled?: boolean; subscriptio
 	const elapsed = typeof pending.at === "number" ? Math.max(0, Date.now() - pending.at) : undefined;
 	void captureRendererEvent("ao.renderer.cloud_checkout_completed", {
 		plan: summary.plan ?? pending.plan ?? "unknown",
+		// A free trial starts a subscription too; Stripe marks it trialing until it converts or ends.
+		trial: status === "trialing",
 		...(elapsed === undefined ? {} : { duration_ms: elapsed }),
 	});
 }
@@ -193,14 +260,31 @@ export function observeCloudSessions(sessions: readonly CloudCpSession[], now = 
 export function resetCloudTelemetryForTest(): void {
 	pendingSessions.clear();
 	knownCloudUser = undefined;
+	reportedSignIn = undefined;
+	signInSource = undefined;
 	reportedOfferings = new Set();
 	defaultProvider = "";
+	trialOffers.clear();
 }
 
 function projectProvider(config: Record<string, unknown> | undefined): string {
 	const chosen = config?.sandboxProvider;
 	if (typeof chosen === "string" && chosen !== "") return chosen;
 	return defaultProvider || "default";
+}
+
+/**
+ * Reports a user's request for a cloud session, once per create
+ * (createCloudSession): a create that a control plane predating
+ * interfaceMode and defaultInterfaceMode rejects is sent again without them, and that retry is
+ * not a second request.
+ */
+export function reportCloudSessionCreateRequested(body: Pick<CloudCpCreateSessionRequest, "provider" | "kind" | "projectId">): void {
+	void captureRendererEvent("ao.renderer.cloud_session_create_requested", {
+		provider: body.provider || defaultProvider || "default",
+		session_kind: body.kind,
+		project_id: body.projectId,
+	});
 }
 
 /**
@@ -234,14 +318,11 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 		});
 		return response;
 	};
+	// The request itself is reported once per user create, by
+	// reportCloudSessionCreateRequested: a create can take two calls.
 	instrumented.createSession = async (orgId, body, options) => {
 		const requestedAt = Date.now();
 		const provider = body.provider || defaultProvider || "default";
-		void captureRendererEvent("ao.renderer.cloud_session_create_requested", {
-			provider,
-			session_kind: body.kind,
-			project_id: body.projectId,
-		});
 		try {
 			const response = await client.createSession(orgId, body, options);
 			pendingSessions.set(response.session.id, {
@@ -252,9 +333,42 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 			observeCloudSessions([response.session]);
 			return response;
 		} catch (error) {
+			// A control plane that predates interfaceMode and defaultInterfaceMode
+			// rejects the body with 400 invalid_request, and createCloudSession
+			// sends the create again without them: not a failed session.
+			if ((body.interfaceMode !== undefined || body.defaultInterfaceMode !== undefined) && errorStatus(error) === 400 &&
+				errorCode(error) === "invalid_request") {
+				throw error;
+			}
 			void captureRendererEvent("ao.renderer.cloud_session_failed", {
 				provider,
 				session_kind: body.kind,
+				stage: "create",
+				code: errorCode(error),
+				status: errorStatus(error),
+				ttr_ms: Math.max(0, Date.now() - requestedAt),
+			});
+			throw error;
+		}
+	};
+	// A standalone agent's create is its session's: reported as one, timed
+	// from here to the session's first connection like any other.
+	instrumented.createStandaloneAgent = async (orgId, body, options) => {
+		const requestedAt = Date.now();
+		const provider = body.provider || defaultProvider || "default";
+		try {
+			const response = await client.createStandaloneAgent(orgId, body, options);
+			pendingSessions.set(response.session.id, {
+				requestedAt,
+				provider: response.session.sandboxProvider ?? provider,
+				kind: "worker",
+			});
+			observeCloudSessions([response.session]);
+			return response;
+		} catch (error) {
+			void captureRendererEvent("ao.renderer.cloud_session_failed", {
+				provider,
+				session_kind: "worker",
 				stage: "create",
 				code: errorCode(error),
 				status: errorStatus(error),
@@ -276,11 +390,12 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 	instrumented.createBillingCheckout = async (orgId, plan, options) => {
 		const response = await client.createBillingCheckout(orgId, plan, options);
 		markCheckoutPending(plan, Date.now());
-		void captureRendererEvent("ao.renderer.cloud_checkout_started", { plan });
+		void captureRendererEvent("ao.renderer.cloud_checkout_started", { plan, trial: trialOffers.get(orgId)?.has(plan) ?? false });
 		return response;
 	};
 	instrumented.getBilling = async (orgId, options) => {
 		const summary = await client.getBilling(orgId, options);
+		trialOffers.set(orgId, new Set((summary.plans ?? []).filter((offer) => (offer.trialDays ?? 0) > 0).map((offer) => offer.name)));
 		observeBillingSummary(summary);
 		return summary;
 	};

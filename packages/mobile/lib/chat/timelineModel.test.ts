@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, groupConversationByTurn, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -26,7 +26,7 @@ describe("mobile Chat timeline model", () => {
 		value.controller.state = "hibernated";
 		expect(canRollbackTurn(value, value.turns[0])).toBe(false);
 	});
-	it("keeps the empty state outside the inverted conversation surface", () => {
+	it("keeps the empty state outside the conversation list", () => {
 		const value = snapshot();
 		value.items = [];
 		value.turns = [];
@@ -34,47 +34,24 @@ describe("mobile Chat timeline model", () => {
 			timelineModel as unknown as {
 				conversationTimelineRenderPlan?: (snapshot: ConversationSnapshot) => {
 					kind: "empty" | "list";
-					inverted: boolean;
 					groups: unknown[];
 				};
 			}
 		).conversationTimelineRenderPlan;
 
-		expect(buildPlan?.(value)).toEqual({ kind: "empty", inverted: false, groups: [] });
+		expect(buildPlan?.(value)).toEqual({ kind: "empty", groups: [] });
 	});
 
-	it("puts the latest exchange first in the virtualized render plan", () => {
-		expect(latestFirstConversationGroups(snapshot()).map((group) => group.items.map((item) => item.id))).toEqual([
-			["u2", "a2"],
-			["u1", "a1"],
-		]);
-	});
-
-	it("renders Android exchanges in natural order without an inverted list transform", () => {
-		const plan = timelineModel.conversationTimelineRenderPlan(snapshot(), undefined, "android");
-		expect(plan).toMatchObject({ kind: "list", inverted: false });
+	// Never inverted, on either platform: see conversationTimelineRenderPlan.
+	it("renders exchanges in reading order", () => {
+		const plan = timelineModel.conversationTimelineRenderPlan(snapshot());
+		expect(plan).toMatchObject({ kind: "list" });
 		expect(plan.groups.map((group) => group.key)).toEqual(["turn-t1", "turn-t2"]);
 	});
 
 	it("keeps queued questions with their own answers instead of strict-sequence interleaving", () => {
 		const groups = groupConversationByTurn(snapshot());
 		expect(groups.map((group) => group.items.map((item) => item.id))).toEqual([["u1", "a1"], ["u2", "a2"]]);
-		expect(conversationMarkers(snapshot())).toMatchObject([
-			{ sequence: 1, title: "First task", detail: "First answer" },
-			{ sequence: 2, title: "Queued task", detail: "Queued answer" },
-		]);
-	});
-
-	it("titles a marker with the human's words rather than AO's staged attachment list", () => {
-		const value = snapshot();
-		const [first, second] = value.items;
-		if (first.kind !== "message" || second.kind !== "message") throw new Error("fixture");
-		first.text = "See screenshot\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-a.png";
-		second.text = "Attached files (read these files in the workspace):\n- .ao/attachments/attachment-b.png\n- .ao/attachments/attachment-c.png";
-		expect(conversationMarkers(value)).toMatchObject([
-			{ sequence: 1, title: "See screenshot" },
-			{ sequence: 2, title: "2 attachments" },
-		]);
 	});
 
 	it("keys a loaded turn by durable identity rather than its current page boundary", () => {
@@ -94,6 +71,39 @@ describe("mobile Chat timeline model", () => {
 		expect(readableConversationItems(value).slice(-1)[0]).toMatchObject({ activityKind: "system" });
 	});
 
+	it("drops model reroute notes, which the model picker already names", () => {
+		const value = snapshot();
+		value.items.push({ ...activity("system", 5, "t1"), id: "rerouted", detail: { event: "model.rerouted", fromModel: "sonnet", toModel: "claude-sonnet-5-5" } });
+		expect(readableConversationItems(value).map((item) => item.id)).not.toContain("rerouted");
+	});
+
+	// Claude keeps one task list across turns and can revise it after a turn ends,
+	// when the revision belongs to no turn. The daemon marks every older copy
+	// superseded, so only the newest shows.
+	it("hides plan rows the daemon marked superseded", () => {
+		const value = snapshot();
+		const row = (sequence: number, superseded: boolean): ConversationActivity => ({
+			...activity("plan", sequence),
+			detail: { event: "plan", spansTurns: true, superseded, steps: [{ text: "Render", status: "completed" }] },
+		});
+		value.items.push(row(5, true), row(6, false));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		expect(planRows.map((item) => item.id)).toEqual(["plan-6"]);
+	});
+
+	// Provider turns AO never correlated each carry their own plan row. Without the
+	// cross-turn flag those are separate plans, not revisions of one.
+	it("keeps each plan row that is not a copy of a cross-turn list", () => {
+		const value = snapshot();
+		const row = (sequence: number, text: string): ConversationActivity => ({
+			...activity("plan", sequence),
+			detail: { event: "plan", steps: [{ text, status: "completed" }] },
+		});
+		value.items.push(row(5, "Read"), row(6, "Write"));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		expect(planRows.map((item) => item.id)).toEqual(["plan-5", "plan-6"]);
+	});
+
 	it("docks queued human messages instead of rendering them as sent timeline turns", () => {
 		const value = snapshot();
 		value.turns[1].state = "queued";
@@ -108,6 +118,24 @@ describe("mobile Chat timeline model", () => {
 			{ turnId: "t2", message: { text: "Queued task" } },
 		]);
 		expect(readableConversationItems(value).map((item) => item.id)).not.toContain("u2");
+	});
+
+	it("shows a starting session's opening brief as sent instead of queued", () => {
+		const value = snapshot();
+		value.turns = [{ id: "t1", state: "queued", requestedAt: "2026-08-05T00:00:00Z" }];
+		value.items = value.items.filter((item) => item.id === "u1");
+		expect(timelineModel.queuedConversationMessages(value)).toHaveLength(1);
+		expect(timelineModel.queuedConversationMessages(value, "t1")).toEqual([]);
+		expect(readableConversationItems(value).map((item) => item.id)).toEqual([]);
+		expect(readableConversationItems(value, "t1").map((item) => item.id)).toEqual(["u1"]);
+	});
+
+	it("always places a visible setup checklist, standalone when no turn hosts it", () => {
+		const groups = [{ turnId: "t1" }, { turnId: "t2" }];
+		expect(timelineModel.startupPlacement(groups, "t1", true)).toBe("turn");
+		expect(timelineModel.startupPlacement(groups, "t9", true)).toBe("standalone");
+		expect(timelineModel.startupPlacement(groups, undefined, true)).toBe("standalone");
+		expect(timelineModel.startupPlacement(groups, "t1", false)).toBe("none");
 	});
 
 	it("gates rollback on the daemon capability, accepted history and idle state", () => {
@@ -158,6 +186,20 @@ function activity(kind: ConversationActivity["activityKind"], sequence: number, 
 	return { kind: "activity", id: `${kind}-${sequence}`, turnId, sequence, revision: 1, activityKind: kind, status: "completed", summary: kind, createdAt: "" };
 }
 
+describe("activity run summary", () => {
+	it("labels consecutive AO actions as actions", () => {
+		const renamed = { ...activity("ao_action", 1), summary: "Renamed a session" };
+		const switched = { ...activity("ao_action", 2), summary: "Switched agent" };
+		expect(summarizeActivities([renamed, switched])).toBe("Performed 2 actions");
+	});
+
+	it("counts AO actions separately from commands", () => {
+		const command = { ...activity("command", 1), summary: "npm test" };
+		const renamed = { ...activity("ao_action", 2), summary: "Renamed a session" };
+		expect(summarizeActivities([command, renamed])).toBe("Ran 1 command, 1 action");
+	});
+});
+
 describe("partitionTurnItems", () => {
 	const message = (id: string, sequence: number, role: "user" | "assistant", text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text, streaming: false, createdAt: "" });
 	const activity = (id: string, sequence: number, extra: Partial<ConversationActivity> = {}): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "completed", summary: id, createdAt: "", ...extra } as ConversationActivity);
@@ -182,7 +224,7 @@ describe("partitionTurnItems", () => {
 	});
 
 	it("keeps errors and warnings out of the fold, and leaves later steers inside it", () => {
-		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "model.rerouted" } }), message("done", 6, "assistant", "ok")];
+		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "auth.reauth_required" } }), message("done", 6, "assistant", "ok")];
 		const part = partitionTurnItems(items, turn("failed"))!;
 		expect(ids(part.work)).toEqual(["ls", "steer"]);
 		expect(ids(part.notices)).toEqual(["err", "warn"]);
@@ -203,5 +245,116 @@ describe("partitionTurnItems", () => {
 	it("leaves queued and unrecorded turns flat", () => {
 		expect(partitionTurnItems([message("u", 1, "user", "go")], turn("queued"))).toBeUndefined();
 		expect(partitionTurnItems([message("u", 1, "user", "go")], undefined)).toBeUndefined();
+	});
+});
+
+describe("streamingCursorMessageId", () => {
+	const message = (id: string, sequence: number, streaming: boolean, role: "user" | "assistant" = "assistant"): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text: id, streaming, createdAt: "" });
+	const command = (id: string, sequence: number): ConversationItem => ({ kind: "activity", id, turnId: "t", sequence, revision: 1, activityKind: "command", status: "running", summary: id, createdAt: "" });
+
+	it("puts the cursor only on the newest streaming reply", () => {
+		// ACP providers settle a turn's text blocks only when the turn ends, so
+		// earlier blocks still arrive marked streaming.
+		const items = [message("u", 1, false, "user"), message("a", 2, true), command("ls", 3), message("b", 4, true)];
+		expect(timelineModel.streamingCursorMessageId(items)).toBe("b");
+	});
+
+	it("shows no cursor while work runs after the last reply", () => {
+		expect(timelineModel.streamingCursorMessageId([message("a", 1, true), command("ls", 2)])).toBeUndefined();
+	});
+
+	it("shows no cursor once the reply has settled", () => {
+		expect(timelineModel.streamingCursorMessageId([message("a", 1, false)])).toBeUndefined();
+		expect(timelineModel.streamingCursorMessageId([])).toBeUndefined();
+	});
+});
+
+describe("editable human prompts", () => {
+	function editable(): ConversationSnapshot {
+		const value = snapshot();
+		value.capabilities = ["fork"];
+		value.nativeForkAvailableAfterSequence = 1;
+		value.items = value.items.map((item) => item.kind === "message" && item.role === "user" ? { ...item, editAvailable: true } : item);
+		return value;
+	}
+
+	it("offers the first prompt and natively forkable later prompts once their turns settle", () => {
+		const { editable: turns, reconstructed } = editableHumanTurns(editable());
+		expect([...turns]).toEqual(["t1", "t2"]);
+		expect(reconstructed.size).toBe(0);
+	});
+
+	it("offers nothing while the agent is working or not ready", () => {
+		for (const state of ["busy", "connecting", "recovering", "hibernated", "stopped"] as const) {
+			const value = editable();
+			value.controller.state = state;
+			expect(editableHumanTurns(value).editable.size).toBe(0);
+		}
+	});
+
+	it("skips prompts the daemon cannot edit and turns that never settled", () => {
+		const value = editable();
+		value.items = value.items.map((item) => item.id === "u1" ? { ...item, editAvailable: false } : item);
+		value.turns[1] = { ...value.turns[1], state: "running" };
+		expect(editableHumanTurns(value).editable.size).toBe(0);
+	});
+
+	it("needs a fork or replay to edit a later prompt", () => {
+		const value = editable();
+		value.capabilities = [];
+		expect([...editableHumanTurns(value).editable]).toEqual(["t1"]);
+		value.capabilities = ["prompt_replay", "embedded_context"];
+		const replay = editableHumanTurns(value);
+		expect([...replay.editable]).toEqual(["t1", "t2"]);
+		expect([...replay.reconstructed]).toEqual(["t2"]);
+	});
+
+	it("treats a refresh with the same editable turns as unchanged", () => {
+		const first = editableHumanTurns(editable());
+		expect(sameEditableTurns(first, editableHumanTurns(editable()))).toBe(true);
+		const busy = editable();
+		busy.controller.state = "busy";
+		expect(sameEditableTurns(first, editableHumanTurns(busy))).toBe(false);
+		expect(sameEditableTurns(undefined, undefined)).toBe(true);
+		expect(sameEditableTurns(first, undefined)).toBe(false);
+	});
+
+	it("does not treat the oldest loaded prompt as the first while older history is unloaded", () => {
+		const value = editable();
+		value.capabilities = [];
+		value.hasMoreBefore = true;
+		expect(editableHumanTurns(value).editable.size).toBe(0);
+	});
+});
+
+describe("turn plans", () => {
+	const list = (status: "pending" | "in_progress" | "completed") => [
+		{ text: "Read the code", status: "completed" as const },
+		{ text: "Write the fix", status },
+	];
+
+	it("shows a list the agent keeps across turns only on the latest turn that carries it", () => {
+		const value = snapshot();
+		// The daemon marks every older copy superseded, a failed turn's included.
+		value.turns[0].state = "failed";
+		value.turns[0].plan = { spansTurns: true, superseded: true, steps: list("in_progress") };
+		value.turns[1].plan = { spansTurns: true, steps: list("completed") };
+		const groups = groupConversationByTurn(value);
+		expect(groups.find((group) => group.turnId === "t1")?.plan).toBeUndefined();
+		expect(groups.find((group) => group.turnId === "t2")?.plan).toBe(value.turns[1].plan);
+	});
+
+	it("keeps each turn's own plan", () => {
+		const value = snapshot();
+		value.turns[0].plan = { steps: list("in_progress") };
+		value.turns[1].plan = { steps: list("completed") };
+		const groups = groupConversationByTurn(value);
+		expect(groups.map((group) => group.plan)).toEqual([value.turns[0].plan, value.turns[1].plan]);
+	});
+
+	it("shows no panel for a plan without steps", () => {
+		const value = snapshot();
+		value.turns[0].plan = { steps: [] };
+		expect(groupConversationByTurn(value)[0].plan).toBeUndefined();
 	});
 });

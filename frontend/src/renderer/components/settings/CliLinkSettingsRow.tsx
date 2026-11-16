@@ -64,14 +64,14 @@ function CliLinkSettingsRow() {
 	const linked = status?.current.kind === "linked";
 	const canLink = Boolean(status && !foreign && !linked && !status.pathIssue && status.proposedTarget);
 	const canUnlink = status?.current.kind === "linked" || status?.current.kind === "stale";
-	const detail = describeStatus((key, options) => String(t(key as never, options as never)), view, error);
+	const detail = linked && !status?.message && !status?.pathIssue && !error ? t("settings.cliLink.linked") : describeStatus((key, options) => String(t(key as never, options as never)), view, error);
 
 	return (
 		<div className="flex w-full flex-col">
 			<SettingsRow label={t("settings.cliLink.label")}>
 				<div className="flex items-center gap-1.5">
 					{canUnlink ? (
-						<Button type="button" variant="footer" disabled={busy} onClick={() => {
+						<Button type="button" variant="secondary" disabled={busy} onClick={() => {
 							if (!status || status.current.kind === "missing") return;
 							setError(null);
 							setConfirm({ action: "unlink", target: status.current.target });
@@ -80,7 +80,7 @@ function CliLinkSettingsRow() {
 						</Button>
 					) : null}
 					{canLink ? (
-						<Button type="button" variant="footer-primary" disabled={busy} onClick={() => {
+						<Button type="button" variant="primary" disabled={busy} onClick={() => {
 							if (!status) return;
 							setError(null);
 							if (status.current.kind === "missing") void runAction("link", null, false);

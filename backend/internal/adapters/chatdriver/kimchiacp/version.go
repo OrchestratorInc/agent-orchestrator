@@ -27,12 +27,12 @@ func versionProbe(ctx context.Context, bin string) error {
 	}
 	installed, ok := parseSemver(string(output))
 	if !ok {
-		return fmt.Errorf("unrecognized Kimchi version %q (AO requires %s or newer)",
+		return fmt.Errorf("unrecognized Kimchi version %q (Orchestrator requires %s or newer)",
 			strings.TrimSpace(string(output)), minimumKimchiVersion)
 	}
 	minimum, _ := parseSemver(minimumKimchiVersion)
 	if installed.less(minimum) {
-		return fmt.Errorf("kimchi %s is older than AO's tested minimum %s",
+		return fmt.Errorf("kimchi %s is older than Orchestrator's tested minimum %s",
 			installed, minimumKimchiVersion)
 	}
 	return nil

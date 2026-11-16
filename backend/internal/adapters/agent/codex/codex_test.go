@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -168,6 +169,29 @@ func canonicalTempDir(t *testing.T) string {
 	return dir
 }
 
+// TestSessionHookFlagsRunTheAppImageLink covers an AppImage daemon: hooks run
+// the link under the data dir instead of this launch's /tmp/.mount_* path, so
+// a Codex session that outlives an app restart still reaches the running AO.
+func TestSessionHookFlagsRunTheAppImageLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("AppImage is Linux-only")
+	}
+	dataDir := t.TempDir()
+	t.Cleanup(func() { _ = agentlaunch.UseStableExecutable(dataDir, func(string) string { return "" }) })
+	appImage := func(key string) string { return map[string]string{"AO_APPIMAGE": "/home/me/AO.AppImage"}[key] }
+	if err := agentlaunch.UseStableExecutable(dataDir, appImage); err != nil {
+		t.Fatal(err)
+	}
+	var cmd []string
+	if err := appendSessionHookFlags(&cmd); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dataDir, "runtime", "ao-current", "ao")
+	if len(cmd) < 2 || !strings.Contains(cmd[1], "'"+link+"' hooks codex session-start") {
+		t.Fatalf("hook flags = %q, want hooks to run %s", cmd, link)
+	}
+}
+
 // sessionHookFlags mirrors the `-c` hook config appendSessionHookFlags emits,
 // asserted literally so accidental format drift fails loudly: Codex parses
 // these values as TOML. The absolute AO executable is load-bearing because
@@ -290,6 +314,37 @@ func TestLocateAndProbeNativeSessionTranscript(t *testing.T) {
 	}
 	if availability != ports.NativeSessionAvailabilityAvailable {
 		t.Fatalf("availability = %q, want available", availability)
+	}
+}
+
+// Codex compresses inactive rollouts and continues long threads in segments;
+// both remain resumable by thread id.
+func TestProbeNativeSessionFindsStoredRolloutForms(t *testing.T) {
+	sessionID := "019f9f7c-53c0-7f10-8d56-a8a979dd7001"
+	for name, file := range map[string]string{
+		"compressed":         "rollout-2026-08-04T00-00-00-" + sessionID + ".jsonl.zst",
+		"segment":            "rollout-2026-08-05T00-00-00-" + sessionID + "_019f9f7c-53c0-7f10-8d56-a8a979dd7002.jsonl",
+		"compressed segment": "rollout-2026-08-05T00-00-00-" + sessionID + "_019f9f7c-53c0-7f10-8d56-a8a979dd7002.jsonl.zst",
+		"other thread":       "rollout-2026-08-04T00-00-00-" + sessionID + "0.jsonl.zst",
+	} {
+		t.Run(name, func(t *testing.T) {
+			configDir := t.TempDir()
+			path := filepath.Join(configDir, "sessions", "2026", "08", "04", file)
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			availability, err := (&Plugin{}).ProbeNativeSession(context.Background(), ports.NativeSessionRef{NativeSessionID: sessionID, ConfigDir: configDir})
+			want := ports.NativeSessionAvailabilityAvailable
+			if name == "other thread" {
+				want = ports.NativeSessionAvailabilityUnavailable
+			}
+			if err != nil || availability != want {
+				t.Fatalf("availability = %q, %v; want %q", availability, err, want)
+			}
+		})
 	}
 }
 
@@ -448,6 +503,28 @@ func TestGetLaunchCommandAppendsConfiguredEffort(t *testing.T) {
 	}
 	if containsSubsequence(cmd, []string{"-c", "model_reasoning_effort='  high  '"}) {
 		t.Fatalf("command %#v used untrimmed effort", cmd)
+	}
+}
+
+func TestGetLaunchCommandSetsTheFastTierEitherWay(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	for _, tt := range []struct {
+		launch domain.AgentLaunchOptions
+		want   string
+	}{
+		{domain.AgentLaunchOptions{FastMode: true}, "service_tier='priority'"},
+		{domain.AgentLaunchOptions{FastModeOff: true}, "service_tier='default'"},
+	} {
+		cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Launch: tt.launch}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !containsSubsequence(cmd, []string{"-c", tt.want}) {
+			t.Fatalf("command %#v missing %s", cmd, tt.want)
+		}
+	}
+	if cmd, _ := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{}); contains(cmd, "service_tier='default'") || contains(cmd, "service_tier='priority'") {
+		t.Fatalf("command %#v set a tier nobody chose", cmd)
 	}
 }
 
@@ -1115,5 +1192,93 @@ func TestDoctorLaunchProbesMirrorLaunchFlags(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("override probe missing %q in %s", want, joined)
 		}
+	}
+}
+
+// An account home links its sessions folder to the computer's own, so the
+// rollout of a conversation started on another account is visible through it.
+func TestNativeConversationExistsFollowsALinkedSessionsFolder(t *testing.T) {
+	p := &Plugin{}
+	id := "019fc430-1234-7abc-8def-0123456789ab"
+	shared := t.TempDir()
+	activeDir := filepath.Join(shared, "sessions", "2026", "10", "17")
+	if err := os.MkdirAll(activeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activeDir, "rollout-2026-10-17T02-00-00-"+id+".jsonl"), []byte("{\"type\":\"session_meta\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	account := t.TempDir()
+	if err := os.Symlink(filepath.Join(shared, "sessions"), filepath.Join(account, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, map[string]string{"CODEX_HOME": account})
+	if err != nil || !exists {
+		t.Fatalf("rollout through a linked sessions folder: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestAuthStatusFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm env-node launcher is Unix-specific")
+	}
+	home := t.TempDir()
+	nodeDir := filepath.Join(home, ".nvm", "versions", "node", "v22.11.0", "bin")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "node"), []byte("#!/bin/sh\nscript=$1\nshift\nexec /bin/sh \"$script\" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, "npm-global", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/usr/bin/env node\necho 'Logged in using ChatGPT'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	status, err := (&Plugin{resolvedBinary: launcher}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("AuthStatus = %q, %v; want authorized", status, err)
+	}
+}
+
+func TestAuthStatusUsesCustomModelProviderKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the codex binary")
+	}
+	binary := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'Not logged in'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	litellm := "model_provider = \"litellm\"\n[model_providers.litellm]\nbase_url = \"http://127.0.0.1:4000/v1\"\nenv_key = \"LITELLM_API_KEY\"\n"
+	tests := []struct {
+		name   string
+		config string
+		key    string
+		want   ports.AgentAuthStatus
+	}{
+		{name: "env key set", config: litellm, key: "sk-test", want: ports.AgentAuthStatusConfigured},
+		{name: "env key unset", config: litellm, want: ports.AgentAuthStatusUnknown},
+		{name: "selected by profile", config: "profile = \"proxy\"\n[profiles.proxy]\nmodel_provider = \"litellm\"\n[model_providers.litellm]\nenv_key = \"LITELLM_API_KEY\"\n", key: "sk-test", want: ports.AgentAuthStatusConfigured},
+		{name: "provider uses OpenAI login", config: litellm + "requires_openai_auth = true\n", key: "sk-test", want: ports.AgentAuthStatusUnauthorized},
+		{name: "OpenAI provider", config: "model = \"gpt-5\"\n", key: "sk-test", want: ports.AgentAuthStatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("CODEX_HOME", home)
+			t.Setenv("LITELLM_API_KEY", tt.key)
+			status, err := (&Plugin{resolvedBinary: binary}).AuthStatus(context.Background())
+			if err != nil || status != tt.want {
+				t.Fatalf("AuthStatus = %q, %v; want %q", status, err, tt.want)
+			}
+		})
 	}
 }

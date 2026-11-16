@@ -3,7 +3,10 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
@@ -72,12 +75,32 @@ type Manager struct {
 	inputLeaseMu sync.RWMutex
 	inputLease   sessionguard.InputLease
 
-	// inputMu makes BeginInputDrain atomic with pane writes. Once a drain returns,
-	// every write that began before it has finished and every later write is
-	// refused until the matching release runs.
+	shellAgentsMu sync.Mutex
+	shellAgents   ShellAgentSource
+	panesMu       sync.Mutex
+	panes         PaneSource
+
+	// inputMu guards inputBlocked and lastInputAt. It is held only briefly, never
+	// across a pane write.
 	inputMu      sync.Mutex
 	inputBlocked map[string]int
 	lastInputAt  map[string]time.Time
+
+	// fences holds one write fence per terminal id. Every pane write for that
+	// terminal holds it — a keystroke, and input buffered during attach as it is
+	// replayed — and so do BeginInputDrain and HoldInput, so they order against
+	// those writes without stalling any other terminal's input. Lock order: a
+	// fence, then inputMu.
+	fencesMu sync.Mutex
+	fences   map[string]*inputFence
+}
+
+// inputFence serializes one terminal's pane writes. sem is a one-slot
+// semaphore rather than a mutex so a waiter can give up when its context ends.
+// refs counts holders and waiters so the entry is dropped once nobody needs it.
+type inputFence struct {
+	sem  chan struct{}
+	refs int
 }
 
 // sharedTerm tracks every client currently viewing one terminal id (one PTY) so
@@ -102,6 +125,42 @@ type termMember struct {
 
 // Option configures a Manager.
 type Option func(*Manager)
+
+// ShellAgentSource streams the agents running in shell terminals as JSON
+// snapshots. fn gets the current snapshot at once and every later one; it is
+// called with the source's lock held, so it must not block.
+type ShellAgentSource interface {
+	SubscribeShellAgents(fn func(snapshot json.RawMessage)) (unsubscribe func())
+}
+
+// PaneSource connects a desktop window to the split-pane relay (see
+// internal/service/panes). send delivers an encoded command to the window and
+// must not block.
+type PaneSource interface {
+	ConnectPanes(send func(command json.RawMessage)) PaneConn
+}
+
+// PaneConn is one window's link to the split-pane relay.
+type PaneConn interface {
+	Report(sessionID string, layout json.RawMessage)
+	Resolve(result json.RawMessage)
+	Close()
+}
+
+// SetPanes late-binds the split-pane relay.
+func (m *Manager) SetPanes(src PaneSource) {
+	m.panesMu.Lock()
+	m.panes = src
+	m.panesMu.Unlock()
+}
+
+// SetShellAgents late-binds the shell agent source; the manager is built
+// before it during daemon boot.
+func (m *Manager) SetShellAgents(src ShellAgentSource) {
+	m.shellAgentsMu.Lock()
+	m.shellAgents = src
+	m.shellAgentsMu.Unlock()
+}
 
 // WithHeartbeat overrides the ping interval.
 func WithHeartbeat(d time.Duration) Option { return func(m *Manager) { m.heartbeat = d } }
@@ -142,6 +201,7 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 		shared:       map[string]*sharedTerm{},
 		inputBlocked: map[string]int{},
 		lastInputAt:  map[string]time.Time{},
+		fences:       map[string]*inputFence{},
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -149,13 +209,55 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 	return m
 }
 
+// lockInputFence takes terminalID's write fence and returns its unlock.
+func (m *Manager) lockInputFence(terminalID string) (unlock func()) {
+	unlock, _ = m.lockInputFenceContext(context.Background(), terminalID)
+	return unlock
+}
+
+// lockInputFenceContext takes terminalID's write fence, or gives up with
+// ctx's error once ctx ends first.
+func (m *Manager) lockInputFenceContext(ctx context.Context, terminalID string) (unlock func(), err error) {
+	m.fencesMu.Lock()
+	f := m.fences[terminalID]
+	if f == nil {
+		f = &inputFence{sem: make(chan struct{}, 1)}
+		m.fences[terminalID] = f
+	}
+	f.refs++
+	m.fencesMu.Unlock()
+	select {
+	case f.sem <- struct{}{}:
+	case <-ctx.Done():
+		m.unrefInputFence(terminalID, f)
+		return nil, ctx.Err()
+	}
+	return func() {
+		<-f.sem
+		m.unrefInputFence(terminalID, f)
+	}, nil
+}
+
+func (m *Manager) unrefInputFence(terminalID string, f *inputFence) {
+	m.fencesMu.Lock()
+	f.refs--
+	if f.refs == 0 {
+		delete(m.fences, terminalID)
+	}
+	m.fencesMu.Unlock()
+}
+
 // BeginInputDrain blocks new user input for one terminal while Session Manager
-// hands its controller to another interface. The returned release is idempotent.
+// hands its controller to another interface. Once it returns, every write that
+// began before it has finished (it waits on the terminal's fence) and every later
+// write is refused until the matching release runs. The release is idempotent.
 func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, release func()) {
+	unlock := m.lockInputFence(terminalID)
 	m.inputMu.Lock()
 	m.inputBlocked[terminalID]++
 	lastInputAt = m.lastInputAt[terminalID]
 	m.inputMu.Unlock()
+	unlock()
 
 	var once sync.Once
 	return lastInputAt, func() {
@@ -171,16 +273,130 @@ func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, rel
 	}
 }
 
-func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
+// LastInputAt returns when the newest keystroke was accepted for one terminal,
+// without blocking input. A drain (BeginInputDrain) drops keystrokes while it is
+// held, so read-only callers must use this instead.
+func (m *Manager) LastInputAt(terminalID string) time.Time {
 	m.inputMu.Lock()
 	defer m.inputMu.Unlock()
-	if m.inputBlocked[terminalID] > 0 {
+	return m.lastInputAt[terminalID]
+}
+
+// HoldInput takes one terminal's write fence and returns a release. Unlike
+// BeginInputDrain, it does NOT set inputBlocked, so a concurrent keystroke is not
+// dropped: its writeInput blocks on the fence until release and then writes, and
+// input buffered during an attach waits the same way. Other terminals are not
+// fenced. Session Manager holds it across the composer-draft confirmation and the
+// pane write so a human keystroke cannot land between the final empty-frame proof
+// and the paste (#5711). Hold it only briefly; this terminal's keystrokes queue
+// for its duration.
+//
+// lastInputAt is read under the fence, so no keystroke accepted after it can
+// reach the pane until release; one accepted just before may still be rendering,
+// which is why the caller settles on it before trusting the screen. The release
+// is idempotent.
+func (m *Manager) HoldInput(terminalID string) (lastInputAt time.Time, release func()) {
+	unlock := m.lockInputFence(terminalID)
+	m.inputMu.Lock()
+	lastInputAt = m.lastInputAt[terminalID]
+	m.inputMu.Unlock()
+	var once sync.Once
+	return lastInputAt, func() { once.Do(unlock) }
+}
+
+// ForgetTerminalInput drops one terminal's input timestamp. Callers use it only
+// after they destroyed the runtime behind the terminal: the timestamp must
+// outlive viewers (a draft typed before switching tabs still guards the idle
+// and draft proofs), so nothing here drops it on detach (#5691).
+//
+// It takes the write fence first so a keystroke write already in flight
+// finishes before the entry goes, and gives up with ctx's error, changing
+// nothing, if ctx ends while it waits. Under the fence it also stops every view
+// still open on that runtime from taking input: their buffered and queued
+// keystrokes are dropped, and so is anything typed later, so none of them can
+// record the timestamp again. A fresh view (a new runtime under the same id)
+// records as usual. A drain's inputBlocked count is left alone: its holder
+// releases it.
+func (m *Manager) ForgetTerminalInput(ctx context.Context, terminalID string) error {
+	unlock, err := m.lockInputFenceContext(ctx, terminalID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	m.mu.Lock()
+	var views []*attachment
+	for a := range m.attachments {
+		if a.id == terminalID {
+			views = append(views, a)
+		}
+	}
+	m.mu.Unlock()
+	for _, a := range views {
+		a.forgetInput()
+	}
+	m.inputMu.Lock()
+	delete(m.lastInputAt, terminalID)
+	m.inputMu.Unlock()
+	return nil
+}
+
+// TerminalOnScreen reports whether a client is showing the terminal. A client
+// without a grid keeps it parked off screen: it attached without one, or gave
+// it up with a 0x0 resize when its pane or window was hidden. (Same signal as
+// Account Manager's session moves, #6274.)
+func (m *Manager) TerminalOnScreen(terminalID string) bool {
+	m.sharedMu.Lock()
+	defer m.sharedMu.Unlock()
+	s := m.shared[terminalID]
+	if s == nil {
+		return false
+	}
+	cols, rows := largestGrid(s.members)
+	return cols > 0 && rows > 0
+}
+
+// inputRefused reports whether a drain refuses input for terminalID right now.
+func (m *Manager) inputRefused(terminalID string) bool {
+	m.inputMu.Lock()
+	defer m.inputMu.Unlock()
+	return m.inputBlocked[terminalID] > 0
+}
+
+func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
+	unlock := m.lockInputFence(terminalID)
+	defer unlock()
+	m.inputMu.Lock()
+	blocked := m.inputBlocked[terminalID] > 0
+	m.inputMu.Unlock()
+	if blocked {
 		release()
 		return
 	}
-	m.lastInputAt[terminalID] = time.Now()
-	_ = a.writeLeased(raw, release)
+	if err := a.writeLeased(raw, release); errors.Is(err, errInputRefused) {
+		// Nothing reached the pane, so nothing was accepted. This also keeps a
+		// view forgotten by ForgetTerminalInput from recording its terminal again.
+		return
+	}
+	m.recordInputAt(terminalID, raw)
 }
+
+// recordInputAt starts the render settle window after input acceptance and
+// refreshes it after buffered replay. Callers hold the terminal's write fence.
+func (m *Manager) recordInputAt(terminalID string, raw []byte) {
+	if terminalReports.Match(raw) {
+		return
+	}
+	m.inputMu.Lock()
+	m.lastInputAt[terminalID] = time.Now()
+	m.inputMu.Unlock()
+}
+
+// terminalReports matches bytes the terminal view sends on its own, not typed by
+// anyone: focus in and out, and replies to the agent's queries about the
+// device and cursor, colours, modes ($y), keyboard flags (?…u), window size (…t)
+// and version (a DCS string). They are no reason to think the agent was given
+// work. A key under the kitty keyboard protocol ends in u too, but never has ?.
+var terminalReports = regexp.MustCompile(`^(?:\x1b\[[IO]|\x1b\[[?>]?[0-9;]*[cRn]|\x1b\[\??[0-9;]*\$y|\x1b\[\?[0-9]*u|\x1b\[[0-9;]+t|\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)+$`)
 
 // Close tears down every live attachment and stops re-attach loops. Safe to
 // call once on daemon shutdown.
@@ -344,12 +560,13 @@ func (m *Manager) Serve(ctx context.Context, conn wsConn) {
 	defer cancel()
 
 	c := &connState{
-		mgr:    m,
-		conn:   conn,
-		ctx:    ctx,
-		cancel: cancel,
-		out:    newOutQueue(),
-		terms:  map[string]*attachment{},
+		mgr:     m,
+		conn:    conn,
+		ctx:     ctx,
+		cancel:  cancel,
+		out:     newOutQueue(),
+		terms:   map[string]*attachment{},
+		writers: map[string]*inputWriter{},
 	}
 	defer c.cleanup()
 
@@ -376,10 +593,101 @@ type connState struct {
 	cancel context.CancelFunc
 	out    *outQueue
 
-	mu        sync.Mutex
-	terms     map[string]*attachment // terminal id -> this conn's own attach PTY
-	unsubEvts func()
-	closed    bool
+	mu          sync.Mutex
+	terms       map[string]*attachment // terminal id -> this conn's own attach PTY
+	unsubEvts   func()
+	unsubAgents func()
+	panes       PaneConn
+	closed      bool
+
+	// writers holds each terminal's newest writer. It is only touched by the
+	// read loop and, once it has returned, by cleanup, so it needs no lock.
+	writers map[string]*inputWriter
+}
+
+// inputQueueDepth bounds the keystroke messages one terminal can queue behind
+// its held fence before the connection's read loop waits for room.
+const inputQueueDepth = 256
+
+// inputWriter writes one terminal's input from one connection in arrival order,
+// off the connection's read loop. A keystroke waiting on a held fence
+// (HoldInput) then stalls only that terminal, not the connection's other
+// terminals, resizes, or pongs — the desktop app multiplexes every terminal
+// over one connection. Closing the terminal retires its writer; it exits once
+// its queue drains.
+type inputWriter struct {
+	queue chan queuedInput
+	done  chan struct{}
+	// retired means queue is closed. Read loop only.
+	retired bool
+}
+
+// queuedInput is a keystroke message to write, or (closeAfter) the attachment
+// to close once every keystroke queued before it is written.
+type queuedInput struct {
+	a          *attachment
+	raw        []byte
+	release    func()
+	closeAfter bool
+}
+
+// run writes the queue in order. prev is the terminal's retired writer, if it
+// may still be draining; waiting for it keeps keys typed before a close and
+// reopen ahead of keys typed after.
+func (w *inputWriter) run(m *Manager, terminalID string, prev *inputWriter) {
+	defer close(w.done)
+	if prev != nil {
+		<-prev.done
+	}
+	for in := range w.queue {
+		if in.closeAfter {
+			in.a.close()
+			continue
+		}
+		m.writeInput(terminalID, in.a, in.raw, in.release)
+	}
+}
+
+// queueInput hands a keystroke message to the terminal's writer, starting one
+// when it has none or its last one was retired.
+func (c *connState) queueInput(terminalID string, in queuedInput) {
+	w := c.writers[terminalID]
+	if w == nil || w.retired {
+		next := &inputWriter{queue: make(chan queuedInput, inputQueueDepth), done: make(chan struct{})}
+		go next.run(c.mgr, terminalID, w)
+		c.writers[terminalID] = next
+		w = next
+	}
+	w.queue <- in
+}
+
+// closeAfterInput closes a once the keystrokes this connection queued for it
+// are written, so a client that types and then switches away keeps its keys.
+func (c *connState) closeAfterInput(terminalID string, a *attachment) {
+	if w := c.writers[terminalID]; w == nil || w.retired {
+		a.close()
+		return
+	}
+	c.queueInput(terminalID, queuedInput{a: a, closeAfter: true})
+}
+
+// retireWriter closes terminalID's writer queue, so the writer exits once it
+// has written what was queued, and forgets writers that already finished.
+func (c *connState) retireWriter(terminalID string) {
+	if w := c.writers[terminalID]; w != nil && !w.retired {
+		close(w.queue)
+		w.retired = true
+	}
+	for id, w := range c.writers {
+		if !w.retired {
+			continue
+		}
+		select {
+		case <-w.done:
+			delete(c.writers, id)
+		default:
+		}
+	}
 }
 
 func (c *connState) handle(msg clientMsg) {
@@ -388,6 +696,10 @@ func (c *connState) handle(msg clientMsg) {
 		c.handleTerminal(msg)
 	case chSubscribe:
 		c.handleSubscribe(msg)
+	case chShellAgents:
+		c.handleShellAgents(msg)
+	case chPanes:
+		c.handlePanes(msg)
 	case chSystem:
 		if msg.Type == msgPing {
 			c.enqueue(serverMsg{Ch: chSystem, Type: msgPong})
@@ -409,11 +721,14 @@ func (c *connState) handleTerminal(msg clientMsg) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is disabled while an exclusive session operation is in progress"})
 			return
 		}
-		if a := c.lookup(msg.ID); a != nil {
-			c.mgr.writeInput(msg.ID, a, raw, release)
-		} else {
+		// A drain refuses input received while it is held, even if the write
+		// itself would only run after the drain ends.
+		a := c.lookup(msg.ID)
+		if a == nil || c.mgr.inputRefused(msg.ID) {
 			release()
+			return
 		}
+		c.queueInput(msg.ID, queuedInput{a: a, raw: raw, release: release})
 	case msgResize:
 		// The client reports the grid it fits to; the manager arbitrates the shared
 		// PTY's size across all viewers and resizes the attach Stream itself (see
@@ -465,6 +780,8 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
 		},
 		c.mgr.log)
+	a.lockInput = func() func() { return c.mgr.lockInputFence(id) }
+	a.onInputReplay = func(raw []byte) { c.mgr.recordInputAt(id, raw) }
 	if err := c.mgr.track(a); err != nil {
 		c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgError, Error: err.Error()})
 		return
@@ -491,8 +808,9 @@ func (c *connState) closeTerminal(id string) {
 	c.mu.Unlock()
 	c.mgr.leaveTerminal(id, c)
 	if a != nil {
-		a.close()
+		c.closeAfterInput(id, a)
 	}
+	c.retireWriter(id)
 }
 
 func (c *connState) lookup(id string) *attachment {
@@ -527,6 +845,88 @@ func (c *connState) handleSubscribe(msg clientMsg) {
 	c.mu.Lock()
 	c.unsubEvts = unsub
 	c.mu.Unlock()
+}
+
+func (c *connState) handleShellAgents(msg clientMsg) {
+	c.mgr.shellAgentsMu.Lock()
+	src := c.mgr.shellAgents
+	c.mgr.shellAgentsMu.Unlock()
+	if msg.Type != msgSubscribe || src == nil {
+		return
+	}
+	c.mu.Lock()
+	subscribed := c.unsubAgents != nil || c.closed
+	c.mu.Unlock()
+	if subscribed {
+		return
+	}
+	unsub := src.SubscribeShellAgents(func(snapshot json.RawMessage) {
+		c.enqueue(serverMsg{Ch: chShellAgents, Type: msgSnapshot, Agents: snapshot})
+	})
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		unsub()
+		return
+	}
+	c.unsubAgents = unsub
+	c.mu.Unlock()
+}
+
+// handlePanes links the connection to the split-pane relay on "subscribe" and
+// passes on its layout reports and command results.
+func (c *connState) handlePanes(msg clientMsg) {
+	if msg.Type == msgSubscribe {
+		// Only the desktop app's own page drives panes. The terminal socket also
+		// accepts local programs that send no Origin, and those must not be able
+		// to receive pane requests or answer them.
+		if !paneClientAllowed(c.conn) {
+			return
+		}
+		c.mgr.panesMu.Lock()
+		src := c.mgr.panes
+		c.mgr.panesMu.Unlock()
+		if src == nil {
+			return
+		}
+		c.mu.Lock()
+		subscribed := c.panes != nil || c.closed
+		c.mu.Unlock()
+		if subscribed {
+			return
+		}
+		conn := src.ConnectPanes(func(command json.RawMessage) {
+			c.enqueue(serverMsg{Ch: chPanes, Type: msgCommand, Command: command})
+		})
+		c.mu.Lock()
+		if c.closed || c.panes != nil {
+			c.mu.Unlock()
+			conn.Close()
+			return
+		}
+		c.panes = conn
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Lock()
+	conn := c.panes
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	switch msg.Type {
+	case msgLayout:
+		conn.Report(msg.SessionID, msg.Layout)
+	case msgResult:
+		conn.Resolve(msg.Result)
+	}
+}
+
+// paneClientAllowed reports whether the connection may use the panes channel:
+// the transport vouches for it by implementing AllowsPanes.
+func paneClientAllowed(conn wsConn) bool {
+	p, ok := conn.(interface{ AllowsPanes() bool })
+	return ok && p.AllowsPanes()
 }
 
 // outQueue is the per-connection write queue. A buffered channel cannot serve
@@ -703,6 +1103,10 @@ func (c *connState) cleanup() {
 	c.terms = map[string]*attachment{}
 	unsubEvts := c.unsubEvts
 	c.unsubEvts = nil
+	unsubAgents := c.unsubAgents
+	c.unsubAgents = nil
+	panes := c.panes
+	c.panes = nil
 	c.mu.Unlock()
 
 	// Drop this connection from every shared terminal so the grid follows the
@@ -711,11 +1115,24 @@ func (c *connState) cleanup() {
 	for _, id := range ids {
 		c.mgr.leaveTerminal(id, c)
 	}
-	for _, a := range attachments {
-		a.close()
+	for i, a := range attachments {
+		c.closeAfterInput(ids[i], a)
+	}
+	// The read loop has returned, so nothing queues input any more. Each
+	// writer finishes what was queued (keystrokes, then closes) and exits.
+	for _, w := range c.writers {
+		if !w.retired {
+			close(w.queue)
+		}
 	}
 	if unsubEvts != nil {
 		unsubEvts()
+	}
+	if unsubAgents != nil {
+		unsubAgents()
+	}
+	if panes != nil {
+		panes.Close()
 	}
 	_ = c.conn.Close("server: connection closed")
 }

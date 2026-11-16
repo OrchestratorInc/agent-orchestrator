@@ -41,6 +41,8 @@ type State struct {
 	// AccountTokenOwner makes issuance idempotent for retries by the same AO
 	// account while still allowing an intentional re-link by another account.
 	AccountTokenOwner string `json:"accountTokenOwner,omitempty"`
+	// RequireDeviceCredentials makes the remote listener refuse the pairing password.
+	RequireDeviceCredentials bool `json:"requireDeviceCredentials,omitempty"`
 	// NoPublicTunnel keeps the self-hosted remote listener off the managed
 	// Cloudflare tunnel, including after daemon restart. Old Connect Mobile
 	// configs default to false and keep their existing behavior.
@@ -57,11 +59,14 @@ type State struct {
 	// ServeCleanupPending survives a failed Tailscale Serve teardown so a later
 	// tunnel-only setup cannot inherit an AO-owned tailnet route.
 	ServeCleanupPending bool `json:"serveCleanupPending,omitempty"`
-	// KeepAwake is the user's choice to keep this Mac from idle-sleeping while
-	// the bridge is on. Kept separate from Enabled so turning the bridge off and
-	// on again does not forget it.
+	// KeepAwake is an independent wake choice. Changing the mobile listener's
+	// Enabled state does not acquire or release wake ownership.
 	KeepAwake    bool `json:"keepAwake"`
 	KeepAwakeLid bool `json:"keepAwakeLid,omitempty"`
+	// BrowserRemoteAccess is an explicit, additional opt-in for streaming and
+	// controlling the desktop-owned browser from a paired phone. Existing
+	// installations deserialize the omitted field as false.
+	BrowserRemoteAccess bool `json:"browserRemoteAccess"`
 }
 
 // Path returns the Connect Mobile config file location under the data dir
@@ -97,7 +102,13 @@ func Save(path string, s State) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	return writeFileAtomic(path, b)
+}
+
+// writeFileAtomic replaces path with b, readable by this user only, so a
+// reader never sees half a file.
+func writeFileAtomic(path string, b []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
@@ -111,10 +122,24 @@ func Save(path string, s State) error {
 		_ = tmp.Close()
 		return err
 	}
+	// On disk before the rename, so a power loss cannot leave an empty file.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	// The rename on disk too, so a power loss cannot bring back the old file
+	// or none. Best effort: Windows cannot sync a directory.
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }
 
 const pwAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"

@@ -80,6 +80,7 @@ func TestSignalCoverageForHarness(t *testing.T) {
 		{domain.HarnessContinue, SignalCoveragePartial},
 		{domain.HarnessAider, SignalCoveragePartial},
 		{domain.HarnessCommandCode, SignalCoveragePartial},
+		{domain.HarnessMemcode, SignalCoveragePartial},
 		{domain.HarnessCrush, SignalCoverageNone},
 	}
 
@@ -105,6 +106,30 @@ func TestCommandCodeDispatchesAvailableLifecycleSignals(t *testing.T) {
 			got, ok := Derive("command-code", tc.event, []byte(`{"session_id":"native-1"}`))
 			if !ok || got != tc.want {
 				t.Fatalf("Derive(command-code, %q) = (%q, %v), want (%q, true)", tc.event, got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// Kimi's managed config installs the tool-use trio plus PermissionResult as
+// AO's canonical permission-resolved event; every sub-command it writes must
+// derive through the shared standard deriver (#2814).
+func TestKimiDerivesMidTurnToolActivity(t *testing.T) {
+	for _, tc := range []struct {
+		event string
+		want  domain.ActivityState
+	}{
+		{event: "pre-tool-use", want: domain.ActivityActive},
+		{event: "post-tool-use", want: domain.ActivityActive},
+		{event: "post-tool-use-failure", want: domain.ActivityActive},
+		{event: "permission-resolved", want: domain.ActivityActive},
+		{event: "permission-request", want: domain.ActivityWaitingInput},
+		{event: "stop", want: domain.ActivityIdle},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			got, ok := Derive("kimi", tc.event, []byte(`{"session_id":"kimi-native-1"}`))
+			if !ok || got != tc.want {
+				t.Fatalf("Derive(kimi, %q) = (%q, %v), want (%q, true)", tc.event, got, ok, tc.want)
 			}
 		})
 	}
