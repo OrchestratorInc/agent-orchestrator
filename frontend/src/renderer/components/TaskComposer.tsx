@@ -1304,7 +1304,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// unknown without anything being wrong, so there definite failures alone are left out.
 	// The chat agents, and any installed agent that is not signed in, are still offered
 	// dimmed with the reason, so the picker opens their setup instead of hiding them.
-	const agentChoices = useMemo(() => {
+	const agentChoices = useMemo((): Array<{ id: string; label: string; unavailable?: string }> => {
 		const agents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 		const ranked = buildRankedAgentOptions({
 			agents,
