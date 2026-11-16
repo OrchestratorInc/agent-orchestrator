@@ -11,7 +11,7 @@ import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransit
 export type AgentAccount = components["schemas"]["AgentAccountResponse"];
 export type AgentAccountProvider = AgentAccount["provider"];
 /** The providers whose CLI can run on an API key account. */
-export type AgentAccountApiKeyProvider = components["schemas"]["AddAgentAccountAPIKeyRequest"]["provider"];
+export type AgentAccountApiKeyProvider = components["schemas"]["ControllersAddAgentAccountAPIKeyRequest"]["provider"];
 export type AgentAccountLimitWindow = components["schemas"]["AgentAccountLimitWindow"];
 export type AgentAccountLogin = components["schemas"]["StartAgentAccountLoginResponse"];
 export type AgentAccountUsageRow = components["schemas"]["AgentAccountUsageRow"];
