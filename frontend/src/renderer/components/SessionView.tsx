@@ -2977,10 +2977,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								</>
-							) : showChatSurface ? (
-								<>
-								{/* Recent chats stay mounted, hidden, so switching back shows them at once. */}
-								<KeepRecentAlive activeKey={uiSessionId}>
+							) : null}
+							{/* Recent chats stay mounted, hidden, so switching back shows them at once. They
+							    stay mounted while a terminal session is shown too, without counting as a visit. */}
+							<KeepRecentAlive activeKey={showChatSurface && !session?.cloud ? uiSessionId : null}>
+							{showChatSurface && !session?.cloud ? (
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
 									onSideChatsChange={onSideChatsChange}
@@ -3047,9 +3048,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
-								</KeepRecentAlive>
-								</>
-							) : (
+							) : null}
+							</KeepRecentAlive>
+							{!showChatSurface ? (
 								<CenterPane
 									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
@@ -3078,7 +3079,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
 								/>
-							)}
+							) : null}
 							</div>
 							</SessionTabAgentMenuContext.Provider>
 							</TabSplitMenuContext.Provider>

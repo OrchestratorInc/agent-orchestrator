@@ -19,10 +19,10 @@ function Chat({ id }: { id: string }) {
 	);
 }
 
-function Host({ id, max }: { id: string; max?: number }) {
+function Host({ id, max }: { id: string | null; max?: number }) {
 	return (
 		<KeepRecentAlive activeKey={id} max={max}>
-			<Chat key={id} id={id} />
+			{id ? <Chat key={id} id={id} /> : null}
 		</KeepRecentAlive>
 	);
 }
@@ -54,6 +54,19 @@ describe("KeepRecentAlive", () => {
 		expect(order()).toEqual(["chat-a", "chat-c"]);
 		act(() => rerender(<Host id="a" max={2} />));
 		expect(order()).toEqual(["chat-a", "chat-c"]);
+	});
+
+	it("hides every chat while something else is shown, without counting it as a visit", () => {
+		const { container, rerender } = render(<Host id="a" max={2} />);
+		act(() => rerender(<Host id="b" max={2} />));
+		act(() => rerender(<Host id={null} max={2} />));
+		expect(screen.getByTestId("chat-a")).toHaveStyle({ display: "none" });
+		expect(screen.getByTestId("chat-b")).toHaveStyle({ display: "none" });
+
+		act(() => rerender(<Host id="a" max={2} />));
+		act(() => rerender(<Host id="c" max={2} />));
+		const order = Array.from(container.querySelectorAll("[data-testid^='chat-']"), (element) => element.getAttribute("data-testid"));
+		expect(order).toEqual(["chat-a", "chat-c"]);
 	});
 
 	it("lets document-wide lookups find the shown composer, not a hidden one", () => {
