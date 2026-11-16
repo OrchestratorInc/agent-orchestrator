@@ -345,6 +345,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onConversationWorkChange,
 		auxiliaryTabOrder,
 		onAuxiliaryTabOrderChange,
+		onRevealSubagents,
 	}: {
 		session: WorkspaceSession;
 		onOpenShell?: () => void;
@@ -370,6 +371,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onConversationWorkChange?: (state: typeof chatSurfaceWorkState) => void;
 		auxiliaryTabOrder?: string[];
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
+		onRevealSubagents?: () => void;
 	}) => {
 		chatSurfaceRenders.push(session.id);
 		annotationOpen.current=onOpenFileAnnotation;
@@ -463,6 +465,9 @@ vi.mock("./chat/SessionChatSurface", async () => {
 			</button>
 			<button type="button" onClick={() => onConversationWorkChange?.({ ...chatSurfaceWorkState })}>
 				report chat work
+			</button>
+			<button type="button" onClick={onRevealSubagents}>
+				open a subagent
 			</button>
 		</div>
 		);
@@ -690,7 +695,10 @@ vi.mock("./SessionFileWorkspace", () => ({
 vi.mock("./CloudWorkspaceDiff", () => ({
 	CloudFileContentPane: ({ path }: { path: string }) => <div data-testid="cloud-file-workspace">{path}</div>,
 	CloudWorkspaceDiff: ({ onOpenFile }: { onOpenFile?: (path: string) => void }) => (
-		<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
+		<>
+			<button onClick={() => onOpenFile?.("src/cloud.ts")} type="button">open cloud file</button>
+			<button onClick={() => onOpenFile?.("src/other.ts")} type="button">open other cloud file</button>
+		</>
 	),
 }));
 const { browserDestroy, browserViewOptions, browserViewState } = vi.hoisted(() => ({
@@ -823,7 +831,8 @@ vi.mock("./SessionInspector", () => ({
 		);
 	},
 }));
-vi.mock("../lib/shell-context", () => ({
+vi.mock("../lib/shell-context", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/shell-context")>(),
 	useShell: () => ({ daemonStatus: { state: "ready" } }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
@@ -860,7 +869,17 @@ vi.mock("../hooks/useShellTerminals", () => ({
 	adoptedShellHandle: (handleId: string) => adoptedShellHandles.get(handleId),
 	useShellTerminals: () => ({ data: shellTerminalsState.loaded ? shellTerminalsState.data : undefined, isLoading: !shellTerminalsState.loaded }),
 	useOpenShellTerminal: () => ({ open: openShellTerminalMock, isPending: false }),
-	useCloseShellTerminal: () => ({ mutate: closeShellTerminalMock }),
+	useCloseShellTerminal: () => ({
+		mutate: closeShellTerminalMock,
+		// Settles on the mock's callbacks, like the real mutation does.
+		mutateAsync: (handleId: string) =>
+			new Promise<void>((resolve, reject) => {
+				closeShellTerminalMock(handleId, {
+					onSuccess: () => resolve(),
+					onError: (error: unknown) => reject(error),
+				});
+			}),
+	}),
 	useRenameShellTerminal: () => ({ mutate: vi.fn() }),
 }));
 
@@ -5841,6 +5860,32 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("summary");
 	});
 
+	it("resizes the orchestrator's inspector from Browser to Subagents when a subagent opens", () => {
+		vi.useFakeTimers();
+		try {
+			workerSession("sess-orch").mode = "chat";
+			render(<SessionView sessionId="sess-orch" />);
+			act(() => {
+				useUiStore.getState().setSubagentsAvailable("sess-orch", true);
+				useUiStore.getState().setInspectorView("sess-orch", "browser");
+				useUiStore.getState().setInspectorOpen("sess-orch", true);
+			});
+			const split = screen.getByTestId("panel-group");
+			expect(split).toHaveAttribute("data-workspace-mode", "browser");
+			act(() => vi.advanceTimersByTime(300));
+
+			fireEvent.click(screen.getByRole("button", { name: "open a subagent" }));
+
+			// The same spring a tab click runs, not a snap from the canvas width.
+			expect(split).toHaveAttribute("data-workspace-resizing", "true");
+			expect(split).toHaveAttribute("data-workspace-mode", "utility");
+			expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("subagents");
+			expect(inspectorOpen("sess-orch")).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
 		const defaultGet = reviewGetMock.getMockImplementation()!;
 		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) =>
@@ -6266,6 +6311,29 @@ describe("SessionView", () => {
 
 		expect(screen.getByRole("tab", { name: "cloud.ts" })).toHaveAttribute("aria-selected", "true");
 		expect(screen.getByTestId("cloud-file-workspace")).toHaveTextContent("src/cloud.ts");
+	});
+
+	it("keeps each open Cloud file's view mounted behind the others, as local file tabs do", () => {
+		workerSession("sess-1").cloud = { orgId: "cloud-org", sandboxProvider: "docker" };
+		act(() => useUiStore.getState().setInspectorOpen("sess-1", true));
+		render(<SessionView sessionId="sess-1" />);
+
+		fireEvent.click(screen.getByRole("button", { name: "open files" }));
+		fireEvent.click(screen.getByRole("button", { name: "open cloud file" }));
+		const first = screen.getByTestId("cloud-file-workspace");
+		fireEvent.click(screen.getByRole("button", { name: "open other cloud file" }));
+
+		expect(screen.getByRole("tab", { name: "other.ts" })).toHaveAttribute("aria-selected", "true");
+		const views = screen.getAllByTestId("cloud-file-workspace");
+		expect(views.map((view) => view.textContent)).toEqual(["src/cloud.ts", "src/other.ts"]);
+		// The first file is hidden, not unmounted, so it keeps its mode, scroll and edit.
+		expect(views[0]).toBe(first);
+		expect(first.closest("[inert]")).not.toBeNull();
+		expect(views[1].closest("[inert]")).toBeNull();
+
+		fireEvent.click(screen.getByRole("tab", { name: "cloud.ts" }));
+		expect(screen.getAllByTestId("cloud-file-workspace")[0]).toBe(first);
+		expect(first.closest("[inert]")).toBeNull();
 	});
 
 	it("opens a selected tree file in a center tab while retaining the right-side tree", () => {

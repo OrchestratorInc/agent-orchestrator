@@ -28,7 +28,6 @@ const (
 
 type accountHandoffStore interface {
 	AccountHandoffCandidateTurns(context.Context, time.Time) ([]domain.ConversationTurn, error)
-	SessionAccountPinned(context.Context, domain.SessionID) (bool, error)
 	GetSessionInterfaceTransition(context.Context, string) (domain.SessionInterfaceTransition, bool, error)
 	ListPendingSessionInterfaceTransitionMessages(context.Context, string) ([]domain.SessionInterfaceTransitionMessage, error)
 }
@@ -237,11 +236,6 @@ func (s *Service) selectAccountHandoff(ctx context.Context, store accountHandoff
 	}
 	if !deps.enabled(ctx) {
 		return true, nil
-	}
-	if pinned, err := store.SessionAccountPinned(ctx, h.sessionID); err != nil {
-		return false, err
-	} else if pinned {
-		return s.stayOnAccount(ctx, h, source, "This session stays on its account.")
 	}
 	transition, err := deps.mover.StartAccountTransition(ctx, h.sessionID, target, domain.SessionInterfaceTransitionDrain)
 	if err != nil {

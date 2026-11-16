@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
 import type { CloudHarnessVersions } from "../../hooks/useCloudHarnessVersions";
 import { apiClient } from "../../lib/api-client";
+import { CloudCpError } from "../../lib/cloud-cp";
 import { cloudHarnessEntry, cloudHarnessVersions } from "../../test/cloud-harness-fixtures";
 import { TooltipProvider } from "../ui/tooltip";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -17,7 +18,23 @@ vi.mock("../../hooks/useCloudHarnessVersions", async (importOriginal) => {
 });
 vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true, localEnabled: true, client: "", loading: false }) }));
 vi.mock("../../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: "org-1" }, isLoading: false, error: null, ready: true }) }));
-vi.mock("../../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ data: [], isSuccess: true }) }));
+// The signed-in person's saved credentials (GET /me/providers), as the hook would return them.
+const providerConnections = vi.hoisted(() => ({ value: [] as Array<{ id: string; provider: string; label: string; validationState: string }> }));
+vi.mock("../../hooks/useProviderConnections", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useProviderConnections")>();
+	return { ...actual, useProviderConnections: () => ({ data: providerConnections.value, isSuccess: true }) };
+});
+const deleteGitHubPAT = vi.hoisted(() => vi.fn(async (): Promise<void> => undefined));
+vi.mock("../../hooks/useCloudCp", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../hooks/useCloudCp")>();
+	return {
+		...actual,
+		useCloudCp: (...args: Parameters<typeof actual.useCloudCp>) => {
+			const cp = actual.useCloudCp(...args);
+			return { ...cp, client: { ...cp.client, deleteGitHubPAT } };
+		},
+	};
+});
 
 /** Codex and Claude Code installed here (Cursor is not), each with its local release status. */
 function mockLocal(status: { codex: "current" | "behind_latest"; claude?: "current" | "behind_latest" }) {
@@ -205,5 +222,72 @@ describe("AO Cloud on the Harness page", () => {
 		await userEvent.click(within(line).getByRole("button", { name: "Update" }));
 		await waitFor(() => expect(cloud.value!.startUpdate).toHaveBeenCalledWith("cursor"));
 		expect(within(page).getByRole("button", { name: "Install" })).toBeInTheDocument();
+	});
+});
+
+describe("Cloud harness tab", () => {
+	beforeEach(async () => {
+		await appI18n.changeLanguage("en");
+		cloud.value = cloudHarnessVersions({ editable: true, agents: [] });
+		providerConnections.value = [];
+		deleteGitHubPAT.mockClear();
+	});
+	afterEach(() => cleanup());
+
+	it("still lets a person remove a GitHub token they saved before, and offers nothing to save one", async () => {
+		// A token saved before the GitHub App, still marked valid: the control plane keeps it
+		// and can use it, so it must stay removable even though nothing saves one now.
+		providerConnections.value = [{ id: "gh-1", provider: "github", label: "default", validationState: "valid" }];
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+		const row = await waitFor(() => {
+			const element = view.container.querySelector<HTMLElement>("[data-saved-github-token]");
+			if (!element) throw new Error("no saved token row yet");
+			return element;
+		});
+		expect(within(row).getByText("GitHub token")).toBeInTheDocument();
+		expect(view.container.querySelector('input[type="password"]')).toBeNull();
+		expect(screen.queryByRole("button", { name: "Save token" })).toBeNull();
+		await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
+		await waitFor(() => expect(deleteGitHubPAT).toHaveBeenCalledTimes(1));
+	});
+
+	it("treats a GitHub token that is already gone as removed, and still reports any other failure", async () => {
+		providerConnections.value = [{ id: "gh-1", provider: "github", label: "default", validationState: "valid" }];
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const view = render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+		const row = await waitFor(() => {
+			const element = view.container.querySelector<HTMLElement>("[data-saved-github-token]");
+			if (!element) throw new Error("no saved token row yet");
+			return element;
+		});
+
+		// Removed from another device first: the control plane answers 404 not_found.
+		deleteGitHubPAT.mockRejectedValueOnce(new CloudCpError("not found", { status: 404, code: "not_found" }));
+		await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
+		await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(1));
+		expect(within(row).queryByRole("alert")).toBeNull();
+
+		// A real failure still says so, and the row is refetched to match the control plane.
+		deleteGitHubPAT.mockRejectedValueOnce(new CloudCpError("unavailable", { status: 503, code: "unavailable" }));
+		await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
+		expect(await within(row).findByRole("alert")).toHaveTextContent("Could not remove the GitHub token.");
+		expect(invalidate).toHaveBeenCalledTimes(2);
+	});
+
+	it("offers no GitHub personal access token: Cloud reaches private repositories through the GitHub App", async () => {
+		const { CloudHarnessContent } = await import("./harness/CloudHarnessContent");
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(<QueryClientProvider client={client}><TooltipProvider><CloudHarnessContent search="" /></TooltipProvider></QueryClientProvider>);
+		// The Cloud agents are listed as before.
+		expect(await screen.findByText("Codex")).toBeInTheDocument();
+		expect(screen.queryByText("GitHub private repositories")).toBeNull();
+		expect(screen.queryByText("GitHub token")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Save token" })).toBeNull();
+		expect(view.container.querySelector('input[type="password"]')).toBeNull();
+		expect(view.container.querySelector('[placeholder^="github_pat_"]')).toBeNull();
 	});
 });

@@ -29,6 +29,7 @@ var sessionVars = []string{
 	"AO_PATH_PIN",
 	"AO_OWNER",
 	"AO_APP_RUN_ID",
+	"AO_DESKTOP_APP",
 	"AO_ACP_RUNTIME_DIR",
 	"AO_CLOUDFLARED_PATH",
 	"AO_WAKE_HELPER",

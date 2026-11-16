@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -549,10 +550,56 @@ func (s *Store) UpdateSessionFromActivitySignal(
 	rec domain.SessionRecord,
 	expectedRevision int64,
 ) (bool, error) {
-	activity := normalActivity(rec.Activity, rec.UpdatedAt)
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, activitySignalProjectionParams(rec, expectedRevision))
+}
+
+// UpdateSessionFromActivitySignalAndAcceptSemanticDelivery is
+// UpdateSessionFromActivitySignal that also records deliveryID as accepted by
+// the session's runtime launch. It is one fenced write, so acceptance lands
+// only with a projection that still owns that launch.
+func (s *Store) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	expectedRevision int64,
+	deliveryID string,
+) (bool, error) {
+	if deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
+		return false, fmt.Errorf("semantic delivery id %q is invalid", deliveryID)
+	}
+	params := activitySignalProjectionParams(rec, expectedRevision)
+	params.AcceptedDeliveryID = deliveryID
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, params)
+}
+
+func (s *Store) updateSessionFromActivitySignal(ctx context.Context, id domain.SessionID, params gen.UpdateSessionFromActivitySignalParams) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, gen.UpdateSessionFromActivitySignalParams{
+	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, params)
+	if err != nil {
+		return false, fmt.Errorf("update session %s from activity signal: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// SemanticDeliveryAccepted reports whether runtimeLaunchID of session id
+// accepted deliveryID, even if later prompts replaced the conversation
+// checkpoint.
+func (s *Store) SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error) {
+	if runtimeLaunchID == "" || deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
+		return false, nil
+	}
+	accepted, err := s.qr.SessionAcceptedDelivery(ctx, gen.SessionAcceptedDeliveryParams{
+		ID: id, DeliveryID: deliveryID, RuntimeLaunchID: runtimeLaunchID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("read accepted delivery %s for session %s: %w", deliveryID, id, err)
+	}
+	return accepted, nil
+}
+
+func activitySignalProjectionParams(rec domain.SessionRecord, expectedRevision int64) gen.UpdateSessionFromActivitySignalParams {
+	activity := normalActivity(rec.Activity, rec.UpdatedAt)
+	return gen.UpdateSessionFromActivitySignalParams{
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
@@ -579,11 +626,7 @@ func (s *Store) UpdateSessionFromActivitySignal(
 		ExpectedSessionMode:              domain.NormalizeSessionMode(rec.Mode),
 		ExpectedRuntimeLaunchID:          rec.Metadata.RuntimeLaunchID,
 		ExpectedControllerGeneration:     rec.Metadata.ControllerGeneration,
-	})
-	if err != nil {
-		return false, fmt.Errorf("update session %s from activity signal: %w", rec.ID, err)
 	}
-	return rows > 0, nil
 }
 
 // RecordSessionLatestUserPrompt persists pane-delivered user direction without
@@ -891,6 +934,13 @@ const standaloneSessionIDPrefix = "standalone"
 
 const sessionDeleteBatch = 1000
 
+// sessionCascadedConversations selects the conversations that cascade away
+// with session ?1: its own and its reviewers'. A reviewer's turns name the
+// worker session, though its conversation has no session_id, so only turns and
+// heads in any other conversation are shared history.
+const sessionCascadedConversations = `SELECT id FROM conversations WHERE session_id = ?1
+UNION SELECT c.id FROM conversations c JOIN review r ON r.id = c.review_id WHERE r.session_id = ?1`
+
 var sessionDeleteDrains = []string{
 	`DELETE FROM conversation_provider_events WHERE id IN (
     SELECT id FROM conversation_provider_events WHERE session_id = ?1 LIMIT ?2
@@ -954,16 +1004,21 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
 		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
 	}
+	// Retries and branches point at earlier turns and branches with ON DELETE
+	// RESTRICT, which SQLite enforces even when the cascade below removes the
+	// pointing row too. Those links stay inside one conversation, and the
+	// session's own conversations and its reviewers' all go with it, so unlink
+	// them first.
 	if _, err := tx.ExecContext(ctx, `
 UPDATE conversation_branches
 SET parent_branch_id = NULL, fork_after_turn_id = NULL, replaced_turn_id = NULL
-WHERE conversation_id IN (SELECT id FROM conversations WHERE session_id = ?1)
+WHERE conversation_id IN (`+sessionCascadedConversations+`)
   AND (parent_branch_id IS NOT NULL OR fork_after_turn_id IS NOT NULL OR replaced_turn_id IS NOT NULL)`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: unlink branches: %w", id, err)
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE conversation_turns SET retry_of_turn_id = NULL
-WHERE conversation_id IN (SELECT id FROM conversations WHERE session_id = ?1)
+WHERE conversation_id IN (`+sessionCascadedConversations+`)
   AND retry_of_turn_id IS NOT NULL`, id); err != nil {
 		return false, fmt.Errorf("delete session %s: unlink retries: %w", id, err)
 	}
@@ -1003,14 +1058,11 @@ func deletableTerminatedSession(ctx context.Context, q rowQueryer, id domain.Ses
 	var shared bool
 	if err := q.QueryRowContext(ctx, `
 SELECT EXISTS (
-    SELECT 1 FROM conversation_turns t
-    JOIN conversations c ON c.id = t.conversation_id
-    WHERE t.handled_by_session_id = ?1
-      AND (c.session_id IS NULL OR c.session_id <> ?1)
+    SELECT 1 FROM conversation_turns
+    WHERE handled_by_session_id = ?1 AND conversation_id NOT IN (`+sessionCascadedConversations+`)
 ) OR EXISTS (
     SELECT 1 FROM conversations
-    WHERE current_session_id = ?1
-      AND (session_id IS NULL OR session_id <> ?1)
+    WHERE current_session_id = ?1 AND id NOT IN (`+sessionCascadedConversations+`)
 )`, id).Scan(&shared); err != nil {
 		return projectID, 0, false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
 	}

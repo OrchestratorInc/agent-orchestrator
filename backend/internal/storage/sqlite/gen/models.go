@@ -798,10 +798,8 @@ type Session struct {
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
 	DisplayNameExplicit              bool
-}
-
-type SessionAccountPin struct {
-	SessionID string
+	AcceptedDeliveryID               string
+	AcceptedDeliveryLaunchID         string
 }
 
 type SessionAgentAccount struct {
@@ -911,6 +909,15 @@ type SessionInterfaceTransitionMessage struct {
 type SessionNumFloor struct {
 	IDPrefix string
 	MaxNum   int64
+}
+
+type SessionSearchDeleted struct {
+	SessionID string
+}
+
+type SessionSearchOwner struct {
+	ID    int64
+	Token string
 }
 
 type SessionTelemetry struct {

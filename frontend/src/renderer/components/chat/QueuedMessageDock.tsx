@@ -14,6 +14,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { ChevronDown, Circle, CornerDownLeft, GripVertical, Pencil, Trash2 } from "@/components/app-icons";
+import { apiErrorMessage } from "../../lib/api-client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
@@ -272,6 +273,7 @@ function SortableQueuedMessageRow({
 	busy,
 	steady,
 	error,
+	status,
 	onRunAction,
 	showGrip,
 	reorderEnabled,
@@ -294,6 +296,8 @@ function SortableQueuedMessageRow({
 	busy?: boolean;
 	steady?: boolean;
 	error?: string;
+	/** What is happening to the row now (steering, deleting), shown under it. */
+	status?: string;
 	onRunAction: (turnId: string, action: () => Promise<unknown>) => void;
 	showGrip?: boolean;
 	reorderEnabled?: boolean;
@@ -354,6 +358,11 @@ function SortableQueuedMessageRow({
 				suppressHoverSteer={suppressHoverSteer && !isDragging}
 				turnId={turnId}
 			/>
+			{status && !error ? (
+				<p role="status" className="px-3 pb-2 text-xs text-muted-foreground" data-testid={`queued-message-status-${turnId}`}>
+					{status}
+				</p>
+			) : null}
 			{error ? (
 				<p role="status" className="px-3 pb-2 text-xs text-warning">
 					{error}
@@ -379,6 +388,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	onReorderQueuedTurns,
 	promotePendingTurnId,
 	cancelPendingTurnId,
+	steeringTurnIds,
 	steerErrors,
 }: {
 	messages: QueuedMessage[];
@@ -399,6 +409,11 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	onReorderQueuedTurns?: (turnIds: string[]) => Promise<unknown>;
 	promotePendingTurnId?: string;
 	cancelPendingTurnId?: string;
+	/**
+	 * Queued messages being steered into the running turn. They stay in the queue, in their
+	 * place, until the agent takes them, with their Delete still offered and no second Steer.
+	 */
+	steeringTurnIds?: ReadonlySet<string>;
 	steerErrors?: Readonly<Record<string, string>>;
 }) {
 	const [expanded, setExpanded] = useState(true);
@@ -433,7 +448,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			} catch (error) {
 				setErrors((current) => ({
 					...current,
-					[turnId]: error instanceof Error ? error.message : "That action failed.",
+					[turnId]: apiErrorMessage(error, "That action failed."),
 				}));
 			}
 		},
@@ -589,7 +604,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 			void onReorderQueuedTurns(nextDisplay).catch((error) => {
 				setDisplayOrder(null);
 				setReorderError(
-					error instanceof Error ? error.message : "Could not reorder queued messages.",
+					apiErrorMessage(error, "Could not reorder queued messages."),
 				);
 			});
 		},
@@ -679,8 +694,11 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 								)}
 							>
 								{displayMessages.map(({ turnId, message, pending }, index) => {
+									const steering = steeringTurnIds?.has(turnId) ?? false;
+									const deleting = cancelPendingTurnId === turnId;
+									// A steering row keeps its Delete: deleting it withdraws the steer.
 									const rowBusy =
-										disabled || promotePendingTurnId === turnId || cancelPendingTurnId === turnId;
+										disabled || (promotePendingTurnId === turnId && !steering) || deleting;
 									const busy = rowBusy || Boolean(sending);
 									const isNextQueuedTurn = turnId === nextQueuedTurnId;
 									return (
@@ -700,11 +718,13 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 											steady={busy && !rowBusy}
 											dragSnapshot={dragSnapshot}
 											error={errors[turnId] ?? steerErrors?.[turnId]}
+											status={deleting ? "Deleting…" : steering ? "Steering into the running turn…" : undefined}
 											isReordering={isReordering}
 											onRowHoverChange={setHoveredTurnId}
 											showGrip={showGrip}
 											reorderEnabled={reorderEnabled && !busy && !pending}
 											{...rowProps}
+											{...(steering ? { onPromoteQueuedTurn: undefined, showPersistentSteer: false, enterSteers: false } : null)}
 											// A send the daemon has not confirmed yet shows the same actions,
 											// held until it has a turn, so confirming it shifts nothing.
 											{...(pending ? { busy: true, steady: true } : null)}
