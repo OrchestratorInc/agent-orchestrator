@@ -11,7 +11,6 @@
 import { type ConnectDeps, connectHost, type ConnectResult } from "./connect";
 import { deviceTokenConnectDeps } from "./deviceTokenRuntime";
 import type { ServerConfig } from "./config";
-import { endpointKindForHost, type ManualRoute } from "./connectionFields";
 import { type Endpoint, endpointBaseUrl } from "./endpoints";
 import { noteRequestAnswered } from "./answeredRequests";
 import { shouldRetryProbe, TUNNEL_PROBE_RETRY_DELAY_MS } from "./probeRetry";
@@ -94,37 +93,18 @@ async function probeOnce(endpoint: Endpoint, signal: AbortSignal): Promise<Probe
 }
 
 /**
- * Which of a typed address's routes answers, and as which machine, for a
- * connection made by hand rather than by scanning.
- *
- * Every route is asked at once and the first in `routes` that answers wins,
- * so TLS is preferred without waiting out its timeout before trying plain
- * HTTP. The probe carries no credential, so asking both ways reveals nothing.
- * Rejects with the best route's error when none answers, or as soon as one
- * reports a version this phone cannot use.
+ * The host id at a plain address, for a connection made by hand rather than by
+ * scanning. Same endpoint as the race's probe, without a candidate to race.
  */
-export async function probeManualRoutes(host: string, routes: readonly ManualRoute[]): Promise<{ route: ManualRoute; hostId: string }> {
-	const controller = new AbortController();
-	const attempts = routes.map((route) => probeEndpoint(
-		{ kind: endpointKindForHost(host, route.secure), host, port: Number(route.port), secure: route.secure },
-		controller.signal,
-	));
-	// The ones after the winner are never awaited; they must not reject unhandled.
-	for (const attempt of attempts) attempt.catch(() => undefined);
-	let failure: unknown;
-	try {
-		for (const [index, attempt] of attempts.entries()) {
-			try {
-				return { route: routes[index], hostId: (await attempt).hostId };
-			} catch (error) {
-				if (error instanceof IncompatibleHostVersionError) throw error;
-				failure ??= error;
-			}
-		}
-	} finally {
-		controller.abort();
-	}
-	throw failure ?? new Error("no route to probe");
+export async function probeIdentity(cfg: {
+	host: string;
+	httpPort: string;
+	secure?: boolean;
+}): Promise<string> {
+	const base = `${cfg.secure ? "https" : "http"}://${cfg.host}:${cfg.httpPort}`;
+	const res = await fetch(`${base}/api/v1/identity`, { method: "GET" });
+	if (!res.ok) throw new Error(`identity probe returned ${res.status}`);
+	return identityHost((await res.json()) as { hostId?: unknown; apiVersion?: unknown });
 }
 
 /** On a host mismatch (or ambiguous auth rejection), re-race verified endpoints. */

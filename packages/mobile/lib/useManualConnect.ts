@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { configForEndpoint } from "./connect";
 import { manualAddressError, resolveManualAddress } from "./connectionFields";
 import { classifyConnectionFailure, describeConnectionFailure, isLocalNetworkHost } from "./connectionError";
-import { probeManualRoutes } from "./connectRuntime";
+import { probeEndpoint, probeIdentity } from "./connectRuntime";
 import { haptics } from "./haptics";
 import { renameHost, saveHost, setActiveHost, type Host } from "./hosts";
 import { isPairingSecret } from "./deviceToken";
@@ -64,12 +64,11 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		if (!address.ok) return;
 		setBusy(true);
 		setFailure(null);
-		// Until a route answers, failures are said against the best one.
-		let target: ServerConfig = { ...cfg, host: address.host, httpPort: address.routes[0].port, secure: address.routes[0].secure };
+		const target = { ...cfg, host: address.host, httpPort: address.port, secure: address.secure };
 		try {
 			if (editingHost) {
 				await persistManualHostEdit(editingHost, cfg, machineName, editingEndpointIndex, {
-					probe: probeManualRoutes,
+					probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),
 					ping: pingServer,
 					saveHost,
 					renameHost,
@@ -81,15 +80,9 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 				return;
 			}
 			// Identity is public; reject unsupported hosts before presenting a password.
-			// It also says which route answers: TLS, or plain HTTP for an address
-			// that could be either. When none answers, the best route is tried with
-			// the credential, which says what is wrong.
 			let hostId = "";
-			try {
-				const answer = await probeManualRoutes(address.host, address.routes);
-				hostId = answer.hostId;
-				target = { ...target, httpPort: answer.route.port, secure: answer.route.secure };
-			} catch (error) { if (error instanceof IncompatibleHostVersionError) throw error; }
+			try { hostId = await probeIdentity(target); }
+			catch (error) { if (error instanceof IncompatibleHostVersionError) throw error; }
 			// Verify BEFORE persisting. pingServer takes the config it is handed, so
 			// nothing needs to be saved to test it — and saving first would leave
 			// known-bad credentials on disk. The background poller retries every 8s,

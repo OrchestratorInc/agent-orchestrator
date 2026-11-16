@@ -10,7 +10,7 @@ vi.mock("./hosts", () => ({
 	touchHost: vi.fn(),
 }));
 
-import { ENDPOINT_REFRESH_TIMEOUT_MS, PROBE_TIMEOUT_MS, probeEndpoint, probeManualRoutes, rejectedEndpointNeedsRace, runtimeConnectDeps } from "./connectRuntime";
+import { ENDPOINT_REFRESH_TIMEOUT_MS, probeEndpoint, probeIdentity, rejectedEndpointNeedsRace, runtimeConnectDeps } from "./connectRuntime";
 import { IncompatibleHostVersionError } from "./race";
 
 const config = { host: "192.168.1.5", httpPort: "3011", password: "stale", secure: false } as Parameters<ReturnType<typeof runtimeConnectDeps>["refreshEndpoints"]>[0];
@@ -100,60 +100,9 @@ describe("identity API compatibility", () => {
 	it.each([undefined, 2])("rejects identity version %s before authentication", async (apiVersion) => {
 		const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ hostId: "h_A", apiVersion }) });
 		vi.stubGlobal("fetch", fetch);
-		await expect(probeManualRoutes(config.host, [{ port: "3011", secure: false }])).rejects.toBeInstanceOf(IncompatibleHostVersionError);
+		await expect(probeIdentity(config)).rejects.toBeInstanceOf(IncompatibleHostVersionError);
 		await expect(probeEndpoint({ kind: "lan", host: config.host, port: 3011, secure: false }, new AbortController().signal))
 			.rejects.toBeInstanceOf(IncompatibleHostVersionError);
 		expect(fetch.mock.calls.every(([, init]) => !init?.headers?.Authorization)).toBe(true);
-	});
-});
-
-// A typed address that could be either asks both ways at once. The probe is
-// unauthenticated, so asking over plain HTTP too gives nothing away.
-describe("probeManualRoutes", () => {
-	const both = [{ port: "443", secure: true }, { port: "3011", secure: false }];
-	const answer = (hostId: string) => ({ ok: true, json: async () => ({ hostId, apiVersion: 1 }) });
-
-	it("asks every route at once, without a credential, and prefers the first that answers", async () => {
-		const fetch = vi.fn().mockResolvedValue(answer("h_A"));
-		vi.stubGlobal("fetch", fetch);
-		await expect(probeManualRoutes("ao.example.com", both)).resolves.toEqual({ route: both[0], hostId: "h_A" });
-		expect(fetch.mock.calls.map(([url]) => url)).toEqual([
-			"https://ao.example.com:443/api/v1/identity",
-			"http://ao.example.com:3011/api/v1/identity",
-		]);
-		expect(fetch.mock.calls.every(([, init]) => !init?.headers)).toBe(true);
-	});
-
-	it("falls back to plain HTTP when TLS does not answer", async () => {
-		vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("https:") ? Promise.reject(new TypeError("Network request failed")) : Promise.resolve(answer("h_A"))));
-		await expect(probeManualRoutes("nas.lan", both)).resolves.toEqual({ route: both[1], hostId: "h_A" });
-	});
-
-	it("waits for TLS rather than taking a faster plain answer", async () => {
-		vi.useFakeTimers();
-		vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("https:")
-			? new Promise((resolve) => setTimeout(() => resolve(answer("h_A")), 500))
-			: Promise.resolve(answer("h_A"))));
-		const probe = probeManualRoutes("ao.example.com", both);
-		await vi.advanceTimersByTimeAsync(500);
-		await expect(probe).resolves.toEqual({ route: both[0], hostId: "h_A" });
-	});
-
-	it("gives up on a route that never answers, and fails with the preferred route's error", async () => {
-		vi.useFakeTimers();
-		vi.stubGlobal("fetch", vi.fn((url: string, init: { signal: AbortSignal }) => url.startsWith("https:")
-			? new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(new Error("TLS timed out"))))
-			: Promise.reject(new TypeError("Network request failed"))));
-		const probe = probeManualRoutes("ao.example.com", both);
-		const settled = expect(probe).rejects.toThrow("TLS timed out");
-		await vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS);
-		await settled;
-	});
-
-	it("stops at a machine this phone cannot use, whichever route says so", async () => {
-		vi.stubGlobal("fetch", vi.fn((url: string) => url.startsWith("https:")
-			? Promise.reject(new TypeError("Network request failed"))
-			: Promise.resolve({ ok: true, json: async () => ({ hostId: "h_A", apiVersion: 2 }) })));
-		await expect(probeManualRoutes("ao.example.com", both)).rejects.toBeInstanceOf(IncompatibleHostVersionError);
 	});
 });

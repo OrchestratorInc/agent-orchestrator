@@ -1,7 +1,7 @@
 import { ApiError, pingServer } from "./api";
 import { classifyConnectionFailure, describeConnectionFailure } from "./connectionError";
 import { resolveManualAddress } from "./connectionFields";
-import { probeManualRoutes } from "./connectRuntime";
+import { probeEndpoint } from "./connectRuntime";
 import { forgetPairedHost, forgetServer } from "./disconnect";
 import { MachineSaveError, type EnvironmentMachineDraft } from "./environmentEditor";
 import { activeHostMetadata, loadHosts, renameHost, saveHost, updateHostAppearance, type Host } from "./hosts";
@@ -21,7 +21,7 @@ export async function saveEnvironmentMachine(host: Host, draft: EnvironmentMachi
 	let after: Host["endpoints"][number] | undefined;
 	try {
 		const saved = await persistManualHostEdit(host, draft.config, draft.machineName, draft.endpointIndex, {
-			probe: probeManualRoutes,
+			probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),
 			ping: pingServer,
 			saveHost,
 			renameHost,
@@ -35,7 +35,7 @@ export async function saveEnvironmentMachine(host: Host, draft: EnvironmentMachi
 		if (kind === "auth") throw new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password");
 		// Said against the port that was tried: an empty Port follows the address.
 		const address = resolveManualAddress(draft.config.host, draft.config.httpPort, before);
-		const port = address.ok ? address.routes[0].port : draft.config.httpPort;
+		const port = address.ok ? address.port : draft.config.httpPort;
 		const copy = describeConnectionFailure(kind, { host: draft.config.host, port, platform });
 		throw new MachineSaveError(copy.message, "host");
 	}

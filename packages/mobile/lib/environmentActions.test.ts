@@ -14,7 +14,7 @@ const fixtures = vi.hoisted(() => ({
 	forgetServer: vi.fn(async () => {}),
 	forgetPairedHost: vi.fn(async () => {}),
 	persist: vi.fn(savedAsTyped),
-	probeManualRoutes: vi.fn(),
+
 	updateHostAppearance: vi.fn(async () => {}),
 }));
 
@@ -24,7 +24,7 @@ vi.mock("./api", () => ({
 	},
 	pingServer: vi.fn(),
 }));
-vi.mock("./connectRuntime", () => ({ probeManualRoutes: fixtures.probeManualRoutes }));
+vi.mock("./connectRuntime", () => ({ probeEndpoint: vi.fn() }));
 vi.mock("./disconnect", () => ({ forgetServer: fixtures.forgetServer, forgetPairedHost: fixtures.forgetPairedHost }));
 vi.mock("./hosts", () => ({
 	activeHostMetadata: fixtures.activeHostMetadata,
@@ -108,11 +108,10 @@ describe("saving a machine", () => {
 		expect(fixtures.updateHostAppearance).toHaveBeenCalledWith("a", { symbol: "cloud" });
 		expect(await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }), "ios")).toEqual({ routeChanged: true });
 		expect(fixtures.updateHostAppearance).toHaveBeenCalledOnce();
-		expect(fixtures.persist).toHaveBeenLastCalledWith(a, expect.anything(), "A", 0, expect.objectContaining({ probe: fixtures.probeManualRoutes }));
 	});
 
-	// Whether the route speaks TLS is only known once it answered, so the change
-	// is read from what was saved rather than from the draft.
+	// The address decides TLS when the route is saved, so the change is read
+	// from what was saved rather than from the draft.
 	it("counts a route that answered over TLS this time as changed", async () => {
 		fixtures.persist.mockImplementationOnce(async (host: Host) => ({ ...host, endpoints: [{ ...host.endpoints[0], secure: true }] }));
 		expect(await saveEnvironmentMachine(a, draft(), "ios")).toEqual({ routeChanged: true });

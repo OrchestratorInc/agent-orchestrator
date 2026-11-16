@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
-import type { ManualRoute } from "./connectionFields";
 import {
 	AccountManagedHostError,
 	adoptManualConnection,
@@ -122,7 +121,7 @@ describe("persisting an inline machine edit", () => {
 
 	function editDeps(overrides: Partial<Parameters<typeof persistManualHostEdit>[4]> = {}) {
 		return {
-			probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[0], hostId: "h_manual" })),
+			probe: vi.fn(async () => ({ hostId: "h_manual" })),
 			ping: vi.fn(async () => {}),
 			saveHost: vi.fn(async () => {}),
 			renameHost: vi.fn(async () => {}),
@@ -164,7 +163,7 @@ describe("persisting an inline machine edit", () => {
 	it("verifies a changed route before authenticating and saving it", async () => {
 		const order: string[] = [];
 		const d = editDeps({
-			probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => { order.push("probe"); return { route: routes[0], hostId: "h_manual" }; }),
+			probe: vi.fn(async () => { order.push("probe"); return { hostId: "h_manual" }; }),
 			ping: vi.fn(async () => { order.push("ping"); }),
 			saveHost: vi.fn(async () => { order.push("save"); }),
 		});
@@ -217,7 +216,7 @@ describe("persisting an inline machine edit", () => {
 	});
 
 	it("does not send a credential when the changed address belongs to another machine", async () => {
-		const d = editDeps({ probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[0], hostId: "someone-else" })) });
+		const d = editDeps({ probe: vi.fn(async () => ({ hostId: "someone-else" })) });
 
 		await expect(persistManualHostEdit(
 			host,
@@ -231,14 +230,24 @@ describe("persisting an inline machine edit", () => {
 		expect(d.saveHost).not.toHaveBeenCalled();
 	});
 
-	it("asks a changed address that could be either which way it answers, and saves that", async () => {
-		const d = editDeps({ probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[1], hostId: "h_manual" })) });
+	// A plain-HTTP fallback for a public name would let whoever blocks TLS on
+	// the path collect the password the ping carries.
+	it("moves a route to a public name over TLS only, whatever the draft said", async () => {
+		const d = editDeps();
 
-		const saved = await persistManualHostEdit(host, { ...cfg, host: "ao.example.com", httpPort: "", password: "old" }, "Old", 0, d);
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "ao.example.com", httpPort: "8080", secure: false, password: "old" }, "Old", 0, d);
 
-		expect(d.probe).toHaveBeenCalledWith("ao.example.com", [{ port: "443", secure: true }, { port: "3011", secure: false }]);
-		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "ao.example.com", httpPort: "3011", secure: false }));
-		expect(saved.endpoints[0]).toEqual({ kind: "lan", host: "ao.example.com", port: 3011, secure: false });
+		expect(d.probe).toHaveBeenCalledWith({ kind: "lan", host: "ao.example.com", port: 8080, secure: true });
+		expect(d.probe).toHaveBeenCalledOnce();
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "ao.example.com", httpPort: "8080", secure: true }));
+		expect(saved.endpoints[0]).toEqual({ kind: "lan", host: "ao.example.com", port: 8080, secure: true });
+	});
+
+	it("keeps plain HTTP for a private address", async () => {
+		const d = editDeps();
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "10.0.0.9", httpPort: "", secure: true, password: "old" }, "Old", 0, d);
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "10.0.0.9", httpPort: "3011", secure: false }));
+		expect(saved.endpoints[0]).toEqual({ kind: "lan", host: "10.0.0.9", port: 3011, secure: false });
 	});
 
 	it("keeps a saved route's TLS when only the password changes", async () => {
@@ -247,7 +256,7 @@ describe("persisting an inline machine edit", () => {
 		// The draft carries no TLS choice of its own any more.
 		const saved = await persistManualHostEdit(host, { ...cfg, host: "old.trycloudflare.com", httpPort: "443", secure: false, password: "new" }, "Old", 1, d);
 
-		expect(d.probe).toHaveBeenCalledWith("old.trycloudflare.com", [{ port: "443", secure: true }]);
+		expect(d.probe).toHaveBeenCalledWith({ kind: "tunnel", host: "old.trycloudflare.com", port: 443, secure: true });
 		expect(saved.endpoints[1]).toEqual(host.endpoints[1]);
 	});
 
@@ -262,7 +271,7 @@ describe("a newly typed code or password on a saved machine", () => {
 	const host = { id: "h_manual", name: "Old", platform: "linux", token: "old", fallbackToken: "older", lastConnected: 42, endpoints: [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }] };
 	const token = "aod_" + "a".repeat(64);
 	const editDeps = (pair: NonNullable<Parameters<typeof persistManualHostEdit>[4]["pair"]>) => ({
-		probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[0], hostId: "h_manual" })),
+		probe: vi.fn(async () => ({ hostId: "h_manual" })),
 		ping: vi.fn(async () => {}),
 		saveHost: vi.fn(async () => {}),
 		renameHost: vi.fn(async () => {}),

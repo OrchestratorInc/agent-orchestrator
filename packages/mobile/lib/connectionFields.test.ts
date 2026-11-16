@@ -9,73 +9,86 @@ describe("resolveManualAddress", () => {
 	describe("decides TLS from what was typed", () => {
 		it.each([
 			// A typed scheme wins over everything else.
-			["https://example.com", "", [tls()]],
-			["https://192.168.1.42:3011", "", [tls("3011")]],
-			["wss://example.com", "", [tls()]],
-			["http://example.com", "", [plain()]],
-			["http://my-pc.tail1234.ts.net:8080", "", [plain("8080")]],
-			["http://example.trycloudflare.com", "", [plain()]],
+			["https://example.com", "", tls()],
+			["https://192.168.1.42:3011", "", tls("3011")],
+			["wss://example.com", "", tls()],
+			["http://example.com", "", plain()],
+			["http://example.com:8080", "", plain("8080")],
+			["http://my-pc.tail1234.ts.net:8080", "", plain("8080")],
 			// Tunnel names are only ever served over TLS on 443.
-			["example.trycloudflare.com", "", [tls()]],
-			[FIXED, "", [tls()]],
-			[`${FIXED}:443`, "", [tls()]],
-			// Port 443 is TLS.
-			["example.com", "443", [tls()]],
-			["192.168.1.42:443", "", [tls()]],
+			["example.trycloudflare.com", "", tls()],
+			[FIXED, "", tls()],
+			[`${FIXED}:443`, "", tls()],
+			// Port 443 is TLS, even on a private address.
+			["example.com", "443", tls()],
+			["192.168.1.42:443", "", tls()],
 			// Addresses that only exist on this network or tailnet are plain HTTP.
-			["192.168.1.42", "3011", [plain()]],
-			["10.0.0.5", "", [plain()]],
-			["172.16.4.2", "", [plain()]],
-			["169.254.1.1", "", [plain()]],
-			["127.0.0.1", "", [plain()]],
-			["localhost", "", [plain()]],
-			["my-mac.local", "", [plain()]],
-			["my-pc", "", [plain()]],
-			["100.101.102.103", "", [plain()]],
-			["[::1]:8080", "", [plain("8080")]],
-			["fe80::1", "3011", [plain()]],
-			["[fd12:3456::1]", "", [plain()]],
-			// A tailnet name without a port is Tailscale Serve's HTTPS address.
-			["my-pc.tail1234.ts.net", "", [tls()]],
-			// Anything else gets both, TLS first.
-			["my-pc.tail1234.ts.net", "3011", [tls("3011"), plain("3011")]],
-			["ao.example.com", "", [tls(), plain()]],
-			["nas.lan", "8443", [tls("8443"), plain("8443")]],
-			["203.0.113.7", "", [tls(), plain()]],
-			["[2001:db8::1]", "", [tls(), plain()]],
-		])("%s with Port %j", (host, port, routes) => {
-			expect(resolveManualAddress(host, port)).toEqual({ ok: true, host: expect.any(String), routes });
+			["192.168.1.42", "3011", plain()],
+			["10.0.0.5", "", plain()],
+			["172.16.4.2", "", plain()],
+			["169.254.1.1", "", plain()],
+			["127.0.0.1", "", plain()],
+			["localhost", "", plain()],
+			["my-mac.local", "", plain()],
+			["my-pc", "", plain()],
+			["100.101.102.103", "", plain()],
+			["[::1]:8080", "", plain("8080")],
+			["fe80::1", "3011", plain()],
+			["[fd12:3456::1]", "", plain()],
+			// Everything else is TLS: tailnet names, custom domains, public IPs.
+			["my-pc.tail1234.ts.net", "", tls()],
+			["my-pc.tail1234.ts.net", "3011", tls("3011")],
+			["ao.example.com", "", tls()],
+			["nas.lan", "8443", tls("8443")],
+			["203.0.113.7", "", tls()],
+			["[2001:db8::1]", "", tls()],
+		])("%s with Port %j", (host, port, route) => {
+			expect(resolveManualAddress(host, port)).toEqual({ ok: true, host: expect.any(String), ...route });
 		});
+	});
+
+	// A plain-HTTP fallback there would let anyone on the path block TLS and
+	// collect the password or pairing code the next request carries.
+	it.each([
+		["ao.example.com", ""],
+		["ao.example.com", "8080"],
+		["ao.example.com:3011", ""],
+		["203.0.113.7", "3011"],
+		["[2001:db8::1]:3011", ""],
+		["my-pc.tail1234.ts.net", "3011"],
+	])("never resolves the public name %s (Port %j) to plain HTTP unless http:// is typed", (host, port) => {
+		expect(resolveManualAddress(host, port)).toMatchObject({ ok: true, secure: true });
+		expect(resolveManualAddress(`http://${host}`, port)).toMatchObject({ ok: true, secure: false });
 	});
 
 	it("keeps the host, without its scheme, port or trailing slash", () => {
 		expect(resolveManualAddress("  https://example.trycloudflare.com:443/ ", "")).toMatchObject({ host: "example.trycloudflare.com" });
-		expect(resolveManualAddress("http://[fe80::1]:3011/", "")).toMatchObject({ host: "[fe80::1]", routes: [plain()] });
+		expect(resolveManualAddress("http://[fe80::1]:3011/", "")).toEqual({ ok: true, host: "[fe80::1]", ...plain() });
 		expect(resolveManualAddress("fe80::1", "3011")).toMatchObject({ host: "fe80::1" });
 	});
 
 	it("accepts the port in both fields when they agree", () => {
-		expect(resolveManualAddress("example.trycloudflare.com:443", "443")).toEqual({ ok: true, host: "example.trycloudflare.com", routes: [tls()] });
-		expect(resolveManualAddress("192.168.1.42:3011", "03011")).toEqual({ ok: true, host: "192.168.1.42", routes: [plain()] });
+		expect(resolveManualAddress("example.trycloudflare.com:443", "443")).toEqual({ ok: true, host: "example.trycloudflare.com", ...tls() });
+		expect(resolveManualAddress("192.168.1.42:3011", "03011")).toEqual({ ok: true, host: "192.168.1.42", ...plain() });
 	});
 
 	describe("for a machine being edited", () => {
 		const saved = { host: "203.0.113.7", port: 8080, secure: false };
 
 		it("keeps the saved TLS choice while the address still matches", () => {
-			expect(resolveManualAddress("203.0.113.7", "8080", saved)).toEqual({ ok: true, host: "203.0.113.7", routes: [plain("8080")] });
-			expect(resolveManualAddress("203.0.113.7", "", saved)).toEqual({ ok: true, host: "203.0.113.7", routes: [plain("8080")] });
+			expect(resolveManualAddress("203.0.113.7", "8080", saved)).toEqual({ ok: true, host: "203.0.113.7", ...plain("8080") });
+			expect(resolveManualAddress("203.0.113.7", "", saved)).toEqual({ ok: true, host: "203.0.113.7", ...plain("8080") });
 			const tunnel = { host: "ao.example.com", port: 443, secure: true };
-			expect(resolveManualAddress("AO.example.com", "443", tunnel)).toEqual({ ok: true, host: "AO.example.com", routes: [tls()] });
+			expect(resolveManualAddress("AO.example.com", "443", tunnel)).toEqual({ ok: true, host: "AO.example.com", ...tls() });
 		});
 
 		it("decides again once the address or port changes", () => {
-			expect(resolveManualAddress("203.0.113.8", "8080", saved)).toEqual({ ok: true, host: "203.0.113.8", routes: [tls("8080"), plain("8080")] });
-			expect(resolveManualAddress("203.0.113.7", "9090", saved)).toEqual({ ok: true, host: "203.0.113.7", routes: [tls("9090"), plain("9090")] });
+			expect(resolveManualAddress("203.0.113.8", "8080", saved)).toEqual({ ok: true, host: "203.0.113.8", ...tls("8080") });
+			expect(resolveManualAddress("203.0.113.7", "9090", saved)).toEqual({ ok: true, host: "203.0.113.7", ...tls("9090") });
 		});
 
 		it("lets a typed scheme override the saved choice", () => {
-			expect(resolveManualAddress("https://203.0.113.7:8080", "", saved)).toEqual({ ok: true, host: "203.0.113.7", routes: [tls("8080")] });
+			expect(resolveManualAddress("https://203.0.113.7:8080", "", saved)).toEqual({ ok: true, host: "203.0.113.7", ...tls("8080") });
 		});
 	});
 

@@ -4,15 +4,11 @@ import type { Host } from "./hosts";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
-// The paired machine answers at its own address, a new one anywhere else, over
-// the best route the address offered.
-const answerAsPaired = vi.hoisted(() => async (host: string, routes: readonly { port: string; secure: boolean }[]) =>
-	({ route: routes[0], hostId: host === "192.168.1.24" ? "host-1" : "host-new" }));
-
 const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	ping: vi.fn(async () => ({})),
-	probeManualRoutes: vi.fn(answerAsPaired),
+	probeIdentity: vi.fn(async () => "host-new"),
+	probeEndpoint: vi.fn(async () => ({ hostId: "host-1" })),
 	pair: vi.fn(async (): Promise<import("./deviceToken").PairDeviceResult> => ({ kind: "unsupported" })),
 	saveConfig: vi.fn(async () => {}),
 	saveHost: vi.fn(async () => {}),
@@ -59,7 +55,7 @@ vi.mock("./config", () => ({
 	saveConfig: fixtures.saveConfig,
 }));
 vi.mock("./hosts", () => ({ saveHost: fixtures.saveHost, setActiveHost: fixtures.setActiveHost, renameHost: fixtures.renameHost }));
-vi.mock("./connectRuntime", () => ({ probeManualRoutes: fixtures.probeManualRoutes }));
+vi.mock("./connectRuntime", () => ({ probeEndpoint: fixtures.probeEndpoint, probeIdentity: fixtures.probeIdentity }));
 vi.mock("./deviceTokenRuntime", () => ({ pairThisDevice: fixtures.pair }));
 vi.mock("./localNetworkStore", () => ({ setLocalNetworkConfirmed: vi.fn(async () => {}) }));
 vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null }));
@@ -89,9 +85,9 @@ let renderer: ReactTestRenderer | undefined;
 
 beforeEach(() => {
 	fixtures.platform.OS = "ios";
-	for (const mock of [fixtures.ping, fixtures.probeManualRoutes, fixtures.saveConfig, fixtures.saveHost, fixtures.setActiveHost, fixtures.renameHost, fixtures.announce]) mock.mockClear();
+	for (const mock of [fixtures.ping, fixtures.probeIdentity, fixtures.probeEndpoint, fixtures.saveConfig, fixtures.saveHost, fixtures.setActiveHost, fixtures.renameHost, fixtures.announce]) mock.mockClear();
 	fixtures.ping.mockImplementation(async () => ({}));
-	fixtures.probeManualRoutes.mockImplementation(answerAsPaired);
+	fixtures.probeEndpoint.mockImplementation(async () => ({ hostId: "host-1" }));
 });
 afterEach(() => {
 	act(() => renderer?.unmount());
@@ -151,32 +147,34 @@ describe("ManualConnectSheet on iOS", () => {
 		await type("manual-connect-host", "h-0123456789abcdef0123.useao.dev");
 		await type("manual-connect-password", "pw");
 		await act(async () => confirm().props.onPress());
-		expect(fixtures.probeManualRoutes).toHaveBeenCalledWith("h-0123456789abcdef0123.useao.dev", [{ port: "443", secure: true }]);
+		expect(fixtures.probeIdentity).toHaveBeenCalledWith(expect.objectContaining({ host: "h-0123456789abcdef0123.useao.dev", httpPort: "443", secure: true }));
 		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "h-0123456789abcdef0123.useao.dev", httpPort: "443", secure: true }));
 		expect(fixtures.saveHost).toHaveBeenCalledWith(expect.objectContaining({
 			endpoints: [{ kind: "tunnel", host: "h-0123456789abcdef0123.useao.dev", port: 443, secure: true }],
 		}));
 	});
 
-	it("uses plain HTTP for a custom domain that only answers that way", async () => {
-		fixtures.probeManualRoutes.mockImplementationOnce(async (_host, routes) => ({ route: routes[1], hostId: "host-new" }));
+	// Plain HTTP to a public name would hand the password to whoever blocked TLS.
+	it("sends a custom domain's credential over TLS only, never plain HTTP", async () => {
 		render();
 		await type("manual-connect-name", "Office PC");
 		await type("manual-connect-host", "nas.example.com");
+		await type("manual-connect-port", "8080");
 		await type("manual-connect-password", "pw");
 		await act(async () => confirm().props.onPress());
-		expect(fixtures.probeManualRoutes).toHaveBeenCalledWith("nas.example.com", [{ port: "443", secure: true }, { port: "3011", secure: false }]);
-		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "nas.example.com", httpPort: "3011", secure: false }));
+		for (const mock of [fixtures.probeIdentity, fixtures.ping]) {
+			expect(mock).toHaveBeenCalledOnce();
+			expect(mock).toHaveBeenCalledWith(expect.objectContaining({ host: "nas.example.com", httpPort: "8080", secure: true }));
+		}
 	});
 
-	it("still tries the credential over the best route when no route answers the identity probe", async () => {
-		fixtures.probeManualRoutes.mockRejectedValueOnce(new TypeError("Network request failed"));
+	it("uses plain HTTP on the Connect Mobile port for a private address left without a port", async () => {
 		render();
 		await type("manual-connect-name", "Office PC");
-		await type("manual-connect-host", "nas.example.com");
+		await type("manual-connect-host", "192.168.1.30");
 		await type("manual-connect-password", "pw");
 		await act(async () => confirm().props.onPress());
-		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "nas.example.com", httpPort: "443", secure: true }));
+		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", httpPort: "3011", secure: false }));
 	});
 
 	it("connects from the bar once the form is complete", async () => {

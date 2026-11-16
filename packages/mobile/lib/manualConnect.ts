@@ -1,5 +1,5 @@
 import type { ServerConfig } from "./config";
-import { endpointKindForHost, type ManualRoute, resolveManualAddress } from "./connectionFields";
+import { endpointKindForHost, resolveManualAddress } from "./connectionFields";
 import { isPairingSecret, type PairDeviceResult } from "./deviceToken";
 import { normalizeServerHost, type Endpoint } from "./endpoints";
 import type { Host } from "./hosts";
@@ -12,12 +12,8 @@ export type AdoptManualDeps = {
 };
 
 export type PersistManualHostEditDeps = {
-	/**
-	 * Public identity probe over the typed address's routes, best first: says
-	 * which one answered and as which machine. This must run before ping
-	 * presents the saved credential.
-	 */
-	probe: (host: string, routes: readonly ManualRoute[]) => Promise<{ route: ManualRoute; hostId: string }>;
+	/** Public identity probe. This must run before ping presents the saved credential. */
+	probe: (endpoint: Endpoint) => Promise<{ hostId: string }>;
 	ping: (cfg: ServerConfig) => Promise<unknown>;
 	saveHost: (host: Host) => Promise<void>;
 	renameHost: (id: string, name: string) => Promise<void>;
@@ -111,22 +107,21 @@ export async function persistManualHostEdit(
 	const before = host.endpoints[endpointIndex];
 	const address = resolveManualAddress(cfg.host, cfg.httpPort, before);
 	if (!address.ok) throw new Error(address.incomplete ? "Host is required" : address.error);
-	// More than one route means the address changed and only asking it can tell
-	// which way it answers; one route is either the saved route or a typed one.
-	const [first] = address.routes;
-	const unchanged = address.routes.length === 1 && !!before && before.host === address.host &&
-		before.port === Number(first.port) && before.secure === first.secure && host.token === cfg.password;
-	if (unchanged) {
-		const edited = editedManualHost(host, { ...cfg, host: address.host, httpPort: first.port, secure: first.secure }, machineName, endpointIndex);
+	// The address decides TLS; an unchanged one keeps the saved route's choice.
+	const target = { ...cfg, host: address.host, httpPort: address.port, secure: address.secure };
+
+	const edited = editedManualHost(host, target, machineName, endpointIndex);
+	const after = edited.endpoints[endpointIndex];
+	const connectionChanged = !before || before.host !== after.host || before.port !== after.port ||
+		before.secure !== after.secure || host.token !== target.password;
+	if (!connectionChanged) {
 		if (edited.name !== host.name) await deps.renameHost(host.id, edited.name);
 		return edited;
 	}
 	if (host.accountUserId) throw new AccountManagedHostError();
 
-	const { route, hostId } = await deps.probe(address.host, address.routes);
+	const { hostId } = await deps.probe(after);
 	if (host.id && hostId !== host.id) throw new DifferentMachineError();
-	const target = { ...cfg, host: address.host, httpPort: route.port, secure: route.secure };
-	const edited = editedManualHost(host, target, machineName, endpointIndex);
 	let credential = { ...target, hostId: host.id || hostId };
 	let saved = edited;
 	if (deps.pair && host.token !== target.password && isPairingSecret(target.password)) {

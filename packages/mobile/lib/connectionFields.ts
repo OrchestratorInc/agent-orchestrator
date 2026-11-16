@@ -57,27 +57,24 @@ export function endpointKindForHost(host: string, secure: boolean): EndpointKind
 	return "lan";
 }
 
-/** One way to reach a typed address: its port, and whether it speaks TLS. */
-export type ManualRoute = { port: string; secure: boolean };
-
 /** The route a machine is saved with, which an unchanged address keeps. */
 export type SavedRoute = { host: string; port: number; secure: boolean };
 
 export type ManualAddress =
-	/** Routes to try, best first. One when the address says how to reach it; two when only asking it can tell. */
-	| { ok: true; host: string; routes: [ManualRoute, ...ManualRoute[]] }
+	| { ok: true; host: string; port: string; secure: boolean }
 	| { ok: false; incomplete: true }
 	| { ok: false; incomplete?: false; error: string };
 
 /**
- * Reads a hand-typed address into the routes worth trying.
+ * Reads a hand-typed address, deciding whether it speaks TLS.
  *
  * Whether to use TLS is never asked. A typed scheme decides it; otherwise
- * the port and the name do: 443 and tunnel names are TLS, addresses that
- * only exist on the local network or tailnet are plain HTTP. Any other name,
- * a custom domain above all, gets both, TLS first, and the identity probe
- * picks whichever answers. An empty port means 443 for TLS and the Connect
- * Mobile port otherwise.
+ * only an address that exists on the local network or tailnet alone is plain
+ * HTTP, and every other one is TLS. That includes custom domains and public
+ * IPs: a plain-HTTP fallback there would let anyone on the path block TLS and
+ * collect the password or pairing code the next request carries, so a public
+ * name over plain HTTP needs http:// typed. An empty port means 443 for TLS
+ * and the Connect Mobile port otherwise.
  *
  * `saved` is the route an edited machine already has. An address that still
  * matches it keeps its TLS choice: a working pairing is not guessed again.
@@ -116,21 +113,16 @@ export function resolveManualAddress(hostInput: string, portInput: string, saved
 		return { ok: false, error: `The host says port ${Number(embedded)} but Port is ${Number(port)}. Make them match, or clear one.` };
 	}
 	const typedPort = port || embedded ? String(Number(port || embedded)) : "";
-	const route = (secure: boolean): ManualRoute => ({ port: typedPort || (secure ? TLS_PORT : BRIDGE_PORT), secure });
+	const resolved = (secure: boolean): ManualAddress => ({ ok: true, host, port: typedPort || (secure ? TLS_PORT : BRIDGE_PORT), secure });
 
-	if (typedTls !== undefined) return { ok: true, host, routes: [route(typedTls)] };
+	if (typedTls !== undefined) return resolved(typedTls);
 	if (saved && saved.host.toLowerCase() === host.toLowerCase() && (!typedPort || Number(typedPort) === saved.port)) {
-		return { ok: true, host, routes: [{ port: String(saved.port), secure: saved.secure }] };
+		return { ok: true, host, port: String(saved.port), secure: saved.secure };
 	}
-	if (isTunnelHost(host)) {
-		if (typedPort && typedPort !== TLS_PORT) return { ok: false, error: "Tunnel addresses use port 443. Clear Port or enter 443." };
-		return { ok: true, host, routes: [route(true)] };
+	if (isTunnelHost(host) && typedPort && typedPort !== TLS_PORT) {
+		return { ok: false, error: "Tunnel addresses use port 443. Clear Port or enter 443." };
 	}
-	if (typedPort === TLS_PORT) return { ok: true, host, routes: [route(true)] };
-	if (isPrivateHost(host)) return { ok: true, host, routes: [route(false)] };
-	// A tailnet name with no port is Tailscale Serve's HTTPS address.
-	if (!typedPort && host.toLowerCase().endsWith(".ts.net")) return { ok: true, host, routes: [route(true)] };
-	return { ok: true, host, routes: [route(true), route(false)] };
+	return resolved(typedPort === TLS_PORT || !isPrivateHost(host));
 }
 
 export function manualAddressError(hostInput: string, portInput: string, saved?: SavedRoute): string | undefined {
