@@ -915,6 +915,13 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 		author = "unknown reviewer"
 	}
 	fmt.Fprintf(&msg, "A changes-requested review from @%s is on your PR.", author)
+	// When the reviewer submitted it, not when AO delivered it: a nudge held
+	// while the session waited on the user can arrive long after. The chat
+	// shows this time on the event row. It ends the first line, which older
+	// chat clients read only for the PR identity, so they still parse the rest.
+	if !review.SubmittedAt.IsZero() {
+		fmt.Fprintf(&msg, " Submitted at %s.", providerEventTime(review.SubmittedAt))
+	}
 	if body := domain.SanitizeControlChars(review.Body); strings.TrimSpace(body) != "" {
 		fmt.Fprintf(&msg, "\n\nReview body:\n%s", body)
 	}
@@ -923,12 +930,6 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 	}
 	if review.ID != "" {
 		fmt.Fprintf(&msg, "\nReview ID: %s", domain.SanitizeControlChars(review.ID))
-	}
-	// When the reviewer submitted it, not when AO delivered it: a nudge held
-	// while the session waited on the user can arrive long after. The chat
-	// shows this time on the event row.
-	if !review.SubmittedAt.IsZero() {
-		fmt.Fprintf(&msg, "\nSubmitted at: %s", providerEventTime(review.SubmittedAt))
 	}
 	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what Orchestrator has provided here.")
 	return msg.String()
@@ -939,7 +940,14 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what Orchestrator has provided here."
 	}
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
+	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.", len(comments))
+	// When the newest comment was written, not when AO delivered it; the chat
+	// shows this time on the event row. Like the changes-requested nudge, it
+	// ends the first line so older chat clients still parse the message.
+	if newest := newestCommentTime(comments); !newest.IsZero() {
+		fmt.Fprintf(&msg, " Newest comment posted at %s.", providerEventTime(newest))
+	}
+	msg.WriteString("\n")
 	for i, c := range comments {
 		location := "(general)"
 		if c.File != "" {
@@ -956,15 +964,7 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		// PR) and get pasted into the agent's live pane; strip control/escape
 		// chars before formatting them.
 		body := domain.SanitizeControlChars(c.Body)
-		// The heading carries when the reviewer wrote the comment, not when AO
-		// delivered it; the chat shows this time on the event row. It sits in
-		// the heading AO writes, after the provider-controlled path, so a body
-		// line cannot supply it.
-		posted := ""
-		if !c.CreatedAt.IsZero() {
-			posted = ", " + providerEventTime(c.CreatedAt)
-		}
-		fmt.Fprintf(&msg, "\n%d. %s (@%s%s):\n%s", i+1, location, author, posted, body)
+		fmt.Fprintf(&msg, "\n%d. %s (@%s):\n%s", i+1, location, author, body)
 		if c.URL != "" {
 			fmt.Fprintf(&msg, "\n   %s", domain.SanitizeControlChars(c.URL))
 		}
@@ -975,6 +975,16 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 	}
 	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
 	return msg.String()
+}
+
+func newestCommentTime(comments []ports.PRCommentObservation) time.Time {
+	var newest time.Time
+	for _, c := range comments {
+		if c.CreatedAt.After(newest) {
+			newest = c.CreatedAt
+		}
+	}
+	return newest
 }
 
 // providerEventTime renders a provider timestamp for nudge text: UTC RFC 3339

@@ -176,8 +176,7 @@ export type FileFeedback = {
 export type BrowserAnnotation = { number: number; target: string; text: string; comment: string; changes: string[] };
 export type BrowserFeedback = { pageTitle: string; pageUrl: string; items: BrowserAnnotation[]; screenshotCount: number };
 export type FailedCheck = { name: string; url?: string; log?: string };
-/** `postedAt` is when the reviewer wrote it, which can be long before AO delivered the message. */
-export type ReviewComment = { path?: string; line?: number; author: string; body: string; postedAt?: string };
+export type ReviewComment = { path?: string; line?: number; author: string; body: string };
 export type GitAction = "createPR" | "createDraftPR" | "commit" | "commitPush" | "push";
 export type AutomationNotice = "orchestratorReplaced" | "contextCarried" | "reviewTask";
 
@@ -198,12 +197,13 @@ const PR_IDENTITY = /PR #(\d+)(?: ("(?:[^"\\\n]|\\.)*"))?(?: \([^\n]*? → [^\n]
 const PR_LINE = /\nPR: (\S+)\s*$/;
 // A GitHub or GitLab login, or the daemon's stand-in. Never markup.
 const LOGIN = String.raw`[\w.-]+(?:\[bot\])?|unknown reviewer`;
-// The provider time lifecycle's providerEventTime writes: UTC RFC 3339 to the second.
-const EVENT_TIME = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z`;
+// The forge time lifecycle ends a nudge's first line with, in providerEventTime's
+// UTC RFC 3339. AO writes it after the PR identity, whose title is quoted and
+// whose branch names hold no spaces, so a title cannot end the line with one.
+const EVENT_TIME = String.raw`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\.$`;
 
-/** The newest of the given times, or undefined when none is known. */
-function latest(times: (string | undefined)[]): string | undefined {
-	return times.reduce<string | undefined>((newest, time) => (time && (!newest || Date.parse(time) > Date.parse(newest)) ? time : newest), undefined);
+function firstLineTime(text: string, lead: string): string | undefined {
+	return new RegExp(String.raw` ${lead} ${EVENT_TIME}`).exec(text.split("\n", 1)[0]!)?.[1];
 }
 
 function pullRequest(text: string, url?: string): PullRequestRef | undefined {
@@ -241,30 +241,28 @@ function failedChecks(text: string): FailedCheck[] | null {
 // looks like a heading then cannot pose as the next comment.
 function reviewComments(text: string, announced: number): ReviewComment[] | null {
 	const closing = text.lastIndexOf("\n\nAddress each comment and push fixes.");
-	const headings = [...text.matchAll(new RegExp(String.raw`\n\n(\d+)\. ([^\n]+) \(@(${LOGIN})(?:, (${EVENT_TIME}))?\):\n`, "g"))];
+	const headings = [...text.matchAll(new RegExp(String.raw`\n\n(\d+)\. ([^\n]+) \(@(${LOGIN})\):\n`, "g"))];
 	if (closing < 0 || headings.length !== announced || headings.some((heading, index) => Number(heading[1]) !== index + 1)) return null;
 	return headings.map((heading, index) => {
 		const end = headings[index + 1]?.index ?? closing;
 		const lines = text.slice(heading.index! + heading[0].length, end).replace(/\s+$/, "").split("\n");
 		while (lines.length > 0 && /^ {3}(?:https?:\/\/\S+|Thread ID: .*)$/.test(lines.at(-1)!)) lines.pop();
 		const at = heading[2] === "(general)" ? undefined : /^(.*?)(?::(\d+))?$/.exec(heading[2]!);
-		return { path: at?.[1] || undefined, line: at?.[2] ? Number(at[2]) : undefined, author: heading[3]!, body: lines.join("\n").trim(), postedAt: heading[4] };
+		return { path: at?.[1] || undefined, line: at?.[2] ? Number(at[2]) : undefined, author: heading[3]!, body: lines.join("\n").trim() };
 	});
 }
 
-// Read from the end: the review URL, ID and submitted time follow the free-text body.
-function changesRequested(text: string): { body: string; url?: string; at?: string } | null {
+// Read from the end: the review URL and ID follow the free-text body.
+function changesRequested(text: string): { body: string; url?: string } | null {
 	const closing = text.lastIndexOf("\n\nAddress the requested changes and push.");
 	if (closing < 0) return null;
 	let rest = text.slice(0, closing);
-	const submitted = new RegExp(String.raw`\nSubmitted at: (${EVENT_TIME})$`).exec(rest);
-	if (submitted) rest = rest.slice(0, submitted.index);
 	const id = /\nReview ID: [^\n]*$/.exec(rest);
 	if (id) rest = rest.slice(0, id.index);
 	const url = /\n\nReview URL: (\S+)$/.exec(rest);
 	if (url) rest = rest.slice(0, url.index);
 	const bodyAt = rest.indexOf("\n\nReview body:\n");
-	return { body: bodyAt < 0 ? "" : rest.slice(bodyAt + "\n\nReview body:\n".length).trim(), url: url?.[1], at: submitted?.[1] };
+	return { body: bodyAt < 0 ? "" : rest.slice(bodyAt + "\n\nReview body:\n".length).trim(), url: url?.[1] };
 }
 
 function readPullRequestNudge(text: string): Automation | null {
@@ -282,13 +280,13 @@ function readPullRequestNudge(text: string): Automation | null {
 	if (announced) {
 		const pr = pullRequest(text, prURL);
 		const comments = pr ? reviewComments(text, Number(announced[1])) : null;
-		return pr && comments ? { kind: "reviewComments", pr, comments, at: latest(comments.map((comment) => comment.postedAt)) } : null;
+		return pr && comments ? { kind: "reviewComments", pr, comments, at: firstLineTime(text, "Newest comment posted at") } : null;
 	}
 	const reviewer = new RegExp(String.raw`^A changes-requested review from @(${LOGIN}) is on `).exec(text);
 	if (reviewer) {
 		const review = changesRequested(text.replace(PR_LINE, ""));
 		const pr = review ? pullRequest(text, review.url ?? prURL) : undefined;
-		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body, at: review.at } : null;
+		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body, at: firstLineTime(text, "Submitted at") } : null;
 	}
 	// AO's own reviewer, before its findings became GitHub reviews; only old history carries these.
 	if (text.startsWith("[AO reviewer] ")) {

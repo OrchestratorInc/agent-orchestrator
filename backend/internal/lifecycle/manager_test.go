@@ -2747,11 +2747,16 @@ func TestPRObservation_ReviewNudgesCarryProviderTime(t *testing.T) {
 	if len(msg.msgs) != 2 {
 		t.Fatalf("want comment and review nudges, got %v", msg.msgs)
 	}
-	if want := "\n1. telemetry.ts:12 (@alice, 2026-11-16T02:24:42Z):\nfix this"; !strings.Contains(msg.msgs[0], want) {
-		t.Fatalf("comment nudge missing UTC posted time %q:\n%s", want, msg.msgs[0])
+	// The time ends the first line, where older chat clients do not look; the
+	// comment heading keeps the shape they parse.
+	if first := strings.SplitN(msg.msgs[0], "\n", 2)[0]; !strings.HasSuffix(first, " Newest comment posted at 2026-11-16T02:24:42Z.") {
+		t.Fatalf("comment nudge first line missing UTC posted time: %q", first)
 	}
-	if want := "\nReview ID: r1\nSubmitted at: 2026-11-16T07:54:41Z\n\nAddress the requested changes"; !strings.Contains(msg.msgs[1], want) {
-		t.Fatalf("review nudge missing submitted time %q:\n%s", want, msg.msgs[1])
+	if !strings.Contains(msg.msgs[0], "\n1. telemetry.ts:12 (@alice):\nfix this") {
+		t.Fatalf("comment heading changed shape:\n%s", msg.msgs[0])
+	}
+	if first := strings.SplitN(msg.msgs[1], "\n", 2)[0]; first != "A changes-requested review from @bob is on your PR. Submitted at 2026-11-16T07:54:41Z." {
+		t.Fatalf("review nudge first line missing submitted time: %q", first)
 	}
 }
 
@@ -2767,10 +2772,10 @@ func TestPRObservation_ReviewNudgesOmitUnknownProviderTime(t *testing.T) {
 	if len(msg.msgs) != 2 {
 		t.Fatalf("want comment and review nudges, got %v", msg.msgs)
 	}
-	if !strings.Contains(msg.msgs[0], "\n1. (general) (@alice):\n") {
-		t.Fatalf("comment heading changed without a provider time:\n%s", msg.msgs[0])
+	if strings.Contains(msg.msgs[0], "posted at") {
+		t.Fatalf("comment nudge invented a posted time:\n%s", msg.msgs[0])
 	}
-	if strings.Contains(msg.msgs[1], "Submitted at:") {
+	if strings.Contains(msg.msgs[1], "Submitted at") {
 		t.Fatalf("review nudge invented a submitted time:\n%s", msg.msgs[1])
 	}
 }

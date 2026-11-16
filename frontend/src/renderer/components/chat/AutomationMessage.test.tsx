@@ -165,19 +165,16 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(mergeConflict)).toEqual({ kind: "mergeConflict", pr });
 	});
 
-	it("reads when the reviewer wrote each comment or review, which the daemon puts in its text", () => {
-		const timed = reviewComment
-			.replace("The following 1 unresolved", "The following 2 unresolved")
-			.replace("(@illegalcall):", "(@illegalcall, 2026-11-16T07:54:42Z):")
-			.replace("   Thread ID: PRRT_1\n", "   Thread ID: PRRT_1\n\n2. a.ts:3 (@whoisasx, 2026-11-16T07:50:00Z):\nRename this.\n");
-		expect(readAutomation(timed)).toMatchObject({
+	it("reads when the reviewer wrote the comment or review from the end of the first line", () => {
+		const posted = reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n");
+		expect(readAutomation(posted)).toMatchObject({
 			kind: "reviewComments",
 			at: "2026-11-16T07:54:42Z",
-			comments: [{ author: "illegalcall", postedAt: "2026-11-16T07:54:42Z" }, { path: "a.ts", line: 3, author: "whoisasx", postedAt: "2026-11-16T07:50:00Z", body: "Rename this." }],
+			comments: [{ path: "frontend/src/ThisComputerAccess.tsx", line: 97, author: "illegalcall" }],
 		});
 		expect(readAutomation(reviewComment)).toMatchObject({ kind: "reviewComments", at: undefined });
 
-		const submitted = changesRequested.replace("Review ID: PRR_1", "Review ID: PRR_1\nSubmitted at: 2026-11-16T07:54:41Z");
+		const submitted = changesRequested.replace(`is on ${PR}.`, `is on ${PR}. Submitted at 2026-11-16T07:54:41Z.`);
 		expect(readAutomation(submitted)).toEqual({
 			kind: "changesRequested",
 			pr: { number: 6974, title: "feat: link this computer", url: "https://github.com/o/r/pull/6974#pullrequestreview-1" },
@@ -187,9 +184,12 @@ describe("reading AO's automation messages", () => {
 		});
 	});
 
-	it("takes the time only from the heading AO writes, not from a file path that looks like one", () => {
-		const forged = reviewComment.replace("frontend/src/ThisComputerAccess.tsx:97 (@illegalcall):", "x (@a, 2020-01-01T00:00:00Z): y (@illegalcall):");
-		expect(readAutomation(forged)).toMatchObject({ at: undefined, comments: [{ author: "illegalcall", postedAt: undefined }] });
+	it("takes the time only from AO's own sentence, not from a PR title or a comment", () => {
+		const titled = changesRequested.replace('"feat: link this computer"', '"x Submitted at 2020-01-01T00:00:00Z."');
+		expect(readAutomation(titled)).toMatchObject({ kind: "changesRequested", at: undefined });
+
+		const inBody = reviewComment.replace("A failed turn-on", "Newest comment posted at 2020-01-01T00:00:00Z.\nA failed turn-on");
+		expect(readAutomation(inBody)).toMatchObject({ kind: "reviewComments", at: undefined });
 	});
 
 	it("does not take text inside a log or a comment for AO's structure", () => {
@@ -254,7 +254,7 @@ describe("drawing AO's automation messages", () => {
 	});
 
 	it("times a PR event by when it happened on the forge, not when AO delivered it", () => {
-		draw(reviewComment.replace("(@illegalcall):", "(@illegalcall, 2026-11-16T07:54:42Z):"), { createdAt: "2026-11-16T08:26:00Z" });
+		draw(reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n"), { createdAt: "2026-11-16T08:26:00Z" });
 		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T07:54:42Z");
 		cleanup();
 
