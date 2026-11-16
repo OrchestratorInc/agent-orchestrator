@@ -458,7 +458,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 
 	now := e.clock()
-	reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID, domain.ActivityActive, now)
+	// Keep the stored activity until planning proves review work is due; a
+	// trigger that starts no run must not leave the reviewer marked active.
+	reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID, "", now)
 	if err != nil {
 		return TriggerResult{}, err
 	}
@@ -571,15 +573,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			reviewRow.ProviderConversationID = ""
 			reviewRow.ControllerGeneration = ""
 		}
-		// The reviewer was marked active before planning decided whether any PR
-		// was due. No run started, so restore the activity it had before this
-		// trigger; otherwise a live pane reads as active with no run behind it.
-		if hasReview && !previousReview.IsArchived && previousReview.ReviewerActivityState != "" && reviewRow.ReviewerActivityState != previousReview.ReviewerActivityState {
-			reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID, previousReview.ReviewerActivityState, now)
-			if err != nil {
-				return TriggerResult{}, err
-			}
-		}
 		if opts.RejectReviewedHead || (opts.Rerun && source == domain.ReviewTriggerAgent) {
 			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun, noOpenPR)
 		}
@@ -593,6 +586,12 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 		}
 		return err
+	}
+
+	// Review work is due now, so the reviewer is active.
+	reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID, domain.ActivityActive, now)
+	if err != nil {
+		return TriggerResult{}, failRuns(0, err)
 	}
 
 	previousHandleID := reviewRow.ReviewerHandleID
