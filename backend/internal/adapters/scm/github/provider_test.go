@@ -1272,6 +1272,45 @@ func TestSCMObservationUsesRollupStateWhenContextsPaginated(t *testing.T) {
 	}
 }
 
+// A PR whose head is a fork's branch or the repository's default branch is
+// flagged, so the stack-parent lookup never treats it as a stack base.
+func TestSCMObservationFlagsHeadsThatCannotBeStackParents(t *testing.T) {
+	defaultBranch := func(name string) map[string]any {
+		return map[string]any{"defaultBranchRef": map[string]any{"name": name}}
+	}
+	cases := []struct {
+		name               string
+		head               string
+		crossRepository    bool
+		headRepository     any
+		wantFork, wantMain bool
+	}{
+		{name: "feature branch", head: "feat/base", headRepository: defaultBranch("main")},
+		{name: "sync from main", head: "main", headRepository: defaultBranch("main"), wantMain: true},
+		{name: "fork branch", head: "develop", crossRepository: true, headRepository: defaultBranch("develop"), wantFork: true},
+		{name: "deleted fork", head: "patch-1", crossRepository: true, headRepository: nil, wantFork: true},
+		{name: "empty repository", head: "main", headRepository: map[string]any{"defaultBranchRef": nil}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var pr map[string]any
+			basePRFixture().prData(func(m map[string]any) {
+				pr = m
+				m["headRefName"] = tc.head
+				m["isCrossRepository"] = tc.crossRepository
+				m["headRepository"] = tc.headRepository
+			})
+			obs := scmObservationFromGraphQL(ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "github", Host: "github.com", Owner: "octocat", Name: "hello", Repo: "octocat/hello"}, Number: 42}, pr)
+			if obs.PR.HeadFromFork != tc.wantFork || obs.PR.HeadIsDefaultBranch != tc.wantMain {
+				t.Fatalf("fork=%v default=%v, want fork=%v default=%v", obs.PR.HeadFromFork, obs.PR.HeadIsDefaultBranch, tc.wantFork, tc.wantMain)
+			}
+		})
+	}
+	if !strings.Contains(scmPRFields(), "isCrossRepository headRepository{ defaultBranchRef{ name } }") {
+		t.Fatal("PR query does not read the head repository facts")
+	}
+}
+
 func actionsCheckRun(workflow, name, conclusion string, id float64) map[string]any {
 	n := map[string]any{"__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": conclusion, "databaseId": id}
 	if workflow != "" {
