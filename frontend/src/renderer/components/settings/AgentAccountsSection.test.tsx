@@ -14,7 +14,7 @@ const { deleteMock, getMock, patchMock, postMock, terminalState } = vi.hoisted((
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
-	apiErrorCode: (error: unknown) => (error as { code?: string } | undefined)?.code,
+	apiErrorDetails: (error: unknown) => (error as { details?: Record<string, unknown> } | undefined)?.details,
 }));
 
 vi.mock("../TerminalPane", () => ({
@@ -66,8 +66,8 @@ it("signs a signed-out saved account in again in its own folder", async () => {
 	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This account is b@example.com. Sign in again with that login."));
 });
 
-it("names Windows Developer Mode, not Orchestrator's, when an account folder cannot link", async () => {
-	postMock.mockImplementation(() => Promise.resolve({ error: { code: "AGENT_ACCOUNT_UNSHARED", message: "server text" } }));
+it("names Windows Developer Mode, not Orchestrator's, when Windows refused an account folder's links", async () => {
+	postMock.mockImplementation(() => Promise.resolve({ error: { code: "AGENT_ACCOUNT_UNSHARED", message: "server text", details: { windowsDeveloperMode: true } } }));
 	const user = userEvent.setup();
 	renderPanel();
 	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
@@ -77,7 +77,19 @@ it("names Windows Developer Mode, not Orchestrator's, when an account folder can
 	// A setting the user can change reads as a warning, not a failure.
 	expect(alert).toHaveClass("text-warning");
 	await user.hover(within(alert).getByRole("button", { name: "How to turn on Windows Developer Mode" }));
-	expect(await screen.findByRole("tooltip")).toHaveTextContent("Windows Settings > System > For developers");
+	expect(await screen.findByRole("tooltip")).toHaveTextContent("System > Advanced");
+});
+
+it("keeps any other failed account link an error without the Developer Mode help", async () => {
+	postMock.mockImplementation(() => Promise.resolve({ error: { code: "AGENT_ACCOUNT_UNSHARED", message: "server text" } }));
+	const user = userEvent.setup();
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveClass("text-error");
+	expect(alert).not.toHaveTextContent("Developer Mode");
+	expect(within(alert).queryByRole("button", { name: "How to turn on Windows Developer Mode" })).not.toBeInTheDocument();
 });
 
 it("starts the sign-in a chat asked for, once", async () => {

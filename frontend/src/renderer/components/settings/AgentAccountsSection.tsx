@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
-import { apiErrorCode } from "../../lib/api-client";
+import { apiErrorDetails } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
 import { formatRelativeTime } from "../../lib/usage-format";
@@ -45,9 +45,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [loginNote, setLoginNote] = useState("");
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState("");
-	// The account folder could not link to this computer's history, which on
-	// Windows needs the OS's own Developer Mode; the alert explains where it is.
-	const [unshared, setUnshared] = useState(false);
+	// Windows refused the account folder's links because its own Developer Mode
+	// is off; the alert says where to turn it on. Other link failures stay errors.
+	const [needsDeveloperMode, setNeedsDeveloperMode] = useState(false);
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
@@ -59,13 +59,13 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
 		setBusy(key);
 		setError("");
-		setUnshared(false);
+		setNeedsDeveloperMode(false);
 		try {
 			await action();
 		} catch (err) {
-			const isUnshared = err instanceof Error && apiErrorCode(err.cause) === "AGENT_ACCOUNT_UNSHARED";
-			setUnshared(isUnshared);
-			setError(isUnshared ? t("settings.agentAccounts.unshared") : err instanceof Error ? err.message : String(err));
+			const isDeveloperMode = err instanceof Error && apiErrorDetails(err.cause)?.windowsDeveloperMode === true;
+			setNeedsDeveloperMode(isDeveloperMode);
+			setError(isDeveloperMode ? t("settings.agentAccounts.unshared") : err instanceof Error ? err.message : String(err));
 		} finally {
 			setBusy(null);
 		}
@@ -132,11 +132,11 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			</div>}
 		>
 			{/* A setting the user can change is a warning, like an account problem that needs them. */}
-			{error ? <p role="alert" className={cn("flex items-start gap-1.5 px-3 py-2.5 text-xs", unshared ? "text-warning" : "text-error")}>
-				{unshared ? <TriangleAlert aria-hidden="true" className="mt-px size-icon-sm shrink-0" /> : null}
+			{error ? <p role="alert" className={cn("flex items-start gap-1.5 px-3 py-2.5 text-xs", needsDeveloperMode ? "text-warning" : "text-error")}>
+				{needsDeveloperMode ? <TriangleAlert aria-hidden="true" className="mt-px size-icon-sm shrink-0" /> : null}
 				<span className="min-w-0">
 					{error}
-					{unshared ? <Tooltip>
+					{needsDeveloperMode ? <Tooltip>
 						<TooltipTrigger asChild>
 							<Button type="button" size="icon-xs" variant="quiet" className="ml-1 align-middle" aria-label={t("settings.agentAccounts.unsharedHelpLabel")}>
 								<Info className="size-icon-sm" aria-hidden="true" />
@@ -164,7 +164,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => void startLogin(account.id)}
-				onRemove={() => { setError(""); setUnshared(false); setRemoving(account); }}
+				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
