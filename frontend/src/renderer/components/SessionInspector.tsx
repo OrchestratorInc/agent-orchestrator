@@ -493,7 +493,8 @@ const SummaryView = memo(function SummaryView({
 	// CI, review, and merge policies act on a PR. Standalone sessions, local or
 	// a Cloud standalone agent, keep the row for Archive.
 	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
-	const showSessionControls = hasPRs || scratchpadSession;
+	// Stop turn needs no PR, so a busy worker without one still gets the section.
+	const showSessionControls = hasPRs || scratchpadSession || canStopTurn(session);
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -601,7 +602,7 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			)}
-			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} scratchpad={scratchpadSession} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} policies={hasPRs} scratchpad={scratchpadSession} session={session} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
@@ -886,7 +887,11 @@ function updateSessionAutoInjectCI(
 	}));
 }
 
-function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSession; hostId?: string; scratchpad: boolean }) {
+function canStopTurn(session: WorkspaceSession): boolean {
+	return !session.cloud && session.mode !== "chat" && session.activity?.state === "active";
+}
+
+function SessionControls({ session, hostId, policies, scratchpad }: { session: WorkspaceSession; hostId?: string; policies: boolean; scratchpad: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -988,7 +993,7 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 			</span>
 		</div>
 	);
-	const interruptAction = !session.cloud && session.mode !== "chat" && session.activity?.state === "active" ? (
+	const interruptAction = canStopTurn(session) ? (
 		<div className="py-1">
 			<div className="flex items-center justify-between gap-3">
 				<span className="text-xs font-medium text-settings-label">{t("inspector.currentTurn")}</span>
@@ -1007,6 +1012,10 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 				{terminateAction}
 			</Section>
 		);
+	}
+
+	if (!policies) {
+		return <Section title={t("inspector.sessionControls")}>{interruptAction}</Section>;
 	}
 
 	return (
