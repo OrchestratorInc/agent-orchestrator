@@ -1,10 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Columns2, Maximize2, Minimize2, Rows3, Search } from "@/components/app-icons";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";
-import { cloudWorkspaceReviewSummaryQueryOptions, useCloudWorkspaceReviewEvents } from "../../hooks/useCloudWorkspaceReview";
+import { cloudFilesManifest, cloudFilesReviewDataSource, cloudWorkspaceReviewSummaryQueryOptions, useCloudWorkspaceReviewEvents } from "../../hooks/useCloudWorkspaceReview";
+import { useFileAnnotation } from "../../hooks/useFileAnnotation";
+import { useFilesReviewSelection, type FilesSelectionStore } from "../../hooks/useFilesReviewSelection";
+import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
 import { refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
+import { annotationSource } from "../../lib/files-review-selection";
 import { joinWorkspaceRepositoryPath, splitWorkspaceRepositoryPath, withWorkspaceRepository, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
 import { cloudStartupProblem, resumeCloudSession } from "../../lib/cloud-lifecycle";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -20,6 +24,8 @@ import { repositoryAnnotationModel } from "./repositoryAnnotation";
 export type CloudFileOpenOptions = {
 	scope?: CloudCpWorkspaceReviewScope;
 	commitSha?: string;
+	/** Another branch's or a PR's commits, which the file is read from instead of the worktree. */
+	source?: FilesSource;
 	mode?: "diff" | "file" | "rendered";
 	editing?: boolean;
 };
@@ -72,7 +78,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const activeRepository = switchable && repositories.some((entry) => !entry.main && entry.present && entry.name === repository) ? repository : "";
 	const reviewUi = useUiStore((state) => state.inspectorSessions[session.id]?.cloudReviewUi?.[activeRepository]);
 	const setReviewUi = useUiStore((state) => state.setCloudReviewUi);
-	const showChanges = reviewUi?.showChanges ?? true;
+	const storedShowChanges = reviewUi?.showChanges ?? true;
 	const filter = reviewUi?.filter ?? "";
 	const selectedPath = reviewUi?.selectedPath ?? null;
 	const setShowChanges = (value: boolean) => setReviewUi(session.id, activeRepository, { showChanges: value });
@@ -82,12 +88,34 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 		...cloudWorkspaceReviewSummaryQueryOptions({ client: scopedClient, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && workerConnected && activeRepository !== "", visible: true }),
 	});
 	const summaryQuery = activeRepository !== "" ? siblingSummaryQuery : mainSummaryQuery;
-	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(annotation, activeRepository || undefined), [annotation, activeRepository]);
+	// The branch or PR under review, picked from the same menus and rules as a
+	// local review. A worker without views lists no branches, so the menu stays
+	// hidden and the review shows the worktree as before.
+	const summary = summaryQuery.data;
+	const manifest = useMemo(() => (summary ? cloudFilesManifest(summary, session.id) : undefined), [session.id, summary]);
+	const reviewDataSource = useMemo(() => cloudFilesReviewDataSource({ client: scopedClient, baseUrl, orgId: orgId ?? "", sessionId: session.id }), [baseUrl, orgId, scopedClient, session.id]);
+	const selectionStore: FilesSelectionStore = {
+		key: `cloud:${session.id}:${activeRepository}`,
+		stored: reviewUi?.filesSelection,
+		set: (next) => setReviewUi(session.id, activeRepository, { filesSelection: next }),
+		reset: () => setReviewUi(session.id, activeRepository, { filesSelection: undefined }),
+	};
+	const checkedOutBranch = activeRepository ? repositories.find((entry) => entry.name === activeRepository)?.branch : session.branch;
+	const review = useFilesReviewSelection({ sessionId: session.id, manifest, projectKind: "single_repo", checkedOutBranch, dataSource: reviewDataSource, selectionStore });
+	const reviewBranch = review.target.branch;
+	const viewing = reviewBranch.kind !== "checked_out" && review.branchMenu !== null;
+	// Comments on a branch or PR tell the agent which one they are about.
+	const sendViewAnnotation = useCallback(async (message: string) => { await client.sendSessionMessage(orgId ?? "", session.id, { text: message }); }, [client, orgId, session.id]);
+	const viewAnnotation = useFileAnnotation(session.id, { source: annotationSource(reviewBranch), sendMessage: sendViewAnnotation });
+	const reviewAnnotation = viewing ? viewAnnotation : annotation;
+	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(reviewAnnotation, activeRepository || undefined), [reviewAnnotation, activeRepository]);
 	useCloudWorkspaceReviewEvents({ baseUrl, orgId, sessionId: session.id, enabled });
 	useEffect(() => { window.localStorage.setItem("ao.cloud.files.diffStyle", split ? "split" : "unified"); }, [split]);
 	useEffect(() => {
 		if (mainSummaryQuery.data && repository !== activeRepository) setRepository(session.id, activeRepository);
 	}, [mainSummaryQuery.data, repository, activeRepository, session.id, setRepository]);
+	// The tree shows the worktree, so another branch or a PR is only reviewed.
+	const showChanges = storedShowChanges || viewing;
 	const changedFiles = useMemo(() => {
 		const data = summaryQuery.data;
 		if (!data) return [];
@@ -113,7 +141,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 		<section aria-label={t("files.sessionFiles")} className="flex h-full min-h-0 flex-col bg-background text-foreground">
 			<header className="flex h-10 shrink-0 items-center gap-0.5 border-b border-border bg-surface px-2">
 				<label className="relative mr-1 min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" /><Input aria-label={t("files.explorer.filter")} className="h-8 pl-8 font-mono text-xs" onChange={(event) => setFilter(event.target.value)} placeholder={t("files.explorer.filterPlaceholder")} value={filter} /></label>
-				{changedFiles.length > 0 ? <div aria-label={t("files.viewMode")} className="flex items-center rounded-md border border-border bg-muted/30 p-0.5" role="tablist">
+				{changedFiles.length > 0 && !viewing ? <div aria-label={t("files.viewMode")} className="flex items-center rounded-md border border-border bg-muted/30 p-0.5" role="tablist">
 					<Button aria-selected={showChanges} data-active={showChanges} role="tab" className="text-2xs" onClick={() => setShowChanges(true)} size="xs" variant="ghost">{t("files.reviewChanges")}</Button>
 					<Button aria-selected={!showChanges} data-active={!showChanges} role="tab" className="text-2xs" onClick={() => setShowChanges(false)} size="xs" variant="ghost">{t("files.allFiles")}</Button>
 				</div> : null}
@@ -132,7 +160,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 			{!enabled || (summaryQuery.isPending && !workerGone) ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isPending ? (
 				<PanelMessage action={session.isTerminated ? undefined : <RetryButton onClick={restart} />}>{restartError ?? startupProblem?.message ?? t("inspector.filesUnavailable")}</PanelMessage>
 			) : summaryQuery.isError ? <PanelMessage action={<RetryButton onClick={() => void summaryQuery.refetch()} />}>{summaryQuery.error.message}</PanelMessage> : showChanges ? (
-				<CloudWorkspaceReviewPane annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} data={summaryQuery.data} filter={filter} key={activeRepository} onBrowseAll={() => setShowChanges(false)} onOpenFile={open} orgId={orgId!} repository={activeRepository || undefined} sessionId={session.id} split={split} />
+				<CloudWorkspaceReviewPane annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} data={summaryQuery.data} filter={filter} key={activeRepository} onBrowseAll={() => setShowChanges(false)} onOpenFile={open} orgId={orgId!} repository={activeRepository || undefined} review={review} sessionId={session.id} split={split} />
 			) : <CloudFileTree baseUrl={baseUrl} client={scopedClient} filterText={filter} key={activeRepository} onOpenFile={(path) => open(path, { mode: "file" })} orgId={orgId!} selectedPath={selectedInRepository} sessionId={session.id} />}
 		</section>
 	);

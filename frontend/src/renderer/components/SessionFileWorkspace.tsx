@@ -1,4 +1,5 @@
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
+import { snapshotAnnotationSource } from "../lib/files-review-selection";
 import type { FileAnnotationRange } from "../../shared/chat-file-reference";
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { FileContentPane } from "./FileContentPane";
@@ -52,8 +53,7 @@ export function SessionFileWorkspace({
 }) {
 	const snapshotAnnotation = useFileAnnotation(sessionId, {
 		hostId,
-		source:
-			source?.kind === "snapshot" ? `${source.label} (tip ${source.view?.expectedTipSha ?? "selected revision"}; review base ${source.view?.expectedBaseSha ?? "selected history"}; commits ${source.commitShas?.join(",") || "all"})` : "Workspace",
+		source: source?.kind === "snapshot" ? snapshotAnnotationSource(source) : "Workspace",
 	});
 	const identity = fileKey ?? path;
 	const scrollRef = useRef<HTMLDivElement>(null);

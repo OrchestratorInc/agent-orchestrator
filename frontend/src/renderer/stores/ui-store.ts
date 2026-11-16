@@ -87,6 +87,8 @@ export type CloudReviewUiState = {
 	filter?: string;
 	selectedPath?: string | null;
 	commitBrowserOpen?: boolean;
+	/** The branch (or PR) and changes under review; unset follows the checked-out branch. */
+	filesSelection?: FilesSelection;
 	pane?: {
 		selectionKey: string;
 		files: Record<string, { fingerprint: string; collapsed: boolean; loadedDeferred: boolean }>;

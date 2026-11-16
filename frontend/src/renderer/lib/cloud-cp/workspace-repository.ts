@@ -35,6 +35,9 @@ export function withWorkspaceRepository(client: CloudCpClient, repository: strin
 		getWorkspaceReviewDiffs: (orgId, sessionId, body, options) => client.getWorkspaceReviewDiffs(orgId, sessionId, body, { ...options, repository: name }),
 		getWorkspaceReviewRevision: (orgId, sessionId, query, options) => client.getWorkspaceReviewRevision(orgId, sessionId, query, { ...options, repository: name }),
 		updateWorkspaceReviewFile: (orgId, sessionId, body, options) => client.updateWorkspaceReviewFile(orgId, sessionId, body, { ...options, repository: name }),
+		getWorkspaceBranches: (orgId, sessionId, options) => client.getWorkspaceBranches(orgId, sessionId, { ...options, repository: name }),
+		getWorkspaceHistory: (orgId, sessionId, query, options) => client.getWorkspaceHistory(orgId, sessionId, query, { ...options, repository: name }),
+		getWorkspaceCommitSelection: (orgId, sessionId, body, options) => client.getWorkspaceCommitSelection(orgId, sessionId, body, { ...options, repository: name }),
 	};
 	scopedRepository.set(scoped, name);
 	byName.set(name, scoped);
