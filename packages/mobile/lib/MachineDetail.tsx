@@ -10,7 +10,7 @@ import {
 	environmentStatusColor,
 	primaryEnvironmentEndpoint,
 } from "./environmentView";
-import { FormFooter, formModifiers, sectionModifiers } from "./formFields";
+import { FormFooter, formModifiers, FormSection, sectionModifiers } from "./formFields";
 import { DEFAULT_MACHINE_NOTE, FORGET_MACHINE_NOTE, RECONNECT_NOTE, type MachineDetailProps } from "./MachineDetail.types";
 import { symbols } from "./symbols";
 import { useTheme, useThemeState } from "./ThemeProvider";
@@ -40,7 +40,7 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 			{headerItems}
 			<Host style={{ flex: 1 }} colorScheme={scheme}>
 				<Form modifiers={formModifiers(t)}>
-					<Section footer={isDefault ? <FormFooter>{DEFAULT_MACHINE_NOTE}</FormFooter> : undefined} modifiers={sectionModifiers(t)}>
+					<FormSection hint={isDefault ? DEFAULT_MACHINE_NOTE : undefined} modifiers={sectionModifiers(t)}>
 						<LabeledContent label="Status">
 							<Text testID="machine-status" modifiers={[foregroundStyle(environmentStatusColor(t, status))]}>{status.label}</Text>
 						</LabeledContent>
@@ -49,7 +49,7 @@ export function MachineDetail({ host, activeConfig, isDefault, status, switching
 								<Text>{environmentPlatformLabel(host.platform)}</Text>
 							</LabeledContent>
 						) : null}
-					</Section>
+					</FormSection>
 					<Section title="Routes" modifiers={sectionModifiers(t)}>
 						{primary ? (
 							<LabeledContent label="Active route">

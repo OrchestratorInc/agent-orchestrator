@@ -5,7 +5,7 @@ Projects, Pull Requests — with Settings and Notifications in their headers, pl
 Chat-first spawn flow, a native conversation surface, the existing live terminal, and a
 preview browser. Chat sessions expose durable history,
 streaming activity, approvals, provider controls, attachments, voice input, and a plain
-worktree-shell escape hatch. It is a **thin client**: it talks to the AO daemon running on your
+worktree-shell escape hatch. It is a **thin client**: it talks to the Orchestrator daemon running on your
 computer through the endpoints advertised by the desktop pairing offer. It never runs agents itself.
 
 > **Development builds only — Expo Go is not supported.** The app depends on native modules,
@@ -13,6 +13,7 @@ computer through the endpoints advertised by the desktop pairing offer. It never
 > it; don't file bugs from it.
 
 - [How the phone reaches your machine](#how-the-phone-reaches-your-machine)
+- [Orchestrator Cloud](#orchestrator-cloud)
 - [Prerequisites](#prerequisites)
 - [Install](#install)
 - [Step 1 — Turn on Connect Mobile on the desktop](#step-1--turn-on-connect-mobile-on-the-desktop)
@@ -47,6 +48,39 @@ report no secure-pairing availability while the mode is off, and current v2 endp
 do not establish a verified working path. Use a managed HTTPS endpoint whose pairing
 record is marked `secure: true` for remote access. Background: [`docs/adr/0001-lan-listener-for-mobile.md`](../../docs/adr/0001-lan-listener-for-mobile.md).
 
+## Orchestrator Cloud
+
+Orchestrator Cloud runs agents in hosted sandboxes, with no computer involved. Signed in, it is one more
+environment beside the paired machines, labelled "Cloud" with a cloud icon wherever a machine shows its name:
+
+- **Workers** lists cloud workers on the same board, filterable by the Cloud machine chip. Rows open
+  the cloud session; pin, rename, archive, restore and resume go to Orchestrator Cloud.
+- **Projects** lists cloud projects beside each machine's; their page shows the orchestrator and
+  workers like any project's. **New cloud project** (the **+** at the end of the Projects title on iOS, the floating button on
+  Android, or the New task project menu) opens a form, a sheet on iOS and a page under the top app bar
+  on Android, as manual connect is: a repository the Orchestrator GitHub App can reach, or none.
+- **New task**: Cloud is a "Run on" choice after the connected machines. Its projects, connected agents,
+  models and effort levels fill the controls, and the approval mode and effort picked are passed to the
+  new session. Attachments are not supported for new cloud tasks yet; add files in the session's chat.
+- **Settings** lists Orchestrator Cloud in the Machines section while signed in. Its page holds the
+  organization, the coding agents and GitHub access.
+
+The phone talks to the control plane directly (`EXPO_PUBLIC_AO_CLOUD_API_BASE_URL`, default
+`https://api.aoagents.dev`, routes under `/api/cloud/v1`) with the Orchestrator account token from the existing
+sign-in (`lib/account.ts`). That token is never sent to a paired daemon, and a daemon's password is
+never sent to Orchestrator Cloud.
+
+| Flow | What the phone does |
+| --- | --- |
+| Sign in | The account's own sign-in, which also syncs the account's machines: Settings → Account, Sign in on an empty board, or onboarding's Sign in (an account with Cloud goes straight to the board, with no machine needed). The workspace is chosen as the desktop chooses it; a first sign-in creates one. |
+| Coding agents | Settings → Orchestrator Cloud. Claude Code: sign in on claude.com and paste back the code, or paste a `claude setup-token` / API key. Codex: ChatGPT device-code sign-in (enter the code on auth.openai.com), an API key, or `auth.json`. Cursor and OpenCode: API keys. The control plane validates each credential before storing it; nothing is kept on the phone. |
+| Sessions | The local chat's own screen parts: glass header, timeline, floating composer (model, effort, approvals, Plan mode for Claude Code, photos and files uploaded with the message where the organization's plan takes attachments), the request card, banners and the "⋯" actions sheet (shell, agent terminal, project, pin, the PR on GitHub, archive or restore). Events stream from the session's event stream, with the chat-events poll behind it. Agent and Shell terminals are the local terminal's parts over single-use terminal tickets on `wss://…/terminal` (protocol 2). Opening a paused session wakes it; reading it keeps it awake. |
+| Notifications | One Notifications screen lists machine and Cloud notifications together; Cloud rows carry the cloud icon and open their session. Clearing a Cloud row hides it on the phone and marks it read (the control plane has no delete). Cloud workers waiting on you count toward the Workers badge. When the control plane supports push devices, the phone registers its Expo token with `PUT /me/push-devices/{installId}`; an older control plane answers 404 and the app keeps to the list. |
+
+The code lives in `lib/cloud/` (client, state, row mapping, board actions, chat projection, event
+stream, attachments, terminal, sign-ins, notification feed), `app/cloud/` (new project, shell) and
+`app/settings/cloud/` (the Orchestrator Cloud page and each coding agent's page).
+
 ## Forgetting a machine
 
 Forgetting a machine removes its local pairing without waiting for network requests.
@@ -66,7 +100,7 @@ must be removed from the desktop, rather than sending credentials to an unverifi
 
 | For             | You need                                                                              |
 | --------------- | ------------------------------------------------------------------------------------- |
-| Everything      | Node 20+, and AO running on your machine (desktop app, or the daemon from source)     |
+| Everything      | Node 20+, and Orchestrator running on your machine (desktop app, or the daemon from source)     |
 | Phone ↔ machine | Same Wi-Fi network for LAN, or a reachable HTTPS endpoint for remote access         |
 | iOS build       | macOS, Xcode 16+, an Apple ID (a free one gives a 7-day signing profile), a USB cable |
 | Android build   | Android Studio (SDK + platform-tools for `adb`), a USB cable                          |
@@ -91,7 +125,7 @@ Two rules worth knowing before you fight an install:
 
 Nothing on the phone works until the desktop opens the LAN bridge. Do this first.
 
-**1. Start the desktop app.** Either launch the packaged AO app, or run it from source
+**1. Start the desktop app.** Either launch the packaged Orchestrator app, or run it from source
 (it starts its own daemon):
 
 ```bash
@@ -407,7 +441,7 @@ Play Store** checks on demand.
 | Crash at launch, _"main has not been registered"_ | Two React copies. Keep `metro.config.js` intact, reinstall with plain `npm install` (never `--force`), then `npx expo prebuild --clean`.                     |
 | **Connect** fails, everything times out            | Connect Mobile is off on the desktop, wrong port (`3011`, not `3001`), phone on a different network, or the macOS firewall is blocking incoming connections. |
 | 401 / invalid password                            | The password was regenerated on the desktop. Re-scan the QR.                                                                                                 |
-| Locked out after repeated failures                | The bridge locks out a source after 5 failed attempts. Wait it out, or toggle Connect Mobile off and on.                                                     |
+| Locked out after repeated failures                | The bridge locks out a source after 5 wrong passwords. Wait it out, or toggle Connect Mobile off and on.                                                     |
 | `adb devices` shows `unauthorized`                | Re-accept the USB debugging prompt on the phone.                                                                                                             |
 | iOS app installs, then closes immediately         | Untrusted developer profile: **Settings → General → VPN & Device Management → trust your Apple ID**.                                                         |
 | App runs but can't reach the daemon (iOS)         | The Local Network prompt was denied: **Settings → Privacy & Security → Local Network → Orchestrator** → on.                                                            |

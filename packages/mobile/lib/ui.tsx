@@ -131,13 +131,14 @@ export const Dot = memo(function Dot({
 	);
 });
 
-// `mascot.png` is the desktop mascot (frontend/assets/ao-mascot.png) cropped to
-// its artwork, with the eye sockets filled so they stay dark on light themes.
+// `mascot.png` is the flat Ruto from assets/brand/ruto.svg, the same artwork as
+// the desktop app's mascot, cropped by scripts/generate-brand-assets.swift. Its
+// dark pupils and edged baton keep it readable on light themes.
 // Its aspect ratio, as height / width.
 export const MASCOT_ASPECT = 200 / 256;
 // Where the wand tip sits in the artwork, as fractions of its width and height.
-const WAND_TIP_X = 0.972;
-const WAND_TIP_Y = 0.032;
+const WAND_TIP_X = 0.942;
+const WAND_TIP_Y = 0.023;
 const LAMP_DOT = 7;
 const LAMP_HALO = 16;
 

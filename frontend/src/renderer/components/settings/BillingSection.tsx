@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Loader2, Minus } from "lucide-react";
+import { Check, ExternalLink, Loader2, Minus } from "@/components/app-icons";
 import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";

@@ -388,7 +388,7 @@ func (c *Controller) upsertRender(ctx context.Context, providerTurnID, activityI
 }
 
 // ErrRenderCheckUnavailable reports that no desktop app is connected to load the page.
-var ErrRenderCheckUnavailable = errors.New("render check needs the AO desktop app")
+var ErrRenderCheckUnavailable = errors.New("render check needs the Orchestrator desktop app")
 
 // RenderCheck asks the desktop app to load a render URL in a hidden view. The
 // daemon wires it to the browser-runtime broker.

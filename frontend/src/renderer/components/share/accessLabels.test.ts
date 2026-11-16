@@ -6,9 +6,9 @@ const t = appI18n.t.bind(appI18n);
 
 describe("access labels", () => {
 	it("names writing by scope, as the link dialog always has", () => {
-		expect(roleLabel(t, "viewer", "session")).toBe("Watch");
-		expect(roleLabel(t, "editor", "session")).toBe("Write to the agent");
-		expect(roleLabel(t, "editor", "project")).toBe("Start sessions");
+		expect(roleLabel(t, "viewer", "session")).toBe("Can watch");
+		expect(roleLabel(t, "editor", "session")).toBe("Can write");
+		expect(roleLabel(t, "editor", "project")).toBe("Can start sessions");
 		expect(capLabel(t, "trusted")).toBe("Trusted");
 		expect(capLabel(t, undefined)).toBe("Standard");
 	});
@@ -20,10 +20,10 @@ describe("access labels", () => {
 
 	it("says where a member's access comes from only when it isn't this team", () => {
 		expect(effectiveAccessText(t, { role: "member", source: "workspace" }, "team-a", "session")).toEqual({ level: "Full access", source: "workspace member" });
-		expect(effectiveAccessText(t, { role: "editor", modeCap: "standard", source: "team", teamId: "team-a", teamName: "Platform" }, "team-a", "session")).toEqual({ level: "Write to the agent" });
-		expect(effectiveAccessText(t, { role: "viewer", source: "team", teamId: "team-b", teamName: "Data infra" }, "team-a", "session")).toEqual({ level: "Watch", source: "via Data infra" });
+		expect(effectiveAccessText(t, { role: "editor", modeCap: "standard", source: "team", teamId: "team-a", teamName: "Platform" }, "team-a", "session")).toEqual({ level: "Can write" });
+		expect(effectiveAccessText(t, { role: "viewer", source: "team", teamId: "team-b", teamName: "Data infra" }, "team-a", "session")).toEqual({ level: "Can watch", source: "via Data infra" });
 		expect(effectiveAccessText(t, { role: "editor", modeCap: "trusted", source: "link" }, "team-a", "session")).toEqual({ level: "Trusted", source: "shared directly" });
-		expect(effectiveAccessText(t, { role: "viewer", source: "project" }, "team-a", "session")).toEqual({ level: "Watch", source: "from the whole project" });
+		expect(effectiveAccessText(t, { role: "viewer", source: "project" }, "team-a", "session")).toEqual({ level: "Can watch", source: "from the whole project" });
 		expect(effectiveAccessText(t, {}, "team-a", "session")).toEqual({ level: "No access" });
 	});
 

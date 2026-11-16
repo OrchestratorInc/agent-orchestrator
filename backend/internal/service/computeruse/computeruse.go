@@ -127,7 +127,7 @@ var errDisabled = apierr.Forbidden("COMPUTER_USE_DISABLED", "Computer use is tur
 // agent with curl, so it runs no more than chat agents get: no browser tools,
 // scripts, whole-screen capture, or driver configuration.
 func toolNotOffered(tool string) error {
-	return apierr.Forbidden("COMPUTER_USE_TOOL_NOT_OFFERED", fmt.Sprintf("%q is not one of the computer-use tools AO offers: %s.", tool, strings.Join(agentToolNames, ", ")))
+	return apierr.Forbidden("COMPUTER_USE_TOOL_NOT_OFFERED", fmt.Sprintf("%q is not one of the computer-use tools Orchestrator offers: %s.", tool, strings.Join(agentToolNames, ", ")))
 }
 
 // Driver locates and runs the locally installed Cua Driver CLI. Callers build

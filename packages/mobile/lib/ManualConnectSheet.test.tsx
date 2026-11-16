@@ -9,6 +9,7 @@ const fixtures = vi.hoisted(() => ({
 	ping: vi.fn(async () => ({})),
 	probeIdentity: vi.fn(async () => "host-new"),
 	probeEndpoint: vi.fn(async () => ({ hostId: "host-1" })),
+	pair: vi.fn(async (): Promise<import("./deviceToken").PairDeviceResult> => ({ kind: "unsupported" })),
 	saveConfig: vi.fn(async () => {}),
 	saveHost: vi.fn(async () => {}),
 	setActiveHost: vi.fn(async () => {}),
@@ -55,6 +56,7 @@ vi.mock("./config", () => ({
 }));
 vi.mock("./hosts", () => ({ saveHost: fixtures.saveHost, setActiveHost: fixtures.setActiveHost, renameHost: fixtures.renameHost }));
 vi.mock("./connectRuntime", () => ({ probeEndpoint: fixtures.probeEndpoint, probeIdentity: fixtures.probeIdentity }));
+vi.mock("./deviceTokenRuntime", () => ({ pairThisDevice: fixtures.pair }));
 vi.mock("./localNetworkStore", () => ({ setLocalNetworkConfirmed: vi.fn(async () => {}) }));
 vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null }));
 vi.mock("./haptics", () => ({ haptics: fixtures.haptics }));
@@ -117,6 +119,16 @@ function confirm() {
 	return renderer!.root.findByType("StackToolbarButton" as never);
 }
 
+/** The Connection section's footer as it renders: whether it draws anything, and its text's modifiers. */
+function connectionFooter(): { drawn: boolean; modifiers: Modifier[] } {
+	let footer: ReactTestRenderer | undefined;
+	act(() => { footer = create(renderer!.root.findAllByType("Section" as never)[1].props.footer); });
+	const text = footer!.root.findAllByType("Text" as never)[0];
+	const result = { drawn: footer!.toJSON() !== null, modifiers: text ? (text.props.modifiers as Modifier[]) : [] };
+	act(() => footer!.unmount());
+	return result;
+}
+
 describe("ManualConnectSheet on iOS", () => {
 	it("labels every field for VoiceOver and hides the password", () => {
 		render();
@@ -138,6 +150,25 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", httpPort: "3011", password: "pw" }));
 		expect(fixtures.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "host-new", name: "Office PC", token: "pw" }));
 		expect(onConnected).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["a one-time code", "pairing-code" as const, undefined],
+		["the pairing password", "password" as const, "typed"],
+	])("swaps %s for this phone's own token before saving", async (_name, credential, fallbackToken) => {
+		const token = "aod_" + "a".repeat(64);
+		fixtures.pair.mockResolvedValueOnce({ kind: "paired", token, credential });
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		await type("manual-connect-password", "typed");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.pair).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", password: "typed", hostId: "host-new" }), { fresh: true });
+		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		expect(fixtures.saveConfig).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		const saved = (fixtures.saveHost.mock.calls as unknown as [Host][]).at(-1)![0];
+		expect(saved.token).toBe(token);
+		expect(saved.fallbackToken).toBe(fallbackToken);
 	});
 
 	// The route returns from onConnected early when its sheet has lost focus.
@@ -165,11 +196,12 @@ describe("ManualConnectSheet on iOS", () => {
 		await type("manual-connect-password", "wrong");
 		await act(async () => confirm().props.onPress());
 		const connection = renderer!.root.findAllByType("Section" as never)[1];
-		expect(connection.props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
+		expect(connection.props.footer.props).toMatchObject({ error: true, children: "That code or password was rejected. Get a new code and try again." });
 		// A footer isn't read out as it appears, so VoiceOver is told.
-		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith("That code or password was rejected. Get a new code and try again.", { queue: true });
 		await type("manual-connect-password", "right");
-		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer).toBeUndefined();
+		// Cleared but still mounted (see the footer test below).
+		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer.props).toMatchObject({ error: false, children: undefined });
 	});
 
 	it("enables Connect once the form has a name and a host, saying what it waits for", async () => {
@@ -183,7 +215,46 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(hint()).toMatchObject({ children: "Add a name to connect." });
 		await type("manual-connect-name", "Office PC");
 		expect(confirm().props.disabled).toBe(false);
-		expect(hint()).toBeUndefined();
+		expect(hint().children).toBeUndefined();
+	});
+
+	// FormSection keeps the footer slot mounted (formSection.source.test.ts guards
+	// that no Section's footer comes and goes). What the footer draws must not
+	// change shape either: whenever it shows text, the same single modifier.
+	it("draws the connection footer with the same modifiers while the hint, the port error and a failure come and go", async () => {
+		fixtures.ping.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(401));
+		render();
+		const steps: Array<[string, () => Promise<void>]> = [
+			["name", () => type("manual-connect-name", "Office PC")],
+			["first host character", () => type("manual-connect-host", "1")],
+			["host cleared", () => type("manual-connect-host", "")],
+			["host", () => type("manual-connect-host", "192.168.1.30")],
+			["port invalid", () => type("manual-connect-port", "0")],
+			["port valid", () => type("manual-connect-port", "3011")],
+			["password", () => type("manual-connect-password", "wrong")],
+			["failed connect", () => act(async () => confirm().props.onPress())],
+			["password fixed", () => type("manual-connect-password", "right")],
+		];
+		const kinds = () => connectionFooter().modifiers.map((modifier) => modifier.$type);
+		expect(kinds()).toEqual(["foregroundStyle"]);
+		for (const [step, run] of steps) {
+			await run();
+			if (connectionFooter().drawn) expect(kinds(), step).toEqual(["foregroundStyle"]);
+		}
+	});
+
+	// A hint and an error draw with the same modifier, only its style changes;
+	// with nothing to say the footer draws nothing (no empty row, nothing for VoiceOver).
+	it("styles the hint and an error through one modifier and draws nothing when empty", async () => {
+		render();
+		const styles = () => connectionFooter().modifiers.filter((modifier) => modifier.$type === "foregroundStyle").map((modifier) => modifier.args[0]);
+		expect(styles()).toEqual([{ type: "hierarchical", style: "secondary" }]);
+		await type("manual-connect-port", "0");
+		expect(styles()).toEqual(["red"]);
+		await type("manual-connect-port", "3011");
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		expect(connectionFooter().drawn).toBe(false);
 	});
 
 	it("reveals the password in place and hides it again", () => {
@@ -228,10 +299,10 @@ describe("ManualConnectSheet on Android", () => {
 		await act(async () => renderer!.root.findByType("RNButton" as never).props.onPress());
 		const password = field("manual-connect-password");
 		expect(password.props.isError).toBe(true);
-		expect(password.findByType("OutlinedTextField.SupportingText" as never).findByType("Text" as never).props.children).toBe("That password was rejected. Check it and try again.");
+		expect(password.findByType("OutlinedTextField.SupportingText" as never).findByType("Text" as never).props.children).toBe("That code or password was rejected. Get a new code and try again.");
 		expect(field("manual-connect-host").props.isError).toBe(false);
 		// Supporting text is read only with its field focused, so TalkBack is told.
-		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith("That code or password was rejected. Get a new code and try again.", { queue: true });
 	});
 
 	// Connect follows the last field.

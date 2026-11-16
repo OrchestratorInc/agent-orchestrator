@@ -38,7 +38,7 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	projectID := domain.ProjectID("proj-1")
 	sessionID := domain.SessionID("sess-1")
 	sink.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.session.spawned",
+		Name:       "ao.sessions.spawned",
 		Source:     "session_service",
 		OccurredAt: time.Unix(1700000000, 0).UTC(),
 		Level:      ports.TelemetryLevelInfo,
@@ -55,8 +55,8 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.session.spawned" {
-			t.Fatalf("event = %#v, want ao.session.spawned", got)
+		if got := req["event"]; got != "ao.sessions.spawned" {
+			t.Fatalf("event = %#v, want ao.sessions.spawned", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {
@@ -77,8 +77,8 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["lifetime_sessions"] != float64(2) || props["days_since_install"] != float64(0) {
 			t.Fatalf("shared metadata missing or incorrect: %#v", props)
 		}
-		if _, ok := props["is_signed_in"]; ok {
-			t.Fatal("unknown Cloud sign-in state was exported")
+		if props["is_signed_in"] != false {
+			t.Fatalf("is_signed_in = %#v, want false without a Cloud binding", props["is_signed_in"])
 		}
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])
@@ -124,7 +124,7 @@ func TestLifetimeSessionCountUsesEnqueueTime(t *testing.T) {
 		t.Fatal("first export did not start")
 	}
 	count.Store(2)
-	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.session.spawned", OccurredAt: time.Now()})
+	sink.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.sessions.spawned", OccurredAt: time.Now()})
 	count.Store(3)
 	close(releaseFirst)
 	if err := sink.Close(context.Background()); err != nil {
@@ -148,7 +148,7 @@ func TestProjectHashIsInstallationScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	projectID := domain.ProjectID("ao")
-	event := ports.TelemetryEvent{Name: "ao.session.spawned", ProjectID: &projectID}
+	event := ports.TelemetryEvent{Name: "ao.sessions.spawned", ProjectID: &projectID}
 	a := (&PostHogSink{ident: first}).properties(event)["project_id_hash"]
 	b := (&PostHogSink{ident: second}).properties(event)["project_id_hash"]
 	if a == b || a == sha256String(string(projectID)) {
@@ -246,6 +246,48 @@ func TestRenamedEventAllowlists(t *testing.T) {
 	}
 }
 
+// Each renamed daemon event goes on the wire under its new name, with its
+// property allowlist moved to that name. No old name keeps an allowlist entry,
+// so a reintroduced old emit site would lose its properties and stand out.
+func TestRenamedDaemonEventsExportUnderNewName(t *testing.T) {
+	requests := make(chan map[string]any, len(legacyEventNames))
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		requests <- body
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatalf("NewPostHogSink: %v", err)
+	}
+	for name, legacy := range legacyEventNames {
+		for _, old := range legacy {
+			if _, ok := remotePayloadAllowlist[old]; ok {
+				t.Errorf("legacy name %q still has an allowlist entry", old)
+			}
+		}
+		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, Source: "test", OccurredAt: time.Now().UTC(), Level: ports.TelemetryLevelInfo})
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	close(requests)
+	seen := map[string]bool{}
+	for req := range requests {
+		name, _ := req["event"].(string)
+		if _, ok := legacyEventNames[name]; !ok {
+			t.Errorf("exported %q, want one of the renamed names", name)
+		}
+		seen[name] = true
+	}
+	if len(seen) != len(legacyEventNames) {
+		t.Fatalf("exported %d distinct names, want %d", len(seen), len(legacyEventNames))
+	}
+}
+
 func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
 	var names []string
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
@@ -262,7 +304,7 @@ func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.session.spawned"} {
+	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.sessions.spawned"} {
 		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, OccurredAt: time.Now()})
 	}
 	if err := sink.Close(context.Background()); err != nil {
@@ -371,7 +413,7 @@ func TestPostHogSinkSanitizesAppActivePayload(t *testing.T) {
 	}
 
 	sink.Emit(context.Background(), ports.TelemetryEvent{
-		Name:       "ao.app.active",
+		Name:       "ao.cli.active",
 		Source:     "cli",
 		OccurredAt: time.Unix(1700000000, 0).UTC(),
 		Level:      ports.TelemetryLevelInfo,
@@ -392,18 +434,18 @@ func TestPostHogSinkSanitizesAppActivePayload(t *testing.T) {
 
 	select {
 	case req := <-requests:
-		if got := req["event"]; got != "ao.v2.app.active" {
-			t.Fatalf("event = %#v, want ao.v2.app.active", got)
+		if got := req["event"]; got != "ao.cli.active" {
+			t.Fatalf("event = %#v, want ao.cli.active", got)
 		}
 		props, ok := req["properties"].(map[string]any)
 		if !ok {
 			t.Fatalf("properties type = %T, want map[string]any", req["properties"])
 		}
-		if props["legacy_event_name"] != "ao.app.active" {
-			t.Fatalf("legacy_event_name = %#v, want ao.app.active", props["legacy_event_name"])
+		if _, ok := props["legacy_event_name"]; ok {
+			t.Fatalf("legacy_event_name = %#v, want absent after the rename", props["legacy_event_name"])
 		}
-		if props["telemetry_schema_version"] != float64(2) {
-			t.Fatalf("telemetry_schema_version = %#v, want 2", props["telemetry_schema_version"])
+		if props["telemetry_schema_version"] != float64(3) {
+			t.Fatalf("telemetry_schema_version = %#v, want 3", props["telemetry_schema_version"])
 		}
 		if props["channel"] != "cli" || props["command"] != "spawn" || props["command_path"] != "ao spawn" {
 			t.Fatalf("sanitized properties = %#v, want active CLI metadata", props)
@@ -447,7 +489,7 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 
 	emit := func(sink *PostHogSink) map[string]any {
 		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:       "ao.session.spawn_failed",
+			Name:       "ao.sessions.spawn_failed",
 			Source:     "session_service",
 			OccurredAt: time.Unix(1700000000, 0).UTC(),
 			Level:      ports.TelemetryLevelError,
@@ -488,10 +530,10 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 // failure, and nothing ties the emit sites to this map at compile time.
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
-		"ao.review.triggered":      {"harness", "created_runs", "trigger", "rerun"},
-		"ao.review.trigger_failed": {"error_kind", "trigger"},
-		"ao.review.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
-		"ao.review.cancelled":      {"cancelled_runs"},
+		"ao.reviews.triggered":      {"harness", "created_runs", "trigger", "rerun"},
+		"ao.reviews.trigger_failed": {"error_kind", "trigger"},
+		"ao.reviews.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
+		"ao.reviews.cancelled":      {"cancelled_runs"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
@@ -531,9 +573,9 @@ func TestReviewPayloadAllowlistRejectsIdentifyingKeys(t *testing.T) {
 // would export stripped.
 func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 	want := map[string][]string{
-		"ao.harness.update":           {"harness", "level", "live_sessions", "result"},
-		"ao.harness.update_idle_wait": {"harness", "sessions", "wait_ms"},
-		"ao.harness.version_switch":   {"harness", "latency_ms", "mode", "result"},
+		"ao.harnesses.updated":          {"harness", "level", "live_sessions", "result"},
+		"ao.harness.update_idle_wait":   {"harness", "sessions", "wait_ms"},
+		"ao.harnesses.version_switched": {"harness", "latency_ms", "mode", "result"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
@@ -565,7 +607,7 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 	}
 	defer func() { _ = sink.Close(context.Background()) }()
 	event := ports.TelemetryEvent{
-		Name:    "ao.session.spawned",
+		Name:    "ao.sessions.spawned",
 		Source:  "session_service",
 		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
 	}
@@ -600,7 +642,7 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 }
 
 func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
-	got := sanitizeRemotePayload("ao.review.submitted", map[string]any{
+	got := sanitizeRemotePayload("ao.reviews.submitted", map[string]any{
 		"verdict": "changes_requested",
 		"trigger": "auto",
 		"body":    "leaks credentials in src/config/prod.ts",
@@ -614,6 +656,20 @@ func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
 	}
 	if _, ok := got["pr_url"]; ok {
 		t.Fatalf("pr_url survived sanitization: %#v", got)
+	}
+}
+
+func TestSanitizeRemotePayloadKeepsWriteLockHolder(t *testing.T) {
+	got := sanitizeRemotePayload("ao.daemon.write_lock_held", map[string]any{
+		"caller":      "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215",
+		"duration_ms": int64(110482),
+		"session_id":  "agent-orchestrator-1-374",
+	})
+	if got["caller"] != "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215" || got["duration_ms"] != int64(110482) {
+		t.Fatalf("write lock fields were dropped: %#v", got)
+	}
+	if _, ok := got["session_id"]; ok {
+		t.Fatalf("session_id survived sanitization: %#v", got)
 	}
 }
 
@@ -636,7 +692,7 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 	for range 2 {
 		sink.Emit(context.Background(), ports.TelemetryEvent{
-			Name:    "ao.session.spawned",
+			Name:    "ao.sessions.spawned",
 			Source:  "session_service",
 			Payload: map[string]any{"github_actor": "octocat"},
 		})

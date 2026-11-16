@@ -154,7 +154,7 @@ func TestUpdateOutcomeRequiresKnownNewerReleaseToReachRunningBinary(t *testing.T
 	}
 
 	_, note = updateOutcome(baseline, VerifyResult{ResolvedPath: "/opt/homebrew/bin/codex", Output: "codex-cli 0.160.1"})
-	if !strings.Contains(note, "AO now runs /opt/homebrew/bin/codex (was /usr/local/bin/codex)") {
+	if !strings.Contains(note, "Orchestrator now runs /opt/homebrew/bin/codex (was /usr/local/bin/codex)") {
 		t.Fatalf("path change note = %q", note)
 	}
 

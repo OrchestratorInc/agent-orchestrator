@@ -33,6 +33,7 @@ type AppSettings struct {
 	// SessionRetentionDays is how long an archived session is kept before the
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
+	AccountHandoff       bool
 	UpdatedAt            time.Time
 }
 
@@ -54,6 +55,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
 		SessionRetentionDays: int(row.SessionRetentionDays),
+		AccountHandoff:       row.AccountHandoff,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -109,6 +111,19 @@ func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.
 		UpdatedAt:            now,
 	}); err != nil {
 		return fmt.Errorf("set session retention: %w", err)
+	}
+	return nil
+}
+
+// SetAccountHandoff stores the usage-limit account handoff setting.
+func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetAccountHandoff(ctx, gen.SetAccountHandoffParams{
+		AccountHandoff: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set account handoff: %w", err)
 	}
 	return nil
 }

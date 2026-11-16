@@ -26,6 +26,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessOpenCode,
 		domain.HarnessOpenCodeV2,
 		domain.HarnessDroid,
+		domain.HarnessGrok,
 		domain.HarnessKimi,
 		domain.HarnessKimchi,
 		domain.HarnessPi,
@@ -33,6 +34,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessOMP,
 		domain.HarnessQwen,
 		domain.HarnessUnreal,
+		domain.HarnessDockerAgent,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
 		domain.HarnessHermes,
@@ -49,6 +51,7 @@ func TestShippedChatDrivers(t *testing.T) {
 	// typed answer rather than quietly producing a terminal session.
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
+		domain.HarnessMiniMaxCode,
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {

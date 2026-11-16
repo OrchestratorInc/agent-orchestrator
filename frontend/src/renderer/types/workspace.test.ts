@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_OPTIONS } from "@aoagents/product-ui";
 import {
+	sessionWorkspaceReady,
 	attentionZone,
+	canArchiveWorkerSession,
 	canonicalTrackerIssueId,
 	findProjectOrchestrator,
 	newestActiveOrchestrator,
@@ -10,6 +12,7 @@ import {
 	sessionCueTargetAvailable,
 	sessionIsActive,
 	sessionNeedsAttention,
+	sortedWorkerSessions,
 	toAgentProvider,
 	toSessionActivity,
 	toSessionStatus,
@@ -99,6 +102,19 @@ describe("toSessionActivity", () => {
 	});
 });
 
+describe("sortedWorkerSessions", () => {
+	it("orders imports not opened yet by the source chat's last activity, not the import time", () => {
+		const imported = (id: string, lastActivityAt: string, createdAt: string) =>
+			sessionWith({ id, needsResume: true, createdAt, activity: { state: "exited", lastActivityAt } });
+		const sessions = [
+			imported("oldest", "2026-10-15T04:11:25Z", "2026-11-09T16:13:54.159Z"),
+			imported("newest", "2026-10-26T06:06:05Z", "2026-11-09T16:13:54.137Z"),
+			sessionWith({ id: "native", createdAt: "2026-10-20T00:00:00Z", lastInteractionAt: "2026-10-20T00:00:00Z" }),
+		];
+		expect(sortedWorkerSessions(sessions).map((s) => s.id)).toEqual(["newest", "native", "oldest"]);
+	});
+});
+
 describe("sessionIsActive", () => {
 	it("keeps a merged session active until its runtime is terminated", () => {
 		expect(sessionIsActive(sessionWith({ status: "merged", isTerminated: false }))).toBe(true);
@@ -113,6 +129,20 @@ describe("sessionIsActive", () => {
 		expect(sessionIsActive(sessionWith({ status: "working" }))).toBe(true);
 		expect(sessionIsActive(sessionWith({ status: "pr_open" }))).toBe(true);
 		expect(sessionIsActive(sessionWith({ status: "exited" }))).toBe(true);
+	});
+});
+
+describe("canArchiveWorkerSession", () => {
+	it("lets a live local, remote, or Cloud worker be archived from its own session", () => {
+		expect(canArchiveWorkerSession(sessionWith({ status: "working" }))).toBe(true);
+		expect(canArchiveWorkerSession(sessionWith({ status: "working", hostId: "host-1" }))).toBe(true);
+		expect(canArchiveWorkerSession(sessionWith({ status: "working", cloud: { orgId: "org-1" } }))).toBe(true);
+	});
+
+	it("leaves orchestrators, ended sessions, and sessions shared from another organization alone", () => {
+		expect(canArchiveWorkerSession(sessionWith({ kind: "orchestrator" }))).toBe(false);
+		expect(canArchiveWorkerSession(sessionWith({ isTerminated: true }))).toBe(false);
+		expect(canArchiveWorkerSession(sessionWith({ status: "working", cloud: { orgId: "org-1", shared: true } }))).toBe(false);
 	});
 });
 
@@ -380,6 +410,18 @@ describe("sessionArtifacts", () => {
 		expect(sessionArtifacts(session)).toEqual([artifact({ path: "report.md", kind: "markdown" })]);
 	});
 
+	it("lists the newest artifact first, not alphabetically", () => {
+		const session = sessionWith({
+			outputType: "artifact",
+			artifactFiles: [
+				artifact({ path: "a-old.md", updatedAt: "2026-01-01T00:00:00Z" }),
+				artifact({ path: "z-new.md", updatedAt: "2026-01-03T00:00:00Z" }),
+				artifact({ path: "m-mid.md", updatedAt: "2026-01-02T00:00:00Z" }),
+			],
+		});
+		expect(sessionArtifacts(session).map((file) => file.path)).toEqual(["z-new.md", "m-mid.md", "a-old.md"]);
+	});
+
 	it("is empty when outputType is artifact but artifactFiles is absent", () => {
 		expect(sessionArtifacts(sessionWith({ outputType: "artifact" }))).toEqual([]);
 	});
@@ -411,5 +453,14 @@ describe("attentionZone", () => {
 	it("prioritizes merge as the highest-ROI zone", () => {
 		// merge is checked before action/pending so an approved PR always surfaces.
 		expect(attentionZone(sessionWith({ status: "approved" }))).toBe("merge");
+	});
+});
+
+describe("sessionWorkspaceReady", () => {
+	it("follows the daemon's published workspace, not the start state", () => {
+		expect(sessionWorkspaceReady({ workspacePublished: false })).toBe(false);
+		expect(sessionWorkspaceReady({ workspacePublished: true })).toBe(true);
+		// An older daemon that does not report it.
+		expect(sessionWorkspaceReady({})).toBe(true);
 	});
 });

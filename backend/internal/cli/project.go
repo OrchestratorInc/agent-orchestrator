@@ -261,7 +261,7 @@ func newProjectAddCommand(ctx *commandContext) *cobra.Command {
 		Long: "Register a local git repo as a project so sessions can be spawned in it.\n\n" +
 			"The path must be an existing git repository on disk. With --as-workspace, " +
 			"the path may be a parent folder containing direct child git repositories; " +
-			"AO initializes/adopts the parent as the root repo and gitignores children.",
+			"Orchestrator initializes/adopts the parent as the root repo and gitignores children.",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.path == "" {

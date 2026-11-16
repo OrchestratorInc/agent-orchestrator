@@ -6,13 +6,13 @@ import type { AppLocale } from "../../i18n";
 import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore, type ChatSendKeyMode } from "../../stores/ui-store";
-import { isNewSidebarDesign } from "../../lib/new-sidebar-design";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { CliShadowSettingsRow } from "./CliShadowSettingsRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
 import { Button } from "../ui/button";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight } from "@/components/app-icons";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { checkTerminalShellPath, useTerminalShells } from "../../hooks/useTerminalShells";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
@@ -30,6 +30,7 @@ import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isLinuxPlatform, isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 import { aoBridge } from "../../lib/bridge";
+import type { TerminalClickMode } from "../../lib/terminal-mouse";
 
 function AltMenuRow() {
 	const { t } = useTranslation();
@@ -366,9 +367,14 @@ export function GeneralSettingsSection({
 	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
+	const terminalClickMode = useUiStore((state) => state.terminalClickMode);
+	const setTerminalClickMode = useUiStore((state) => state.setTerminalClickMode);
+	const terminalClickOptions = [
+		{ value: "app", label: t("settings.terminalClicks.app") },
+		{ value: "select", label: t("settings.terminalClicks.select") },
+	] satisfies SettingsOption<TerminalClickMode>[];
 	const projectAvatars = useUiStore((state) => state.projectAvatars);
 	const setProjectAvatars = useUiStore((state) => state.setProjectAvatars);
-	const newSidebarDesign = useUiStore(isNewSidebarDesign);
 	const chatSendKeyMode = useUiStore((state) => state.chatSendKeyMode);
 	const setChatSendKeyMode = useUiStore((state) => state.setChatSendKeyMode);
 	const chatSendKeyOptions = [
@@ -428,11 +434,9 @@ export function GeneralSettingsSection({
 					</div>
 				</SettingsRow>
 				{isMacPlatform() && <WindowTranslucencyRow />}
-				{newSidebarDesign && (
-					<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
-						<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
-					</SettingsRow>
-				)}
+				<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
+					<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
+				</SettingsRow>
 				<SettingsRow
 					label={t("settings.language")}
 					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
@@ -486,6 +490,17 @@ export function GeneralSettingsSection({
 					/>
 				</SettingsRow>
 				<SettingsRow
+					label={t("settings.terminalClicks")}
+					description={isMacPlatform() ? t("settings.terminalClicks.description.mac") : t("settings.terminalClicks.description.other")}
+				>
+					<SettingsOptionMenu
+						aria-label={t("settings.terminalClicks")}
+						value={terminalClickMode}
+						options={terminalClickOptions}
+						onChange={setTerminalClickMode}
+					/>
+				</SettingsRow>
+				<SettingsRow
 					label={t("settings.soundNotifications")}
 					description={soundNotificationsSaveError ? <span role="alert" className="text-error">{t("settings.soundNotifications.saveFailed")}</span> : undefined}
 				>
@@ -518,10 +533,10 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
+				<CliShadowSettingsRow />
 				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
-				{developerMode && <NewSidebarDesignRow />}
-				{developerMode && <SimplifiedTopbarRow />}
+				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
@@ -638,26 +653,14 @@ function SplitPanesRow() {
 	);
 }
 
-/** Developer Mode-only switch for the new left sidebar design. On by default. */
-function NewSidebarDesignRow() {
+/** Developer Mode-only switch for the PR view: a PR's own tab, comments, stacks and actions. Off by default. */
+function PRViewRow() {
 	const { t } = useTranslation();
-	const newSidebarDesign = useUiStore((state) => state.newSidebarDesign);
-	const setNewSidebarDesign = useUiStore((state) => state.setNewSidebarDesign);
+	const prView = useUiStore((state) => state.prView);
+	const setPRView = useUiStore((state) => state.setPRView);
 	return (
-		<SettingsRow label={t("settings.newSidebarDesign")} description={t("settings.newSidebarDesignHint")}>
-			<Switch aria-label={t("settings.newSidebarDesign")} checked={newSidebarDesign} onCheckedChange={setNewSidebarDesign} />
-		</SettingsRow>
-	);
-}
-
-/** Developer Mode-only switch for the simplified, floating top bar. On by default. */
-function SimplifiedTopbarRow() {
-	const { t } = useTranslation();
-	const simplifiedTopbar = useUiStore((state) => state.simplifiedTopbar);
-	const setSimplifiedTopbar = useUiStore((state) => state.setSimplifiedTopbar);
-	return (
-		<SettingsRow label={t("settings.simplifiedTopbar")} description={t("settings.simplifiedTopbarHint")}>
-			<Switch aria-label={t("settings.simplifiedTopbar")} checked={simplifiedTopbar} onCheckedChange={setSimplifiedTopbar} />
+		<SettingsRow label={t("settings.prView")} description={t("settings.prViewHint")}>
+			<Switch aria-label={t("settings.prView")} checked={prView} onCheckedChange={setPRView} />
 		</SettingsRow>
 	);
 }

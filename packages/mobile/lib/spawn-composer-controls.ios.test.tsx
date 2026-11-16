@@ -120,6 +120,19 @@ const choices = (menu: ReactTestInstance) => menu.findAll((node) => hostType(nod
 const choiceLabel = (choice: ReactTestInstance): string => choice.props.label ?? choice.findByType("Label" as never).props.title;
 
 describe("iOS spawn selectors", () => {
+	// Each machine with its glyph, as each project has its folder.
+	it("draws a computer for each machine and a cloud for Orchestrator Cloud, in the menu and on the selector", async () => {
+		const root = await render(baseProps({ hosts: [{ id: "host-a", label: "Alpha" }, { id: "orchestrator-cloud", label: "Cloud", icon: "cloud" }], hostId: "orchestrator-cloud" }));
+		const menu = identified(root, "spawn-host");
+		expect(choices(menu).map((choice) => [choiceLabel(choice), choice.props.systemImage])).toEqual([["Alpha", "laptopcomputer"], ["Cloud", "cloud"]]);
+	});
+
+	it("marks New cloud project with a folder and a plus", async () => {
+		const root = await render(baseProps({ projects: [{ id: "p", label: "Web", icon: "folder" }, { id: "new-cloud-project", label: "New cloud project", icon: "folder-plus", sectionBreakBefore: true }] }));
+		const menu = identified(root, "spawn-project");
+		expect(choices(menu).map((choice) => choice.props.systemImage)).toEqual(["folder", "folder.badge.plus"]);
+	});
+
 	it("checks the current machine with the system's checkable item and selects another", async () => {
 		const props = baseProps();
 		const root = await render(props);

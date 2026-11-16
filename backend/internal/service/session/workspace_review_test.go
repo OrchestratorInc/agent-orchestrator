@@ -692,3 +692,86 @@ func TestWorkspaceProjectManifestListsUncommittedPerRepository(t *testing.T) {
 		t.Fatalf("uncommitted workspace project patches = %#v", patches)
 	}
 }
+
+// The mobile Files screen reads a worktree scope's file from GetWorkspaceDiffs
+// and GetWorkspaceFileRevision. Each scope must answer with its own sides even
+// when base, HEAD, the index and the worktree all differ.
+func TestScopedReadsKeepToTheirScopeWhenBaseHeadIndexAndWorktreeDiffer(t *testing.T) {
+	repo := newWorkspaceRepo(t)
+	base := strings.TrimSpace(runGit(t, repo, "rev-parse", "HEAD"))
+	runGit(t, repo, "switch", "-c", "ao/scoped-reads")
+	writeWorkspaceFile(t, repo, "README.md", "committed\n")
+	writeWorkspaceFile(t, repo, "lib.txt", "a\nb\nc\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "branch change")
+	// README.md: base "hello", HEAD "committed", worktree adds an uncommitted line.
+	writeWorkspaceFile(t, repo, "README.md", "committed\nuncommitted edit\n")
+	// src/app.go: a staged edit whose worktree bytes are back at the base, so the
+	// combined base → worktree diff is empty while Staged is not.
+	writeWorkspaceFile(t, repo, "src/app.go", "package main\n// staged\n")
+	runGit(t, repo, "add", "src/app.go")
+	writeWorkspaceFile(t, repo, "src/app.go", "package main\n")
+	// lib.txt: a staged line at the end, and an unstaged line inserted above it,
+	// so the index and the worktree number the staged line differently.
+	writeWorkspaceFile(t, repo, "lib.txt", "a\nb\nc\nstaged\n")
+	runGit(t, repo, "add", "lib.txt")
+	writeWorkspaceFile(t, repo, "lib.txt", "inserted\na\nb\nc\nstaged\n")
+	store := newFakeStore()
+	store.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{Branch: "ao/scoped-reads", WorkspacePath: repo, DiffBaseSHA: base, DiffBaseRef: "main"}}
+	svc := &Service{store: store}
+	ctx := context.Background()
+
+	patch := func(scope WorkspaceDiffScope, path string) string {
+		t.Helper()
+		got, err := svc.GetWorkspaceDiffs(ctx, "ao-1", WorkspaceDiffInput{Scope: scope, Paths: []string{path}, ContextLines: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out strings.Builder
+		for _, group := range got.Groups {
+			out.WriteString(group.Patch)
+		}
+		return out.String()
+	}
+	after := func(scope WorkspaceDiffScope, path string) string {
+		t.Helper()
+		got, err := svc.GetWorkspaceFileRevision(ctx, "ao-1", path, scope, WorkspaceBlobAfter, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.Content
+	}
+
+	t.Run("all commits stop at HEAD", func(t *testing.T) {
+		if got := patch(WorkspaceDiffCommitted, "README.md"); !strings.Contains(got, "+committed") || strings.Contains(got, "uncommitted edit") {
+			t.Fatalf("committed patch = %q, want the commit and not the uncommitted edit", got)
+		}
+		if got := after(WorkspaceDiffCommitted, "README.md"); got != "committed\n" {
+			t.Fatalf("committed after = %q, want HEAD's bytes", got)
+		}
+	})
+
+	t.Run("staged shows an edit the combined diff cannot", func(t *testing.T) {
+		if got := patch(WorkspaceDiffCombined, "src/app.go"); strings.Contains(got, "// staged") {
+			t.Fatalf("combined patch = %q, want no staged line", got)
+		}
+		if got := patch(WorkspaceDiffStaged, "src/app.go"); !strings.Contains(got, "+// staged") {
+			t.Fatalf("staged patch = %q, want the staged line", got)
+		}
+		if got := after(WorkspaceDiffStaged, "src/app.go"); got != "package main\n// staged\n" {
+			t.Fatalf("staged after = %q, want the index's bytes", got)
+		}
+	})
+
+	t.Run("staged lines are numbered by the index, not the worktree", func(t *testing.T) {
+		if got := patch(WorkspaceDiffStaged, "lib.txt"); !strings.Contains(got, "@@ -1,3 +1,4 @@") || strings.Contains(got, "inserted") {
+			t.Fatalf("staged patch = %q, want the index's numbering without the unstaged line", got)
+		}
+		if got := after(WorkspaceDiffStaged, "lib.txt"); got != "a\nb\nc\nstaged\n" {
+			t.Fatalf("staged after = %q, want the index's bytes", got)
+		}
+		if got := after(WorkspaceDiffUnstaged, "lib.txt"); !strings.HasPrefix(got, "inserted\n") {
+			t.Fatalf("unstaged after = %q, want the worktree's bytes", got)
+		}
+	})
+}

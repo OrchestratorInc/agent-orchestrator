@@ -231,7 +231,7 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 		{
 			Key:         "model",
 			Type:        ports.ConfigFieldString,
-			Description: "Model override written to the AO-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
+			Description: "Model override written to the Orchestrator-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
 		},
 	}
 	if !reflect.DeepEqual(spec.Fields, want) {

@@ -66,7 +66,7 @@ func TestResolveNeverFallsBackToCurrentOrConventionalBranch(t *testing.T) {
 	if !errors.Is(err, ErrUnresolved) {
 		t.Fatalf("Resolve error = %v, want ErrUnresolved", err)
 	}
-	if !strings.Contains(err.Error(), "no remote or AO-recorded default") {
+	if !strings.Contains(err.Error(), "no remote or Orchestrator-recorded default") {
 		t.Fatalf("Resolve error = %v, want missing authoritative metadata detail", err)
 	}
 }

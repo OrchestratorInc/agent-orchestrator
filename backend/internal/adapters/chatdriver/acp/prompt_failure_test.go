@@ -481,3 +481,46 @@ func promptResponseFailure(meta map[string]any) error {
 	}
 	return ports.NewChatProviderFailure(title, details, cause)
 }
+
+func TestClaudeUsageLimitResetFromRateLimitEvents(t *testing.T) {
+	now := time.Date(2026, 11, 8, 12, 10, 0, 0, time.UTC)
+	fiveHour := now.Add(40 * time.Minute)
+	weekly := now.Add(72 * time.Hour)
+	info := func(status, kind string, reset time.Time, extra map[string]any) map[string]any {
+		value := map[string]any{"status": status, "rateLimitType": kind}
+		if !reset.IsZero() {
+			value["resetsAt"] = float64(reset.Unix())
+		}
+		for key, item := range extra {
+			value[key] = item
+		}
+		return map[string]any{"_claude/rateLimit": value}
+	}
+	for _, tc := range []struct {
+		name   string
+		events []map[string]any
+		want   time.Time
+	}{
+		{"none", nil, time.Time{}},
+		{"allowed only", []map[string]any{info("allowed_warning", "five_hour", fiveHour, nil)}, time.Time{}},
+		{"rejected", []map[string]any{info("rejected", "five_hour", fiveHour, nil)}, fiveHour},
+		{"rejected then allowed", []map[string]any{info("rejected", "five_hour", fiveHour, nil), info("allowed", "five_hour", fiveHour, nil)}, time.Time{}},
+		{"overage allowed", []map[string]any{info("rejected", "five_hour", fiveHour, map[string]any{"overageStatus": "allowed"})}, time.Time{}},
+		{"using overage", []map[string]any{info("rejected", "five_hour", fiveHour, map[string]any{"isUsingOverage": true})}, time.Time{}},
+		{"latest of two windows", []map[string]any{info("rejected", "five_hour", fiveHour, nil), info("rejected", "seven_day", weekly, nil)}, weekly},
+		{"one window without reset", []map[string]any{info("rejected", "five_hour", fiveHour, nil), info("rejected", "seven_day", time.Time{}, nil)}, time.Time{}},
+		{"expired window dropped", []map[string]any{info("rejected", "five_hour", now.Add(-time.Minute), nil), info("rejected", "seven_day", weekly, nil)}, weekly},
+		{"beyond a month", []map[string]any{info("rejected", "seven_day", now.Add(32*24*time.Hour), nil)}, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &conversation{}
+			for _, meta := range tc.events {
+				c.trackClaudeRateLimit(meta, now)
+			}
+			got, ok := c.claudeUsageLimitReset(now)
+			if ok != !tc.want.IsZero() || !got.Equal(tc.want) {
+				t.Fatalf("reset = %v, %v; want %v", got, ok, tc.want)
+			}
+		})
+	}
+}

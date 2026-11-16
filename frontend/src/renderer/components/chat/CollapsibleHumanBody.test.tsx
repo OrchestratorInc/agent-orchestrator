@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { revealFoldedRange } from "../../lib/chat-annotation-navigation";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 
 // jsdom has no layout: give every element the same rendered height. With no
@@ -64,5 +65,36 @@ describe("CollapsibleHumanBody", () => {
 		unmount();
 		render(<CollapsibleHumanBody stateKey="remount"><p>Opened</p></CollapsibleHumanBody>);
 		expect(screen.getByRole("button", { name: "Show less" })).toBeInTheDocument();
+	});
+
+	it("opens when navigation lands on text the fold hides, and leaves it folded for text above the fold", () => {
+		renderedHeight(900);
+		render(
+			<CollapsibleHumanBody stateKey="navigated">
+				<p>Opening line</p>
+				<p>Closing line</p>
+			</CollapsibleHumanBody>,
+		);
+		const clip = screen.getByText("Opening line").parentElement!.parentElement!;
+		// Folded to 220px, from 100 to 320; the last 40px is the fade.
+		vi.spyOn(clip, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 100, 400, 220));
+		const textAt = (text: string, top: number) => {
+			const range = document.createRange();
+			range.selectNodeContents(screen.getByText(text).firstChild!);
+			vi.spyOn(range, "getBoundingClientRect").mockReturnValue(new DOMRect(0, top, 80, 20));
+			return range;
+		};
+
+		// Readable above the fold: navigation scrolls to it without opening anything.
+		expect(revealFoldedRange(textAt("Opening line", 110))).toBe(false);
+		expect(clip).toHaveAttribute("data-folded");
+		// In the fade or below it: the message opens, as Show more would open it.
+		let opened = false;
+		act(() => { opened = revealFoldedRange(textAt("Closing line", 270)); });
+		expect(opened).toBe(true);
+		expect(clip).not.toHaveAttribute("data-folded");
+		expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+		// Open, nothing is hidden: the next navigation measures straight away.
+		expect(revealFoldedRange(textAt("Closing line", 270))).toBe(false);
 	});
 });

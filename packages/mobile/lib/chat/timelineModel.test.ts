@@ -71,6 +71,12 @@ describe("mobile Chat timeline model", () => {
 		expect(readableConversationItems(value).slice(-1)[0]).toMatchObject({ activityKind: "system" });
 	});
 
+	it("drops model reroute notes, which the model picker already names", () => {
+		const value = snapshot();
+		value.items.push({ ...activity("system", 5, "t1"), id: "rerouted", detail: { event: "model.rerouted", fromModel: "sonnet", toModel: "claude-sonnet-5-5" } });
+		expect(readableConversationItems(value).map((item) => item.id)).not.toContain("rerouted");
+	});
+
 	// Claude keeps one task list across turns and can revise it after a turn ends,
 	// when the revision belongs to no turn. The daemon marks every older copy
 	// superseded, so only the newest shows.
@@ -218,7 +224,7 @@ describe("partitionTurnItems", () => {
 	});
 
 	it("keeps errors and warnings out of the fold, and leaves later steers inside it", () => {
-		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "model.rerouted" } }), message("done", 6, "assistant", "ok")];
+		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "auth.reauth_required" } }), message("done", 6, "assistant", "ok")];
 		const part = partitionTurnItems(items, turn("failed"))!;
 		expect(ids(part.work)).toEqual(["ls", "steer"]);
 		expect(ids(part.notices)).toEqual(["err", "warn"]);

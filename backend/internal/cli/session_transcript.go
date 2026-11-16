@@ -141,7 +141,7 @@ func transcriptRequestFrom(cmd *cobra.Command) (transcriptRequest, error) {
 }
 
 func transcriptUnavailable(id string) error {
-	return fmt.Errorf("session %s runs in Terminal UI mode; AO keeps no durable transcript for it. Use \"ao session get %s\" for status, or open its terminal", id, id)
+	return fmt.Errorf("session %s runs in Terminal UI mode; Orchestrator keeps no durable transcript for it. Use \"ao session get %s\" for status, or open its terminal", id, id)
 }
 
 func (c *commandContext) fetchConversationSnapshot(ctx context.Context, id string, req transcriptRequest) (conversationSnapshotWire, error) {
