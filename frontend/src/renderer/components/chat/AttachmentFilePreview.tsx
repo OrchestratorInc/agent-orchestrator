@@ -7,6 +7,7 @@ import { useChatImageSrc } from "./chat-image-source";
 import {
 	ATTACHMENT_TILE_OVERLAY_PILL_CLASS,
 	ATTACHMENT_TILE_PILL_CLASS,
+	ATTACHMENT_TILE_SOLID_FILL_CLASS,
 	attachmentTypeLabel,
 	type AttachmentPreviewKind,
 } from "./messageAttachments";
@@ -89,7 +90,7 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 			: kind === "pdf"
 				? <PdfPreview cover onError={onError} path={name} src={src} />
 				: text
-					? <pre className="m-0 size-full overflow-hidden whitespace-pre-wrap break-words bg-background p-2 font-mono text-micro leading-tight text-foreground">{text}</pre>
+					? <pre className={cn("m-0 size-full overflow-hidden whitespace-pre-wrap break-words p-2 font-mono text-micro leading-tight text-foreground", ATTACHMENT_TILE_SOLID_FILL_CLASS)}>{text}</pre>
 					: null;
 
 	return (
