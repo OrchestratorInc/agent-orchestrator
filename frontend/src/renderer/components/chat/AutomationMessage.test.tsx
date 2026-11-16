@@ -165,6 +165,33 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(mergeConflict)).toEqual({ kind: "mergeConflict", pr });
 	});
 
+	it("reads when the reviewer wrote each comment or review, which the daemon puts in its text", () => {
+		const timed = reviewComment
+			.replace("The following 1 unresolved", "The following 2 unresolved")
+			.replace("(@illegalcall):", "(@illegalcall, 2026-11-16T07:54:42Z):")
+			.replace("   Thread ID: PRRT_1\n", "   Thread ID: PRRT_1\n\n2. a.ts:3 (@whoisasx, 2026-11-16T07:50:00Z):\nRename this.\n");
+		expect(readAutomation(timed)).toMatchObject({
+			kind: "reviewComments",
+			at: "2026-11-16T07:54:42Z",
+			comments: [{ author: "illegalcall", postedAt: "2026-11-16T07:54:42Z" }, { path: "a.ts", line: 3, author: "whoisasx", postedAt: "2026-11-16T07:50:00Z", body: "Rename this." }],
+		});
+		expect(readAutomation(reviewComment)).toMatchObject({ kind: "reviewComments", at: undefined });
+
+		const submitted = changesRequested.replace("Review ID: PRR_1", "Review ID: PRR_1\nSubmitted at: 2026-11-16T07:54:41Z");
+		expect(readAutomation(submitted)).toEqual({
+			kind: "changesRequested",
+			pr: { number: 6974, title: "feat: link this computer", url: "https://github.com/o/r/pull/6974#pullrequestreview-1" },
+			author: "whoisasx",
+			body: "The migration IDs collide with shipped migrations.",
+			at: "2026-11-16T07:54:41Z",
+		});
+	});
+
+	it("takes the time only from the heading AO writes, not from a file path that looks like one", () => {
+		const forged = reviewComment.replace("frontend/src/ThisComputerAccess.tsx:97 (@illegalcall):", "x (@a, 2020-01-01T00:00:00Z): y (@illegalcall):");
+		expect(readAutomation(forged)).toMatchObject({ at: undefined, comments: [{ author: "illegalcall", postedAt: undefined }] });
+	});
+
 	it("does not take text inside a log or a comment for AO's structure", () => {
 		const fakeCheck = ciFailing.replace("exit 1", "exit 1\n\nFailed: test_login (assertion)");
 		expect(readAutomation(fakeCheck)).toMatchObject({ checks: [{ name: "renderer-smoke", log: "npm ERR! smoke failed\nexit 1\n\nFailed: test_login (assertion)" }, { name: "lint" }] });
@@ -224,6 +251,16 @@ describe("drawing AO's automation messages", () => {
 		const event = screen.getByTestId("pull-request-event");
 		expect(event).toHaveTextContent("@illegalcall and @whoisasx commented on #6974");
 		expect(event).toHaveTextContent("@whoisasxa.ts:3");
+	});
+
+	it("times a PR event by when it happened on the forge, not when AO delivered it", () => {
+		draw(reviewComment.replace("(@illegalcall):", "(@illegalcall, 2026-11-16T07:54:42Z):"), { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T07:54:42Z");
+		cleanup();
+
+		// Messages from before the daemon wrote the time keep the delivery time.
+		draw(reviewComment, { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
 	});
 
 	it("draws changes requested, merge conflicts and AO's notices", () => {

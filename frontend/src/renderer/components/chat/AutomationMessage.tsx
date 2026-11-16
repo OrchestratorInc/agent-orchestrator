@@ -42,7 +42,7 @@ import type { SessionGitActionKind } from "../../stores/session-git-action-store
 import { Pressable } from "../ui/pressable";
 import type { ConversationActivity, ConversationMessage } from "../../types/conversation";
 import { ChatMarkdown, FileReference, SessionLabelLink } from "./ChatMarkdown";
-import { formatTime, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
+import { formatMessageTimestamp, humanBubbleClass, MessageTimestamp, QueuedNote } from "./ChatTimelineItems";
 import { cachedBy, Folded } from "./WorkerUpdates";
 
 export type PullRequestRef = { number: number; title?: string; url?: string };
@@ -60,7 +60,8 @@ export type FileFeedback = {
 };
 
 export type FailedCheck = { name: string; url?: string; log?: string };
-export type ReviewComment = { path?: string; line?: number; author: string; body: string };
+/** `postedAt` is when the reviewer wrote it, which can be long before AO delivered the message. */
+export type ReviewComment = { path?: string; line?: number; author: string; body: string; postedAt?: string };
 export type AutomationNotice = "orchestratorReplaced" | "contextCarried" | "reviewTask";
 
 export type Automation =
@@ -69,8 +70,9 @@ export type Automation =
 	| { kind: "gitAction"; action: SessionGitActionKind; base?: string; prNumber?: number; files?: string[] }
 	| { kind: "browserFeedback"; annotations: ParsedBrowserAnnotationMessage }
 	| { kind: "ciFailing"; pr: PullRequestRef; checks: FailedCheck[] }
-	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[] }
-	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string }
+	// `at` is when the event happened on the forge; absent in messages from before AO wrote it.
+	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[]; at?: string }
+	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string; at?: string }
 	| { kind: "mergeConflict"; pr: PullRequestRef }
 	| { kind: "notice"; notice: AutomationNotice };
 
@@ -83,6 +85,13 @@ const PR_IDENTITY = /PR #(\d+)(?: ("(?:[^"\\\n]|\\.)*"))?(?: \([^\n]*? → [^\n]
 const PR_LINE = /\nPR: (\S+)\s*$/;
 // A GitHub or GitLab login, or the daemon's stand-in. Never markup: it is interpolated into a translation.
 const LOGIN = String.raw`[\w.-]+(?:\[bot\])?|unknown reviewer`;
+// The provider time lifecycle's providerEventTime writes: UTC RFC 3339 to the second.
+const EVENT_TIME = String.raw`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z`;
+
+/** The newest of the given times, or undefined when none is known. */
+function latest(times: (string | undefined)[]): string | undefined {
+	return times.reduce<string | undefined>((newest, time) => (time && (!newest || Date.parse(time) > Date.parse(newest)) ? time : newest), undefined);
+}
 
 function pullRequest(text: string, url?: string): PullRequestRef | undefined {
 	const match = PR_IDENTITY.exec(text.split("\n", 1)[0]!);
@@ -120,28 +129,30 @@ function failedChecks(text: string): FailedCheck[] | null {
 // else is not read as comments.
 function reviewComments(text: string, announced: number): ReviewComment[] | null {
 	const closing = text.lastIndexOf("\n\nAddress each comment and push fixes.");
-	const headings = [...text.matchAll(new RegExp(String.raw`\n\n(\d+)\. ([^\n]+) \(@(${LOGIN})\):\n`, "g"))];
+	const headings = [...text.matchAll(new RegExp(String.raw`\n\n(\d+)\. ([^\n]+) \(@(${LOGIN})(?:, (${EVENT_TIME}))?\):\n`, "g"))];
 	if (closing < 0 || headings.length !== announced || headings.some((heading, index) => Number(heading[1]) !== index + 1)) return null;
 	return headings.map((heading, index) => {
 		const end = headings[index + 1]?.index ?? closing;
 		const lines = text.slice(heading.index! + heading[0].length, end).replace(/\s+$/, "").split("\n");
 		while (lines.length > 0 && /^ {3}(?:https?:\/\/\S+|Thread ID: .*)$/.test(lines.at(-1)!)) lines.pop();
 		const at = heading[2] === "(general)" ? undefined : /^(.*?)(?::(\d+))?$/.exec(heading[2]!);
-		return { path: at?.[1] || undefined, line: at?.[2] ? Number(at[2]) : undefined, author: heading[3]!, body: lines.join("\n").trim() };
+		return { path: at?.[1] || undefined, line: at?.[2] ? Number(at[2]) : undefined, author: heading[3]!, body: lines.join("\n").trim(), postedAt: heading[4] };
 	});
 }
 
-// Read from the end: the review URL and ID follow the free-text body.
-function changesRequested(text: string): { body: string; url?: string } | null {
+// Read from the end: the review URL, ID and submitted time follow the free-text body.
+function changesRequested(text: string): { body: string; url?: string; at?: string } | null {
 	const closing = text.lastIndexOf("\n\nAddress the requested changes and push.");
 	if (closing < 0) return null;
 	let rest = text.slice(0, closing);
+	const submitted = new RegExp(String.raw`\nSubmitted at: (${EVENT_TIME})$`).exec(rest);
+	if (submitted) rest = rest.slice(0, submitted.index);
 	const id = /\nReview ID: [^\n]*$/.exec(rest);
 	if (id) rest = rest.slice(0, id.index);
 	const url = /\n\nReview URL: (\S+)$/.exec(rest);
 	if (url) rest = rest.slice(0, url.index);
 	const bodyAt = rest.indexOf("\n\nReview body:\n");
-	return { body: bodyAt < 0 ? "" : rest.slice(bodyAt + "\n\nReview body:\n".length).trim(), url: url?.[1] };
+	return { body: bodyAt < 0 ? "" : rest.slice(bodyAt + "\n\nReview body:\n".length).trim(), url: url?.[1], at: submitted?.[1] };
 }
 
 function readPullRequestNudge(text: string): Automation | null {
@@ -159,13 +170,13 @@ function readPullRequestNudge(text: string): Automation | null {
 	if (announced) {
 		const pr = pullRequest(text, prURL);
 		const comments = pr ? reviewComments(text, Number(announced[1])) : null;
-		return pr && comments ? { kind: "reviewComments", pr, comments } : null;
+		return pr && comments ? { kind: "reviewComments", pr, comments, at: latest(comments.map((comment) => comment.postedAt)) } : null;
 	}
 	const reviewer = new RegExp(String.raw`^A changes-requested review from @(${LOGIN}) is on `).exec(text);
 	if (reviewer) {
 		const review = changesRequested(text.replace(PR_LINE, ""));
 		const pr = review ? pullRequest(text, review.url ?? prURL) : undefined;
-		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body } : null;
+		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body, at: review.at } : null;
 	}
 	// AO's own reviewer, before its findings became GitHub reviews; only old history carries these.
 	if (text.startsWith("[AO reviewer] ")) {
@@ -499,6 +510,9 @@ const GITHUB_HTML = GITHUB_HTML_REHYPE_NO_IMAGES;
 function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAutomation; createdAt: string }) {
 	const { t, i18n } = useTranslation();
 	const { pr } = automation;
+	// When it happened on the forge, not when AO delivered it: AO holds PR
+	// nudges while the session waits on the user, so delivery can lag by a lot.
+	const at = ("at" in automation && automation.at) || createdAt;
 	const components = {
 		strong: <span className="font-medium text-foreground" />,
 		pr: <ForgeLink url={pr.url} className="font-medium text-foreground" />,
@@ -561,7 +575,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 					{heading}
 					{pr.title ? <span className="ml-1.5">{pr.title}</span> : null}
 				</span>
-				<span className="ml-auto shrink-0 tabular-nums">{formatTime(createdAt)}</span>
+				<time className="ml-auto shrink-0 tabular-nums" dateTime={at}>{formatMessageTimestamp(at)}</time>
 			</div>
 			{detail ? <div className="flex min-w-0 flex-col gap-3 pb-1">{detail}</div> : null}
 		</div>

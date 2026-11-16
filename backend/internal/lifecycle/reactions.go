@@ -533,12 +533,18 @@ func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCM
 		Provider:           o.Provider,
 		Repo:               o.Repo,
 	}
+	// A merge or close happened at a known provider time, which can be well
+	// before AO polled it (slow cadence, daemon down). Show that time, not the
+	// poll's. Ready-to-merge stays on the observation time: it is a state AO
+	// derived from several facts, with no single provider event behind it.
 	if o.PR.Merged {
 		base.Type = domain.NotificationPRMerged
+		base.CreatedAt = timeOr(o.PR.MergedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if o.PR.Closed {
 		base.Type = domain.NotificationPRClosedUnmerged
+		base.CreatedAt = timeOr(o.PR.ClosedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if rec.IsTerminated || rec.Activity.State.NeedsInput() || !ready {
@@ -685,6 +691,7 @@ func prCommentObservations(comments []domain.PullRequestComment) []ports.PRComme
 			URL:              comment.URL,
 			Resolved:         comment.Resolved,
 			AutoInjectReview: comment.AutoInjectReview,
+			CreatedAt:        comment.CreatedAt,
 		})
 	}
 	return out
@@ -917,6 +924,12 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 	if review.ID != "" {
 		fmt.Fprintf(&msg, "\nReview ID: %s", domain.SanitizeControlChars(review.ID))
 	}
+	// When the reviewer submitted it, not when AO delivered it: a nudge held
+	// while the session waited on the user can arrive long after. The chat
+	// shows this time on the event row.
+	if !review.SubmittedAt.IsZero() {
+		fmt.Fprintf(&msg, "\nSubmitted at: %s", providerEventTime(review.SubmittedAt))
+	}
 	msg.WriteString("\n\nAddress the requested changes and push. You should not need to re-fetch the review unless you need additional context beyond what Orchestrator has provided here.")
 	return msg.String()
 }
@@ -943,7 +956,15 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		// PR) and get pasted into the agent's live pane; strip control/escape
 		// chars before formatting them.
 		body := domain.SanitizeControlChars(c.Body)
-		fmt.Fprintf(&msg, "\n%d. %s (@%s):\n%s", i+1, location, author, body)
+		// The heading carries when the reviewer wrote the comment, not when AO
+		// delivered it; the chat shows this time on the event row. It sits in
+		// the heading AO writes, after the provider-controlled path, so a body
+		// line cannot supply it.
+		posted := ""
+		if !c.CreatedAt.IsZero() {
+			posted = ", " + providerEventTime(c.CreatedAt)
+		}
+		fmt.Fprintf(&msg, "\n%d. %s (@%s%s):\n%s", i+1, location, author, posted, body)
 		if c.URL != "" {
 			fmt.Fprintf(&msg, "\n   %s", domain.SanitizeControlChars(c.URL))
 		}
@@ -954,6 +975,12 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 	}
 	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
 	return msg.String()
+}
+
+// providerEventTime renders a provider timestamp for nudge text: UTC RFC 3339
+// to the second, which both agents and the chat's parser read unambiguously.
+func providerEventTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
 }
 
 func markdownCodeFence(s string) string {
