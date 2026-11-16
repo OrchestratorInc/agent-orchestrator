@@ -234,7 +234,7 @@ func TestCompressedNativeHistoryIsBoundedAndReadOnly(t *testing.T) {
 	if err := os.WriteFile(plain+".zst", oversize, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readSessionMetadata(plain + ".zst"); err == nil {
+	if _, err := readSessionMetadata(context.Background(), plain+".zst"); err == nil {
 		t.Fatal("unbounded compressed metadata accepted")
 	}
 }
@@ -380,6 +380,42 @@ func TestRestoreAcceptsTornLastLineAndLargeHistoryRecord(t *testing.T) {
 	_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Env: map[string]string{"INTERPRETER_HOME": home}, Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
 	if err != nil || !ok {
 		t.Fatalf("valid history with large record and torn tail = %v, %v", ok, err)
+	}
+}
+
+// Records stream one at a time: a long conversation past the old whole-file
+// cap still restores, and a single record too large to validate stops restore
+// with an error instead of silently starting a fresh conversation.
+func TestRestoreStreamsLongHistoryAndRefusesUnvalidatableRecord(t *testing.T) {
+	const id = "019f706d-1234-7123-8123-123456789abc"
+	record := func(size int) string {
+		return `{"timestamp":"2026-10-10T00:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"` + strings.Repeat("x", size) + `"}]}}` + "\n"
+	}
+	restore := func(t *testing.T, extra string) (bool, error) {
+		t.Helper()
+		workspace := t.TempDir()
+		home := writeNativeHistory(t, id, workspace)
+		path := filepath.Join(home, "sessions", "rollout-now-"+id+".jsonl")
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteString(extra); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		p := &Plugin{resolvedBinary: "/bin/interpreter"}
+		_, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Env: map[string]string{"INTERPRETER_HOME": home}, Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: id}}})
+		return ok, err
+	}
+	if ok, err := restore(t, strings.Repeat(record(8<<20), 9)); err != nil || !ok {
+		t.Fatalf("history over 64 MiB in total = %v, %v; want native restore", ok, err)
+	}
+	ok, err := restore(t, record(maxNativeRecordBytes))
+	if ok || !errors.Is(err, errNativeHistoryTooLarge) {
+		t.Fatalf("record over the validation limit = %v, %v; want errNativeHistoryTooLarge, not a fresh launch", ok, err)
 	}
 }
 
