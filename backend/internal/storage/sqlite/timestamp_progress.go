@@ -97,7 +97,7 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 		old = append(old, strings.ReplaceAll(predicate, quoteIdentifier(column.column), "OLD."+quoteIdentifier(column.column)))
 		fresh = append(fresh, strings.ReplaceAll(predicate, quoteIdentifier(column.column), "NEW."+quoteIdentifier(column.column)))
 	}
-	pending := `(SELECT completed=0 OR rejected=1 FROM timestamp_repair_progress WHERE table_name=` + literal + `)`
+	rejected := `(SELECT rejected FROM timestamp_repair_progress WHERE table_name=` + literal + `)=1`
 	predicates := map[string]string{
 		"insert": strings.Join(fresh, " OR "),
 		"update": strings.Join(append(append([]string{}, old...), fresh...), " OR "),
@@ -107,7 +107,7 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 	for event, predicate := range predicates {
 		name := fmt.Sprintf("ao_timestamp_%x_%s", sha256.Sum256([]byte(table)), event)
 		out[name] = "CREATE TRIGGER " + quoteIdentifier(name) + " AFTER " + strings.ToUpper(event) + " ON " + quoteIdentifier(table) +
-			" WHEN (SELECT paused FROM timestamp_repair_control WHERE id=1)=0 AND (" + pending + " OR " + predicate + ") BEGIN " +
+			" WHEN (SELECT paused FROM timestamp_repair_control WHERE id=1)=0 AND (" + rejected + " OR " + predicate + ") BEGIN " +
 			"UPDATE timestamp_repair_progress SET generation=generation+1,completed=0 WHERE table_name=" + literal + "; END"
 	}
 	return out
