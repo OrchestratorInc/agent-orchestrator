@@ -550,6 +550,25 @@ describe("cloud control-plane session lifecycle", () => {
 		await expect(client.getWorkspaceBranches("org", "s")).rejects.toMatchObject({ status: 501, code: "WORKSPACE_VIEW_UNSUPPORTED" });
 	});
 
+	// A first pull request fetch can outlast the load balancer: the control
+	// plane answers WORKSPACE_VIEW_PREPARING and keeps fetching, so the view is
+	// asked again after Retry-After.
+	it("asks again for a view the control plane is still preparing", async () => {
+		const preparing = () => new Response(JSON.stringify({ code: "WORKSPACE_VIEW_PREPARING", message: "preparing" }), { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "0" } });
+		const history = { view: { kind: "pull_request", name: "#12", tipSha: "a", baseSha: "b", baseRef: "origin/main", rangeMode: "since_base" }, commits: [], commitsTruncated: false, rangeSummary: { files: 0, additions: 0, deletions: 0 } };
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(preparing())
+			.mockResolvedValueOnce(new Response(JSON.stringify(history), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: fetchMock as typeof fetch });
+		await expect(client.getWorkspaceHistory("org", "s", { prNumber: 12 })).resolves.toEqual(history);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		const stillPreparing = vi.fn(async () => preparing());
+		const giveUp = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl: stillPreparing as typeof fetch });
+		await expect(giveUp.getWorkspaceBranches("org", "s")).rejects.toMatchObject({ status: 503, code: "WORKSPACE_VIEW_PREPARING" });
+		expect(stillPreparing).toHaveBeenCalledTimes(4);
+	});
+
 	it("posts restore intent for one deleted, encoded session", async () => {
 		const fetchMock = vi.fn(async () =>
 			new Response(

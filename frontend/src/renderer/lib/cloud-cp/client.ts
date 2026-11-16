@@ -747,6 +747,10 @@ function seg(value: string): string {
 	return encodeURIComponent(value);
 }
 
+/** A view of another branch or a pull request still being prepared: asked again after Retry-After. */
+const VIEW_PREPARING_CODE = "WORKSPACE_VIEW_PREPARING";
+const VIEW_PREPARING_RETRIES = 3;
+
 /** Error codes the control plane uses when a plan does not allow the request. */
 export const PLAN_REFUSAL_CODES: ReadonlySet<string> = new Set([
 	"PLAN_REQUIRED",
@@ -855,6 +859,25 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 	async function requestJson<T>(method: string, path: string, init: SendOptions = {}): Promise<T> {
 		const response = await send(method, path, init);
 		return (await response.json()) as T;
+	}
+
+	// A view of another branch or a pull request may first fetch through the
+	// session's git proxy for longer than the load balancer waits; the control
+	// plane then answers 503 WORKSPACE_VIEW_PREPARING and keeps the fetch
+	// running, so asking again shortly finds it done.
+	async function requestView<T>(method: string, path: string, init: SendOptions = {}): Promise<T> {
+		for (let attempt = 0; ; attempt++) {
+			try {
+				return await requestJson<T>(method, path, init);
+			} catch (error) {
+				if (!(error instanceof CloudCpError) || error.code !== VIEW_PREPARING_CODE || attempt >= VIEW_PREPARING_RETRIES || init.signal?.aborted) throw error;
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(resolve, error.retryAfterMs ?? 3_000);
+					init.signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+				});
+				if (init.signal?.aborted) throw error;
+			}
+		}
 	}
 
 	async function requestVoid(method: string, path: string, init: SendOptions = {}): Promise<void> {
@@ -1170,15 +1193,15 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				query: { query: query.query, cursor: query.cursor, limit: query.limit, mode: query.mode, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewFile: (orgId, sessionId, query, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
+			requestView("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/file`, {
 				query: { path: query.path, scope: query.scope, commitSha: query.commitSha, ...viewQuery(query), ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceReviewDiffs: (orgId, sessionId, body, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
+			requestView("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/diffs`, {
 				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		getWorkspaceReviewRevision: (orgId, sessionId, query, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
+			requestView("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/review/revision`, {
 				query: {
 					path: query.path, scope: query.scope, side: query.side, workspaceVersion: query.workspaceVersion,
 					expectedRevision: query.expectedRevision, commitSha: query.commitSha, ...viewQuery(query), ...repositoryQuery(o),
@@ -1189,19 +1212,19 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		getWorkspaceBranches: (orgId, sessionId, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/branches`, {
+			requestView("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/branches`, {
 				query: repositoryQuery(o), signal: o?.signal,
 			}),
 		getWorkspaceHistory: (orgId, sessionId, query, o) =>
-			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/history`, {
+			requestView("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/history`, {
 				query: { branch: query.branch, prNumber: query.prNumber, sourceUrl: query.sourceUrl, ...repositoryQuery(o) }, signal: o?.signal,
 			}),
 		getWorkspaceCommitSelection: (orgId, sessionId, body, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/history/selection`, {
+			requestView("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/workspace/history/selection`, {
 				body, query: repositoryQuery(o), signal: o?.signal,
 			}),
 		resolveFileReference: (orgId, sessionId, body, o) =>
-			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/conversation/file-references/resolve`, {
+			requestView("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/conversation/file-references/resolve`, {
 				body, signal: o?.signal,
 			}),
 		restoreSession: (orgId, sessionId, o) =>
