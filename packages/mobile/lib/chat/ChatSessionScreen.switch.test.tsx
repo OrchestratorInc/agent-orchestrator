@@ -46,7 +46,7 @@ const fixtures = vi.hoisted(() => {
 		conversation: conversation(),
 		freshConversation: conversation,
 		refreshBoard: vi.fn(async () => {}),
-		navigation: { setOptions: vi.fn() },
+		navigation: { setOptions: vi.fn(), addListener: vi.fn(() => () => {}) },
 		router: { push: vi.fn(), back: vi.fn(), replace: vi.fn(), canGoBack: () => true },
 	};
 });
