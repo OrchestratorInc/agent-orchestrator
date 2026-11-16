@@ -1341,12 +1341,7 @@ export function HumanMessage({
 					{branchPoint && onActivateBranch ? (
 						<ConversationBranchNavigator
 							point={branchPoint}
-							pending={
-								(!activateBranchTarget ||
-									branchPoint.previousBranchId === activateBranchTarget ||
-									branchPoint.nextBranchId === activateBranchTarget) &&
-								activateBranchPending
-							}
+							pending={activateBranchPending}
 							disabled={activateBranchDisabled}
 							error={
 								!activateBranchTarget ||

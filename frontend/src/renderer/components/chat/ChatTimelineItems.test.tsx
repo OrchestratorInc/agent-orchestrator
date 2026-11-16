@@ -859,6 +859,21 @@ describe("HumanMessage", () => {
 			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
 		});
 
+		it("disables branch navigation globally while activateBranchPending is true regardless of activateBranchTarget", () => {
+			render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchPending
+					activateBranchTarget="unrelated-branch"
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Previous conversation branch" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
+		});
+
 		it("shows activateBranchError only when branch matches activateBranchTarget", () => {
 			const { rerender } = render(
 				<HumanMessage
