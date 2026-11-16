@@ -1554,6 +1554,8 @@ function steerRefusal(error: unknown): string | undefined {
 			return undefined;
 		case "CHAT_STEER_TEXT_REQUIRED":
 			return "Type something to steer with.";
+		case "CHAT_OPEN_ELSEWHERE":
+			return "chat.draft.openElsewhere";
 		default:
 			return apiErrorMessage(error);
 	}
@@ -1571,6 +1573,7 @@ const DEFINITIVE_STEER_NON_ACCEPTANCE_CODES = new Set([
 	"SESSION_NOT_FOUND",
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_AUTH_REQUIRED",
+	"CHAT_OPEN_ELSEWHERE",
 ]);
 
 function steerNonAcceptance(error: unknown): ChatSteerOutcome | undefined {
