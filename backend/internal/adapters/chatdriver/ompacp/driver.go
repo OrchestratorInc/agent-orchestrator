@@ -56,10 +56,15 @@ func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[str
 }
 
 func sessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOption {
+	var options []acpdriver.SessionOption
 	if model := strings.TrimSpace(settings.Model); model != "" {
-		return []acpdriver.SessionOption{{ID: "model", Value: model}}
+		options = append(options, acpdriver.SessionOption{ID: "model", Value: model})
 	}
-	return nil
+	// OMP advertises its thinking level as the "thinking" config option.
+	if effort := strings.TrimSpace(settings.Effort); effort != "" {
+		options = append(options, acpdriver.SessionOption{ID: "thinking", Value: effort})
+	}
+	return options
 }
 
 func validateTurnSettings(initial ports.PermissionMode, settings ports.ChatTurnSettings) error {

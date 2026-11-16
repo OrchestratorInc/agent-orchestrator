@@ -485,6 +485,10 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 			// matched Pi's level rules lack those levels.
 			return fingerprint + ":shared-providers-v1:thinking-v3"
 		}
+		if request.AgentID == "omp" {
+			// Snapshots from before OMP's thinking efforts were read lack them.
+			return fingerprint + ":shared-providers-v1:thinking-v1"
+		}
 		return fingerprint + ":shared-providers-v1"
 	}
 	if request.AgentID != "claude-code" || d.ClaudeFingerprint == nil {

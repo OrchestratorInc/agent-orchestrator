@@ -758,6 +758,42 @@ func TestResolveGrokEffortIsAvailableOnlyInChat(t *testing.T) {
 	}
 }
 
+// TestResolveOMPEffortValidatesAgainstCatalog covers #8232: OMP takes an
+// explicit level the model's catalog entry lists, in Chat and the terminal,
+// rejects one it does not, and clears a stale level inherited from settings.
+func TestResolveOMPEffortValidatesAgainstCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "anthropic/claude-opus-5-5", IsDefault: true, Efforts: []string{"low", "medium", "high", "xhigh", "max"}},
+	}}}}
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			spawn := func(effort string, override bool, project domain.ProjectConfig) (ports.AgentConfig, error) {
+				return m.resolveAgentConfig(t.Context(), ports.SpawnConfig{
+					ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOMP, RequestedMode: mode,
+					AgentConfig: ports.AgentConfig{Model: "anthropic/claude-opus-5-5", Effort: effort}, EffortOverride: override,
+				}, project)
+			}
+			resolved, err := spawn("max", true, domain.ProjectConfig{})
+			if err != nil || resolved.Effort != "max" {
+				t.Fatalf("listed effort = %#v, %v; want max forwarded", resolved, err)
+			}
+			if _, err := spawn("minimal", true, domain.ProjectConfig{}); !errors.Is(err, ports.ErrUnsupportedEffort) {
+				t.Fatalf("unlisted effort error = %v, want ErrUnsupportedEffort", err)
+			}
+			inherited := domain.ProjectConfig{Worker: domain.RoleOverride{AgentConfig: domain.AgentConfig{Effort: "minimal"}}}
+			resolved, err = spawn("", false, inherited)
+			if err != nil || resolved.Effort != "" {
+				t.Fatalf("stale inherited effort = %#v, %v; want cleared", resolved, err)
+			}
+			inherited.Worker.AgentConfig.Effort = "high"
+			resolved, err = spawn("", false, inherited)
+			if err != nil || resolved.Effort != "high" {
+				t.Fatalf("listed inherited effort = %#v, %v; want high kept", resolved, err)
+			}
+		})
+	}
+}
+
 func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
@@ -773,7 +809,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, prime-agent, open-interpreter, and omp") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the

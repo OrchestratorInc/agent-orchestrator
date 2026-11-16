@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -146,13 +147,15 @@ func parseProviderSnapshot(raw []byte, piRules bool) ports.AgentModelCatalog {
 			continue
 		}
 		result.Providers = append(result.Providers, provider)
-		result.Models = append(result.Models, parseProviderModelRecords(entry.Models, provider, piRules)...)
+		result.Models = append(result.Models, parseProviderModelRecords(entry.Models, provider, func(record map[string]any) []string {
+			return piThinkingLevels(record, piRules)
+		})...)
 	}
 	sort.Strings(result.Providers)
 	return result
 }
 
-func parseProviderModelRecords(raw []byte, provider string, piRules bool) []ports.AgentModelInfo {
+func parseProviderModelRecords(raw []byte, provider string, effortsFor func(map[string]any) []string) []ports.AgentModelInfo {
 	var records []map[string]any
 	if json.Unmarshal(raw, &records) != nil {
 		var keyed map[string]map[string]any
@@ -189,9 +192,39 @@ func parseProviderModelRecords(raw []byte, provider string, piRules bool) []port
 		}
 		// These native catalogs store unqualified model IDs, including org/model.
 		models = append(models, ports.AgentModelInfo{ID: modelProvider + "/" + id, Label: label, Provider: modelProvider,
-			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: piThinkingLevels(record, piRules)})
+			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: effortsFor(record)})
 	}
 	return models
+}
+
+// ompRecordEfforts keeps an explicit thinkingLevelMap if present, otherwise
+// it reads the thinking.efforts list OMP stores in its models.db records.
+func ompRecordEfforts(record map[string]any) []string {
+	if efforts := piThinkingLevels(record, false); efforts != nil {
+		return efforts
+	}
+	return ompThinkingEfforts(record)
+}
+
+// ompThinkingLevels are the levels `omp --thinking` accepts besides off and
+// auto, which pick no specific effort.
+var ompThinkingLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+
+// ompThinkingEfforts are a reasoning OMP model's thinking.efforts, limited to
+// levels --thinking accepts and kept in OMP's order.
+func ompThinkingEfforts(record map[string]any) []string {
+	if reasoning, _ := record["reasoning"].(bool); !reasoning {
+		return nil
+	}
+	thinking, _ := record["thinking"].(map[string]any)
+	listed, _ := thinking["efforts"].([]any)
+	var efforts []string
+	for _, value := range listed {
+		if level, _ := value.(string); slices.Contains(ompThinkingLevels, level) && !slices.Contains(efforts, level) {
+			efforts = append(efforts, level)
+		}
+	}
+	return efforts
 }
 
 // piThinkingLevels are a reasoning Pi model's thinking levels as effort choices,
@@ -239,7 +272,7 @@ func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalo
 		}
 		// Cache keys can include account-specific suffixes: trust model.provider,
 		// never expose the cache key as a provider or infer it from a selector.
-		result.Models = append(result.Models, parseProviderModelRecords(raw, "", false)...)
+		result.Models = append(result.Models, parseProviderModelRecords(raw, "", ompRecordEfforts)...)
 	}
 	if rows.Err() != nil {
 		return ports.AgentModelCatalog{}
@@ -299,7 +332,9 @@ func piInstalledModels(ctx context.Context, binary, workingDir string, env map[s
 	if err != nil {
 		return nil
 	}
-	return parseProviderModelRecords(output, "", true)
+	return parseProviderModelRecords(output, "", func(record map[string]any) []string {
+		return piThinkingLevels(record, true)
+	})
 }
 
 func providerCatalogFingerprint(agentID string, env map[string]string) string {

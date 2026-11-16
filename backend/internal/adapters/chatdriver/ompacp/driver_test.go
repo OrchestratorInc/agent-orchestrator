@@ -59,6 +59,11 @@ func TestSessionOptionsUseAdvertisedModelOption(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings = %#v, want %#v", got, want)
 	}
+	got = sessionOptions(ports.ChatTurnSettings{Model: "zai/glm-5.2", Effort: "high"})
+	want = []acpdriver.SessionOption{{ID: "model", Value: "zai/glm-5.2"}, {ID: "thinking", Value: "high"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("settings with effort = %#v, want %#v", got, want)
+	}
 }
 
 func TestValidateTurnSettingsRejectsApprovalModeChange(t *testing.T) {
