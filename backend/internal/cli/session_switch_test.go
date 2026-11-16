@@ -261,3 +261,16 @@ func TestSessionSwitchFromReportsTheSessionsItCouldNotSwitch(t *testing.T) {
 		t.Fatalf("err = %v exit = %d stderr = %q", err, ExitCode(err), errOut)
 	}
 }
+
+func TestSessionSwitchFromCountsAnUnsentMessageAsSwitched(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	calls.sessions = `{"sessions":[{"id":"demo-1","projectId":"demo","kind":"worker","harness":"claude-code"}]}`
+	calls.busySends, calls.busyCode = 1, "SEND_FAILED"
+	writeRunFileFor(t, cfg, srv)
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "--from", "claude", "codex", "-m", "take over")
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "switched 1 sessions from claude-code to codex, but 1 did not get the message") ||
+		!strings.Contains(errOut, "demo-1: switched, but the message was not sent") {
+		t.Fatalf("err = %v exit = %d stderr = %q", err, ExitCode(err), errOut)
+	}
+}

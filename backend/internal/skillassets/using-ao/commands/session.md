@@ -327,8 +327,8 @@ A session whose agent is working or waiting on an approval is refused.
 `--force` stops the current turn, cancels queued messages and pending
 approvals, and switches anyway. Use it when the agent is stuck.
 
-`--from <agent>` switches every session on that agent, four at a time, and
-exits 1 if any was not switched. Switching to the agent already running changes
+`--from <agent>` switches every session on that agent, orchestrators included,
+four at a time, and exits 1 if any was not switched or did not get the message. Switching to the agent already running changes
 nothing. `claude` means `claude-code`. Run `ao agent ls` for the agents you can
 switch to.
 

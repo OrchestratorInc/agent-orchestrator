@@ -76,8 +76,9 @@ stops the current turn, cancels queued messages and pending approvals, and
 switches anyway: use it when the agent is stuck, for example during a provider
 outage.
 
---from <agent> switches every session on that agent instead of one, four at a
-time, and exits 1 if any of them was not switched.
+--from <agent> switches every session on that agent instead of one,
+orchestrators included, four at a time, and exits 1 if any of them was not
+switched or did not get the message.
 
 --message is sent to the new agent once the switch completes, as ao send would.
 Run ao agent ls for the agents you can switch to.`,
@@ -143,7 +144,7 @@ func (c *commandContext) switchSessionsFrom(ctx context.Context, cmd *cobra.Comm
 		return err
 	}
 	var mu sync.Mutex
-	failed := 0
+	failed, unsent := 0, 0
 	var group errgroup.Group
 	group.SetLimit(switchFromLimit)
 	for _, id := range ids {
@@ -153,8 +154,12 @@ func (c *commandContext) switchSessionsFrom(ctx context.Context, cmd *cobra.Comm
 			mu.Lock()
 			defer mu.Unlock()
 			_, _ = out.Write(lines.Bytes())
-			if err != nil {
+			if errors.Is(err, errMessageNotSent) {
+				unsent++
+			} else if err != nil {
 				failed++
+			}
+			if err != nil {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s: %v\n", id, err)
 			}
 			return nil
@@ -163,6 +168,9 @@ func (c *commandContext) switchSessionsFrom(ctx context.Context, cmd *cobra.Comm
 	_ = group.Wait()
 	if failed > 0 {
 		return fmt.Errorf("%d of %d sessions on %s were not switched", failed, len(ids), from)
+	}
+	if unsent > 0 {
+		return fmt.Errorf("switched %d sessions from %s to %s, but %d did not get the message", len(ids), from, agent, unsent)
 	}
 	_, err := fmt.Fprintf(out, "switched %d sessions from %s to %s\n", len(ids), from, agent)
 	return err
@@ -195,11 +203,13 @@ func (c *commandContext) switchSession(ctx context.Context, out io.Writer, id, a
 		return nil
 	}
 	if err := c.sendAfterSwitch(ctx, id, opts.message); err != nil {
-		return fmt.Errorf("switched, but the message was not sent: %w", err)
+		return fmt.Errorf("%w: %w", errMessageNotSent, err)
 	}
 	_, err = fmt.Fprintf(out, "sent message to %s\n", id)
 	return err
 }
+
+var errMessageNotSent = errors.New("switched, but the message was not sent")
 
 func knownAgentFlag(raw string) (string, error) {
 	agent := strings.ToLower(strings.TrimSpace(raw))
