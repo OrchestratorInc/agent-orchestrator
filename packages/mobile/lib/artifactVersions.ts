@@ -100,7 +100,8 @@ export const BASE_PAGE_CSS = "html{background:var(--background);color:var(--fore
 
 // A BOM, whitespace and comments may precede the doctype.
 const LEADING_DOCTYPE = /^\uFEFF?(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
-const PAGE_VIEWPORT = /<meta\s[^>]*name\s*=\s*["']?viewport/i;
+/** A <meta> whose name attribute is exactly viewport, in any letter case. */
+const PAGE_VIEWPORT = /<meta\s(?:[^>]*?\s)?name\s*=\s*(?:"viewport"|'viewport'|viewport[\s/>])/i;
 
 /**
  * A saved HTML version as a page, styled as the daemon serves the live file:

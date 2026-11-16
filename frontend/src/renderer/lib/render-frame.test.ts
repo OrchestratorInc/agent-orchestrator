@@ -81,27 +81,30 @@ describe("render-frame helpers", () => {
 		}
 	});
 
-	it("reads the taller of the nearest measured heights on each side of a width", () => {
+	it("sizes a frame from the heights measured nearest its width", () => {
 		const heights: Array<[number, number]> = [
-			[320, 900],
-			[520, 400],
-			[860, 500],
+			[360, 1400],
+			[600, 700],
+			[1024, 820],
 		];
-		expect(measuredRenderHeight(heights, 520)).toBe(400);
-		expect(measuredRenderHeight(heights, 700)).toBe(500);
-		expect(measuredRenderHeight(heights, 400)).toBe(900);
-		expect(measuredRenderHeight(heights, 240)).toBe(900);
-		expect(measuredRenderHeight(heights, 1200)).toBe(500);
-		expect(measuredRenderHeight([[640, 300]], 1200)).toBe(300);
+		expect(measuredRenderHeight(heights, 600)).toBe(700);
+		expect(measuredRenderHeight(heights, 480)).toBe(1400);
+		expect(measuredRenderHeight(heights, 800)).toBe(820);
+		expect(measuredRenderHeight(heights, 300)).toBe(1400);
+		expect(measuredRenderHeight(heights, 1600)).toBe(820);
+		expect(measuredRenderHeight([[500, 250]], 90)).toBe(250);
 	});
 
-	it("names a saved page after its title, without characters a file system refuses", () => {
-		expect(renderFileName("Turns by day")).toBe("Turns by day.html");
-		expect(renderFileName('Q3: a/b\\c *?"<>| \u0007 report\n')).toBe("Q3 a b c report.html");
+	it("names a saved page with the words of its title", () => {
+		expect(renderFileName("Weekly spend")).toBe("Weekly spend.html");
+		expect(renderFileName('CI <main>: p95 / p99 | "flaky"?')).toBe("CI main p95 p99 flaky.html");
+		expect(renderFileName("line one\r\nline two\u0000\u007f")).toBe("line one line two.html");
 		expect(renderFileName("")).toBe("Page.html");
-		expect(renderFileName(' /:*?"<>| ')).toBe("Page.html");
-		expect(renderFileName(`${"x".repeat(119)} tail`)).toBe(`${"x".repeat(119)}.html`);
-		expect(renderFileName("y".repeat(300))).toBe(`${"y".repeat(120)}.html`);
+		expect(renderFileName("  ***  ")).toBe("Page.html");
+		expect(renderFileName("\ufeffBOM\ufefftitle\ufeff")).toBe("BOM title.html");
+		expect(renderFileName("ab ".repeat(50))).toBe(`${"ab ".repeat(40).trim()}.html`);
+		expect(renderFileName("ж".repeat(125))).toBe(`${"ж".repeat(120)}.html`);
+		expect(renderFileName("😀".repeat(121))).toBe(`${"😀".repeat(120)}.html`);
 	});
 
 	it("reads only the bootstrap's own protocol messages", () => {

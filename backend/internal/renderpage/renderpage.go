@@ -31,20 +31,24 @@ var (
 	// A BOM, whitespace, and comments may precede the doctype. Anything inserted
 	// before the doctype would drop the page into quirks mode.
 	leadingDoctype = regexp.MustCompile(`(?is)^\x{FEFF}?(?:\s|<!--.*?-->)*<!doctype[^>]*>`)
-	pageViewport   = regexp.MustCompile(`(?i)<meta\s[^>]*name\s*=\s*["']?viewport`)
-	// Characters a file system refuses, and control characters.
-	unsafeFileNameChars = regexp.MustCompile(`[\\/:*?"<>|\p{Cc}]+`)
+	// A <meta> whose name attribute is exactly viewport, in any letter case.
+	pageViewport = regexp.MustCompile(`(?i)<meta\s(?:[^>]*?\s)?name\s*=\s*(?:"viewport"|'viewport'|viewport[\s/>])`)
 )
 
-// FileName is the file a saved render is written to: its title, without
-// characters a file system refuses, whitespace collapsed, capped at 120 runes.
-// A port of renderFileName in frontend/src/renderer/lib/render-frame.ts.
+// maxFileNameChars caps a saved render's file name, in runes, before ".html".
+const maxFileNameChars = 120
+
+// FileName is the file a saved render is written to: the words of its title,
+// split at whitespace, control characters, and characters a file system
+// refuses. renderFileName in frontend/src/renderer/lib/render-frame.ts names
+// it the same way, so U+FEFF, which JavaScript counts as whitespace, splits too.
 func FileName(title string) string {
-	// JS \s, which the renderer collapses, also matches U+FEFF.
-	isSpace := func(r rune) bool { return unicode.IsSpace(r) || r == '\uFEFF' }
-	name := strings.Join(strings.FieldsFunc(unsafeFileNameChars.ReplaceAllString(title, " "), isSpace), " ")
-	if runes := []rune(name); len(runes) > 120 {
-		name = strings.TrimSpace(string(runes[:120]))
+	words := strings.FieldsFunc(title, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r) || r == '\uFEFF' || strings.ContainsRune(`\/:*?"<>|`, r)
+	})
+	name := strings.Join(words, " ")
+	if runes := []rune(name); len(runes) > maxFileNameChars {
+		name = strings.TrimRight(string(runes[:maxFileNameChars]), " ")
 	}
 	if name == "" {
 		name = "Page"
@@ -94,10 +98,9 @@ func Document(stored []byte) []byte {
 // markup. Right after the doctype the HTML parser opens the implied <head> for
 // them; the page's own <html> start tag then only merges its attributes and its
 // <head> start tag is ignored, so the page's styles and scripts still come
-// after the bootstrap. This needs neither an HTML tokenizer (golang.org/x/net
-// is not a dependency) nor T3's backreference regex, which RE2 cannot express.
-// The viewport meta follows the script, outside the block Document removes, so
-// injecting twice yields the same document.
+// after the bootstrap, with no HTML tokenizer (golang.org/x/net is not a
+// dependency). The viewport meta follows the script, outside the block
+// Document removes, so injecting twice yields the same document.
 func inject(page string) string {
 	var b strings.Builder
 	b.WriteString(themeStyleOpen + defaultThemeCSS + `</style>`)
