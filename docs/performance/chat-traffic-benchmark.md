@@ -156,9 +156,11 @@ than the provider's gap between units. Real coalescing can only lower them.
 
 Bytes cannot pass by losing content. Each scenario reduces the client's
 reconstructed view and a fresh, unpaged server read over the same window to a
-canonical text: ordered rows and the states of the turns they belong to. A
-message row holds its role and the sha256 and size of its text. An activity row
-holds its kind and status, and four values:
+canonical text: ordered rows and the states of the turns they belong to. Every
+row starts with the index of its turn in that list, so a row that moves to
+another turn changes the text. A message row then holds its role and the sha256
+and size of its text. An activity row holds its kind and status, and four
+values:
 
 - the sha256 of its summary plus settled detail text;
 - its full output size;
@@ -225,6 +227,12 @@ Expected states change only when regenerated explicitly with
   measured paths, Go version and platform, digests of the harness, fixtures plus
   expected states, the ceilings file, and the renderer source, the renderer
   policy constants it applied, and a fresh nonce.
+- The candidate's commit and uncommitted-change digest are checked again after
+  its replay. A source edited while the runs compiled ends the run with exit 2
+  instead of being measured under the identity recorded before.
+- Runs of the same baseline commit share its exported tree, so a run holds a
+  lock on it (`<tree>.lock`, holding its pid). A second run is refused while the
+  first is alive, and a lock left by a run that died is taken over.
 
 ## Comparison rules
 

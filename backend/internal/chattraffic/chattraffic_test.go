@@ -380,3 +380,23 @@ func TestCeilingsBindTheCommittedFixtures(t *testing.T) {
 		t.Fatalf("ceilings.json is bound to fixtures %s, but the committed fixtures and expected states are %s", ceilings.FixturesSha256, got)
 	}
 }
+
+func TestCanonicalStateRecordsEachRowsTurn(t *testing.T) {
+	turns := []string{"completed", "completed"}
+	rows := []chattraffic.CanonicalRow{
+		{Turn: 0, Kind: "message", Role: "user", Text: "first"},
+		{Turn: 1, Kind: "message", Role: "user", Text: "second"},
+		{Turn: 1, Kind: "activity", ActivityKind: "command", Status: "completed", Text: "ls"},
+	}
+	moved := append([]chattraffic.CanonicalRow(nil), rows...)
+	moved[2].Turn = 0
+	if chattraffic.CanonicalState(rows, turns) == chattraffic.CanonicalState(moved, turns) {
+		t.Fatal("a row moved to the previous turn left the canonical state unchanged")
+	}
+	// Two completed turns exchanging their rows keep the same rows and states.
+	swapped := append([]chattraffic.CanonicalRow(nil), rows...)
+	swapped[0].Turn, swapped[1].Turn = 1, 0
+	if chattraffic.CanonicalState(rows, turns) == chattraffic.CanonicalState(swapped, turns) {
+		t.Fatal("two turns exchanging rows left the canonical state unchanged")
+	}
+}

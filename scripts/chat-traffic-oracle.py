@@ -2,9 +2,9 @@
 """Fixture-only oracle for the chat traffic benchmark.
 
 Derives, from the committed fixtures alone, the canonical state the daemon must
-reproduce: every history row (kind, role or activity kind, status, sha256 of its
-text, output size, and sha256 of its tool payload and whole output) and every
-remote-cut tool output (sha256 and size). It is an
+reproduce: every history row (the index of its turn, kind, role or activity
+kind, status, sha256 of its text, output size, and sha256 of its tool payload
+and whole output) and every remote-cut tool output (sha256 and size). It is an
 independent re-implementation of the fixture rules in
 backend/internal/chattraffic/fixture.go, so an expected state generated from
 the product can be checked against something the product did not produce.
@@ -167,12 +167,13 @@ def turn_rows(turn):
 
 
 def canonical(turn_states, rows):
+    """Rows end with the index of their turn in turn_states."""
     lines = ["turn\t%s\n" % s for s in turn_states]
     for row in rows:
         if row[0] == "message":
-            lines.append("message\t%s\t%s\t%d\n" % (row[1], sha(row[2]), size(row[2])))
+            lines.append("message\t%d\t%s\t%s\t%d\n" % (row[-1], row[1], sha(row[2]), size(row[2])))
         else:
-            lines.append("activity\t%s\t%s\t%s\t%d\t%s\t%s\n" % (row[1], row[4], sha(row[2]), row[3], sha(row[5]), sha(row[6])))
+            lines.append("activity\t%d\t%s\t%s\t%s\t%d\t%s\t%s\n" % (row[-1], row[1], row[4], sha(row[2]), row[3], sha(row[5]), sha(row[6])))
     return "".join(lines)
 
 
@@ -184,19 +185,19 @@ def oracle(provider, output_limit):
 
     files = {}
     states, rows, cut_states, cut_rows = [], [], [], []
-    for turn in history:
+    for index, turn in enumerate(history):
         state, turn_rows_, outputs = turn_rows(turn)
         states.append(state)
-        rows.extend(turn_rows_)
+        rows.extend(row + (index,) for row in turn_rows_)
         cut = [o for o in outputs if size(o[2]) > output_limit]
         if cut:
             cut_states.append(state)
         for kind, status, output in cut:
-            cut_rows.append(("activity", kind, output, size(output), status, "", ""))
+            cut_rows.append(("activity", kind, output, size(output), status, "", "", len(cut_states) - 1))
     files["oracle-%s-history.txt" % provider] = canonical(states, rows)
     files["oracle-%s-expand.txt" % provider] = canonical(cut_states, cut_rows)
     state, rows, _ = turn_rows(live)
-    files["oracle-%s-live.txt" % provider] = canonical([state], rows)
+    files["oracle-%s-live.txt" % provider] = canonical([state], [row + (0,) for row in rows])
     return files
 
 

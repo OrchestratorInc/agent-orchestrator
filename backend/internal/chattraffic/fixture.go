@@ -175,11 +175,14 @@ func expand(t TurnTemplate, n int) Turn {
 	return turn
 }
 
-// CanonicalRow is one timeline row reduced to what a reader sees: its kind,
-// role or activity kind, status, a digest of its text, the full size of any
-// command output, and for activities digests of the tool payload and of the
-// output the reader holds.
+// CanonicalRow is one timeline row reduced to what a reader sees: the turn it
+// belongs to, its kind, role or activity kind, status, a digest of its text,
+// the full size of any command output, and for activities digests of the tool
+// payload and of the output the reader holds.
 type CanonicalRow struct {
+	// Turn is the index of the row's turn in the state's turn list, or -1 for a
+	// row outside any turn, so a row moved to another turn changes the state.
+	Turn         int
 	Kind         string // "message" or "activity"
 	Role         string
 	ActivityKind string
@@ -205,9 +208,9 @@ func CanonicalState(rows []CanonicalRow, turnStates []string) string {
 	for _, row := range rows {
 		switch row.Kind {
 		case "message":
-			fmt.Fprintf(&b, "message\t%s\t%s\t%d\n", row.Role, SHA256Hex([]byte(row.Text)), len(row.Text))
+			fmt.Fprintf(&b, "message\t%d\t%s\t%s\t%d\n", row.Turn, row.Role, SHA256Hex([]byte(row.Text)), len(row.Text))
 		default:
-			fmt.Fprintf(&b, "activity\t%s\t%s\t%s\t%d\t%s\t%s\n", row.ActivityKind, row.Status, SHA256Hex([]byte(row.Text)), row.OutputBytes,
+			fmt.Fprintf(&b, "activity\t%d\t%s\t%s\t%s\t%d\t%s\t%s\n", row.Turn, row.ActivityKind, row.Status, SHA256Hex([]byte(row.Text)), row.OutputBytes,
 				SHA256Hex([]byte(row.Payload)), SHA256Hex([]byte(row.Output)))
 		}
 	}

@@ -579,6 +579,7 @@ func (w *benchWorld) measureExpandOutput(history *benchClient) benchResult {
 	var clientRows, serverRows []chattraffic.CanonicalRow
 	var turnStates []string
 	seenTurns := map[string]bool{}
+	turnIndex := map[string]int{}
 	turnState := map[string]string{}
 	for _, turn := range view.Turns {
 		turnState[turn.ID] = turn.State
@@ -592,13 +593,22 @@ func (w *benchWorld) measureExpandOutput(history *benchClient) benchResult {
 		if int64(len(output)) != int64(cutSize) {
 			w.t.Errorf("expanded output of %s is %d bytes; the page said %d", item.ID, len(output), int64(cutSize))
 		}
-		clientRows = append(clientRows, expandedRow(item, output))
-		serverOutput, _ := full["activity:"+item.ID].Detail["output"].(string)
-		serverRows = append(serverRows, expandedRow(full["activity:"+item.ID], serverOutput))
 		if item.TurnID != "" && !seenTurns[item.TurnID] {
 			seenTurns[item.TurnID] = true
+			turnIndex[item.TurnID] = len(turnStates)
 			turnStates = append(turnStates, turnState[item.TurnID])
 		}
+		turn := -1
+		if item.TurnID != "" {
+			turn = turnIndex[item.TurnID]
+		}
+		clientRow := expandedRow(item, output)
+		clientRow.Turn = turn
+		clientRows = append(clientRows, clientRow)
+		serverOutput, _ := full["activity:"+item.ID].Detail["output"].(string)
+		serverRow := expandedRow(full["activity:"+item.ID], serverOutput)
+		serverRow.Turn = turn
+		serverRows = append(serverRows, serverRow)
 	}
 	if len(clientRows) == 0 {
 		w.t.Fatal("no remote output was cut; the fixture must include outputs longer than the remote output limit")
@@ -1015,15 +1025,20 @@ func (c *benchClient) expandOutput(item benchItem) string {
 // the socket carried to the metrics.
 func (c *benchClient) do(req *http.Request) []byte {
 	c.w.t.Helper()
+	// A finite request gets a step's deadline, headers and body included, so a
+	// stalled handler fails the replay instead of waiting for the test timeout.
+	ctx, cancel := context.WithTimeout(req.Context(), benchStepTimeout)
+	defer cancel()
+	req = req.WithContext(ctx)
 	mark := c.api.mark()
 	resp, err := c.api.client.Do(req)
 	if err != nil {
-		c.w.t.Fatal(err)
+		c.w.t.Fatalf("%s %s: %v", req.Method, req.URL.Path, err)
 	}
 	encoded, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if err != nil {
-		c.w.t.Fatal(err)
+		c.w.t.Fatalf("%s %s: reading the body: %v", req.Method, req.URL.Path, err)
 	}
 	if resp.StatusCode/100 != 2 {
 		c.w.t.Fatalf("%s %s: %d %s", req.Method, req.URL.Path, resp.StatusCode, encoded)
@@ -1438,7 +1453,8 @@ func compareInt64(a, b int64) int {
 /* ---- semantic state ------------------------------------------------------ */
 
 // canonicalBenchRows reduces a view to its rows at or after start, and the
-// states of the turns those rows belong to in first-reference order. An
+// states of the turns those rows belong to in first-reference order; each row
+// names its turn by its index in that order. An
 // activity's text is its summary plus any settled text in its detail; its
 // output size is outputBytes when a page cut it, else the output length; its
 // payload is the rest of its detail. A whole output longer than previewLimit
@@ -1450,20 +1466,25 @@ func canonicalBenchRows(view benchPage, start, previewLimit int64) ([]chattraffi
 	}
 	var rows []chattraffic.CanonicalRow
 	var turns []string
-	seen := map[string]bool{}
+	index := map[string]int{}
 	for _, item := range view.Items {
 		if item.Sequence < start {
 			continue
 		}
-		if item.TurnID != "" && !seen[item.TurnID] {
-			seen[item.TurnID] = true
+		if _, seen := index[item.TurnID]; item.TurnID != "" && !seen {
 			state, ok := turnState[item.TurnID]
 			if !ok {
 				state = "missing"
 			}
+			index[item.TurnID] = len(turns)
 			turns = append(turns, state)
 		}
-		rows = append(rows, canonicalItem(item, previewLimit))
+		row := canonicalItem(item, previewLimit)
+		row.Turn = -1
+		if item.TurnID != "" {
+			row.Turn = index[item.TurnID]
+		}
+		rows = append(rows, row)
 	}
 	return rows, turns
 }
@@ -1514,7 +1535,7 @@ func checkFixtureContent(turns []chattraffic.Turn, view benchPage, policy chattr
 		start = view.OldestSequence
 	}
 	have := map[string]int{}
-	rows, _ := canonicalBenchRows(view, start, 0)
+	rows, viewTurns := canonicalBenchRows(view, start, 0)
 	for _, row := range rows {
 		have[canonicalLine(row)]++
 	}
@@ -1524,8 +1545,12 @@ func checkFixtureContent(turns []chattraffic.Turn, view benchPage, policy chattr
 	}
 	want := fixtureRows(turns, previewLimit)
 	if view.HasMoreBefore {
-		// A bounded page holds only the newest turns; require the live one.
+		// A bounded page holds only the newest turns; require the live one, which
+		// is the view's last turn.
 		want = fixtureRows(turns[len(turns)-1:], previewLimit)
+		for i := range want {
+			want[i].Turn += len(viewTurns) - 1
+		}
 	}
 	for _, row := range want {
 		line := canonicalLine(row)
@@ -1579,11 +1604,15 @@ func checkOracle(expectedDir string, result benchResult) string {
 		}
 		return ""
 	}
+	// The live oracle holds one turn, numbered 0; in the view it follows the
+	// history. Its ownership is checked against the fixture instead, so the
+	// turn column is dropped here.
 	rows := func(text string) []string {
 		var lines []string
 		for _, line := range strings.SplitAfter(text, "\n") {
 			if line != "" && !strings.HasPrefix(line, "turn\t") {
-				lines = append(lines, line)
+				fields := strings.Split(line, "\t")
+				lines = append(lines, strings.Join(append(fields[:1], fields[2:]...), "\t"))
 			}
 		}
 		return lines
@@ -1601,10 +1630,11 @@ func canonicalLine(row chattraffic.CanonicalRow) string {
 
 // fixtureRows derives the rows the turns must produce, from the fixture alone,
 // holding outputs as a page with previewLimit keeps them (0 keeps them whole).
+// Each row names its turn by its index in turns.
 func fixtureRows(turns []chattraffic.Turn, previewLimit int64) []chattraffic.CanonicalRow {
 	var rows []chattraffic.CanonicalRow
-	for _, turn := range turns {
-		rows = append(rows, chattraffic.CanonicalRow{Kind: "message", Role: "user", Text: turn.User})
+	for turnIndex, turn := range turns {
+		rows = append(rows, chattraffic.CanonicalRow{Turn: turnIndex, Kind: "message", Role: "user", Text: turn.User})
 		type itemState struct {
 			message  bool
 			text     string
@@ -1654,7 +1684,7 @@ func fixtureRows(turns []chattraffic.Turn, previewLimit int64) []chattraffic.Can
 		for _, id := range order {
 			state := items[id]
 			if state.message {
-				rows = append(rows, chattraffic.CanonicalRow{Kind: "message", Role: "assistant", Text: state.text})
+				rows = append(rows, chattraffic.CanonicalRow{Turn: turnIndex, Kind: "message", Role: "assistant", Text: state.text})
 				continue
 			}
 			if state.streamed != "" {
@@ -1677,7 +1707,7 @@ func fixtureRows(turns []chattraffic.Turn, previewLimit int64) []chattraffic.Can
 			}
 			output, _ := state.detail["output"].(string)
 			rows = append(rows, chattraffic.CanonicalRow{
-				Kind: "activity", ActivityKind: state.kind, Status: state.status, Text: text, OutputBytes: int64(len(output)),
+				Turn: turnIndex, Kind: "activity", ActivityKind: state.kind, Status: state.status, Text: text, OutputBytes: int64(len(output)),
 				Payload: chattraffic.CanonicalPayload(state.detail), Output: chattraffic.OutputPreview(output, previewLimit),
 			})
 		}
@@ -1879,7 +1909,13 @@ func (c *benchClient) openStream() {
 	}
 	c.decorate(req, "text/event-stream")
 	req.Header.Set("Cache-Control", "no-cache")
+	// Only opening the stream is bounded; frames are read under their own
+	// step deadline for as long as the scenario runs.
+	opening := time.AfterFunc(benchStepTimeout, cancel)
 	resp, err := transport.client.Do(req)
+	if !opening.Stop() {
+		c.w.t.Fatalf("event stream did not open within %s", benchStepTimeout)
+	}
 	if err != nil {
 		c.w.t.Fatal(err)
 	}

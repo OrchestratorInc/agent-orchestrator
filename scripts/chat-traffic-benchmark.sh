@@ -58,6 +58,11 @@ absolute() {
 [[ -z "$out_dir" ]] || out_dir="$(absolute "$out_dir")"
 [[ -z "$ceilings" ]] || ceilings="$(absolute "$ceilings")"
 
+# A reused --out-dir must never hand an earlier run's results to this one, even
+# when this run stops during setup.
+clear_results() { rm -f "$1"/{baseline,candidate}.{json,log} "$1"/report.{json,md}; }
+[[ -z "$out_dir" || ! -d "$out_dir" ]] || clear_results "$out_dir"
+
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo"
 
@@ -85,29 +90,47 @@ ceilings_sha="$(sha256 <"$ceilings")"
 # Paths the benchmark compiles or reads. Dirty state elsewhere cannot change a
 # measurement and is not part of the candidate identity.
 measured=(backend frontend/src/renderer/hooks/useConversation.ts frontend/src/renderer/lib/event-transport.ts)
-dirty_sha=""
-if [[ -n "$(git status --porcelain --untracked-files=all -- "${measured[@]}")" ]]; then
-	dirty_sha="$({
-		git diff --binary HEAD -- "${measured[@]}"
-		git ls-files --others --exclude-standard -z -- "${measured[@]}" | while IFS= read -r -d '' f; do
-			printf 'untracked %s %s\n' "$f" "$(sha256 <"$f")"
-		done
-	} | sha256)"
-fi
+# The candidate's identity is its commit plus a digest of uncommitted changes to
+# the measured paths.
+candidate_dirty() {
+	if [[ -n "$(git status --porcelain --untracked-files=all -- "${measured[@]}")" ]]; then
+		{
+			git diff --binary HEAD -- "${measured[@]}"
+			git ls-files --others --exclude-standard -z -- "${measured[@]}" | while IFS= read -r -d '' f; do
+				printf 'untracked %s %s\n' "$f" "$(sha256 <"$f")"
+			done
+		} | sha256
+	fi
+}
+dirty_sha="$(candidate_dirty)"
 
 work="$(mktemp -d "$tmp_root/ao-chattraffic.XXXXXX")"
-if [[ -z "$keep_work" ]]; then
-	trap 'rm -rf "$work"' EXIT
-fi
+baseline_lock=""
+cleanup() {
+	[[ -n "$keep_work" ]] || rm -rf "$work"
+	[[ -z "$baseline_lock" ]] || rm -rf "$baseline_lock"
+}
+trap cleanup EXIT
 out_dir="${out_dir:-$tmp_root/ao-chattraffic-results/$(date -u +%Y%m%dT%H%M%SZ)}"
 # The baseline tree lives at a stable path per commit so Go's build cache,
 # whose keys include each package directory, is reused across runs. It is
 # still deleted and exported afresh every run, then verified.
 baseline_root="$tmp_root/ao-chattraffic-baseline/$base_sha"
+# Runs of the same baseline share that tree, so one run at a time owns it. A
+# lock left by a run that is no longer alive is taken over.
+mkdir -p "$(dirname "$baseline_root")"
+if ! mkdir "$baseline_root.lock" 2>/dev/null; then
+	owner="$(cat "$baseline_root.lock/pid" 2>/dev/null || true)"
+	[[ -n "$owner" ]] || fail "baseline $base_sha is locked by a run that recorded no pid; remove $baseline_root.lock if none is active"
+	! kill -0 "$owner" 2>/dev/null || fail "another run (pid $owner) is using baseline $base_sha; try again when it finishes"
+	rm -rf "$baseline_root.lock"
+	mkdir "$baseline_root.lock" 2>/dev/null || fail "cannot lock baseline $base_sha"
+fi
+baseline_lock="$baseline_root.lock"
+echo $$ >"$baseline_lock/pid"
 rm -rf "$baseline_root"
 mkdir -p "$out_dir" "$baseline_root" "$work/bin" "$work/gotmp"
-# A reused --out-dir must never hand an earlier run's results to this one.
-rm -f "$out_dir"/{baseline,candidate}.{json,log} "$out_dir"/report.{json,md}
+clear_results "$out_dir"
 
 # One Go configuration for every step: no workspace file, no toolchain or
 # module downloads, read-only module graph, private temporary build output.
@@ -151,6 +174,10 @@ run_side() {
 
 run_side baseline "$baseline_root" "$base_sha" ""
 run_side candidate "$repo" "$head_sha" "$dirty_sha"
+# An edit made while the runs compiled would be measured under the identity
+# recorded before them.
+[[ "$(git rev-parse --verify HEAD^{commit})" == "$head_sha" && "$(candidate_dirty)" == "$dirty_sha" ]] ||
+	fail "the candidate's measured sources changed during the run; no comparison"
 
 status=0
 "$bench" compare --baseline "$out_dir/baseline.json" --candidate "$out_dir/candidate.json" --ceilings "$ceilings" \
