@@ -111,6 +111,10 @@ const UPSTREAM_SESSION_WINDOW = 32 << 20;
 // handshake, the identity probe), and how often a live session is pinged.
 const UPSTREAM_TIMING = { openMs: 5_000, pingMs: 10_000 };
 
+// A render id as the daemon makes them (renderTagID in conversation_render.go):
+// nothing percent-encoded reaches the host, where a proxy in front of it might decode it.
+const RENDER_ID = /^[A-Za-z0-9_-]{1,200}$/;
+
 function previewHostForSession(id: string, label = "ao-preview"): string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
 	let bits = 0;
@@ -239,7 +243,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/agent-browser/${asset}${parsed.search}`, kind: target.kind };
 		}
 		if (target.kind === "render") {
-			if (!/^[^/]+$/.test(asset) || asset === "check") return null;
+			if (!RENDER_ID.test(asset) || asset === "check") return null;
 			return { path: `${prefix}/api/v1/sessions/${encodeURIComponent(target.sessionId)}/renders/${asset}${parsed.search}`, kind: target.kind };
 		}
 		if (target.kind === "artifact") {
@@ -870,7 +874,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			// since the proxy URL's path carries the token the page could read.
 			const render = /^\/api\/v1\/sessions\/([^/?#]+)\/renders\/([^/?#]+)$/.exec(raw);
 			if (render) {
-				if (decodeURIComponent(render[1]!) !== sessionId || render[2] === "check") throw new Error("render does not belong to this session");
+				if (decodeURIComponent(render[1]!) !== sessionId || !RENDER_ID.test(render[2]!) || render[2] === "check") throw new Error("render does not belong to this session");
 				let host = renderHosts.get(sessionId);
 				if (!host) {
 					host = `ao-preview-${randomBytes(16).toString("hex")}.localhost`;

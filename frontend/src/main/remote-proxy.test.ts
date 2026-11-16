@@ -243,6 +243,7 @@ describe("startRemoteProxy", () => {
 		expect(proxy.isRenderUrl(proxy.previewUrl("ao-1", `http://ao-preview-artifact.mfxs2mi.localhost:${port}/a.html`))).toBe(false);
 		expect(() => proxy!.previewUrl("ao-2", "/api/v1/sessions/ao-1/renders/r1")).toThrow(/render/);
 		expect(() => proxy!.previewUrl("ao-1", "/api/v1/sessions/ao-1/renders/check")).toThrow(/render/);
+		expect(() => proxy!.previewUrl("ao-1", "/api/v1/sessions/ao-1/renders/..%2F..%2Fprojects")).toThrow(/render/);
 		const request = (path: string, method = "GET") => new Promise<{ status: number; csp?: string }>((resolve, reject) => {
 			const req = httpRequest({ hostname: "127.0.0.1", port: Number(new URL(page).port), path, method, headers: { Host: new URL(page).host } }, (res) => {
 				res.resume();
@@ -255,6 +256,7 @@ describe("startRemoteProxy", () => {
 		expect(await request("/offline-r1?source=1")).toMatchObject({ status: 200 });
 		expect((await request("/check")).status).toBe(404);
 		expect((await request("/r1/artifact")).status).toBe(404);
+		expect((await request("/..%2F..%2Fprojects")).status).toBe(404);
 		expect((await request("/offline-r1", "POST")).status).toBe(404);
 		expect(seen.map((entry) => entry.url)).toEqual([
 			"/ao/api/v1/sessions/ao-1/renders/offline-r1",
