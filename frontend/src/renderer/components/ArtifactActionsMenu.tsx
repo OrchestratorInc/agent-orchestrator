@@ -154,7 +154,7 @@ export function ArtifactActionsMenu({
 			const links = await prepareUnpublish(
 				shareBaseUrl,
 				share ? targets.map(() => share) : targets,
-				{ deleting: [{ sessionId: session.id, path: artifact.path }] },
+				{ deleting: [{ hostId, sessionId: session.id, path: artifact.path }] },
 			);
 			await (session.cloud
 				? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
