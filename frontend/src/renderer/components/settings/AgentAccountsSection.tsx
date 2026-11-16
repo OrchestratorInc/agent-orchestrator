@@ -80,6 +80,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	const accountOperation = useRef<string | undefined>(undefined);
 	// The account a sign-in that finished at once saved, for the chat that sent the user here.
 	const finishedAccount = useRef<string | undefined>(undefined);
+	// Moves on whenever the in-app sign-in opens or closes, so a start that
+	// resolves after the user moved on never writes the newer sign-in's refs.
+	const signInGeneration = useRef(0);
 	const harness = providerHarness[provider];
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
@@ -158,6 +161,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 		setError("");
 		if (hasTerminal(login)) closeLogin(login);
 		// Another account's sign-in still pending is stopped, never verified as this one.
+		signInGeneration.current += 1;
 		const pending = accountOperation.current;
 		accountOperation.current = undefined;
 		finishedAccount.current = undefined;
@@ -178,12 +182,16 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	// harness's own sign-in.
 	const startAccountSignIn = async (method: string, secret: string, name: string): Promise<AgentLoginSnapshot> => {
 		const target = signIn?.account;
+		// A start that resolves after the user opened or closed another sign-in
+		// belongs to a panel that is gone: it never writes the newer one's refs.
+		const generation = signInGeneration.current;
+		const current = () => generation === signInGeneration.current;
 		setError("");
 		try {
 			if (method === API_KEY_METHOD) {
 				if (target) await actions.replaceApiKey(target.id, secret);
 				else if (provider === "claude") await actions.addApiKey(provider, name, secret);
-				finishedAccount.current = target?.id;
+				if (current()) finishedAccount.current = target?.id;
 				return finishedAtOnce(method);
 			}
 			const request = { method, ...(secret ? { secret } : {}) } as AgentAccountLoginRequest;
@@ -192,10 +200,15 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 				: await actions.startLogin(provider, { ...request, ...(name ? { name } : {}) });
 			if (started.account || !started.authOperationId) {
 				await actions.refresh();
-				finishedAccount.current = started.account?.id ?? target?.id;
+				if (current()) finishedAccount.current = started.account?.id ?? target?.id;
 				return finishedAtOnce(method);
 			}
-			accountOperation.current = started.operationId;
+			if (!current()) {
+				// Its panel is gone, so nothing will save or cancel it: stop it now.
+				if (started.operationId) void actions.cancelLogin(started.operationId).catch(() => undefined);
+			} else {
+				accountOperation.current = started.operationId;
+			}
 			return await getAgentUILogin(harness, started.authOperationId, hostId);
 		} catch (err) {
 			throw credentialError(err);
@@ -222,7 +235,8 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 			setError(t("settings.agentAccounts.loginNotSubscription"));
 			return false;
 		}
-		accountOperation.current = undefined;
+		// Another account's sign-in may have taken the ref meanwhile; leave it be.
+		if (accountOperation.current === operation) accountOperation.current = undefined;
 		if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
 		if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
 		if (result.status !== "complete") return false;
@@ -231,6 +245,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	};
 	// Closing before the sign-in was saved stops it and removes its new folder.
 	const closeSignIn = () => {
+		signInGeneration.current += 1;
 		setSignIn(null);
 		finishedAccount.current = undefined;
 		const operation = accountOperation.current;

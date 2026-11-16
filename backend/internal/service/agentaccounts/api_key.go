@@ -188,13 +188,21 @@ func (s *Service) view(ctx context.Context, id string) (AccountView, error) {
 // readAPIKeyAccount is read for an API key account: it is logged in while its
 // key is saved. There is no sign-in to ask the CLI about and no limits to read.
 func (s *Service) readAPIKeyAccount(ctx context.Context, account domain.AgentAccount) *reading {
+	// The sequence is taken before the file is read, so a reading that saw an
+	// older file never replaces one that saw a newer key saved meanwhile.
+	s.mu.Lock()
+	s.readSeq++
+	seq := s.readSeq
+	s.mu.Unlock()
 	_, err := readAPIKey(account.Home)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.readSeq++
-	r := &reading{at: s.now(), seq: s.readSeq, identity: domain.AgentAccountIdentityCheck{LoggedIn: err == nil}}
+	r := &reading{at: s.now(), seq: seq, identity: domain.AgentAccountIdentityCheck{LoggedIn: err == nil}}
 	confirmed := r.identity
 	r.confirmed, r.confirmedSeq = &confirmed, r.seq
+	if prev := s.readings[account.ID]; prev != nil && prev.seq > seq {
+		return prev
+	}
 	if ctx.Err() == nil {
 		s.readings[account.ID] = r
 	}
