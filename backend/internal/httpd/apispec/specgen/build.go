@@ -138,6 +138,11 @@ func Build() ([]byte, error) {
 		if err := r.AddOperation(oc); err != nil {
 			return nil, fmt.Errorf("add operation %s %s: %w", op.method, op.path, err)
 		}
+		if op.rawReqBody != "" {
+			if err := setRawRequestBody(r.Spec, op.method, op.path, op.rawReqBody); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return r.Spec.MarshalYAML()
@@ -741,6 +746,24 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 
 // markRequestBodyRequired sets requestBody.required: true on the operation's
 // JSON body. swaggest leaves it absent (== optional) for AddReqStructure bodies.
+// setRawRequestBody declares a required request body of raw bytes, which the
+// reflector has no struct form for: a file streamed as the whole body.
+func setRawRequestBody(spec *openapi31.Spec, method, path, contentType string) error {
+	var item openapi31.PathItem
+	if spec.Paths != nil {
+		item = spec.Paths.MapOfPathItemValues[path]
+	}
+	if method != http.MethodPost || item.Post == nil {
+		return fmt.Errorf("raw request body for %s %s: only a POST operation is supported", method, path)
+	}
+	body := openapi31.RequestBody{Content: map[string]openapi31.MediaType{
+		contentType: {Schema: map[string]interface{}{"type": "string", "format": "binary"}},
+	}}
+	body.WithRequired(true)
+	item.Post.RequestBody = &openapi31.RequestBodyOrReference{RequestBody: &body}
+	return nil
+}
+
 func markRequestBodyRequired(cor openapi.ContentOrReference) {
 	if rb, ok := cor.(*openapi31.RequestBodyOrReference); ok && rb.RequestBody != nil {
 		rb.RequestBody.WithRequired(true)
@@ -818,8 +841,9 @@ type respUnit struct {
 type operation struct {
 	method, path, id, summary string
 	tag                       string
-	pathParams                []any // path/query param containers (e.g. ProjectIDParam)
-	reqBody                   any   // JSON request body struct, nil when the op takes none
+	pathParams                []any  // path/query param containers (e.g. ProjectIDParam)
+	reqBody                   any    // JSON request body struct, nil when the op takes none
+	rawReqBody                string // content type of a required raw-bytes body, in place of reqBody
 	// optionalReqBody declares the body without marking it required, for the
 	// handlers that accept an empty body as a meaningful default.
 	optionalReqBody bool
@@ -3650,10 +3674,10 @@ func sessionOperations() []operation {
 			contentTypes: map[int]string{http.StatusBadGateway: "text/plain"},
 		},
 		{
-			// The body is the file's raw bytes (any content type), streamed to
-			// disk with no size cap; the reflected spec has no raw-body form.
+			// The body is the file's raw bytes, streamed to disk with no size cap.
 			method: http.MethodPost, path: "/api/v1/attachment-uploads", id: "uploadAttachment", tag: "sessions",
-			summary: "Stream a file to disk for a later attachment to name by uploadId",
+			summary:    "Stream a file to disk for a later attachment to name by uploadId",
+			rawReqBody: "application/octet-stream",
 			resps: []respUnit{
 				{http.StatusCreated, controllers.AttachmentUploadResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},

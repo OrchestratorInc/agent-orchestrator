@@ -2138,6 +2138,13 @@ paths:
   /api/v1/attachment-uploads:
     post:
       operationId: uploadAttachment
+      requestBody:
+        content:
+          application/octet-stream:
+            schema:
+              format: binary
+              type: string
+        required: true
       responses:
         "201":
           content:

@@ -183,6 +183,12 @@ export type LaunchReplay = {
  * with, and the create call for local, remote, cloud, and standalone targets.
  * The new chat page and TaskComposer render it.
  */
+/** The decoded size of standard base64, as an inline attachment carries its bytes. */
+function base64Bytes(data: string): number {
+	const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return Math.floor((data.length * 3) / 4) - padding;
+}
+
 export function useTaskLaunch({ projectId, hostId }: {
 	projectId?: string;
 	hostId?: string;
@@ -277,18 +283,18 @@ export function useTaskLaunch({ projectId, hostId }: {
 				}
 				// AO Cloud says how large one upload may be, and the main process carries
 				// no more than MAX_CLOUD_CP_BINARY_BYTES in one request; both read the
-				// bytes whole. A file kept on disk because it was too large to inline is
-				// read now if it fits, and refused with that limit if not.
+				// bytes whole. Every file is held to that limit, including one already
+				// read inline; a file kept on disk is read now if it fits.
 				const cloudMaxBytes = Math.min(cloudOffering.maxAttachmentBytes ?? 0, MAX_CLOUD_CP_BINARY_BYTES);
 				const cloudFiles = await Promise.all(files.map(async (file) => {
-					if (file.data) return file;
-					if (!file.file || file.file.size > cloudMaxBytes) {
+					const size = file.file?.size ?? base64Bytes(file.data);
+					if (!(file.data || file.file) || size > cloudMaxBytes) {
 						throw new TaskCreateError(t("newTask.cloudAttachmentTooLarge", {
 							size: Math.floor(cloudMaxBytes / (1024 * 1024)),
 							defaultValue: "AO Cloud takes files up to {{size}} MB each. Remove the larger ones to start this task.",
 						}), "CLOUD_ATTACHMENT_TOO_LARGE");
 					}
-					return { ...file, data: await readBlobAsBase64(file.file) };
+					return file.data || !file.file ? file : { ...file, data: await readBlobAsBase64(file.file) };
 				}));
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
