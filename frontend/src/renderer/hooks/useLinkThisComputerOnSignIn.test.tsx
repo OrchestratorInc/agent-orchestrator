@@ -135,3 +135,43 @@ test("a failed link attempt is retried even if accountLinked became true", async
 	await vi.advanceTimersByTimeAsync(30_000);
 	expect(linkThisComputer).toHaveBeenCalledTimes(2);
 });
+
+test("a non-retryable 4xx error stops retrying immediately", async () => {
+	vi.useFakeTimers();
+	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (403).", 403));
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(60_000);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+});
+
+test("retry delays back off exponentially and stop after max retries", async () => {
+	vi.useFakeTimers();
+	fake.signedIn = true;
+	Object.assign(fake.status, { enabled: false });
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	// Initial attempt was made (status was not enabled, so retry 1 was scheduled for 30s).
+	// Before 30s, no second attempt:
+	await vi.advanceTimersByTimeAsync(29_000);
+	expect(linkThisComputer).not.toHaveBeenCalled();
+	// At 30s, attempt 1 runs (delay doubled to 60s):
+	await vi.advanceTimersByTimeAsync(1_000);
+	// Advance 59s: still waiting on 60s delay:
+	await vi.advanceTimersByTimeAsync(59_000);
+	// At +60s (90s total), attempt 2 runs (delay doubled to 120s):
+	await vi.advanceTimersByTimeAsync(1_000);
+	// At +120s (210s total), attempt 3 runs (delay doubled to 240s):
+	await vi.advanceTimersByTimeAsync(120_000);
+	// At +240s (450s total), attempt 4 runs (delay capped at 300s):
+	await vi.advanceTimersByTimeAsync(240_000);
+	// At +300s (750s total), attempt 5 runs (max retries reached):
+	await vi.advanceTimersByTimeAsync(300_000);
+	// Remote access turns on now, but max retries was reached so no more polls occur:
+	Object.assign(fake.status, { enabled: true });
+	await vi.advanceTimersByTimeAsync(600_000);
+	expect(linkThisComputer).not.toHaveBeenCalled();
+});
+

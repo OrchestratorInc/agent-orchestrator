@@ -9,11 +9,34 @@ import { linkThisComputer } from "../lib/link-this-computer";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
 import { useSettings } from "./useSettings";
 
-// A development build's daemon and credentials live under ~/.ao/dev, beside
-// the installed app's. Publishing it would add a second machine entry for the
-// same laptop: an address that stops answering as soon as the dev daemon does,
-// which the phone cannot tell apart from the app the user actually runs.
-const LINK_RETRY_MS = 30_000;
+export const LINK_RETRY_INIT_MS = 30_000;
+export const LINK_RETRY_MAX_MS = 300_000;
+export const LINK_MAX_RETRIES = 5;
+
+export function isRetryableLinkError(cause: unknown): boolean {
+	if (cause instanceof AccountHostSyncError) {
+		return cause.status === 409 || cause.status >= 500;
+	}
+	if (typeof cause === "object" && cause !== null) {
+		const status = "status" in cause && typeof (cause as { status: unknown }).status === "number"
+			? (cause as { status: number }).status
+			: (cause instanceof Error && typeof cause.cause === "object" && cause.cause !== null && "status" in cause.cause && typeof (cause.cause as { status: unknown }).status === "number"
+				? (cause.cause as { status: number }).status
+				: undefined);
+		if (status !== undefined) {
+			return status === 409 || status >= 500;
+		}
+		const code = "code" in cause && typeof (cause as { code: unknown }).code === "string"
+			? (cause as { code: string }).code
+			: (cause instanceof Error && typeof cause.cause === "object" && cause.cause !== null && "code" in cause.cause && typeof (cause.cause as { code: unknown }).code === "string"
+				? (cause.cause as { code: string }).code
+				: undefined);
+		if (code === "forbidden" || code === "unauthorized" || code === "bad_request" || code === "not_found") {
+			return false;
+		}
+	}
+	return true;
+}
 
 /**
  * Links this computer to the account once the desktop is signed in, when
@@ -44,6 +67,8 @@ export function useLinkThisComputerOnSignIn(): void {
 		}
 		let cancelled = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let retryDelayMs = LINK_RETRY_INIT_MS;
+		let attempts = 0;
 		// Set once this sign-in starts linking. A token issued by a failed attempt
 		// makes accountLinked true before the directory entry exists.
 		let linkBegun = false;
@@ -51,14 +76,26 @@ export function useLinkThisComputerOnSignIn(): void {
 			done.current = key;
 		};
 		const retry = () => {
-			if (!cancelled) timer = setTimeout(() => void run(), LINK_RETRY_MS);
+			if (cancelled) return;
+			if (attempts >= LINK_MAX_RETRIES) {
+				finish();
+				return;
+			}
+			attempts++;
+			const delay = retryDelayMs;
+			retryDelayMs = Math.min(retryDelayMs * 2, LINK_RETRY_MAX_MS);
+			timer = setTimeout(() => void run(), delay);
 		};
 		const run = async () => {
 			let status: Awaited<ReturnType<typeof fetchMobileStatus>>;
 			try {
 				status = await fetchMobileStatus();
-			} catch {
-				// The daemon may still be starting; try again while this sign-in lasts.
+			} catch (cause: unknown) {
+				if (!isRetryableLinkError(cause)) {
+					finish();
+					return;
+				}
+				// The daemon may still be starting; try again with backoff.
 				retry();
 				return;
 			}
@@ -100,10 +137,14 @@ export function useLinkThisComputerOnSignIn(): void {
 					queryClient.invalidateQueries({ queryKey: ["account-remote-hosts", cloudBaseUrl] }),
 				]);
 				finish();
-			} catch {
+			} catch (cause: unknown) {
 				// Not fatal: the computer keeps its quick tunnel, and Allow access links
-				// it. Retry in case the link landed but the answer was lost.
-				retry();
+				// it. Retry transient network or 5xx errors; stop on permanent failures.
+				if (isRetryableLinkError(cause)) {
+					retry();
+				} else {
+					finish();
+				}
 			}
 		};
 		void run();
