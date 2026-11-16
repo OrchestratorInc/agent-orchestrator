@@ -1345,6 +1345,8 @@ func (s *Service) Delete(ctx context.Context, id domain.SessionID, cleanup bool)
 	}
 	s.cancelTitleRefinement(id)
 	s.deleteArtifactDir(ctx, id)
+	// A kept record left by an earlier keeping delete that failed.
+	s.forgetKeptArtifacts(ctx, id)
 	return nil
 }
 
@@ -1354,8 +1356,9 @@ type archivedSessionLister interface {
 }
 
 // DeleteExpired permanently deletes the archived sessions whose worktree is
-// released and that were archived more than days ago, the same way Delete
-// does. The store leaves out sessions with shared history, which the delete
+// released and that were archived more than days ago. Their artifacts are
+// kept, the way DeleteKeepingArtifacts keeps them: artifacts are deleted only
+// when the person deletes them. The store leaves out sessions with shared history, which the delete
 // always refuses. A session the delete refuses for now (an operation running)
 // or that is already gone is left for a later pass.
 func (s *Service) DeleteExpired(ctx context.Context, days int) error {
@@ -1376,7 +1379,7 @@ func (s *Service) DeleteExpired(ctx context.Context, days int) error {
 		if sess.ArchivedAt.After(cutoff) {
 			continue
 		}
-		err := s.Delete(ctx, sess.ID, false)
+		err := s.DeleteKeepingArtifacts(ctx, sess.ID, false)
 		var apiErr *apierr.Error
 		if err == nil || errors.As(err, &apiErr) && (apiErr.Kind == apierr.KindConflict || apiErr.Kind == apierr.KindNotFound) {
 			continue

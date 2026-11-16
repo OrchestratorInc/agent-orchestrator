@@ -23,6 +23,8 @@ const pendingSessions = new Map<string, { requestedAt: number; provider: string;
 /** A pending session is forgotten after this long without becoming ready. */
 const PENDING_SESSION_TTL_MS = 60 * 60_000;
 const PENDING_CHECKOUT_KEY = "ao.telemetry.cloudCheckoutPending";
+/** Per org, the plans whose Checkout the control plane last said starts a free trial (trialDays). */
+const trialOffers = new Map<string, ReadonlySet<string>>();
 
 let reportedOfferings = new Set<string>();
 let defaultProvider = "";
@@ -204,6 +206,8 @@ export function observeBillingSummary(summary: { entitled?: boolean; subscriptio
 	const elapsed = typeof pending.at === "number" ? Math.max(0, Date.now() - pending.at) : undefined;
 	void captureRendererEvent("ao.renderer.cloud_checkout_completed", {
 		plan: summary.plan ?? pending.plan ?? "unknown",
+		// A free trial starts a subscription too; Stripe marks it trialing until it converts or ends.
+		trial: status === "trialing",
 		...(elapsed === undefined ? {} : { duration_ms: elapsed }),
 	});
 }
@@ -255,6 +259,7 @@ export function resetCloudTelemetryForTest(): void {
 	signInSource = undefined;
 	reportedOfferings = new Set();
 	defaultProvider = "";
+	trialOffers.clear();
 }
 
 function projectProvider(config: Record<string, unknown> | undefined): string {
@@ -380,11 +385,12 @@ export function instrumentCloudClient(client: CloudCpClient): CloudCpClient {
 	instrumented.createBillingCheckout = async (orgId, plan, options) => {
 		const response = await client.createBillingCheckout(orgId, plan, options);
 		markCheckoutPending(plan, Date.now());
-		void captureRendererEvent("ao.renderer.cloud_checkout_started", { plan });
+		void captureRendererEvent("ao.renderer.cloud_checkout_started", { plan, trial: trialOffers.get(orgId)?.has(plan) ?? false });
 		return response;
 	};
 	instrumented.getBilling = async (orgId, options) => {
 		const summary = await client.getBilling(orgId, options);
+		trialOffers.set(orgId, new Set((summary.plans ?? []).filter((offer) => (offer.trialDays ?? 0) > 0).map((offer) => offer.name)));
 		observeBillingSummary(summary);
 		return summary;
 	};

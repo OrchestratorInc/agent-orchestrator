@@ -434,8 +434,6 @@ export interface ChatWorkspaceProps {
 	headerActions?: ReactNode;
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
 	sessionTabAction?: ReactNode;
-	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
-	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	/** File tabs coordinated by SessionView, appended to the native chat tab strip. */
@@ -643,6 +641,8 @@ export interface ChatWorkspaceProps {
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	/** The agent's skills are still being read; the `/` menu says so instead of staying shut. */
+	skillsLoading?: boolean;
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
 	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
@@ -829,7 +829,6 @@ function ChatWorkspaceContent({
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -933,6 +932,7 @@ function ChatWorkspaceContent({
 	activateBranchTarget,
 	activateBranchError,
 	skills,
+	skillsLoading,
 	filePaths,
 	filePathsTruncated,
 	onFileQuery,
@@ -2145,7 +2145,6 @@ function ChatWorkspaceContent({
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -2483,6 +2482,7 @@ function ChatWorkspaceContent({
 										// look like a regression.
 										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
+										skillsLoading={skillsLoading}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onFileQuery={onFileQuery}
@@ -2864,7 +2864,6 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -2893,7 +2892,6 @@ function ChatHeader({
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
@@ -2972,7 +2970,6 @@ function ChatHeader({
 											onRenamed={onSessionRenamed}
 											session={session}
 											tabAction={sessionTabAction}
-											tabActionPinned={sessionTabActionPinned}
 										/>
 									) : (
 										<SessionPaneTab
