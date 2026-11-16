@@ -29,7 +29,7 @@ export function resumeAgentError(error: unknown, status?: number): Error {
 
 export function resumeMayRecover(error: unknown): boolean {
 	const { code, status } = (error ?? {}) as { code?: string; status?: number };
-	return status === undefined || status >= 500 || Boolean(code?.endsWith("_IN_PROGRESS"));
+	return status === undefined || status >= 500 || code === "AGENT_RESUME_IN_PROGRESS" || code === "AGENT_EXIT_IN_PROGRESS";
 }
 
 /** A failed resume says another app still holds the chat. */

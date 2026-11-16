@@ -323,10 +323,52 @@ it.each([
 		return Response.json({});
 	}));
 	await connectHost("http://box-a:3001");
-	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
-	expect(await screen.findByText(new RegExp(reason), undefined, { timeout: 6_000 })).toBeInTheDocument();
-	expect(screen.getByText("The agent controller stopped")).toBeInTheDocument();
-	expect(resumes).toHaveLength(requests);
+	vi.useFakeTimers({ shouldAdvanceTime: true });
+	try {
+		renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+		await waitFor(() => expect(resumes).toHaveLength(1));
+		await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		expect(await screen.findByText(new RegExp(reason))).toBeInTheDocument();
+		expect(screen.getByText("The agent controller stopped")).toBeInTheDocument();
+		expect(resumes).toHaveLength(requests);
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+it("counts an agent that is already running on the retry as resumed", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const resumes: string[] = [];
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "exited", activity: { state: "exited" }, mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: "stopped" }));
+		if (path.endsWith("/resume-agent")) {
+			resumes.push(request.url);
+			return resumes.length === 1
+				? Response.json({ code: "UPSTREAM_TIMEOUT", message: "the host did not answer in time" }, { status: 504 })
+				: Response.json({ code: "AGENT_NOT_EXITED", message: "agent is still running" }, { status: 409 });
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	vi.useFakeTimers({ shouldAdvanceTime: true });
+	try {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		renderRemoteSession(queryClient);
+		await waitFor(() => expect(resumes).toHaveLength(1));
+		await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		await waitFor(() => expect(resumes).toHaveLength(2));
+		await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+		expect(screen.queryByText(/already running/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/did not answer in time/)).not.toBeInTheDocument();
+	} finally {
+		vi.useRealTimers();
+	}
 });
 
 it("resumes a remote agent that exited after the host list was last read when the chat opens again", async () => {

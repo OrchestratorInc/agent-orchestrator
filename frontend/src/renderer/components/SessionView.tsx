@@ -632,9 +632,12 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const openedSession = useRef({ key: uiSessionId, checked: false });
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
-		mutationFn: (id: string) => resumeAgentOnOpen(id, hostId),
+		mutationFn: (id: string) => resumeAgentOnOpen(id, hostId).catch((error: unknown) => {
+			if (apiErrorCode(error) !== "AGENT_NOT_EXITED") throw error;
+		}),
 		retry: (failures, error) => failures < 1 && resumeMayRecover(error),
 		retryDelay: 3_000,
+		networkMode: "always",
 		onSettled: async (_data, _error, id) => {
 			await Promise.all([
 				refreshWorkspaces(),
@@ -652,6 +655,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		(!usesPreviewWorkspaceData && !hostUnreachable && canResumeAgent(session, resumeStatus.transition) &&
 		!resumeStatus.statusError && !importBlock.block && (openedSession.current.key !== uiSessionId || !openedSession.current.checked));
 	const resumeOnOpen = autoResume.mutate;
+	const resumeOnOpenAsync = autoResume.mutateAsync;
 	// This session's background resume failed; the chat shows why.
 	const autoResumeFailed = autoResume.variables === sessionId && autoResume.isError;
 	const remoteConnection = useRef({ base: remoteBase, at: 0 });
@@ -673,12 +677,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return;
 		}
 		if (!canResume || importBlock.block || importBlock.checking) return;
-		// One attempt per route opening; a failed resume or a later agent exit
-		// stays stopped rather than entering an automatic restart loop.
+		// One attempt per route opening, plus one retry of a failure that can clear;
+		// a failed resume or a later agent exit stays stopped rather than entering an
+		// automatic restart loop.
 		openedSession.current.checked = true;
-		if (session.needsResume) trackImportFirstOpen(session.provider, resumeAgentOnOpen(session.id, hostId));
-		resumeOnOpen(session.id);
-	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, queryClient, refetchRemoteSession, remoteBase, remoteReadAt, remoteSessionQuery.isError, remoteSessionQuery.isFetching, resumeOnOpen, session, uiSessionId]);
+		if (session.needsResume) trackImportFirstOpen(session.provider, resumeOnOpenAsync(session.id));
+		else resumeOnOpen(session.id);
+	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, queryClient, refetchRemoteSession, remoteBase, remoteReadAt, remoteSessionQuery.isError, remoteSessionQuery.isFetching, resumeOnOpen, resumeOnOpenAsync, session, uiSessionId]);
 	const previewBaselineRef = useRef<{ sessionId: string; key: string } | null>(null);
 	const revealedBrowserCommandsRef = useRef<{ sessionId: string; commands: Set<string> }>({ sessionId: uiSessionId, commands: new Set() });
 	const sessionSplitRef = useRef<HTMLDivElement | null>(null);
