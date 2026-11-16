@@ -51,6 +51,7 @@ import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
+import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 
 type EventPayload = {
@@ -572,20 +573,21 @@ function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: bo
 	return (
 		<ComposerErrorNotice
 			title={appI18n.t("cloud.planLimit.title")}
-			message={<>{reason}{onPlan && <span className="block">{onPlan}</span>}</>}
+			message={shared ? appI18n.t("cloud.planLimit.contactOwner") : <>{reason}{onPlan && <span className="block">{onPlan}</span>}</>}
 			onDismiss={onDismiss}
-			action={!shared && offering.selfServeBilling && offering.canManageBilling ? (
-				<button
+			action={shared ? undefined : offering.selfServeBilling && offering.canManageBilling ? (
+				<Button
 					type="button"
-					className="mt-1 font-medium text-foreground underline underline-offset-2 hover:decoration-dashed"
+					variant="link"
+					className="mt-1"
 					onClick={() => {
 						useUiStore.getState().openGlobalSettings("billing");
 						reportUpgradeViewed("plan_refusal");
 					}}
 				>
 					{appI18n.t("cloud.planLimit.upgrade")}
-				</button>
-			) : <p className="text-muted-foreground">{appI18n.t(shared ? "cloud.planLimit.contactOwner" : "cloud.planLimit.contactAdmin")}</p>}
+				</Button>
+			) : <p className="text-muted-foreground">{appI18n.t("cloud.planLimit.contactAdmin")}</p>}
 		/>
 	);
 }
@@ -2424,10 +2426,10 @@ export function CloudSessionChatSurface({
 					onDismiss={() => setSwitchError(undefined)}
 				/>
 			) : planRefusal?.key === refusalKey || live ? (
-				<>
+				<div className="[&>[data-composer-notice]:not(:first-child)]:rounded-t-none">
 					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} shared={cloud?.shared === true} onDismiss={() => setPlanRefusal(undefined)} />}
 					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
-				</>
+				</div>
 			) : undefined}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")

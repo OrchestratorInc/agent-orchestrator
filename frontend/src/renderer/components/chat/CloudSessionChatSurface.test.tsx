@@ -2632,6 +2632,7 @@ describe("CloudSessionChatSurface", () => {
 		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
 		expect(screen.getByRole("alert").textContent).not.toContain("Starter");
 		expect(screen.getByRole("alert").textContent).toContain("Ask them to raise it.");
+		expect(screen.getByRole("alert").textContent).not.toContain("your plan");
 		rerender(view(session.id));
 		// The same surface shows another chat and comes back: the old notice stays gone.
 		rerender(view("session-2"));
