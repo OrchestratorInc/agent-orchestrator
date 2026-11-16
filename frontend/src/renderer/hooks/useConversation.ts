@@ -1981,7 +1981,8 @@ export function useConversationSkills(
 ) {
 	// When this controller first answered with an empty list: see EMPTY_SKILLS_GRACE_MS.
 	const firstEmptyAt = useRef<number | undefined>(undefined);
-	const query = useQuery({
+	// Typed explicitly: `refetchInterval` reads the data, which leaves inference circular.
+	const query = useQuery<ChatSkill[]>({
 		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
 		// ACP agents publish this catalog asynchronously and may replace it later.
