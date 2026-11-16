@@ -1809,6 +1809,36 @@ describe("opening a local chat it has cached", () => {
 		expect(second.result.current.snapshot).toMatchObject({ latestSequence: 21, oldestSequence: 1 });
 	});
 
+	it("cancels a reload left running from before the chat closed so it cannot write over the open read", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const reloadOlder = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockResolvedValueOnce(page(10, 1, false))
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockReturnValueOnce(reloadOlder.promise)
+			.mockResolvedValueOnce(page(21, 11, true, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		act(() => first.result.current.loadOlder());
+		await waitFor(() => expect(first.result.current.hasOlder).toBe(false));
+
+		// An event reloads every page; the chat closes while the older one is still loading.
+		void queryClient.invalidateQueries({ queryKey: key }, { cancelRefetch: false });
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(4));
+		first.unmount();
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(second.result.current.snapshot?.latestSequence).toBe(21));
+		expect(second.result.current.snapshot).toMatchObject({ oldestSequence: 1 });
+		await act(async () => { reloadOlder.resolve(page(10, 1, false)); });
+
+		expect(queryClient.getQueryData<{ pages: { latestSequence: number }[] }>(key)?.pages[0]?.latestSequence).toBe(21);
+		expect(getMock).toHaveBeenCalledTimes(5);
+	});
+
 	it("drops an open read that lands after the chat moved to another branch", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = conversationQueryKey("ao-1");

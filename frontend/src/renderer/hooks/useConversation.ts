@@ -588,13 +588,23 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
 				missed = false;
 				// Marking an already stale query stale again records nothing, so take the
 				// mark off while reading for an event during the read to be seen.
-				queryClient.getQueryCache().find({ queryKey: key, exact: true })?.setState({ isInvalidated: false });
+				const query = queryClient.getQueryCache().find({ queryKey: key, exact: true });
+				query?.setState({ isInvalidated: false });
+				// A full reload still running from before the chat closed (closing does not
+				// cancel it) read its pages before this read and would write them over it.
+				const earlierReload = query?.state.fetchStatus === "fetching" && !query.state.fetchMeta?.fetchMore ? query.promise : undefined;
 				const before = cachedLivePage(queryClient, key);
 				const latest = await fetchConversationPage(sessionId);
-				// An older page that was already loading copied the previous live page when
-				// it started and writes it back when it lands, so this page goes in after it.
 				const loading = queryClient.getQueryCache().find({ queryKey: key, exact: true });
-				if (loading?.state.fetchStatus === "fetching" && loading.state.fetchMeta?.fetchMore) await loading.promise?.catch(() => undefined);
+				if (loading?.state.fetchStatus === "fetching") {
+					// An older page that was already loading copied the previous live page when
+					// it started and writes it back when it lands, so this page goes in after it.
+					if (loading.state.fetchMeta?.fetchMore) await loading.promise?.catch(() => undefined);
+					// Cancelling reverts to the pages held when it started (and any write since),
+					// which this page goes in front of. A reload that started during this read
+					// holds newer rows and is left to land.
+					else if (earlierReload && loading.promise === earlierReload) await queryClient.cancelQueries({ queryKey: key, exact: true });
+				}
 				// A branch switch, edit or rollback during the read already refetched the
 				// chat on its new branch; this page shows the one it left.
 				const now = cachedLivePage(queryClient, key);
