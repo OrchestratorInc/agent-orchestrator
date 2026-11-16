@@ -7564,7 +7564,8 @@ function splitAtSteers(group: TimelineGroup): TimelineGroup[] {
 		return {
 			key,
 			turnId: group.turnId,
-			anchor: first.sequence,
+			// The first part keeps where the turn began, which may be above the loaded history.
+			anchor: index === 0 ? group.anchor : first.sequence,
 			items,
 			outcome: {
 				state: "completed" as const,

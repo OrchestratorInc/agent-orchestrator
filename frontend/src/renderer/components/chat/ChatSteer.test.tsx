@@ -1027,6 +1027,35 @@ describe("ChatWorkspace steering", () => {
 		expect(steer.compareDocumentPosition(screen.getByText("Rebasing onto main.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("keeps a steered turn's first part where the turn began when its prompt is above the loaded history", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 13,
+					oldestSequence: 10,
+					hasMoreBefore: true,
+					// Both prompts are above the loaded page, so each turn sorts where it began.
+					turns: [
+						{ id: "x", state: "running", providerTurnId: "provider-x", requestedAt: at(0), startedAt: at(0), anchorSequence: 9.1 },
+						{ id: "y", state: "completed", providerTurnId: "provider-y", requestedAt: at(1), startedAt: at(1), completedAt: at(5), anchorSequence: 9.5 },
+					],
+					items: [
+						{ kind: "message", id: "x-before", turnId: "x", sequence: 10, revision: 0, role: "assistant", origin: "provider", text: "X before the steer.", streaming: false, createdAt: at(2) },
+						{ kind: "message", id: "y-report", turnId: "y", sequence: 11, revision: 0, role: "assistant", origin: "provider", text: "Y report.", streaming: false, createdAt: at(5) },
+						{ kind: "activity", id: "steer-1", turnId: "x", sequence: 12, revision: 0, activityKind: "system", status: "completed", summary: "keep going", detail: { event: "steer", origin: "human", text: "keep going", clientMessageId: "steer-1" }, createdAt: at(6) },
+						{ kind: "message", id: "x-after", turnId: "x", sequence: 13, revision: 0, role: "assistant", origin: "provider", text: "X after the steer.", streaming: false, createdAt: at(7) },
+					],
+				}}
+			/>,
+		);
+		const before = screen.getByText("X before the steer.");
+		const report = screen.getByText("Y report.");
+		expect(before.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(report.compareDocumentPosition(screen.getByText("keep going")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("draws a message drained behind an earlier queued report before the reply to it", () => {
 		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
 		render(
