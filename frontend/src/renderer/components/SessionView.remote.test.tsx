@@ -302,7 +302,10 @@ it("resumes an exited remote agent on its own host when the chat opens, without 
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("shows why a remote resume failed on the stopped banner and does not retry it", async () => {
+it.each([
+	{ status: 500, code: "HARNESS_START_FAILED", reason: "codex is not installed", requests: 2 },
+	{ status: 409, code: "WORKSPACE_LOCKED", reason: "the workspace is locked", requests: 1 },
+])("shows why a remote resume failed after $requests request(s) when it answers $status", async ({ status, code, reason, requests }) => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -315,15 +318,15 @@ it("shows why a remote resume failed on the stopped banner and does not retry it
 		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: "stopped" }));
 		if (path.endsWith("/resume-agent")) {
 			resumes.push(request.url);
-			return Response.json({ code: "HARNESS_START_FAILED", message: "codex is not installed" }, { status: 500 });
+			return Response.json({ code, message: reason }, { status });
 		}
 		return Response.json({});
 	}));
 	await connectHost("http://box-a:3001");
 	renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
-	expect(await screen.findByText(/codex is not installed/)).toBeInTheDocument();
+	expect(await screen.findByText(new RegExp(reason), undefined, { timeout: 6_000 })).toBeInTheDocument();
 	expect(screen.getByText("The agent controller stopped")).toBeInTheDocument();
-	expect(resumes).toHaveLength(1);
+	expect(resumes).toHaveLength(requests);
 });
 
 it("resumes a remote agent that exited after the host list was last read when the chat opens again", async () => {

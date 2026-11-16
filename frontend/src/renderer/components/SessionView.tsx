@@ -109,7 +109,7 @@ import {
 } from "../hooks/useShellTerminals";
 import { useSessionInterfaceSwitch } from "../hooks/useSessionInterfaceSwitch";
 import { SESSION_WORKSPACE_ID } from "../hooks/useHeldSession";
-import { canResumeAgent, resumeAgentOnOpen, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
+import { canResumeAgent, resumeAgentOnOpen, resumeMayRecover, resumeOpenElsewhere } from "../hooks/useCanResumeAgent";
 import { trackImportFirstOpen, useImportedAgentBlock } from "../lib/session-import";
 import { useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { conversationQueryKey, conversationSettled } from "../hooks/useConversation";
@@ -633,6 +633,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const autoResume = useMutation({
 		mutationKey: ["resume-agent", hostId ?? "local", sessionId],
 		mutationFn: (id: string) => resumeAgentOnOpen(id, hostId),
+		retry: (failures, error) => failures < 1 && resumeMayRecover(error),
+		retryDelay: 3_000,
 		onSettled: async (_data, _error, id) => {
 			await Promise.all([
 				refreshWorkspaces(),

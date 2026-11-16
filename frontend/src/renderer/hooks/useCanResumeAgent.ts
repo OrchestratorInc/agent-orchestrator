@@ -24,7 +24,12 @@ export function resumeAgentErrorMessage(error: unknown, status?: number): string
 
 /** A failed resume as a thrown Error that keeps the API error code. */
 export function resumeAgentError(error: unknown, status?: number): Error {
-	return Object.assign(new Error(resumeAgentErrorMessage(error, status)), { code: apiErrorCode(error) });
+	return Object.assign(new Error(resumeAgentErrorMessage(error, status)), { code: apiErrorCode(error), status });
+}
+
+export function resumeMayRecover(error: unknown): boolean {
+	const { code, status } = (error ?? {}) as { code?: string; status?: number };
+	return status === undefined || status >= 500 || Boolean(code?.endsWith("_IN_PROGRESS"));
 }
 
 /** A failed resume says another app still holds the chat. */
