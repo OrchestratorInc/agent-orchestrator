@@ -589,17 +589,6 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		created = append(created, run)
 		reviews = replaceReviewLatestRun(reviews, reviewState.PRURL, reviewState.TargetSHA, run)
 	}
-	if len(created) > 0 || len(restarted) > 0 {
-		if reviewRow.IsArchived {
-			// A pass starting on an archived row revives it: the reviewer is
-			// live again for this pass; sweep retirement applies only after it
-			// ends. A no-op trigger never reopens a retired reviewer.
-			reviewRow.IsArchived = false
-			if err := e.store.UpsertReview(ctx, reviewRow); err != nil {
-				return TriggerResult{}, err
-			}
-		}
-	}
 	if len(created) == 0 && len(restarted) == 0 {
 		if modeChanging && mode == "" {
 			if err := e.stopReviewChatWork(ctx, reviewRow); err != nil {
@@ -1017,6 +1006,16 @@ func (e *Engine) SwitchReviewer(
 	if previousSelected == selected && previousConfig != selectedConfig {
 		if err := e.resetReviewerRuntimeLocked(ctx, workerID, selected); err != nil {
 			return SessionReviews{}, err
+		}
+	}
+	for _, row := range reviewRows {
+		if row.Harness == selected && row.IsArchived {
+			row.IsArchived = false
+			row.UpdatedAt = e.clock()
+			if err := e.store.UpsertReview(ctx, row); err != nil {
+				return SessionReviews{}, err
+			}
+			break
 		}
 	}
 	if _, err := e.restoreReviewerLocked(ctx, workerID, worker, selected, selectedConfig); err != nil {
