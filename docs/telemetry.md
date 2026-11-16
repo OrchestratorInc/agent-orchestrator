@@ -584,7 +584,7 @@ project name, raw error message, or the people a link is shared with.
 | `ao.artifacts.session_start_failed` | Starting that session fails (formerly `ao.renderer.artifact_create_failed`) | `scope`, `error_code`, `http_status` |
 | `ao.artifacts.registered` | The daemon registers new artifacts for a session (`ao artifact add`). One event per content category and size band among them; registering a path again sends nothing | `source`, `content_category`, `size_bucket`, `count` |
 | `ao.artifacts.register_failed` | The daemon refuses an `ao artifact add` | `source`, `reason` |
-| `ao.artifacts.publish_clicked` | You click Publish (the toolbar button or the ⋯ menu item), before any sign-in check or upload | `already_published`, `signed_in` |
+| `ao.artifacts.publish_clicked` | The Publish popover opens: you click the toolbar's Publish, Published or Republish button, or Publish in the ⋯ menu, before any sign-in check or upload. Opening it on a published file to copy the link counts too, with `already_published` true | `already_published`, `signed_in` |
 | `ao.artifacts.sign_in_prompt_shown` | The Publish popover asks you to sign in, once per popover | `reason` |
 | `ao.artifacts.sign_in_clicked` | You click its Sign in button | none |
 | `ao.artifacts.published` | A publish or republish succeeds | `is_republish` |
@@ -622,7 +622,9 @@ project name, raw error message, or the people a link is shared with.
 
 `ao.renderer.cloud_signed_in` also carries `source`: `artifact_publish` when
 the sign-in finished within 30 minutes of clicking Sign in in the Publish
-popover, while the popover stayed open, and `other` otherwise. That note is
+popover, while the popover stayed open, and `other` otherwise. Signing in
+again as the account that is already signed in, as after an expired session,
+counts as a sign-in too; a token refresh does not. That note is
 kept in memory only. Together these events give the sign-in drop-off funnel:
 `publish_clicked` (`signed_in` false) → `sign_in_prompt_shown` →
 `sign_in_clicked` → `cloud_signed_in` (`source` `artifact_publish`) →

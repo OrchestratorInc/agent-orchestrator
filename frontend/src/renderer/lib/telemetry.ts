@@ -1046,7 +1046,8 @@ function sanitizeArtifactProperties(event: string, properties?: TelemetryPropert
 			const status = properties?.http_status;
 			candidates = {
 				scope: oneOf(properties?.scope, ARTIFACT_SESSION_SCOPES),
-				error_code: typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : undefined,
+				// Daemon codes are upper case (AGENT_NOT_READY), the control plane's lower (validation_error).
+				error_code: typeof code === "string" && /^[A-Za-z0-9_]{1,64}$/.test(code) ? code : undefined,
 				http_status: typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : undefined,
 			};
 			break;

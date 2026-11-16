@@ -63,6 +63,19 @@ function takeSignInSource(now = Date.now()): CloudSignInSource | "other" {
 
 /** The signed-in user as last seen by any hook instance; undefined before the first read. */
 let knownCloudUser: string | null | undefined;
+/**
+ * The session stamp (storedAt) of the last sign-in reported. Two paths see a
+ * sign-in, the session notification and main's completed sign-in, so each
+ * reports it only if the other has not.
+ */
+let reportedSignIn: string | undefined;
+
+type SignedInAccount = { authProvider: string; user: { id: string }; storedAt?: string };
+
+function reportSignIn(account: SignedInAccount): void {
+	if (account.storedAt) reportedSignIn = account.storedAt;
+	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider, source: takeSignInSource() });
+}
 
 /**
  * Tracks the cloud session and reports a genuine sign-in: a session for a
@@ -70,14 +83,27 @@ let knownCloudUser: string | null | undefined;
  * token refreshes (which re-send the same user) are not sign-ins.
  */
 export function noteCloudSession(
-	account: { authProvider: string; user: { id: string } } | null,
+	account: SignedInAccount | null,
 	initial: boolean,
 ): void {
 	const userId = account?.user.id ?? null;
 	const previous = knownCloudUser;
 	knownCloudUser = userId;
 	if (initial || !account || previous === userId) return;
-	void captureRendererEvent("ao.renderer.cloud_signed_in", { method: account.authProvider, source: takeSignInSource() });
+	if (account.storedAt && account.storedAt === reportedSignIn) return;
+	reportSignIn(account);
+}
+
+/**
+ * Reports a sign-in main says just completed, unless the session notification
+ * already did. This counts signing in again as the account already signed in,
+ * as after a link refused an expired session, which noteCloudSession cannot
+ * tell from a token refresh.
+ */
+export function noteCloudSignInCompleted(account: SignedInAccount): void {
+	knownCloudUser = account.user.id;
+	if (account.storedAt && account.storedAt === reportedSignIn) return;
+	reportSignIn(account);
 }
 
 interface OfferingShape {
@@ -217,6 +243,7 @@ export function observeCloudSessions(sessions: readonly CloudCpSession[], now = 
 export function resetCloudTelemetryForTest(): void {
 	pendingSessions.clear();
 	knownCloudUser = undefined;
+	reportedSignIn = undefined;
 	signInSource = undefined;
 	reportedOfferings = new Set();
 	defaultProvider = "";

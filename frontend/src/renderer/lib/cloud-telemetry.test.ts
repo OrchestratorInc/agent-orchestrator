@@ -20,6 +20,7 @@ import {
 	clearSignInSource,
 	instrumentCloudClient,
 	noteCloudSession,
+	noteCloudSignInCompleted,
 	noteSignInSource,
 	observeCloudSessions,
 	reportCloudOffering,
@@ -161,6 +162,30 @@ describe("cloud funnel telemetry", () => {
 		captured.length = 0;
 		noteCloudSession(account, true);
 		expect(events()).toEqual([]);
+	});
+
+	it("counts signing in again as the same account once, from main's completed sign-in", () => {
+		const first = { authProvider: "workos", user: { id: "user-1" }, storedAt: "2026-11-16T10:00:00Z" };
+		const again = { ...first, storedAt: "2026-11-16T10:20:00Z" };
+		noteCloudSession(first, true);
+		// A link refused the expired session; Publish's Sign in signs the same account in again.
+		noteSignInSource("artifact_publish");
+		noteCloudSession(again, false);
+		expect(events()).toEqual([]);
+		noteCloudSignInCompleted(again);
+		expect(captured).toEqual([{ event: "ao.renderer.cloud_signed_in", properties: { method: "workos", source: "artifact_publish" } }]);
+
+		// A new account: the notification reports it, and main's completed sign-in does not again.
+		const other = { authProvider: "workos", user: { id: "user-2" }, storedAt: "2026-11-16T11:00:00Z" };
+		noteCloudSession(other, false);
+		noteCloudSignInCompleted(other);
+		expect(events()).toEqual(["ao.renderer.cloud_signed_in", "ao.renderer.cloud_signed_in"]);
+
+		// In the other order, the notification does not count it again either.
+		const third = { authProvider: "workos", user: { id: "user-3" }, storedAt: "2026-11-16T12:00:00Z" };
+		noteCloudSignInCompleted(third);
+		noteCloudSession(third, false);
+		expect(events()).toHaveLength(3);
 	});
 
 	it("says a sign-in came from Publish only within 30 minutes of its Sign in click, once", () => {

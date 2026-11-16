@@ -654,6 +654,10 @@ describe("telemetry sanitizers", () => {
 		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
 			scope: "standalone", error_code: "AGENT_NOT_READY", http_status: 409, message: "Agent is not ready",
 		})).toEqual({ scope: "standalone", error_code: "AGENT_NOT_READY", http_status: 409 });
+		// The control plane's codes are lower case.
+		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
+			scope: "cloud", error_code: "validation_error", http_status: 422,
+		})).toEqual({ scope: "cloud", error_code: "validation_error", http_status: 422 });
 		expect(await sanitizeRendererProperties("ao.artifacts.session_start_failed", {
 			scope: "standalone", error_code: "agent not ready at /Users/alice", http_status: 200,
 		})).toEqual({ scope: "standalone" });
