@@ -14,7 +14,7 @@ import (
 const DefaultPollInterval = 250 * time.Millisecond
 
 type sessionPreviewSource interface {
-	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	ListPreviewPollSessions(ctx context.Context) ([]domain.SessionRecord, error)
 }
 
 type previewSetter interface {
@@ -101,7 +101,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 	if p.source == nil || p.setter == nil {
 		return nil
 	}
-	sessions, err := p.source.ListAllSessions(ctx)
+	sessions, err := p.source.ListPreviewPollSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("preview poller list sessions: %w", err)
 	}
