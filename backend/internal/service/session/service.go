@@ -315,11 +315,7 @@ type projectRoleAgentFiller interface {
 // import) heal here. Roles that name an agent are never changed, and a failed
 // fill leaves the spawn to report the missing agent as before.
 func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.ProjectRecord, kind domain.SessionKind) domain.ProjectRecord {
-	role := project.Config.Worker.Harness
-	if kind == domain.KindOrchestrator {
-		role = project.Config.Orchestrator.Harness
-	}
-	if role != "" || s.preferredAgent == nil {
+	if roleHarness(project, kind) != "" || s.preferredAgent == nil {
 		return project
 	}
 	filler, ok := s.store.(projectRoleAgentFiller)
@@ -344,6 +340,14 @@ func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.Proj
 		return project
 	}
 	return row
+}
+
+// roleHarness is the agent the project names for sessions of kind.
+func roleHarness(project domain.ProjectRecord, kind domain.SessionKind) domain.AgentHarness {
+	if kind == domain.KindOrchestrator {
+		return project.Config.Orchestrator.Harness
+	}
+	return project.Config.Worker.Harness
 }
 
 // SetComputerLoginCheck late-binds the account check the launch gate needs: the
@@ -498,8 +502,11 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if err != nil {
 			return domain.Session{}, 0, 0, err
 		}
-		if cfg.Harness == "" {
+		if cfg.Harness == "" && roleHarness(project, cfg.Kind) == "" {
 			project = s.fillMissingRoleAgents(ctx, project, cfg.Kind)
+			// The daemon picked this agent, so the launch gate below checks it
+			// like an explicit one.
+			cfg.Harness = roleHarness(project, cfg.Kind)
 		}
 	} else {
 		if cfg.IssueID != "" || strings.TrimSpace(cfg.Branch) != "" {

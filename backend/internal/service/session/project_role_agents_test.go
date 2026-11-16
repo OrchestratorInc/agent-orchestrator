@@ -31,11 +31,16 @@ func pickAgent(agent domain.AgentHarness) func(context.Context) domain.AgentHarn
 func TestSpawnOrchestratorFillsMissingProjectRoleAgents(t *testing.T) {
 	st := &roleFillingStore{fakeStore: newFakeStore()}
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessCodex}}}
-	svc := &Service{manager: &fakeCommander{}, store: st}
+	fc := &fakeCommander{}
+	svc := &Service{manager: fc, store: st}
 	svc.SetPreferredProjectAgent(pickAgent(domain.HarnessClaudeCode))
 
 	if _, err := svc.SpawnOrchestrator(context.Background(), "mer", false, "", ""); err != nil {
 		t.Fatalf("SpawnOrchestrator: %v", err)
+	}
+	// The picked agent goes through the launch checks like an explicit one.
+	if fc.spawnedCfg.Harness != domain.HarnessClaudeCode {
+		t.Fatalf("spawn harness = %q, want claude-code", fc.spawnedCfg.Harness)
 	}
 	got := st.projects["mer"].Config
 	// The chosen worker is kept; only the empty orchestrator role is filled.
