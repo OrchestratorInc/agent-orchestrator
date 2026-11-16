@@ -15,7 +15,7 @@ export const LINK_MAX_RETRIES = 5;
 
 export function isRetryableLinkError(cause: unknown): boolean {
 	if (cause instanceof AccountHostSyncError) {
-		return cause.status === 409 || cause.status >= 500;
+		return cause.status === 409 || cause.status === 429 || cause.status >= 500;
 	}
 	if (typeof cause === "object" && cause !== null) {
 		const status = "status" in cause && typeof (cause as { status: unknown }).status === "number"
@@ -24,7 +24,7 @@ export function isRetryableLinkError(cause: unknown): boolean {
 				? (cause.cause as { status: number }).status
 				: undefined);
 		if (status !== undefined) {
-			return status === 409 || status >= 500;
+			return status === 409 || status === 429 || status >= 500;
 		}
 		const code = "code" in cause && typeof (cause as { code: unknown }).code === "string"
 			? (cause as { code: string }).code
@@ -91,6 +91,7 @@ export function useLinkThisComputerOnSignIn(): void {
 			try {
 				status = await fetchMobileStatus();
 			} catch (cause: unknown) {
+				if (cancelled) return;
 				if (!isRetryableLinkError(cause)) {
 					finish();
 					return;
@@ -138,6 +139,7 @@ export function useLinkThisComputerOnSignIn(): void {
 				]);
 				finish();
 			} catch (cause: unknown) {
+				if (cancelled) return;
 				// Not fatal: the computer keeps its quick tunnel, and Allow access links
 				// it. Retry transient network or 5xx errors; stop on permanent failures.
 				if (isRetryableLinkError(cause)) {

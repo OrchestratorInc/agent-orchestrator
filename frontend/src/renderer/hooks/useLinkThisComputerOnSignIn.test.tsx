@@ -28,7 +28,7 @@ vi.mock("../components/settings/ConnectMobileContent", () => ({
 	tunnelUrl: (status: { url: string }) => status.url,
 }));
 
-import { useLinkThisComputerOnSignIn } from "./useLinkThisComputerOnSignIn";
+import { isRetryableLinkError, useLinkThisComputerOnSignIn } from "./useLinkThisComputerOnSignIn";
 
 const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>;
 
@@ -173,5 +173,47 @@ test("retry delays back off exponentially and stop after max retries", async () 
 	Object.assign(fake.status, { enabled: true });
 	await vi.advanceTimersByTimeAsync(600_000);
 	expect(linkThisComputer).not.toHaveBeenCalled();
+});
+
+test("isRetryableLinkError classifies 429 as retryable and permanent 4xx as non-retryable", () => {
+	expect(isRetryableLinkError(new AccountHostSyncError("rate limit", 429))).toBe(true);
+	expect(isRetryableLinkError({ status: 429 })).toBe(true);
+	expect(isRetryableLinkError(new Error("wrapped", { cause: { status: 429 } }))).toBe(true);
+
+	expect(isRetryableLinkError(new AccountHostSyncError("forbidden", 403))).toBe(false);
+	expect(isRetryableLinkError({ status: 403 })).toBe(false);
+	expect(isRetryableLinkError(new Error("wrapped", { cause: { status: 403 } }))).toBe(false);
+});
+
+test("HTTP 429 rate limit is treated as retryable by the link attempt", async () => {
+	vi.useFakeTimers();
+	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("Too Many Requests", 429));
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await vi.advanceTimersByTimeAsync(0);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+	await vi.advanceTimersByTimeAsync(30_000);
+	expect(linkThisComputer).toHaveBeenCalledTimes(2);
+});
+
+test("a cancelled link attempt does not record completion on error", async () => {
+	fake.signedIn = true;
+	let rejectLink!: (err: Error) => void;
+	vi.mocked(linkThisComputer).mockImplementation(
+		() => new Promise((_, reject) => { rejectLink = reject; }),
+	);
+	const { unmount } = renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledTimes(1));
+
+	// User unmounts (e.g. signs out) while link is in flight
+	unmount();
+	// Link attempt rejects with permanent error 403 after unmount
+	rejectLink(new AccountHostSyncError("Forbidden", 403));
+	await new Promise((resolve) => setTimeout(resolve, 10));
+
+	// A new mount (signing back in) should still run and link
+	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "h_this", added: true });
+	renderHook(() => useLinkThisComputerOnSignIn(), { wrapper });
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledTimes(2));
 });
 
