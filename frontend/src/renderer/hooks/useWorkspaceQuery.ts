@@ -67,6 +67,7 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 		mergeability: pr.mergeability,
 		reviewComments: pr.reviewComments,
 		updatedAt: pr.updatedAt,
+		...(pr.stackParent ? { stackParent: pr.stackParent } : {}),
 	};
 }
 

@@ -18,6 +18,7 @@ const localeLoaders: Record<Exclude<AppLocale, "en">, () => Promise<{ default: C
 	de: () => import("./de.json"),
 	"pt-BR": () => import("./pt-BR.json"),
 	ru: () => import("./ru.json"),
+	tr: () => import("./tr.json"),
 };
 
 /**
