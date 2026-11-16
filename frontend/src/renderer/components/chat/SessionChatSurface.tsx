@@ -102,7 +102,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenLinkInBrowser,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -165,7 +164,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
@@ -740,7 +738,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				theme={theme}
 				headerActions={headerActions}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabs={workspaceTabs}
 				workspaceTabActions={workspaceTabActions}
