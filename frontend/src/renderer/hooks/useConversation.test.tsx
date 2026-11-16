@@ -1233,6 +1233,71 @@ describe("conversation branching commands", () => {
 			{ params: { path: { sessionId: "ao-1", branchId: "branch-previous" } } },
 		);
 	});
+
+	// One client for the whole test: the shared wrapper builds a new one per
+	// render, which would drop the branch mutation's error on rerender.
+	function renderBranchCommands() {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		return renderHook(
+			({ turnActive }) => useConversationCommands("ao-1", undefined, false, turnActive),
+			{
+				wrapper: ({ children }: { children: ReactNode }) => (
+					<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+				),
+				initialProps: { turnActive: true },
+			},
+		);
+	}
+
+	it("disables branch navigation while a turn is active", () => {
+		const { result, rerender } = renderBranchCommands();
+		expect(result.current.activateBranchDisabled).toBe(true);
+
+		rerender({ turnActive: false });
+		expect(result.current.activateBranchDisabled).toBe(false);
+	});
+
+	it("clears CHAT_EDIT_BUSY branch error when the turn finishes", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		apiErrorMessageMock.mockImplementation((error: { message?: string } | undefined) => error?.message ?? "error");
+		const busyError = { code: "CHAT_EDIT_BUSY", message: "stop the current turn before switching conversation branches" };
+		postMock.mockResolvedValue({ data: undefined, error: busyError });
+
+		const { result, rerender } = renderBranchCommands();
+		await act(async () => {
+			await expect(result.current.activateBranch("branch-previous")).rejects.toBe(busyError);
+		});
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBe("stop the current turn before switching conversation branches");
+		});
+
+		rerender({ turnActive: false });
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBeUndefined();
+		});
+	});
+
+	it("preserves unrelated branch errors when a turn finishes", async () => {
+		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
+		apiErrorMessageMock.mockImplementation((error: { message?: string } | undefined) => error?.message ?? "error");
+		const genericError = { code: "SERVER_ERROR", message: "server error" };
+		postMock.mockResolvedValue({ data: undefined, error: genericError });
+
+		const { result, rerender } = renderBranchCommands();
+		await act(async () => {
+			await expect(result.current.activateBranch("branch-previous")).rejects.toBe(genericError);
+		});
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBe("server error");
+		});
+
+		rerender({ turnActive: false });
+		await waitFor(() => {
+			expect(result.current.activateBranchError).toBe("server error");
+		});
+	});
 });
 
 describe("steering refusals", () => {

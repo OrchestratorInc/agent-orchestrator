@@ -758,8 +758,12 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	});
 }
 
-/** Commands against a conversation. Each refetches the snapshot on success. */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false) {
+/**
+ * Commands against a conversation. Each refetches the snapshot on success.
+ * `turnActive` comes from the caller's snapshot: reading the conversation
+ * cache here would re-render every consumer on each streamed chunk.
+ */
+export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false, turnActive = false) {
 	const queryClient = useQueryClient();
 	const restoreSession = useRestoreSession();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
@@ -791,6 +795,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		staleTime: Number.POSITIVE_INFINITY,
 	}).data;
 	const trackedDispatch = stateSessionId ? trackedDispatches[stateSessionId] : undefined;
+	const hasActiveTurn = turnActive || trackedDispatch !== undefined;
 	const invalidateSession = useCallback(
 		async (targetSessionId: string) => {
 			if (hostId) await refreshRemoteConversation(queryClient, targetSessionId, hostId);
@@ -1361,6 +1366,13 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		onSettled: invalidate,
 	});
+	const activateBranchIsBusyError = apiErrorCode(activateBranch.error) === "CHAT_EDIT_BUSY";
+
+	useEffect(() => {
+		if (activateBranch.error && activateBranchIsBusyError && !hasActiveTurn) {
+			activateBranch.reset();
+		}
+	}, [activateBranch, activateBranchIsBusyError, hasActiveTurn]);
 	const acknowledgeAcceptedTurn = useCallback(
 		(turnId: string) => {
 			if (!sessionId) return;
@@ -1565,7 +1577,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				: undefined,
 		activateBranch: (branchId: string) => activateBranch.mutateAsync(branchId),
 		activateBranchPending: activateBranch.isPending,
-		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
+		activateBranchDisabled: hasActiveTurn,
+		activateBranchTarget: activateBranch.variables,
+		activateBranchError:
+			activateBranchIsBusyError && !hasActiveTurn
+				? undefined
+				: activateBranch.error
+					? apiErrorMessage(activateBranch.error)
+					: undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
 				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
