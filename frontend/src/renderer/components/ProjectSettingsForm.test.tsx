@@ -1925,6 +1925,51 @@ describe("ProjectSettingsForm", () => {
 		expect(options.map((option) => option.textContent)).toContain("Agy");
 	});
 
+	it("lets Agy be selected as the orchestrator agent and saves it", async () => {
+		const agy = agentReadiness("agy", "Agy");
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents/readiness") {
+				return {
+					data: {
+						agents: [...agentCatalogResponse.data.agents, agy],
+					},
+					error: undefined,
+				};
+			}
+			return {
+				data: {
+					status: "ok",
+					project: {
+						id: "proj-1",
+						name: "Project One",
+						kind: "single_repo",
+						path: "/repo/project-one",
+						repo: "",
+						defaultBranch: "main",
+						config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+					},
+				},
+				error: undefined,
+			};
+		});
+
+		renderSettings("proj-1", undefined, "agents");
+
+		const orchestratorAgent = await screen.findByRole("button", { name: "Orchestrator agent" });
+		await chooseOption(orchestratorAgent, "Agy");
+		submitSettings();
+
+		await waitFor(() => expect(putMock).toHaveBeenCalled());
+		expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", {
+			params: { path: { id: "proj-1" } },
+			body: expect.objectContaining({
+				config: expect.objectContaining({
+					orchestrator: expect.objectContaining({ agent: "agy" }),
+				}),
+			}),
+		});
+	});
+
 	it("shows scratch identity and saves only scratch-supported settings", async () => {
 		mockProject({
 			id: "scratch",

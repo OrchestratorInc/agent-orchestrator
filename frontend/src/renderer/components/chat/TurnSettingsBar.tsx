@@ -71,6 +71,8 @@ const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string; description?: str
 	"bypass-permissions": { label: "Auto-approve" },
 };
 
+const AGY_APPROVAL_ORDER = APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions");
+
 // Hermes' default mode governs only its file-edit tool; ordinary shell commands
 // still run without asking, so the copy states what Default actually asks
 // about instead of reading stronger than Hermes behaves.
@@ -242,7 +244,7 @@ export function TurnSettingsBar({
 		: harness === "agy" ? AGY_APPROVAL_COPY
 		: harness === "hermes" ? HERMES_APPROVAL_COPY
 		: APPROVAL_COPY;
-	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? APPROVAL_ORDER.filter((mode) => mode !== "bypass-permissions") : APPROVAL_ORDER;
+	const approvalOrder = harness === "codex" ? CODEX_APPROVAL_ORDER : harness === "agy" ? AGY_APPROVAL_ORDER : APPROVAL_ORDER;
 	const approvalLabel = approvalCopy[settings.approvalMode ?? "default"].label;
 	const approvalUnavailable = (mode: ApprovalMode) =>
 		approvalModeLimits?.unavailable.includes(mode) ? `Not available for ${approvalModeLimits.model}` : undefined;
@@ -347,7 +349,10 @@ export function TurnSettingsBar({
 		?? settings.approvalMode ?? "default";
 	const pendingWanted = pending?.approvalMode ?? agentSwitch?.chatPermissionMode ?? chatMode;
 	const pendingMode = pendingRuns(pendingWanted) ? pendingWanted : pendingModes?.[0] ?? pendingWanted;
-	const [pendingCopy, pendingOrder] = pending?.harness === "codex" ? [CODEX_APPROVAL_COPY, CODEX_APPROVAL_ORDER] as const : [APPROVAL_COPY, APPROVAL_ORDER] as const;
+	const [pendingCopy, pendingOrder] =
+		pending?.harness === "codex" ? [CODEX_APPROVAL_COPY, CODEX_APPROVAL_ORDER] as const
+		: pending?.harness === "agy" ? [AGY_APPROVAL_COPY, AGY_APPROVAL_ORDER] as const
+		: [APPROVAL_COPY, APPROVAL_ORDER] as const;
 	const startsInNote = pendingMode !== pendingWanted
 		? t("agentSwitch.startsInMode", { agent: pendingAgent, mode: pendingCopy[pendingWanted].label, target: pendingCopy[pendingMode].label })
 		: undefined;

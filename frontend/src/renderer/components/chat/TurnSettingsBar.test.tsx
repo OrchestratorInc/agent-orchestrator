@@ -2022,4 +2022,23 @@ describe("permissions for the agent picked for the next message", () => {
 		await user.click(screen.getByRole("menuitemradio", { name: /Use agent permissions/ }));
 		expect(onPendingChange).toHaveBeenCalledWith({ harness: "kimi", approvalMode: "default" });
 	});
+
+	it("uses Agy's approval vocabulary and omits bypass-permissions when switching to Agy", async () => {
+		const user = userEvent.setup();
+		render(
+			<TurnSettingsBar
+				harness="codex"
+				models={[]}
+				settings={{ approvalMode: "accept-edits" }}
+				onChange={vi.fn()}
+				agentSwitch={{ projectId: "p", pending: { harness: "agy" }, pendingPermissionModes: ["default", "accept-edits", "auto"], onPendingChange: vi.fn() }}
+			/>,
+		);
+		await user.click(screen.getByRole("button", { name: /Approval policy for agy/i }));
+		expect(screen.getByRole("menuitemradio", { name: /Ask for approval/ })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: /Accept edits/ })).toBeInTheDocument();
+		expect(screen.getByRole("menuitemradio", { name: /Auto-approve/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitemradio", { name: /Bypass permissions/ })).not.toBeInTheDocument();
+	});
 });
+
