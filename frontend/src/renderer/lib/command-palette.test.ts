@@ -485,12 +485,26 @@ describe("buildCommands PR actions", () => {
 		expect(filterCommands(items, "review all").some((item) => item.id === "pr-review-all:w-multi")).toBe(true);
 	});
 
-	it("counts only PRs whose current commit needs a review, and disables Review all when none do", () => {
+	it("counts the PRs a manual session pass reviews, and disables Review all when none are due", () => {
 		const oneDue = buildCommands({
 			workspaces: multiWorkspaces(),
 			reviewStatesBySessionId: { "w-multi": [reviewState(1, "needs_review"), reviewState(2, "up_to_date", { latestRun: reviewRun(2) })] },
 		});
 		expect(byId(oneDue).get("pr-review-all:w-multi")?.title).toBe("Review all due PRs (1)");
+
+		// A manual pass also re-reviews a current commit whose review asked for changes.
+		const withChangesRequested = byId(buildCommands({
+			workspaces: multiWorkspaces(),
+			reviewStatesBySessionId: { "w-multi": [reviewState(1, "needs_review"), reviewState(2, "changes_requested", { latestRun: reviewRun(2) })] },
+		})).get("pr-review-all:w-multi");
+		expect(withChangesRequested?.title).toBe("Review all due PRs (2)");
+
+		const allChangesRequested = byId(buildCommands({
+			workspaces: multiWorkspaces(),
+			reviewStatesBySessionId: { "w-multi": [reviewState(1, "changes_requested"), reviewState(2, "changes_requested")] },
+		})).get("pr-review-all:w-multi");
+		expect(allChangesRequested?.title).toBe("Review all due PRs (2)");
+		expect(allChangesRequested?.disabled).toBe(false);
 
 		const noneDue = byId(buildCommands({
 			workspaces: multiWorkspaces(),

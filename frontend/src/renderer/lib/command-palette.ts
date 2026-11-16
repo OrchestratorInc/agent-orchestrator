@@ -17,6 +17,7 @@ import {
 } from "../types/workspace";
 import {
 	openReviewStatesFor,
+	manualReviewIsDue,
 	reviewIsRunning,
 	reviewSessionRunAction,
 	type PRReviewState,
@@ -931,8 +932,9 @@ function prReviewCommand(
 
 /**
  * Session-wide review command for a session with more than one open PR: the
- * trigger without a PR URL reviews every PR whose current commit still needs a
- * review. Before review state loads (tests only) every open PR counts as due.
+ * trigger without a PR URL reviews every PR the daemon counts as due for a
+ * manual pass (manualReviewIsDue). Before review state loads (tests only) every
+ * open PR counts as due.
  */
 function reviewAllCommand(
 	session: WorkspaceSession,
@@ -944,7 +946,7 @@ function reviewAllCommand(
 	t: TFunction,
 ): CommandItem {
 	const due = openReviewStates
-		? openReviewStates.filter((reviewState) => reviewState.status === "needs_review").length
+		? openReviewStates.filter(manualReviewIsDue).length
 		: prCount;
 	const disabled = sessionReviewRunning || due === 0;
 	const disabledReason = sessionReviewRunning

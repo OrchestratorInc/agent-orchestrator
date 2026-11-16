@@ -67,6 +67,15 @@ function reviewsHaveActiveRun(data: ReviewsResponse | undefined): boolean {
 	);
 }
 
+/**
+ * Whether a person's session-wide trigger (no PR URL, no rerun) reviews this PR.
+ * Mirrors the daemon's manual eligibility rule in backend/internal/review/review.go:
+ * a new commit, or a current commit whose review asked for changes.
+ */
+export function manualReviewIsDue(reviewState: PRReviewState): boolean {
+	return reviewState.status === "needs_review" || reviewState.status === "changes_requested";
+}
+
 export function reviewIsRunning(openReviewStates: PRReviewState[]): boolean {
 	return openReviewStates.some((reviewState) => reviewState.status === "running");
 }
