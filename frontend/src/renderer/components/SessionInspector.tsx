@@ -3012,6 +3012,8 @@ function ReviewPanel({
 			})
 		: [];
 	const showPerPRRows = perPRRows.length > 1;
+	// Across repositories two PRs can share a number, so the row names its repository.
+	const perPRSpanRepositories = prsSpanRepositories(perPRRows.map(({ pr }) => pr));
 	// The session button's rules, applied to one PR: a running pass, auto review,
 	// or a reviewer switch in flight blocks every manual trigger.
 	const perPRLocked = reviewRunning || autoReviewEnabled || isTriggering || isKilling || isSwitchingReviewer || isCancelling;
@@ -3207,9 +3209,11 @@ function ReviewPanel({
 							: state?.status !== "needs_review" && (headReviewed || state?.latestRun)
 								? t("inspector.review.prRerun")
 								: t("inspector.review.prRun");
+						const repository = perPRSpanRepositories ? prRepositoryFromUrl(pr.url) : undefined;
+						const repositoryPrefix = repository ? `${prRepositoryShortName(repository)} ` : "";
 						const button = (
 							<Button
-								aria-label={t("inspector.review.prActionLabel", { action, number: pr.number })}
+								aria-label={t("inspector.review.prActionLabel", { action, number: pr.number, repository: repositoryPrefix })}
 								className="shrink-0 px-1.5"
 								disabled={perPRLocked || ineligible}
 								onClick={() => onTriggerPR?.(pr.url, headReviewed)}
@@ -3223,7 +3227,7 @@ function ReviewPanel({
 						return (
 							<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1" key={pr.url}>
 								{/* The number alone: the review list below already carries each PR's title. */}
-								<span className="min-w-0 truncate text-sm text-settings-label tabular-nums">PR #{pr.number}</span>
+								<span className="min-w-0 truncate text-sm text-settings-label tabular-nums">{repositoryPrefix}PR #{pr.number}</span>
 								{ineligible && !perPRLocked ? (
 									<Tooltip>
 										<TooltipTrigger asChild>

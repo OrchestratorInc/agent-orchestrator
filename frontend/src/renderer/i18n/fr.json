@@ -1063,7 +1063,7 @@
 	"inspector.review.activeReviewers": "Relecteurs actifs",
 	"inspector.review.allPrs": "Toutes les PR",
 	"inspector.review.notEligible": "Non éligible à la revue",
-	"inspector.review.prActionLabel": "{{action}} PR #{{number}}",
+	"inspector.review.prActionLabel": "{{action}} {{repository}}PR #{{number}}",
 	"inspector.review.prRerun": "Relancer",
 	"inspector.review.prRun": "Relire",
 	"inspector.review.requestedByAgent": "Requested by agent",

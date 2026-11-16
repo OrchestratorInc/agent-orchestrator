@@ -1049,7 +1049,7 @@
 	"inspector.review.activeReviewers": "Aktive Reviewer",
 	"inspector.review.allPrs": "Alle PRs",
 	"inspector.review.notEligible": "Nicht für ein Review geeignet",
-	"inspector.review.prActionLabel": "{{action}} PR #{{number}}",
+	"inspector.review.prActionLabel": "{{action}} {{repository}}PR #{{number}}",
 	"inspector.review.prRerun": "Erneut",
 	"inspector.review.prRun": "Review",
 	"inspector.review.requestedByAgent": "Requested by agent",

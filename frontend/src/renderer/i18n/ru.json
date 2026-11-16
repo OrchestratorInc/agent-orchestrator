@@ -1065,7 +1065,7 @@
 	"inspector.review.activeReviewers": "Активные ревьюеры",
 	"inspector.review.allPrs": "Все PR",
 	"inspector.review.notEligible": "Недоступно для ревью",
-	"inspector.review.prActionLabel": "{{action}} PR #{{number}}",
+	"inspector.review.prActionLabel": "{{action}} {{repository}}PR #{{number}}",
 	"inspector.review.prRerun": "Повторить",
 	"inspector.review.prRun": "Ревью",
 	"inspector.review.requestedByAgent": "Запрошено агентом",
