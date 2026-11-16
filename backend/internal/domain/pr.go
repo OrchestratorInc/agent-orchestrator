@@ -40,8 +40,10 @@ type PRFacts struct {
 	ExternalComments         bool
 	// StackParent is the number of the open PR, in any live session, whose
 	// source branch this PR targets; 0 when its base branch has no open PR AO
-	// still polls.
+	// still polls. The parent is in this PR's Host and Repo.
 	StackParent int
+	Host        string
+	Repo        string
 }
 
 // PullRequest is the app-level representation of one tracked pull request as

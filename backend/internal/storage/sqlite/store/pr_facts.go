@@ -91,6 +91,8 @@ func prFactsFromListRow(r gen.ListPRFactsBySessionRow) domain.PRFacts {
 		ExternalApproved:         r.ExternalApproved,
 		ExternalChangesRequested: r.ExternalChangesRequested,
 		StackParent:              int(r.StackParentNumber),
+		Host:                     r.Host,
+		Repo:                     r.Repo,
 	}
 }
 

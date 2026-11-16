@@ -1091,6 +1091,10 @@ func TestDeriveKanbanPresentationLeastReadyPRSpeaks(t *testing.T) {
 		pr.Number = number
 		return pr
 	}
+	inRepo := func(pr contract.KanbanPRFacts, repo string) contract.KanbanPRFacts {
+		pr.Host, pr.Repo = "github.com", repo
+		return pr
+	}
 
 	for _, tt := range []struct {
 		name string
@@ -1174,6 +1178,22 @@ func TestDeriveKanbanPresentationLeastReadyPRSpeaks(t *testing.T) {
 				numbered(stacked(contract.KanbanPRFacts{URL: "pr/b", CI: contract.CIFailing, UpdatedAt: older}, 10), 11),
 			},
 			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayCIFailing},
+		},
+		{
+			name: "a parent number the session owns in another repository is not the child's parent",
+			prs: []contract.KanbanPRFacts{
+				inRepo(numbered(mergeable("repo-a/12", older), 12), "acme/repo-a"),
+				inRepo(numbered(stacked(mergeable("repo-b/13", newer), 12), 13), "acme/repo-b"),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayWaitingOnBasePR},
+		},
+		{
+			name: "a parent the session owns is matched regardless of repository name case",
+			prs: []contract.KanbanPRFacts{
+				inRepo(numbered(mergeable("pr/a", older), 10), "Acme/App"),
+				inRepo(numbered(stacked(mergeable("pr/b", newer), 10), 11), "acme/app"),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
 		},
 		{
 			name: "a merged pr with a stack parent recorded is still merged",

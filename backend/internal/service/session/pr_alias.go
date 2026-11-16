@@ -124,6 +124,9 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 		if next.StackParent == 0 && sameTargetBranch(next.TargetBranch, current.TargetBranch) {
 			next.StackParent = current.StackParent
 		}
+		if next.Repo == "" {
+			next.Host, next.Repo = current.Host, current.Repo
+		}
 		return next
 	}
 	current.ReviewComments = current.ReviewComments || next.ReviewComments
@@ -141,6 +144,9 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 	}
 	if current.StackParent == 0 && sameTargetBranch(current.TargetBranch, next.TargetBranch) {
 		current.StackParent = next.StackParent
+	}
+	if current.Repo == "" {
+		current.Host, current.Repo = next.Host, next.Repo
 	}
 	return current
 }

@@ -57,6 +57,8 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 	for i, pr := range prs {
 		out[i] = contract.KanbanPRFacts{
 			URL:          pr.URL,
+			Host:         pr.Host,
+			Repo:         pr.Repo,
 			Number:       pr.Number,
 			Draft:        pr.Draft,
 			Merged:       pr.Merged,

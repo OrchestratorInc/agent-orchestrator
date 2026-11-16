@@ -1,6 +1,9 @@
 package contract
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // KanbanColumn is the derived delivery-lifecycle placement of a session. It
 // answers where the session sits between first commit and merge, and which
@@ -89,6 +92,11 @@ type KanbanExternalReviewFacts struct {
 // KanbanPRFacts are the per-PR facts the column reducer reads.
 type KanbanPRFacts struct {
 	URL string
+	// Host and Repo locate the PR. StackParent is a PR number in the same
+	// repository, so a session's PRs in different repositories can share a
+	// number without being one another's parent.
+	Host string
+	Repo string
 	// Number is the provider's PR number, which StackParent refers to; 0 when
 	// unknown.
 	Number         int
@@ -123,11 +131,22 @@ func derivePRKanbanColumn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanCo
 // the session also owns is placed on its own: the parent is in the same pool
 // and speaks for the stack, and landing it is the session's next step, so the
 // child waiting on it must not pull the session back into review.
-func placeSessionPR(session KanbanSessionFacts, pr KanbanPRFacts, owned map[int]bool) KanbanColumn {
-	if owned[pr.StackParent] {
+func placeSessionPR(session KanbanSessionFacts, pr KanbanPRFacts, owned map[kanbanPRKey]bool) KanbanColumn {
+	if pr.StackParent > 0 && owned[kanbanPRKeyOf(pr, pr.StackParent)] {
 		return prKanbanColumnOnItsOwn(session, pr)
 	}
 	return derivePRKanbanColumn(session, pr)
+}
+
+// kanbanPRKey names a PR by repository and number. Repository names compare
+// case-insensitively, like the stack-parent lookup.
+type kanbanPRKey struct {
+	host, repo string
+	number     int
+}
+
+func kanbanPRKeyOf(pr KanbanPRFacts, number int) kanbanPRKey {
+	return kanbanPRKey{host: pr.Host, repo: strings.ToLower(pr.Repo), number: number}
 }
 
 // waitsOnStackParent reports a live PR whose base branch belongs to another
@@ -352,10 +371,10 @@ func DeriveKanbanPresentation(
 	if len(pool) == 0 {
 		pool = prs
 	}
-	owned := make(map[int]bool, len(pool))
+	owned := make(map[kanbanPRKey]bool, len(pool))
 	for _, pr := range pool {
 		if pr.Number > 0 {
-			owned[pr.Number] = true
+			owned[kanbanPRKeyOf(pr, pr.Number)] = true
 		}
 	}
 

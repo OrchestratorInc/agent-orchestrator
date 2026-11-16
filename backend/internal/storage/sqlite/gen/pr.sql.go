@@ -557,6 +557,8 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
     pr.state_changed_at,
@@ -651,6 +653,8 @@ type ListPRFactsBySessionRow struct {
 	Mergeability             domain.Mergeability
 	SourceBranch             string
 	TargetBranch             string
+	Host                     string
+	Repo                     string
 	HeadSha                  string
 	UpdatedAt                time.Time
 	StateChangedAt           sql.NullTime
@@ -687,6 +691,8 @@ func (q *Queries) ListPRFactsBySession(ctx context.Context, sessionID domain.Ses
 			&i.Mergeability,
 			&i.SourceBranch,
 			&i.TargetBranch,
+			&i.Host,
+			&i.Repo,
 			&i.HeadSha,
 			&i.UpdatedAt,
 			&i.StateChangedAt,
@@ -770,6 +776,8 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
     pr.state_changed_at,
@@ -866,6 +874,8 @@ type ListPRFactsBySessionsRow struct {
 	Mergeability             domain.Mergeability
 	SourceBranch             string
 	TargetBranch             string
+	Host                     string
+	Repo                     string
 	HeadSha                  string
 	UpdatedAt                time.Time
 	StateChangedAt           sql.NullTime
@@ -900,6 +910,8 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 			&i.Mergeability,
 			&i.SourceBranch,
 			&i.TargetBranch,
+			&i.Host,
+			&i.Repo,
 			&i.HeadSha,
 			&i.UpdatedAt,
 			&i.StateChangedAt,
