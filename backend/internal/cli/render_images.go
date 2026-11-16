@@ -132,11 +132,11 @@ func missingImagesError(missing []string) error {
 
 // imageTooLarge names an image's size, "12.0 MiB" or "over 10.0 MiB".
 func imageTooLarge(path, size string) error {
-	return fmt.Errorf("Local image %s exceeds %s (%s). Resize it before rendering.", path, formatMiB(maxRenderImageBytes), size)
+	return fmt.Errorf("local image %s exceeds %s (%s); resize it before rendering", path, formatMiB(maxRenderImageBytes), size)
 }
 
 func pageTooLarge(size int) error {
-	return fmt.Errorf("The page exceeds the %s limit after embedding images (%s). Use smaller images.",
+	return fmt.Errorf("the page exceeds the %s limit after embedding images (%s); use smaller images",
 		formatMiB(maxRenderPageBytes), formatMiB(size))
 }
 
