@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -14,6 +15,9 @@ import (
 // first seen when `models` fails. That failure must read as sign-in required,
 // so the service keeps the saved catalog instead of an empty, retried error.
 func TestCursorRejectedLoginIsSignInRequired(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake CLI is a shell script")
+	}
 	for _, tc := range []struct {
 		name       string
 		script     string

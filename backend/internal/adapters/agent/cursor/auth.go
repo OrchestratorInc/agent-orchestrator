@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 var (
@@ -44,16 +47,19 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	}
 	if err == nil && status == ports.AgentAuthStatusAuthorized && unconfirmed {
 		// The lookup failure means either a rejected login or an unreachable
-		// Cursor. `models` sends the login to Cursor, so its answer tells them
-		// apart: a rejection signs Cursor out (the env key may still apply);
-		// anything else keeps the login with the caveat.
-		verified, verifySteps, verifyErr := authprobe.CLIStatusWithDiagnostics(ctx, binary, [][]string{{"models"}}, cursorLoginVerifyTimeout, cursorLoginRejection)
-		steps = append(steps, verifySteps...)
-		if verifyErr != nil && ctx.Err() != nil {
-			return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, steps, verifyErr
+		// Cursor. `models` sends the saved login to Cursor, so its answer tells
+		// them apart: a rejection signs Cursor out (the env key may still
+		// apply); anything else keeps the login with the caveat.
+		rejected, step, verifyErr := verifyCursorLogin(ctx, binary)
+		if verifyErr != nil {
+			return ports.AgentAuthStatusUnknown, domain.AgentAccountIdentity{}, append(steps, step), verifyErr
 		}
-		if verified == ports.AgentAuthStatusUnauthorized {
+		if rejected {
 			status = ports.AgentAuthStatusUnauthorized
+			steps = append(steps, step)
+			// `status` recorded itself as the deciding credential; Cursor
+			// rejected that login, so it no longer decides anything.
+			ports.RecordAuthEvidence(ctx, domain.AgentAccountIdentity{})
 		} else {
 			steps = append(steps, domain.NewAgentAuthDiagnostic("cursor-agent status", "account_unconfirmed"))
 		}
@@ -76,17 +82,52 @@ func cursorAccountUnconfirmed(out []byte) bool {
 }
 
 // cursorLoginVerifyTimeout bounds the `models` call that verifies an
-// unconfirmed login. It fits inside the readiness auth budget after `status`.
+// unconfirmed login. With the 3s `status` probe it stays inside the Cursor
+// readiness auth budget (cursorAuthCheckTimeout in the agent service).
 const cursorLoginVerifyTimeout = 6 * time.Second
 
-// cursorLoginRejection classifies `cursor-agent models` output while
-// verifying a login: only a clear sign-in answer ("Authentication required")
-// counts. A model list or any other failure is inconclusive, never a login.
-func cursorLoginRejection(out []byte) (ports.AgentAuthStatus, bool) {
-	if authprobe.StatusFromText(string(out)) == ports.AgentAuthStatusUnauthorized {
-		return ports.AgentAuthStatusUnauthorized, true
+// cursorLoginCredentialEnv are the variables that authorize the Cursor CLI
+// without the saved login. The verification drops them, so it tests the
+// saved login alone; a configured key is judged separately afterwards.
+var cursorLoginCredentialEnv = []string{"CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"}
+
+// cursorModelsRunner runs `cursor-agent models` with env; tests replace it.
+var cursorModelsRunner = func(ctx context.Context, binary string, env []string) ([]byte, error) {
+	cmd := aoprocess.CommandContext(ctx, binary, "models")
+	cmd.Env = env
+	return cmd.CombinedOutput()
+}
+
+// verifyCursorLogin reports whether Cursor rejected the saved login. Only a
+// clear sign-in answer ("Authentication required") is a rejection; a model
+// list, a timeout or any other failure is inconclusive. It returns an error
+// only when the caller's context ended.
+func verifyCursorLogin(ctx context.Context, binary string) (bool, domain.AgentAuthDiagnostic, error) {
+	probeCtx, cancel := context.WithTimeout(ctx, cursorLoginVerifyTimeout)
+	defer cancel()
+	started := time.Now()
+	out, runErr := cursorModelsRunner(probeCtx, binary, withoutEnv(agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary), cursorLoginCredentialEnv))
+	status := ports.AgentAuthStatusUnknown
+	if probeCtx.Err() == nil && authprobe.StatusFromText(string(out)) == ports.AgentAuthStatusUnauthorized {
+		status = ports.AgentAuthStatusUnauthorized
 	}
-	return ports.AgentAuthStatusUnknown, true
+	step := authprobe.CommandStep(binary, []string{"models"}, status, runErr, probeCtx.Err(), started)
+	if err := ctx.Err(); err != nil {
+		return false, step, err
+	}
+	return status == ports.AgentAuthStatusUnauthorized, step, nil
+}
+
+// withoutEnv returns env minus the named variables.
+func withoutEnv(env []string, names []string) []string {
+	kept := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if !slices.Contains(names, name) {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
 }
 
 // cursorConfigPath is where the Cursor CLI records its login; tests point it

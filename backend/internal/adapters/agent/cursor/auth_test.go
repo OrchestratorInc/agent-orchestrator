@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
@@ -66,19 +67,25 @@ func TestCursorUnconfirmedLoginIsVerifiedWithModels(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CURSOR_API_KEY", tc.apiKey)
+			t.Setenv("CURSOR_AUTH_TOKEN", tc.apiKey)
 			ranModels := false
-			previous := authprobe.CmdRunner
-			t.Cleanup(func() { authprobe.CmdRunner = previous })
-			authprobe.CmdRunner = func(_ context.Context, name string, arg ...string) ([]byte, error) {
-				switch {
-				case name == "cursor-agent" && reflect.DeepEqual(arg, []string{"status"}):
-					return []byte(tc.status), nil
-				case name == "cursor-agent" && reflect.DeepEqual(arg, []string{"models"}):
-					ranModels = true
-					return []byte(tc.models), tc.modelsErr
+			restore := stubCursorAuthCommand(t, []string{"status"}, []byte(tc.status), nil)
+			defer restore()
+			previousModels := cursorModelsRunner
+			t.Cleanup(func() { cursorModelsRunner = previousModels })
+			cursorModelsRunner = func(_ context.Context, binary string, env []string) ([]byte, error) {
+				ranModels = true
+				if binary != "cursor-agent" {
+					t.Fatalf("binary = %q, want cursor-agent", binary)
 				}
-				t.Fatalf("unexpected command %s %#v", name, arg)
-				return nil, nil
+				// The saved login is verified alone: a key in the daemon env
+				// would answer for it and hide a rejection.
+				for _, entry := range env {
+					if strings.HasPrefix(entry, "CURSOR_API_KEY=") || strings.HasPrefix(entry, "CURSOR_AUTH_TOKEN=") {
+						t.Fatalf("models env carries %q, want the credential variables removed", entry)
+					}
+				}
+				return []byte(tc.models), tc.modelsErr
 			}
 			status, _, steps, err := (&Plugin{resolvedBinary: "cursor-agent"}).AuthStatusWithDiagnostics(context.Background())
 			if err != nil {
@@ -94,7 +101,35 @@ func TestCursorUnconfirmedLoginIsVerifiedWithModels(t *testing.T) {
 			if got != tc.unconfirmed {
 				t.Fatalf("account_unconfirmed = %v, want %v (steps %+v)", got, tc.unconfirmed, steps)
 			}
+			// A models run is listed only when it decided the verdict.
+			gotModelsStep := slices.ContainsFunc(steps, func(step domain.AgentAuthDiagnostic) bool { return strings.HasSuffix(step.Method, " models") })
+			if wantModelsStep := tc.wantModels && !tc.unconfirmed; gotModelsStep != wantModelsStep {
+				t.Fatalf("models step = %v, want %v (steps %+v)", gotModelsStep, wantModelsStep, steps)
+			}
 		})
+	}
+}
+
+func TestCursorRejectedLoginClearsStatusEvidence(t *testing.T) {
+	t.Setenv("CURSOR_API_KEY", "")
+	t.Setenv("CURSOR_AUTH_TOKEN", "")
+	restore := stubCursorAuthCommand(t, []string{"status"}, []byte("Logged in (unable to fetch user details)\n"), nil)
+	defer restore()
+	previousModels := cursorModelsRunner
+	t.Cleanup(func() { cursorModelsRunner = previousModels })
+	cursorModelsRunner = func(context.Context, string, []string) ([]byte, error) {
+		return []byte("Error: Authentication required.\n"), assertErr("exit status 1")
+	}
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, _, _, err := (&Plugin{resolvedBinary: "cursor-agent"}).AuthStatusWithDiagnostics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != ports.AgentAuthStatusUnauthorized {
+		t.Fatalf("status = %q, want unauthorized", status)
+	}
+	if source := evidence.Identity().Sanitized(); source != nil && source.Source != "" {
+		t.Fatalf("evidence = %+v, want the rejected status login cleared", source)
 	}
 }
 
