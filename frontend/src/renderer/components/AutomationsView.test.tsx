@@ -1219,5 +1219,19 @@ describe("automation starters", () => {
 				style.remove();
 			}
 		});
+
+		it("keeps showing a run in flight that a newer skipped occurrence hides, with Run now off", () => {
+			mocks.cloudAvailable = true;
+			const skipped = { ...cloudAutomation.latestRun, id: "r2", scheduledFor: "2026-11-16T14:19:00Z", errorCode: "PREVIOUS_RUN_ACTIVE", errorMessage: "The previous run was still going, so this one was skipped." };
+			const manual = { id: "r1", automationId: "c1", scheduledFor: "2026-11-16T14:11:00Z", trigger: "manual", status: "running", attemptCount: 1, sessionId: "s-live", createdAt: "2026-11-16T14:11:00Z" };
+			mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: skipped, hiddenInFlightRun: manual }];
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			expect(within(row).getByText("Last run Running")).toBeInTheDocument();
+			expect(within(row).queryByText("Last run Skipped")).not.toBeInTheDocument();
+			// The skip still says why that occurrence did not run.
+			expect(within(row).getByRole("alert")).toHaveTextContent("Skipped: the previous run was still going.");
+			expect(within(row).getByRole("button", { name: "Run Nightly debt now" })).toBeDisabled();
+		});
 	});
 });

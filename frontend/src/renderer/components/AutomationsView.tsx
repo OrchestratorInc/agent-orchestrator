@@ -66,6 +66,7 @@ import {
 } from "../hooks/useAutomations";
 import {
 	CLOUD_AUTOMATION_HARNESSES,
+	cloudAutomationActiveRun,
 	cloudAutomationErrorMessage,
 	cloudRunErrorMessage,
 	isCloudRunInFlight,
@@ -510,7 +511,10 @@ function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, 
 	const historyId = `automation-history-cloud-${item.id}`;
 	const runAs = item.runAs.displayName || item.runAs.email || t("automations.cloud.runAsUnknown");
 	const latestError = item.latestRun ? cloudRunErrorMessage(item.latestRun, t) : undefined;
-	const running = isCloudRunInFlight(item.latestRun);
+	// A run in flight leads the row, even when an occurrence skipped since is the latest run.
+	const activeRun = cloudAutomationActiveRun(item);
+	const running = Boolean(activeRun);
+	const shownRun = activeRun ?? item.latestRun;
 	// The organization shares it, so a teammate elsewhere reads its clock time in its own zone.
 	const schedule = item.timezone === localTimezone()
 		? scheduleLabel(item.rrule)
@@ -561,7 +565,7 @@ function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, 
 				<p className={cn("tabular-nums", item.enabled ? "text-foreground" : "text-muted-foreground")}>
 					{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : notOnSchedule}
 				</p>
-				{item.latestRun ? <p className="text-muted-foreground">{t("automations.lastRun", { status: t(`automations.runStatus.${item.latestRun.status}`, { defaultValue: item.latestRun.status }) })}</p> : null}
+				{shownRun ? <p className="text-muted-foreground">{t("automations.lastRun", { status: t(`automations.runStatus.${shownRun.status}`, { defaultValue: shownRun.status }) })}</p> : null}
 			</div>
 			<div className="flex shrink-0 items-center gap-1">
 				<Tooltip>

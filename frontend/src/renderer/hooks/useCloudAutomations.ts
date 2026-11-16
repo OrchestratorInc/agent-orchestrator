@@ -7,14 +7,20 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { CloudCpError, type CloudCpAutomation, type CloudCpAutomationRun, type CloudCpCreateAutomationRequest, type CloudCpUpdateAutomationRequest } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAutomation, type CloudCpAutomationRun, type CloudCpClient, type CloudCpCreateAutomationRequest, type CloudCpUpdateAutomationRequest } from "../lib/cloud-cp";
 import { AUTOMATIONS_FEATURE } from "../lib/cloud-offering";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudMeUserId } from "./useCloudMeUserId";
 import { useCloudOffering } from "./useCloudOffering";
 
-export type CloudAutomation = CloudCpAutomation;
 export type CloudAutomationRun = CloudCpAutomationRun;
+/**
+ * A cloud automation as this app lists it: the contract's, plus the run in
+ * flight that a newer skipped occurrence hides from latestRun (the contract's
+ * latestRun is the newest occurrence, and an occurrence skipped while a run
+ * goes is newer than that run). The list finds it in the run history.
+ */
+export type CloudAutomation = CloudCpAutomation & { hiddenInFlightRun?: CloudAutomationRun };
 
 /** Harnesses a cloud automation can run: those with a Chat controller, whose opening turn ends the run. */
 export const CLOUD_AUTOMATION_HARNESSES = ["claude-code", "codex", "cursor"] as const;
@@ -28,20 +34,59 @@ export function isCloudRunInFlight(run: Pick<CloudAutomationRun, "status"> | und
 	return Boolean(run && IN_FLIGHT_RUN_STATUSES.has(run.status));
 }
 
+/** The automation's run in flight, if any: its latest run, or one a newer skipped occurrence hides. */
+export function cloudAutomationActiveRun(item: Pick<CloudAutomation, "latestRun" | "hiddenInFlightRun">): CloudAutomationRun | undefined {
+	if (isCloudRunInFlight(item.latestRun)) return item.latestRun;
+	return isCloudRunInFlight(item.hiddenInFlightRun) ? item.hiddenInFlightRun : undefined;
+}
+
 // The control plane's automation loop ticks every 30s (and at once for Run now),
 // so a run in flight is followed every 15s; otherwise the list only changes at a
 // scheduled time or by someone's edit, and once a minute is enough.
 const IN_FLIGHT_POLL_MS = 15_000;
 const IDLE_POLL_MS = 60_000;
 
-/** How often the automation list refreshes: closely while any automation's latest run is in flight. */
-export function cloudAutomationPollInterval(automations: ReadonlyArray<Pick<CloudAutomation, "latestRun">> | undefined): number {
-	return automations?.some((item) => isCloudRunInFlight(item.latestRun)) ? IN_FLIGHT_POLL_MS : IDLE_POLL_MS;
+/** How often the automation list refreshes: closely while any automation has a run in flight. */
+export function cloudAutomationPollInterval(automations: ReadonlyArray<Pick<CloudAutomation, "latestRun" | "hiddenInFlightRun">> | undefined): number {
+	return automations?.some((item) => cloudAutomationActiveRun(item)) ? IN_FLIGHT_POLL_MS : IDLE_POLL_MS;
 }
 
 /** How often an expanded run history refreshes: closely while one of its runs is in flight. */
 export function cloudRunsPollInterval(runs: ReadonlyArray<Pick<CloudAutomationRun, "status">> | undefined): number {
 	return runs?.some((run) => isCloudRunInFlight(run)) ? IN_FLIGHT_POLL_MS : IDLE_POLL_MS;
+}
+
+// A run in flight stops at its automation's maxRuntimeMinutes: the control
+// plane times it out on a tick after that. Slack for those ticks and for a
+// start that was still being retried when the occurrence was skipped.
+const RUN_STOP_SLACK_MS = 15 * 60_000;
+
+/**
+ * Whether the latest run is a skipped occurrence that may hide a run still in
+ * flight: one going when it was skipped, which stops at its time limit, so a
+ * skip older than that hides none and costs no lookup.
+ */
+function mayHideInFlightRun(item: Pick<CloudAutomation, "latestRun" | "maxRuntimeMinutes">, now: number): boolean {
+	const latest = item.latestRun;
+	if (latest?.status !== "skipped") return false;
+	const skippedAt = Date.parse(latest.finishedAt ?? latest.scheduledFor);
+	return Number.isFinite(skippedAt) && now - skippedAt < item.maxRuntimeMinutes * 60_000 + RUN_STOP_SLACK_MS;
+}
+
+// A run lasts at most 480 minutes and occurrences are at least an hour apart,
+// so at most nine skipped occurrences are newer than a run in flight.
+const HIDDEN_RUN_LOOKUP_LIMIT = 20;
+
+/**
+ * The run in flight behind an automation's newer skipped occurrences, from its
+ * run history (newest occurrence first). Only one run goes at a time and a
+ * skipped occurrence never started, so the newest run that was not skipped is
+ * the only one that can still be going.
+ */
+async function findHiddenInFlightRun(client: CloudCpClient, orgId: string, automationId: string, signal: AbortSignal): Promise<CloudAutomationRun | undefined> {
+	const runs = await client.listAutomationRuns(orgId, automationId, { limit: HIDDEN_RUN_LOOKUP_LIMIT }, { signal });
+	const newestStarted = runs.items.find((run) => run.status !== "skipped");
+	return isCloudRunInFlight(newestStarted) ? newestStarted : undefined;
 }
 
 /** Whether cloud automations are offered, and the organization and query key they live under. */
@@ -69,7 +114,18 @@ export function useCloudAutomations() {
 				automations.push(...page.items);
 				cursor = page.page.hasMore ? page.page.nextCursor : undefined;
 			} while (cursor);
-			return automations;
+			const now = Date.now();
+			return Promise.all(automations.map(async (item): Promise<CloudAutomation> => {
+				if (!mayHideInFlightRun(item, now)) return item;
+				try {
+					const hiddenInFlightRun = await findHiddenInFlightRun(client, orgId, item.id, signal);
+					return hiddenInFlightRun ? { ...item, hiddenInFlightRun } : item;
+				} catch (error) {
+					if (signal.aborted) throw error;
+					// The row still shows what the list says; the next refresh looks again.
+					return item;
+				}
+			}));
 		},
 		refetchInterval: (current) => cloudAutomationPollInterval(current.state.data),
 	});
@@ -77,12 +133,23 @@ export function useCloudAutomations() {
 	return { ...query, available, orgId, userId };
 }
 
+/**
+ * An automation the control plane just returned, keeping the run in flight the
+ * list found behind its skipped latest run while that skip is still its latest.
+ */
+function refreshedAutomation(cached: CloudAutomation | undefined, automation: CloudAutomation): CloudAutomation {
+	if (!cached?.hiddenInFlightRun || automation.hiddenInFlightRun || automation.latestRun?.id !== cached.latestRun?.id) return automation;
+	return { ...automation, hiddenInFlightRun: cached.hiddenInFlightRun };
+}
+
 /** Replaces one automation in the cached list, or adds it. */
 function useCacheAutomation() {
 	const queryClient = useQueryClient();
 	const { queryKey } = useCloudAutomationsScope();
 	return (automation: CloudAutomation) => queryClient.setQueryData<CloudAutomation[]>(queryKey, (current = []) =>
-		current.some((item) => item.id === automation.id) ? current.map((item) => item.id === automation.id ? automation : item) : [automation, ...current]);
+		current.some((item) => item.id === automation.id)
+			? current.map((item) => item.id === automation.id ? refreshedAutomation(item, automation) : item)
+			: [automation, ...current]);
 }
 
 export function useCreateCloudAutomation() {
@@ -115,15 +182,28 @@ export function useDeleteCloudAutomation() {
 	});
 }
 
-/** Runs an automation now, as the signed-in person; the list refreshes to show the run. */
+/**
+ * Runs an automation now, as the signed-in person. The queued run is its latest
+ * at once, so the row shows it in flight (and Run now stays off) before the
+ * list refreshes; a refusal because a run is already going refreshes the list
+ * to show that run.
+ */
 export function useRunCloudAutomationNow() {
 	const queryClient = useQueryClient();
 	const { client, orgId, queryKey } = useCloudAutomationsScope();
 	return useMutation({
 		mutationFn: async (id: string) => (await client.runAutomationNow(orgId, id)).run,
 		onSuccess: (run) => {
+			queryClient.setQueryData<CloudAutomation[]>(queryKey, (current) => current?.map((item) => item.id === run.automationId
+				? { ...item, latestRun: run, hiddenInFlightRun: undefined }
+				: item));
 			void queryClient.invalidateQueries({ queryKey });
 			void queryClient.invalidateQueries({ queryKey: [...queryKey, run.automationId, "runs"] });
+		},
+		onError: (error, id) => {
+			if (!(error instanceof CloudCpError) || error.code !== "AUTOMATION_RUN_ACTIVE") return;
+			void queryClient.invalidateQueries({ queryKey });
+			void queryClient.invalidateQueries({ queryKey: [...queryKey, id, "runs"] });
 		},
 	});
 }

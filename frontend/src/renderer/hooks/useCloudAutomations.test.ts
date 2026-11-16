@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cloudAutomationPollInterval, cloudRunsPollInterval, useCloudAutomations, type CloudAutomationRun } from "./useCloudAutomations";
+import { CloudCpError } from "../lib/cloud-cp";
+import { cloudAutomationActiveRun, cloudAutomationPollInterval, cloudRunsPollInterval, useCloudAutomations, useRunCloudAutomationNow, type CloudAutomation, type CloudAutomationRun } from "./useCloudAutomations";
 
 const mocks = vi.hoisted(() => ({
 	client: {
@@ -18,8 +19,17 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: mocks.client, ready: true, baseUrl: "https://cp.test", userId: "user_01WORKOS" }) }));
 vi.mock("./useCloudOffering", () => ({ useCloudOffering: () => ({ ready: true, org: { id: "org-1" }, features: ["automations"] }) }));
 
+const listKey = ["cloud-automations", "https://cp.test", "org-1"];
+
+const iso = (ms: number) => new Date(ms).toISOString();
 const run = (status: string, overrides: Partial<CloudAutomationRun> = {}): CloudAutomationRun => ({
 	id: status, automationId: "a", scheduledFor: "2026-11-16T09:00:00Z", trigger: "schedule", status: status as CloudAutomationRun["status"], attemptCount: 1, createdAt: "2026-11-16T09:00:00Z", ...overrides,
+});
+const automation = (overrides: Partial<CloudAutomation> = {}): CloudAutomation => ({
+	id: "a", projectId: "p", displayName: "Nightly debt", prompt: "List debt.", harness: "codex", mode: "trusted",
+	rrule: "FREQ=HOURLY", timezone: "UTC", enabled: true, maxRuntimeMinutes: 60, branch: "ao/automation-a",
+	runAs: { userId: "4fa6d173-cp" }, consecutiveFailures: 0, subscribed: true, canEdit: true,
+	createdAt: "2026-11-16T00:00:00Z", updatedAt: "2026-11-16T00:00:00Z", ...overrides,
 });
 const page = <T>(items: T[]) => ({ items, page: { hasMore: false } });
 
@@ -46,6 +56,12 @@ describe("cloud automation polling", () => {
 		}
 	});
 
+	it("follows a run in flight closely when a newer skipped occurrence is the latest run", () => {
+		const skipped = run("skipped", { errorCode: "PREVIOUS_RUN_ACTIVE" });
+		expect(cloudAutomationPollInterval([{ latestRun: skipped, hiddenInFlightRun: run("running", { trigger: "manual" }) }])).toBe(15_000);
+		expect(cloudAutomationPollInterval([{ latestRun: skipped }])).toBe(60_000);
+	});
+
 	it("polls a run history the same way", () => {
 		expect(cloudRunsPollInterval(undefined)).toBe(60_000);
 		expect(cloudRunsPollInterval([run("skipped"), run("timed_out")])).toBe(60_000);
@@ -65,5 +81,74 @@ describe("useCloudAutomations", () => {
 		const { wrapper } = setup();
 		const { result } = renderHook(() => useCloudAutomations(), { wrapper });
 		expect(result.current.userId).toBeUndefined();
+	});
+
+	it("finds the run in flight that a newer skipped occurrence hides, and follows it closely", async () => {
+		const now = Date.now();
+		const skipped = run("skipped", { id: "skip", scheduledFor: iso(now - 60_000), finishedAt: iso(now - 50_000), errorCode: "PREVIOUS_RUN_ACTIVE" });
+		const manual = run("running", { id: "manual", trigger: "manual", scheduledFor: iso(now - 5 * 60_000) });
+		mocks.client.listAutomations.mockResolvedValue(page([automation({ latestRun: skipped })]));
+		mocks.client.listAutomationRuns.mockResolvedValue(page([skipped, manual]));
+		const { wrapper } = setup();
+		const { result } = renderHook(() => useCloudAutomations(), { wrapper });
+		await waitFor(() => expect(result.current.data).toHaveLength(1));
+		expect(mocks.client.listAutomationRuns).toHaveBeenCalledWith("org-1", "a", expect.objectContaining({ limit: expect.any(Number) }), expect.anything());
+		expect(cloudAutomationPollInterval(result.current.data)).toBe(15_000);
+		expect(cloudAutomationActiveRun(result.current.data![0])?.id).toBe("manual");
+	});
+
+	it("reports no run in flight when the run behind the skip has settled", async () => {
+		const now = Date.now();
+		const skipped = run("skipped", { id: "skip", scheduledFor: iso(now - 60_000), finishedAt: iso(now - 50_000), errorCode: "PREVIOUS_RUN_ACTIVE" });
+		mocks.client.listAutomations.mockResolvedValue(page([automation({ latestRun: skipped })]));
+		// Only one run goes at a time: one older than a settled run cannot still be going.
+		mocks.client.listAutomationRuns.mockResolvedValue(page([skipped, run("completed", { id: "done", trigger: "manual", scheduledFor: iso(now - 5 * 60_000) }), run("running", { id: "older" })]));
+		const { wrapper } = setup();
+		const { result } = renderHook(() => useCloudAutomations(), { wrapper });
+		await waitFor(() => expect(result.current.data).toHaveLength(1));
+		expect(mocks.client.listAutomationRuns).toHaveBeenCalled();
+		expect(cloudAutomationActiveRun(result.current.data![0])).toBeUndefined();
+		expect(cloudAutomationPollInterval(result.current.data)).toBe(60_000);
+	});
+
+	it("looks behind a skip only while a run that started before it could still be going", async () => {
+		const now = Date.now();
+		// A run stops at its automation's time limit, so a skip older than that hides nothing.
+		const old = run("skipped", { id: "old", scheduledFor: iso(now - 2 * 3_600_000), finishedAt: iso(now - 2 * 3_600_000), errorCode: "PREVIOUS_RUN_ACTIVE" });
+		mocks.client.listAutomations.mockResolvedValue(page([
+			automation({ id: "a", latestRun: old }),
+			automation({ id: "b", latestRun: run("completed", { automationId: "b", finishedAt: iso(now) }) }),
+			automation({ id: "c", latestRun: run("running", { automationId: "c" }) }),
+		]));
+		const { wrapper } = setup();
+		const { result } = renderHook(() => useCloudAutomations(), { wrapper });
+		await waitFor(() => expect(result.current.data).toHaveLength(3));
+		expect(mocks.client.listAutomationRuns).not.toHaveBeenCalled();
+	});
+});
+
+describe("useRunCloudAutomationNow", () => {
+	it("shows the run it asked for as in flight at once, so Run now stays off", async () => {
+		const { queryClient, wrapper } = setup();
+		queryClient.setQueryData(listKey, [automation({ latestRun: run("completed") })]);
+		const queued = run("pending", { id: "queued", trigger: "manual" });
+		mocks.client.runAutomationNow.mockResolvedValue({ run: queued });
+		// The refreshed list is slow to answer.
+		mocks.client.listAutomations.mockReturnValue(new Promise(() => undefined));
+		const { result } = renderHook(() => ({ list: useCloudAutomations(), runNow: useRunCloudAutomationNow() }), { wrapper });
+		await act(async () => { await result.current.runNow.mutateAsync("a"); });
+		const cached = queryClient.getQueryData<CloudAutomation[]>(listKey);
+		expect(cached?.[0].latestRun?.id).toBe("queued");
+		expect(cloudAutomationPollInterval(cached)).toBe(15_000);
+	});
+
+	it("refreshes the list when the control plane says a run is already going", async () => {
+		const { queryClient, wrapper } = setup();
+		queryClient.setQueryData(listKey, [automation({ latestRun: run("completed") })]);
+		mocks.client.runAutomationNow.mockRejectedValue(new CloudCpError("A run is in flight.", { status: 409, code: "AUTOMATION_RUN_ACTIVE" }));
+		const { result } = renderHook(() => ({ list: useCloudAutomations(), runNow: useRunCloudAutomationNow() }), { wrapper });
+		await waitFor(() => expect(mocks.client.listAutomations).toHaveBeenCalledTimes(1));
+		await act(async () => { await result.current.runNow.mutateAsync("a").catch(() => undefined); });
+		await waitFor(() => expect(mocks.client.listAutomations).toHaveBeenCalledTimes(2));
 	});
 });
