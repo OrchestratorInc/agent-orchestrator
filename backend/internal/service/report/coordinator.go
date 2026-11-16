@@ -66,8 +66,7 @@ type Coordinator struct {
 	// deadline, and early flush does not wait for a retry time, so without the
 	// hold every wake would retry at once. Guarded by mu.
 	earlyHold map[domain.ProjectID]time.Time
-	// started bounds early flush of a batch attempted before this coordinator
-	// existed: its hold was lost with the previous process.
+	// started prevents immediate retries of batches recovered after restart.
 	started time.Time
 }
 
@@ -213,6 +212,7 @@ func (c *Coordinator) nextEarlyFlush(ctx context.Context, now time.Time) (domain
 	}
 	var wait time.Duration
 	for _, projectID := range projects {
+		first := byProject[projectID][0]
 		if !claimsDone(byProject[projectID]) {
 			// The next claim would take another batch first, for example one
 			// deferred until a retry time. It goes out when it is due.
@@ -228,9 +228,14 @@ func (c *Coordinator) nextEarlyFlush(ctx context.Context, now time.Time) (domain
 		if hold := c.earlyHold[projectID]; hold.After(flushAt) {
 			flushAt = hold
 		}
+		// Only the original done settlement deadline may be shortened. An
+		// attempted batch's earlier urgent row can hold a longer retry time.
+		if first.DeliveryBatchID != "" && (first.State != domain.ReportDone || first.AvailableAt.After(first.SettlementDeadline)) && first.AvailableAt.After(flushAt) {
+			flushAt = first.AvailableAt
+		}
 		// A batch that was already attempted may wait for a retry time that a
 		// done row cannot store, so after a restart it waits out a full retry.
-		if retry := c.started.Add(OrchestratorBusyRetry); byProject[projectID][0].DeliveryBatchID != "" && retry.After(flushAt) {
+		if retry := c.started.Add(OrchestratorBusyRetry); first.DeliveryBatchID != "" && retry.After(flushAt) {
 			flushAt = retry
 		}
 		if !flushAt.After(now) {

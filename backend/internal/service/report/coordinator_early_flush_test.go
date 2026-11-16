@@ -388,3 +388,43 @@ func TestCoordinatorEarlyFlushKeepsSharedBatchRetryAfterRestart(t *testing.T) {
 		t.Fatalf("submissions = %#v, want the shared batch once at its retry time", got)
 	}
 }
+
+func TestCoordinatorEarlyFlushKeepsStuckBatchRetryAfterRestart(t *testing.T) {
+	start := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	h := newEarlyFlushHarness(start)
+	h.store.setSessions(earlyOrchestrator(), earlyWorker("a", domain.ActivityIdle, start.Add(-time.Hour)))
+	h.store.interrupts["a"] = start
+	stuck := reportAt("stuck-a", "a", start, start, "still waiting")
+	stuck.State = domain.ReportStuck
+	h.store.add(stuck, doneAt("done-a", "a", start, "a finished"))
+	claims := 0
+	countClaim := func() string {
+		claims++
+		return "claim"
+	}
+	h.c.newToken = countClaim
+	if delay := h.run(t); delay != ReportInterruptWindow || claims != 1 {
+		t.Fatalf("coalesced delay = %v, claims = %d", delay, claims)
+	}
+
+	h.now = start.Add(15 * time.Second)
+	h.restart()
+	h.c.newToken = countClaim
+	// The process-start hold has expired, but the durable interrupt window has not.
+	h.now = start.Add(45 * time.Second)
+	if delay := h.run(t); delay != ReportInterruptWindow-45*time.Second || claims != 1 {
+		t.Fatalf("restart delay = %v, claims = %d; want no claim before the stored retry time", delay, claims)
+	}
+	if len(h.delivery.submitted()) != 0 || len(h.delivery.interrupts) != 0 {
+		t.Fatal("coalesced batch was delivered before its retry time")
+	}
+
+	h.now = start.Add(ReportInterruptWindow)
+	if delay := h.run(t); delay != -1 || claims != 2 {
+		t.Fatalf("retry delay = %v, claims = %d; want one delivery at the stored retry time", delay, claims)
+	}
+	got := h.delivery.submitted()
+	if len(got) != 1 || !strings.Contains(got[0].message, "still waiting") || !strings.Contains(got[0].message, "a finished") || len(h.delivery.interrupts) != 1 {
+		t.Fatalf("submissions = %#v, interrupts = %v; want the shared batch once", got, h.delivery.interrupts)
+	}
+}
