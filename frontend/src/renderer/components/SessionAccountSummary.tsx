@@ -1,7 +1,7 @@
 import { LoaderCircle } from "@/components/app-icons";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderFor, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderFor, oneRowPerLogin, useAgentAccountActions, useAgentAccountLabel, useAgentAccounts, useSessionAgentAccounts } from "../hooks/useAgentAccounts";
 import { cloudAgentAccountName, CLOUD_ACCOUNT_SWITCH_HARNESSES, useCloudAgentAccountActions, useCloudAgentAccounts, useCloudSessionAgentAccount } from "../hooks/useCloudAgentAccounts";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { useCloudOffering } from "../hooks/useCloudOffering";
@@ -43,7 +43,7 @@ export function useSessionAccountSwitch(session: WorkspaceSession, sessionHostId
 
 	const currentId = provider ? current.data?.[provider] : undefined;
 	const options = useMemo(() => provider
-		? withoutSameLogins((accounts.data ?? []).filter((account) => account.provider === provider), currentId)
+		? oneRowPerLogin((accounts.data ?? []).filter((account) => account.provider === provider), currentId)
 		: [], [accounts.data, currentId, provider]);
 	const account = options.find((option) => option.id === currentId);
 	const working = session.activity?.state === "active" || session.activity?.state === "blocked";

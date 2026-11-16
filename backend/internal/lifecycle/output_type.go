@@ -60,7 +60,13 @@ func (m *Manager) ReconcileSessionOutputType(ctx context.Context, id domain.Sess
 	if err != nil {
 		return err
 	}
-	next := sessionartifacts.DeriveOutputType(len(prs), len(artifacts))
+	ownedPRs := 0
+	for _, pr := range prs {
+		if !pr.ReviewOnly {
+			ownedPRs++
+		}
+	}
+	next := sessionartifacts.DeriveOutputType(ownedPRs, len(artifacts))
 	if next == rec.OutputType && !backfilled {
 		return nil
 	}

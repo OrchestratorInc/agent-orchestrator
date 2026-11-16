@@ -1893,6 +1893,23 @@ describe("TaskComposer", () => {
 		});
 	});
 
+	it("starts Docker Agent in Chat without a terminal fallback", async () => {
+		h.agentCatalog = { agents: [agentReadiness("docker-agent", "Docker Agent")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "tui", chatHarnesses: ["docker-agent"] } };
+			if (path.includes("/models")) return { data: { agent: "docker-agent", selectionMode: "catalog", models: [], allowCustom: false } };
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ error: { code: "CHAT_DRIVER_UNAVAILABLE", message: "Docker Agent unavailable" } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "docker-agent"));
+		fireEvent.change(task(), { target: { value: "Edit workspace" } });
+		fireEvent.click(startTask());
+		await screen.findByText("Docker Agent unavailable");
+		expect(h.post.mock.calls[0][1].body).toMatchObject({ harness: "docker-agent", mode: "chat" });
+		expect(screen.queryByRole("button", { name: "Create as Terminal UI" })).not.toBeInTheDocument();
+	});
+
 	it("reports a standalone create failure", async () => {
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
 		h.post.mockResolvedValue({ error: { code: "SESSION_CREATE_FAILED", message: "no session" } });
@@ -4277,6 +4294,21 @@ describe("useTaskLaunch Cloud start on send", () => {
 				.catch((error: unknown) => error);
 		});
 		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENTS_UNSUPPORTED" });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
+	// A file small enough to read inline is still over a lower Cloud limit.
+	it("holds a file already read inline to the Cloud per-file limit", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 1;
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f8", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENT_TOO_LARGE" });
 		expect(h.cloudCreateSession).not.toHaveBeenCalled();
 	});
 

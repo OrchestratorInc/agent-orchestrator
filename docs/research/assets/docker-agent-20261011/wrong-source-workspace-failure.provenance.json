@@ -1,0 +1,38 @@
+{
+  "utc": "2026-10-11T09:29:04.005063+00:00",
+  "capture": "scrot on actual AO Electron Xvfb display",
+  "label": "wrong-source-workspace-failure",
+  "interface": "Chat",
+  "provider": "Z.ai compatible",
+  "model": "glm-5.3-flash",
+  "nativeVersion": "v1.150.0",
+  "source": "f7391356508fd81228ee308ad79083033124d392",
+  "UIcommit": "f7391356508fd81228ee308ad79083033124d392",
+  "PNGsha": "57a7268efa916aa394ee9bce17079750888f5472715f104d6f04c7dd1e7d23ac",
+  "build": [
+    "build\tvcs.revision=f7391356508fd81228ee308ad79083033124d392",
+    "build\tvcs.time=2026-10-11T09:19:57Z",
+    "build\tvcs.modified=false"
+  ],
+  "before": {
+    "session": "docker-acp-proof-1",
+    "nativeIDDigest": "71b577158c7779e21c747d5818bde61e2d2449f6d720f6d2db5944e254f9b5d1",
+    "generation": "68657d65-f2de-4409-92d5-ae66efabeb17",
+    "daemonPID": 890617,
+    "daemonExe": "/home/azureuser/.ao/audits/candidate-integrations-20261011/tools/docker-agent/proof-bin/ao",
+    "daemonSHA": "a92ae7a3f729c41a858473a999d1f000e56665d071a6d2fa5d5d8189d5e1fd2f",
+    "runFile": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/docker-agent/ao-attempt-001/running.json",
+    "activity": "idle"
+  },
+  "after": {
+    "session": "docker-acp-proof-1",
+    "nativeIDDigest": "71b577158c7779e21c747d5818bde61e2d2449f6d720f6d2db5944e254f9b5d1",
+    "generation": "68657d65-f2de-4409-92d5-ae66efabeb17",
+    "daemonPID": 890617,
+    "daemonExe": "/home/azureuser/.ao/audits/candidate-integrations-20261011/tools/docker-agent/proof-bin/ao",
+    "daemonSHA": "a92ae7a3f729c41a858473a999d1f000e56665d071a6d2fa5d5d8189d5e1fd2f",
+    "runFile": "/home/azureuser/.ao/audits/candidate-integrations-20261011/reports/docker-agent/ao-attempt-001/running.json",
+    "activity": "idle"
+  },
+  "inspection": "Actual image inspected; audit tokens and scratch paths only, no credentials."
+}

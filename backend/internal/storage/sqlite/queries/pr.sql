@@ -6,11 +6,13 @@ INSERT INTO pr (
     is_draft, is_merged, is_closed,
     provider_state, provider_mergeable, provider_merge_state_status, html_url,
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
-    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial, auto_inject_ci
+    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial,
+    head_from_fork, head_is_default_branch, review_only, auto_inject_ci
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-    COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+    ?, COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
+    review_only = pr.review_only OR excluded.review_only,
     number = excluded.number,
     -- A successful merge is authoritative and irreversible. A poll that
     -- fetched the old open state before that merge must not roll it back.
@@ -36,6 +38,8 @@ ON CONFLICT (url) DO UPDATE SET
     provider_id = CASE WHEN excluded.provider_id != '' THEN excluded.provider_id ELSE pr.provider_id END,
     source_branch = excluded.source_branch,
     target_branch = excluded.target_branch,
+    head_from_fork = excluded.head_from_fork,
+    head_is_default_branch = excluded.head_is_default_branch,
     head_sha = excluded.head_sha,
     title = excluded.title,
     additions = excluded.additions,
@@ -322,6 +326,7 @@ external_review AS (
     )
 )
 SELECT
+    pr.session_id,
     pr.url,
     pr.number,
     pr.pr_state,
@@ -330,6 +335,8 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
     pr.state_changed_at,
@@ -367,7 +374,36 @@ SELECT
         FROM external_review
         WHERE external_review.pr_url = pr.url
           AND external_review.state = 'changes_requested'
-    ) AS external_changes_requested
+    ) AS external_changes_requested,
+    -- The open PR whose source branch this PR targets, in any session, so a
+    -- PR stacked on it is not read as ready to merge. A PR whose source and
+    -- target branch are the same (a fork PR opened from its own main) can
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
+    CAST(COALESCE((
+        SELECT parent.number
+        FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
+        WHERE parent.source_branch = pr.target_branch
+          AND parent.repo = pr.repo COLLATE NOCASE
+          AND parent.host = pr.host
+          AND pr.target_branch != ''
+          AND pr.repo != ''
+          AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
+          AND parent.url != pr.url
+          AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
+        ORDER BY parent.updated_at DESC
+        LIMIT 1
+    ), 0) AS INTEGER) AS stack_parent_number
 FROM pr
 LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
     -- The newest review by provider submission time, so re-fetching a review
@@ -446,6 +482,8 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
     pr.state_changed_at,
@@ -485,7 +523,36 @@ SELECT
         WHERE external_review.pr_url = pr.url
           AND external_review.session_id = pr.session_id
           AND external_review.state = 'changes_requested'
-    ) AS external_changes_requested
+    ) AS external_changes_requested,
+    -- The open PR whose source branch this PR targets, in any session, so a
+    -- PR stacked on it is not read as ready to merge. A PR whose source and
+    -- target branch are the same (a fork PR opened from its own main) can
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
+    CAST(COALESCE((
+        SELECT parent.number
+        FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
+        WHERE parent.source_branch = pr.target_branch
+          AND parent.repo = pr.repo COLLATE NOCASE
+          AND parent.host = pr.host
+          AND pr.target_branch != ''
+          AND pr.repo != ''
+          AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
+          AND parent.url != pr.url
+          AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
+        ORDER BY parent.updated_at DESC
+        LIMIT 1
+    ), 0) AS INTEGER) AS stack_parent_number
 FROM pr
 JOIN wanted_session ON wanted_session.session_id = pr.session_id
 LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url

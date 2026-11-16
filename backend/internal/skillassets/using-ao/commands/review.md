@@ -34,6 +34,21 @@ The review loop can be inspected, submitted, cancelled, or triggered again.
 
 ## Subcommands
 
+### ao review auto-inject
+
+Set whether new review feedback is delivered to an existing worker session:
+
+```bash
+ao review auto-inject [worker-session-id] --off
+ao review auto-inject [worker-session-id] --on
+```
+
+Omit the session id inside a worker to change that worker's setting. Choose
+exactly one of `--on` and `--off`. This leaves CI fixing and native auto-review
+unchanged. Read the setting with `ao session get <id> --json`
+(`session.autoInjectReview`). Review runs in `ao review ls --json` also expose
+`noInject` and `autoInjectReview`.
+
 ---
 
 ### ao review ls

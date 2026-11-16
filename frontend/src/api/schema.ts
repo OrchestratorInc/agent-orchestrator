@@ -875,6 +875,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attachment-uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stream a file to disk for a later attachment to name by uploadId */
+        post: operations["uploadAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/automations": {
         parameters: {
             query?: never;
@@ -1660,6 +1677,23 @@ export interface paths {
         put?: never;
         /** Validate a selected folder for project import onboarding */
         post: operations["validateImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kept-artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the artifacts no session or project lists: those of sessions deleted with their artifacts kept, and of sessions in removed projects */
+        get: operations["listKeptArtifacts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5559,8 +5593,14 @@ export interface components {
             version: number;
         };
         AttachmentInput: {
-            data: string;
+            data?: string;
             mimeType?: string;
+            uploadId?: string;
+        };
+        AttachmentUploadResponse: {
+            /** Format: int64 */
+            bytes: number;
+            uploadId: string;
         };
         AutoSpawnPause: {
             effort?: string;
@@ -6260,9 +6300,24 @@ export interface components {
             lidSupported?: boolean;
             supported: boolean;
         };
+        ControllersKeptArtifactsView: {
+            artifactFiles: components["schemas"]["SessionArtifact"][];
+            /**
+             * Format: date-time
+             * @description When the session was deleted, or last updated.
+             */
+            at: string;
+            projectId?: string;
+            sessionDeleted: boolean;
+            sessionId: string;
+            title: string;
+        };
         ControllersKillSessionRequest: {
             callerSessionId?: string;
             deleteArtifacts?: boolean;
+        };
+        ControllersListKeptArtifactsResponse: {
+            sets: components["schemas"]["ControllersKeptArtifactsView"][];
         };
         ControllersPairDeviceRequest: {
             /** @description Name shown in the host's device list. */
@@ -6461,7 +6516,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Waiting on base PR" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -6971,7 +7026,7 @@ export interface components {
         DelegateTaskRequest: {
             accountId?: string;
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
@@ -7266,7 +7321,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "cloudflared" | "cua-driver";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "cloudflared" | "cua-driver";
             /** Format: date-time */
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
@@ -8037,17 +8092,32 @@ export interface components {
             batchId: string;
             body: string;
             /** Format: date-time */
+            cancelRequestedAt?: null | string;
+            /** @enum {string} */
+            cancelledBy?: "user" | "worker_lifecycle";
+            /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             deliveredAt?: null | string;
+            /** Format: date-time */
+            endedAt?: null | string;
+            /** @enum {string} */
+            failureReason?: "preflight_failed" | "launch_failed" | "never_started" | "exited_during_launch" | "turn_ended_without_submit" | "process_exited" | "timed_out" | "daemon_restarted" | "cancel_unconfirmed";
+            /** Format: date-time */
+            firstActivityAt?: null | string;
             githubReviewId: string;
             harness: string;
             id: string;
+            /** Format: date-time */
+            launchingAt?: null | string;
             noInject?: boolean;
             prUrl: string;
             reviewId: string;
             sessionId: string;
-            status: string;
+            /** Format: date-time */
+            startedAt?: null | string;
+            /** @enum {string} */
+            status: "queued" | "launching" | "running" | "cancelling" | "completed" | "failed" | "cancelled" | "superseded";
             targetSha: string;
             /** @enum {string} */
             triggerSource: "manual" | "agent" | "auto";
@@ -8322,6 +8392,7 @@ export interface components {
             /** @enum {string} */
             review: "none" | "approved" | "changes_requested" | "review_required";
             reviewComments: boolean;
+            stackParent?: number;
             /** @enum {string} */
             state: "draft" | "open" | "merged" | "closed";
             /** Format: date-time */
@@ -8927,7 +8998,7 @@ export interface components {
             displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -12377,6 +12448,57 @@ export interface operations {
             };
         };
     };
+    uploadAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentUploadResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listAutomations: {
         parameters: {
             query?: {
@@ -15171,6 +15293,44 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listKeptArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersListKeptArtifactsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -19047,6 +19207,8 @@ export interface operations {
             query?: {
                 /** @description When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete. */
                 cleanup?: boolean;
+                /** @description When true, the session's artifact files are kept, view only, and listed by GET /api/v1/kept-artifacts until they are deleted one by one. Otherwise they are deleted with the session. */
+                keepArtifacts?: boolean;
             };
             header?: never;
             path: {

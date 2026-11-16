@@ -7,6 +7,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
 // #6810: a --no-inject AO review's observed rows are suppressed, and only its
@@ -49,10 +50,10 @@ func TestNoInjectAOReviewIDsAndSuppression(t *testing.T) {
 	if err != nil || !ok || !got.NoInject {
 		t.Fatalf("run = %+v ok=%v err=%v, want NoInject persisted", got, ok, err)
 	}
-	if _, err := s.UpdateReviewRunResult(ctx, "quiet", domain.ReviewRunComplete, domain.VerdictChangesRequested, "b", "987", false); err != nil {
+	if _, err := transitionNoInjectTestRun(t, s, ctx, "quiet", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "b", "987", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateReviewRunResult(ctx, "loud", domain.ReviewRunComplete, domain.VerdictChangesRequested, "b", "555", true); err != nil {
+	if _, err := transitionNoInjectTestRun(t, s, ctx, "loud", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "b", "555", true); err != nil {
 		t.Fatal(err)
 	}
 	ids, err := s.NoInjectAOReviewIDs(ctx, url)
@@ -162,10 +163,10 @@ func TestNoInjectAOReviewWindows(t *testing.T) {
 		t.Fatalf("windows = %+v, want both running --no-inject passes open from %v", windows, now)
 	}
 
-	if _, err := s.UpdateReviewRunResult(ctx, "submitted", domain.ReviewRunComplete, domain.VerdictChangesRequested, "b", "987", false); err != nil {
+	if _, err := transitionNoInjectTestRun(t, s, ctx, "submitted", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "b", "987", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateReviewRunResult(ctx, "exited", domain.ReviewRunFailed, domain.VerdictNone, "reviewer exited", "", false); err != nil {
+	if _, err := transitionNoInjectTestRun(t, s, ctx, "exited", domain.ReviewRunFailed, domain.VerdictNone, "reviewer exited", "", false); err != nil {
 		t.Fatal(err)
 	}
 	windows, err = s.NoInjectAOReviewWindows(ctx, url)
@@ -185,7 +186,7 @@ func TestNoInjectAOReviewWindows(t *testing.T) {
 	if err := s.InsertReviewRun(ctx, domain.ReviewRun{ID: "cancelled", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: url, TargetSHA: "h3", Status: domain.ReviewRunRunning, CreatedAt: now, NoInject: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CancelRunningReviewRunsBySession(ctx, r.ID, "cancelled by user"); err != nil {
+	if _, err := s.TransitionReviewRunsBySession(ctx, r.ID, nil, domain.ActiveReviewRunStatuses, domain.ReviewRunCancelled, domain.ReviewRunPatch{EndedAt: &now}); err != nil {
 		t.Fatal(err)
 	}
 	windows, err = s.NoInjectAOReviewWindows(ctx, url)
@@ -224,7 +225,7 @@ func TestMarkReviewRunNoInject(t *testing.T) {
 	if err != nil || !got.NoInject || got.AutoInjectReview {
 		t.Fatalf("run = %+v err=%v, want no-inject and not auto-injected", got, err)
 	}
-	if _, err := s.UpdateReviewRunResult(ctx, "run", domain.ReviewRunFailed, domain.VerdictNone, "x", "", false); err != nil {
+	if _, err := transitionNoInjectTestRun(t, s, ctx, "run", domain.ReviewRunFailed, domain.VerdictNone, "x", "", false); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := s.MarkReviewRunNoInject(ctx, "run"); err != nil || ok {
@@ -254,7 +255,7 @@ func TestUpdateReviewRunResultKeepsNoInjectRunQuiet(t *testing.T) {
 		if err := s.InsertReviewRun(ctx, run); err != nil {
 			t.Fatal(err)
 		}
-		if ok, err := s.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, domain.VerdictChangesRequested, "b", "", true); err != nil || !ok {
+		if ok, err := transitionNoInjectTestRun(t, s, ctx, run.ID, domain.ReviewRunCompleted, domain.VerdictChangesRequested, "b", "", true); err != nil || !ok {
 			t.Fatalf("update %s: ok=%v err=%v", run.ID, ok, err)
 		}
 		got, _, err := s.GetReviewRun(ctx, run.ID)
@@ -265,4 +266,10 @@ func TestUpdateReviewRunResultKeepsNoInjectRunQuiet(t *testing.T) {
 			t.Fatalf("run %s AutoInjectReview = %v, want %v", run.ID, got.AutoInjectReview, want)
 		}
 	}
+}
+
+func transitionNoInjectTestRun(t *testing.T, s *store.Store, ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, reviewID string, inject bool) (bool, error) {
+	t.Helper()
+	now := time.Now().UTC()
+	return s.TransitionReviewRun(ctx, id, domain.ActiveReviewRunStatuses, status, domain.ReviewRunPatch{Verdict: verdict, Body: &body, GithubReviewID: &reviewID, AutoInjectReview: &inject, EndedAt: &now})
 }

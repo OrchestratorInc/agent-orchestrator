@@ -100,33 +100,54 @@ func (f *fakeStore) SetSessionAutoInjectReview(_ context.Context, _ domain.Sessi
 	return true, nil
 }
 
-func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+func (f *fakeStore) TransitionReviewRun(_ context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error) {
+	allowed := func(status domain.ReviewRunStatus) bool {
+		for _, s := range from {
+			if s == status {
+				return true
+			}
+		}
+		return false
+	}
+	apply := func(run *domain.ReviewRun) {
+		run.Status = to
+		if patch.Verdict != "" {
+			run.Verdict = patch.Verdict
+		}
+		if patch.Body != nil {
+			run.Body = *patch.Body
+		}
+		if patch.GithubReviewID != nil {
+			run.GithubReviewID = *patch.GithubReviewID
+		}
+		if patch.AutoInjectReview != nil {
+			run.AutoInjectReview = *patch.AutoInjectReview && !run.NoInject
+		}
+		if patch.StartedAt != nil {
+			run.StartedAt = patch.StartedAt
+		}
+		if patch.EndedAt != nil {
+			run.EndedAt = patch.EndedAt
+		}
+	}
 	for i := range f.batchRuns {
 		if f.batchRuns[i].ID == id {
-			if f.batchRuns[i].Status != domain.ReviewRunRunning {
+			if !allowed(f.batchRuns[i].Status) {
 				return false, nil
 			}
 			f.updateCalls++
-			f.batchRuns[i].Status = status
-			f.batchRuns[i].Verdict = verdict
-			f.batchRuns[i].Body = body
-			f.batchRuns[i].GithubReviewID = githubReviewID
-			f.batchRuns[i].AutoInjectReview = autoInjectReview
+			apply(&f.batchRuns[i])
 			if f.run.ID == id {
 				f.run = f.batchRuns[i]
 			}
 			return true, nil
 		}
 	}
-	if f.run.Status != domain.ReviewRunRunning {
+	if !allowed(f.run.Status) {
 		return false, nil
 	}
 	f.updateCalls++
-	f.run.Status = status
-	f.run.Verdict = verdict
-	f.run.Body = body
-	f.run.GithubReviewID = githubReviewID
-	f.run.AutoInjectReview = autoInjectReview
+	apply(&f.run)
 	return true, nil
 }
 
@@ -338,8 +359,37 @@ func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: Submit: %v", verdict, err)
 		}
-		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil {
+		if run.Status != domain.ReviewRunCompleted || run.DeliveredAt != nil {
 			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
+		}
+	}
+}
+
+// A fast reviewer can submit before the trigger records that its prompt was
+// delivered. The submit completes the run and also records its start; a run
+// that already ended rejects it.
+func TestSubmitCompletesALaunchingRunAndRejectsAFinalOne(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunLaunching},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+	}
+	svc := New(nil, st)
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "", "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if run.Status != domain.ReviewRunCompleted || st.run.StartedAt == nil || st.run.EndedAt == nil {
+		t.Fatalf("run = %+v stored = %+v, want completed with started and ended times", run, st.run)
+	}
+
+	for _, status := range []domain.ReviewRunStatus{domain.ReviewRunFailed, domain.ReviewRunCancelled, domain.ReviewRunSuperseded, domain.ReviewRunCancelling, domain.ReviewRunQueued} {
+		st.run = domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1", Status: status}
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "", ""); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("submit on %s: err = %v, want rejected", status, err)
+		}
+		if st.run.Status != status {
+			t.Fatalf("submit on %s changed the run to %s", status, st.run.Status)
 		}
 	}
 }
@@ -464,7 +514,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+	if run.Status != domain.ReviewRunCompleted || run.AutoInjectReview {
 		t.Fatalf("disabled review = %+v", run)
 	}
 
@@ -474,7 +524,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+	if run.Status != domain.ReviewRunCompleted || run.AutoInjectReview {
 		t.Fatalf("retry rewrote disabled review = %+v", run)
 	}
 }
@@ -539,7 +589,7 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitMany must record valid siblings when one run was superseded: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunComplete {
+	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunCompleted {
 		t.Fatalf("want only run-1 recorded, got %+v", runs)
 	}
 }
@@ -575,7 +625,7 @@ func TestSubmitCompletedRetryRejectsDifferentRecordedFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			st := &fakeStore{ok: true, run: domain.ReviewRun{
 				ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1",
-				Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+				Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested,
 				Body: "fix it", GithubReviewID: "987",
 			}}
 			svc := New(nil, st)
@@ -1063,7 +1113,7 @@ func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) (Bran
 	return BranchPRs{Own: f.branchPRs, OtherAuthor: f.otherAuthorPRs}, f.findErr
 }
 
-func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
+func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string, _ bool) error {
 	f.calls = append(f.calls, prURL)
 	if f.order != nil {
 		*f.order = append(*f.order, "refresh "+prURL)
@@ -1244,7 +1294,7 @@ func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testin
 // namedPRRefresher refreshes named PRs but cannot look up a branch's PRs.
 type namedPRRefresher struct{}
 
-func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string) error { return nil }
+func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string, bool) error { return nil }
 
 // A session whose tracked PR was closed or merged may have opened a new PR on
 // the same branch. With no open tracked PR, the branch lookup still runs and

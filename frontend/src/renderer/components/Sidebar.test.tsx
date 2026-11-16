@@ -775,7 +775,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Sign in")).toHaveLength(2);
 	});
 
-	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
+	it("shows the Artifacts row under Automations with a count of every listed artifact, archived sessions' included", async () => {
 		const user = userEvent.setup();
 		const withArtifacts: WorkspaceSummary = {
 			...workspace,
@@ -802,7 +802,7 @@ describe("Sidebar", () => {
 		const automations = screen.getByRole("button", { name: "Automations" });
 		const artifacts = screen.getByRole("button", { name: "Artifacts" });
 		expect(automations.compareDocumentPosition(artifacts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(artifacts).toHaveTextContent("2");
+		expect(artifacts).toHaveTextContent("3");
 		expect(artifacts).not.toHaveAttribute("aria-current");
 
 		await user.click(artifacts);
@@ -1223,12 +1223,14 @@ describe("Sidebar", () => {
 		expect(section).toContainElement(screen.getByText("baby"));
 		const agentRow = screen.getByText("Fix the flake").closest("[data-session-row]")!;
 		expect(section).toContainElement(agentRow as HTMLElement);
-		// Only the Cloud agent carries the badge that tells it from a local one.
-		expect(within(agentRow as HTMLElement).getByText("Cloud")).toBeInTheDocument();
-		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByText("Cloud")).toBeNull();
+		// Only the Cloud agent carries the cloud mark that tells it from a local one.
+		expect(within(agentRow as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
+		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByRole("img", { name: "Cloud" })).toBeNull();
 		// It is no project of its own; a standalone agent shared with the person stays with the shared projects.
 		expect(document.querySelector('li[data-project-id="agent-1"]')).toBeNull();
 		expect(document.querySelector('li[data-project-id="agent-shared"]')).not.toBeNull();
+		// A Cloud project row carries the same cloud mark, not a text pill.
+		expect(within(document.querySelector('li[data-project-id="agent-shared"]') as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
 		expect(section).not.toContainElement(screen.queryByText("Their work"));
 
 		await user.click(screen.getByText("Fix the flake"));

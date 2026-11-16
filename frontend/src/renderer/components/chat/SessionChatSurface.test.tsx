@@ -93,6 +93,8 @@ const sideMocks = vi.hoisted(() => ({
 	show: vi.fn(),
 	addReference: vi.fn(),
 	sides: [] as { id: string; hasWork: boolean }[],
+	loaded: false,
+	pending: false,
 	activeId: "existing-side" as string | undefined,
 	attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
@@ -321,6 +323,9 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+// The skills hook also takes the remembered list; these tests are about gating.
+const catalogCall = (hook: unknown) => (hook as ReturnType<typeof vi.fn>).mock.lastCall?.slice(0, 3);
+
 describe("SessionChatSurface recovery", () => {
 	it.each<[string, WorkspaceSession, boolean]>([
 		["a live session", session, false],
@@ -328,7 +333,16 @@ describe("SessionChatSurface recovery", () => {
 		["a session read as terminated", { ...session, status: "terminated" }, true],
 	])("tells the commands whether %s can only be restored", (_name, target, terminated) => {
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={target} /></Wrapper>);
-		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated]);
+		expect(conversationCommandArgs.at(-1)).toEqual([target.id, undefined, terminated, false]);
+	});
+
+	it("tells the commands when a turn is active", () => {
+		conversationState.snapshot = {
+			capabilities: [],
+			turns: [{ id: "turn-1", state: "running", requestedAt: "2026-11-16T00:00:00Z" }],
+		};
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+		expect(conversationCommandArgs.at(-1)).toEqual([session.id, undefined, false, true]);
 	});
 });
 
@@ -1246,13 +1260,13 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
 		}
 	});
 
@@ -1268,18 +1282,18 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
 		}
 	});
 
@@ -1287,7 +1301,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 	});
 });
@@ -1377,6 +1391,35 @@ describe("side command routing", () => {
 		});
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+	});
+
+	it("reports whether the session has side chats, and is creating one, only once their list has loaded", () => {
+		const onSideChatsChange = vi.fn();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const surface = () => (
+			<Wrapper client={queryClient}>
+				{/* A fresh session object rerenders the memoized surface. */}
+				<SessionChatSurface session={{ ...session }} onSideChatsChange={onSideChatsChange} />
+			</Wrapper>
+		);
+		try {
+			const view = render(surface());
+			expect(onSideChatsChange).not.toHaveBeenCalled();
+			sideMocks.loaded = true;
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: false });
+			sideMocks.pending = true;
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: false, creating: true });
+			sideMocks.pending = false;
+			sideMocks.sides = [{ id: "side-1", hasWork: false }];
+			view.rerender(surface());
+			expect(onSideChatsChange).toHaveBeenLastCalledWith({ present: true, creating: false });
+		} finally {
+			sideMocks.loaded = false;
+			sideMocks.pending = false;
+			sideMocks.sides = [];
+		}
 	});
 
 	it(

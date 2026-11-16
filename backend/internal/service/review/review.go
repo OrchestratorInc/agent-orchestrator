@@ -64,6 +64,10 @@ func reviewErrorKind(err error) string {
 // Manager is the reviews surface the HTTP controller depends on.
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
+	// ReviewerObserver is the review side of the runtime reaper: the reaper
+	// probes reviewers serving an in-progress run and this reduces each pass
+	// into review-run transitions.
+	ReviewerObserver() ports.ReviewerObserver
 	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
@@ -111,6 +115,12 @@ func (s *Service) RecoverChatReviewers(ctx context.Context) error {
 	return s.engine.RecoverChatReviewers(ctx)
 }
 
+// ReviewerObserver returns the engine as the runtime reaper's reviewer
+// observer.
+func (s *Service) ReviewerObserver() ports.ReviewerObserver {
+	return s.engine
+}
+
 // Store is the review_run persistence surface owned by the service submit path.
 type Store interface {
 	GetReviewByID(ctx context.Context, id string) (domain.Review, bool, error)
@@ -118,7 +128,7 @@ type Store interface {
 	GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	SetSessionAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error)
-	UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
+	TransitionReviewRun(ctx context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error)
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
 	ListPRComments(ctx context.Context, prURL string) ([]domain.PullRequestComment, error)
@@ -137,7 +147,7 @@ type Store interface {
 // on the worker session. It attaches a PR the session does not track yet, but
 // never takes one over from another active session.
 type PRRefresher interface {
-	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error
+	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string, reviewOnly bool) error
 }
 
 // BranchPRFinder finds open PRs from the worker's own branch that AO does not
@@ -589,12 +599,12 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 				break
 			}
 		}
-		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil && !known {
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL, noInject && !known); err != nil && !known {
 			return false, err
 		} else if err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh named PR failed; using stored facts", "session", workerID, "err", err)
 		}
-		if err := s.setNamedPRReviewOnly(ctx, workerID, prURL, noInject, known); err != nil {
+		if err := s.setNamedPRReviewOnly(ctx, workerID, prURL, noInject); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -603,7 +613,7 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 		if pr.Merged || pr.Closed {
 			continue
 		}
-		if err := s.prRefresher.RefreshPR(ctx, workerID, firstNonEmpty(pr.HTMLURL, pr.URL)); err != nil {
+		if err := s.prRefresher.RefreshPR(ctx, workerID, firstNonEmpty(pr.HTMLURL, pr.URL), false); err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh PR failed; using stored facts", "session", workerID, "err", err)
 		}
 	}
@@ -614,8 +624,9 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 // reviewed by the session. Only a --no-inject trigger that attached the PR
 // marks it; a --no-inject trigger on a PR the session already owned leaves it
 // owned, and a trigger without --no-inject makes the session its owner.
-func (s *Service) setNamedPRReviewOnly(ctx context.Context, workerID domain.SessionID, prURL string, noInject, known bool) error {
-	if noInject && known {
+func (s *Service) setNamedPRReviewOnly(ctx context.Context, workerID domain.SessionID, prURL string, noInject bool) error {
+	if noInject {
+		// The claim writes a new attachment as review-only atomically.
 		return nil
 	}
 	tracked, err := s.store.ListPRsBySession(ctx, workerID)
@@ -678,7 +689,7 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		// The PR may have closed since the lookup, seconds ago; say it was
 		// found, so a not-found or not-open error does not read as a miss.
 		prURL := found.Own[0]
-		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil {
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL, false); err != nil {
 			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", prURL, workerID, err, workerID, prURL)
 		}
 		return false, nil
@@ -862,6 +873,14 @@ func (s *Service) ApplyReviewActivitySignal(ctx context.Context, reviewSessionID
 		}
 		return fmt.Errorf("%w: review session %q", ErrNotFound, reviewSessionID)
 	}
+	if s.engine != nil && signal.State != "" {
+		// Activity is evidence for the run lifecycle, never run state itself.
+		review.ReviewerActivityState = signal.State
+		if signal.LaunchID != "" {
+			review.ReviewerLaunchID = signal.LaunchID
+		}
+		return s.engine.ObserveReviewActivity(ctx, review, signal.LaunchID, signal.State)
+	}
 	return nil
 }
 
@@ -958,7 +977,9 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 	}
 
 	switch run.Status {
-	case domain.ReviewRunRunning:
+	case domain.ReviewRunLaunching, domain.ReviewRunRunning:
+		// A fast reviewer can submit before the trigger records that its prompt
+		// was delivered; that submit also proves the delivery.
 		session, found, err := s.store.GetSession(ctx, workerID)
 		if err != nil {
 			return domain.ReviewRun{}, err
@@ -966,17 +987,28 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if !found {
 			return domain.ReviewRun{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
 		}
-		// A --no-inject pass is never delivered, even if the session's
-		// auto-inject is on now (#6810).
+		// A pass's opt-out wins over the session setting at submission.
 		autoInject := session.AutoInjectReview && !run.NoInject
-		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, autoInject)
+		now := s.clock()
+		patch := domain.ReviewRunPatch{
+			Verdict:          verdict,
+			Body:             &body,
+			GithubReviewID:   &githubReviewID,
+			AutoInjectReview: &autoInject,
+			EndedAt:          &now,
+		}
+		if run.StartedAt == nil {
+			patch.StartedAt = &now
+		}
+		updated, err := s.store.TransitionReviewRun(ctx, run.ID, []domain.ReviewRunStatus{domain.ReviewRunLaunching, domain.ReviewRunRunning}, domain.ReviewRunCompleted, patch)
 		if err != nil {
 			return domain.ReviewRun{}, err
 		}
 		if !updated {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q is not running", errRunSuperseded, runID)
 		}
-		run.Status = domain.ReviewRunComplete
+		run.Status = domain.ReviewRunCompleted
+		run.EndedAt = &now
 		run.Verdict = verdict
 		run.Body = body
 		run.GithubReviewID = githubReviewID
@@ -1001,8 +1033,8 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if githubReviewID != "" && s.reviewRefresher != nil {
 			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
 		}
-		// Only on the real running -> complete transition. Re-submitting an
-		// already-complete run returns early below, so telemetry stays idempotent
+		// Only on the real running -> completed transition. Re-submitting an
+		// already-completed run returns early below, so telemetry stays idempotent
 		// the same way the store does.
 		s.emit(ctx, "ao.reviews.submitted", workerID, map[string]any{
 			"harness":            string(run.Harness),
@@ -1021,7 +1053,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			// all, recorded at the moment it is snapshotted onto the run.
 			"auto_inject": autoInject,
 		})
-	case domain.ReviewRunComplete:
+	case domain.ReviewRunCompleted:
 		if run.Verdict != verdict {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded verdict %q", ErrInvalid, runID, run.Verdict)
 		}
@@ -1039,8 +1071,6 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 				return domain.ReviewRun{}, err
 			}
 		}
-	case domain.ReviewRunDelivered:
-		return run, nil
 	default:
 		return domain.ReviewRun{}, fmt.Errorf("%w: review run %q is not running", errRunSuperseded, runID)
 	}

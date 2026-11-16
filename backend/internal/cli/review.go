@@ -36,6 +36,11 @@ type reviewRun struct {
 	GithubReviewID string     `json:"githubReviewId"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
+	FailureReason  string     `json:"failureReason,omitempty"`
+	CancelledBy    string     `json:"cancelledBy,omitempty"`
+
+	NoInject         bool `json:"noInject"`
+	AutoInjectReview bool `json:"autoInjectReview"`
 }
 
 type reviewState struct {
@@ -155,9 +160,40 @@ func newReviewCommand(ctx *commandContext) *cobra.Command {
 		Short: "Manage Orchestrator code reviews of a worker's PR",
 	}
 	cmd.AddCommand(newReviewListCommand(ctx))
+	cmd.AddCommand(newReviewAutoInjectCommand(ctx))
 	cmd.AddCommand(newReviewSubmitCommand(ctx))
 	cmd.AddCommand(newReviewCancelCommand(ctx))
 	cmd.AddCommand(newReviewTriggerCommand(ctx))
+	return cmd
+}
+
+func newReviewAutoInjectCommand(ctx *commandContext) *cobra.Command {
+	var on, off bool
+	cmd := &cobra.Command{
+		Use:   "auto-inject [worker-session-id]",
+		Short: "Turn review feedback delivery on or off for a session",
+		Args:  atMostOneArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if on == off {
+				return usageError{errors.New("usage: choose --on or --off")}
+			}
+			session := reviewTargetSession(args, "")
+			if session == "" {
+				return usageError{errors.New("usage: worker session id is required outside an Orchestrator-managed session")}
+			}
+			if err := ctx.setSessionSwitches(cmd.Context(), session, nil, &on, nil); err != nil {
+				return err
+			}
+			state := "off"
+			if on {
+				state = "on"
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "review auto-inject %s for %s\n", state, session)
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&on, "on", false, "Deliver review feedback to the session")
+	cmd.Flags().BoolVar(&off, "off", false, "Stop delivery of new review feedback to the session")
 	return cmd
 }
 
@@ -453,11 +489,22 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	return nil
 }
 
-// startedRuns returns the running passes on the PR heads the trigger covered.
+// reviewRunActive mirrors domain.ReviewRunStatus.IsActive for the CLI's
+// hand-mirrored DTOs.
+func reviewRunActive(status string) bool {
+	switch status {
+	case "queued", "launching", "running", "cancelling":
+		return true
+	default:
+		return false
+	}
+}
+
+// startedRuns returns the active passes on the PR heads the trigger covered.
 func startedRuns(res triggerReviewResponse) []reviewRun {
 	var out []reviewRun
 	for _, review := range res.Reviews {
-		if review.LatestRun != nil && review.LatestRun.Status == "running" {
+		if review.LatestRun != nil && reviewRunActive(review.LatestRun.Status) {
 			out = append(out, *review.LatestRun)
 		}
 	}
@@ -492,7 +539,7 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tRUN\tVERDICT\tTITLE"); err != nil {
 		return err
 	}
 	for _, review := range res.Reviews {
@@ -500,11 +547,25 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 		if review.LatestRun != nil && review.LatestRun.Verdict != "" {
 			verdict = review.LatestRun.Verdict
 		}
-		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title); err != nil {
+		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", review.PRNumber, review.Status, reviewRunLabel(review.LatestRun), verdict, review.Title); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
+}
+
+// reviewRunLabel names the latest pass's state, with the daemon's reason code
+// for a failed pass so a person can tell a launch problem from a reviewer that
+// stopped without submitting.
+func reviewRunLabel(run *reviewRun) string {
+	switch {
+	case run == nil || run.Status == "":
+		return "-"
+	case run.Status == "failed" && run.FailureReason != "":
+		return "failed (" + run.FailureReason + ")"
+	default:
+		return run.Status
+	}
 }
 
 func readReviewItems(cmd *cobra.Command, path string) ([]submitReviewItem, error) {

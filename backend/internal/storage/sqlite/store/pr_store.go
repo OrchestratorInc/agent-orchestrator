@@ -152,6 +152,8 @@ func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []dom
 				return err
 			}
 			if owner.SessionID == pr.SessionID {
+				// A review through a renamed URL must not disown an existing PR.
+				pr.ReviewOnly = candidate.ReviewOnly
 				continue
 			}
 			if outcome.PreviousOwner != "" && outcome.PreviousOwner != owner.SessionID {
@@ -375,6 +377,9 @@ func upsertPRWithIdentity(ctx context.Context, q *gen.Queries, pr domain.PullReq
 		return err
 	}
 	for _, existing := range candidates {
+		if existing.SessionID == pr.SessionID && existing.ReviewOnly {
+			pr.ReviewOnly = true
+		}
 		if rejectReassignment && existing.SessionID != pr.SessionID {
 			return fmt.Errorf("pr %s already belongs to session %s", existing.URL, existing.SessionID)
 		}
@@ -696,6 +701,7 @@ func prState(r domain.PullRequest) domain.PRState {
 
 func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 	return gen.UpsertPRParams{
+		ReviewOnly:               r.ReviewOnly,
 		URL:                      r.URL,
 		SessionID:                r.SessionID,
 		Number:                   int64(r.Number),
@@ -711,6 +717,8 @@ func genPRParams(r domain.PullRequest) gen.UpsertPRParams {
 		ProviderID:               r.ProviderID,
 		SourceBranch:             r.SourceBranch,
 		TargetBranch:             r.TargetBranch,
+		HeadFromFork:             r.HeadFromFork,
+		HeadIsDefaultBranch:      r.HeadIsDefaultBranch,
 		HeadSha:                  r.HeadSHA,
 		Title:                    r.Title,
 		Additions:                int64(r.Additions),
@@ -818,6 +826,8 @@ func prRowFromGen(p gen.PR) domain.PullRequest {
 		ProviderID:               p.ProviderID,
 		SourceBranch:             p.SourceBranch,
 		TargetBranch:             p.TargetBranch,
+		HeadFromFork:             p.HeadFromFork,
+		HeadIsDefaultBranch:      p.HeadIsDefaultBranch,
 		HeadSHA:                  p.HeadSha,
 		Title:                    p.Title,
 		Additions:                int(p.Additions),

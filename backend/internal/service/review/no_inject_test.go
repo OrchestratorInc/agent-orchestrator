@@ -53,13 +53,17 @@ func TestSubmitInjectingRunDoesNotSuppress(t *testing.T) {
 // attachingRefresher records a named PR on the session, like ClaimPR does.
 type attachingRefresher struct{ st *fakeStore }
 
-func (r attachingRefresher) RefreshPR(_ context.Context, workerID domain.SessionID, prURL string) error {
+func (r attachingRefresher) RefreshPR(_ context.Context, workerID domain.SessionID, prURL string, reviewOnly bool) error {
 	for _, pr := range r.st.prs {
 		if pr.URL == prURL {
 			return nil
 		}
 	}
-	r.st.prs = append(r.st.prs, domain.PullRequest{URL: prURL, SessionID: workerID})
+	r.st.prs = append(r.st.prs, domain.PullRequest{URL: prURL, SessionID: workerID, ReviewOnly: reviewOnly})
+	if r.st.reviewOnlySets == nil {
+		r.st.reviewOnlySets = map[string]bool{}
+	}
+	r.st.reviewOnlySets[prURL] = reviewOnly
 	return nil
 }
 
@@ -137,7 +141,7 @@ func TestSubmitNoInjectRetryFinishesSuppression(t *testing.T) {
 	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987"); err == nil {
 		t.Fatal("want the suppression error")
 	}
-	if st.run.Status != domain.ReviewRunComplete {
+	if st.run.Status != domain.ReviewRunCompleted {
 		t.Fatalf("run = %+v, want completed by the first submit", st.run)
 	}
 	st.suppressErr = nil
@@ -153,9 +157,8 @@ func TestSubmitNoInjectRetryFinishesSuppression(t *testing.T) {
 // Submit read it and before its result was written.
 type markedDuringSubmitStore struct{ *fakeStore }
 
-func (s markedDuringSubmitStore) UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
-	updated, err := s.fakeStore.UpdateReviewRunResult(ctx, id, status, verdict, body, githubReviewID, autoInjectReview)
-	// The store keeps auto-inject off for a run marked --no-inject.
+func (s markedDuringSubmitStore) TransitionReviewRun(ctx context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error) {
+	updated, err := s.fakeStore.TransitionReviewRun(ctx, id, from, to, patch)
 	s.run.NoInject, s.run.AutoInjectReview = true, false
 	return updated, err
 }

@@ -37,9 +37,11 @@ var (
 type ClaimPROptions struct {
 	AllowTakeover bool
 	// KeepReviewOnly leaves a review-only attachment as it is. A review
-	// trigger refreshing a PR sets it; it then decides the PR's review-only
-	// mark itself. Any other claim makes the session the PR's owner (#6810).
+	// trigger refreshing an existing PR sets it. Any other claim makes the
+	// session the PR's owner (#6810).
 	KeepReviewOnly bool
+	// ReviewOnly attaches a new review target without a visible ownership interval.
+	ReviewOnly bool
 }
 
 // reviewOnlyStore is the optional part of the PR claimer that knows about
@@ -154,6 +156,7 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	}
 	now := s.clock().UTC()
 	pr, checks, reviews, threads, comments := claimRowsFromSCM(id, obs, reviewMode, now, rec)
+	pr.ReviewOnly = opts.ReviewOnly
 	if src, ok := s.prClaimer.(domain.NoInjectReviewSource); ok {
 		// Rows snapshot the session's auto-inject setting and keep it once
 		// stored; a --no-inject AO review on this PR must still never be
@@ -175,7 +178,7 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 	if tookOver && s.prMoved != nil && !outcome.OwnerTerminated {
 		s.prMoved(context.WithoutCancel(ctx), outcome.PreviousOwner, id, pr)
 	}
-	if hasReviewOnly && !opts.KeepReviewOnly {
+	if hasReviewOnly && !opts.KeepReviewOnly && !opts.ReviewOnly {
 		if _, err := reviewOnly.SetPRReviewOnly(ctx, pr.URL, id, false); err != nil {
 			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 			return ClaimPRResult{}, err
@@ -358,6 +361,8 @@ func claimRowsFromSCM(sessionID domain.SessionID, obs ports.SCMObservation, revi
 		Repo:                     obs.Repo,
 		SourceBranch:             obs.PR.SourceBranch,
 		TargetBranch:             obs.PR.TargetBranch,
+		HeadFromFork:             obs.PR.HeadFromFork,
+		HeadIsDefaultBranch:      obs.PR.HeadIsDefaultBranch,
 		HeadSHA:                  obs.PR.HeadSHA,
 		Title:                    obs.PR.Title,
 		Additions:                obs.PR.Additions,

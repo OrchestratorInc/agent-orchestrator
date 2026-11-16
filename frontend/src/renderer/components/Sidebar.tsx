@@ -58,7 +58,8 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { artifactCount, groupArtifactsByProject } from "../lib/artifacts";
+import { artifactCount, groupArtifactsByProject, withKeptArtifacts } from "../lib/artifacts";
+import { useKeptArtifacts } from "../hooks/useKeptArtifacts";
 import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
@@ -139,6 +140,7 @@ import { Pressable } from "./ui/pressable";
 import { menuFocusReturnTarget } from "./ui/menu-focus";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { SharedProjectMark } from "./teams/SharedProjectMark";
+import { CloudMark } from "./CloudMark";
 import { ProjectIcon } from "./ProjectIcon";
 import { OrchestratorIcon } from "./icons";
 import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
@@ -742,9 +744,11 @@ export const Sidebar = memo(function Sidebar({
 	const developerMode = useUiStore((s) => s.developerMode);
 	// Cloud projects count only while the control plane keeps artifacts, as on the Artifacts page.
 	const cloudArtifacts = useCloudOffering().artifacts;
+	// Kept artifacts are listed there too.
+	const kept = useKeptArtifacts().data;
 	const artifactTotal = useMemo(
-		() => artifactCount(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud"))),
-		[cloudArtifacts, workspaces],
+		() => artifactCount(withKeptArtifacts(groupArtifactsByProject(cloudArtifacts ? workspaces : workspaces.filter((workspace) => workspace.kind !== "cloud")), kept, workspaces, "")),
+		[cloudArtifacts, workspaces, kept],
 	);
 	const existingProjectPaths = useMemo(
 		() => workspaces
@@ -2048,12 +2052,7 @@ const ProjectItem = memo(function ProjectItem({
 										</Badge>
 									)}
 									{workspace.kind === "cloud" && (
-										<Badge
-											variant="outline"
-											className="sidebar-expanded-chrome relative z-[1] h-4 shrink-0 px-1.5 text-2xs group-data-[collapsible=icon]:hidden"
-										>
-											{t("shell.cloudProjectBadge")}
-										</Badge>
+										<CloudMark className="sidebar-expanded-chrome relative z-[1] translate-y-px group-data-[collapsible=icon]:hidden" />
 									)}
 								</SidebarMenuButton>
 								{/* Folder disclosure toggle: sibling of the nav button, absolutely positioned over
@@ -2534,14 +2533,14 @@ const SortableSessionRow = memo(function SortableSessionRow({
 	layoutDependency,
 	listIsDragging,
 	dropTransitionDisabled,
-	hostLabel,
+	cloud,
 	onKilled,
 	onOpen,
 }: {
 	session: WorkspaceSession;
 	active: boolean;
 	consumeDragClick: (id: string) => boolean;
-	hostLabel?: string;
+	cloud?: boolean;
 	indented?: boolean;
 	layoutDependency?: string;
 	listIsDragging: boolean;
@@ -2565,7 +2564,7 @@ const SortableSessionRow = memo(function SortableSessionRow({
 		<SessionRow
 			session={session}
 			active={active}
-			hostLabel={hostLabel}
+			cloud={cloud}
 			indented={indented}
 			onKilled={onKilled}
 			onOpen={open}
@@ -2610,8 +2609,6 @@ function SessionReorderList({
 	onKilled?: (session: WorkspaceSession) => void;
 	onOpen: (sessionId: string) => void;
 }) {
-	const { t } = useTranslation();
-	const hostLabelOf = (session: WorkspaceSession) => cloudBadge && session.cloud ? t("shell.cloudProjectBadge") : undefined;
 	// Suppress the vertical glide for the first 500ms after the list mounts, so the
 	// re-sorts that follow a daemon settle or a project expanding do not shuffle rows.
 	const [layoutSettled, setLayoutSettled] = useState(false);
@@ -2661,7 +2658,7 @@ function SessionReorderList({
 						key={session.id}
 						session={session}
 						active={activeSessionId === session.id}
-						hostLabel={hostLabelOf(session)}
+						cloud={cloudBadge && Boolean(session.cloud)}
 						indented={indented}
 						onKilled={onKilled}
 						onOpen={() => onOpen(session.id)}
@@ -2689,7 +2686,7 @@ function SessionReorderList({
 							session={session}
 							active={activeSessionId === session.id}
 							consumeDragClick={dragClickGuard.consumeClick}
-							hostLabel={hostLabelOf(session)}
+							cloud={cloudBadge && Boolean(session.cloud)}
 							indented={indented}
 							layoutDependency={layoutDependency}
 							listIsDragging={listDragging}
@@ -2715,6 +2712,7 @@ const SessionRow = memo(function SessionRow({
 	session,
 	active,
 	hostLabel,
+	cloud = false,
 	indented = true,
 	layoutDependency,
 	listIsDragging = false,
@@ -2725,6 +2723,8 @@ const SessionRow = memo(function SessionRow({
 	session: WorkspaceSession;
 	active: boolean;
 	hostLabel?: string;
+	/** Mark the row as a Cloud session, in a list (the Scratchpad) that mixes them with local ones. */
+	cloud?: boolean;
 	indented?: boolean;
 	/** The list order. Present only for rows in a reorderable list: the row then
 	 *  animates its vertical position (and nothing else) when the order changes. */
@@ -2885,7 +2885,7 @@ const SessionRow = memo(function SessionRow({
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
-							aria-label={t("shell.openSession", { title: hostLabel ? `${session.title} · ${hostLabel}` : session.title })}
+							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
@@ -2953,6 +2953,7 @@ const SessionRow = memo(function SessionRow({
 									{session.title}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
+								{cloud ? <CloudMark /> : null}
 							</span>
 						</Pressable>
 					</div>
