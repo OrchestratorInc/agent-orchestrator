@@ -28,7 +28,7 @@ func otherWriter(open, wrote *atomic.Bool) otherWriterCheck {
 	}
 }
 
-func resumingHarness(t *testing.T, hibernation bool) (*harness, *hibernationConversation, *fakeConversation) {
+func resumingHarness(t *testing.T, hibernation bool, imports ...*domain.SessionImportSource) (*harness, *hibernationConversation, *fakeConversation) {
 	t.Helper()
 	resumed := newFakeConversation()
 	resumed.turnSeq = 1
@@ -37,7 +37,7 @@ func resumingHarness(t *testing.T, hibernation bool) (*harness, *hibernationConv
 		driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
 		driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
 		opts.Drivers = fakeRegistry{driver: driver}
-	})
+	}, imports...)
 	return h, old, resumed
 }
 
@@ -137,14 +137,13 @@ func TestImportedClaudeReloadPlacesTerminalTurnsBeforeTheNewPrompt(t *testing.T)
 				driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
 				driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
 				opts.Drivers = fakeRegistry{driver: driver}
-			})
+			}, &domain.SessionImportSource{NativeID: "thread-1", Adopted: true, Prepared: true, Transferred: true})
 			ctx := context.Background()
 			rec, found, err := h.st.GetSession(ctx, testSession)
 			if err != nil || !found {
 				t.Fatalf("load session: found=%v err=%v", found, err)
 			}
 			rec.Harness = domain.HarnessClaudeCode
-			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: old.ProviderConversationID(), Adopted: true, Prepared: true, Transferred: true}
 			if err := h.st.UpdateSession(ctx, rec); err != nil {
 				t.Fatal(err)
 			}
@@ -185,14 +184,13 @@ func TestImportedClaudeReloadPlacesTerminalTurnsBeforeTheNewPrompt(t *testing.T)
 }
 
 func TestImportedClaudeReloadFailureDoesNotRecordTheNewPrompt(t *testing.T) {
-	h, old, _ := resumingHarness(t, true)
+	h, old, _ := resumingHarness(t, true, &domain.SessionImportSource{NativeID: "thread-1", Adopted: true, Prepared: true, Transferred: true})
 	ctx := context.Background()
 	rec, found, err := h.st.GetSession(ctx, testSession)
 	if err != nil || !found {
 		t.Fatalf("load session: found=%v err=%v", found, err)
 	}
 	rec.Harness = domain.HarnessClaudeCode
-	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: old.ProviderConversationID(), Adopted: true, Prepared: true, Transferred: true}
 	if err := h.st.UpdateSession(ctx, rec); err != nil {
 		t.Fatal(err)
 	}
