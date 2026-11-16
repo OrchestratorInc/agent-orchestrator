@@ -522,9 +522,10 @@ export function AgentModelPicker({
 				</>}
 			</OptionMenuTrigger>
 			{/* Pinned to the trigger's left edge, which stays put while its label changes width.
-			    Taller than other menus, as the chosen agent's models are listed in it. */}
+			    One fixed height whichever agent is chosen: the model list takes the room left,
+			    so changing agent never resizes the menu or moves its rows. */}
 			<OptionMenuContent align="start" side={terminal ? "right" : "top"} steady
-				className="chat-settings-menu max-h-[min(25rem,var(--radix-dropdown-menu-content-available-height))]! w-64 text-[12px]!"
+				className="chat-settings-menu h-[min(23rem,var(--radix-dropdown-menu-content-available-height))]! max-h-[min(23rem,var(--radix-dropdown-menu-content-available-height))]! w-64 text-[12px]!"
 				onCloseAutoFocus={(event) => {
 					management.onCloseAutoFocus(event);
 					if (!event.defaultPrevented) onCloseAutoFocus?.(event);
@@ -537,7 +538,7 @@ export function AgentModelPicker({
 					selectedId={source.modelId === undefined ? undefined : `${shownHarness} ${source.modelId}`}
 					searchable
 					searchPlaceholder={t("agentSwitch.search")}
-					className="max-h-none"
+					className="max-h-none flex-1"
 					header={({ clearSearch }) => (
 						<AgentRail
 							agents={railAgents}
