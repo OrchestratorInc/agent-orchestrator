@@ -1,14 +1,15 @@
 import { useEffect, useRef } from "react";
 import { matchesAppShortcut, shortcutYieldsToTerminal, type AppShortcutEvent, type AppShortcutId } from "../../shared/shortcuts";
 import { aoBridge } from "../lib/bridge";
+import { queryShown } from "../lib/dom-selectors";
 import { isMacPlatform } from "../lib/platform";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { useUiStore } from "../stores/ui-store";
 
-/** Focuses the first element matching `selector` once the next render has painted. */
+/** Focuses the first shown element matching `selector` once the next render has painted. */
 export function focusAfterPaint(selector: string): void {
 	window.requestAnimationFrame(() => {
-		window.requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus());
+		window.requestAnimationFrame(() => queryShown<HTMLElement>(selector)?.focus());
 	});
 }
 
@@ -24,6 +25,28 @@ const localListeners = new Set<(event: AppShortcutEvent) => void>();
 /** Runs every handler registered for event.id, as if its chord had been pressed. */
 export function runAppShortcut(event: AppShortcutEvent): void {
 	for (const listener of Array.from(localListeners)) listener(event);
+}
+
+/**
+ * For shortcuts main delivers on a channel of their own (⌘N, session and tab
+ * cycling, New terminal, Close tab): subscribes `handler` there and to the
+ * command palette running the shortcut, which only reaches in-renderer
+ * listeners. Returns the unsubscribe.
+ */
+export function onDedicatedShortcut(
+	id: AppShortcutId,
+	subscribe: (handler: () => void) => () => void,
+	handler: () => void,
+): () => void {
+	const unsubscribe = subscribe(handler);
+	const local = (event: AppShortcutEvent) => {
+		if (event.id === id) handler();
+	};
+	localListeners.add(local);
+	return () => {
+		unsubscribe();
+		localListeners.delete(local);
+	};
 }
 
 const TERMINAL_SELECTOR = ".xterm, .terminal-surface, [data-testid='session-terminal']";

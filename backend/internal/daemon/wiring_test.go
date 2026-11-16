@@ -242,6 +242,7 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
 		{domain.HarnessMemcode, "memcode"},
+		{domain.HarnessStakpak, "stakpak"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -840,6 +841,9 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 		ProjectID: "p",
 		Kind:      domain.KindWorker,
 		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+		// Spawned sessions start with automatic CI fixing on; that switch also
+		// gates the merge-conflict nudge.
+		AutoInjectCI: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -997,6 +1001,9 @@ func (*fakeSessionLifecycle) StopHarnessSessions(context.Context, domain.AgentHa
 }
 func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.SessionID) error {
 	return nil
+}
+func (*fakeSessionLifecycle) SessionRuntimeEnv(context.Context, domain.SessionRecord) (map[string]string, error) {
+	return nil, nil
 }
 func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
 func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}

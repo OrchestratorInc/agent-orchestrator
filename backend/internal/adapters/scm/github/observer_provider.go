@@ -294,6 +294,7 @@ func (p *Provider) FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef)
 				return nil, err
 			}
 		}
+		p.markCancelledGateFailures(ctx, ref.Repo.Owner, ref.Repo.Name, pr)
 		out[i] = scmObservationFromGraphQL(ref, pr)
 		switch {
 		case ref.DetailsUpdatedAt.IsZero():
@@ -488,6 +489,7 @@ func scmPRFields() string {
 	return strings.ReplaceAll(`
 number id url state isDraft merged closed title additions deletions changedFiles
 mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
+isCrossRepository headRepository{ defaultBranchRef{ name } }
 createdAt updatedAt mergedAt closedAt
 author{ login avatarUrl }
 mergeCommit{ oid }
@@ -571,6 +573,15 @@ repo: repository(owner:%s,name:%s){ pullRequest(number:%d){
 }`, graphQLString(ref.Repo.Owner), graphQLString(ref.Repo.Name), ref.Number, scmBatchCheckContextLimit, graphQLString(cursor))
 }
 
+// headIsDefaultBranch reports whether a PR's head branch is its head
+// repository's default branch, as in a main -> release sync PR.
+func headIsDefaultBranch(pr map[string]any) bool {
+	repo, _ := pr["headRepository"].(map[string]any)
+	ref, _ := repo["defaultBranchRef"].(map[string]any)
+	name := str(ref["name"])
+	return name != "" && name == str(pr["headRefName"])
+}
+
 func statusContexts(pr map[string]any) map[string]any {
 	roll := statusRollup(pr)
 	if roll == nil {
@@ -608,6 +619,7 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 	merged := boolv(pr["merged"])
 	closed := boolv(pr["closed"]) && !merged
 	draft := boolv(pr["isDraft"])
+	fromFork := boolv(pr["isCrossRepository"])
 	canonicalRepo := repoFullName(ref.Repo)
 	if owner, repoName, _, err := parsePRURL(prURL); err == nil {
 		canonicalRepo = owner + "/" + repoName
@@ -632,6 +644,8 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 			Closed:                   closed,
 			SourceBranch:             str(pr["headRefName"]),
 			TargetBranch:             str(pr["baseRefName"]),
+			HeadFromFork:             fromFork,
+			HeadIsDefaultBranch:      !fromFork && headIsDefaultBranch(pr),
 			HeadSHA:                  firstNonEmpty(str(pr["headRefOid"]), latestCommitOID(pr)),
 			Title:                    str(pr["title"]),
 			Additions:                int(num(pr["additions"])),

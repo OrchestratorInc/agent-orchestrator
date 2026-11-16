@@ -2,7 +2,6 @@ import { useEffect, useReducer, useRef, useSyncExternalStore } from "react";
 import { type ArtifactSnapshotJob, artifactSnapshotUrl } from "../../shared/artifact-snapshot";
 import { aoBridge } from "../lib/bridge";
 import type { ArtifactRow } from "../lib/artifacts";
-import { LOCAL_HOST } from "../lib/hosts";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 
 /**
@@ -34,12 +33,11 @@ function subscribeToTheme(onChange: () => void) {
 const themeSnapshot = () => `${document.documentElement.dataset.theme === "light" ? "light" : "dark"}|${document.documentElement.dataset.styleTheme ?? ""}`;
 
 /**
- * Only this computer's and Cloud sessions' artifacts can be rendered by the hidden window. Another host's
- * are reached through URLs that carry a capability the window must not hold, so those cards render live.
- * Main enforces the same rule on the job it receives.
+ * The job the hidden window renders for a card. Another host's artifact is read through its proxy's
+ * artifact origin, the same read-only URL the live card frames, and its snapshot is kept with the
+ * account's, cleared on sign-out.
  */
-function snapshotJob(row: ArtifactRow, appearance: string): ArtifactSnapshotJob | undefined {
-	if (row.hostId && row.hostId !== LOCAL_HOST) return undefined;
+function snapshotJob(row: ArtifactRow, appearance: string): ArtifactSnapshotJob {
 	const [theme, styleTheme] = appearance.split("|") as ["light" | "dark", string];
 	return {
 		sessionId: row.sessionId,
@@ -68,8 +66,8 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 	const appearance = useSyncExternalStore(subscribeToTheme, themeSnapshot);
 	const [, missed] = useReducer((count: number) => count + 1, 0);
 	const job = snapshotJob(row, appearance);
-	const url = job ? artifactSnapshotUrl(job) : "";
-	if (!job || missing.has(url)) return <LiveThumbnail job={job} previewLive={previewLive} row={row} url={url} />;
+	const url = artifactSnapshotUrl(job);
+	if (missing.has(url)) return <LiveThumbnail job={job} previewLive={previewLive} row={row} url={url} />;
 	return (
 		<span className="pointer-events-none absolute inset-0 block overflow-hidden bg-[var(--solid-muted,var(--muted))]" aria-hidden="true">
 			<img

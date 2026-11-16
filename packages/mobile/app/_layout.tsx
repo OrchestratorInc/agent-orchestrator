@@ -60,6 +60,7 @@ const PICKER_SHEETS = [
 	{ name: "sheets/model", title: "Model" },
 	{ name: "sheets/files-branch", title: "Branch" },
 	{ name: "sheets/files-changes", title: "Changes" },
+	{ name: "sheets/account", title: "Account" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar
@@ -90,7 +91,7 @@ export const unstable_settings = { initialRouteName: "(tabs)" };
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
-	// The app's family (DM Sans, after T3 Code), loaded before anything else
+	// The app's family (DM Sans), loaded before anything else
 	// draws: rendering the tree first would paint one frame of SF Pro and then
 	// swap every label under it.
 	//

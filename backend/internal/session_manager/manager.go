@@ -65,6 +65,10 @@ var (
 	// selected harness's catalog and the harness does not accept arbitrary model
 	// ids. The API maps it to a 400.
 	ErrUnsupportedModel = errors.New("session: model is not supported by the selected harness")
+	// ErrTerminalUnsupported means a terminal launch was requested for a
+	// harness that runs in Chat only. Unlike ports.ErrChatUnsupported it must
+	// not prompt a terminal retry. The API maps it to a 400.
+	ErrTerminalUnsupported = errors.New("session: terminal mode is not supported by the selected harness")
 	// ErrScratchBranchUnsupported means a caller tried to force git branch
 	// semantics onto a scratch project.
 	ErrScratchBranchUnsupported = errors.New("session: scratch projects do not support branches")
@@ -209,6 +213,11 @@ const (
 	// session. AO_DATA_DIR is durable storage, not daemon discovery; custom and
 	// isolated daemons therefore need this coordinate explicitly.
 	EnvRunFile = "AO_RUN_FILE"
+	// EnvDesktopApp is "1" when the Orchestrator desktop app started the
+	// daemon, so macOS charges the session's privacy checks to Orchestrator.
+	// A daemon started from a terminal (`ao start`) leaves it unset: macOS
+	// then checks that terminal, and AO must not send the user to Orchestrator.
+	EnvDesktopApp = "AO_DESKTOP_APP"
 	// EnvBrowserCapability proves ownership of the session's browser target.
 	EnvBrowserCapability = "AO_BROWSER_CAPABILITY"
 	// EnvAgentBrowserURL names the host's self-hosted agent-browser service
@@ -315,6 +324,11 @@ type ReviewerTerminator interface {
 	TerminateReviewer(ctx context.Context, workerID domain.SessionID, body string) error
 	TeardownReviewerTerminal(ctx context.Context, workerID domain.SessionID) error
 	RestoreReviewer(ctx context.Context, workerID domain.SessionID) error
+}
+
+// BranchStateRecorder records the branch a session's worktree has checked out.
+type BranchStateRecorder interface {
+	ReconcileSessionBranchState(ctx context.Context, id domain.SessionID) error
 }
 
 type runtimeController interface {
@@ -432,6 +446,7 @@ type Manager struct {
 	backgroundTaskUsage BackgroundTaskUsage
 	usageFlusher        UsageFlusher
 	importArchive       ImportArchiveRefresher
+	branchStates        BranchStateRecorder
 	// messenger is a sessionguard.Guard wrapping the raw messenger, so every
 	// pane write is guarded (re-read state, refuse a blocked session) without
 	// each call site re-deriving the check. Send/confirmActive use Deliver for
@@ -693,6 +708,11 @@ type UsageFlusher interface {
 // SetUsageFlusher completes daemon wiring before request handling begins.
 func (m *Manager) SetUsageFlusher(flusher UsageFlusher) {
 	m.usageFlusher = flusher
+}
+
+// SetBranchStateRecorder completes daemon wiring before request handling begins.
+func (m *Manager) SetBranchStateRecorder(recorder BranchStateRecorder) {
+	m.branchStates = recorder
 }
 
 // SetAgentAccounts completes daemon wiring before request handling begins.
@@ -1140,14 +1160,19 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 	if _, ok := m.agents.Agent(cfg.Harness); !ok {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %q", ErrUnknownHarness, cfg.Harness)
 	}
-	// Unreal Agent has no terminal interface or interactive approval channel.
-	// Selecting the harness therefore supplies its only valid launch defaults;
-	// an explicit caller-supplied mode or permission remains authoritative and
-	// is rejected normally when the harness cannot honor it.
-	if cfg.Harness == domain.HarnessUnreal {
-		if !cfg.RequestedMode.Valid() {
-			cfg.RequestedMode = domain.SessionModeChat
+	// A chat-only harness has no terminal interface, so Chat is its only mode
+	// and a terminal request is refused before any durable state exists.
+	if cfg.Harness.ChatOnly() {
+		if cfg.RequestedMode == domain.SessionModeTUI {
+			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w: %s supports Chat only", ErrTerminalUnsupported, cfg.Harness)
 		}
+		cfg.RequestedMode = domain.SessionModeChat
+	}
+	// Unreal Agent has no interactive approval channel either, so selecting it
+	// supplies bypass permissions by default; an explicit caller-supplied
+	// permission remains authoritative and is rejected normally when the
+	// harness cannot honor it.
+	if cfg.Harness == domain.HarnessUnreal {
 		if cfg.AgentConfig.Permissions == "" {
 			cfg.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 		}
@@ -1191,17 +1216,17 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
 				"harness", cfg.Harness, "error", ports.ErrChatUnsupported)
 			mode = domain.SessionModeTUI
-		} else if err := m.chat.PreflightChat(ctx, cfg.Harness, agentConfig.Permissions); err != nil {
+		} else if err := m.preflightChat(ctx, cfg.Harness, agentConfig.Permissions, m.chatPreflightEnv(cfg, project.Config.Env)); err != nil {
 			fallbackAllowed := errors.Is(err, ports.ErrChatUnsupported) ||
 				errors.Is(err, ports.ErrChatDriverUnavailable) ||
 				errors.Is(err, ports.ErrChatDriverIncompatible) ||
 				errors.Is(err, ports.ErrChatAuthRequired)
 			if modeExplicitlyRequested || !fallbackAllowed ||
 				errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", agentlaunch.RedactError(err, project.Config.Env))
 			}
 			m.logger.Warn("spawn: default Chat unavailable; falling back to TUI",
-				"harness", cfg.Harness, "error", err)
+				"harness", cfg.Harness, "error", agentlaunch.RedactError(err, project.Config.Env))
 			mode = domain.SessionModeTUI
 		}
 		if mode == domain.SessionModeChat {
@@ -1293,8 +1318,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 	id := rec.ID
-	if m.agentAccounts != nil {
-		if err := m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID); err != nil {
+	if m.agentAccounts != nil || cfg.AgentAccountID != "" {
+		err := ports.ErrAgentAccountUnknown
+		if m.agentAccounts != nil {
+			err = m.agentAccounts.BindSession(ctx, id, cfg.Harness, cfg.AgentAccountID)
+		}
+		if err != nil {
 			if prep != nil {
 				cleanupCtx, cancel := spawnRollbackContext(ctx)
 				m.discardClaimedTaskPreparation(cleanupCtx, prep)
@@ -2694,6 +2723,10 @@ func resolvedModelForMetadata(harness domain.AgentHarness, effective, adapter po
 // static catalog. Dynamic catalogs and direct-entry agents defer authoritative
 // model validation to the selected agent at launch time.
 func validateSpawnModel(harness domain.AgentHarness, model string) error {
+	if harness == domain.HarnessDockerAgent && strings.HasPrefix(strings.TrimSpace(model), "model:") {
+		return nil
+	}
+
 	if modelcatalog.Accepts(string(harness), model) {
 		return nil
 	}
@@ -2988,6 +3021,11 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, rec, refusedShellTerminalOpen, err, true)
 		}
 		releaseTerminals = release
+	}
+	if ws.Path != "" && !workspaceProject && m.branchStates != nil {
+		if err := m.branchStates.ReconcileSessionBranchState(ctx, id); err != nil {
+			m.logger.Warn("kill: record worktree branch failed", "sessionID", id, "error", err)
+		}
 	}
 	freed := false
 	if ws.Path != "" {
@@ -3362,6 +3400,9 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 }
 
 func (m *Manager) relaunchRestoredSession(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, ws ports.WorkspaceInfo) (RestoreResult, error) {
+	if rec.Metadata.Branch != "" && projectKindForSession(project, rec.ProjectID) != domain.ProjectKindWorkspace {
+		ws.Branch = rec.Metadata.Branch
+	}
 	result, err := m.relaunchSession(ctx, "restore", rec, project, ws, nil)
 	if err != nil {
 		return RestoreResult{}, err
@@ -4847,6 +4888,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 			Kind:          rec.Kind,
 			SessionPrefix: sessionPrefix(project),
 			Branch:        rec.Metadata.Branch,
+			LastBranch:    lastCheckedOutBranch(rec),
 			BaseBranch:    project.Config.WorktreeBaseBranch(),
 			BaseRef:       rec.Metadata.DiffBaseRef,
 			Path:          rec.Metadata.WorkspacePath,
@@ -4973,6 +5015,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			Kind:          rec.Kind,
 			SessionPrefix: sessionPrefix(project),
 			Branch:        rec.Metadata.Branch,
+			LastBranch:    lastCheckedOutBranch(rec),
 			BaseBranch:    project.Config.WorktreeBaseBranch(),
 			BaseRef:       rec.Metadata.DiffBaseRef,
 			Path:          rec.Metadata.WorkspacePath,
@@ -5341,6 +5384,10 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 	return m.send(ctx, id, message, "", options)
 }
 
+type semanticDeliveryStore interface {
+	SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error)
+}
+
 // SendSemantic delivers an internal message and returns only after the target
 // agent has accepted that exact message. Chat uses its native accepted-turn
 // boundary. Supported TUIs correlate the durable id through UserPromptSubmit;
@@ -5360,14 +5407,37 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		}
 		return sendErr
 	}
+	receipts, ok := m.store.(semanticDeliveryStore)
+	if !ok {
+		return fmt.Errorf("%w: durable delivery receipts are unavailable", ErrSemanticAcceptanceUnsupported)
+	}
+	if deliveryID, valid := domain.ReportDeliveryID(domain.WrapReportDelivery(clientMessageID, message)); !valid || deliveryID != clientMessageID {
+		return fmt.Errorf("%w: invalid semantic delivery id", ErrSemanticAcceptanceUnsupported)
+	}
+	launchID := rec.Metadata.RuntimeLaunchID
+	accepted, err := receipts.SemanticDeliveryAccepted(ctx, id, launchID, clientMessageID)
+	if err != nil {
+		return err
+	}
+	// A delivery accepted before the daemon recorded accepted deliveries
+	// separately is still matched by the conversation checkpoint.
+	if accepted || semanticMessageAccepted(rec, clientMessageID) {
+		return nil
+	}
+	if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
+		return ErrTerminated
+	}
+	if launchID == "" {
+		return fmt.Errorf("%w: session has no active runtime launch", ErrSemanticAcceptanceUnsupported)
+	}
 	if !m.harnessSemanticAcceptance(rec.Harness) {
 		return ErrSemanticAcceptanceUnsupported
 	}
-	if semanticMessageAccepted(rec, clientMessageID) {
-		return nil
-	}
 	wrapped := domain.WrapReportDelivery(clientMessageID, message)
-	if err := m.send(ctx, id, wrapped, clientMessageID, ports.MessageDeliveryOptions{}); err != nil {
+	stopConfirmation := func(stopCtx context.Context) (bool, error) {
+		return receipts.SemanticDeliveryAccepted(stopCtx, id, launchID, clientMessageID)
+	}
+	if err := m.sendWithConfirmationStop(ctx, id, wrapped, clientMessageID, ports.MessageDeliveryOptions{}, stopConfirmation); err != nil {
 		// A pane write whose activity confirmation could not be observed is not
 		// fatal here: SendSemantic's own durable acceptance loop below is
 		// authoritative and correlates this exact message through its submission
@@ -5381,15 +5451,19 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 	ticker := time.NewTicker(m.sendConfirm.pollInterval)
 	defer ticker.Stop()
 	for {
+		accepted, readErr := receipts.SemanticDeliveryAccepted(ctx, id, launchID, clientMessageID)
+		if readErr != nil {
+			return readErr
+		}
+		if accepted {
+			return nil
+		}
 		current, found, readErr := m.store.GetSession(ctx, id)
 		if readErr != nil {
 			return readErr
 		}
 		if !found || current.IsTerminated || current.Activity.State == domain.ActivityExited {
 			return ErrTerminated
-		}
-		if semanticMessageAccepted(current, clientMessageID) {
-			return nil
 		}
 		select {
 		case <-ctx.Done():
@@ -5443,6 +5517,16 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 // retries. Ordinary callers leave it empty; the outbox preserves the key across
 // restart, rollback, and even a second overlapping handoff.
 func (m *Manager) send(ctx context.Context, id domain.SessionID, message, clientMessageID string, options ports.MessageDeliveryOptions) error {
+	return m.sendWithConfirmationStop(ctx, id, message, clientMessageID, options, nil)
+}
+
+func (m *Manager) sendWithConfirmationStop(
+	ctx context.Context,
+	id domain.SessionID,
+	message, clientMessageID string,
+	options ports.MessageDeliveryOptions,
+	stop confirmationStopCheck,
+) error {
 	// A controller transition deliberately has a short interval with no writer.
 	// Queue internal/lifecycle sends durably instead of racing either controller
 	// or dropping coordination work; the transition worker drains this outbox
@@ -5577,7 +5661,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return nil
 	}
 	if m.harnessNudgeSafe(rec.Harness) {
-		if err := m.confirmActive(ctx, m.messenger, id, evidence, inputBaseline); err != nil {
+		if err := m.confirmActiveWithStop(ctx, m.messenger, id, evidence, inputBaseline, stop); err != nil {
 			return fmt.Errorf("send %s: %w", id, err)
 		}
 	}
@@ -5708,11 +5792,8 @@ func (e deliveryEvidence) accepted(rec domain.SessionRecord) bool {
 	return false
 }
 
-// confirmActive fences each retry's input timestamp check through its Enter
-// write. Typing since inputBaseline suppresses the retry, so AO cannot submit
-// the operator's new draft while trying to confirm its own prompt.
-func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time) error {
-	return m.confirmActiveWithNudge(ctx, id, evidence, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
+func (m *Manager) confirmActiveWithStop(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time, stop confirmationStopCheck) error {
+	return m.confirmActiveWithNudge(ctx, id, evidence, stop, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
 		accepted := false
 		outcome, err := guard.DeliverWithComposerCheck(nudgeCtx, id, "", func(_ context.Context, rec domain.SessionRecord) (bool, func()) {
 			lastInputAt, release := m.fenceTerminalInput(rec)
@@ -6259,7 +6340,7 @@ const attachmentsDir = attachmentstore.WorkspaceDir
 func (m *Manager) writeSpawnAttachments(ctx context.Context, id domain.SessionID, workspacePath string, attachments []ports.SpawnAttachment) ([]string, error) {
 	refs := spawnAttachmentRefs(attachments)
 	for i, a := range attachments {
-		if err := m.attachments.Put(ctx, id, workspacePath, spawnAttachmentName(i, a), a.Data); err != nil {
+		if err := m.attachments.PutSource(ctx, id, workspacePath, spawnAttachmentName(i, a), attachmentSource(a)); err != nil {
 			return nil, fmt.Errorf("write attachment %d: %w", i+1, err)
 		}
 	}
@@ -6422,6 +6503,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if chat && m.computerUseEnabled(ctx) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
 	}
+	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)
+	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
 	}
@@ -6540,7 +6624,7 @@ func (m *Manager) prepareSystemPromptFile(id domain.SessionID, harness domain.Ag
 
 func systemPromptFileRequired(harness domain.AgentHarness) bool {
 	switch harness {
-	case domain.HarnessGemini, domain.HarnessAider,
+	case domain.HarnessMiniMaxCode, domain.HarnessGemini, domain.HarnessAider,
 		domain.HarnessAgy,
 		domain.HarnessAuggie,
 		domain.HarnessCommandCode,
@@ -6711,6 +6795,16 @@ func (m *Manager) runtimeEnvForHarness(id domain.SessionID, project domain.Proje
 	return env
 }
 
+// chatPreflightEnv is the environment a new Chat session will launch with,
+// before it has an ID: the same AO-stored provider keys and withheld keys as
+// runtimeEnvForHarness, so admission and launch agree on which provider keys
+// exist. Subscription-account environment is left to the launch: resolving it
+// now would bind the provider default to a session that does not exist yet.
+func (m *Manager) chatPreflightEnv(cfg ports.SpawnConfig, projectEnv map[string]string) map[string]string {
+	env, _ := m.runtimeEnvChecked("", cfg.ProjectID, cfg.IssueID, projectEnv, cfg.AgentAccountID, cfg.Harness)
+	return env
+}
+
 // runtimeEnvChecked is runtimeEnv that also reports why the session's account
 // environment could not be resolved, for callers that must not go on under
 // another login (an account move's preflight). A nonempty accountID replaces
@@ -6758,6 +6852,10 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 	if runFilePath != "" {
 		env[EnvRunFile] = runFilePath
 	}
+	deleteProtectedEnv(env, EnvDesktopApp, caseInsensitive)
+	if desktopOwnedDaemon() {
+		env[EnvDesktopApp] = "1"
+	}
 	setProtectedEnv(env, EnvBrowserCapability, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeToken, "", caseInsensitive)
 	setProtectedEnv(env, EnvBrowserRuntimeTokenStdin, "", caseInsensitive)
@@ -6796,7 +6894,9 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 // accountID replaces the session's binding. An error means the env may lack an
 // account's variables.
 func (m *Manager) applyAgentAccountEnv(id domain.SessionID, accountID string, env map[string]string, caseInsensitive bool) error {
-	if m.agentAccounts == nil {
+	// A session without an ID is a Chat admission check before the session
+	// exists: resolving an account would bind the provider default to "".
+	if m.agentAccounts == nil || id == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -7833,6 +7933,16 @@ func (m *Manager) wrapAgentProcessWithLaunchID(agent ports.Agent, id domain.Sess
 
 func runtimeHandle(meta domain.SessionMetadata) ports.RuntimeHandle {
 	return ports.RuntimeHandle{ID: meta.RuntimeHandleID}
+}
+
+func lastCheckedOutBranch(rec domain.SessionRecord) string {
+	if rec.BranchState == nil {
+		return ""
+	}
+	if rec.BranchState.Branch != "" {
+		return rec.BranchState.Branch
+	}
+	return strings.TrimPrefix(rec.BranchState.RemoteBranch, "origin/")
 }
 
 func workspaceInfo(rec domain.SessionRecord) ports.WorkspaceInfo {

@@ -5855,6 +5855,33 @@ func TestDeduplicatePRFactsKeepsSameNumberAcrossDifferentRepos(t *testing.T) {
 	}
 }
 
+func TestDeduplicatePRFactsCarriesStackParentOnlyForTheSameBase(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	stale := domain.PRFacts{URL: "https://github.com/acme/app/pull/9", Number: 9, TargetBranch: "feat/base", StackParent: 8, UpdatedAt: now}
+
+	// Retargeted onto main since: the old base's parent no longer applies.
+	got := deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "main", UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "main" || got[0].StackParent != 0 {
+		t.Fatalf("retargeted alias = %+v, want main with no stack parent", got)
+	}
+
+	// An alias with no target inherits the base and its parent together.
+	got = deduplicatePRFacts([]domain.PRFacts{stale, {URL: "https://github.com/Acme/App/pull/9", Number: 9, UpdatedAt: now.Add(time.Minute)}})
+	if len(got) != 1 || got[0].TargetBranch != "feat/base" || got[0].StackParent != 8 {
+		t.Fatalf("alias without a target = %+v, want feat/base waiting on #8", got)
+	}
+
+	// Branch names are case-sensitive: feat/Base is a different base, in
+	// either input order.
+	recased := domain.PRFacts{URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "feat/Base", UpdatedAt: now.Add(time.Minute)}
+	for _, in := range [][]domain.PRFacts{{stale, recased}, {recased, stale}} {
+		got = deduplicatePRFacts(in)
+		if len(got) != 1 || got[0].TargetBranch != "feat/Base" || got[0].StackParent != 0 {
+			t.Fatalf("alias retargeted to feat/Base = %+v, want no stack parent", got)
+		}
+	}
+}
+
 func TestDeduplicatePRFactsKeepsSameBasenameAcrossDifferentOwners(t *testing.T) {
 	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
 	got := deduplicatePRFacts([]domain.PRFacts{
@@ -6010,7 +6037,7 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 		},
 		{
 			SessionID: rec.ID, Harness: "claude-code", PRURL: newURL,
-			Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+			Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved,
 			ID: "run-new", CreatedAt: rec.UpdatedAt.Add(time.Minute),
 		},
 	}

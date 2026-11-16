@@ -23,7 +23,9 @@ import {
 import { InterfaceSwitchCard } from "../session/InterfaceSwitchCard";
 import { useInterfaceHandoff } from "../session/useInterfaceHandoff";
 import type { Theme } from "../theme";
-import { Frost, FROST_TAIL, frostStops } from "../frost";
+import { Frost, FROST_TAIL, pillFrostStops } from "../frost";
+import { headerBackOptions } from "../headerBack";
+import { HeaderPill, HeaderPillButton, pillBackOptions } from "../headerPill";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, type ForkOptions } from "./api";
@@ -57,12 +59,15 @@ import { useSessionPreview } from "../session/useSessionPreview";
 import { toolbarIcon } from "../toolbarIcon";
 import { useChatViewLease } from "./useChatViewLease";
 import { useOpenPage } from "../pageNavigation";
+import { usePushSettled } from "../usePushSettled";
 import { usePRSummaries } from "../usePRSummaries";
 import { reviewRouteForPR, reviewRouteForSession, sessionPRReadyForReview } from "../reviewView";
 import { space } from "../tokens";
 import { Button, EmptyState } from "../ui";
 import { backOr } from "../backNavigation";
 import { userFacingError, NOT_PAIRED_ACTION_COPY, RECONNECTING_ACTION_COPY } from "../connectionError";
+import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAgentAccounts } from "../agentAccounts";
+import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
@@ -108,6 +113,10 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, machine, session.id);
+	// See `awaitingConversation`: only a conversation the page opened without is held.
+	const pushSettled = usePushSettled();
+	const [openedWithSnapshot] = useState(() => Boolean(conversation.snapshot));
+	const holdArrivingSnapshot = !pushSettled && !openedWithSnapshot && Boolean(conversation.snapshot);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
 	// The catalog is asked for again too if it has none of its own yet: a page
 	// cached as ready loads it before the wake, and that load can fail unseen.
@@ -266,7 +275,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
-				: "The interface switch failed; the current interface remains available.");
+				: interfaceTransitionNotice?.targetAccountId
+					? "The switch failed. The agent stays on its previous account."
+					: "The interface switch failed; the current interface remains available.");
 	const turnActive = Boolean(
 		conversation.snapshot?.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
 	);
@@ -364,18 +375,23 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	useLayoutEffect(() => {
 		navigation.setOptions({ gestureEnabled: !cardShowing });
 	}, [cardShowing, navigation]);
+	// Android's title pill leads with the way back (see `HeaderPill`).
+	const goBack = useCallback(() => backOr(router), [router]);
 	useLayoutEffect(() => {
 		navigation.setOptions({
-			headerTitle: () => (
-				<ConversationTitle
-					title={title}
-					subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
-					harness={headerHarness}
-					state={headerState}
-				/>
-			),
+			headerTitle: () => {
+				const heading = (
+					<ConversationTitle
+						title={title}
+						subtitle={[projectName, headerHarness].filter(Boolean).join(" · ")}
+						harness={headerHarness}
+						state={headerState}
+					/>
+				);
+				return PILL_HEADER ? <HeaderPill onBack={goBack}>{heading}</HeaderPill> : heading;
+			},
 		});
-	}, [headerHarness, headerState, navigation, projectName, title, t]);
+	}, [goBack, headerHarness, headerState, navigation, projectName, title, t]);
 	// The route keeps its options when it swaps this screen for the terminal,
 	// which sets only `title`. A `headerTitle` left here outranks it, so the bar
 	// stayed on this screen's last state: the Chat controller the switch stopped,
@@ -384,14 +400,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The conversation scrolls up under a clear bar. iOS 27's is the system's
 	// glass, which blurs it beneath the title, as Settings and the board do; the
 	// edge effect is the system's own: setting `scrollEdgeEffects` from here
-	// turned it off. Android's bar frosts it out with the page's colour (see
-	// `frost`), as the board tabs' bars do. Every other iOS keeps the stack's own
+	// turned it off. Android's bar floats its back button, title and actions on
+	// pills of their own (see `headerPill`) over a light frost of the page's
+	// colour (see `pillFrostStops`). Every other iOS keeps the stack's own
 	// bar (see `CLEAR_HEADER`). The route also holds terminal sessions, so the
 	// stack's own bar comes back when this screen goes.
 	useLayoutEffect(() => {
 		if (!CLEAR_HEADER) return;
-		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" } });
-		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle });
+		navigation.setOptions({ headerTransparent: true, headerStyle: SYSTEM_GLASS_HEADER ? undefined : { backgroundColor: "transparent" }, ...(PILL_HEADER ? pillBackOptions() : null) });
+		return () => navigation.setOptions({ headerTransparent: false, headerStyle: stackScreenOptions(t).headerStyle, ...(PILL_HEADER ? { headerBackVisible: undefined, headerLeft: undefined, ...headerBackOptions() } : null) });
 	}, [navigation, t]);
 
 	// Remounts the composer only for a different conversation, never because the
@@ -578,6 +595,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Offered only where the agent can carry the conversation on in Terminal UI.
 	const menuCanSwitch = Boolean(interfaceSwitch.status?.supported);
 	const menuSwitching = interfaceSwitch.starting || switchingToTerminal;
+	const accountMove = interfaceSwitch.transition?.targetAccountId ? interfaceSwitch.transition : undefined;
+	const accountMoving = mobileInterfaceTransitionIsActive(accountMove);
+	// Reread the binding once a move settles: it commits at the end of the move.
+	const agentAccounts = useAgentAccounts(config, terminated ? undefined : headerHarness, session.id, accountMoving ? undefined : accountMove?.id);
+	const stillHere = useStillHere(`${currentHostId ?? ""}|${session.id}|${config ? JSON.stringify(config) : ""}`, () => navigation.isFocused?.() !== false);
+	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
+	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
+	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -593,7 +618,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		compacting: menuCompacting,
 		turnInFlight: turnActive,
 		contextPercent: menuContextPercent,
-	}) : undefined, [isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
+		account: menuAccountName ? { name: menuAccountName, moving: accountMoving, canMove: menuAccountCanMove } : undefined,
+	}) : undefined, [accountMoving, menuAccountCanMove, menuAccountName, isOrchestrator, menuArtifactCount, menuCanCompact, menuCanSwitch, menuCompacting, menuContextPercent, menuHasPullRequest, menuPinned, menuReady, menuSwitching, openingShell, previewReady, turnActive]);
 	// The actions sheet follows what it shows while it is up (see `ConversationActionsEntry`).
 	const latestMenuGroups = useRef(menuGroups);
 	const menuGroupListeners = useRef(new Set<(groups: readonly ConversationMenuGroup[]) => void>());
@@ -628,6 +654,34 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			void setWorkerPinned(session.id, !session.isPinned).catch(() => {});
 		},
 		compact: () => void conversation.compact().catch(() => {}),
+		account: async () => {
+			if (!config) return;
+			const move = (accountId: string, stop: boolean) => void moveSessionAgentAccount(config, session.id, accountId, stop)
+				.then(() => interfaceSwitch.refresh())
+				.catch((cause) => Alert.alert("Couldn't switch account", userFacingError(cause)));
+			const here = stillHere();
+			const { accounts, current } = await agentAccounts.reload().catch(() => undefined) ?? agentAccounts;
+			if (!here()) return;
+			void presentSheet({
+				kind: "account-picker",
+				subtitle: "The agent resumes this conversation on the account you choose.",
+				options: agentAccountOptions(accounts),
+				selected: current ?? "",
+				onSelect: (accountId) => {
+					if (!turnActive) return move(accountId, false);
+					const target = accounts.find((account) => account.id === accountId);
+					haptics.warning();
+					Alert.alert(
+						"Stop the turn and move?",
+						`The agent is still working. Orchestrator stops it now and resumes the conversation on ${target ? agentAccountLabel(target, accounts) : "that account"}.`,
+						[
+							{ text: "Cancel", style: "cancel" },
+							{ text: "Stop and move", style: "destructive", onPress: () => move(accountId, true) },
+						],
+					);
+				},
+			});
+		},
 		switch_tui: requestInterfaceSwitch,
 		delete: () => {
 			haptics.warning();
@@ -659,7 +713,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		const groups = latestMenuGroups.current;
 		if (groups) void presentSheet({ kind: "conversation-actions", title, groups, subscribeGroups: subscribeMenuGroups, onSelect: runMenuAction });
 	}, [presentSheet, runMenuAction, subscribeMenuGroups, title]);
-	const headerItems = useMemo(() => menuReady ? (
+	// Android's "⋯" floats on a pill of its own, as the back button and title
+	// do, where the toolbar's would sit on the bar bare.
+	useLayoutEffect(() => {
+		if (!PILL_HEADER) return;
+		navigation.setOptions({
+			headerRight: menuReady ? () => <HeaderPillButton icon="more" label="Conversation actions" onPress={openActions} testID="header-more" /> : undefined,
+		});
+		return () => navigation.setOptions({ headerRight: undefined });
+	}, [menuReady, navigation, openActions]);
+	const headerItems = useMemo(() => menuReady && !PILL_HEADER ? (
 		<Stack.Toolbar placement="right">
 			<Stack.Toolbar.Button icon={toolbarIcon("more")} accessibilityLabel="Conversation actions" onPress={openActions} />
 		</Stack.Toolbar>
@@ -684,7 +747,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		}
 	}, [interfaceSwitch]);
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
-	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `Switching to Terminal UI · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
+	const interfaceTransitionPhaseText = interfaceRecoveryMessage || `${accountMove ? "Switching account" : "Switching to Terminal UI"} · ${interfacePhaseShortLabel(interfaceSwitch.transition?.phase)}`;
 	const interfaceTransitionBanner = {
 		text: interfaceSwitch.fetchFailed
 			? `${interfaceTransitionPhaseText}. Couldn't check on it${interfaceSwitch.error ? `: ${interfaceSwitch.error}` : ""}`
@@ -716,10 +779,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		return <Failure><EmptyState icon="warning" iconColor={t.red} title="Session failed to start" message={failedStart} action={<Button title="Retry" icon="refresh" loading={resuming} onPress={() => void resume()} />} /></Failure>;
 	}
 	// A session that is still starting shows its checklist straight away rather than a bare spinner.
-	if (conversation.loading && !conversation.snapshot && startupView && !startupView.failed) {
+	// A conversation that arrives while the page is still sliding in waits for
+	// the slide to finish: mounting the timeline mid-push stalled the UI thread
+	// for hundreds of milliseconds, so the slide froze and then jumped to its
+	// end. One already cached renders with the page, before the slide starts.
+	const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;
+	if (awaitingConversation && startupView && !startupView.failed) {
 		return <View style={[styles.startupLoading, { paddingTop: space.md + headerOverlap }]}><SessionStartupStatus startup={startupView} /></View>;
 	}
-	if (conversation.loading && !conversation.snapshot) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
+	if (awaitingConversation) return <View style={[styles.center, { paddingTop: headerOverlap }]}><EmptyState busy title="Loading conversation…" /></View>;
 	if (conversation.unavailable) {
 		return <Failure>
 			<EmptyState
@@ -862,8 +930,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					/>
 				) : (
 					<InterfaceSwitchCard
-						title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Terminal"}
-						message={interfaceRecoveryMessage || interfacePhaseLabel(interfaceSwitch.transition?.phase)}
+						title={interfaceRecoveryMessage ? "Interface recovery blocked" : accountMove ? "Switching account" : "Switching to Terminal"}
+						message={interfaceRecoveryMessage || (accountMove ? accountPhaseLabel : interfacePhaseLabel)(interfaceSwitch.transition?.phase)}
 						blocked={Boolean(interfaceRecoveryMessage)}
 						cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
 						cancelling={interfaceSwitch.cancelling}
@@ -875,11 +943,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					/>
 				)
 			) : null}
-			{/* Android's frost behind the clear bar: solid under the title, then
-			    dissolving into the page, so the conversation frosts out as it
-			    passes under it rather than meeting a hard edge. */}
+			{/* Android's frost behind the clear bar's pills: dense at the status
+			    bar, then thinning through the bar and dissolving into the page,
+			    so the conversation shows around the pills and fades out as it
+			    passes under them rather than meeting a hard edge. */}
 			{CLEAR_HEADER && !SYSTEM_GLASS_HEADER ? (
-				<Frost from="top" stops={frostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
+				<Frost from="top" stops={pillFrostStops(headerOverlap)} style={[styles.headerFrost, { height: headerOverlap + FROST_TAIL }]} />
 			) : null}
 			{CLEAR_HEADER ? (
 				<View pointerEvents="box-none" style={[styles.floatingBanners, { top: headerOverlap }]} onLayout={(event) => setBannersHeight(event.nativeEvent.layout.height)}>
@@ -985,6 +1054,12 @@ function Failure({ children }: { children: ReactNode }) {
  */
 const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";
 
+/**
+ * Android's bar floats its controls on pills over the conversation (see
+ * `headerPill`), as its board bar and composer float.
+ */
+const PILL_HEADER = Platform.OS === "android";
+
 /** How much of the screen the clear header covers; nothing under a solid one. */
 function useGlassHeaderOverlap(): number {
 	const headerHeight = useHeaderHeight();
@@ -1009,6 +1084,17 @@ function interfacePhaseLabel(phase?: string): string {
 		case "activating": return "Opening the Terminal UI.";
 		case "completed": return "Terminal UI is ready. Opening it now.";
 		default: return "Checking that the terminal can resume this agent's native conversation.";
+	}
+}
+function accountPhaseLabel(phase?: string): string {
+	switch (phase) {
+		case "draining": return "Waiting for the current turn to finish.";
+		case "source_stopping": return "Stopping the agent on its current account.";
+		case "source_stopped":
+		case "target_starting": return "Resuming the same conversation on the new account.";
+		case "activating":
+		case "completed": return "The agent is ready on the new account.";
+		default: return "Checking that the agent can move to that account.";
 	}
 }
 function signInCommand(harness: string): string | undefined { return harness === "codex" ? "codex login" : harness === "claude-code" || harness === "claude" ? "claude auth login" : undefined; }

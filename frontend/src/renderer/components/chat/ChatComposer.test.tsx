@@ -291,6 +291,23 @@ describe("send keys", () => {
 		expect(await screen.findByText("Each file must be under 25 MB.")).toBeInTheDocument();
 		expect(stage).not.toHaveBeenCalled();
 	});
+	it("stages a file far over the old 50 MB cap without reading it", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-x.mov"]);
+		const { field } = renderComposer({ draftSessionId: "composer-large-file", onStageAttachments: stage });
+		const huge = new File([new Uint8Array(1)], "clip.mov", { type: "video/quicktime" });
+		Object.defineProperty(huge, "size", { value: 3 * 1024 * 1024 * 1024 });
+		fireEvent.paste(field, { clipboardData: clipboardData([huge]) });
+		expect(await screen.findByRole("button", { name: "Remove clip.mov" })).toBeInTheDocument();
+		expect(stage).toHaveBeenCalledWith([{ mimeType: "video/quicktime", data: "", file: huge, name: "clip.mov" }], expect.anything());
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+	it("clears the notice about a refused file once the user types on", async () => {
+		const { field } = renderComposer({ draftSessionId: "composer-notice-clears", onStageAttachments: vi.fn() });
+		fireEvent.paste(field, { clipboardData: clipboardData([new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" })]) });
+		expect(await screen.findByText("SVG files are not supported for security reasons.")).toBeInTheDocument();
+		fireEvent.keyDown(field, { key: "a" });
+		await waitFor(() => expect(screen.queryByText("SVG files are not supported for security reasons.")).not.toBeInTheDocument());
+	});
 	it("lays attachments beside annotations and clears only annotation references", async () => {
 		const sessionId = "composer-shared-attachment-row";
 		writeChatExcerptReferences(sessionId, EXCERPTS);
@@ -405,6 +422,45 @@ describe("send keys", () => {
   expect(document.activeElement).not.toBe(field);expect(window.getSelection()!.toString()).toBe("selected transcript");
   window.getSelection()!.removeAllRanges();text.remove();
  });
+
+	it.each([
+		["the Browser address bar", () => Object.assign(document.createElement("input"), { type: "text" })],
+		["a terminal", () => document.createElement("textarea")],
+		["a rich text field", () => {
+			const div = Object.assign(document.createElement("div"), { tabIndex: 0 });
+			div.setAttribute("contenteditable", "true");
+			return div;
+		}],
+	])("leaves focus in %s when the window regains focus", (_, makeField) => {
+		const { field } = renderComposer({ autoFocusKey: "session-1" });
+		const other = makeField();
+		document.body.append(other);
+		other.focus();
+		expect(document.activeElement).toBe(other);
+
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+
+		expect(document.activeElement).toBe(other);
+		expect(document.activeElement).not.toBe(field);
+		other.remove();
+	});
+
+	it("still refocuses the message field when a button held focus", () => {
+		const { field } = renderComposer({ autoFocusKey: "session-1" });
+		const button = document.createElement("button");
+		document.body.append(button);
+		button.focus();
+
+		act(() => {
+			window.dispatchEvent(new Event("focus"));
+		});
+
+		expect(document.activeElement).toBe(field);
+		button.remove();
+	});
 
 	it("does not focus the hidden or inactive chat composer", () => {
 		const { field } = renderComposer({ autoFocus: false, autoFocusKey: "session-1" });
@@ -867,14 +923,15 @@ describe("send keys", () => {
 		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts.map(upgradeExcerpt));
 	});
 
-	it.each([
+	it.each<[string, string, string?]>([
 		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
 		["validation_error", "Request was rejected"],
 		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
 		// A refused /btw or /side launch must not lock the main draft.
 		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
 		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
-	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
+		["CHAT_OPEN_ELSEWHERE", "open in another process", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again."],
+	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message, shown = message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
 			.mockRejectedValueOnce({ code, message })
@@ -885,7 +942,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(screen.getByRole("alert")).toHaveTextContent(message);
+		expect(screen.getByRole("alert")).toHaveTextContent(shown);
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		first.unmount();
 		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
@@ -1077,6 +1134,30 @@ describe("send keys", () => {
 			"Message delivery wasn’t confirmed before Chat restarted",
 		);
 		await waitFor(() => expect(getChatDraftBoundaries(sessionId)).toEqual([]));
+	});
+
+	// Signed out, nothing can be sent: a restored delivery waits for the login
+	// rather than offering a retry whose send would be dropped.
+	it.each([
+		["the send button", false, "Retry message safely"],
+		["the unsent strip", true, "Retry"],
+	])("holds a restored delivery's retry on %s while typing is locked", async (_where, parkUnsentSends, name) => {
+		const sessionId = `composer-restored-delivery-locked-${parkUnsentSends}`;
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "wait for the login",
+			attachments: [],
+			requestText: "wait for the login",
+			clientMessageId: `composer-restored-delivery-locked-${parkUnsentSends}-id`,
+		});
+		const onSend = vi.fn(async () => undefined);
+		const view = render(<ChatComposer parkUnsentSends={parkUnsentSends} onSend={onSend} draftSessionId={sessionId} typingLocked />);
+
+		expect(await screen.findByRole("button", { name })).toBeDisabled();
+		expect(onSend).not.toHaveBeenCalled();
+
+		view.rerender(<ChatComposer parkUnsentSends={parkUnsentSends} onSend={onSend} draftSessionId={sessionId} />);
+		await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
 	});
 
 	it.each([false, true])("preserves a newer draft when an old surface accepts before replacement mount: %s", async (acceptBeforeMount) => {
@@ -2005,7 +2086,7 @@ describe("slash commands", () => {
 		const options = screen.getAllByRole("option");
 		expect(options).toHaveLength(2);
 		// The prefix match leads; the mid-name match follows.
-		expect(options[0]?.textContent).toContain("/review");
+		expect(options[0]?.textContent).toMatch(/^Review/);
 	});
 
 	// The whole point of gating on the provider's answer: with nothing to offer,
@@ -2020,11 +2101,37 @@ describe("slash commands", () => {
 		expect(onSend).toHaveBeenCalledWith("/rev");
 	});
 
+	// While the agent's list is still on its way, `/` says so instead of looking broken.
+	it("says the skills are loading, without taking Enter, while they are on their way", async () => {
+		const { onSend, field } = renderComposer({ skills: [], skillsLoading: true });
+		await typeInComposer(field, "/rev");
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+		// A note, not a row: nothing to pick, so Enter still sends.
+		expect(screen.queryByRole("option")).toBeNull();
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).toHaveBeenCalledWith("/rev");
+	});
+
+	it("shows the loading note under the commands that already match", async () => {
+		const { field } = renderComposer({ skills: SKILLS, skillsLoading: true });
+		await typeInComposer(field, "/");
+		expect(screen.getAllByRole("option")).toHaveLength(3);
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+	});
+
+	it("closes the loading note with Escape", async () => {
+		const { field } = renderComposer({ skills: [], skillsLoading: true });
+		await typeInComposer(field, "/");
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByText("Loading skills…")).toBeNull();
+	});
+
 	it("opens on a slash after existing text", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "look here /rev");
 		expect(screen.getByRole("listbox")).toBeInTheDocument();
-		expect(screen.getByRole("option", { name: /\/review/ })).toBeInTheDocument();
+		expect(screen.getByRole("option", { name: /^Review/ })).toBeInTheDocument();
 	});
 
 	it("moves the highlight with the arrow keys and wraps", async () => {
@@ -2078,8 +2185,8 @@ describe("slash commands", () => {
 	it.each(["Enter", "Tab"])("finds /btw through /side and completes with %s before sending the prompt", async key => {
 		const {onSend,field}=renderComposer({skills:[{name:"btw",displayName:"btw",description:"Open a new side chat",source:"AO"}]});
 		await typeInComposer(field,"/side");
-		expect(screen.getByRole("option",{name:/\/btw/})).toBeInTheDocument();
-		expect(screen.queryByRole("option",{name:/^\/side\b/})).not.toBeInTheDocument();
+		expect(screen.getByRole("option",{name: /^BTW/})).toBeInTheDocument();
+		expect(screen.queryByRole("option",{name: /^Side/})).not.toBeInTheDocument();
 		await userEvent.keyboard(`{${key}}`);
 		expect(composerWireText(field)).toBe("/btw ");
 		expect(onSend).not.toHaveBeenCalled();
@@ -2222,7 +2329,7 @@ describe("slash commands", () => {
 	it("selects with the mouse", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "/");
-		await userEvent.click(screen.getByText("/ship"));
+		await userEvent.click(screen.getByText("Ship"));
 		expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/ship");
 	});
 });
