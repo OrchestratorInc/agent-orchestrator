@@ -252,11 +252,37 @@ test("a signed-out computer gets a new password without linking", async () => {
 test("a development build starts remote access without publishing its temporary identity", async () => {
 	vi.stubEnv("MODE", "development");
 	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockImplementation(async (_baseUrl, _accountId, hostId, _pw, options) => {
+		if (options?.ifListed && !listedHosts.has(hostId)) return { hostId: "", added: false };
+		const added = !listedHosts.has(hostId);
+		listedHosts.add(hostId);
+		return { hostId, added };
+	});
 	renderContent();
 	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable", "/api/v1/mobile/remote-access"]));
-	expect(linkThisComputer).not.toHaveBeenCalled();
+	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", { ifListed: true });
+	expect(listedHosts.has("h_fixture")).toBe(false);
+});
+
+test("a development build that is already listed relinks its listing when remote access is enabled", async () => {
+	vi.stubEnv("MODE", "development");
+	fake.signedIn = true;
+	listedHosts.add("h_fixture");
+	vi.mocked(linkThisComputer).mockImplementation(async (_baseUrl, _accountId, hostId, _pw, options) => {
+		if (options?.ifListed && !listedHosts.has(hostId)) return { hostId: "", added: false };
+		const added = !listedHosts.has(hostId);
+		listedHosts.add(hostId);
+		return { hostId, added };
+	});
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+
+	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable", "/api/v1/mobile/remote-access"]));
+	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", { ifListed: true });
+	const result = await vi.mocked(linkThisComputer).mock.results[0].value;
+	expect(result).toEqual({ hostId: "h_fixture", added: false });
 });
 
 test("explicitly enabling Allow access in development, regenerating credentials, and refreshing the existing listing without creating a new one", async () => {

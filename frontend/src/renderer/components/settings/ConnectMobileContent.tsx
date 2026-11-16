@@ -420,7 +420,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	};
 	/** Links this computer when signed in, then starts remote access, which moves a running connector to the fixed address the link gave it, so the code stays valid after restarts. */
 	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
-		const { added } = await linkIfSignedIn(password, hostId);
+		const { added } = await linkIfSignedIn(password, hostId, isDevelopmentBuild() ? { ifListed: true } : undefined);
 		const started = await apiClient.POST("/api/v1/mobile/remote-access");
 		if (started.error) {
 			// Not left listed at an address nothing serves.
