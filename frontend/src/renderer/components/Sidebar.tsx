@@ -17,6 +17,7 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalList
 import { CSS } from "@dnd-kit/utilities";
 import {
 	Archive,
+	Bug,
 	CalendarClock,
 	ChevronRight,
 	CircleAlert,
@@ -84,7 +85,8 @@ import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMen
 import { dropdownMenuKit, MenuEntries, MenuKitContext, type MenuEntry } from "./menu-model";
 import { isArchivedSession } from "../lib/standalone-archive";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
-import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
+import { useAppVersion, useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
+import { isNightlyBuild } from "../lib/build-channel";
 import { useEdgeFade } from "../hooks/useEdgeFade";
 import { canResumeAgent, resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -1362,7 +1364,7 @@ export const Sidebar = memo(function Sidebar({
 			)}
 
 			{/* Footer: update rows on top, then one row with the account on the
-			    left and the Mobile menu (Connect mobile, Stay Awake) and Settings
+			    left and the Mobile menu, nightly bug report and Settings
 			    as icons. No divider. Bottom spacing stays inside the footer so
 			    there is no empty strip beneath it. */}
 			<SidebarFooter
@@ -1451,6 +1453,7 @@ export const Sidebar = memo(function Sidebar({
 						</TooltipTrigger>
 						<TooltipContent side="right">{t("settings.connectMobile")}</TooltipContent>
 					</Tooltip>
+					<FooterReportBugButton rail tabIndex={isCollapsed ? 0 : -1} />
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Pressable
@@ -3173,8 +3176,35 @@ function CloudSignInRailButton({ tabIndex }: { tabIndex: number }) {
 	);
 }
 
+function FooterReportBugButton({ tabIndex, rail = false }: { tabIndex: number; rail?: boolean }) {
+	const { t } = useTranslation();
+	const version = useAppVersion();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	if (!isNightlyBuild(version)) return null;
+
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Pressable
+					aria-label={t("shell.reportBug")}
+					className={rail ? FOOTER_RAIL_BUTTON_CLASS : FOOTER_ICON_BUTTON_CLASS}
+					onClick={() => openGlobalSettings("help")}
+					tabIndex={tabIndex}
+					type="button"
+				>
+					<NavRowHighlight />
+					<span className={cn("relative z-[1] grid place-items-center", rail && "[&_svg]:size-icon-base")}>
+						<Bug aria-hidden="true" />
+					</span>
+				</Pressable>
+			</TooltipTrigger>
+			<TooltipContent side={rail ? "right" : undefined}>{t("shell.reportBug")}</TooltipContent>
+		</Tooltip>
+	);
+}
+
 /**
- * The footer's bottom row: the account on the left, then the Mobile menu and
+ * The footer's bottom row: the account on the left, then Mobile, nightly bug report and
  * Settings as icons. Without AO Cloud the left side is the labelled
  * Settings row instead, so Settings never shows twice. While the cloud session
  * is still loading the left side stays empty and the icons hold their place.
@@ -3216,6 +3246,7 @@ function FooterAccountRow({
 				)}
 			</div>
 			<FooterMobileMenu onConnectMobile={onConnectMobile} tabIndex={tabIndex} />
+			<FooterReportBugButton tabIndex={tabIndex} />
 			{configured ? (
 				<Tooltip>
 					<TooltipTrigger asChild>

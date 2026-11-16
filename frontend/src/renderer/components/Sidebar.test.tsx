@@ -159,7 +159,8 @@ vi.mock("../hooks/useCloudLocalAuth", () => ({
 		},
 	}),
 }));
-vi.mock("../hooks/useCommandPaletteEnabled", () => ({
+vi.mock("../hooks/useCommandPaletteEnabled", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useCommandPaletteEnabled")>(),
 	useCommandPaletteEnabled: () => commandPaletteEnabled.current,
 }));
 
@@ -2669,6 +2670,38 @@ describe("Sidebar", () => {
 				asWorkspace: false,
 			}),
 		);
+	});
+
+	it.each(["0.14.10", "0.14.11-pr8539.1", "0.0.0-preview"])("hides Report a bug on non-nightly build %s", (version) => {
+		renderSidebar({ seed: (client) => client.setQueryData(["app-version"], version) });
+
+		expect(screen.queryAllByRole("button", { name: "Report a bug", hidden: true })).toHaveLength(0);
+	});
+
+	it("shows Report a bug on nightly and opens the existing report settings page", async () => {
+		const user = userEvent.setup();
+		cloudSessionState.configured = true;
+		cloudSessionState.status = "authenticated";
+		cloudSessionState.session = { user: { email: "ada@example.com", displayName: "Ada Park" } };
+		renderSidebar({ seed: (client) => client.setQueryData(["app-version"], "0.14.11-nightly.202611170300") });
+
+		const report = screen.getByRole("button", { name: "Report a bug" });
+		expect(report).toBeVisible();
+		await user.hover(report);
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Report a bug");
+		await user.click(report);
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "help" });
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps Report a bug hidden until the installed version is known", async () => {
+		let resolveVersion!: (version: string) => void;
+		vi.spyOn(aoBridge.app, "getVersion").mockReturnValue(new Promise((resolve) => { resolveVersion = resolve; }));
+		renderSidebar();
+
+		expect(screen.queryAllByRole("button", { name: "Report a bug", hidden: true })).toHaveLength(0);
+		await act(async () => { resolveVersion("0.14.11-nightly.202611170300"); });
+		expect(await screen.findByRole("button", { name: "Report a bug" })).toBeVisible();
 	});
 
 	it("opens settings when the footer Settings button is clicked", async () => {
