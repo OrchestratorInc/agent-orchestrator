@@ -193,7 +193,7 @@ const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 // Plain fill stays for non-interactive status rows; interactive rows use
 // {@link NavRowHighlight} via {@link NAV_ROW_HIGHLIGHT_HOST_CLASS}.
 const NAV_ROW_CLASS =
-	"h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground active:bg-interactive-hover active:text-foreground data-[active=true]:bg-interactive-active data-[active=true]:font-medium data-[active=true]:text-foreground";
+	"h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium text-muted-foreground hover:bg-interactive-hover hover:text-foreground active:bg-interactive-hover active:text-foreground data-[active=true]:bg-interactive-active data-[active=true]:font-medium data-[active=true]:text-foreground";
 
 /** Expanded footer action row: growing highlight behind icon + label. */
 const FOOTER_NAV_BUTTON_CLASS = cn(
@@ -1997,10 +1997,10 @@ const ProjectItem = memo(function ProjectItem({
 										data-expanded={expanded ? "" : undefined}
 										data-project-folder-visual=""
 									>
-										{/* 1.2 — contextual icon swap: scale 0.8↔1 (animated); opacity snaps for hide.
+										{/* 1.2 — contextual icon swap on hover, instant (scale and opacity snap).
 										    Hover paint lives in styles.css (fine pointer only). */}
 										<span
-											className="inline-flex size-icon-md items-center justify-center transition-[scale] duration-normal ease-[var(--ease-out)] motion-reduce:transition-none"
+											className="inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
 											{!expanded && projectNeedsInput ? (
@@ -2010,7 +2010,8 @@ const ProjectItem = memo(function ProjectItem({
 										<span
 											className={cn(
 												"absolute inline-flex size-icon-md scale-[0.8] items-center justify-center opacity-0",
-												"transition-[scale,rotate] duration-normal ease-[var(--ease-out)]",
+												// Only expanding or collapsing turns it; the hover swap is instant.
+												"transition-[rotate] duration-normal ease-[var(--ease-out)]",
 												"motion-reduce:transition-none",
 												expanded && "rotate-90",
 											)}
@@ -2401,8 +2402,6 @@ function ScratchpadSection({
 									<span
 										className={cn(
 											"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
-											"transition-[scale] duration-normal ease-[var(--ease-out)]",
-											"motion-reduce:transition-none",
 											"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
 										)}
 										data-scratchpad-archive-action=""
@@ -3056,11 +3055,9 @@ const SessionActions = memo(function SessionActions({
 		>
 			<div
 				className={cn(
-					/* 1.3 — pin/kill: scale 0.8↔1 from center (not origin-right — that reads as a slide) */
+					/* 1.3 — pin/kill appear on hover at once: scale and opacity snap */
 					ROW_ACTIONS_CLASS,
 					"origin-center scale-[0.8] opacity-0",
-					"transition-[scale] duration-normal ease-[var(--ease-out)]",
-					"motion-reduce:transition-none",
 					!isDragging &&
 						"group-has-[:focus-visible]/session-row:pointer-events-auto group-has-[:focus-visible]/session-row:scale-100 group-has-[:focus-visible]/session-row:opacity-100",
 				)}

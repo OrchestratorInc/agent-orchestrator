@@ -86,6 +86,12 @@ describe("useSessionPreviewHover safe triangle", () => {
 		vi.useRealTimers();
 	});
 
+	it("opens the card the moment the pointer enters a row", () => {
+		render(<Row id="a" />);
+		fireEvent.pointerEnter(screen.getByTestId("row-a"), { clientX: 100, clientY: 40 });
+		expect(screen.getByTestId("card-a")).toBeInTheDocument();
+	});
+
 	it("keeps the card open across other rows while the pointer heads for it", () => {
 		openFirstRow();
 		fireEvent.pointerLeave(screen.getByTestId("row-a"), { clientX: 180, clientY: 40 });
