@@ -70,7 +70,7 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 	};
 }
 
-function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
+export function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
 	return {
 		...(artifact.id ? { id: artifact.id } : {}),
 		kind: artifact.kind,
@@ -575,7 +575,7 @@ export function toCloudWorkspaceSession(
 			...(file.previousPaths?.length ? { previousPaths: file.previousPaths } : {}),
 			...(file.sha256 ? { sha256: file.sha256 } : {}),
 		})),
-		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles && !session.isTerminated ? { artifactFilesPending: true } : {}),
+		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles ? { artifactFilesPending: true } : {}),
 	};
 }
 
@@ -742,10 +742,11 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			return response.items;
 		},
 	});
-	// The list carries only an artifact count. Each live session's files are
-	// read in their own query, once per artifact version, without holding up
-	// the list.
-	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
+	// The list carries only an artifact count. Each session's files are read in
+	// their own query, once per artifact version, without holding up the list.
+	// An archived session's are read too: its artifacts stay listed until the
+	// person deletes them.
+	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0);
 	const fileData = useQueries({
 		queries: withFiles.map((session) => ({
 			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
@@ -834,7 +835,7 @@ async function withSharedArtifactFiles(
 	baseUrl: string,
 	session: CloudCpSession,
 ): Promise<CloudCpSession> {
-	if ((session.artifactCount ?? 0) === 0 || session.isTerminated) return session;
+	if ((session.artifactCount ?? 0) === 0) return session;
 	let reads = sharedArtifactReads.get(queryClient);
 	if (!reads) {
 		reads = { last: new Map(), failed: new Map() };

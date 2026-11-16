@@ -3030,6 +3030,8 @@ export interface components {
             currency: string;
             interval: string;
             limits?: components["schemas"]["PlanLimits"];
+            /** @description Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial. */
+            trialDays?: number;
         };
         PutPushDeviceInput: {
             /** @description The Expo push token the app minted. */

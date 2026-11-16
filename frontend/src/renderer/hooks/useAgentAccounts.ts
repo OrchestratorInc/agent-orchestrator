@@ -70,6 +70,11 @@ export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLogin
 	return accounts.filter((account) => account.id === keepId || !twinOf(account));
 }
 
+export function oneRowPerLogin<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: T[], keepId?: string): T[] {
+	const keptTwin = accounts.find((account) => account.id === keepId)?.sameLoginAs;
+	return withoutSameLogins(accounts, keepId).filter((account) => account.id !== keptTwin);
+}
+
 export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
 	const name = agentAccountName(account, t);
 	const email = account.email?.toLowerCase();

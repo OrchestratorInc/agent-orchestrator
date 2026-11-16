@@ -273,6 +273,7 @@ var shippedMigrations = map[int64]string{
 	20261115072651599: "20261115072651599_allow_minimax_code_harness.sql",
 	20261115072835107: "20261115072835107_review_run_state_machine.sql",
 	20261116063923032: "20261116063923032_index_pr_source_branch.sql",
+	20261116070040471: "20261116070040471_kept_artifacts.sql",
 	20261116113334512: "20261116113334512_pr_head_stack_facts.sql",
 }
 

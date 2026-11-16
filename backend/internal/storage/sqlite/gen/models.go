@@ -465,6 +465,22 @@ type DeletedSessionAccountUsage struct {
 	EstimatedCostNanos int64
 }
 
+type KeptArtifact struct {
+	ID            string
+	SessionID     string
+	Path          string
+	RegisteredAt  sql.NullTime
+	PreviousPaths string
+	CreatedAt     time.Time
+}
+
+type KeptArtifactSession struct {
+	SessionID string
+	ProjectID sql.NullString
+	Title     string
+	KeptAt    time.Time
+}
+
 type ManagedHarnessRelease struct {
 	Harness   string
 	Release   string
