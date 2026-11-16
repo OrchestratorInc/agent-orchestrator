@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "ao.chattraffic.run.v1",
+  "side": "baseline",
+  "sourceRef": "999321b38cc5f57bc53ab9c255cb10c4e8999e68",
+  "dirty": false,
+  "dirtyDiffSha256": "",
+  "goVersion": "go1.27.2",
+  "goos": "darwin",
+  "goarch": "arm64",
+  "harnessSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "fixturesSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+  "ceilingsSha256": "f978306bf8cd63c38c64be3ddbbef04d597f3dace09192a82f98dc0f60650a96",
+  "clientSourceSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "simulatorClientSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+  "clientPolicy": {
+    "localPageSize": 200,
+    "remoteLivePageSize": 30,
+    "remoteOlderPageSize": 100,
+    "remoteOutputLimit": 512,
+    "invalidateWindowMs": 150
+  },
+  "nonce": "0123456789abcdef0123456789abcdef",
+  "scenarios": [
+    {
+      "provider": "codex",
+      "phase": "history-open",
+      "transport": "remote-lan",
+      "metrics": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytesIn": 180,
+        "framingBytesIn": 12,
+        "bodyEncodedBytes": 5000,
+        "bodyDecodedBytes": 42000,
+        "wireBytesIn": 5192,
+        "wireBytesOut": 210
+      },
+      "state": {
+        "expectedDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+        "clientDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+        "serverDigest": "4444444444444444444444444444444444444444444444444444444444444444",
+        "messages": 20,
+        "activities": 10,
+        "turns": 10
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "live-turn",
+      "transport": "local",
+      "metrics": {
+        "requests": 6,
+        "cdcRows": 40,
+        "sseFrames": 41,
+        "sseBytes": 9000,
+        "headerBytesIn": 1100,
+        "framingBytesIn": 300,
+        "bodyEncodedBytes": 240000,
+        "bodyDecodedBytes": 240000,
+        "wireBytesIn": 250400,
+        "wireBytesOut": 900
+      },
+      "state": {
+        "expectedDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+        "clientDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+        "serverDigest": "5555555555555555555555555555555555555555555555555555555555555555",
+        "messages": 34,
+        "activities": 60,
+        "turns": 17
+      }
+    }
+  ]
+}

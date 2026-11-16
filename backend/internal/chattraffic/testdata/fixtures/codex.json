@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "ao.chattraffic.fixture.v1",
+  "provider": "codex",
+  "harness": "codex",
+  "provenance": "Normalized ports.ChatEvent shapes produced by backend/internal/adapters/chatdriver/codexappserver/normalize.go (normalizeItem, activityFor, activityDetail, encodeDetail) at 999321b38cc5; item id styles (rs_, msg_, call_) and field sets follow the codex-cli 0.146.0 frames cited in normalize_ingest_test.go. All paths, commands, outputs and prose are invented dummy content for a fictional project; no user data.",
+  "providerConversationId": "019dummy-thread-codex",
+  "historyTurns": 60,
+  "historyTemplates": [
+    {
+      "user": "Turn {n}: find where reserveStock validates quantities in the dummy shop and explain it.",
+      "steps": [
+        {"kind": "turn.started"},
+        {"kind": "activity.started", "item": "rs_{n}a", "activityKind": "reasoning", "status": "running", "summary": "Reasoning"},
+        {"kind": "reasoning.delta", "item": "rs_{n}a", "delta": "**Locating the reservation entry point for turn {n}**"},
+        {"kind": "activity.completed", "item": "rs_{n}a", "activityKind": "reasoning", "status": "completed", "summary": "Reasoning", "text": "{streamed}", "detail": {"text": "{streamed}"}},
+        {"kind": "activity.started", "item": "call_{n}a", "activityKind": "command", "status": "running", "summary": "rg -n \"reserveStock\" src", "detail": {"command": "rg -n \"reserveStock\" src", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'rg -n \"reserveStock\" src'"}},
+        {"kind": "command.output.delta", "item": "call_{n}a", "delta": "src/inventory/reserve.ts:{r}:export function reserveStock(sku: string, qty: number): Reservation {\n", "repeat": 6, "join": true},
+        {"kind": "activity.completed", "item": "call_{n}a", "activityKind": "command", "status": "completed", "summary": "rg -n \"reserveStock\" src", "detail": {"command": "rg -n \"reserveStock\" src", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'rg -n \"reserveStock\" src'", "output": "{streamed}", "outputMayBePartial": true, "outputSource": "aggregate", "exitCode": 0, "durationMs": 38}},
+        {"kind": "activity.started", "item": "call_{n}b", "activityKind": "command", "status": "running", "summary": "sed -n '1,60p' src/inventory/reserve.ts", "detail": {"command": "sed -n '1,60p' src/inventory/reserve.ts", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc \"sed -n '1,60p' src/inventory/reserve.ts\""}},
+        {"kind": "command.output.delta", "item": "call_{n}b", "delta": "{r}  if (qty <= 0 || !Number.isInteger(qty)) throw new InvalidQuantity(sku, qty); // dummy line\n", "repeat": 24, "join": true},
+        {"kind": "activity.completed", "item": "call_{n}b", "activityKind": "command", "status": "completed", "summary": "sed -n '1,60p' src/inventory/reserve.ts", "detail": {"command": "sed -n '1,60p' src/inventory/reserve.ts", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc \"sed -n '1,60p' src/inventory/reserve.ts\"", "output": "{streamed}", "outputMayBePartial": true, "outputSource": "aggregate", "exitCode": 0, "durationMs": 12}},
+        {"kind": "message.delta", "item": "msg_{n}a", "delta": "Turn {n}: `reserveStock` rejects non-positive and fractional quantities before it touches the ledger. It then reads the SKU's available count, refuses to go below zero, and records a reservation row with an expiry so an abandoned cart releases its hold. The validation lives at the top of `src/inventory/reserve.ts`, which keeps every caller on the same rule."},
+        {"kind": "message.completed", "item": "msg_{n}a", "text": "{streamed}"},
+        {"kind": "turn.completed", "turnState": "completed"}
+      ]
+    },
+    {
+      "user": "Turn {n}: make reservations expire after 15 minutes instead of 30 and run the inventory tests.",
+      "steps": [
+        {"kind": "turn.started"},
+        {"kind": "message.delta", "item": "msg_{n}a", "delta": "I'll change the default hold and run the inventory suite."},
+        {"kind": "message.completed", "item": "msg_{n}a", "text": "{streamed}"},
+        {"kind": "activity.started", "item": "call_{n}c", "activityKind": "file_change", "status": "running", "summary": "Edited src/inventory/config.ts", "detail": {"files": [{"path": "src/inventory/config.ts", "status": "modified", "additions": 1, "deletions": 1, "patch": "@@ -4,7 +4,7 @@ export const inventoryConfig = {\n   warehouse: \"dummy-east\",\n   lowStockThreshold: 5,\n-  reservationTtlMinutes: 30,\n+  reservationTtlMinutes: 15,\n   restockWebhook: \"https://example.invalid/restock\",\n };\n"}]}},
+        {"kind": "activity.completed", "item": "call_{n}c", "activityKind": "file_change", "status": "completed", "summary": "Edited src/inventory/config.ts", "detail": {"files": [{"path": "src/inventory/config.ts", "status": "modified", "additions": 1, "deletions": 1, "patch": "@@ -4,7 +4,7 @@ export const inventoryConfig = {\n   warehouse: \"dummy-east\",\n   lowStockThreshold: 5,\n-  reservationTtlMinutes: 30,\n+  reservationTtlMinutes: 15,\n   restockWebhook: \"https://example.invalid/restock\",\n };\n"}]}},
+        {"kind": "activity.started", "item": "call_{n}d", "activityKind": "command", "status": "running", "summary": "npm test -- inventory", "detail": {"command": "npm test -- inventory", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'npm test -- inventory'"}},
+        {"kind": "command.output.delta", "item": "call_{n}d", "delta": "  ✓ inventory › reserve › holds stock for case {r} (2 ms)\n", "repeat": 30, "join": true},
+        {"kind": "activity.completed", "item": "call_{n}d", "activityKind": "command", "status": "completed", "summary": "npm test -- inventory", "detail": {"command": "npm test -- inventory", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'npm test -- inventory'", "output": "{streamed}", "outputMayBePartial": true, "outputSource": "aggregate", "exitCode": 0, "durationMs": 4180}},
+        {"kind": "message.delta", "item": "msg_{n}b", "delta": "Turn {n}: the hold is now 15 minutes (`src/inventory/config.ts`), and all 30 inventory tests pass."},
+        {"kind": "message.completed", "item": "msg_{n}b", "text": "{streamed}"},
+        {"kind": "turn.completed", "turnState": "completed"}
+      ]
+    },
+    {
+      "user": "Turn {n}: check the dummy docs for how rollbacks should release reservations, then summarize.",
+      "steps": [
+        {"kind": "turn.started"},
+        {"kind": "activity.started", "item": "call_{n}e", "activityKind": "mcp_tool", "status": "running", "summary": "Called docs/search", "detail": {"server": "docs", "toolName": "search", "arguments": {"query": "reservation rollback release", "limit": 3}}},
+        {"kind": "activity.completed", "item": "call_{n}e", "activityKind": "mcp_tool", "status": "completed", "summary": "Called docs/search", "detail": {"server": "docs", "toolName": "search", "arguments": {"query": "reservation rollback release", "limit": 3}, "result": {"content": [{"type": "text", "text": "Dummy handbook §4.2: a failed checkout must release every reservation it created, in reverse order, inside the same transaction."}]}, "success": true}},
+        {"kind": "message.delta", "item": "msg_{n}a", "delta": "Turn {n} summary of the dummy handbook:\n\n1. A failed checkout releases every reservation it created.\n2. Releases run in reverse order so partial holds never strand stock.\n3. The release shares the checkout's transaction, so a crash cannot leave a hold without its order.\n\nOur `rollbackCheckout` already releases in reverse order, but it commits the release separately. Moving it into the checkout transaction would match the handbook."},
+        {"kind": "message.completed", "item": "msg_{n}a", "text": "{streamed}"},
+        {"kind": "turn.completed", "turnState": "completed"}
+      ]
+    }
+  ],
+  "liveTurn": {
+    "user": "Turn {n}: move the rollback release into the checkout transaction, add a regression test, and run the full suite.",
+    "steps": [
+      {"kind": "turn.started"},
+      {"kind": "activity.started", "item": "rs_{n}a", "activityKind": "reasoning", "status": "running", "summary": "Reasoning"},
+      {"kind": "reasoning.delta", "item": "rs_{n}a", "delta": "**Planning the transactional rollback change (part {r})**", "repeat": 3},
+      {"kind": "activity.completed", "item": "rs_{n}a", "activityKind": "reasoning", "status": "completed", "summary": "Reasoning", "text": "{streamed}", "detail": {"text": "{streamed}"}},
+      {"kind": "message.delta", "item": "msg_{n}a", "delta": "Part {r} of the plan: read the checkout flow, move the release into its transaction, then cover it with a test. ", "repeat": 4},
+      {"kind": "message.completed", "item": "msg_{n}a", "text": "{streamed}"},
+      {"kind": "activity.started", "item": "call_{n}a", "activityKind": "command", "status": "running", "summary": "rg -n \"rollbackCheckout\" src", "detail": {"command": "rg -n \"rollbackCheckout\" src", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'rg -n \"rollbackCheckout\" src'"}},
+      {"kind": "command.output.delta", "item": "call_{n}a", "delta": "src/checkout/rollback.ts:{r}:export async function rollbackCheckout(order: DummyOrder) {\n", "repeat": 4, "join": true},
+      {"kind": "activity.completed", "item": "call_{n}a", "activityKind": "command", "status": "completed", "summary": "rg -n \"rollbackCheckout\" src", "detail": {"command": "rg -n \"rollbackCheckout\" src", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'rg -n \"rollbackCheckout\" src'", "output": "{streamed}", "outputMayBePartial": true, "outputSource": "aggregate", "exitCode": 0, "durationMs": 31}},
+      {"kind": "activity.started", "item": "call_{n}b", "activityKind": "command", "status": "running", "summary": "sed -n '1,120p' src/checkout/rollback.ts", "detail": {"command": "sed -n '1,120p' src/checkout/rollback.ts", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc \"sed -n '1,120p' src/checkout/rollback.ts\""}},
+      {"kind": "command.output.delta", "item": "call_{n}b", "delta": "{r}  await releaseReservation(tx, order.reservations[{r}]); // dummy rollback line\n", "repeat": 40, "join": true},
+      {"kind": "activity.completed", "item": "call_{n}b", "activityKind": "command", "status": "completed", "summary": "sed -n '1,120p' src/checkout/rollback.ts", "detail": {"command": "sed -n '1,120p' src/checkout/rollback.ts", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc \"sed -n '1,120p' src/checkout/rollback.ts\"", "output": "{streamed}", "outputMayBePartial": true, "outputSource": "aggregate", "exitCode": 0, "durationMs": 9}},
+      {"kind": "activity.started", "item": "call_{n}c", "activityKind": "file_change", "status": "running", "summary": "Edited 2 files", "detail": {"files": [{"path": "src/checkout/rollback.ts", "status": "modified", "additions": 6, "deletions": 3, "patch": "@@ -12,9 +12,12 @@ export async function rollbackCheckout(order: DummyOrder) {\n-  const released = await releaseAll(order.reservations);\n-  await db.commit();\n-  return released;\n+  return db.transaction(async (tx) => {\n+    for (const reservation of [...order.reservations].reverse()) {\n+      await releaseReservation(tx, reservation);\n+    }\n+    return order.reservations.length;\n+  });\n }\n"}, {"path": "test/checkout/rollback.test.ts", "status": "added", "additions": 14, "deletions": 0, "patch": "import { rollbackCheckout } from \"../../src/checkout/rollback\";\nimport { dummyOrder, failingTransaction } from \"../fixtures\";\n\ntest(\"rollback releases reservations inside the checkout transaction\", async () => {\n  const order = dummyOrder({ reservations: 3 });\n  const tx = failingTransaction({ failAfter: 2 });\n  await expect(rollbackCheckout(order, tx)).rejects.toThrow();\n  expect(tx.committed).toBe(false);\n  expect(tx.released).toEqual([]);\n});\n"}]}},
+      {"kind": "activity.completed", "item": "call_{n}c", "activityKind": "file_change", "status": "completed", "summary": "Edited 2 files", "detail": {"files": [{"path": "src/checkout/rollback.ts", "status": "modified", "additions": 6, "deletions": 3, "patch": "@@ -12,9 +12,12 @@ export async function rollbackCheckout(order: DummyOrder) {\n-  const released = await releaseAll(order.reservations);\n-  await db.commit();\n-  return released;\n+  return db.transaction(async (tx) => {\n+    for (const reservation of [...order.reservations].reverse()) {\n+      await releaseReservation(tx, reservation);\n+    }\n+    return order.reservations.length;\n+  });\n }\n"}, {"path": "test/checkout/rollback.test.ts", "status": "added", "additions": 14, "deletions": 0, "patch": "import { rollbackCheckout } from \"../../src/checkout/rollback\";\nimport { dummyOrder, failingTransaction } from \"../fixtures\";\n\ntest(\"rollback releases reservations inside the checkout transaction\", async () => {\n  const order = dummyOrder({ reservations: 3 });\n  const tx = failingTransaction({ failAfter: 2 });\n  await expect(rollbackCheckout(order, tx)).rejects.toThrow();\n  expect(tx.committed).toBe(false);\n  expect(tx.released).toEqual([]);\n});\n"}]}},
+      {"kind": "activity.started", "item": "call_{n}d", "activityKind": "command", "status": "running", "summary": "npm test", "detail": {"command": "npm test", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'npm test'"}},
+      {"kind": "command.output.delta", "item": "call_{n}d", "delta": "  ✓ suite {r} › checkout › reserves, charges and confirms dummy order {r} (3 ms)\n  ✓ suite {r} › checkout › releases reservations for dummy order {r} (2 ms)\n", "repeat": 12},
+      {"kind": "activity.completed", "item": "call_{n}d", "activityKind": "command", "status": "completed", "summary": "npm test", "detail": {"command": "npm test", "cwd": "/workspace/dummy-shop", "rawCommand": "/bin/zsh -lc 'npm test'", "output": "{streamed}", "outputMayBePartial": true, "outputSource": "aggregate", "exitCode": 0, "durationMs": 6240}},
+      {"kind": "activity.started", "item": "call_{n}e", "activityKind": "mcp_tool", "status": "running", "summary": "Called docs/search", "detail": {"server": "docs", "toolName": "search", "arguments": {"query": "checkout transaction isolation", "limit": 2}}},
+      {"kind": "activity.completed", "item": "call_{n}e", "activityKind": "mcp_tool", "status": "completed", "summary": "Called docs/search", "detail": {"server": "docs", "toolName": "search", "arguments": {"query": "checkout transaction isolation", "limit": 2}, "result": {"content": [{"type": "text", "text": "Dummy handbook §4.3: checkout transactions run at serializable isolation in the dummy database."}]}, "success": true}},
+      {"kind": "message.delta", "item": "msg_{n}b", "delta": "Section {r}: the rollback now releases reservations in reverse order inside the checkout transaction, so a failure part-way leaves no stranded holds; the new regression test fails the transaction after two releases and checks nothing was committed. ", "repeat": 8},
+      {"kind": "message.completed", "item": "msg_{n}b", "text": "{streamed}"},
+      {"kind": "turn.completed", "turnState": "completed"}
+    ]
+  }
+}
