@@ -18,7 +18,7 @@ import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
-import { prepareUnpublish, sessionUnpublishTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { prepareUnpublish, sessionDeleteTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { useUiStore } from "../stores/ui-store";
 
 type TerminateSessionOptions = {
@@ -50,10 +50,9 @@ type TerminateResult = {
  * that keeps the files keeps their links too.
  */
 async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<TerminateResult> {
+	const baseUrl = session.deleteArtifacts ? queryClient.getQueryData<Settings>(settingsQueryKey)?.cloudControlPlaneUrl ?? "" : "";
 	const links = session.deleteArtifacts
-		? await prepareUnpublish(queryClient.getQueryData<Settings>(settingsQueryKey)?.cloudControlPlaneUrl ?? "", sessionUnpublishTargets(session), {
-			deleting: session.hostId ? [] : [{ sessionId: session.id }],
-		})
+		? await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ sessionId: session.id }] })
 		: undefined;
 	const artifactsDeleted = await archiveSession(queryClient, session);
 	return { artifactsDeleted, linksLive: artifactsDeleted && links ? await links.unpublish() : 0 };

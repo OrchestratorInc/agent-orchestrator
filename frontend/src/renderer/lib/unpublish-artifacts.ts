@@ -10,7 +10,8 @@
  * succeeded, so a delete that fails leaves its links working.
  */
 import type { TFunction } from "i18next";
-import type { CloudShareFile } from "../../shared/cloud-share";
+import type { CloudShareFile, HostShareLink } from "../../shared/cloud-share";
+import { findHostShareLink } from "./artifacts";
 import { useUiStore } from "../stores/ui-store";
 import { sessionArtifacts, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 import { aoBridge } from "./bridge";
@@ -19,7 +20,7 @@ import { aoBridge } from "./bridge";
 export type UnpublishTarget = Omit<CloudShareFile, "baseUrl" | "shareId">;
 
 /** The part of the share bridge unpublishing uses. */
-export type UnpublishBridge = Pick<typeof aoBridge.cloudShare, "inspect" | "unpublish">;
+export type UnpublishBridge = Pick<typeof aoBridge.cloudShare, "inspect" | "unpublish" | "hostLinks">;
 
 /**
  * An artifact as a delete names it: its ID when it has one, its path, its
@@ -101,9 +102,10 @@ export function publishedArtifacts<T extends Pick<DeletedArtifact, "shareUrl">>(
 
 /**
  * Whether a delete must look an artifact's link up. A local file says whether
- * it is published (its shareUrl, from this computer's records). A cloud file's
- * list never does: its link is recorded on this computer by org, session and
- * artifact ID, so each one is looked up.
+ * it is published (its shareUrl, from this computer's records), as does a
+ * remote host's file once matched to this computer's host links. A cloud
+ * file's list never does: its link is recorded on this computer by org,
+ * session and artifact ID, so each one is looked up.
  */
 export function mayBePublished(session: Pick<WorkspaceSession, "cloud">, artifact: Pick<DeletedArtifact, "shareUrl">): boolean {
 	return Boolean(session.cloud) || Boolean(artifact.shareUrl);
@@ -116,7 +118,7 @@ export function mayBePublished(session: Pick<WorkspaceSession, "cloud">, artifac
  * session without a project uses the Scratchpad's, as the session view does.
  */
 export function unpublishTarget(
-	session: Pick<WorkspaceSession, "id" | "cloud"> & { workspaceId?: string },
+	session: Pick<WorkspaceSession, "id" | "cloud"> & { workspaceId?: string; hostId?: string },
 	artifact: DeletedArtifact,
 ): UnpublishTarget {
 	const artifactId = artifact.id ? { artifactId: artifact.id } : {};
@@ -124,25 +126,48 @@ export function unpublishTarget(
 		const fingerprint = artifact.sha256 ? { fingerprint: artifact.sha256 } : {};
 		return { source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: artifact.path, projectId: "", ...artifactId, ...fingerprint };
 	}
-	return { sessionId: session.id, path: artifact.path, projectId: session.workspaceId || STANDALONE_WORKSPACE_ID, ...artifactId };
+	const projectId = session.workspaceId || STANDALONE_WORKSPACE_ID;
+	if (session.hostId) return { source: "host", hostId: session.hostId, sessionId: session.id, path: artifact.path, projectId, ...artifactId };
+	return { sessionId: session.id, path: artifact.path, projectId, ...artifactId };
 }
 
-/**
- * The files whose links a delete of these artifacts must look up and
- * unpublish. A remote host's session has none: links are published from, and
- * recorded on, this computer only.
- */
+/** The files whose links a delete of these artifacts must look up and unpublish. */
 export function deleteUnpublishTargets(
 	session: Pick<WorkspaceSession, "id" | "cloud" | "hostId"> & { workspaceId?: string },
 	artifacts: readonly DeletedArtifact[],
 ): UnpublishTarget[] {
-	if (session.hostId) return [];
 	return artifacts.filter((artifact) => mayBePublished(session, artifact)).map((artifact) => unpublishTarget(session, artifact));
 }
 
-/** The files whose links deleting a session's artifacts must look up and unpublish. */
-export function sessionUnpublishTargets(session: WorkspaceSession): UnpublishTarget[] {
-	return deleteUnpublishTargets(session, sessionArtifacts(session));
+/**
+ * A session's artifacts with their links. A remote daemon lists none, so a
+ * remote host's files take theirs from this computer's host links.
+ */
+function sessionArtifactsWithLinks(session: WorkspaceSession, hostLinks: readonly HostShareLink[]): DeletedArtifact[] {
+	const { hostId } = session;
+	return sessionArtifacts(session).map((artifact) => {
+		const link = hostId && !artifact.shareUrl ? findHostShareLink(hostLinks, hostId, session.id, artifact) : undefined;
+		return link ? { ...artifact, shareUrl: link.url } : artifact;
+	});
+}
+
+/**
+ * The files whose links deleting a session's artifacts must look up and
+ * unpublish. A remote host's session needs this computer's host links.
+ */
+export function sessionUnpublishTargets(session: WorkspaceSession, hostLinks: readonly HostShareLink[] = []): UnpublishTarget[] {
+	return deleteUnpublishTargets(session, sessionArtifactsWithLinks(session, hostLinks));
+}
+
+/**
+ * sessionUnpublishTargets, reading this computer's host links for a remote
+ * host's session. When they cannot be read, every file is looked up.
+ */
+export async function sessionDeleteTargets(baseUrl: string, session: WorkspaceSession, bridge: UnpublishBridge = aoBridge.cloudShare): Promise<UnpublishTarget[]> {
+	if (!session.hostId || !baseUrl) return sessionUnpublishTargets(session);
+	const hostLinks = await bridge.hostLinks(baseUrl).catch(() => undefined);
+	if (!hostLinks) return sessionArtifacts(session).map((artifact) => unpublishTarget(session, artifact));
+	return sessionUnpublishTargets(session, hostLinks);
 }
 
 /**
@@ -158,14 +183,13 @@ export function publishedCheck(
 	session: Pick<WorkspaceSession, "id" | "cloud" | "hostId"> & { workspaceId?: string },
 	artifacts: readonly DeletedArtifact[],
 ): PublishedCheck {
-	if (session.hostId) return NOTHING_PUBLISHED;
 	if (session.cloud) return { known: 0, lookup: deleteUnpublishTargets(session, artifacts) };
 	return { known: publishedArtifacts(artifacts).length, lookup: [] };
 }
 
-/** The PublishedCheck of deleting a whole session's artifacts. */
-export function sessionPublishedCheck(session: WorkspaceSession | undefined): PublishedCheck {
-	return session ? publishedCheck(session, sessionArtifacts(session)) : NOTHING_PUBLISHED;
+/** The PublishedCheck of deleting a whole session's artifacts; see sessionUnpublishTargets for hostLinks. */
+export function sessionPublishedCheck(session: WorkspaceSession | undefined, hostLinks: readonly HostShareLink[] = []): PublishedCheck {
+	return session ? publishedCheck(session, sessionArtifactsWithLinks(session, hostLinks)) : NOTHING_PUBLISHED;
 }
 
 /** Adds checks up, for a delete that spans sessions. */

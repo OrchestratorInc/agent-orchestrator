@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { HostShareLink } from "../../shared/cloud-share";
 import { toCloudWorkspaceSession } from "../hooks/useWorkspaceQuery";
 import type { CloudCpSession } from "./cloud-cp/types";
 import { STANDALONE_WORKSPACE_ID, type SessionArtifact, type WorkspaceSession } from "../types/workspace";
@@ -7,6 +8,7 @@ import {
 	onArtifactLinksUnpublished,
 	prepareUnpublish,
 	publishedCheck,
+	sessionDeleteTargets,
 	sessionPublishedCheck,
 	sessionUnpublishTargets,
 	trackPublish,
@@ -38,7 +40,7 @@ function session(artifacts: SessionArtifact[], overrides: Partial<WorkspaceSessi
 }
 
 /** A bridge whose links are by path; `refuse` makes a lookup or unpublish fail. */
-function bridge(links: Record<string, string>, refuse: { inspect?: string[]; unpublish?: string[] } = {}) {
+function bridge(links: Record<string, string>, refuse: { inspect?: string[]; unpublish?: string[] } = {}, hostLinks: HostShareLink[] = []) {
 	const unpublished: string[] = [];
 	const fake: UnpublishBridge = {
 		inspect: vi.fn(async (file) => {
@@ -46,6 +48,7 @@ function bridge(links: Record<string, string>, refuse: { inspect?: string[]; unp
 			const shareId = links[file.path];
 			return { name: file.path, unsupported: false, fingerprint: "f", ...(shareId ? { shareId } : {}) };
 		}),
+		hostLinks: vi.fn(async () => hostLinks),
 		unpublish: vi.fn(async (_baseUrl, shareId) => {
 			if (refuse.unpublish?.includes(shareId)) throw new Error("offline");
 			unpublished.push(shareId);
@@ -63,10 +66,26 @@ describe("sessionUnpublishTargets", () => {
 		]);
 	});
 
-	it("has none for a remote host's session, whose links are not recorded here", () => {
-		const remote = session([artifact("a.md", "https://l/a")], { hostId: "host-1" });
+	it("names a remote host's files by the host, taking their links from this computer's host links", async () => {
+		const remote = session([artifact("a.md", undefined, "id-a"), artifact("b.md"), artifact("c.md")], { hostId: "host-1" });
+		const hostLinks: HostShareLink[] = [
+			{ hostId: "host-1", sessionId: "ao-1", artifactId: "id-a", url: "https://l/a" },
+			{ hostId: "host-1", sessionId: "ao-1", path: "c.md", url: "https://l/c" },
+			{ hostId: "host-2", sessionId: "ao-1", path: "b.md", url: "https://l/b" },
+		];
+		const expected = [
+			{ source: "host", hostId: "host-1", sessionId: "ao-1", path: "a.md", projectId: "ao", artifactId: "id-a" },
+			{ source: "host", hostId: "host-1", sessionId: "ao-1", path: "c.md", projectId: "ao" },
+		];
+		expect(sessionUnpublishTargets(remote, hostLinks)).toEqual(expected);
+		expect(sessionPublishedCheck(remote, hostLinks)).toEqual({ known: 2, lookup: [] });
 		expect(sessionUnpublishTargets(remote)).toEqual([]);
-		expect(sessionPublishedCheck(remote)).toEqual({ known: 0, lookup: [] });
+
+		const { fake } = bridge({}, {}, hostLinks);
+		await expect(sessionDeleteTargets(BASE, remote, fake)).resolves.toEqual(expected);
+		// Host links that cannot be read leave every file to be looked up.
+		fake.hostLinks = vi.fn(async () => { throw new Error("signed out"); });
+		await expect(sessionDeleteTargets(BASE, remote, fake)).resolves.toHaveLength(3);
 	});
 
 	it("names a cloud session's file by its org, and a projectless one by the Scratchpad", () => {
