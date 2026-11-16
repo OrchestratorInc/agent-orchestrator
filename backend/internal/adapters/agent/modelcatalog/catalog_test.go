@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -440,6 +441,41 @@ func TestOpenInterpreterCatalogFingerprintTracksNativeAccount(t *testing.T) {
 	}
 	if second == (Discoverer{}).CatalogFingerprint(context.Background(), request) {
 		t.Fatal("account change did not invalidate the catalog")
+	}
+}
+
+// model_catalog_json replaces the native catalog, so editing only the file it
+// names must invalidate. A relative path resolves against its config file's
+// directory; a project layer may name an absolute path.
+func TestOpenInterpreterCatalogFingerprintTracksReferencedModelCatalog(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	external := filepath.Join(t.TempDir(), "project-models.json")
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(root, "config.toml"), `model_catalog_json = "models.json"`+"\n")
+	write(filepath.Join(root, "models.json"), `{"models":[{"slug":"one"}]}`)
+	write(filepath.Join(workspace, ".openinterpreter", "config.toml"), "model_catalog_json = "+strconv.Quote(external)+"\n")
+	write(external, `{"models":[{"slug":"project-one"}]}`)
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", WorkingDir: workspace, Env: map[string]string{"INTERPRETER_HOME": root}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	before := fingerprint()
+	write(filepath.Join(root, "models.json"), `{"models":[{"slug":"two"}]}`)
+	afterUser := fingerprint()
+	if afterUser == before {
+		t.Fatal("editing the user-referenced model catalog did not invalidate the catalog")
+	}
+	write(external, `{"models":[{"slug":"project-two"}]}`)
+	if fingerprint() == afterUser {
+		t.Fatal("editing the project-referenced model catalog did not invalidate the catalog")
 	}
 }
 

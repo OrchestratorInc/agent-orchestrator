@@ -953,11 +953,18 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		if err != nil {
 			return "native-debug-models-v2:" + providers
 		}
-		paths := []string{filepath.Join(root, "config.toml"), filepath.Join(root, "auth.json")}
+		configs := []string{filepath.Join(root, "config.toml")}
 		if workingDir != "" {
-			paths = append(paths, filepath.Join(workingDir, ".openinterpreter", "config.toml"))
+			configs = append(configs, filepath.Join(workingDir, ".openinterpreter", "config.toml"))
 		}
-		return "native-debug-models-v2:" + providers + ":" + root + ":" + fingerprintConfigPaths(paths)
+		// model_catalog_json replaces the native catalog, so the file it names
+		// is a discovery input even when no config file changes.
+		catalogs := openInterpreterModelCatalogFiles(configs)
+		paths := make([]string, 0, len(configs)+1+len(catalogs))
+		paths = append(paths, configs...)
+		paths = append(paths, filepath.Join(root, "auth.json"))
+		paths = append(paths, catalogs...)
+		return "native-debug-models-v2:" + providers + ":" + root + ":" + fingerprintConfigPaths(paths) + fileStatSignature(catalogs)
 	}
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)

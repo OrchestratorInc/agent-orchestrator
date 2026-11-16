@@ -377,6 +377,48 @@ func readModelConfig(path string) ([]byte, error) {
 	return raw, nil
 }
 
+// openInterpreterModelCatalogFiles returns the model_catalog_json files named by
+// Open Interpreter config layers. Native resolves a relative path against the
+// directory of the config file that sets it.
+func openInterpreterModelCatalogFiles(configs []string) []string {
+	var files []string
+	for _, path := range configs {
+		raw, err := readModelConfig(path)
+		if err != nil {
+			continue
+		}
+		var config struct {
+			ModelCatalogJSON string `toml:"model_catalog_json"`
+		}
+		if toml.Unmarshal(raw, &config) != nil {
+			continue
+		}
+		file := strings.TrimSpace(config.ModelCatalogJSON)
+		if file == "" {
+			continue
+		}
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(filepath.Dir(path), file)
+		}
+		files = append(files, filepath.Clean(file))
+	}
+	return files
+}
+
+// fileStatSignature records size and modification time, so a change to a file
+// fingerprintConfigPaths skips for exceeding the read limit still invalidates.
+func fileStatSignature(paths []string) string {
+	var signature strings.Builder
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil {
+			fmt.Fprintf(&signature, ":%d-%d", info.Size(), info.ModTime().UnixNano())
+		} else {
+			signature.WriteString(":missing")
+		}
+	}
+	return signature.String()
+}
+
 func configDiscoveryFingerprint(agentID, workingDir string, env map[string]string) string {
 	if !hasConfigDiscoverySource(agentID) {
 		return ""
