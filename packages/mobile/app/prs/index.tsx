@@ -29,7 +29,8 @@ import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
 import type { DashboardPR } from "../../lib/api";
 import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
-import { useArchivedMergedPRs, withArchivedPRSessions, type MergedPRSource } from "../../lib/archivedMergedPRs";
+import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
+import type { ArchivedPRState } from "../../lib/api";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
@@ -46,6 +47,9 @@ type PRsParams = { hostId?: string; projectId?: string };
 // archived rows wait for it: the merged history can run to hundreds of PRs, one
 // request each.
 const SUMMARY_LOOKAHEAD = 30;
+
+// The ended sessions' PRs each filter shows.
+const ARCHIVED_STATES: Record<PRListFilter, readonly ArchivedPRState[]> = { open: [], merged: ["merged"], all: ["merged", "closed"] };
 
 // Its rows share one width (see `MenuRowWidthScope`): a filter mounts a new
 // set of rows, and the ones past the list's first render batch are sized on
@@ -69,30 +73,32 @@ function PRList() {
 	const projectFilter = routeHostId ? (routeProjectId ?? "all") : singleMachine ? activeProjectId : "all";
 	const [filter, setFilter] = useState<Filter>("open");
 	const [refreshToken, setRefreshToken] = useState(0);
-	// Each machine that pages its archive is read for the merged PRs of sessions
-	// that have ended, once Merged or All is open. A machine with an empty
-	// archive has none to read.
-	const mergedSources = useMemo<MergedPRSource[]>(() => visibleHosts.flatMap((host) => {
+	// Each machine that pages its archive is read for the PRs of sessions that
+	// have ended: merged ones once Merged or All is open, closed ones once All
+	// is. A machine with an empty archive has none to read.
+	const archivedSources = useMemo<ArchivedPRSource[]>(() => visibleHosts.flatMap((host) => {
 		if (isCloudHost(host.hostId) || !host.archive) return [];
 		const projectId = projectFilter === "all" ? undefined : projectFilter;
 		const archived = projectId === undefined ? host.archive.total : host.archive.byProject[projectId] ?? 0;
 		return archived > 0 ? [{ hostId: host.hostId, hostName: host.name, appearance: host.appearance, projectId, archived }] : [];
 	}), [visibleHosts, projectFilter]);
-	const archivedMerged = useArchivedMergedPRs(mergedSources, { active: filter !== "open", refreshToken });
-	const archivedKeys = useMemo(() => new Set(archivedMerged.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archivedMerged.sessions]);
+	const archivedStates = ARCHIVED_STATES[filter];
+	const archived = useArchivedPRs(archivedSources, { states: archivedStates, refreshToken });
+	const archivedLoading = archivedStates.some((state) => archived.loading[state]);
+	const archivedKeys = useMemo(() => new Set(archived.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archived.sessions]);
 	const prs = useMemo(() => {
 		// Hosted rows are structurally shared across sync/notification updates.
 		// Keep those identities, and deduplicate PRs within each machine only.
 		// Live rows come first, so a PR keeps its live session's row.
 		const byHost = new Map<string, HostedSession[]>();
-		for (const session of withArchivedPRSessions(allSessions, archivedMerged.sessions)) {
+		for (const session of withArchivedPRSessions(allSessions, archived.sessions)) {
 			if (routeHostId && session.hostId !== routeHostId) continue;
 			const rows = byHost.get(session.hostId);
 			if (rows) rows.push(session);
 			else byHost.set(session.hostId, [session]);
 		}
 		return [...byHost.values()].flatMap(sessions => collectPRs(sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter));
-	}, [allSessions, archivedMerged.sessions, routeHostId, projectFilter]);
+	}, [allSessions, archived.sessions, routeHostId, projectFilter]);
 	const configured = hostStates.length > 0 || Boolean(cloud);
 	const loading = visibleHosts.some((host) => host.loading) || (cloudShown && !cloudSessionsLoaded);
 	// A machine's failure fills the page only when nothing answers: with
@@ -101,8 +107,8 @@ function PRList() {
 	const toast = useToast();
 	const { show: showToast } = toast;
 	useEffect(() => {
-		if (archivedMerged.error) showToast(archivedMerged.error);
-	}, [archivedMerged.error, showToast]);
+		if (archived.error) showToast(archived.error);
+	}, [archived.error, showToast]);
 	// Android 13 and later confirms every copy with its own clipboard preview.
 	const linkCopied = useCallback(() => {
 		if (Platform.OS === "android" && Number(Platform.Version) >= 33) return;
@@ -113,12 +119,13 @@ function PRList() {
 	// than presenting a flat stream in daemon order.
 	const filtered = useMemo(() => prs.filter(({ pr }) => prInFilter(filter, prLifecycle(pr))), [prs, filter]);
 	const sections = useMemo(() => prListSections(prs, filter), [prs, filter]);
-	// Archived sessions still loading each hold a merged PR, so the counts do
-	// not climb page by page.
+	// Archived sessions still loading each hold a PR in the state they were
+	// asked for, so the counts do not climb page by page.
+	const { merged: unloadedMerged, closed: unloadedClosed } = archived.unloaded;
 	const counts = useMemo(() => {
 		const loaded = prFilterCounts(prs);
-		return { ...loaded, merged: loaded.merged + archivedMerged.unloaded, all: loaded.all + archivedMerged.unloaded };
-	}, [prs, archivedMerged.unloaded]);
+		return { ...loaded, merged: loaded.merged + unloadedMerged, all: loaded.all + unloadedMerged + unloadedClosed };
+	}, [prs, unloadedMerged, unloadedClosed]);
 	// Name each row's repository only when the list holds more than one.
 	const showProject = useMemo(() => new Set(prs.map(({ session }) => `${session.hostId}:${session.projectId}`)).size > 1, [prs]);
 	const now = useNow(MINUTE_MS);
@@ -237,13 +244,13 @@ function PRList() {
 						onLinkCopied={linkCopied}
 					/>;
 				}}
-				ListFooterComponent={filter !== "open" && archivedMerged.loading && filtered.length > 0 ? (
+				ListFooterComponent={archivedLoading && filtered.length > 0 ? (
 					<View style={styles.footer}>
-						<Spinner color={t.accent} accessibilityLabel="Loading merged pull requests" />
+						<Spinner color={t.accent} accessibilityLabel="Loading past pull requests" />
 					</View>
 				) : null}
 				ListEmptyComponent={
-					(loading && prs.length === 0) || (filter !== "open" && archivedMerged.loading && filtered.length === 0) ? (
+					(loading && prs.length === 0) || (archivedLoading && filtered.length === 0) ? (
 						<View style={styles.center}>
 							<Spinner color={t.accent} accessibilityLabel="Loading pull requests" />
 						</View>

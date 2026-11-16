@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getArchivedPRSessions, type DashboardSession, type PRStatePage } from "./api";
+import { getArchivedPRSessions, type ArchivedPRState, type DashboardSession, type PRStatePage } from "./api";
 import { userFacingError } from "./connectionError";
 import { hostedRowKey, type HostedSession } from "./hostedRows";
 import type { MachineAppearance } from "./machineAppearance";
 import { useApp } from "./store";
 
-// The poll fetches live workers only, so a pull request merged by a session
-// that has since ended is in no row the PR list reads. A machine whose daemon
-// pages its archive is asked for those sessions separately, all of them, while
-// the Merged or All filter is open. A machine that still sends its archive with
-// the poll needs none of this: its ended sessions are already rows.
+// The poll fetches live workers only, so a pull request merged or closed by a
+// session that has since ended is in no row the PR list reads. A machine whose
+// daemon pages its archive is asked for those sessions separately, all of
+// them: merged ones while Merged or All is open, closed ones while All is. A
+// machine that still sends its archive with the poll needs none of this: its
+// ended sessions are already rows.
 
-/** One machine's archive, optionally narrowed to a project, read for merged PRs. */
-export type MergedPRSource = {
+/** One machine's archive, optionally narrowed to a project, read for its PRs. */
+export type ArchivedPRSource = {
 	hostId: string;
 	hostName: string;
 	appearance?: MachineAppearance;
@@ -34,7 +35,8 @@ type Stream = {
 
 const EMPTY_STREAM: Stream = { rows: [], total: 0, loading: false, supported: true, error: null };
 
-export const mergedSourceKey = (source: Pick<MergedPRSource, "hostId" | "projectId">) => `${source.hostId}\n${source.projectId ?? ""}`;
+const sourceKey = (source: Pick<ArchivedPRSource, "hostId" | "projectId">) => `${source.hostId}\n${source.projectId ?? ""}`;
+const streamKey = (source: Pick<ArchivedPRSource, "hostId" | "projectId">, state: ArchivedPRState) => `${sourceKey(source)}\n${state}`;
 
 /**
  * Reads a cursor to its end, handing each page's new sessions to `onPage`.
@@ -75,11 +77,11 @@ export function withArchivedPRSessions(live: readonly HostedSession[], archived:
 }
 
 /**
- * How many archived sessions with a merged PR are counted but not loaded yet.
- * Each holds at least one, so adding this to the loaded count keeps the
- * Merged filter's number from climbing page by page while the list loads.
+ * How many archived sessions with a PR in a state are counted but not loaded
+ * yet. Each holds at least one such PR, so adding this to the loaded count
+ * keeps a filter's number from climbing page by page while the list loads.
  */
-export function unloadedMergedSessions(streams: Iterable<Pick<Stream, "rows" | "total" | "supported">>): number {
+export function unloadedArchivedSessions(streams: Iterable<Pick<Stream, "rows" | "total" | "supported">>): number {
 	let count = 0;
 	for (const stream of streams) {
 		if (stream.supported) count += Math.max(0, stream.total - stream.rows.length);
@@ -89,25 +91,40 @@ export function unloadedMergedSessions(streams: Iterable<Pick<Stream, "rows" | "
 
 /**
  * An archived row as the PR list reads it: tagged with its machine and holding
- * its merged PRs only. A PR the ended session left open or closed would
- * otherwise join the other filters only after Merged had been opened.
+ * only its PRs in the state it was read for. A PR the ended session left open
+ * would otherwise join the Open filter only after Merged or All had been
+ * opened.
  */
-export function archivedMergedRow(source: Pick<MergedPRSource, "hostId" | "hostName" | "appearance">, session: DashboardSession): HostedSession {
-	const prs = (session.prs?.length ? session.prs : session.pr ? [session.pr] : []).filter((pr) => pr.state === "merged");
+export function archivedPRRow(source: Pick<ArchivedPRSource, "hostId" | "hostName" | "appearance">, session: DashboardSession, state: ArchivedPRState): HostedSession {
+	const prs = (session.prs?.length ? session.prs : session.pr ? [session.pr] : []).filter((pr) => pr.state === state);
 	return { ...session, pr: prs[0] ?? null, prs, hostId: source.hostId, hostName: source.hostName, hostAppearance: source.appearance };
 }
 
-function hosted(source: MergedPRSource, sessions: DashboardSession[]): HostedSession[] {
-	return sessions.map((session) => archivedMergedRow(source, session));
+/**
+ * One row per archived session: a session read for both its merged and its
+ * closed PRs keeps the first row and gains the other's PRs.
+ */
+export function mergeArchivedRows(lists: readonly (readonly HostedSession[])[]): HostedSession[] {
+	const byKey = new Map<string, HostedSession>();
+	for (const rows of lists) {
+		for (const row of rows) {
+			const key = hostedRowKey(row.hostId, row.id);
+			const existing = byKey.get(key);
+			if (!existing) byKey.set(key, row);
+			else byKey.set(key, { ...existing, prs: [...(existing.prs ?? []), ...(row.prs ?? [])] });
+		}
+	}
+	return [...byKey.values()];
 }
 
 /**
- * Every archived worker with a merged PR on each source, read to the end while
- * `active`. A source is read again when its archive's size moves or
+ * Every archived worker with a PR in one of `states` on each source, read to
+ * the end. A stream is read again when its archive's size moves or
  * `refreshToken` changes; a first read shows its pages as they land, a re-read
- * keeps the rows on screen until it has them all.
+ * keeps the rows on screen until it has them all. A state no longer asked for
+ * keeps what it read, so going back to its filter shows it at once.
  */
-export function useArchivedMergedPRs(sources: readonly MergedPRSource[], options: { active: boolean; refreshToken: number }) {
+export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { states: readonly ArchivedPRState[]; refreshToken: number }) {
 	const { configForHost } = useApp();
 	const [streams, setStreams] = useState<Record<string, Stream>>({});
 	const streamsRef = useRef(streams);
@@ -120,7 +137,7 @@ export function useArchivedMergedPRs(sources: readonly MergedPRSource[], options
 		setStreams((current) => ({ ...current, [key]: change(current[key] ?? EMPTY_STREAM) }));
 	}, []);
 
-	const read = useCallback(async (source: MergedPRSource, key: string, controller: AbortController) => {
+	const read = useCallback(async (source: ArchivedPRSource, state: ArchivedPRState, key: string, controller: AbortController) => {
 		const config = configForHost(source.hostId);
 		if (!config) return;
 		const firstRead = (streamsRef.current[key]?.rows.length ?? 0) === 0;
@@ -129,9 +146,9 @@ export function useArchivedMergedPRs(sources: readonly MergedPRSource[], options
 		let total = 0;
 		try {
 			const outcome = await readAllPRStatePages(
-				(cursor) => getArchivedPRSessions(config, { prState: "merged", cursor, projectId: source.projectId }, { signal: controller.signal }),
+				(cursor) => getArchivedPRSessions(config, { prState: state, cursor, projectId: source.projectId }, { signal: controller.signal }),
 				(sessions, pageTotal) => {
-					rows.push(...hosted(source, sessions));
+					rows.push(...sessions.map((session) => archivedPRRow(source, session, state)));
 					total = pageTotal;
 					if (firstRead) {
 						const shown = [...rows];
@@ -149,35 +166,39 @@ export function useArchivedMergedPRs(sources: readonly MergedPRSource[], options
 		} catch (cause) {
 			if (controller.signal.aborted) return;
 			// Whatever was on screen stays; a pull to refresh reads again.
-			update(key, (stream) => ({ ...stream, loading: false, error: userFacingError(cause, "Couldn't load merged pull requests.") }));
+			update(key, (stream) => ({ ...stream, loading: false, error: userFacingError(cause, "Couldn't load past pull requests.") }));
 		}
 	}, [configForHost, update]);
 
-	const plan = sources.map((source) => `${mergedSourceKey(source)}=${source.archived}`).join("\t");
+	const plan = sources.map((source) => `${sourceKey(source)}=${source.archived}`).join("\t");
+	const wanted = options.states.join(",");
 	useEffect(() => {
-		const current = new Set(sourcesRef.current.map(mergedSourceKey));
+		const current = new Set(sourcesRef.current.map(sourceKey));
+		const stillShown = (key: string) => current.has(key.slice(0, key.lastIndexOf("\n")));
 		for (const [key, run] of runs.current) {
-			if (current.has(key)) continue;
+			if (stillShown(key)) continue;
 			run.controller.abort();
 			runs.current.delete(key);
 		}
 		setStreams((existing) => {
-			const kept = Object.entries(existing).filter(([key]) => current.has(key));
+			const kept = Object.entries(existing).filter(([key]) => stillShown(key));
 			return kept.length === Object.keys(existing).length ? existing : Object.fromEntries(kept);
 		});
-		if (!options.active) return;
-		for (const source of sourcesRef.current) {
-			const key = mergedSourceKey(source);
-			const stamp = `${source.archived}|${options.refreshToken}`;
-			const previous = runs.current.get(key);
-			// An offline machine is not marked read, so the next change or refresh tries it again.
-			if (previous?.stamp === stamp || !configForHost(source.hostId)) continue;
-			previous?.controller.abort();
-			const controller = new AbortController();
-			runs.current.set(key, { controller, stamp });
-			void read(source, key, controller);
+		for (const state of options.states) {
+			for (const source of sourcesRef.current) {
+				const key = streamKey(source, state);
+				const stamp = `${source.archived}|${options.refreshToken}`;
+				const previous = runs.current.get(key);
+				// An offline machine is not marked read, so the next change or refresh tries it again.
+				if (previous?.stamp === stamp || !configForHost(source.hostId)) continue;
+				previous?.controller.abort();
+				const controller = new AbortController();
+				runs.current.set(key, { controller, stamp });
+				void read(source, state, key, controller);
+			}
 		}
-	}, [plan, options.active, options.refreshToken, read, configForHost]);
+		// `wanted` stands for `options.states`.
+	}, [plan, wanted, options.refreshToken, read, configForHost]);
 	useEffect(() => () => {
 		for (const run of runs.current.values()) run.controller.abort();
 		runs.current.clear();
@@ -185,15 +206,21 @@ export function useArchivedMergedPRs(sources: readonly MergedPRSource[], options
 
 	// Keyed on the plan, not the array: a host sync rebuilds `sources` with the
 	// same machines, and the PR list must not rebuild its sections for that.
-	const shown = useMemo(
-		() => sourcesRef.current.map((source) => streams[mergedSourceKey(source)]).filter((stream): stream is Stream => Boolean(stream)),
-		[plan, streams],
+	const shown = useMemo(() => {
+		const byState = (state: ArchivedPRState) => sourcesRef.current
+			.map((source) => streams[streamKey(source, state)])
+			.filter((stream): stream is Stream => Boolean(stream));
+		return { merged: byState("merged"), closed: byState("closed") };
+	}, [plan, streams]);
+	const sessions = useMemo(
+		() => mergeArchivedRows([...shown.merged, ...shown.closed].map((stream) => stream.rows)),
+		[shown],
 	);
-	const sessions = useMemo(() => shown.flatMap((stream) => stream.rows), [shown]);
+	const all = [...shown.merged, ...shown.closed];
 	return {
 		sessions,
-		unloaded: unloadedMergedSessions(shown),
-		loading: shown.some((stream) => stream.loading),
-		error: shown.find((stream) => stream.error)?.error ?? null,
+		unloaded: { merged: unloadedArchivedSessions(shown.merged), closed: unloadedArchivedSessions(shown.closed) },
+		loading: { merged: shown.merged.some((stream) => stream.loading), closed: shown.closed.some((stream) => stream.loading) },
+		error: all.find((stream) => stream.error)?.error ?? null,
 	};
 }

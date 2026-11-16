@@ -297,3 +297,23 @@ it("lists the merged PRs of ended sessions once Merged is open", async () => {
 	expect(control().props.counts).toMatchObject({ open: 2, merged: 1, all: 3 });
 	expect(fixture.summaryTargets.at(-1)).toContainEqual(expect.objectContaining({ sessionId: "ended" }));
 });
+
+it("adds the closed PRs of ended sessions under All", async () => {
+	fixture.hostStates = fixture.hostStates.map((host, index) => index === 0 ? { ...host, archive: { total: 5, byProject: {} } } : host);
+	const ended = (id: string, number: number, state: "merged" | "closed"): HostedSession =>
+		({ ...session("mac"), id, isTerminated: true, pr: undefined, prs: [{ number, url: `https://github.com/ao/test/pull/${number}`, state }] });
+	fixture.getArchivedPRSessions.mockImplementation(async (_config: unknown, options: { prState: string }) => (
+		options.prState === "closed"
+			? { sessions: [ended("gave-up", 4, "closed")], nextCursor: null, total: 1 }
+			: { sessions: [ended("shipped", 3, "merged")], nextCursor: null, total: 1 }
+	));
+	act(() => { renderer = create(<PRsScreen />); });
+	const header = () => (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as { props: { children: { type: unknown; props: Record<string, unknown> }[] } })
+		.props.children.find((child) => child?.type === "PRFilterControl")!;
+	await act(async () => (header().props.onChange as (filter: string) => void)("all"));
+	expect(fixture.getArchivedPRSessions.mock.calls.map((call) => (call[1] as { prState: string }).prState).sort()).toEqual(["closed", "merged"]);
+	const sections = renderer!.root.findByType("SectionList" as never).props.sections as { key: string; data: { session: HostedSession }[] }[];
+	expect(sections.map((section) => section.key)).toEqual(["review", "merged", "closed"]);
+	expect(sections.at(-1)?.data.map((item) => item.session.id)).toEqual(["gave-up"]);
+	expect(header().props.counts).toMatchObject({ open: 2, merged: 1, all: 4 });
+});

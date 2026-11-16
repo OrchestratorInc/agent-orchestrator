@@ -650,6 +650,9 @@ export async function getArchivedSessions(
 	};
 }
 
+/** The PR states an ended session's pull requests are read back in. */
+export type ArchivedPRState = "merged" | "closed";
+
 /** Archived workers owning a pull request in one state, a page at a time. */
 export type PRStatePage = ArchivePage & {
 	/** How many archived workers match, across every page. */
@@ -666,7 +669,7 @@ export const PR_STATE_PAGE_SIZE = 100;
  */
 export async function getArchivedPRSessions(
 	cfg: ServerConfig,
-	options: { prState: "merged"; cursor?: string | null; projectId?: string },
+	options: { prState: ArchivedPRState; cursor?: string | null; projectId?: string },
 	init?: Pick<RequestInit, "signal">,
 ): Promise<PRStatePage | null> {
 	const query = new URLSearchParams({ active: "false", kind: "worker", prState: options.prState, limit: String(PR_STATE_PAGE_SIZE) });
