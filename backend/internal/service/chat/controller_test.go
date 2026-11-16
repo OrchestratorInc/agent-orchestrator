@@ -36,7 +36,7 @@ const (
 	testSession = domain.SessionID("p1-1")
 )
 
-func openStore(t *testing.T) *sqlite.Store {
+func openStore(t *testing.T, imports ...*domain.SessionImportSource) *sqlite.Store {
 	t.Helper()
 	dir := t.TempDir()
 	st := sqlitetest.MustOpenAt(t, dir)
@@ -49,7 +49,12 @@ func openStore(t *testing.T) *sqlite.Store {
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
+	var source *domain.SessionImportSource
+	if len(imports) > 0 {
+		source = imports[0]
+	}
 	if _, err := st.CreateSession(ctx, domain.SessionRecord{
+		Metadata:  domain.SessionMetadata{ImportSource: source},
 		ID:        testSession,
 		ProjectID: testProject,
 		Kind:      domain.KindOrchestrator,

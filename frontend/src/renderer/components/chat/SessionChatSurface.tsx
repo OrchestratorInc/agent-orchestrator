@@ -8,7 +8,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { useImportedAgentBlock } from "../../lib/session-import";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
-import { useSideChatsAvailable } from "../../lib/side-chats";
+import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats";
 /**
  * The central surface for a chat-mode session.
  *
@@ -52,7 +52,7 @@ import { clientForSessionHost } from "../../lib/host-clients";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
-import { can } from "../../types/conversation";
+import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
@@ -71,6 +71,7 @@ export interface ConversationWorkState {
 
 export const SessionChatSurface = memo(function SessionChatSurface({
 	sideChatContainer,
+	onSideChatsChange,
 	subagentContainer,
 	onRevealSubagents,
 	session,
@@ -123,6 +124,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
+	/** Whether this session has any side chat, and whether one is being created, once its list has loaded. */
+	onSideChatsChange?: (state: SideChatsState) => void;
 	/** The inspector's Subagents tab body while that tab shows; null otherwise. */
 	subagentContainer?: HTMLDivElement | null;
 	/** Brings the Subagents tab up the way the host switches any inspector tab, resizing it on the way. */
@@ -207,7 +210,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
+	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(snapshot && activeTurn(snapshot)));
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
@@ -470,6 +473,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		sideCreationEnabled,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
+	const sideChatsPresent = sideChats.loaded ? sideChats.sides.length > 0 : undefined;
+	const sideChatCreating = sideChats.pending;
+	useEffect(() => {
+		if (sideChatsPresent !== undefined) onSideChatsChange?.({ present: sideChatsPresent, creating: sideChatCreating });
+	}, [onSideChatsChange, sideChatCreating, sideChatsPresent]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
 	const reportSubagents = useCallback(
 		(available: boolean) => useUiStore.getState().setSubagentsAvailable(uiSessionId, available),
@@ -899,6 +907,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				editMessageError={commands.editMessageError}
 				onActivateBranch={commands.activateBranch}
 				activateBranchPending={commands.activateBranchPending}
+				activateBranchDisabled={commands.activateBranchDisabled}
+				activateBranchTarget={commands.activateBranchTarget}
 				activateBranchError={commands.activateBranchError}
 				skills={sideCreationEnabled ? [...(["btw"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw")] : skills}
 				filePaths={paths}
