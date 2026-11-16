@@ -10,6 +10,7 @@ import type { TLSSocket } from "node:tls";
 import { WebSocket, WebSocketServer } from "ws";
 import { agentBrowserRunning, agentViewerUrl, HOP_BY_HOP_HEADERS, listenOnStablePort } from "./agent-viewer";
 import { getCloudAccessToken } from "./cloud-auth";
+import { sameControlPlaneUrl, type ControlPlaneUrlResolver } from "./cloud-control-plane-url";
 import { parseCloudBaseUrl } from "./cloud-cp-proxy";
 import { previewCertificate } from "./preview-certificate";
 
@@ -77,7 +78,11 @@ export function retryAfterMs(header: string | null): number {
 	return Math.min(Math.max(seconds, 5), 300) * 1_000;
 }
 
-export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy {
+/**
+ * controlPlaneUrl, when given, is the configured control plane: the bearer
+ * goes only there, and a session named on any other gets no agent browser.
+ */
+export function createCloudAgentProxy(getDataDir: () => string, controlPlaneUrl?: ControlPlaneUrlResolver): CloudAgentProxy {
 	const bearer = async (): Promise<string | null> => (await getCloudAccessToken(getDataDir()).catch(() => null)) || null;
 	let secret: Promise<Buffer> | undefined;
 	const loadKey = (): Promise<Buffer> =>
@@ -130,7 +135,7 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 			});
 			const token = await bearer();
 			if (left) return;
-			if (!token) return answer(res, 401, "no AO Cloud session");
+			if (!token) return answer(res, 401, "no Orchestrator Cloud session");
 			const headers: OutgoingHttpHeaders = {};
 			for (const [name, value] of Object.entries(req.headers)) {
 				// HTTP/2 pseudo-headers (":authority", ":path") are not forwardable headers.
@@ -142,7 +147,7 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 				if (left) return;
 				warn(`control plane failed on ${req.method} ${found.tail.split("/", 1)[0]} (${error.message})`);
 				if (res.headersSent) res.destroy(error);
-				else answer(res, 502, "AO Cloud unreachable");
+				else answer(res, 502, "Orchestrator Cloud unreachable");
 			};
 			const url = cpUrl(found.target, found.tail, found.search);
 			proxied = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, { method: req.method, headers }, (upstream) => {
@@ -246,6 +251,10 @@ export function createCloudAgentProxy(getDataDir: () => string): CloudAgentProxy
 			const base = parseCloudBaseUrl(baseUrl);
 			if (typeof orgId !== "string" || typeof sessionId !== "string" || !ID.test(orgId) || !ID.test(sessionId)) {
 				throw new Error("invalid cloud agent browser session");
+			}
+			if (controlPlaneUrl) {
+				const configured = await controlPlaneUrl();
+				if (!configured || !sameControlPlaneUrl(base.href, configured)) return "";
 			}
 			const target: Target = { base, orgId, sessionId };
 			// Only a sandbox whose agent browser runs has an agent tab: the CP answers

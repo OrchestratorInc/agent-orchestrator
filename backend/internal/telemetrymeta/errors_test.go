@@ -1,10 +1,14 @@
 package telemetrymeta
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	sqlite3 "modernc.org/sqlite"
 
 	"github.com/go-chi/chi/v5"
 
@@ -20,6 +24,29 @@ func TestErrorKindAndCode(t *testing.T) {
 	kind, code = ErrorKindAndCode(errors.New("boom"))
 	if kind != "internal" || code != "" {
 		t.Fatalf("raw error = (%q, %q), want (internal, empty)", kind, code)
+	}
+}
+
+type diagnosticCodeError struct{}
+
+func (diagnosticCodeError) Error() string { return "private database path" }
+func (diagnosticCodeError) Code() int     { return 1 }
+
+func TestErrorTypeUsesOnlyFixedCauseTypes(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("private: %w", apierr.InternalCause("REPORT_CREATE_FAILED", "Report failed", &sqlite3.Error{})), "sqlite"},
+		{apierr.InternalCause("REPORT_LIST_FAILED", "Report failed", errors.New("private path")), "unknown"},
+		{apierr.InternalCause("REPORT_LIST_FAILED", "Report failed", diagnosticCodeError{}), "unknown"},
+		{apierr.Internal("INTERNAL_ERROR", "Internal error"), "api_error"},
+		{fmt.Errorf("private: %w", context.DeadlineExceeded), "context_deadline"},
+		{errors.New("private project"), "unknown"},
+	} {
+		if got := ErrorType(tc.err); got != tc.want {
+			t.Fatalf("ErrorType(%T) = %q, want %q", tc.err, got, tc.want)
+		}
 	}
 }
 

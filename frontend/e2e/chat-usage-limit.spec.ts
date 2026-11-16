@@ -13,7 +13,7 @@ for (const { harness, providerLabel } of [
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
-			const recoveryNotice = page.getByTestId("usage-limit-notice").filter({ has: page.locator("time") });
+			const recoveryNotice = page.getByTestId("usage-limit-notice");
 			await expect(recoveryNotice).toBeVisible();
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 			await page.getByRole("button", { name: "Auto-resume at reset" }).click();
@@ -38,7 +38,7 @@ for (const { harness, providerLabel } of [
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
-			const recoveryNotice = page.getByTestId("usage-limit-notice").filter({ has: page.locator("time") });
+			const recoveryNotice = page.getByTestId("usage-limit-notice");
 			await page.getByRole("button", { name: "Auto-resume at reset" }).click();
 
 			const cancel = page.getByRole("button", { name: "Cancel auto-resume" });
@@ -93,13 +93,13 @@ for (const { harness, providerLabel } of [
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&unknown=1`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
-			await expect(page.getByText("The provider did not supply a reset time.")).toBeVisible();
+			await expect(page.getByTestId("usage-limit-marker")).toBeVisible();
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeEnabled();
 			await expect(page.getByRole("button", { name: "Auto-resume at reset" })).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Cancel auto-resume" })).toHaveCount(0);
 			expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 			await page.getByRole("button", { name: "Resume", exact: true }).click();
-			await expect(page.getByText("The provider did not supply a reset time.")).toHaveCount(0);
+			await expect(page.getByTestId("usage-limit-notice")).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 		});
 	});

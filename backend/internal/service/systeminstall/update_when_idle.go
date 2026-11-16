@@ -330,6 +330,65 @@ func (s *Service) waitForHarnessChange(target Target, gate *sync.RWMutex) bool {
 	return false
 }
 
+// holdOtherHarnesses takes each target's harness gate exclusively and marks
+// it changing, so its launches wait (see waitForHarnessChange) and its own
+// install, reinstall or update is refused until release. It fails, holding
+// nothing, when a launch keeps a gate past otherHarnessHoldWait or the target
+// has an install job of its own running.
+func (s *Service) holdOtherHarnesses(targets []Target) (release func(), err error) {
+	var releases []func()
+	release = func() {
+		for index := len(releases) - 1; index >= 0; index-- {
+			releases[index]()
+		}
+	}
+	for _, target := range targets {
+		gate := s.harnessGate(domain.AgentHarness(target))
+		if !tryLockFor(gate, otherHarnessHoldWait) {
+			release()
+			return func() {}, &HarnessActiveError{Target: target, Starting: true, Level: UpdateWhileRunningBlocked}
+		}
+		// Check for the target's own job and mark it changing under one lock,
+		// the one StartAgentOperation registers jobs under: an install of
+		// target either registered first (and this fails) or sees changing.
+		s.mu.Lock()
+		job, ok := s.jobs[target]
+		busy := ok && activeStatus(job.Status)
+		if !busy {
+			if s.changing == nil {
+				s.changing = make(map[Target]bool)
+			}
+			s.changing[target] = true
+		}
+		s.mu.Unlock()
+		if busy {
+			gate.Unlock()
+			release()
+			return func() {}, fmt.Errorf("%w: %s is being installed or updated; retry once it finishes", ErrInstallActive, target)
+		}
+		releases = append(releases, func() {
+			s.setHarnessChanging(target, false)
+			gate.Unlock()
+		})
+	}
+	return release, nil
+}
+
+// harnessChanging reports whether another run holds target (an update, an
+// update-when-idle run, or a run that lists it in Plan.alsoChanges).
+func (s *Service) harnessChanging(target Target) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.changing[target]
+}
+
+func (s *Service) cleanupStepTimeout() time.Duration {
+	if s.cleanupStepLimit > 0 {
+		return s.cleanupStepLimit
+	}
+	return cleanupTimeout
+}
+
 // tryLockFor takes gate exclusively, giving short launches (and the request
 // that queued this update) a moment to release it.
 func tryLockFor(gate *sync.RWMutex, wait time.Duration) bool {

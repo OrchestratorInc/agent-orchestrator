@@ -24,6 +24,8 @@ const {
 }));
 
 vi.mock("./api-client", () => ({
+	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
+	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	apiClient: { DELETE: apiDeleteMock, GET: apiGetMock },
 	apiErrorMessage: () => "Request failed",
 	getApiBaseUrl: getApiBaseUrlMock,

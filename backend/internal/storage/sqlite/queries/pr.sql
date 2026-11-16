@@ -160,6 +160,14 @@ INSERT INTO pr_url_alias(alias_url, canonical_url)
 VALUES (sqlc.arg(alias_url), sqlc.arg(canonical_url))
 ON CONFLICT(alias_url) DO UPDATE SET canonical_url = excluded.canonical_url;
 
+-- name: UpsertRepositoryRename :exec
+INSERT INTO repository_renames(host, old_name, name)
+VALUES (sqlc.arg(host), sqlc.arg(old_name), sqlc.arg(name))
+ON CONFLICT(host, old_name) DO UPDATE SET name = excluded.name;
+
+-- name: ListRepositoryRenames :many
+SELECT host, old_name, name FROM repository_renames;
+
 -- name: MovePRAliasChecks :exec
 UPDATE OR IGNORE pr_checks SET pr_url = sqlc.arg(canonical_url) WHERE pr_url = sqlc.arg(previous_url);
 
@@ -500,6 +508,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     session_id = excluded.session_id,
+    -- The PR follows its new owner's "Automatically fix CI failures" switch,
+    -- not the previous owner's.
+    auto_inject_ci = excluded.auto_inject_ci,
     state_changed_at = CASE
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at

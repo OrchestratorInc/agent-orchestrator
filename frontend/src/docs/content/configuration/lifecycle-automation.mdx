@@ -36,6 +36,36 @@ Choose one schedule format: a five-field cron expression or an RRULE, a calendar
 
 Cron accepts numeric minute and hour fields, `*` for day and month, and supported weekday choices. It does not accept arbitrary ranges or steps. RRULE does not accept `COUNT` or `UNTIL`, or intervals faster than one minute.
 
+The **Automations** page offers three template cards with editable starter prompts:
+
+| Starter | Default schedule in your timezone | Result |
+| --- | --- | --- |
+| PR review inbox | Monday–Friday, 09:00 | Review up to five open, non-draft PRs requesting the authenticated GitHub user's review, with code references and next actions. |
+| Daily issue triage | Every day, 09:15 | Summarize up to 20 issues changed in the last 24 hours, with suggested priorities, missing details, and possible duplicates. |
+| Weekly release notes | Friday, 16:00 | Draft notes from up to 100 PRs merged into the default branch in the last seven days, with links and migration details supported by evidence. |
+
+Choose a project with a GitHub repository and an agent with its own GitHub read
+access. Connecting GitHub to Orchestrator does not provide credentials to the
+agent. The prompts ask the agent to report missing access and stop. They request
+read-only reports in AO; the release-notes starter does not publish a release or
+claim merged work has deployed. These are prompt instructions, not a new sandbox
+or permission policy.
+
+Review and edit the name, prompt, agent, and schedule before clicking **Create
+automation**. Selecting a card opens the standard creation dialog and saves
+nothing until you submit it. **New automation** opens a blank custom form. The
+prompt limit is 4,096 UTF-8 bytes. Template origin and its use-case category are
+recorded automatically; there is no purpose selector. Editing a definition keeps
+its original template identity.
+
+CLI/API clients can optionally set `templateId` / `useCase` on creation (CLI:
+`--template-id` / `--use-case`). These fields only record intent; they do not load
+a starter prompt. The caller still supplies the prompt and schedule. Omitted
+fields default to `custom` / `unknown`. Update purpose with
+`ao automation update <id> --use-case issue_triage`; template origin cannot be
+updated. See [product telemetry](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/telemetry.md#automation-usage-and-creation)
+for the allowed categories and privacy details.
+
 Automations run in the local daemon, so the computer must be awake and Orchestrator must be running. After a restart, Orchestrator runs at most three missed occurrences. The same automation will not start another run while its current run is active. Deleting an automation also deletes its run history.
 
 To try an automation, create one in **Automations** with a short prompt and a schedule a few minutes ahead. Then open its run history and linked session. If it does not run, check the time zone, confirm the automation is enabled, and make sure Orchestrator stayed open and the computer stayed awake. Pause the automation before changing a schedule you are testing.

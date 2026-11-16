@@ -13,7 +13,9 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const (
@@ -211,6 +213,11 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 			CreatedBy: domain.SessionCreatedByAutomation,
 		}); err != nil {
 			o.logger.Error("tracker intake: spawn issue session failed", "project", project.ID, "issue", issueID, "err", err)
+			// An automated spawn has no HTTP request, so the request logger never
+			// sees it. Bad input (an invalid issue or project) stays out.
+			if kind, code := telemetrymeta.ErrorKindAndCode(err); kind == "internal" || sentryobs.IsFaultCode(code) {
+				sentryobs.CaptureBackground(ctx, err, "trackerintake", "tracker_spawn", nil)
+			}
 			spawnFailed = true
 			continue
 		}

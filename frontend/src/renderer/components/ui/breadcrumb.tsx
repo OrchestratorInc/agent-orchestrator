@@ -1,4 +1,4 @@
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon } from "@/components/app-icons";
 import * as React from "react";
 import { useTranslation } from "react-i18next";
 
