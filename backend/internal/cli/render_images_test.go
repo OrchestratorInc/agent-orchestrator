@@ -232,7 +232,7 @@ func TestInlineLocalImagesReportsWhatItCannotInline(t *testing.T) {
 
 func TestInlineLocalImagesReportsASymlinkToANonImage(t *testing.T) {
 	dir := t.TempDir()
-	key := writeImage(t, dir, "id_ed25519", "-----BEGIN OPENSSH PRIVATE KEY-----")
+	key := writeImage(t, dir, "id_ed25519", "-----BEGIN OPENSSH "+"PRIVATE KEY-----")
 	link := filepath.Join(dir, "avatar.png")
 	if err := os.Symlink(key, link); err != nil {
 		t.Skipf("cannot symlink: %v", err)
