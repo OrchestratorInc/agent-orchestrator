@@ -234,6 +234,8 @@ type BrowserBoundsInput = {
 type BrowserNavigateInput = {
   viewId: string;
   url: string;
+  // False when the app loads the page (a preview): the agent follows it.
+  byPerson?: boolean;
 };
 
 type BrowserHistorySuggestInput = {
@@ -2632,7 +2634,10 @@ export function createBrowserViewHost(
         const from = session.agentTabId;
         const turn = session.agentTurnGeneration;
         const entry = await openTab(session, url === "about:blank" ? undefined : url, from === undefined);
-        if (from !== undefined && turn === session.agentTurnGeneration) moveAgentTab(session, entry.tabId, from);
+        // Only while the hold is as it was: the turn may have ended, or the app
+        // may have brought a tab forward (a preview), while the tab loaded.
+        if (from !== undefined && turn === session.agentTurnGeneration && session.agentTabId === from)
+          moveAgentTab(session, entry.tabId, from);
         return target(entry);
       },
       activateTarget: async (targetId) => {
@@ -2997,6 +3002,10 @@ export function createBrowserViewHost(
     }
     const owner = entries.get(entry.state.viewId);
     if (owner) owner.livePreviewPending = false;
+    // The address bar shows the front tab: a background tab that finishes
+    // loading (a person may select another while it loads) keeps its state.
+    const inFront = () => entries.get(entry.state.viewId)?.activeTabId === entry.tabId;
+    const settle = () => (inFront() ? pushNavState(options, entry) : (entry.state = readNavState(entry)));
     const pendingNavigation = { url: href };
     entry.pendingNavigation = pendingNavigation;
     try {
@@ -3004,13 +3013,13 @@ export function createBrowserViewHost(
       else await entry.view.webContents.loadURL(href);
     } catch (err) {
       if ((err as { errorCode?: number })?.errorCode === -3)
-        return pushNavState(options, entry);
+        return settle();
       entry.view.setVisible?.(false);
       entry.state = {
         ...readNavState(entry),
         error: String((err as Error)?.message || "Unable to load page"),
       };
-      shellWebContents.send("browser:navState", entry.state);
+      if (inFront()) shellWebContents.send("browser:navState", entry.state);
       return entry.state;
     } finally {
       if (entry.pendingNavigation === pendingNavigation)
@@ -3019,7 +3028,7 @@ export function createBrowserViewHost(
     const session = entries.get(entry.state.viewId);
     if (session?.activeTabId === entry.tabId)
       applySessionBounds(session, entry);
-    return pushNavState(options, entry);
+    return settle();
   };
 
   // clear resets the view to a blank page (`ao preview clear`). about:blank is
@@ -3817,11 +3826,14 @@ export function createBrowserViewHost(
     const applied = setBounds(input, event.sender.getZoomFactor());
     if (applied) event.sender.send("browser:boundsApplied", applied);
   });
-  handle("browser:navigate", (event, input: BrowserNavigateInput) =>
-    isRendererOwned(event, input.viewId)
-      ? navigate(input)
-      : emptyNavState(input.viewId),
-  );
+  handle("browser:navigate", (event, input: BrowserNavigateInput) => {
+    if (!isRendererOwned(event, input.viewId)) return emptyNavState(input.viewId);
+    // A preview the app loads into the front tab releases a held agent to it,
+    // as one it opens or selects does (frontTabChanges).
+    const session = input.byPerson === false ? entries.get(input.viewId) : undefined;
+    if (session) frontTabChanges(session, false);
+    return navigate(input);
+  });
   handle(
     "browser:history:suggest",
     (event, input: BrowserHistorySuggestInput) => {

@@ -3961,6 +3961,26 @@ describe("agent browser runtime", () => {
 		await vi.waitFor(() => expect(runtime.reconcileTargets).toHaveBeenCalledWith("sess-1"));
 	});
 
+	it("shows only the front tab's navigation state when a background tab finishes loading", async () => {
+		let finishLoad!: () => void;
+		const slowLoad = new Promise<void>((resolve) => (finishLoad = resolve));
+		const { invoke, sent } = setupTabHost(undefined, false, (_viewIndex, url) =>
+			url === "https://slow.example/" ? slowLoad : Promise.resolve(),
+		);
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		const opening = invoke("browser:openTab", { viewId, url: "https://slow.example/" });
+		await vi.waitFor(async () => expect(((await invoke("browser:getTabs", viewId)) as BrowserTabsState).tabs).toHaveLength(2));
+		await invoke("browser:selectTab", { viewId, tabId: "t1" });
+		const mark = sent.length;
+
+		finishLoad();
+		await opening;
+		const published = sent.slice(mark).filter((message) => message.channel === "browser:navState");
+		expect(published.map((message) => (message.payload as BrowserNavState).url)).not.toContain("https://slow.example/");
+		const tabs = (await invoke("browser:getTabs", viewId)) as BrowserTabsState;
+		expect(tabs.tabs.find((tab) => tab.id === "t2")?.url).toBe("https://slow.example/");
+	});
+
 	describe("the agent's own tab while its turn runs", () => {
 		// The agent opens t1, its turn starts, and it uses the browser in it.
 		async function startTurn(loadURLHook?: (viewIndex: number, url: string) => Promise<void>) {
@@ -4073,6 +4093,44 @@ describe("agent browser runtime", () => {
 			await host.execute("sess-1", "snapshot");
 			expect(agentOn()).toBe("t2");
 			expect(await front()).toBe("t2");
+		});
+
+		it("follows a preview the app selects while its own new tab is still loading", async () => {
+			let finishLoad!: () => void;
+			const slowLoad = new Promise<void>((resolve) => (finishLoad = resolve));
+			const { agentOn, host, invoke, viewId, front } = await startTurn((_viewIndex, url) =>
+				url === "http://localhost:4173/" ? slowLoad : Promise.resolve(),
+			);
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+
+			const opening = host.execute("sess-1", "tab-new", { url: "http://localhost:4173/" });
+			await vi.waitFor(async () => expect(((await invoke("browser:getTabs", viewId)) as BrowserTabsState).tabs).toHaveLength(3));
+			await invoke("browser:selectTab", { viewId, tabId: "t1", byPerson: false });
+			finishLoad();
+			await opening.catch(() => undefined);
+
+			await host.execute("sess-1", "snapshot");
+			expect(await front()).toBe("t1");
+			expect(agentOn()).toBe("t1");
+		});
+
+		it("follows a preview the app loads into the person's front tab", async () => {
+			const { agentOn, host, invoke, viewId, front } = await startTurn();
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+
+			await invoke("browser:navigate", { viewId, url: "http://localhost:5174/", byPerson: false });
+			await host.execute("sess-1", "snapshot");
+			expect(await front()).toBe("t2");
+			expect(agentOn()).toBe("t2");
+		});
+
+		it("keeps holding when the person navigates their own tab", async () => {
+			const { agentOn, host, invoke, viewId } = await startTurn();
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+
+			await invoke("browser:navigate", { viewId, url: "https://example.org/" });
+			await host.execute("sess-1", "snapshot");
+			expect(agentOn()).toBe("t1");
 		});
 
 		it("returns to the tab it came from when its own new tab closes", async () => {

@@ -1715,6 +1715,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://localhost:5173/",
+				byPerson: false,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
@@ -1738,6 +1739,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "file:///tmp/preview/index.html",
+				byPerson: false,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(3);
@@ -1761,6 +1763,7 @@ describe("useBrowserView", () => {
 		rerender({ proxyBase: "http://127.0.0.1:4000/token" });
 		await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({
 			viewId: "42:remote:box-a:ao-1", url: "http://ao-preview-abc.localhost:4000/",
+			byPerson: false,
 		}));
 		expect(browser.navigate).not.toHaveBeenCalledWith(expect.objectContaining({ url: "http://localhost:5173/" }));
 	});
@@ -1836,7 +1839,7 @@ describe("useBrowserView", () => {
 			const previewTab = { id: "t1", url: "https://ao-preview-ffffffffffffffffffffffffffffffff.localhost:47663/", title: "Daybook", active: false };
 			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [previewTab, agentTab] });
 			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
-			await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({ viewId, url: appPreview }));
+			await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({ viewId, url: appPreview, byPerson: false }));
 			expect(browser.selectTab).toHaveBeenCalledWith({ viewId, tabId: "t1", byPerson: false });
 			expect(browser.openTab).not.toHaveBeenCalled();
 		});
@@ -1969,6 +1972,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://localhost:5217/",
+				byPerson: false,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
@@ -2014,6 +2018,7 @@ describe("useBrowserView", () => {
 		expect(bridge.navigate).toHaveBeenLastCalledWith({
 			viewId: "42:sess-1",
 			url: "http://localhost:5217/",
+			byPerson: false,
 		});
 	});
 
@@ -2128,6 +2133,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://127.0.0.1:4173/",
+				byPerson: false,
 			}),
 		);
 
@@ -2137,6 +2143,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-2",
 				url: "http://127.0.0.1:5173/",
+				byPerson: false,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(2);
@@ -2162,6 +2169,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "http://localhost:5173/",
+				byPerson: false,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
@@ -2176,6 +2184,7 @@ describe("useBrowserView", () => {
 			expect(bridge.navigate).toHaveBeenCalledWith({
 				viewId: "42:sess-1",
 				url: "C:\\Users\\Lenovo\\Downloads\\sm5\\paper_explainer.html",
+				byPerson: false,
 			}),
 		);
 		expect(bridge.navigate).toHaveBeenCalledTimes(2);

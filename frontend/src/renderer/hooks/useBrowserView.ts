@@ -94,7 +94,7 @@ export type BrowserViewModel = {
 	viewId: string;
 	navState: BrowserNavState;
 	slotRef: (node: HTMLDivElement | null) => void;
-	navigate: (url: string) => Promise<void>;
+	navigate: (url: string, byPerson?: boolean) => Promise<void>;
 	goBack: () => Promise<void>;
 	goForward: () => Promise<void>;
 	reload: () => Promise<void>;
@@ -1148,8 +1148,10 @@ export function useBrowserView({
 		void setAnnotationMode(false);
 	}, [navState.url, setAnnotationMode]);
 
+	// byPerson: false when the app loads the page (a preview): a held agent
+	// follows it to that tab.
 	const navigate = useCallback(
-		(url: string) => {
+		(url: string, byPerson = true) => {
 			if (!hasNativeBrowser) {
 				const normalized = url.trim();
 				setNavState((current) => ({
@@ -1160,7 +1162,7 @@ export function useBrowserView({
 				}));
 				return Promise.resolve();
 			}
-			return withView((id) => window.ao!.browser.navigate({ viewId: id, url }));
+			return withView((id) => window.ao!.browser.navigate({ viewId: id, url, ...(byPerson ? {} : { byPerson: false }) }));
 		},
 		[hasNativeBrowser, withView],
 	);
@@ -1171,12 +1173,12 @@ export function useBrowserView({
 		async (url: string) => {
 			const id = viewIdRef.current;
 			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
-			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url, false);
 			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
 			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
 			if (!own) return openTab(url, false);
 			await selectTab(own.id, false);
-			return navigate(url);
+			return navigate(url, false);
 		},
 		[hasNativeBrowser, navigate, openTab, selectTab],
 	);

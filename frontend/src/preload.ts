@@ -144,6 +144,8 @@ export type BrowserBoundsApplied = BrowserBoundsInput;
 export type BrowserNavigateInput = {
 	viewId: string;
 	url: string;
+	/** False when the app, not the person, loads the page (a preview). */
+	byPerson?: boolean;
 };
 
 export type ImportFolderMode = "project" | "workspace";
