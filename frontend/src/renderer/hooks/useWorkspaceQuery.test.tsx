@@ -881,6 +881,43 @@ describe("useWorkspaceQuery", () => {
 		expect(listProjectsMock).not.toHaveBeenCalled();
 	});
 
+	it("redraws a component only for the fields it reads, not for every refetch", async () => {
+		respondWith({
+			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },
+			sessions: { data: { sessions: [{ id: "s1", projectId: "p1", harness: "codex", status: "working", updatedAt: "2026-01-01T00:00:00Z" }] } },
+		});
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+		const shared = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		let dataRenders = 0;
+		const dataReader = renderHook(() => {
+			dataRenders += 1;
+			return useWorkspaceQuery().data;
+		}, { wrapper: shared });
+		const fetchingSeen: boolean[] = [];
+		renderHook(() => {
+			const fetching = useWorkspaceQuery().isFetching;
+			fetchingSeen.push(fetching);
+			return fetching;
+		}, { wrapper: shared });
+		await waitFor(() => expect(dataReader.result.current).toHaveLength(1));
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(false));
+		const settledRenders = dataRenders;
+		const settledFetching = fetchingSeen.length;
+
+		await act(async () => {
+			await queryClient.refetchQueries({ queryKey: workspaceQueryKey });
+		});
+
+		expect(getMock.mock.calls.filter(([url]) => url === "/api/v1/sessions")).toHaveLength(2);
+		// Same lists back: the data reader is not drawn again.
+		expect(dataRenders).toBe(settledRenders);
+		// A reader of isFetching still sees the refetch start and end.
+		expect(fetchingSeen.slice(settledFetching)).toContain(true);
+		expect(fetchingSeen.at(-1)).toBe(false);
+	});
+
 	it("selects only attention-worthy worker sessions for the always-mounted tray", async () => {
 		respondWith({
 			projects: { data: { projects: [{ id: "proj-1", name: "my-app", path: "/p" }] }, error: undefined },
