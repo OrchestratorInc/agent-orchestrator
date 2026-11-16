@@ -498,6 +498,7 @@ func TestOpenInterpreterCatalogFingerprintTracksAncestorLayerAndHomePath(t *test
 			t.Fatal(err)
 		}
 	}
+	write(filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
 	write(filepath.Join(repo, ".openinterpreter", "config.toml"), `model_catalog_json = "~/home-models.json"`+"\n")
 	write(filepath.Join(home, "home-models.json"), `{"models":[{"slug":"one"}]}`)
 	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", WorkingDir: workingDir, Env: map[string]string{
@@ -509,6 +510,44 @@ func TestOpenInterpreterCatalogFingerprintTracksAncestorLayerAndHomePath(t *test
 	write(filepath.Join(home, "home-models.json"), `{"models":[{"slug":"two"}]}`)
 	if fingerprint() == before {
 		t.Fatal("editing a home-relative catalog named by an ancestor project layer did not invalidate the catalog")
+	}
+}
+
+// project_root_markers in the user layer replaces the default ".git", so an
+// ancestor holding a configured marker supplies a project layer, and an empty
+// list limits discovery to the working directory.
+func TestOpenInterpreterCatalogFingerprintUsesConfiguredRootMarkers(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	workingDir := filepath.Join(repo, "src")
+	for _, dir := range []string{workingDir, filepath.Join(repo, ".openinterpreter")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous := openInterpreterSystemConfig
+	openInterpreterSystemConfig = func() string { return filepath.Join(t.TempDir(), "absent.toml") }
+	t.Cleanup(func() { openInterpreterSystemConfig = previous })
+	write(filepath.Join(repo, ".project"), "")
+	write(filepath.Join(repo, ".openinterpreter", "config.toml"), `model_catalog_json = "models.json"`+"\n")
+	write(filepath.Join(repo, ".openinterpreter", "models.json"), `{"models":[{"slug":"one"}]}`)
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", WorkingDir: workingDir, Env: map[string]string{"INTERPRETER_HOME": root}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	write(filepath.Join(root, "config.toml"), `project_root_markers = [".project"]`+"\n")
+	before := fingerprint()
+	write(filepath.Join(repo, ".openinterpreter", "models.json"), `{"models":[{"slug":"two"}]}`)
+	if fingerprint() == before {
+		t.Fatal("a catalog named by the configured-marker root's layer did not invalidate the catalog")
+	}
+	if got := openInterpreterProjectConfigs(workingDir, []string{}); len(got) != 1 || got[0] != filepath.Join(workingDir, ".openinterpreter", "config.toml") {
+		t.Fatalf("empty root markers = %v; want only the working directory layer", got)
 	}
 }
 

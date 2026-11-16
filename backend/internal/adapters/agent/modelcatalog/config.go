@@ -435,27 +435,64 @@ func openInterpreterUserHome(env map[string]string) string {
 	return home
 }
 
+// openInterpreterRootMarkers returns the project_root_markers native discovery
+// uses, read from the layers it merges before project layers (later layers
+// win). Absent or unreadable settings keep the native default, ".git".
+func openInterpreterRootMarkers(layers []string) []string {
+	markers := []string{".git"}
+	for _, path := range layers {
+		raw, err := readModelConfig(path)
+		if err != nil {
+			continue
+		}
+		var config struct {
+			Markers *[]string `toml:"project_root_markers"`
+		}
+		if toml.Unmarshal(raw, &config) != nil || config.Markers == nil {
+			continue
+		}
+		markers = *config.Markers
+	}
+	return markers
+}
+
+// openInterpreterIsProjectRoot reports whether dir holds a root marker. As in
+// native discovery, a .git directory counts only when it contains HEAD.
+func openInterpreterIsProjectRoot(dir string, markers []string) bool {
+	for _, marker := range markers {
+		path := filepath.Join(dir, marker)
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if marker == ".git" && info.IsDir() {
+			if _, err := os.Stat(filepath.Join(path, "HEAD")); err != nil {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // openInterpreterProjectConfigs lists the project configuration layers native
 // discovery reads: .openinterpreter/config.toml in each directory from
-// workingDir up to the project root, the nearest ancestor holding .git.
-// Without a root marker only workingDir's own layer applies.
-func openInterpreterProjectConfigs(workingDir string) []string {
+// workingDir up to the project root, the nearest ancestor holding one of
+// markers. With no markers, or none found, only workingDir's own layer applies.
+func openInterpreterProjectConfigs(workingDir string, markers []string) []string {
 	if workingDir == "" {
 		return nil
 	}
 	dir := filepath.Clean(workingDir)
-	var dirs []string
-	for {
-		dirs = append(dirs, dir)
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			break
-		}
+	dirs := []string{dir}
+	for len(markers) > 0 && !openInterpreterIsProjectRoot(dir, markers) {
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			dirs = dirs[:1]
 			break
 		}
 		dir = parent
+		dirs = append(dirs, dir)
 	}
 	configs := make([]string, 0, len(dirs))
 	for _, dir := range dirs {

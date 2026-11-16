@@ -955,7 +955,8 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		}
 		// The system layer can select the provider when the user layer names
 		// none, and any layer can name a model_catalog_json file.
-		configs := append([]string{openInterpreterSystemConfig(), filepath.Join(root, "config.toml")}, openInterpreterProjectConfigs(workingDir)...)
+		layers := []string{openInterpreterSystemConfig(), filepath.Join(root, "config.toml")}
+		configs := append(append([]string{}, layers...), openInterpreterProjectConfigs(workingDir, openInterpreterRootMarkers(layers))...)
 		// model_catalog_json replaces the native catalog, so the file it names
 		// is a discovery input even when no config file changes.
 		catalogs := openInterpreterModelCatalogFiles(configs, env)
