@@ -532,7 +532,7 @@ function useCloudChatEventStream(orgId: string | undefined, sessionId: string, e
 }
 
 const PLAN_REFUSAL_CODE_ALTERNATION = [...PLAN_REFUSAL_CODES].join("|");
-// Failed tools also report the code in parentheses or a JSON `code` field.
+// Failed MCP tools also report the code in parentheses or a JSON `code` field.
 // A bare code is not enough: a failing test or grep can print it too.
 const PLAN_REFUSAL_PATTERN = new RegExp(
 	`\\((${PLAN_REFUSAL_CODE_ALTERNATION})\\)|"code"\\s*:\\s*"(${PLAN_REFUSAL_CODE_ALTERNATION})"`,
@@ -561,7 +561,7 @@ export function planRefusalCode(item: ConversationItem): string | undefined {
 			if (match) return match[1];
 		}
 	}
-	if (!failedTool(item)) return undefined;
+	if (!failedTool(item) || item.activityKind !== "mcp_tool") return undefined;
 	const text = [item.detail?.error, item.detail?.output].filter((part): part is string => typeof part === "string").join("\n");
 	const match = PLAN_REFUSAL_PATTERN.exec(text);
 	return match?.[1] ?? match?.[2];
@@ -580,7 +580,7 @@ function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: bo
 	const canUpgrade = offering.selfServeBilling && offering.canManageBilling;
 	const reason = !code.endsWith("_SLOTS_FULL") ? appI18n.t("cloud.planLimit.refused")
 		: !planName ? appI18n.t("cloud.planLimit.slotsFull")
-			: typeof limit === "number" && Number.isFinite(limit) && limit >= 0
+			: typeof limit === "number" && Number.isFinite(limit) && limit > 0
 				? appI18n.t("cloud.planLimit.slotsFullWithLimit", { plan: planName, limit })
 				: appI18n.t("cloud.planLimit.slotsFullOnPlan", { plan: planName });
 	const nextStep = appI18n.t(canUpgrade ? "cloud.planLimit.stopOrUpgrade" : "cloud.planLimit.stopOrContactAdmin");

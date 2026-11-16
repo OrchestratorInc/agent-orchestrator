@@ -2585,7 +2585,7 @@ describe("CloudSessionChatSurface", () => {
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
 			payload: { turnId: "turn-1", activity: { id, kind: "command", status, detail } },
 		});
-		const refusal = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
+		const refusal = "ao: WORKER_SLOTS_FULL: All your plan's running sessions are in use.";
 		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, hasOlder: false, nextAfter: events.at(-1)?.sequence ?? 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset()
@@ -2594,8 +2594,8 @@ describe("CloudSessionChatSurface", () => {
 			// A successful grep that prints the code is not a refusal.
 			.mockResolvedValueOnce(page(activity(2, "grep", "completed", { output: "WORKER_SLOTS_FULL" })))
 			// A refusal streamed in two chunks across polls, then failed.
-			.mockResolvedValueOnce(page(activity(3, "spawn", "running", { outputDelta: "All your plan's running sessions are in use. (WORKER_" })))
-			.mockResolvedValueOnce(page(activity(4, "spawn", "failed", { outputDelta: "SLOTS_FULL)" })))
+			.mockResolvedValueOnce(page(activity(3, "spawn", "running", { outputDelta: "ao: WORKER_" })))
+			.mockResolvedValueOnce(page(activity(4, "spawn", "failed", { outputDelta: "SLOTS_FULL: All your plan's running sessions are in use." })))
 			.mockResolvedValue(page());
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = ["cloud-chat-events", "org-1", session.id];
@@ -2647,6 +2647,7 @@ describe("CloudSessionChatSurface", () => {
 	it.each([
 		{ plan: "starter", limit: 15, expected: "your Starter plan allows 15 running at once" },
 		{ plan: "pro", limit: 40, expected: "your Pro plan allows 40 running at once" },
+		{ plan: "pro", limit: 0, expected: "all running sessions on your Pro plan are in use" },
 		{ plan: "pro", limit: undefined, expected: "all running sessions on your Pro plan are in use" },
 	])("uses the billing limit for $plan ($limit), with a no-number fallback", async ({ plan, limit, expected }) => {
 		billing.plan = plan;
@@ -2656,7 +2657,7 @@ describe("CloudSessionChatSurface", () => {
 			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
 			.mockResolvedValue({ events: [{
 				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
-				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
 			}], hasMore: false, hasOlder: false, nextAfter: 1 });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = ["cloud-chat-events", "org-1", session.id];
@@ -2673,7 +2674,7 @@ describe("CloudSessionChatSurface", () => {
 	it("reports each refused activity in a batch once, including repeated updates", async () => {
 		const failed = (sequence: number, id = `spawn-${sequence}`): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
-			payload: { turnId: "turn-1", activity: { id, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+			payload: { turnId: "turn-1", activity: { id, kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
 		});
 		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, hasOlder: false, nextAfter: events.at(-1)?.sequence ?? 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
@@ -2750,13 +2751,24 @@ describe("CloudSessionChatSurface", () => {
 	});
 
 
+	it("ignores a failed command's Vitest assertion diff", () => {
+		const output = `FAIL src/renderer/lib/cloud-telemetry.test.ts > reports a refusal
+AssertionError: expected refusal telemetry to match
+  {
+    "code": "WORKER_SLOTS_FULL",
+-   "shown": false,
++   "shown": true,
+  }`;
+		expect(planRefusalCode({ kind: "activity", id: "vitest", sequence: 1, revision: 1, createdAt: session.updatedAt, summary: "Run tests", activityKind: "command", status: "failed", detail: { command: "npx vitest run src/renderer/lib/cloud-telemetry.test.ts", output, exitCode: 1 } })).toBeUndefined();
+	});
+
 	it("does not attribute a shared owner's refusal to the viewer's organization", async () => {
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset()
 			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
 			.mockResolvedValue({ events: [{
 				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
-				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
 			}], hasMore: false, hasOlder: false, nextAfter: 1 });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = ["cloud-chat-events", "owner-org", session.id];
@@ -2774,7 +2786,7 @@ describe("CloudSessionChatSurface", () => {
 			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
 			.mockResolvedValue({ events: [{
 				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
-				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
 			}], hasMore: false, hasOlder: false, nextAfter: 1 });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = ["cloud-chat-events", "org-1", session.id];
@@ -2792,10 +2804,11 @@ describe("CloudSessionChatSurface", () => {
 		const tool = (activityKind: string, status: string, detail: Record<string, unknown>) =>
 			({ kind: "activity", id: "a", activityKind, status, detail }) as unknown as Parameters<typeof planRefusalCode>[0];
 		const refused = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
-		expect(planRefusalCode(tool("command", "failed", { output: refused }))).toBe("WORKER_SLOTS_FULL");
-		expect(planRefusalCode(tool("command", "failed", { output: `{"code": "WORKER_SLOTS_FULL"}` }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("command", "failed", { output: "ao: WORKER_SLOTS_FULL: Limit reached" }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: `{"code": "WORKER_SLOTS_FULL"}` }))).toBe("WORKER_SLOTS_FULL");
 		// A failing test or grep that only mentions the code is not a refusal.
 		expect(planRefusalCode(tool("command", "failed", { output: "FAIL plan-refusal.test.ts: expected WORKER_SLOTS_FULL" }))).toBeUndefined();
+		expect(planRefusalCode(tool("command", "failed", { output: refused }))).toBeUndefined();
 		expect(planRefusalCode(tool("command", "completed", { output: refused }))).toBeUndefined();
 		// An MCP tool reports its failure in `error`, even when its status is not "failed".
 		expect(planRefusalCode(tool("mcp_tool", "completed", { success: false, error: refused }))).toBe("WORKER_SLOTS_FULL");
@@ -2824,7 +2837,7 @@ describe("CloudSessionChatSurface", () => {
 	it("ignores refusals prepended by recent history and scroll-up pages", async () => {
 		const failed = (sequence: number): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
-			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
 		});
 		const page = (sequence: number, hasOlder: boolean) => ({ events: [failed(sequence)], hasMore: false, hasOlder, nextBefore: sequence, nextAfter: sequence });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
@@ -2850,7 +2863,7 @@ describe("CloudSessionChatSurface", () => {
 	it.each([0, 10_000])("waits for opening history while streamed replay arrives in separate batches (staleTime %i)", async (staleTime) => {
 		const failed = (sequence: number): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
-			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
 		});
 		const replay = [failed(2), failed(3)];
 		let finishHistory!: (page: { events: CloudCpClientEvent[]; hasMore: boolean; hasOlder: boolean; nextAfter: number }) => void;
