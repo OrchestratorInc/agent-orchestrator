@@ -259,6 +259,11 @@ describe("AgentModelPicker", () => {
 		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
 		await user.keyboard("{ArrowDown}");
 		expect(screen.getByRole("menuitem", { name: /Effort/ })).toHaveFocus();
+		await user.keyboard("{ArrowUp}");
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveFocus();
+		await user.keyboard("{ArrowDown}");
+		await user.keyboard("{Shift>}{Tab}{/Shift}");
+		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveFocus();
 	});
 
 	it("skips an unavailable first model when going from the rail into the list", async () => {

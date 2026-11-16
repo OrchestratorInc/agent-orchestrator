@@ -265,7 +265,28 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					)}
 				</div>
 			</div>
-			{footer && !normalizedQuery ? <div ref={footerRef} className="shrink-0">{footer}</div> : null}
+			{footer && !normalizedQuery ? (
+				<div
+					ref={footerRef}
+					className="shrink-0"
+					onKeyDownCapture={(event) => {
+						// A submenu's keys bubble here through React, not the DOM; they are its own.
+						if (!event.currentTarget.contains(event.target as Node)) return;
+						const enabled = '[role^="menuitem"]:not([data-disabled])';
+						// Up from the first row goes to the list's last row through the menu's own focus,
+						// unless the list has none; Shift+Tab leaves for the header, as it does from the list.
+						const upward = event.key === "ArrowUp"
+							&& event.target === event.currentTarget.querySelector(enabled)
+							&& !scrollRef.current?.querySelector(enabled);
+						if (!upward && !(event.key === "Tab" && event.shiftKey)) return;
+						event.preventDefault();
+						event.stopPropagation();
+						if (!focusHeader()) searchRef.current?.focus();
+					}}
+				>
+					{footer}
+				</div>
+			) : null}
 		</div>
 	);
 }
