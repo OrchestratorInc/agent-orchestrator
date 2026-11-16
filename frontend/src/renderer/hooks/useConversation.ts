@@ -15,6 +15,7 @@ import {
 	type InfiniteData,
 	type QueryClient,
 	type QueryKey,
+	hashKey,
 	infiniteQueryOptions,
 	useInfiniteQuery,
 	useIsMutating,
@@ -559,11 +560,30 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
 	if (running.has(sessionId)) return;
 	running.add(sessionId);
 	const key = conversationQueryKey(sessionId);
-	void fetchConversationPage(sessionId)
-		.then((latest) => applyLiveConversationPage(queryClient, key, latest))
-		// The query's own read retries and reports what keeps failing.
-		.catch(() => queryClient.invalidateQueries({ queryKey: key }))
-		.finally(() => running.delete(sessionId));
+	const hash = hashKey(key);
+	// An event while the chat is closed again mid-read may describe rows the read
+	// missed, and applying the page clears the stale mark it left. (While the chat
+	// is open, an event refetches it on its own.)
+	let missed = false;
+	const stopWatching = queryClient.getQueryCache().subscribe((event) => {
+		if (event.type === "updated" && event.action.type === "invalidate" && event.query.queryHash === hash && event.query.getObserversCount() === 0) missed = true;
+	});
+	void (async () => {
+		try {
+			do {
+				missed = false;
+				applyLiveConversationPage(queryClient, key, await fetchConversationPage(sessionId));
+			} while (missed && queryClient.getQueryCache().find({ queryKey: key, exact: true, type: "active" }));
+			// Still closed: the next open reads what changed.
+			if (missed) void queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: "none" });
+		} catch {
+			// The query's own read retries and reports what keeps failing.
+			void queryClient.invalidateQueries({ queryKey: key });
+		} finally {
+			stopWatching();
+			running.delete(sessionId);
+		}
+	})();
 }
 
 /**

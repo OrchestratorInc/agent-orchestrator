@@ -1730,6 +1730,60 @@ describe("opening a local chat it has cached", () => {
 		expect(second.result.current.hasOlder).toBe(false);
 	});
 
+	it("keeps the chat stale when it changes again before its open read lands", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockReturnValueOnce(openRead.promise)
+			.mockResolvedValueOnce(page(22, 1, false, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		// Opened and left again before its read lands; the turn finishes in between.
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		second.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+		await act(async () => { openRead.resolve(page(21, 1, false)); });
+		await waitFor(() => expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true));
+
+		const third = mount(queryClient);
+		await waitFor(() => expect(third.result.current.snapshot?.latestSequence).toBe(22));
+		expect(third.result.current.snapshot?.turns[0]?.state).toBe("completed");
+		expect(getMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("reads again when the chat changed while closed and reopened during its open read", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockReturnValueOnce(openRead.promise)
+			.mockResolvedValueOnce(page(22, 1, false, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		second.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+		// Back before the first read lands: that read is still the one in flight.
+		const third = mount(queryClient);
+		await act(async () => { openRead.resolve(page(21, 1, false)); });
+
+		await waitFor(() => expect(third.result.current.snapshot?.latestSequence).toBe(22));
+		expect(getMock).toHaveBeenCalledTimes(3);
+	});
+
 	it("makes no request when the chat did not change while closed", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		getMock.mockReset().mockResolvedValueOnce(page(20, 1, false)).mockRejectedValue(new Error("read again"));
