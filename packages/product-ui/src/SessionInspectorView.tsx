@@ -207,12 +207,15 @@ export function SessionInspectorShellView({
 export function InspectorSection({
 	children,
 	defaultOpen = true,
+	meta,
 	surface = true,
 	title,
 }: {
 	children: ReactNode;
 	/** Off for reference detail the reader opens on demand (a Setup log). */
 	defaultOpen?: boolean;
+	/** A short fact beside the title, such as a count. */
+	meta?: ReactNode;
 	surface?: boolean;
 	title: string;
 }) {
@@ -233,6 +236,7 @@ export function InspectorSection({
 					<NavRowHighlight />
 					<span className="relative z-[1] flex w-full min-w-0 items-center justify-between gap-2 text-sm">
 						<span className="min-w-0 flex-1">{title}</span>
+						{meta ? <span className="shrink-0 pr-1.5 text-xs text-passive">{meta}</span> : null}
 						<ChevronIcon aria-hidden="true" className="size-icon-2xs shrink-0 text-passive" direction={open ? "down" : "right"} />
 					</span>
 				</button>
