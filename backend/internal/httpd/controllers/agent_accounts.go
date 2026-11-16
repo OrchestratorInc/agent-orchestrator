@@ -270,8 +270,9 @@ func (c *AgentAccountsController) switchSession(w http.ResponseWriter, r *http.R
 }
 
 // agentAccountUnsharedMessage is shown when an account folder cannot link to
-// this computer's history; Windows allows the links only in Developer Mode.
-const agentAccountUnsharedMessage = "Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode."
+// this computer's history; Windows allows the links only in its own Developer
+// Mode, not Orchestrator's.
+const agentAccountUnsharedMessage = "Turn on Windows Developer Mode (Windows Settings > System > For developers) to use this account."
 
 func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {

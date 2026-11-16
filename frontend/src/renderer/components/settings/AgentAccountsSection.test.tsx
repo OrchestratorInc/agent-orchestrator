@@ -14,6 +14,7 @@ const { deleteMock, getMock, patchMock, postMock, terminalState } = vi.hoisted((
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
+	apiErrorCode: (error: unknown) => (error as { code?: string } | undefined)?.code,
 }));
 
 vi.mock("../TerminalPane", () => ({
@@ -63,6 +64,20 @@ it("signs a signed-out saved account in again in its own folder", async () => {
 
 	await user.click(screen.getByRole("button", { name: "Check sign-in" }));
 	await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("This account is b@example.com. Sign in again with that login."));
+});
+
+it("names Windows Developer Mode, not Orchestrator's, when an account folder cannot link", async () => {
+	postMock.mockImplementation(() => Promise.resolve({ error: { code: "AGENT_ACCOUNT_UNSHARED", message: "server text" } }));
+	const user = userEvent.setup();
+	renderPanel();
+	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
+
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveTextContent("Turn on Windows Developer Mode to use this account.");
+	// A setting the user can change reads as a warning, not a failure.
+	expect(alert).toHaveClass("text-warning");
+	await user.hover(within(alert).getByRole("button", { name: "How to turn on Windows Developer Mode" }));
+	expect(await screen.findByRole("tooltip")).toHaveTextContent("Windows Settings > System > For developers");
 });
 
 it("starts the sign-in a chat asked for, once", async () => {
