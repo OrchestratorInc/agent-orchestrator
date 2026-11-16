@@ -10,6 +10,7 @@ import {
 	canManageBilling,
 	cloudMeQueryKey,
 	offeringKindFor,
+	startsInPlace,
 	offersProviderChoice,
 	projectSandboxProvider,
 	resolveCloudOffering,
@@ -38,6 +39,15 @@ describe("offeringKindFor", () => {
 		expect(offeringKindFor(["boat"])).toBe("b2c");
 		expect(offeringKindFor(["boat", "coder"])).toBe("both");
 		expect(offeringKindFor([])).toBe("none");
+	});
+});
+
+describe("startsInPlace", () => {
+	it("is true for the snapshot-booted providers only", () => {
+		expect(startsInPlace("freestyle")).toBe(true);
+		expect(startsInPlace("boat")).toBe(true);
+		expect(startsInPlace("coder")).toBe(false);
+		expect(startsInPlace(undefined)).toBe(false);
 	});
 });
 
