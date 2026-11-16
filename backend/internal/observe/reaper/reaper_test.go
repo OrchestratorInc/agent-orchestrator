@@ -204,6 +204,39 @@ func TestTick_MinorityDeadPassesThroughBreaker(t *testing.T) {
 	}
 }
 
+// A session whose launch AO ended on purpose (an agent exit, or a runtime found
+// gone at startup) keeps its dead handle until it is resumed. Probing it would
+// count it as dead on every pass: enough stopped sessions then trip the breaker
+// for good and every real crash is downgraded to an inconclusive probe.
+func TestTick_SkipsReleasedLaunchSoStoppedSessionsDoNotTripBreaker(t *testing.T) {
+	lcm := &fakeLCM{}
+	alive := map[string]bool{}
+	var rows []domain.SessionRecord
+	for _, id := range []domain.SessionID{"stopped-1", "stopped-2", "stopped-3", "stopped-4", "stopped-5"} {
+		rec := handledSession(id)
+		rec.Activity = domain.Activity{State: domain.ActivityExited}
+		rec.Metadata.RuntimeLaunchID = "launch-" + string(id)
+		rec.Metadata.RuntimeReleasedLaunchID = rec.Metadata.RuntimeLaunchID
+		rows = append(rows, rec)
+	}
+	for _, id := range []domain.SessionID{"live-1", "live-2", "crashed"} {
+		rows = append(rows, handledSession(id))
+		alive["h-"+string(id)] = id != "crashed"
+	}
+	r := New(lcm, fakeSessions{rows: rows}, perHandleRuntime{alive: alive}, Config{Logger: quietLogger()})
+	if err := r.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []domain.SessionID{"stopped-1", "stopped-2", "stopped-3", "stopped-4", "stopped-5"} {
+		if got, probed := lcm.observed[id]; probed {
+			t.Fatalf("released session %s was probed: %+v", id, got)
+		}
+	}
+	if got := lcm.observed["crashed"]; got.Runtime != ports.ProbeDead {
+		t.Fatalf("crashed runtime = %q, want %q (stopped sessions must not trip the breaker)", got.Runtime, ports.ProbeDead)
+	}
+}
+
 // Small boards never trip the breaker: two agents finishing together is
 // normal, and both are genuinely dead.
 func TestTick_SmallBoardMassDeathStillConcludes(t *testing.T) {

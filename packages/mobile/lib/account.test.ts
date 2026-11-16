@@ -29,6 +29,17 @@ beforeEach(async () => {
 	});
 });
 
+// The Settings account row shows the person as the desktop does: name and photo.
+it("keeps the person's name and photo from the sign-in provider", async () => {
+	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({
+		user: { id: "user_1", email: "person@example.com", first_name: "Ada", last_name: " Lovelace ", profile_picture_url: "https://example.com/ada.png" },
+		access_token: "access", refresh_token: "refresh",
+	}) })));
+	const person = { id: "user_1", email: "person@example.com", name: "Ada Lovelace", avatarUrl: "https://example.com/ada.png" };
+	await expect(signInToAccount()).resolves.toEqual(person);
+	expect(await loadAccount()).toEqual(person);
+});
+
 it("uses the existing AO AuthKit callback and keeps refresh credentials in SecureStore", async () => {
 	const fetch = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, json: async () => ({
 		user: { id: "user_1", email: "person@example.com" }, access_token: "access", refresh_token: "refresh",

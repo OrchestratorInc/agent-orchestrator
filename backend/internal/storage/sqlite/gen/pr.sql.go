@@ -19,6 +19,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     session_id = excluded.session_id,
+    -- The PR follows its new owner's "Automatically fix CI failures" switch,
+    -- not the previous owner's.
+    auto_inject_ci = excluded.auto_inject_ci,
     state_changed_at = CASE
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
@@ -922,6 +925,33 @@ func (q *Queries) ListPRsBySession(ctx context.Context, sessionID domain.Session
 	return items, nil
 }
 
+const listRepositoryRenames = `-- name: ListRepositoryRenames :many
+SELECT host, old_name, name FROM repository_renames
+`
+
+func (q *Queries) ListRepositoryRenames(ctx context.Context) ([]RepositoryRename, error) {
+	rows, err := q.db.QueryContext(ctx, listRepositoryRenames)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RepositoryRename{}
+	for rows.Next() {
+		var i RepositoryRename
+		if err := rows.Scan(&i.Host, &i.OldName, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const movePRAliasChecks = `-- name: MovePRAliasChecks :exec
 UPDATE OR IGNORE pr_checks SET pr_url = ?1 WHERE pr_url = ?2
 `
@@ -1397,5 +1427,22 @@ type UpsertPRAliasParams struct {
 
 func (q *Queries) UpsertPRAlias(ctx context.Context, arg UpsertPRAliasParams) error {
 	_, err := q.db.ExecContext(ctx, upsertPRAlias, arg.AliasURL, arg.CanonicalURL)
+	return err
+}
+
+const upsertRepositoryRename = `-- name: UpsertRepositoryRename :exec
+INSERT INTO repository_renames(host, old_name, name)
+VALUES (?1, ?2, ?3)
+ON CONFLICT(host, old_name) DO UPDATE SET name = excluded.name
+`
+
+type UpsertRepositoryRenameParams struct {
+	Host    string
+	OldName string
+	Name    string
+}
+
+func (q *Queries) UpsertRepositoryRename(ctx context.Context, arg UpsertRepositoryRenameParams) error {
+	_, err := q.db.ExecContext(ctx, upsertRepositoryRename, arg.Host, arg.OldName, arg.Name)
 	return err
 }

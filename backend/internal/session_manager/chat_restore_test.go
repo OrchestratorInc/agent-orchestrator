@@ -176,7 +176,7 @@ func TestStartupColdStatePreservesHibernationIntent(t *testing.T) {
 	}
 	for _, read := range []func() (chatsvc.Snapshot, error){
 		func() (chatsvc.Snapshot, error) { return svc.Snapshot(ctx, rec.ID) },
-		func() (chatsvc.Snapshot, error) { return svc.SnapshotPage(ctx, rec.ID, 0, 50) },
+		func() (chatsvc.Snapshot, error) { return svc.SnapshotPage(ctx, rec.ID, 0, 0, 50) },
 	} {
 		snapshot, err := read()
 		if err != nil || snapshot.Controller != ports.ChatControllerHibernated {

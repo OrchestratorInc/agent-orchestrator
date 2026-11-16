@@ -6,8 +6,10 @@ import { Input } from "../ui/input";
 import type { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import { cn } from "../../lib/utils";
 import { useCloudCp } from "../../hooks/useCloudCp";
+import { cloudAgentAccountsQueryKey } from "../../hooks/useCloudAgentAccounts";
 import { providerConnectionsQueryKey } from "../../hooks/useProviderConnections";
 import { aoBridge } from "../../lib/bridge";
+import type { CloudCpAddAgentAccountRequest } from "../../lib/cloud-cp";
 
 const BROWSER_LOGIN = "browser_login";
 const SETUP_TOKEN_STEPS = [
@@ -55,16 +57,37 @@ const CLOUD_LOGIN_METHODS: Record<CloudHarness, readonly LoginMethod[]> = {
 	],
 };
 
+/** Where a login goes when the harness can hold several accounts: "new" saves
+ * it as another account, an account id signs that account in again. Signing
+ * in again takes only the account's kind of login (credentialType): the
+ * control plane refuses another kind, since its sessions were set up for it. */
+export type CloudHarnessLoginAccount = { id: "new" | string; credentialType?: string };
+
+// The credential a browser login produces, per harness.
+const BROWSER_LOGIN_CREDENTIAL: Partial<Record<CloudHarness, string>> = { "claude-code": "oauth_token", codex: "auth_json" };
+
+// The harness's login methods that produce credentialType, or all of them
+// when none does (a kind the desktop cannot log in with, such as a pasted
+// Codex access token).
+function loginMethodsFor(agent: CloudHarness, credentialType: string | undefined): readonly LoginMethod[] {
+	const methods = CLOUD_LOGIN_METHODS[agent];
+	if (!credentialType) return methods;
+	const matching = methods.filter((method) =>
+		(method.kind === "browser" ? BROWSER_LOGIN_CREDENTIAL[agent] : method.value) === credentialType);
+	return matching.length > 0 ? matching : methods;
+}
+
 // Logs one harness in for cloud sessions, expanded inline under its row on the
 // Harness settings page (the only place cloud agent logins are made). Every
-// credential is personal (PUT /me/providers/{agent}): it runs the caller's
-// cloud sessions in every org they belong to.
-export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness; onClose: () => void }) {
+// credential is personal: it runs the caller's cloud sessions in every org they
+// belong to. Without `account` the login replaces the harness's one login
+// (PUT /me/providers/{agent}); with it, it adds or signs in one of its accounts.
+export function CloudHarnessLoginPanel({ agent, account, onClose }: { agent: CloudHarness; account?: CloudHarnessLoginAccount; onClose: () => void }) {
 	const { t } = useTranslation();
 	const { client, baseUrl } = useCloudCp();
 	const queryClient = useQueryClient();
 	const panelRef = useRef<HTMLDivElement>(null);
-	const methods = CLOUD_LOGIN_METHODS[agent];
+	const methods = loginMethodsFor(agent, account?.id === "new" ? undefined : account?.credentialType);
 	const [credentialType, setCredentialType] = useState<string>(methods[0].value);
 	const [secret, setSecret] = useState("");
 	const [busy, setBusy] = useState(false);
@@ -103,7 +126,10 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 
 	// On success the panel closes; the row's status line shows the connection.
 	const finish = async () => {
-		await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
+		await Promise.all([
+			queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
+			queryClient.invalidateQueries({ queryKey: cloudAgentAccountsQueryKey }),
+		]);
 		onClose();
 	};
 
@@ -112,12 +138,14 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 		setBusy(true);
 		setError(null);
 		try {
-			const { providerConnection } = await client.putUserAgentConnection(agent, {
-				credentialType,
-				secret: secret.trim(),
-			});
-			if (providerConnection.validationState !== "valid") {
-				setError(t("cloudCredential.invalid", { state: providerConnection.validationState }));
+			const input = { credentialType, secret: secret.trim() };
+			const { validationState } = !account
+				? (await client.putUserAgentConnection(agent, input)).providerConnection
+				: account.id === "new"
+					? (await client.addAgentAccount({ agent, ...input, credentialType: credentialType as CloudCpAddAgentAccountRequest["credentialType"] })).agentAccount
+					: (await client.replaceAgentAccountCredential(account.id, input)).agentAccount;
+			if (validationState !== "valid") {
+				setError(t("cloudCredential.invalid", { state: validationState }));
 				return;
 			}
 			setSecret("");
@@ -137,11 +165,14 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 		try {
 			// One login for local and cloud: the credential becomes the caller's
 			// personal cloud connection and, for Claude Code, is also persisted
-			// locally so local sessions use the same login.
+			// locally so local sessions use the same login. Only the default
+			// account's (the main process reads which account the control plane
+			// saved it as): another account must not change what local sessions use.
 			await aoBridge.cloud.connectProviderAuth({
 				baseUrl,
 				provider: agent,
 				persistLocalClaudeToken: agent === "claude-code",
+				...(account ? { account: account.id } : {}),
 			});
 			await finish();
 		} catch (err) {
@@ -169,13 +200,14 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 								i18nKey="cloudCredential.apiKeyHelp"
 								components={{
 									link: (
-										<button
+										<Button
 											type="button"
-											className="text-settings-label underline underline-offset-2"
+											variant="link"
+											className="text-settings-label"
 											onClick={() => void aoBridge.app.openExternal(selectedMethod.help.url)}
 										>
 											{selectedMethod.help.site}
-										</button>
+										</Button>
 									),
 								}}
 							/>
@@ -249,9 +281,10 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 					{otherMethods.map((entry, index) => (
 						<span key={entry.value}>
 							{index > 0 ? " · " : null}
-							<button
+							<Button
 								type="button"
-								className="text-settings-label underline-offset-2 hover:underline"
+								variant="link"
+								className="text-settings-label"
 								onClick={() => {
 									setCredentialType(entry.value);
 									setSecret("");
@@ -259,7 +292,7 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 								}}
 							>
 								{methodLabel(entry)}
-							</button>
+							</Button>
 						</span>
 					))}
 				</p>

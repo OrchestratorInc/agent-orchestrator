@@ -88,6 +88,21 @@ describe("rankSkills", () => {
 		expect(ranked.indexOf("review")).toBeLessThan(ranked.indexOf("code-review"));
 	});
 
+	it("ignores hyphens, underscores and spaces in the query and the name", () => {
+		const listed = [
+			skill("run-ao-fast", "Launch the app"),
+			skill("ce-plan", "Plan the work"),
+			skill("explanation", "Explain a change"),
+		];
+		const ranked = (query: string) => rankSkills(listed, query).map((item) => item.value);
+		expect(ranked("runaofast")).toEqual(["run-ao-fast"]);
+		expect(ranked("run-ao-fast")).toEqual(["run-ao-fast"]);
+		expect(ranked("run_ao")).toEqual(["run-ao-fast"]);
+		expect(ranked("ceplan")).toEqual(ranked("ce-plan"));
+		// A match at the start of a word still outranks one inside a word.
+		expect(ranked("plan")).toEqual(["ce-plan", "explanation"]);
+	});
+
 	it("matches on the description so a half-remembered skill is still findable", () => {
 		expect(rankSkills(skills, "root cause").map((item) => item.value)).toEqual(["investigate"]);
 	});
@@ -105,7 +120,7 @@ describe("rankSkills", () => {
 		const [row] = rankSkills([skill("ship", "Open a PR\nsecond line", "repo")], "ship");
 		expect(row).toMatchObject({
 			value: "ship",
-			label: "ship",
+			label: "Ship",
 			detail: "Open a PR",
 			badge: "repo",
 		});
@@ -118,6 +133,99 @@ describe("rankSkills", () => {
 			value: "review",
 			detail: "Review a change · <pull-request>",
 		});
+	});
+
+	// The `skill:` prefix is how a Pi-style agent runs the skill, so the row shows
+	// the name alone while a pick still inserts the full command.
+	it("shows a skill command by its name but keeps the command as the value", () => {
+		const listed = [
+			skill("skill:Better Interface", "Cross-discipline interface review", "agent"),
+			skill("skill:blast-radius", "Find what a change could break", "agent"),
+		];
+		expect(rankSkills(listed, "")).toEqual([
+			expect.objectContaining({ value: "skill:Better Interface", label: "Better Interface" }),
+			expect.objectContaining({ value: "skill:blast-radius", label: "Blast Radius" }),
+		]);
+		expect(rankSkills(listed, "better").map((item) => item.value)).toEqual(["skill:Better Interface"]);
+		expect(rankSkills(listed, "skill:blast").map((item) => item.value)).toEqual(["skill:blast-radius"]);
+	});
+
+	it("shows every agent's entries by name alone", () => {
+		const listed = [skill("review", "", "agent"), skill("compact", "", "AO"), skill("skill:ship", "", "agent")];
+		expect(Object.fromEntries(rankSkills(listed, "").map((item) => [item.value, item.label]))).toEqual({
+			review: "Review",
+			compact: "Compact",
+			"skill:ship": "Ship",
+		});
+	});
+
+	// Most skills carry only a slug, so the row reads it as a title. The slug is
+	// still what a pick inserts.
+	it("reads a slug as a title and keeps a label the skill gave", () => {
+		const listed = [
+			skill("ce-plan", "", "agent"),
+			skill("better-ui", "", "agent"),
+			skill("__remote-workflow", "", "agent"),
+			skill("grill-me", "", "agent"),
+			skill("ios-qa", "", "agent"),
+			{ ...skill("better-interface", "", "agent"), displayName: "Better Interface" },
+		];
+		expect(Object.fromEntries(rankSkills(listed, "").map((item) => [item.value, item.label]))).toEqual({
+			"ce-plan": "CE Plan",
+			"better-ui": "Better UI",
+			"__remote-workflow": "Remote Workflow",
+			"grill-me": "Grill Me",
+			"ios-qa": "iOS QA",
+			"better-interface": "Better Interface",
+		});
+	});
+
+	it("titles a slug that names an Object property as a word", () => {
+		const [row] = rankSkills([skill("constructor", "", "agent")], "");
+		expect(row?.label).toBe("Constructor");
+	});
+
+	it("shows a name with nothing after its namespace whole rather than blank", () => {
+		const [row] = rankSkills([skill("plugin:", "", "agent")], "");
+		expect(row?.label).toBe("plugin:");
+	});
+
+	it("names a plugin skill without its namespace, which shows when two read the same", () => {
+		const listed = [skill("ce-plan", "", "agent"), skill("compound-engineering:ce-plan", "", "agent")];
+		expect(rankSkills(listed, "")).toEqual([
+			expect.objectContaining({ value: "ce-plan", label: "CE Plan", badge: "agent" }),
+			expect.objectContaining({ value: "compound-engineering:ce-plan", label: "CE Plan", badge: "compound-engineering" }),
+		]);
+	});
+
+	it("cuts a description to its first sentence and drops Claude's source tags", () => {
+		const listed = [
+			skill("ce-ideate", "Generate and evaluate grounded ideas. Use when the user asks for ideas.", "agent"),
+			skill("gstack", "Router for the gstack skill suite. (gstack) (user)", "agent"),
+			skill("promote", "Draft launch copy for a shipped feature (user)", "agent"),
+			skill("example", "Check e.g. this file. Then stop.", "agent"),
+			skill("export", "Export reports (PDF) (user)", "agent"),
+		];
+		expect(Object.fromEntries(rankSkills(listed, "").map((item) => [item.value, item.detail]))).toEqual({
+			"ce-ideate": "Generate and evaluate grounded ideas",
+			gstack: "Router for the gstack skill suite",
+			promote: "Draft launch copy for a shipped feature",
+			example: "Check e.g. this file",
+			export: "Export reports (PDF)",
+		});
+	});
+
+	it("names the namespace quietly when two skills would read the same", () => {
+		const listed = [
+			{ ...skill("design:polish", "", "user"), displayName: "Polish" },
+			{ ...skill("writing:polish", "", "user"), displayName: "Polish" },
+			{ ...skill("tidy", "", "user"), displayName: "Tidy" },
+		];
+		expect(rankSkills(listed, "")).toEqual([
+			expect.objectContaining({ value: "design:polish", label: "Polish", badge: "design" }),
+			expect.objectContaining({ value: "tidy", label: "Tidy", badge: "user" }),
+			expect.objectContaining({ value: "writing:polish", label: "Polish", badge: "writing" }),
+		]);
 	});
 
 	it("orders equal scores by name so the list does not reshuffle on refetch", () => {

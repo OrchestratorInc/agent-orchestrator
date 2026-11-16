@@ -3,11 +3,10 @@ import type { ComponentType, SVGProps } from "react";
 export type AppIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 export function BrowserIcon(props: SVGProps<SVGSVGElement>) {
+	// Myna UI "globe", matching the app icon set (components/app-icons).
 	return (
-		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
-			<circle cx="12" cy="12" r="9" />
-			<line x1="3" y1="12" x2="21" y2="12" />
-			<path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
+		<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="1.2 1.2 21.6 21.6" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" {...props}>
+			<path d="M12 21a9 9 0 1 0 0-18m0 18a9 9 0 1 1 0-18m0 18c2.761 0 3.941-5.163 3.941-9S14.761 3 12 3m0 18c-2.761 0-3.941-5.163-3.941-9S9.239 3 12 3M3.5 9h17m-17 6h17" />
 		</svg>
 	);
 }
@@ -66,6 +65,52 @@ export function OrchestratorIcon({ className, ...props }: SVGProps<SVGSVGElement
 			<path d="M5 11h14" />
 			<path d="M5 11v7" />
 			<path d="M19 11v7" />
+		</svg>
+	);
+}
+
+// Subagents mark: IconOven's "Agent robot" (https://iconoven.com/icons/agent-robot),
+// a 24x24 stroke glyph that drops into the same slots as the lucide icons. The eyes
+// are drawn at 4/3 of the stroke, as in the original.
+//
+// MIT License. Copyright (c) 2026 Appic Marketing LLC (IconOven)
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy of
+// this software and associated documentation files (the "Software"), to deal in the
+// Software without restriction, including without limitation the rights to use,
+// copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+// Software, and to permit persons to whom the Software is furnished to do so,
+// subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+// FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+// COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
+// AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+export function SubagentIcon({ className, ...props }: SVGProps<SVGSVGElement>) {
+	return (
+		<svg
+			xmlns="http://www.w3.org/2000/svg"
+			width="24"
+			height="24"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			strokeWidth="1.5"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			{...props}
+		>
+			<path d="M12 2.85Q12.24 4.61 14 4.85Q12.24 5.09 12 6.85Q11.76 5.09 10 4.85Q11.76 4.61 12 2.85Z" />
+			<rect x="3.75" y="8.75" width="16.5" height="12.5" rx="4.5" />
+			<rect x="7" y="12.25" width="10" height="4.5" rx="2.25" />
+			<path d="M9.75 14.5h.01" strokeWidth="2" />
+			<path d="M14.25 14.5h.01" strokeWidth="2" />
 		</svg>
 	);
 }

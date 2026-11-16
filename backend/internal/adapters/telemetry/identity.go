@@ -24,9 +24,6 @@ const (
 	installIDFile      = "telemetry_install_id"
 	anonymousIDFile    = "telemetry_anonymous_id"
 	installedEventFile = "telemetry_installed_emitted"
-	// firstOpenEventFile holds the install ID that ao.app.first_open was sent
-	// for, so each install ID sends it exactly once, on any build.
-	firstOpenEventFile = "telemetry_first_open_emitted"
 	// boundUserFile remembers which AO Cloud user the anonymous distinct ID may
 	// be linked to. A sign-out or account switch retires that ID.
 	boundUserFile = "telemetry_bound_user"
@@ -48,11 +45,12 @@ type Identity struct {
 	writeFile  func(path string, data []byte) error
 	removeFile func(path string) error
 
-	mu          sync.RWMutex
-	installID   string
-	anonymousID string
-	onRetired   func()
-	cloudUserID string
+	mu             sync.RWMutex
+	installID      string
+	anonymousID    string
+	onRetired      func()
+	cloudUserID    string
+	cloudUserKnown bool
 	// persistFailed is set while the last SetCloudUserID could not persist.
 	persistFailed bool
 	githubLogin   string
@@ -81,7 +79,15 @@ func NewIdentity(dataDir string) (*Identity, error) {
 			return nil, fmt.Errorf("record telemetry anonymous id: %w", err)
 		}
 	}
-	return &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
+	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}
+	// The bound user is the last sign-in the desktop handed off and the daemon
+	// recorded; a sign-out removes it. Restoring it lets a restarted or
+	// CLI-started daemon report under the signed-in Cloud ID without waiting
+	// for the desktop to push it again. Signed out, nothing is restored.
+	if cloudUserIDPattern.MatchString(bound) {
+		ident.cloudUserID, ident.cloudUserKnown = bound, true
+	}
+	return ident, nil
 }
 
 // FreshInstall reports whether this process is the first run of a brand new
@@ -125,34 +131,6 @@ func (i *Identity) MarkInstalledEvent(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// MarkFirstOpenEvent reserves ao.app.first_open for the current install ID.
-// Unlike ao.app.installed it does not depend on the install being fresh, so an
-// install that predates ao.app.installed (or whose CLI wrote tenure before the
-// daemon first started) is still counted once. An opted-out install reserves
-// nothing: it has never sent the event, so it sends it after opting back in.
-func (i *Identity) MarkFirstOpenEvent(ctx context.Context) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.OptedOut() {
-		return false, nil
-	}
-	path := filepath.Join(i.dataDir, firstOpenEventFile)
-	recorded, err := readTrimmed(path)
-	if err != nil {
-		return false, err
-	}
-	if recorded == i.installID {
-		return false, nil
-	}
-	if err := i.writeFile(path, []byte(i.installID+"\n")); err != nil {
-		return false, fmt.Errorf("mark telemetry first open event: %w", err)
-	}
-	return true, nil
-}
-
 // freshInstall is true when the install event has not been reserved, no event
 // has been exported, and the install ID was created in the last day. The age
 // check keeps an upgrade from a build that predates tenure from counting as a
@@ -183,6 +161,15 @@ func (i *Identity) InstallID() string {
 	return i.installID
 }
 
+// DaysSinceInstall uses the durable install ID file modification timestamp.
+func (i *Identity) DaysSinceInstall(now time.Time) (int, bool) {
+	info, err := os.Stat(filepath.Join(i.dataDir, installIDFile))
+	if err != nil || info.ModTime().After(now) {
+		return 0, false
+	}
+	return int(now.UTC().Sub(info.ModTime().UTC()).Hours() / 24), true
+}
+
 // AnonymousID is the distinct ID used when no Cloud user is bound.
 func (i *Identity) AnonymousID() string {
 	i.mu.RLock()
@@ -208,12 +195,18 @@ func (i *Identity) SetCloudUserID(ctx context.Context, id string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.cloudUserID = id
+	i.cloudUserKnown = true
 	err := i.bindLocked(id)
 	i.persistFailed = err != nil
 	return err
 }
 
 func (i *Identity) bindLocked(id string) error {
+	// The desktop retires a binding itself on sign-out (so it holds while the
+	// daemon is down); pick up the anonymous ID it wrote.
+	if anon, err := readTrimmed(filepath.Join(i.dataDir, anonymousIDFile)); err == nil && anon != "" {
+		i.anonymousID = anon
+	}
 	boundPath := filepath.Join(i.dataDir, boundUserFile)
 	bound, err := readTrimmed(boundPath)
 	if err != nil {
@@ -290,6 +283,7 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	snap := ports.TelemetryIdentity{InstallID: i.installID, AnonymousID: i.anonymousID, OptedOut: optedOut || i.persistFailed}
 	if !snap.OptedOut {
 		snap.CloudUserID, snap.GitHubLogin = i.cloudUserID, i.githubLogin
+		snap.CloudUserKnown = i.cloudUserKnown
 	}
 	return snap
 }

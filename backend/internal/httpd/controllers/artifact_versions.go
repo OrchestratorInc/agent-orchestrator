@@ -8,8 +8,10 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
 	"slices"
 	"strconv"
+	"time"
 	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
@@ -28,6 +30,11 @@ const (
 	artifactVersionRestorePath = "/api/v1/sessions/{sessionId}/artifact-versions/restore"
 	artifactVersionSyncPath    = "/api/v1/sessions/{sessionId}/artifact-versions/sync"
 )
+
+// artifactVersionQuery names the kept version a preview request reads. A
+// session's own pages load their assets through these routes, so it must not
+// be a name such as "version" that a page uses to bust a cache.
+const artifactVersionQuery = "artifactVersion"
 
 // maxArtifactVersionPreviewBytes caps the content a version read returns. A
 // longer version is cut short and marked truncated; a restore still writes it
@@ -124,7 +131,7 @@ func (c *SessionsController) writeArtifactVersionList(w http.ResponseWriter, r *
 		envelope.WriteError(w, r, err)
 		return
 	}
-	out := ListArtifactVersionsResponse{Path: clean, Versions: make([]ArtifactVersionSummary, len(rows))}
+	out := ListArtifactVersionsResponse{Path: clean, MediaVersions: true, Versions: make([]ArtifactVersionSummary, len(rows))}
 	for i, v := range rows {
 		out.Versions[i] = artifactVersionSummary(v)
 	}
@@ -146,8 +153,8 @@ func (c *SessionsController) findArtifactVersion(w http.ResponseWriter, r *http.
 	return rows[i], true
 }
 
-// readArtifactVersionText reads a version's content, which must be UTF-8 text.
-func (c *SessionsController) readArtifactVersionText(w http.ResponseWriter, r *http.Request, sess domain.Session, v domain.SessionArtifactVersion) ([]byte, bool) {
+// readArtifactVersionContent reads a version's content, of any type.
+func (c *SessionsController) readArtifactVersionContent(w http.ResponseWriter, r *http.Request, sess domain.Session, v domain.SessionArtifactVersion) ([]byte, bool) {
 	data, err := c.ArtifactVersions.ReadVersion(sess.SessionRecord, v)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -156,11 +163,47 @@ func (c *SessionsController) readArtifactVersionText(w http.ResponseWriter, r *h
 	case err != nil:
 		envelope.WriteError(w, r, err)
 		return nil, false
-	case !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0:
+	}
+	return data, true
+}
+
+// readArtifactVersionText reads a version's content, which must be UTF-8 text.
+func (c *SessionsController) readArtifactVersionText(w http.ResponseWriter, r *http.Request, sess domain.Session, v domain.SessionArtifactVersion) ([]byte, bool) {
+	data, ok := c.readArtifactVersionContent(w, r, sess, v)
+	if !ok {
+		return nil, false
+	}
+	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
 		envelope.WriteError(w, r, apierr.Invalid("ARTIFACT_FILE_BINARY", "Only UTF-8 text versions can be shown", nil))
 		return nil, false
 	}
 	return data, true
+}
+
+// serveArtifactVersionFile serves the bytes of one kept version of a listed
+// artifact file on the preview route, so an image, PDF, video or audio file's
+// earlier version loads like the live file: with its auth, Range requests and
+// sandbox. A version's content never changes, so its tag is its hash.
+func (c *SessionsController) serveArtifactVersionFile(w http.ResponseWriter, r *http.Request, sess domain.Session, assetPath, rawVersion string) {
+	version, err := strconv.ParseInt(rawVersion, 10, 64)
+	clean, listed := previewutil.CleanWorkspacePath(assetPath)
+	if c.ArtifactVersions == nil || err != nil || version < 1 || !listed || !listsArtifactFile(sess.ArtifactFiles, clean) {
+		writeArtifactVersionNotFound(w, r)
+		return
+	}
+	v, ok := c.findArtifactVersion(w, r, sess, clean, version)
+	if !ok {
+		return
+	}
+	data, ok := c.readArtifactVersionContent(w, r, sess, v)
+	if !ok {
+		return
+	}
+	sandboxLegacyPreview(w, r)
+	w.Header().Set("ETag", `"`+v.SHA256+`"`)
+	w.Header().Set("Access-Control-Expose-Headers", "ETag")
+	w.Header().Set("Cache-Control", "private, no-cache")
+	http.ServeContent(w, r, path.Base(clean), time.Time{}, bytes.NewReader(data))
 }
 
 // truncateText cuts valid UTF-8 text to at most limit bytes without splitting
@@ -205,7 +248,7 @@ func (c *SessionsController) getArtifactVersion(w http.ResponseWriter, r *http.R
 }
 
 // restoreArtifactVersion rewrites a listed artifact file with an earlier
-// version's content. The restore lands as the file's newest version, so the
+// version's content, of any type. The restore lands as the file's newest version, so the
 // history is never rewritten and a restore can itself be undone.
 func (c *SessionsController) restoreArtifactVersion(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil || c.ArtifactVersions == nil {
@@ -225,7 +268,7 @@ func (c *SessionsController) restoreArtifactVersion(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
-	content, ok := c.readArtifactVersionText(w, r, sess, v)
+	content, ok := c.readArtifactVersionContent(w, r, sess, v)
 	if !ok {
 		return
 	}

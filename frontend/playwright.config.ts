@@ -11,13 +11,17 @@ export default defineConfig({
 	// dev:web loads lazy route modules in each fresh browser context. Allow
 	// startup to settle before asserting the rendered state on shared runners.
 	expect: { timeout: 15_000 },
+	retries: process.env.CI ? 1 : 0,
+	reporter: process.env.CI ? [["list"], ["github"]] : "list",
 	use: {
 		baseURL: `http://127.0.0.1:${port}`,
 	},
 	webServer: {
 		// dev:web serves the renderer alone (VITE_NO_ELECTRON=1) — no Electron child to
 		// launch, which is all the browser-based e2e suite needs.
-		command: `npm run dev:web -- --port ${port} --host 127.0.0.1`,
+		command: process.env.AO_PERF_PRODUCTION === "1"
+			? "node scripts/performance-web.mjs"
+			: `npm run dev:web -- --port ${port} --host 127.0.0.1`,
 		port,
 		reuseExistingServer: !process.env.CI,
 	},

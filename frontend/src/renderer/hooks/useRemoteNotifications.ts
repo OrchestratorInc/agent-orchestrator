@@ -1,6 +1,6 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQueries, type QueryClient } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForHost, connectedHosts, labelForHost, subscribeConnectedHosts } from "../lib/host-clients";
 import { probeRemoteSse } from "../lib/remote-sse-probe";
 import { useConnectedHosts } from "./useHostConnection";
@@ -66,20 +66,20 @@ export async function fetchRemoteNotificationsPage(hostId: string, status: Notif
 	const { data, error } = await clientForHost(hostId).GET("/api/v1/notifications", {
 		params: { query: { status, limit: NOTIFICATION_PAGE_SIZE, cursor: cursor || undefined } },
 	});
-	if (error || !data) throw new Error(apiErrorMessage(error, "Could not load notifications"));
+	if (error || !data) throw apiErrorException(error, "Could not load notifications");
 	return data;
 }
 
 export async function markRemoteNotificationsRead(hostId: string, ids: string[], queryClient: QueryClient): Promise<void> {
 	const { error } = await clientForHost(hostId).POST("/api/v1/notifications/read-all", { body: { ids } });
-	if (error) throw new Error(apiErrorMessage(error, "Could not mark notifications read"));
+	if (error) throw apiErrorException(error, "Could not mark notifications read");
 	await queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(hostId, "unread") });
 	await queryClient.invalidateQueries({ queryKey: remoteNotificationsQueryKey(hostId, "all") });
 }
 
 export async function clearRemoteNotifications(hostId: string, queryClient: QueryClient): Promise<void> {
 	const { error } = await clientForHost(hostId).DELETE("/api/v1/notifications");
-	if (error) throw new Error(apiErrorMessage(error));
+	if (error) throw apiErrorException(error);
 	await queryClient.invalidateQueries({ queryKey: ["remote-notifications", hostId] });
 }
 
@@ -87,7 +87,7 @@ export async function clearRemoteNotification(hostId: string, id: string, queryC
 	const { error, response } = await clientForHost(hostId).DELETE("/api/v1/notifications/{id}", {
 		params: { path: { id } },
 	});
-	if (error && response.status !== 404) throw new Error(apiErrorMessage(error));
+	if (error && response.status !== 404) throw apiErrorException(error);
 	await queryClient.invalidateQueries({ queryKey: ["remote-notifications", hostId] });
 }
 

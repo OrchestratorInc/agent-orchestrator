@@ -155,16 +155,20 @@ describe("CONTROL_KEYS", () => {
 	});
 
 	it("sends the bytes a PTY expects", () => {
-		const seq = Object.fromEntries(CONTROL_KEYS.map((k) => [k.label, k.seq]));
+		const seq = Object.fromEntries(CONTROL_KEYS.map((k) => [k.id, k.seq]));
 		expect(seq.esc).toBe("\x1b");
 		expect(seq.tab).toBe("\t");
-		expect(seq["^C"]).toBe("\x03");
-		expect(seq["↵"]).toBe("\r");
+		expect(seq.interrupt).toBe("\x03");
+		expect(seq.enter).toBe("\r");
 		// CSI cursor keys: ESC [ A/B/C/D
-		expect(seq["↑"]).toBe("\x1b[A");
-		expect(seq["↓"]).toBe("\x1b[B");
-		expect(seq["→"]).toBe("\x1b[C");
-		expect(seq["←"]).toBe("\x1b[D");
+		expect(seq.up).toBe("\x1b[A");
+		expect(seq.down).toBe("\x1b[B");
+		expect(seq.right).toBe("\x1b[C");
+		expect(seq.left).toBe("\x1b[D");
+	});
+
+	it("repeats only the arrows while held", () => {
+		expect(CONTROL_KEYS.filter((k) => k.repeats).map((k) => k.id)).toEqual(["left", "up", "down", "right"]);
 	});
 
 	// Every one of these would be stripped by SanitizeControlChars on the REST

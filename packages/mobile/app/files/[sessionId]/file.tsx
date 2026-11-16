@@ -1,26 +1,34 @@
 import * as Clipboard from "expo-clipboard";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AccessibilityInfo, ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { Image, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { FlatList, GestureDetector } from "react-native-gesture-handler";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SvgXml } from "react-native-svg";
 import { parseUnifiedDiff } from "../../../../shared/files/diff-parser";
 import { ChatMarkdown } from "../../../lib/chat/ChatMarkdown";
 import { userFacingError } from "../../../lib/connectionError";
+import { rowDividerWidth } from "../../../lib/divider";
 import { haptics } from "../../../lib/haptics";
-import { headerActionStyle, headerGlyphStyle } from "../../../lib/headerAction";
 import { hostRouteMatches } from "../../../lib/hostRoute";
-import { Feather } from "../../../lib/icons";
+import { ImageViewer } from "../../../lib/ImageViewer";
+import { usePressFeedback } from "../../../lib/pressFeedback";
+import { useGlassBarInset } from "../../../lib/useHeaderOverlap";
+import { Spinner } from "../../../lib/Spinner";
 import { HostScope, useApp } from "../../../lib/store";
 import type { Theme } from "../../../lib/theme";
-import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
-import { font, fontScaleCap, iconSize, press, radius, space, touchTarget, type } from "../../../lib/tokens";
+import { useThemedStyles } from "../../../lib/ThemeProvider";
+import { ToastHost } from "../../../lib/Toast";
+import { font, fontScaleCap, radius, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
-import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
-import { codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, ReviewTray, SegmentedTabs, SelectionComposer, FileTypeIcon, type ComposerAction } from "../../../lib/files/components";
+import { useToast } from "../../../lib/useToast";
+import type { FileRead, WorkspaceFileDetail } from "../../../lib/files/api";
+import type { FilesBackend, WorkspaceImageSource } from "../../../lib/files/backend";
+import { useFilesBackend } from "../../../lib/files/useFilesBackend";
+import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, MARKER_WIDTH, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
+import { fileIcon } from "../../../lib/files/fileIcons";
 import {
 	annotationTarget,
-	changeGroups,
 	commentAnchor,
 	CONTEXT_STEP,
 	contentLines,
@@ -39,14 +47,33 @@ import {
 	type DisplayRow,
 } from "../../../lib/files/model";
 import { addReviewComment, reviewKey } from "../../../lib/files/reviewStore";
+import { REVIEW_BUTTON_RISE } from "../../../lib/files/ReviewButton.types";
+import { ReviewButton } from "../../../lib/files/ReviewButton";
+import { useFileActions } from "../../../lib/files/useFileActions";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
+import { SegmentedChoice, type SegmentedChoiceOption } from "../../../lib/files/SegmentedChoice";
+import { annotationContext, branchLabel, changesLabel, fileRead, imageComparable, inPick, selectionParams, type SelectionParams } from "../../../lib/files/selection";
+import { useBranchBackend, useChangeList, useRouteSelection } from "../../../lib/files/useChangeList";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
 type Mode = "diff" | "file";
+/** The one control over how the file reads: its diff, its text, or a markdown file rendered. */
+type ViewChoice = "diff" | "file" | "preview" | "source";
 type Selection = { anchor: number; focus: number };
+
+/**
+ * Where previous/next file lives. iOS steps through changed files from the
+ * header's chevrons, as Mail steps through messages: UIKit's bottom toolbar is
+ * only driven from iOS 18, and once shown it stays on the navigation
+ * controller for every page under it. Android floats Material's toolbar over
+ * the bottom of this page alone.
+ */
+const STEP_IN_HEADER = Platform.OS === "ios";
+/** Material's floating toolbar: 64dp, and the gap it keeps above what it floats over. */
+const FLOATING_TOOLBAR_CLEARANCE = 64 + space.sm;
 
 export default function SessionFileScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
@@ -54,21 +81,32 @@ export default function SessionFileScreen() {
 }
 
 function SessionFileContent() {
-	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string }>();
+	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string } & SelectionParams>();
+	// What the Files screen was comparing; a file opened from chat has none, the worktree's base.
+	const pick = useRouteSelection(params);
+	const picked = Object.keys(selectionParams(pick)).length > 0;
 	const id = String(params.sessionId ?? "");
 	const path = String(params.path ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection, loading: appLoading } = useApp();
+	const { currentHostId, connection, loading: appLoading } = useApp();
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
+	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { width } = useWindowDimensions();
+	const codeScale = useCodeScale();
 
-	const { manifest } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
-	const changes = useMemo(() => manifest ? orderedChanges(changeGroups(manifest)) : [], [manifest]);
+	const { manifest } = useWorkspaceManifest(hostMatches ? backend : null, id, hostMatches);
+	const branchBackend = useBranchBackend(hostMatches ? backend : null, pick.branch);
+	const viewing = pick.branch.kind !== "checked_out";
+	const { groups } = useChangeList(branchBackend, id, pick, manifest, hostMatches);
+	const changes = useMemo(() => orderedChanges(groups ?? []), [groups]);
 	const position = changes.findIndex((file) => file.path === path);
 	const listed = position >= 0 ? changes[position] : undefined;
+	// The diff the pick reads: a worktree section, one commit, or the whole range.
+	const readKey = JSON.stringify(fileRead(pick, listed));
+	const read = useMemo(() => JSON.parse(readKey) as FileRead, [readKey]);
 
 	const [detail, setDetail] = useState<WorkspaceFileDetail | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -80,22 +118,29 @@ function SessionFileContent() {
 	const [selection, setSelection] = useState<Selection | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [actionError, setActionError] = useState<string>();
-	const [notice, setNotice] = useState<string>();
+	const [composerRise, setComposerRise] = useState(0);
+	const toast = useToast();
+	// `show` is stable where the controller is not, so callbacks keep their identity.
+	const showToast = toast.show;
+	const insets = useSafeAreaInsets();
+	const glassInset = useGlassBarInset();
+	const { openReview } = useFileActions({ sessionId: id, hostId: params.hostId, toast });
 	const list = useRef<FlatList<DisplayRow>>(null);
 	const request = useRef(0);
 
 	const key = reviewKey(currentHostId, id);
-	const review = useReviewSender(config, key, id);
+	const review = useReviewSender(backend, key, id);
 
 	// What says the file changed under us: its fingerprint in the manifest, or the
 	// whole workspace version for a file the manifest does not list.
-	const fingerprint = listed?.fileFingerprint || manifest?.workspaceVersion || "";
+	// Another branch moves on its own, with nothing in the worktree's version to say so.
+	const fingerprint = listed?.fileFingerprint || (viewing ? "" : manifest?.workspaceVersion) || "";
 	const load = useCallback(async (quiet: boolean) => {
-		if (!config || !hostMatches || !path) return;
+		if (!branchBackend || !hostMatches || !path) return;
 		const ticket = ++request.current;
 		if (!quiet) setLoading(true);
 		try {
-			const next = await getWorkspaceFile(config, id, path);
+			const next = await branchBackend.file(id, path, read);
 			if (ticket !== request.current) return;
 			setDetail(next);
 			setLoadError(undefined);
@@ -104,7 +149,7 @@ function SessionFileContent() {
 		} finally {
 			if (ticket === request.current) setLoading(false);
 		}
-	}, [config, hostMatches, id, path]);
+	}, [branchBackend, hostMatches, id, path, read]);
 
 	// A new path starts from a clean slate; the same path reloads quietly when the
 	// agent edits it, keeping the reader's place.
@@ -132,7 +177,11 @@ function SessionFileContent() {
 		return effectiveMode === "diff" ? diffDisplayRows(parsed, lines, revealed) : fileDisplayRows(lines ?? []);
 	}, [detail, effectiveMode, lines, parsed, revealed]);
 	// Comments on this file, queued and sent, drawn under the lines they are about.
-	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path), [path, review.all]);
+	// What a comment here is made on; only this pick's comments are drawn on its lines.
+	const context = useMemo(() => annotationContext(pick), [pick]);
+	// Another branch, or part of the changes, in words: under the title, and on each queued comment.
+	const compared = picked ? [viewing ? branchLabel(pick.branch) : "", changesLabel(pick.changes)].filter(Boolean).join(" · ") : "";
+	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path && inPick(comment.target, context)), [context, path, review.all]);
 	const commentById = useMemo(() => new Map(fileComments.map((comment) => [comment.id, comment])), [fileComments]);
 	const rows = useMemo(() => withInlineComments(baseRows, fileComments), [baseRows, fileComments]);
 	const digits = useMemo(() => String(rows.reduce((max, row) => row.type === "line" ? Math.max(max, row.row.newNo ?? 0, row.row.oldNo ?? 0) : max, 0)).length, [rows]);
@@ -141,39 +190,18 @@ function SessionFileContent() {
 	const markdown = isMarkdownPath(path);
 	const image = isImagePath(path);
 	const svg = isSvgPath(path);
+	const imageSources = useImageSources(branchBackend, id, path, detail, changed, image, read);
 
 	// Lines with a comment card under them, so a screen reader hears "has a comment" there.
 	const commented = useMemo(() => new Set(fileComments.flatMap((comment) => comment.anchor ? [`${comment.anchor.side}:${comment.anchor.line}`] : [])), [fileComments]);
 
 	useLayoutEffect(() => {
-		navigation.setOptions({
-			title: name || "File",
-			headerRight: hostMatches && !image && !(markdown && rendered && effectiveMode === "file") ? () => (
-				<Pressable
-					accessibilityRole="switch"
-					accessibilityLabel="Wrap long lines"
-					accessibilityState={{ checked: wrap }}
-					hitSlop={10}
-					onPress={() => { haptics.select(); setWrap((value) => !value); }}
-					style={headerActionStyle}
-				>
-					<Feather name="wrap-text" size={iconSize.md} color={wrap ? t.textPrimary : t.textTertiary} style={headerGlyphStyle} />
-				</Pressable>
-			) : undefined,
-		});
-	}, [effectiveMode, hostMatches, image, markdown, name, navigation, rendered, t.textPrimary, t.textTertiary, wrap]);
-
-	useEffect(() => {
-		if (!notice) return;
-		AccessibilityInfo.announceForAccessibility(notice);
-		const timer = setTimeout(() => setNotice(undefined), 3_000);
-		return () => clearTimeout(timer);
-	}, [notice]);
+		navigation.setOptions({ title: name || "File" });
+	}, [name, navigation]);
 
 	const go = useCallback((offset: number) => {
 		const target = changes[position + offset];
 		if (!target) return;
-		haptics.select();
 		router.setParams({ path: target.path, previousPath: target.previousPath ?? "", mode: "diff" });
 	}, [changes, position, router]);
 
@@ -189,15 +217,91 @@ function SessionFileContent() {
 		setRevealed((current) => ({ ...current, [foldId]: (current[foldId] ?? 0) + CONTEXT_STEP }));
 	}, []);
 
+	// Changes, then the file itself: rendered and as source for markdown, as text
+	// otherwise. A file with nothing to compare shows only the ways it reads.
+	const comparable = changed && !detail?.deleted;
+	const readable = markdown && !detail?.binary && !detail?.deleted;
+	const viewOptions: SegmentedChoiceOption<ViewChoice>[] = [
+		...(comparable ? [{ key: "diff" as const, label: "Changes" }] : []),
+		...(readable ? [{ key: "preview" as const, label: "Preview" }, { key: "source" as const, label: "Source" }] : comparable ? [{ key: "file" as const, label: "File" }] : []),
+	];
+	const view: ViewChoice = effectiveMode === "diff" ? "diff" : readable ? (rendered ? "preview" : "source") : "file";
+	const chooseView = useCallback((next: ViewChoice) => {
+		const nextMode: Mode = next === "diff" ? "diff" : "file";
+		if (next === "preview" || next === "source") setRendered(next === "preview");
+		if (nextMode !== mode) {
+			setMode(nextMode);
+			setSelection(null);
+		}
+	}, [mode]);
+
+	const copyPath = useCallback(() => {
+		void Clipboard.setStringAsync(path);
+		haptics.success();
+		showToast("Path copied.");
+	}, [path, showToast]);
+	const sharePath = useCallback(() => {
+		// Dismissing the share sheet resolves; only a sheet that cannot open rejects.
+		void Share.share({ message: path }).catch(() => showToast("Couldn't open the share sheet."));
+	}, [path, showToast]);
+
+	const canStep = position >= 0 && changes.length > 1;
+	const atFirst = position <= 0;
+	const atLast = position >= changes.length - 1;
+	const stepLabel = `${position + 1} of ${changes.length}`;
+	const wrappable = !image && !(markdown && rendered && effectiveMode === "file");
+
+	// The page's header actions: on iOS the chevrons that step through the
+	// changed files, then one menu for how the file reads and what to do with
+	// its path. A menu's check marks a choice on both platforms; Android's menu
+	// items carry no selected state for TalkBack, so the menu's own label says
+	// whether lines wrap. Memoized: each new element re-registers the header's
+	// items, and a line drag re-renders the page per frame.
+	const headerItems = useMemo(() => {
+		const pathActions = [
+			<Stack.Toolbar.MenuAction key="copy" icon={fileIcon("copy")} onPress={copyPath}>Copy path</Stack.Toolbar.MenuAction>,
+			<Stack.Toolbar.MenuAction key="share" icon={fileIcon("share")} onPress={sharePath}>Share</Stack.Toolbar.MenuAction>,
+		];
+		return (
+			<Stack.Toolbar placement="right">
+				{STEP_IN_HEADER && canStep ? (
+					<Stack.Toolbar.Button icon={fileIcon("previous")} accessibilityLabel={`Previous changed file. This is ${stepLabel}`} disabled={atFirst} onPress={() => go(-1)} />
+				) : null}
+				{STEP_IN_HEADER && canStep ? (
+					<Stack.Toolbar.Button icon={fileIcon("next")} accessibilityLabel={`Next changed file. This is ${stepLabel}`} disabled={atLast} onPress={() => go(1)} />
+				) : null}
+				<Stack.Toolbar.Menu
+					icon={fileIcon("more")}
+					accessibilityLabel={Platform.OS === "android" && wrappable ? `File actions, long lines ${wrap ? "wrap" : "scroll sideways"}` : "File actions"}
+				>
+					{wrappable ? (
+						<Stack.Toolbar.MenuAction icon={fileIcon("wrapLines")} isOn={wrap} onPress={() => setWrap((value) => !value)}>Wrap lines</Stack.Toolbar.MenuAction>
+					) : null}
+					{readable ? (
+						<Stack.Toolbar.MenuAction icon={fileIcon("preview")} isOn={view === "preview"} onPress={() => chooseView("preview")}>Preview</Stack.Toolbar.MenuAction>
+					) : null}
+					{readable ? (
+						<Stack.Toolbar.MenuAction icon={fileIcon("source")} isOn={view === "source"} onPress={() => chooseView("source")}>Source</Stack.Toolbar.MenuAction>
+					) : null}
+					{/* The path's actions in a section of their own once the view's
+					    choices sit above them. Android opens an inline section with a
+					    divider, which at the top of the menu would rule off nothing. */}
+					{wrappable || readable ? <Stack.Toolbar.Menu inline title="">{pathActions}</Stack.Toolbar.Menu> : pathActions}
+				</Stack.Toolbar.Menu>
+			</Stack.Toolbar>
+		);
+	}, [atFirst, atLast, canStep, chooseView, copyPath, go, readable, sharePath, stepLabel, view, wrap, wrappable]);
+
 	const chosen = useMemo(() => selection ? selectedLines(rows, selection.anchor, selection.focus) : [], [rows, selection]);
 	const selectionStart = selection ? Math.min(selection.anchor, selection.focus) : -1;
 	const selectionEnd = selection ? Math.max(selection.anchor, selection.focus) : -1;
 
 	// Hold-and-drag, or drag the line numbers, to select a range. Starting on an
 	// end of the current selection picks that end up instead of starting over.
+	// The numbers and the +/− column grow with the text, and so does the strip.
 	const drag = useLineDrag({
 		listRef: list,
-		gutterWidth: gutterWidth(digits) + 16,
+		gutterWidth: gutterWidth(digits, codeScale) + MARKER_WIDTH * codeScale,
 		enabled: rows.length > 0,
 		onStart: (index) => {
 			setActionError(undefined);
@@ -232,105 +336,105 @@ function SessionFileContent() {
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
-		if (!config || !detail || !chosen.length) return;
+		if (!backend || !detail || !chosen.length) return;
 		const feedback = text.trim();
-		const target = annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen);
+		const target = { ...annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen), ...context };
 		const anchor = commentAnchor(chosen);
 		if (action === "comment") {
-			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor });
+			addReviewComment(key, { label: `${name} · ${label}${compared ? ` · ${compared}` : ""}`, feedback, target, anchor });
 			haptics.success();
 			setSelection(null);
-			setNotice(`Comment added to the review.`);
+			showToast("Comment added to the review.");
 			return;
 		}
 		setBusy(true);
 		setActionError(undefined);
 		try {
-			await sendFileFeedback(config, id, [{ target, feedback }]);
+			await backend.sendFeedback(id, [{ target, feedback }]);
 			// What was sent stays on the line, like a posted review comment.
-			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor, status: "sent" });
+			addReviewComment(key, { label: `${name} · ${label}${compared ? ` · ${compared}` : ""}`, feedback, target, anchor, status: "sent" });
 			haptics.success();
 			setSelection(null);
-			setNotice("Sent. The agent's reply appears in the session.");
+			showToast("Sent. The agent's reply appears in the session.");
 		} catch (cause) {
 			haptics.error();
 			setActionError(userFacingError(cause, "Couldn't send that to the agent."));
 		} finally {
 			setBusy(false);
 		}
-	}, [chosen, config, detail, id, key, label, name, path]);
+	}, [backend, chosen, compared, context, detail, id, key, label, name, path, showToast]);
 
 	const copySelection = useCallback(() => {
 		void Clipboard.setStringAsync(chosen.map((row) => row.text).join("\n"));
-		setNotice(`Copied ${label.toLowerCase()}.`);
-	}, [chosen, label]);
+		showToast(`Copied ${label.toLowerCase()}.`);
+	}, [chosen, label, showToast]);
 
-	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
+	if (signedOut) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this file." /></View>;
+	if (unreachable) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
+	if (!backend && (appLoading || cloud)) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
+	if (!backend && connection === "closed") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
-	const pathBar = (
-		<View style={styles.pathBar}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityLabel={`Path ${path}. Copy path`}
-				onLongPress={() => { void Clipboard.setStringAsync(path); haptics.success(); setNotice("Path copied."); }}
-				onPress={() => { void Clipboard.setStringAsync(path); haptics.success(); setNotice("Path copied."); }}
-				style={styles.pathPress}
-			>
-				<FileTypeIcon path={path} status={detail && changed ? detail.status : undefined} size={18} />
-				<Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="head" style={styles.pathText}>
-					{dir ? <Text style={styles.pathDir}>{`${dir}/`}</Text> : null}
-					<Text style={styles.pathName}>{name}</Text>
-				</Text>
-				{detail && changed ? <LineCounts additions={detail.additions} deletions={detail.deletions} binary={detail.binary} /> : null}
-			</Pressable>
-			{detail?.previousPath ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.renamed}>{`Renamed from ${detail.previousPath}`}</Text> : null}
-			{changed && !detail?.deleted ? (
-				<SegmentedTabs<Mode>
-					value={effectiveMode}
-					onChange={(next) => { setMode(next); setSelection(null); }}
-					options={[{ key: "diff", label: "Changes", icon: "file-diff" }, { key: "file", label: "File", icon: "file-text" }]}
-				/>
-			) : null}
-			{markdown && effectiveMode === "file" && !detail?.binary ? (
-				<SegmentedTabs<"rendered" | "source">
-					value={rendered ? "rendered" : "source"}
-					onChange={(next) => setRendered(next === "rendered")}
-					options={[{ key: "rendered", label: "Preview", icon: "eye" }, { key: "source", label: "Source", icon: "code" }]}
-				/>
-			) : null}
-			{detail?.diffTruncated && effectiveMode === "diff" ? <Text style={styles.warn}>This diff is too large to show in full; the end is cut off.</Text> : null}
-			{detail?.contentTruncated && effectiveMode === "file" ? <Text style={styles.warn}>This file is too large to show in full.</Text> : null}
+	// Where the file lives and how much changed, under the title that names it;
+	// then the one control over how it reads. iOS adds the file's place among the
+	// changes, which Android's toolbar shows instead.
+	const place = STEP_IN_HEADER && canStep ? stepLabel : "";
+	const counts = detail && changed ? <LineCounts additions={detail.additions} deletions={detail.deletions} binary={detail.binary} /> : null;
+	const where = [place ? `Changed file ${place}` : "", dir ? `in ${dir}` : ""].filter(Boolean).join(", ");
+	// The place keeps its width and only the folder gives way, from its head,
+	// so a deep path never hides which of the changes this is.
+	const metaRow = place || dir || counts ? (
+		<View style={styles.metaRow}>
+			<View accessible={Boolean(where)} accessibilityLabel={where || undefined} style={styles.metaWhere}>
+				{place ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.metaPlace}>{dir ? `${place} · ` : place}</Text> : null}
+				{dir ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="head" style={styles.metaText}>{`${dir}/`}</Text> : null}
+			</View>
+			{counts}
 		</View>
-	);
-
-	const toolbar = position >= 0 && changes.length > 1 && !selection ? (
-		<View accessibilityRole="toolbar" style={styles.toolbar}>
-			<Pressable accessibilityRole="button" accessibilityLabel="Previous changed file" accessibilityState={{ disabled: position === 0 }} disabled={position === 0} onPress={() => go(-1)} style={({ pressed }) => [styles.toolButton, position === 0 && styles.disabled, pressed && { opacity: press.opacity }]}>
-				<Feather name="chevron-left" size={iconSize.lg} color={t.textSecondary} />
-				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.toolText}>Previous</Text>
-			</Pressable>
-			<Text maxFontSizeMultiplier={fontScaleCap.chrome} accessibilityLabel={`File ${position + 1} of ${changes.length}`} style={styles.toolCount}>{`${position + 1} of ${changes.length}`}</Text>
-			<Pressable accessibilityRole="button" accessibilityLabel="Next changed file" accessibilityState={{ disabled: position === changes.length - 1 }} disabled={position === changes.length - 1} onPress={() => go(1)} style={({ pressed }) => [styles.toolButton, position === changes.length - 1 && styles.disabled, pressed && { opacity: press.opacity }]}>
-				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.toolText}>Next</Text>
-				<Feather name="chevron-right" size={iconSize.lg} color={t.textSecondary} />
-			</Pressable>
+	) : null;
+	const truncation = detail?.diffTruncated && effectiveMode === "diff"
+		? "This diff is too large to show in full; the end is cut off."
+		: detail?.contentTruncated && effectiveMode === "file" ? "This file is too large to show in full." : "";
+	// Another branch, or part of the changes: said under the title, since the
+	// page reads the same either way. The branch is named only when it is not the worktree's.
+	const meta = metaRow || compared || detail?.previousPath || viewOptions.length > 1 || truncation ? (
+		<View style={styles.meta}>
+			{compared ? <Text accessibilityLabel={`Comparing ${compared}`} maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="middle" style={styles.compared}>{compared}</Text> : null}
+			{metaRow}
+			{detail?.previousPath ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.renamed}>{`Renamed from ${detail.previousPath}`}</Text> : null}
+			{viewOptions.length > 1 ? <SegmentedChoice<ViewChoice> value={view} options={viewOptions} onChange={chooseView} accessibilityLabel="View" /> : null}
+			{truncation ? <Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.warn}>{truncation}</Text> : null}
 		</View>
 	) : null;
 
+	// Android's previous/next: Material's floating toolbar over the bottom of the
+	// page, out of the way while a selection's composer has the bottom edge.
+	const stepper = !STEP_IN_HEADER && canStep && !selection ? (
+		<Stack.Toolbar placement="bottom">
+			<Stack.Toolbar.Button icon={fileIcon("previous")} accessibilityLabel="Previous changed file" disabled={atFirst} onPress={() => go(-1)} />
+			<Stack.Toolbar.View>
+				<Text accessibilityLabel={`File ${stepLabel}`} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.stepCount}>{stepLabel}</Text>
+			</Stack.Toolbar.View>
+			<Stack.Toolbar.Button icon={fileIcon("next")} accessibilityLabel="Next changed file" disabled={atLast} onPress={() => go(1)} />
+		</Stack.Toolbar>
+	) : null;
+	const composing = Boolean(selection && chosen.length && !drag.dragging);
+	const stepperClearance = stepper ? FLOATING_TOOLBAR_CLEARANCE : 0;
+
 	let body: React.ReactNode;
 	if (loading && !detail) {
-		body = <View style={styles.center}><ActivityIndicator color={t.accent} /><Text style={styles.copy}>Opening {name}…</Text></View>;
+		body = <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (loadError && !detail) {
-		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load(false)} />} /></View>;
-	} else if (detail && image) {
-		body = <ImageCompare detail={detail} sources={{
-			before: detail.status !== "added" && changed ? workspaceImageSource(config!, id, path, "before", detail.workspaceVersion) : undefined,
-			after: !detail.deleted ? workspaceImageSource(config!, id, path, "after", detail.workspaceVersion) : undefined,
-		}} />;
+		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" onPress={() => void load(false)} />} /></View>;
+	} else if (detail && image && !imageComparable(read)) {
+		// The machine can't read a worktree scope's image sides yet; showing the base and the worktree would contradict the diff.
+		body = <View style={styles.center}><EmptyState icon="image" title={`No image preview for ${changesLabel(pick.changes)}`} message="Images are compared in All changes, a single commit, or another branch." /></View>;
+	} else if (detail && image && !imageSources.unavailable) {
+		body = imageSources.resolved
+			? <ImageCompare detail={detail} name={name} sources={imageSources} />
+			: <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (detail && svg && effectiveMode === "file" && lines && !detail.binary) {
 		body = <ScrollView contentContainerStyle={styles.preview}><SvgXml xml={detail.content} width="100%" height={width} /></ScrollView>;
 	} else if (detail?.binary) {
@@ -338,7 +442,7 @@ function SessionFileContent() {
 	} else if (detail && markdown && rendered && effectiveMode === "file") {
 		body = <ScrollView contentContainerStyle={styles.markdown}><ChatMarkdown text={detail.content} /></ScrollView>;
 	} else if (detail && !rows.length) {
-		body = <View style={styles.center}><EmptyState icon={effectiveMode === "diff" ? "check" : "file"} title={effectiveMode === "diff" ? "No changes in this file" : "Empty file"} message={effectiveMode === "diff" ? "It matches the base branch." : undefined} /></View>;
+		body = <View style={styles.center}><EmptyState icon={effectiveMode === "diff" ? "check" : "file"} title={effectiveMode === "diff" ? "No changes in this file" : "Empty file"} message={effectiveMode === "diff" && !picked ? "It matches the base branch." : undefined} /></View>;
 	} else {
 		const listView = (
 			<GestureDetector gesture={drag.gesture}>
@@ -354,8 +458,8 @@ function SessionFileContent() {
 				maxToRenderPerBatch={60}
 				windowSize={15}
 				onViewableItemsChanged={onViewable}
-				onScrollToIndexFailed={({ index }) => list.current?.scrollToOffset({ offset: index * 19, animated: true })}
-				contentContainerStyle={{ paddingBottom: selection ? 260 : review.comments.length ? 140 : 96 }}
+				onScrollToIndexFailed={({ index }) => list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true })}
+				contentContainerStyle={{ paddingBottom: (selection ? 260 : review.comments.length ? 140 : 96) + stepperClearance }}
 				renderItem={({ item, index }) => item.type === "fold" ? (
 					<FoldRow hidden={item.hidden} section={item.section} expandable={item.expandable} onExpand={() => expand(item.id)} />
 				) : item.type === "comment" ? (
@@ -380,17 +484,17 @@ function SessionFileContent() {
 		);
 		body = wrap ? listView : (
 			<ScrollView horizontal bounces={false} contentContainerStyle={{ minWidth: width }}>
-				<View style={{ width: Math.max(width, codeContentWidth(rows, digits)) }}>{listView}</View>
+				<View style={{ width: Math.max(width, codeContentWidth(rows, digits, codeScale)) }}>{listView}</View>
 			</ScrollView>
 		);
 	}
 
 	return (
-		<View style={styles.screen}>
-			{pathBar}
+		<View style={[styles.screen, { paddingTop: glassInset }]}>
+			{headerItems}
+			{meta}
 			<View style={styles.body}>{body}</View>
-			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
-			{selection && chosen.length && !drag.dragging ? (
+			{composing ? (
 				<SelectionComposer
 					label={`${name} · ${label}`}
 					busy={busy}
@@ -398,21 +502,64 @@ function SessionFileContent() {
 					onAction={(action, text) => void act(action, text)}
 					onCopy={copySelection}
 					onClose={() => setSelection(null)}
+					onRise={setComposerRise}
 				/>
 			) : (
 				<>
-					{toolbar}
-					<ReviewTray comments={review.comments} sending={review.sending} error={review.error} bottomOffset={toolbar ? TOOLBAR_HEIGHT : 0} onSend={() => void review.send()} onRemove={review.remove} />
+					{stepper}
+					<ReviewButton count={review.comments.length} bottomOffset={stepperClearance} onPress={openReview} />
 				</>
 			)}
+			<ToastHost
+				toast={toast}
+				bottomOffset={composing
+					? composerRise + space.sm
+					: stepper || review.comments.length ? insets.bottom + stepperClearance + (review.comments.length ? REVIEW_BUTTON_RISE : space.md) : undefined}
+			/>
 		</View>
 	);
 }
 
-const TOOLBAR_HEIGHT = 56;
+type ImageSide = WorkspaceImageSource;
 
-function ImageCompare({ detail, sources }: { detail: WorkspaceFileDetail; sources: { before?: { uri: string; headers: Record<string, string> }; after?: { uri: string; headers: Record<string, string> } } }) {
+/**
+ * Both sides of a changed image. A machine's are URLs read with its Bearer
+ * header; Orchestrator Cloud has no image URL, so its are read as data and
+ * may not exist, which `unavailable` reports so the page says so instead.
+ */
+function useImageSources(backend: FilesBackend | null, sessionId: string, path: string, detail: WorkspaceFileDetail | null, changed: boolean, image: boolean, read: FileRead) {
+	const [sources, setSources] = useState<{ key: string; before?: ImageSide; after?: ImageSide }>();
+	const wantBefore = Boolean(detail && detail.status !== "added" && changed);
+	const wantAfter = Boolean(detail && !detail.deleted);
+	const version = detail?.workspaceVersion ?? "";
+	const key = JSON.stringify([backend?.key, sessionId, path, version, wantBefore, wantAfter, read]);
+	useEffect(() => {
+		if (!backend || !detail || !image) return;
+		let current = true;
+		// A side that can't be read is no side: the page then says the image is
+		// unavailable rather than staying on Opening… with the read rejected.
+		const side = (which: "before" | "after") => backend.imageSource(sessionId, path, which, version, read).catch(() => undefined);
+		void Promise.all([
+			wantBefore ? side("before") : undefined,
+			wantAfter ? side("after") : undefined,
+		]).then(([before, after]) => { if (current) setSources({ key, before, after }); });
+		return () => { current = false; };
+		// `key` covers what the effect reads from `detail`.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [key, image]);
+	const resolved = sources?.key === key;
+	return { before: resolved ? sources.before : undefined, after: resolved ? sources.after : undefined, resolved, unavailable: resolved && !sources.before && !sources.after };
+}
+
+/**
+ * A changed image, before and after. Each pane opens the full-screen viewer,
+ * where it zooms. The daemon's images need the connection's Bearer header,
+ * which React Native's Android image loader forwards only for an array source.
+ */
+function ImageCompare({ detail, name, sources }: { detail: WorkspaceFileDetail; name: string; sources: { before?: ImageSide; after?: ImageSide } }) {
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("button", { foreground: true });
+	const [viewing, setViewing] = useState<{ label: string; source: ImageSide }>();
 	const panes = [
 		sources.before ? { label: detail.deleted ? "Deleted" : "Before", source: sources.before } : null,
 		sources.after ? { label: detail.status === "added" ? "Added" : sources.before ? "After" : statusLabel[detail.status], source: sources.after } : null,
@@ -422,9 +569,19 @@ function ImageCompare({ detail, sources }: { detail: WorkspaceFileDetail; source
 			{panes.map((pane) => (
 				<View key={pane.label} style={styles.imagePane}>
 					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.imageLabel}>{pane.label}</Text>
-					<Image accessibilityLabel={`${pane.label} image`} source={pane.source} resizeMode="contain" style={styles.image} />
+					<Pressable
+						accessibilityRole="imagebutton"
+						accessibilityLabel={`${pane.label} image`}
+						accessibilityHint="Opens it full screen to zoom"
+						onPress={() => setViewing(pane)}
+						android_ripple={feedback.android_ripple}
+						style={({ pressed }) => [styles.imageFrame, pressed && feedback.pressed]}
+					>
+						<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [pane.source] : pane.source} resizeMode="contain" style={styles.image} />
+					</Pressable>
 				</View>
 			))}
+			{viewing ? <ImageViewer visible name={`${name}, ${viewing.label.toLowerCase()}`} source={viewing.source} onClose={() => setViewing(undefined)} /> : null}
 		</ScrollView>
 	);
 }
@@ -433,25 +590,20 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	body: { flex: 1 },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", gap: space.md, padding: space.xxl, backgroundColor: t.bgBase },
-	copy: { ...type.footnote, color: t.textTertiary },
-	pathBar: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.md, gap: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle, backgroundColor: t.bgBase },
-	pathPress: { minHeight: touchTarget - space.md, flexDirection: "row", alignItems: "center", gap: space.sm },
-	pathText: { flex: 1, fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
-	pathDir: { color: t.textTertiary },
-	pathName: { color: t.textPrimary },
+	meta: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.md, gap: space.sm, borderBottomWidth: rowDividerWidth, borderColor: t.borderSubtle, backgroundColor: t.bgBase },
+	metaRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+	metaWhere: { flex: 1, flexDirection: "row", alignItems: "center" },
+	metaPlace: { flexShrink: 0, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textTertiary },
+	metaText: { flex: 1, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textTertiary },
+	stepCount: { ...type.footnote, fontFamily: font.medium, color: t.textSecondary, paddingHorizontal: space.sm },
 	renamed: { ...type.footnote, color: t.blue },
+	compared: { fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textSecondary },
 	warn: { ...type.footnote, color: t.amber },
-	toolbar: { position: "absolute", left: 0, right: 0, bottom: 0, height: TOOLBAR_HEIGHT, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: space.sm, backgroundColor: t.bgSurface, borderTopWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-	toolButton: { minHeight: touchTarget, minWidth: touchTarget * 2, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.xxs, paddingHorizontal: space.sm },
-	toolText: { fontFamily: font.medium, fontSize: type.subheadline.fontSize, color: t.textSecondary },
-	toolCount: { fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textTertiary },
-	disabled: { opacity: 0.35 },
-	notice: { position: "absolute", top: space.md, alignSelf: "center", backgroundColor: t.bgElevated, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.lg, paddingVertical: space.sm },
-	noticeText: { fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textPrimary },
 	preview: { padding: space.lg },
 	markdown: { padding: space.lg, paddingBottom: 120 },
 	images: { padding: space.lg, gap: space.lg, paddingBottom: 120 },
 	imagePane: { gap: space.xs },
-	imageLabel: { fontFamily: font.semibold, fontSize: type.caption2.fontSize, letterSpacing: 0.9, textTransform: "uppercase", color: t.textTertiary },
-	image: { width: "100%", aspectRatio: 1, borderRadius: radius.md, backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
+	imageLabel: { ...type.footnote, fontFamily: font.semibold, color: t.textSecondary },
+	imageFrame: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", backgroundColor: t.bgElevated, borderWidth: rowDividerWidth, borderColor: t.borderSubtle },
+	image: { width: "100%", aspectRatio: 1 },
 });
