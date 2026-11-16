@@ -545,7 +545,16 @@ export function refreshRemoteConversationOnce(queryClient: QueryClient, sessionI
 	})();
 }
 
-const localConversationRefreshes = new WeakMap<QueryClient, Set<string>>();
+/** Each local chat's open read in flight, with the older-page load waiting on it. */
+const localConversationRefreshes = new WeakMap<QueryClient, Map<string, { afterRead?: () => void }>>();
+
+/** Runs `then` once the chat's open read lands; false when no read is in flight. */
+function deferUntilLocalRefresh(queryClient: QueryClient, sessionId: string, then: () => void): boolean {
+	const read = localConversationRefreshes.get(queryClient)?.get(sessionId);
+	if (!read) return false;
+	read.afterRead = then;
+	return true;
+}
 
 /**
  * Brings a local chat that changed while it was closed up to date as it opens.
@@ -556,9 +565,10 @@ const localConversationRefreshes = new WeakMap<QueryClient, Set<string>>();
  */
 function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: string): void {
 	let running = localConversationRefreshes.get(queryClient);
-	if (!running) localConversationRefreshes.set(queryClient, (running = new Set()));
+	if (!running) localConversationRefreshes.set(queryClient, (running = new Map()));
 	if (running.has(sessionId)) return;
-	running.add(sessionId);
+	const read: { afterRead?: () => void } = {};
+	running.set(sessionId, read);
 	const key = conversationQueryKey(sessionId);
 	const hash = hashKey(key);
 	// An event while the chat is closed again mid-read may describe rows the read
@@ -575,7 +585,12 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
 				// Marking an already stale query stale again records nothing, so take the
 				// mark off while reading for an event during the read to be seen.
 				queryClient.getQueryCache().find({ queryKey: key, exact: true })?.setState({ isInvalidated: false });
-				applyLiveConversationPage(queryClient, key, await fetchConversationPage(sessionId));
+				const latest = await fetchConversationPage(sessionId);
+				// An older page that was already loading copied the previous live page when
+				// it started and writes it back when it lands, so this page goes in after it.
+				const loading = queryClient.getQueryCache().find({ queryKey: key, exact: true });
+				if (loading?.state.fetchStatus === "fetching" && loading.state.fetchMeta?.fetchMore) await loading.promise?.catch(() => undefined);
+				applyLiveConversationPage(queryClient, key, latest);
 			} while (missed && queryClient.getQueryCache().find({ queryKey: key, exact: true, type: "active" }));
 			// Still closed: the next open reads what changed.
 			if (missed) void queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: "none" });
@@ -585,6 +600,7 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
 		} finally {
 			stopWatching();
 			running.delete(sessionId);
+			read.afterRead?.();
 		}
 	})();
 }
@@ -684,7 +700,12 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		// A live refresh may be in flight; cancelling it would drop the newest
 		// page for good. The older page then loads on the next scroll or click.
 		loadOlder: () => {
-			void query.fetchNextPage({ cancelRefetch: false });
+			const fetchOlder = () => void query.fetchNextPage({ cancelRefetch: false });
+			// A local chat's open read is not a query fetch to join. An older-page fetch
+			// started during it copies the cached pages as it starts and writes them
+			// back over the live page the read puts in, so it waits for the read.
+			if (!hostId && sessionId && deferUntilLocalRefresh(queryClient, sessionId, fetchOlder)) return;
+			fetchOlder();
 		},
 	};
 }

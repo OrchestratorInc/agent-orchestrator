@@ -1784,6 +1784,31 @@ describe("opening a local chat it has cached", () => {
 		expect(getMock).toHaveBeenCalledTimes(3);
 	});
 
+	it("loads older history asked for during the open read after it, keeping the read's live page", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockReturnValueOnce(openRead.promise)
+			.mockResolvedValueOnce(page(10, 1, false, "completed"))
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: conversationQueryKey("ao-1") });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		// The reader scrolls up before the open read lands.
+		act(() => second.result.current.loadOlder());
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await act(async () => { openRead.resolve(page(21, 11, true, "completed")); });
+
+		await waitFor(() => expect(second.result.current.hasOlder).toBe(false));
+		expect(getMock.mock.calls[2][1]).toMatchObject({ params: { query: { beforeSequence: 11 } } });
+		expect(second.result.current.snapshot).toMatchObject({ latestSequence: 21, oldestSequence: 1 });
+	});
+
 	it("makes no request when the chat did not change while closed", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		getMock.mockReset().mockResolvedValueOnce(page(20, 1, false)).mockRejectedValue(new Error("read again"));
