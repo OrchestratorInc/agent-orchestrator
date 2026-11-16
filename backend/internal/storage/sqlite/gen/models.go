@@ -1025,6 +1025,12 @@ type TimestampRepairProgress struct {
 	Rejected   int64
 }
 
+type TimestampRepairRejection struct {
+	TableName string
+	RowID     int64
+	Pending   int64
+}
+
 type UsageBinding struct {
 	ID             int64
 	SessionID      domain.SessionID

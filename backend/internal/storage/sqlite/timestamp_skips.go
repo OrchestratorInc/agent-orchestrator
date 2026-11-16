@@ -8,8 +8,9 @@ import (
 type timestampRepairResult struct{ Repaired, Skipped, Deleted int }
 type timestampRepairState struct {
 	timestampRepairResult
-	reader *sql.DB
-	retry  map[string]bool
+	reader       *sql.DB
+	retry        map[string]bool
+	rejectedOnly bool
 }
 
 func newTimestampRepairState() *timestampRepairState {

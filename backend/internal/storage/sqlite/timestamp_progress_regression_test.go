@@ -2,7 +2,12 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/pressly/goose/v3"
 )
 
 func TestTimestampProgressCanonicalWritesWhilePending(t *testing.T) {
@@ -41,7 +46,8 @@ func TestTimestampProgressCanonicalWritesWhilePending(t *testing.T) {
 }
 
 func TestTimestampProgressCanonicalWritesWithRejectedRow(t *testing.T) {
-	db := openMigratedTestDB(t)
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
 	ctx := context.Background()
 	if _, err := db.Exec(`CREATE TABLE rejected_times(id INTEGER PRIMARY KEY, at TIMESTAMP, updated_at TIMESTAMP, note TEXT,
  CHECK(at IS NULL OR CAST(at AS TEXT) NOT GLOB '* +0000 UTC'));
@@ -73,8 +79,18 @@ func TestTimestampProgressCanonicalWritesWithRejectedRow(t *testing.T) {
 			t.Errorf("canonical write invalidated rejected table: generation %d -> %d, complete=%v after %s", generation, got, completed, statement)
 		}
 	}
-	if result, err := runTimestampRepair(ctx, db, false); err != nil || result.Skipped != 0 {
-		t.Fatalf("ordinary writes repeated full repair: %+v %v", result, err)
+	counts := &repairScanCounts{}
+	opts := repairScanOptions(t, counts, nil)
+	reader, err := sql.Open(opts.driver, databaseURI(dir)+pragmas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if result, err := runTimestampRepairState(ctx, db, reader, false, newTimestampRepairState()); err != nil || result.Repaired != 0 || result.Deleted != 0 {
+		t.Fatalf("retry kept row: %+v %v", result, err)
+	}
+	if scans := counts.reader.Load() + counts.writer.Load() - counts.rejectedLookups.Load(); scans != 0 {
+		t.Fatalf("ordinary writes repeated %d full repair scans", scans)
 	}
 }
 
@@ -110,6 +126,38 @@ func TestTimestampProgressMigrationDropsReferencedColumns(t *testing.T) {
 	}
 	if err := repairTimestamps(ctx, db); err != nil {
 		t.Fatalf("repair after migration: %v", err)
+	}
+}
+
+func TestTimestampProgressRetryQueuedBeforeCompletion(t *testing.T) {
+	db := openMigratedTestDB(t)
+	ctx := context.Background()
+	if _, err := db.Exec(`CREATE TABLE retry_times(at TIMESTAMP, allow_utc INTEGER,
+ CHECK(allow_utc=1 OR CAST(at AS TEXT) NOT GLOB '* +0000 UTC'));
+ INSERT INTO retry_times VALUES('2026-10-21 09:00:00 +0530 IST',0)`); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := runTimestampRepair(ctx, db, false); err != nil || result.Skipped != 1 {
+		t.Fatalf("kept fixture: %+v %v", result, err)
+	}
+	// Model the interval after a batch kept a row but before the first pass
+	// records the table's rejection summary and completion.
+	if _, err := db.Exec(`UPDATE timestamp_repair_progress SET completed=0,rejected=0 WHERE table_name='retry_times'`); err != nil {
+		t.Fatal(err)
+	}
+	var signature string
+	var generation int64
+	if err := db.QueryRow(`SELECT signature,generation FROM timestamp_repair_progress WHERE table_name='retry_times'`).Scan(&signature, &generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE retry_times SET allow_utc=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishTimestampProgress(ctx, db, "retry_times", signature, generation, true); err != nil {
+		t.Fatalf("canonical write invalidated the full pass: %v", err)
+	}
+	if result, err := runTimestampRepair(ctx, db, false); err != nil || result.Repaired != 1 {
+		t.Fatalf("write before completion lost the kept-row retry: %+v %v", result, err)
 	}
 }
 
@@ -206,5 +254,49 @@ func TestTimestampProgressMigrationKeepsLegacyWritesVisible(t *testing.T) {
 				t.Fatalf("legacy migration value survived: %s", got)
 			}
 		})
+	}
+}
+
+func TestTimestampProgressOlderMigrationSetRemainsReadable(t *testing.T) {
+	db := openMigratedTestDB(t)
+	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at)
+ VALUES('older-reader','/tmp/older-reader','2026-10-21 09:00:00 +0530 IST')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairTimestamps(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	older := fstest.MapFS{}
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "20261116210724592_timestamp_repair_rejections.sql" {
+			continue
+		}
+		path := "migrations/" + entry.Name()
+		content, err := migrationsFS.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		older[path] = &fstest.MapFile{Data: content}
+	}
+	gooseMu.Lock()
+	defer gooseMu.Unlock()
+	goose.SetBaseFS(older)
+	defer goose.SetBaseFS(migrationsFS)
+	if err := goose.Up(db, "migrations", goose.WithAllowMissing()); err != nil {
+		t.Fatalf("older migration set rejected repaired database: %v", err)
+	}
+	var at time.Time
+	if err := db.QueryRow(`SELECT registered_at FROM projects WHERE id='older-reader'`).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	if !at.Equal(time.Date(2026, 10, 21, 3, 30, 0, 0, time.UTC)) {
+		t.Fatalf("older timestamp read changed instant: %v", at)
+	}
+	if _, err := db.Exec(`UPDATE projects SET registered_at='2026-10-22 03:30:00 +0000 UTC' WHERE id='older-reader'`); err != nil {
+		t.Fatalf("write with installed repair triggers failed: %v", err)
 	}
 }

@@ -274,6 +274,7 @@ var shippedMigrations = map[int64]string{
 	20261115072835107: "20261115072835107_review_run_state_machine.sql",
 	20261116070040471: "20261116070040471_kept_artifacts.sql",
 	20261116173733857: "20261116173733857_timestamp_repair_progress.sql",
+	20261116210724592: "20261116210724592_timestamp_repair_rejections.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

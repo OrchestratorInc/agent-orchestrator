@@ -134,15 +134,17 @@ func restoreTimestampProgressTriggers(ctx context.Context, db *sql.DB, previous 
 // No full-table scan is needed to validate a clean database at startup.
 func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timestampColumn) error {
 	// Standalone repair callers can operate on a database without goose history.
-	migration, err := migrationsFS.ReadFile("migrations/20261116173733857_timestamp_repair_progress.sql")
-	if err != nil {
-		return err
-	}
-	up := strings.SplitN(string(migration), "-- +goose Down", 2)[0]
-	up = strings.ReplaceAll(up, "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
-	up = strings.ReplaceAll(up, "INSERT INTO timestamp_repair_control", "INSERT OR IGNORE INTO timestamp_repair_control")
-	if _, err := db.ExecContext(ctx, up); err != nil {
-		return err
+	for _, name := range []string{"20261116173733857_timestamp_repair_progress.sql", "20261116210724592_timestamp_repair_rejections.sql"} {
+		migration, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			return err
+		}
+		up := strings.SplitN(string(migration), "-- +goose Down", 2)[0]
+		up = strings.ReplaceAll(up, "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+		up = strings.ReplaceAll(up, "INSERT INTO timestamp_repair_control", "INSERT OR IGNORE INTO timestamp_repair_control")
+		if _, err := db.ExecContext(ctx, up); err != nil {
+			return err
+		}
 	}
 	existing, err := timestampProgressTriggerDefinitions(ctx, db)
 	if err != nil {
@@ -200,7 +202,6 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 	table := columns[0].table
 	literal := "'" + strings.ReplaceAll(table, "'", "''") + "'"
 	old, fresh, changed := make([]string, 0, len(columns)), make([]string, 0, len(columns)), make([]string, 0, len(columns))
-	names := make([]string, 0, len(columns))
 	for _, column := range columns {
 		name := quoteIdentifier(column.column)
 		predicate := legacyTimestampPredicate(column.column)
@@ -209,7 +210,6 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 		old = append(old, before)
 		fresh = append(fresh, after)
 		changed = append(changed, "(OLD."+name+" IS NOT NEW."+name+" AND (("+before+") OR ("+after+")))")
-		names = append(names, name)
 	}
 	predicates := map[string]string{
 		"insert": strings.Join(fresh, " OR "),
@@ -219,13 +219,11 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 	out := map[string]string{}
 	for event, predicate := range predicates {
 		name := fmt.Sprintf("ao_timestamp_%x_%s", sha256.Sum256([]byte(table)), event)
-		action := strings.ToUpper(event)
-		if event == "update" {
-			action += " OF " + strings.Join(names, ",")
-		}
-		out[name] = "CREATE TRIGGER " + quoteIdentifier(name) + " AFTER " + action + " ON " + quoteIdentifier(table) +
-			" WHEN (SELECT paused FROM timestamp_repair_control WHERE id=1)=0 AND (" + predicate + ") BEGIN " +
-			"UPDATE timestamp_repair_progress SET generation=generation+1,completed=0 WHERE table_name=" + literal + "; END"
+		out[name] = "CREATE TRIGGER " + quoteIdentifier(name) + " AFTER " + strings.ToUpper(event) + " ON " + quoteIdentifier(table) +
+			" WHEN (SELECT paused FROM timestamp_repair_control WHERE id=1)=0 AND ((" + predicate + ") OR " +
+			"EXISTS(SELECT 1 FROM timestamp_repair_rejections WHERE table_name=" + literal + ")) BEGIN " +
+			"UPDATE timestamp_repair_progress SET generation=generation+1,completed=0 WHERE table_name=" + literal + " AND (" + predicate + "); " +
+			"UPDATE timestamp_repair_rejections SET pending=1 WHERE table_name=" + literal + " AND pending=0; END"
 	}
 	return out
 }
@@ -240,7 +238,7 @@ func beginTimestampProgress(ctx context.Context, db *sql.DB, table, signature st
 }
 
 func finishTimestampProgress(ctx context.Context, db *sql.DB, table, signature string, generation int64, rejected bool) error {
-	result, err := db.ExecContext(ctx, `UPDATE timestamp_repair_progress SET completed=1,rejected=? WHERE table_name=? AND signature=? AND generation=?`, rejected, table, signature, generation)
+	result, err := db.ExecContext(ctx, `UPDATE timestamp_repair_progress SET completed=1,rejected=? OR EXISTS(SELECT 1 FROM timestamp_repair_rejections WHERE table_name=timestamp_repair_progress.table_name) WHERE table_name=? AND signature=? AND generation=?`, rejected, table, signature, generation)
 	if err != nil {
 		return err
 	}

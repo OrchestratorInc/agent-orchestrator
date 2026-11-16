@@ -81,6 +81,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 			continue
 		}
 		table := group[0].table
+		state.rejectedOnly = false
 		names := make([]string, len(group))
 		for j, column := range group {
 			names[j] = column.column + "\x00" + column.declaredType
@@ -91,7 +92,20 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 			return result, err
 		}
 		if completed {
-			continue
+			var pending bool
+			if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM timestamp_repair_rejections WHERE table_name=? AND pending=1)`, table).Scan(&pending); err != nil {
+				return result, err
+			}
+			if !pending {
+				continue
+			}
+			state.rejectedOnly = true
+			// Deleted rows cannot be returned by the row-ID lookup below.
+			if _, err := db.ExecContext(ctx, `DELETE FROM timestamp_repair_rejections WHERE table_name=? AND NOT EXISTS(SELECT 1 FROM `+quoteIdentifier(table)+` WHERE rowid=timestamp_repair_rejections.row_id)`, table); err != nil {
+				return result, err
+			}
+		} else if _, err := db.ExecContext(ctx, `DELETE FROM timestamp_repair_rejections WHERE table_name=?`, table); err != nil {
+			return result, err
 		}
 		skippedBefore := state.Skipped
 		complete := func() {
@@ -100,7 +114,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 			}
 		}
 		cursor, lastRow := int64(math.MinInt64), int64(math.MaxInt64)
-		if fence {
+		if fence && !state.rejectedOnly {
 			var done bool
 			cursor, lastRow, done, err = timestampRepairBounds(ctx, reader, group)
 			if err != nil {
@@ -161,6 +175,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 	// Clean rows also consume the scan budget, so detection cannot hold the
 	// sole writer connection for an entire clean or sparsely affected table.
 	filter := ""
+	queryArgs := []any{cursor, lastRow}
 	if candidatesOnly {
 		// Startup has no readers or competing writers yet. Filter inside SQLite
 		// so clean rows never cross the driver boundary or allocate Go values.
@@ -170,17 +185,22 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		}
 		filter = " AND (" + strings.Join(predicates, " OR ") + ")"
 	}
+	if state.rejectedOnly {
+		filter += " AND rowid IN (SELECT row_id FROM timestamp_repair_rejections WHERE table_name=? AND pending=1)"
+		queryArgs = append(queryArgs, columns[0].table)
+	}
 	queryRows := strings.Join([]string{"SELECT rowid,", strings.Join(fields, ","), " FROM ", table, " WHERE rowid>=? AND rowid<=?", filter, " ORDER BY rowid LIMIT ?"}, "")
 	reader := state.reader
 	if reader == nil {
 		reader = db
 	}
-	rows, err := reader.QueryContext(ctx, queryRows, cursor, lastRow, timestampRepairBatch)
+	rows, err := reader.QueryContext(ctx, queryRows, append(queryArgs, timestampRepairBatch)...)
 	if err != nil {
 		return 0, false, err
 	}
 	defer func() { _ = rows.Close() }()
 	var changes [][]any
+	var selected []any
 	var id int64
 	values, dest := make([]sql.NullString, len(columns)), make([]any, len(columns)+1)
 	dest[0] = &id
@@ -194,6 +214,9 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		}
 		n++
 		last = id
+		if state.rejectedOnly {
+			selected = append(selected, id)
+		}
 		var args, before []any
 		for i, value := range values {
 			if !value.Valid {
@@ -217,7 +240,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 	if err := rows.Err(); err != nil {
 		return 0, false, err
 	}
-	if len(changes) > 0 {
+	if len(changes) > 0 || len(selected) > 0 {
 		tx, err := db.Conn(ctx)
 		if err != nil {
 			return 0, false, err
@@ -237,6 +260,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		}
 		defer func() { _ = stmt.Close() }()
 		var repaired, deleted int
+		var rejected []any
 		var bindingDrops []*timestampBindingDrop
 		err = timestamps.PreserveRepresentation(ctx, tx, func() (int64, error) {
 			// Most batches have no constraints. Save one batch instead of creating
@@ -321,6 +345,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 					}
 					expected += after - before
 					state.skip(columns[0].table, values, len(columns), rowErr)
+					rejected = append(rejected, values[len(columns)])
 				} else {
 					expected += writes
 					if updated {
@@ -343,6 +368,19 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		})
 		if err != nil {
 			return 0, false, err
+		}
+		// Retry only the rows read in this batch. A concurrent write after
+		// commit can flag them again without invalidating the whole table.
+		if len(selected) > 0 {
+			args := append([]any{columns[0].table}, selected...)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM timestamp_repair_rejections WHERE table_name=? AND row_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(selected)), ",")+`)`, args...); err != nil {
+				return 0, false, err
+			}
+		}
+		for _, rowID := range rejected {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO timestamp_repair_rejections(table_name,row_id) VALUES(?,?) ON CONFLICT(table_name,row_id) DO UPDATE SET pending=0`, columns[0].table, rowID); err != nil {
+				return 0, false, err
+			}
 		}
 		if _, err := tx.ExecContext(ctx, "COMMIT"); err != nil {
 			return 0, false, err
