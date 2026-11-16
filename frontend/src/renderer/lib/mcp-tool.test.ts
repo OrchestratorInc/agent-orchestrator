@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../types/conversation";
-import { aoToolView, isShownAORender, mcpResultTexts, mcpToolArguments, mcpToolName } from "./mcp-tool";
+import { aoToolView, computerUseStep, isShownAORender, mcpResultTexts, mcpToolArguments, mcpToolName } from "./mcp-tool";
+
+describe("computerUseStep", () => {
+	it("names a timeline step the way the chat names the call", () => {
+		expect(computerUseStep("press_key", { key: "return", modifiers: ["cmd"] }, false)).toEqual({ label: "Pressed ⌘Return" });
+		expect(computerUseStep("run_steps", { app: "Notes", steps: [{}, {}] }, false).label).toBe("Took 2 actions in Notes");
+		expect(computerUseStep("type_text", { text: "x" }, true, "not focused (COMPUTER_USE_CALL_FAILED) [request h/1]")).toEqual({
+			label: "Couldn't type",
+			error: "Not focused",
+		});
+	});
+
+	it("falls back to the tool's name", () => {
+		expect(computerUseStep("get_desktop_state", undefined, false).label).toBe("Get desktop state");
+	});
+});
 
 // The shapes below are copied from rows the two harnesses recorded in a dev app.
 
