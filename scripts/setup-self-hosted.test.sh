@@ -199,6 +199,20 @@ PY
 		releases=("$tmp/host/releases"/*)
 		[[ ${#releases[@]} -eq 2 ]]
 		;;
+	symlinked-home)
+		COPYFILE_DISABLE=1 tar -czf "$bundle" -C "$tmp/pkg" resources
+		mkdir "$tmp/real-home"
+		ln -s "$tmp/real-home" "$tmp/home"
+		install() {
+			env HOME="$tmp/home" PATH="$tmp/bin" TEST_AO_STATE="$1" TEST_AO_EXE="${2:-}" \
+				/bin/bash "$script" --bundle "$bundle" --install-only > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; exit 1; }
+		}
+		install stopped
+		first="$(cd "$tmp/home/.ao/host/current" && pwd -P)"
+		[[ "$first" != "$tmp/home"/* ]]
+		install ready "$first/resources/daemon/ao"
+		[[ "$(cd "$tmp/home/.ao/host/current" && pwd -P)" != "$first" ]]
+		;;
 	failed-restarts)
 		printf '%s\n' '#!/bin/sh' \
 			'case "$2" in' \
@@ -432,6 +446,6 @@ PY
 			! grep -q 'Pair this host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 		fi
 		;;
-	*) printf 'Usage: %s {release-channels|bootstrap-nightly|bad-tmux|no-systemd|inactive-systemd|prune|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
+	*) printf 'Usage: %s {release-channels|bootstrap-nightly|bad-tmux|no-systemd|inactive-systemd|prune|symlinked-home|failed-restarts|failed-first-install|failed-readiness|failed-mac-bootstrap|failed-mac-readiness|failed-mac-first|relative-current|concurrent|interrupted|piped|tunnel-pairing|tunnel-pairing-code|tunnel-unavailable|tunnel-linked}\n' "$0" >&2; exit 2 ;;
 esac
 printf 'PASS %s\n' "$1"

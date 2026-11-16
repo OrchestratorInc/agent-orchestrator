@@ -275,8 +275,8 @@ function MachinesPopover({ action, hostActions, onRequestInstall, children }: {
 	const { t } = useTranslation();
 	const startable = hostActions.filter((entry) => entry.action.kind === "update" || entry.action.kind === "failed");
 	const localStartable = action !== null && action.kind !== "downloading";
-	const updateAll = () => {
-		for (const entry of startable) void startHostUpdate(entry.host.url);
+	const updateAll = async () => {
+		await Promise.all(startable.map((entry) => startHostUpdate(entry.host.url)));
 		if (localStartable) startLocal(action, onRequestInstall);
 	};
 	const button = (label: string, onClick: () => void, ariaLabel?: string) => <Button aria-label={ariaLabel} onClick={onClick} size="sm" type="button" variant="quiet">{label}</Button>;
@@ -313,7 +313,7 @@ function MachinesPopover({ action, hostActions, onRequestInstall, children }: {
 				</ul>
 				{startable.length + (localStartable ? 1 : 0) > 1 ? (
 					<div className="flex justify-end border-t border-(--color-border-subtle) px-1 pt-1">
-						{button(t("shell.updateAll"), updateAll)}
+						{button(t("shell.updateAll"), () => void updateAll())}
 					</div>
 				) : null}
 			</PopoverContent>

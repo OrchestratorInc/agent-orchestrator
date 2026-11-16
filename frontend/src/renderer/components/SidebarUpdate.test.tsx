@@ -162,4 +162,21 @@ describe("SidebarUpdateRow with remote hosts", () => {
 		expect(start).toHaveBeenCalledExactlyOnceWith(buildVm.url);
 		expect(downloadMock).toHaveBeenCalled();
 	});
+
+	it("offers this computer's restart only after the machines' updates have started", async () => {
+		let started!: (view: { version: string; supported: boolean; state: "updating" }) => void;
+		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockReturnValue(new Promise((done) => { started = done; }));
+		useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { [buildVm.url]: { view: { version: "0.14.10", supported: true, state: "idle" } } } });
+		const onRequestInstall = vi.fn();
+		render(
+			<TooltipProvider>
+				<SidebarUpdateRow hosts={[buildVm]} onRequestInstall={onRequestInstall} status={{ state: "downloaded", version: "0.15.1" }} tabIndex={0} />
+			</TooltipProvider>,
+		);
+		await userEvent.click(screen.getByRole("button", { name: "Updates for 2 machines" }));
+		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
+		expect(onRequestInstall).not.toHaveBeenCalled();
+		started({ version: "0.14.10", supported: true, state: "updating" });
+		await vi.waitFor(() => expect(onRequestInstall).toHaveBeenCalledOnce());
+	});
 });
