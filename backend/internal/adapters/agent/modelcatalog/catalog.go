@@ -953,13 +953,10 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		if err != nil {
 			return "native-debug-models-v2:" + providers
 		}
-		configs := []string{filepath.Join(root, "config.toml")}
-		if workingDir != "" {
-			configs = append(configs, filepath.Join(workingDir, ".openinterpreter", "config.toml"))
-		}
+		configs := append([]string{filepath.Join(root, "config.toml")}, openInterpreterProjectConfigs(workingDir)...)
 		// model_catalog_json replaces the native catalog, so the file it names
 		// is a discovery input even when no config file changes.
-		catalogs := openInterpreterModelCatalogFiles(configs)
+		catalogs := openInterpreterModelCatalogFiles(configs, env)
 		paths := make([]string, 0, len(configs)+1+len(catalogs))
 		paths = append(paths, configs...)
 		paths = append(paths, filepath.Join(root, "auth.json"))

@@ -380,7 +380,7 @@ func readModelConfig(path string) ([]byte, error) {
 // openInterpreterModelCatalogFiles returns the model_catalog_json files named by
 // Open Interpreter config layers. Native resolves a relative path against the
 // directory of the config file that sets it.
-func openInterpreterModelCatalogFiles(configs []string) []string {
+func openInterpreterModelCatalogFiles(configs []string, env map[string]string) []string {
 	var files []string
 	for _, path := range configs {
 		raw, err := readModelConfig(path)
@@ -397,12 +397,66 @@ func openInterpreterModelCatalogFiles(configs []string) []string {
 		if file == "" {
 			continue
 		}
-		if !filepath.IsAbs(file) {
+		// Native AbsolutePathBuf expands "~/" against the home directory before
+		// resolving other relative paths against the config file's directory.
+		if rest, ok := strings.CutPrefix(file, "~/"); ok {
+			home := openInterpreterUserHome(env)
+			if home == "" {
+				continue
+			}
+			file = filepath.Join(home, rest)
+		} else if !filepath.IsAbs(file) {
 			file = filepath.Join(filepath.Dir(path), file)
 		}
 		files = append(files, filepath.Clean(file))
 	}
 	return files
+}
+
+// openInterpreterUserHome is the home directory a session's native process
+// sees: the session environment's override first, then the daemon's.
+func openInterpreterUserHome(env map[string]string) string {
+	key := "HOME"
+	if runtime.GOOS == "windows" {
+		key = "USERPROFILE"
+	}
+	if home := strings.TrimSpace(env[key]); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+// openInterpreterProjectConfigs lists the project configuration layers native
+// discovery reads: .openinterpreter/config.toml in each directory from
+// workingDir up to the project root, the nearest ancestor holding .git.
+// Without a root marker only workingDir's own layer applies.
+func openInterpreterProjectConfigs(workingDir string) []string {
+	if workingDir == "" {
+		return nil
+	}
+	dir := filepath.Clean(workingDir)
+	var dirs []string
+	for {
+		dirs = append(dirs, dir)
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			dirs = dirs[:1]
+			break
+		}
+		dir = parent
+	}
+	configs := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		configs = append(configs, filepath.Join(dir, ".openinterpreter", "config.toml"))
+	}
+	return configs
 }
 
 // fileStatSignature records size and modification time, so a change to a file

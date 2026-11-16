@@ -479,6 +479,39 @@ func TestOpenInterpreterCatalogFingerprintTracksReferencedModelCatalog(t *testin
 	}
 }
 
+// Native discovery reads project layers from the working directory up to the
+// project root and expands "~/" in model_catalog_json against the home
+// directory, so both must reach the fingerprint.
+func TestOpenInterpreterCatalogFingerprintTracksAncestorLayerAndHomePath(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	home := t.TempDir()
+	workingDir := filepath.Join(repo, "src", "pkg")
+	for _, dir := range []string{filepath.Join(repo, ".git"), workingDir, filepath.Join(repo, ".openinterpreter")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(repo, ".openinterpreter", "config.toml"), `model_catalog_json = "~/home-models.json"`+"\n")
+	write(filepath.Join(home, "home-models.json"), `{"models":[{"slug":"one"}]}`)
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", WorkingDir: workingDir, Env: map[string]string{
+		"INTERPRETER_HOME": root, "HOME": home, "USERPROFILE": home,
+	}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	before := fingerprint()
+	write(filepath.Join(home, "home-models.json"), `{"models":[{"slug":"two"}]}`)
+	if fingerprint() == before {
+		t.Fatal("editing a home-relative catalog named by an ancestor project layer did not invalidate the catalog")
+	}
+}
+
 func TestParseMiMoModelsAcceptsInlineDetails(t *testing.T) {
 	got, err := parseMiMoModels([]byte("mimo/mimo-auto — window 1M, compacts at 900K\nxiaomi/mimo-v2.5 — window 1.05M\n"))
 	if err != nil {
