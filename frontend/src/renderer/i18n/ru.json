@@ -4281,6 +4281,7 @@
 	"settings.agentAccounts.apiKeyName": "Название",
 	"settings.agentAccounts.apiKeyNamePlaceholder": "Рабочий ключ",
 	"settings.agentAccounts.apiKeyField": "API-ключ",
+	"settings.agentAccounts.apiKeyPlaceholder": "sk-ant-…",
 	"settings.agentAccounts.apiKeyBilling": "Сеансы этого аккаунта оплачиваются за токены через ваш API-аккаунт, а не по подписке Claude. Лимиты использования и перенос при достижении лимита не применяются.",
 	"settings.agentAccounts.apiKeyAdd": "Проверить и добавить",
 	"settings.agentAccounts.apiKeySave": "Проверить и сохранить",

@@ -4199,6 +4199,7 @@
 	"settings.agentAccounts.apiKeyName": "Nombre",
 	"settings.agentAccounts.apiKeyNamePlaceholder": "Clave de trabajo",
 	"settings.agentAccounts.apiKeyField": "Clave de API",
+	"settings.agentAccounts.apiKeyPlaceholder": "sk-ant-…",
 	"settings.agentAccounts.apiKeyBilling": "Las sesiones con esta cuenta se cobran por token en tu cuenta de API, no en tu suscripción de Claude. Los límites de uso y el cambio al llegar a un límite no se aplican.",
 	"settings.agentAccounts.apiKeyAdd": "Comprobar y añadir",
 	"settings.agentAccounts.apiKeySave": "Comprobar y guardar",

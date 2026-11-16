@@ -4108,6 +4108,7 @@
 	"settings.agentAccounts.apiKeyName": "名前",
 	"settings.agentAccounts.apiKeyNamePlaceholder": "仕事用キー",
 	"settings.agentAccounts.apiKeyField": "API キー",
+	"settings.agentAccounts.apiKeyPlaceholder": "sk-ant-…",
 	"settings.agentAccounts.apiKeyBilling": "このアカウントのセッションは、Claude サブスクリプションではなく API アカウントにトークン単位で課金されます。使用上限と上限時のアカウント移動は適用されません。",
 	"settings.agentAccounts.apiKeyAdd": "確認して追加",
 	"settings.agentAccounts.apiKeySave": "確認して保存",

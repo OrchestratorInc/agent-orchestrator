@@ -23,7 +23,7 @@ import (
 
 // apiKeyFile holds an API key account's key inside its own folder, readable by
 // the user only. The key is never stored in the database or sent to the app.
-const apiKeyFile = ".ao-api-key"
+const apiKeyFile = ".ao-api-key" //nolint:gosec // a file name, not a credential
 
 // apiKeyEnv is the variable each provider's CLI reads an API key from. A
 // provider without one has no API key accounts.
@@ -250,7 +250,8 @@ func writeAPIKey(home, key string) error {
 	if err != nil {
 		return fmt.Errorf("save api key: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	// Gone after the rename; removed here only when saving failed.
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.WriteString(key); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("save api key: %w", err)

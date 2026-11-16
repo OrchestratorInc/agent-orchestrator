@@ -4090,6 +4090,7 @@
 	"settings.agentAccounts.apiKeyName": "Name",
 	"settings.agentAccounts.apiKeyNamePlaceholder": "Work key",
 	"settings.agentAccounts.apiKeyField": "API key",
+	"settings.agentAccounts.apiKeyPlaceholder": "sk-ant-…",
 	"settings.agentAccounts.apiKeyBilling": "Sessions using this account are billed per token to your API account, not your Claude subscription. Usage limits and moving at a limit don't apply.",
 	"settings.agentAccounts.apiKeyAdd": "Check and add",
 	"settings.agentAccounts.apiKeySave": "Check and save",

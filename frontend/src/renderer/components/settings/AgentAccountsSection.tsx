@@ -477,7 +477,7 @@ function ApiKeyForm({ replacing, pending, error, onSubmit, onClose }: {
 				<Input id={`${id}-name`} className={cn(KEY_FIELD_CLASS, "font-sans placeholder:font-sans")} value={name} disabled={pending} autoComplete="off" maxLength={80} placeholder={t("settings.agentAccounts.apiKeyNamePlaceholder")} onChange={(event) => setName(event.target.value)} />
 			</>}
 			<label htmlFor={`${id}-key`} className={labelClass}>{t("settings.agentAccounts.apiKeyField")}</label>
-			<Input id={`${id}-key`} className={KEY_FIELD_CLASS} type="password" value={key} disabled={pending} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder="sk-ant-…" autoFocus onChange={(event) => setKey(event.target.value)} />
+			<Input id={`${id}-key`} className={KEY_FIELD_CLASS} type="password" value={key} disabled={pending} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={t("settings.agentAccounts.apiKeyPlaceholder")} autoFocus onChange={(event) => setKey(event.target.value)} />
 			<KeyWarning className="col-start-2">{t("settings.agentAccounts.apiKeyBilling")}</KeyWarning>
 			{error ? <p role="alert" className="col-start-2 text-xs text-error">{error}</p> : null}
 			<div className="col-start-2 flex justify-end gap-2">

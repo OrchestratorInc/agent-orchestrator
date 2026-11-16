@@ -4108,6 +4108,7 @@
 	"settings.agentAccounts.apiKeyName": "이름",
 	"settings.agentAccounts.apiKeyNamePlaceholder": "업무용 키",
 	"settings.agentAccounts.apiKeyField": "API 키",
+	"settings.agentAccounts.apiKeyPlaceholder": "sk-ant-…",
 	"settings.agentAccounts.apiKeyBilling": "이 계정을 쓰는 세션은 Claude 구독이 아니라 API 계정에 토큰 단위로 청구됩니다. 사용 한도와 한도 도달 시 계정 이동은 적용되지 않습니다.",
 	"settings.agentAccounts.apiKeyAdd": "확인 후 추가",
 	"settings.agentAccounts.apiKeySave": "확인 후 저장",

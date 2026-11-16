@@ -4090,6 +4090,7 @@
 	"settings.agentAccounts.apiKeyName": "名称",
 	"settings.agentAccounts.apiKeyNamePlaceholder": "工作密钥",
 	"settings.agentAccounts.apiKeyField": "API 密钥",
+	"settings.agentAccounts.apiKeyPlaceholder": "sk-ant-…",
 	"settings.agentAccounts.apiKeyBilling": "使用此账户的会话按令牌计费到你的 API 账户，而不是你的 Claude 订阅。用量上限和到达上限时切换账户不适用。",
 	"settings.agentAccounts.apiKeyAdd": "检查并添加",
 	"settings.agentAccounts.apiKeySave": "检查并保存",
