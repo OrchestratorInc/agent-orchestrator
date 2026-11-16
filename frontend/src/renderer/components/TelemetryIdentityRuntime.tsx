@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
+import { noteCloudSignInCompleted } from "../lib/cloud-telemetry";
 import { clearCloudUser, identifyCloudUser, noteCloudSignInWebVisitor } from "../lib/telemetry";
 
 // Waits between attempts to get the daemon to acknowledge the current user (or
@@ -33,6 +34,7 @@ export function TelemetryIdentityRuntime() {
 			void cloud.takePendingSignIn().then((pending) => {
 				if (!mounted || !pending) return;
 				const { account, signIn } = pending;
+				noteCloudSignInCompleted(account);
 				noteCloudSignInWebVisitor(account.authProvider === "workos" ? account.user.id : null, signIn.webDistinctId);
 			}, () => undefined);
 		};

@@ -2084,6 +2084,32 @@ describe("slash commands", () => {
 		expect(onSend).toHaveBeenCalledWith("/rev");
 	});
 
+	// While the agent's list is still on its way, `/` says so instead of looking broken.
+	it("says the skills are loading, without taking Enter, while they are on their way", async () => {
+		const { onSend, field } = renderComposer({ skills: [], skillsLoading: true });
+		await typeInComposer(field, "/rev");
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+		// A note, not a row: nothing to pick, so Enter still sends.
+		expect(screen.queryByRole("option")).toBeNull();
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).toHaveBeenCalledWith("/rev");
+	});
+
+	it("shows the loading note under the commands that already match", async () => {
+		const { field } = renderComposer({ skills: SKILLS, skillsLoading: true });
+		await typeInComposer(field, "/");
+		expect(screen.getAllByRole("option")).toHaveLength(3);
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+	});
+
+	it("closes the loading note with Escape", async () => {
+		const { field } = renderComposer({ skills: [], skillsLoading: true });
+		await typeInComposer(field, "/");
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByText("Loading skills…")).toBeNull();
+	});
+
 	it("opens on a slash after existing text", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "look here /rev");

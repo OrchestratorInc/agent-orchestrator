@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -14,6 +15,13 @@ import (
 // agent has none installed" are the same thing to render but not the same thing
 // to be wrong about, and only the first is permanent.
 var ErrSkillsUnsupported = errors.New("chat driver cannot list skills")
+
+// skillsListTimeout bounds one read of the provider's list. Codex answers
+// `skills/list` over the same app-server connection that runs turns, and a busy
+// or wedged provider would otherwise hold the request (and the client's poll that
+// waits on it) for as long as the client stays connected. The composer keeps its
+// last list meanwhile, so failing fast costs nothing.
+const skillsListTimeout = 8 * time.Second
 
 // Skills reports the named skills the provider will let this session invoke.
 //
@@ -34,7 +42,9 @@ func (s *Service) Skills(ctx context.Context, id domain.SessionID) ([]ports.Chat
 	if !ok {
 		return nil, ErrSkillsUnsupported
 	}
-	skills, err := lister.ListSkills(ctx)
+	listCtx, cancel := context.WithTimeout(ctx, skillsListTimeout)
+	defer cancel()
+	skills, err := lister.ListSkills(listCtx)
 	if err != nil {
 		return nil, err
 	}

@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityRevealScrollDelta, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
+import { activityRevealScrollDelta, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, currentScrollMarker, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -4422,6 +4422,46 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("tooltip")).not.toHaveTextContent("Automatic compaction completed");
 	});
 
+	it("keeps exactly one minimap tick current at every scroll position, between turns included", () => {
+		useUiStore.setState({
+			inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } },
+		});
+		// Four 600px turns with 100px of non-turn rows between them, in a 500px viewport:
+		// most positions have no turn's middle on screen, which used to light no tick.
+		const turnTop = (index: number) => index * 700;
+		const original = HTMLElement.prototype.getBoundingClientRect;
+		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (!this.hasAttribute("data-chat-scroll-anchor")) return original.call(this);
+			const anchors = Array.from(this.parentElement?.querySelectorAll(":scope > [data-chat-scroll-anchor]") ?? []);
+			const log = this.closest<HTMLElement>("[role='log']");
+			const top = turnTop(anchors.indexOf(this)) - (log?.scrollTop ?? 0);
+			return { top, bottom: top + 600, height: 600, left: 0, right: 0, width: 0, x: 0, y: top } as DOMRect;
+		});
+		try {
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(4)} />);
+			const log = screen.getByRole("log");
+			const scrollbar = screen.getByTestId("chat-conversation-minimap");
+			stubGeometry(scrollbar, { scrollHeight: 600, clientHeight: 600, scrollTop: 0 });
+			const maxScroll = 2700 - 500;
+			for (let scrollTop = 0; scrollTop <= maxScroll; scrollTop += 50) {
+				stubGeometry(log, { scrollHeight: 2700, clientHeight: 500, scrollTop });
+				fireEvent.scroll(log);
+				const ticks = Array.from(scrollbar.querySelectorAll(".chat-scroll-marker"));
+				expect(ticks).toHaveLength(4);
+				const current = ticks.flatMap((tick, index) =>
+					tick.classList.contains("chat-scroll-marker-current") ? [index] : [],
+				);
+				const readingLine = scrollTop + 250;
+				const expected = scrollTop >= maxScroll - 2
+					? 3
+					: ([0, 1, 2, 3].findLast((index) => turnTop(index) <= readingLine) ?? 0);
+				expect({ scrollTop, current }).toEqual({ scrollTop, current: [expected] });
+			}
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
 	it("fades the welcome heading out in place on the first send instead of popping it off", () => {
 		vi.useFakeTimers();
 		try {
@@ -6599,6 +6639,25 @@ describe("promptSpacerHeight", () => {
 	it("keeps a prior-chat band above the latest prompt instead of pinning flush to the top", () => {
 		expect(promptTopInset(800)).toBe(160);
 		expect(promptTopInset(300)).toBe(80);
+	});
+
+	it("picks the turn whose top last crossed the mid-viewport reading line as the current tick", () => {
+		const tops = [40, 700, 1400, 3000];
+		const at = (scrollTop: number, atEnd = false) => currentScrollMarker(tops, { scrollTop, viewportHeight: 600, atEnd });
+		expect(currentScrollMarker([], { scrollTop: 0, viewportHeight: 600, atEnd: false })).toBe(-1);
+		// Top of the chat, and above the first turn (a header or load-older row).
+		expect(at(0)).toBe(0);
+		expect(currentScrollMarker([500, 900], { scrollTop: 0, viewportHeight: 600, atEnd: false })).toBe(0);
+		// The line is exactly on a turn's top: that turn.
+		expect(at(400)).toBe(1);
+		expect(at(399)).toBe(0);
+		// Deep inside a long reply, no prompt on screen: still the turn being read.
+		expect(at(2000)).toBe(2);
+		expect(at(2699)).toBe(2);
+		expect(at(2700)).toBe(3);
+		// At the end the last turn wins even if its top has not reached the line.
+		expect(at(1500, true)).toBe(3);
+		expect(currentScrollMarker([0], { scrollTop: 0, viewportHeight: 600, atEnd: false })).toBe(0);
 	});
 });
 
