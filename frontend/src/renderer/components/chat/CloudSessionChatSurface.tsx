@@ -532,12 +532,12 @@ function useCloudChatEventStream(orgId: string | undefined, sessionId: string, e
 }
 
 const PLAN_REFUSAL_CODE_ALTERNATION = [...PLAN_REFUSAL_CODES].join("|");
-// The two shapes a control plane refusal reaches a tool's output in: the code in
-// parentheses after its message, or a JSON `code` field. A bare code is not
-// enough, since a failing test or grep prints it without being refused.
+// Failed tools also report the code in parentheses or a JSON `code` field.
+// A bare code is not enough: a failing test or grep can print it too.
 const PLAN_REFUSAL_PATTERN = new RegExp(
 	`\\((${PLAN_REFUSAL_CODE_ALTERNATION})\\)|"code"\\s*:\\s*"(${PLAN_REFUSAL_CODE_ALTERNATION})"`,
 );
+const CLI_PLAN_REFUSAL_PATTERN = new RegExp(`(?:^|[\\s>|:(\\[])ao: (${PLAN_REFUSAL_CODE_ALTERNATION}): \\S`);
 
 /** A command or MCP tool that failed, by the same rule the timeline rows use. */
 function failedTool(item: ConversationItem): item is ConversationItem & { kind: "activity" } {
@@ -548,12 +548,21 @@ function failedTool(item: ConversationItem): item is ConversationItem & { kind: 
 }
 
 /**
- * The plan refusal code a failed tool reported, if any. An agent's own call to
+ * The plan refusal code a tool reported, if any. An agent's own call to
  * the control plane (an orchestrator spawning a worker) is refused inside the
  * sandbox, so the tool's output is the only place this desktop sees it. A
  * command reports it in its output, an MCP tool in its error.
  */
 export function planRefusalCode(item: ConversationItem): string | undefined {
+	if (item.kind === "activity" && item.activityKind === "command" && typeof item.detail?.output === "string") {
+		// A shell loop can finish successfully after individual spawns are refused.
+		for (const line of item.detail.output.split(/\r?\n/)) {
+			const text = line.trimStart();
+			if (/^\S+:\d+[:-]/.test(text) || /^(?:FAIL|PASS|RUN)\s|^AssertionError:/.test(text)) continue;
+			const match = CLI_PLAN_REFUSAL_PATTERN.exec(text);
+			if (match) return match[1];
+		}
+	}
 	if (!failedTool(item)) return undefined;
 	const text = [item.detail?.error, item.detail?.output].filter((part): part is string => typeof part === "string").join("\n");
 	const match = PLAN_REFUSAL_PATTERN.exec(text);
@@ -2035,8 +2044,8 @@ export function CloudSessionChatSurface({
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, history?.hasOlder, me, runningSwitch, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
-	// Failed tools present when this chat opened are history; one that fails
-	// with a plan refusal while it is open explains the limit above the composer.
+	// Refusals present when this chat opened are history; a new refusal while
+	// it is open explains the limit above the composer.
 	const refusalKey = `${cloud?.orgId ?? ""}:${session.id}`;
 	const refusalBaseline = useRef<{ key: string; openedAt: number; through: number; seen?: Set<string> }>(undefined);
 	const [planRefusal, setPlanRefusal] = useState<{ key: string; code: string }>();
@@ -2049,12 +2058,12 @@ export function CloudSessionChatSurface({
 		const baseline = refusalBaseline.current;
 		// Events cached from an earlier opening are history too, until refetched.
 		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
-		const failed = snapshot.items.filter(failedTool);
+		const refusals = snapshot.items.filter((item) => planRefusalCode(item));
 		if (!baseline.seen) {
 			// Stream writes also advance dataUpdatedAt. Wait for opening history
 			// to finish before deciding which failures were already present.
 			if (!eventsQuery.isSuccess || eventsQuery.fetchStatus !== "idle") return;
-			baseline.seen = new Set(failed.map((item) => item.id));
+			baseline.seen = new Set(refusals.map((item) => item.id));
 			baseline.through = eventsQuery.data?.at(-1)?.sequence ?? 0;
 			return;
 		}
@@ -2068,11 +2077,11 @@ export function CloudSessionChatSurface({
 		}
 		baseline.through = Math.max(baseline.through, eventsQuery.data?.at(-1)?.sequence ?? 0);
 		let code: string | undefined;
-		for (const item of failed) {
+		for (const item of refusals) {
 			if (baseline.seen.has(item.id) || !updated.has(item.id)) continue;
-			baseline.seen.add(item.id);
 			const refusal = planRefusalCode(item);
 			if (!refusal) continue;
+			baseline.seen.add(item.id);
 			code ??= refusal;
 			if (!cloud?.shared) reportPlanRefusal(refusal, false, "chat");
 		}
