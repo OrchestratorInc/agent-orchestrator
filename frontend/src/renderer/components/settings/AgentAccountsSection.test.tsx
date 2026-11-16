@@ -596,6 +596,24 @@ it("cancels an account's pending sign-in when the panel goes away mid sign-in", 
 	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId: "acct-op" } } }));
 });
 
+it("cancels an account sign-in that starts after the panel went away", async () => {
+	const user = userEvent.setup();
+	const { getAgentUILogin } = await import("../../hooks/useAgentAuth");
+	vi.mocked(getAgentUILogin).mockReset().mockResolvedValue({ id: "auth-1", agentId: "claude-code", method: "browser", status: "running", expiresAt: "2026-11-17T10:00:00Z" } as never);
+	let resolveStart: (value: unknown) => void = () => undefined;
+	postMock.mockImplementation((path: string) => path === "/api/v1/agents/accounts/login"
+		? new Promise((resolve) => { resolveStart = resolve; })
+		: Promise.resolve({ data: {} }));
+	const { unmount } = renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", expect.anything()));
+
+	unmount();
+	resolveStart({ data: { operationId: "acct-op", provider: "claude", authOperationId: "auth-1" } });
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId: "acct-op" } } }));
+});
+
 it("keeps the computer's own sign-in waiting while an account signs in", async () => {
 	const user = userEvent.setup();
 	const onSignIn = vi.fn();

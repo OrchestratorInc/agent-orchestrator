@@ -279,6 +279,8 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 	const actionsRef = useRef(actions);
 	actionsRef.current = actions;
 	useEffect(() => () => {
+		// A start still in flight sees a newer generation and cancels itself.
+		signInGeneration.current += 1;
 		const operation = accountOperation.current;
 		accountOperation.current = undefined;
 		if (operation) void actionsRef.current.cancelLogin(operation).catch(() => undefined);
