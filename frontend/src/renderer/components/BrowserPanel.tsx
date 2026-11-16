@@ -1612,7 +1612,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						</DropdownMenuItem>
 							</>
 						) : controlsView === "approvals" && approvalSessionId ? (
-							<ApprovalModeMenuItems sessionId={approvalSessionId} onBack={() => setControlsView("root")} />
+							<ApprovalModeMenuItems sessionId={approvalSessionId} hostId={session.hostId} onBack={() => setControlsView("root")} />
 						) : controlsView === "profiles" ? (
 							<>
 								<DropdownMenuItem
@@ -1684,7 +1684,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									<ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-passive" />
 								</DropdownMenuItem>
 								{approvalSessionId ? (
-									<ApprovalModeMenuRow sessionId={approvalSessionId} onOpen={() => setControlsView("approvals")} />
+									<ApprovalModeMenuRow sessionId={approvalSessionId} hostId={session.hostId} onOpen={() => setControlsView("approvals")} />
 								) : null}
 								<DropdownMenuItem
 									className="gap-2"

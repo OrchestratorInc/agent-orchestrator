@@ -10,30 +10,31 @@ const MODES: ApprovalMode[] = ["off", "risky", "every-submit"];
 /**
  * The session's approval mode, read when the Browser menu opens. The menu
  * lives outside any query provider in some hosts, so it reads directly and
- * refreshes shared queries only when a client exists.
+ * refreshes shared queries only when a client exists. hostId is the remote
+ * host that runs the session, whose daemon holds its mode.
  */
-function useSessionApprovalMode(sessionId: string) {
+function useSessionApprovalMode(sessionId: string, hostId?: string) {
 	const queryClient = useContext(QueryClientContext);
 	const [mode, setMode] = useState<ApprovalMode>();
 	useEffect(() => {
 		let cancelled = false;
-		fetchApprovalPolicy(sessionId).then(
+		fetchApprovalPolicy(sessionId, hostId).then(
 			(policy) => !cancelled && setMode(policy.mode),
 			() => undefined,
 		);
 		return () => {
 			cancelled = true;
 		};
-	}, [sessionId]);
+	}, [sessionId, hostId]);
 	const choose = (next: ApprovalMode) =>
-		void setApprovalMode(sessionId, next, queryClient).then((policy) => setMode(policy.mode), () => undefined);
+		void setApprovalMode(sessionId, next, queryClient, hostId).then((policy) => setMode(policy.mode), () => undefined);
 	return { mode, choose };
 }
 
 /** Root row of the Browser menu: this session's approval mode. */
-export function ApprovalModeMenuRow({ sessionId, onOpen }: { sessionId: string; onOpen: () => void }) {
+export function ApprovalModeMenuRow({ sessionId, hostId, onOpen }: { sessionId: string; hostId?: string; onOpen: () => void }) {
 	const { t } = useTranslation();
-	const { mode } = useSessionApprovalMode(sessionId);
+	const { mode } = useSessionApprovalMode(sessionId, hostId);
 	return (
 		<DropdownMenuItem
 			className="gap-2"
@@ -51,9 +52,9 @@ export function ApprovalModeMenuRow({ sessionId, onOpen }: { sessionId: string; 
 }
 
 /** The approval-mode sub-view: back, then the three modes. */
-export function ApprovalModeMenuItems({ sessionId, onBack }: { sessionId: string; onBack: () => void }) {
+export function ApprovalModeMenuItems({ sessionId, hostId, onBack }: { sessionId: string; hostId?: string; onBack: () => void }) {
 	const { t } = useTranslation();
-	const { mode, choose } = useSessionApprovalMode(sessionId);
+	const { mode, choose } = useSessionApprovalMode(sessionId, hostId);
 	return (
 		<>
 			<DropdownMenuItem

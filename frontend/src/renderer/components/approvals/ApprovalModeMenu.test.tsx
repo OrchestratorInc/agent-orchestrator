@@ -1,8 +1,15 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
+import { approvalPolicyQueryKey } from "../../lib/approvals";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { ApprovalModeMenuItems, ApprovalModeMenuRow } from "./ApprovalModeMenu";
+
+const remote = vi.hoisted(() => ({ GET: vi.fn(), PUT: vi.fn() }));
+vi.mock("../../lib/host-clients", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("../../lib/host-clients")>();
+	return { ...actual, clientForSessionHost: (hostId?: string) => (hostId === "box" ? remote : actual.clientForSessionHost(hostId)) };
+});
 
 const policy = (mode: string) => ({ data: { mode, defaultMode: "risky", sites: [] } });
 
@@ -28,5 +35,30 @@ describe("ApprovalModeMenu", () => {
 		await waitFor(() =>
 			expect(put).toHaveBeenCalledWith("/api/v1/approvals/policy", { body: { sessionId: "ao-7", mode: "every-submit" } }),
 		);
+	});
+
+	it("reads and writes a remote session's mode on its own host", async () => {
+		const localGet = vi.spyOn(apiClient, "GET");
+		const localPut = vi.spyOn(apiClient, "PUT");
+		remote.GET.mockResolvedValue(policy("off"));
+		remote.PUT.mockResolvedValue(policy("risky"));
+		render(
+			<DropdownMenu open>
+				<DropdownMenuTrigger>menu</DropdownMenuTrigger>
+				<DropdownMenuContent>
+					<ApprovalModeMenuItems sessionId="ao-9" hostId="box" onBack={vi.fn()} />
+				</DropdownMenuContent>
+			</DropdownMenu>,
+		);
+		expect(remote.GET).toHaveBeenCalledWith("/api/v1/approvals/policy", { params: { query: { sessionId: "ao-9" } } });
+		await waitFor(() => expect(screen.getByRole("menuitem", { name: "Risky actions" })).not.toHaveAttribute("data-disabled"));
+		fireEvent.click(screen.getByRole("menuitem", { name: "Risky actions" }));
+		await waitFor(() => expect(remote.PUT).toHaveBeenCalledWith("/api/v1/approvals/policy", { body: { sessionId: "ao-9", mode: "risky" } }));
+		expect(localGet).not.toHaveBeenCalled();
+		expect(localPut).not.toHaveBeenCalled();
+	});
+
+	it("scopes the policy cache by host", () => {
+		expect(approvalPolicyQueryKey("ao-9", "box")).not.toEqual(approvalPolicyQueryKey("ao-9"));
 	});
 });
