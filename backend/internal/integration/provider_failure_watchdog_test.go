@@ -241,7 +241,9 @@ func TestPeriodicReaperSettlesUnresolvedProviderReconnect(t *testing.T) {
 			!snapshot.Messages[1].Streaming &&
 			snapshot.Activities[0].Status == domain.ActivityStatusFailed &&
 			session.Activity.State == domain.ActivityIdle &&
-			current.State() == ports.ChatControllerReady {
+			// The wedged controller also reads ready once its turn settles, but it
+			// refuses input until the replacement takes over.
+			current != controller && current.State() == ports.ChatControllerReady {
 			break
 		}
 		if time.Now().After(deadline) {
