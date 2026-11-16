@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "./reviewerControls";
+import { defaultReviewerHarness, inheritedReviewerConfig, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "./reviewerControls";
 
 describe("mobile reviewer controls", () => {
 	it("allows authorized and auth-unknown reviewers but disables unavailable agents", () => {
@@ -43,5 +43,24 @@ describe("mobile reviewer controls", () => {
 		expect(defaultReviewerHarness(undefined, "codex")).toBe("codex");
 		expect(defaultReviewerHarness(undefined, "aider")).toBe("claude-code");
 		expect(defaultReviewerHarness(undefined, undefined)).toBe("claude-code");
+	});
+});
+
+describe("inheritedReviewerConfig", () => {
+	it("inherits the project's reviewer settings only for that reviewer", () => {
+		const config = { reviewers: [{ harness: "codex", agentConfig: { model: "gpt-5", effort: "high" } }] };
+		expect(inheritedReviewerConfig(config, "codex")).toEqual({ model: "gpt-5", effort: "high" });
+		expect(inheritedReviewerConfig(config, "claude-code")).toEqual({});
+	});
+
+	it("inherits the default worker's model and effort when it reviews as itself", () => {
+		const config = { agentConfig: { model: "opus", effort: "low" }, worker: { agent: "claude-code", agentConfig: { effort: "max" } } };
+		expect(inheritedReviewerConfig(config, "claude-code")).toEqual({ model: "opus", effort: "max" });
+		expect(inheritedReviewerConfig(config, "codex")).toEqual({});
+		expect(inheritedReviewerConfig({ worker: { agent: "cursor", agentConfig: { model: "auto" } } }, "cursor")).toEqual({});
+	});
+
+	it("inherits nothing without a project config", () => {
+		expect(inheritedReviewerConfig(undefined, "claude-code")).toEqual({});
 	});
 });
