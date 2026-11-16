@@ -47,7 +47,6 @@ import (
 )
 
 type fakeSessionService struct {
-	sendErr               error
 	artifactsRegistered   []string
 	artifactsUnregistered []string
 	registerArtifactsErr  error
