@@ -11440,17 +11440,55 @@ func TestSendSemanticTUIRejectsMissingReceiptStore(t *testing.T) {
 	}
 }
 
-func TestInterruptTUIWithoutSemanticAcceptance(t *testing.T) {
+// The report coordinator interrupts before delivering a --stuck batch. If the
+// harness cannot confirm delivery the batch is retried, so an interrupt sent
+// anyway would hit the orchestrator again on every retry.
+func TestInterruptTUIRequiresSemanticAcceptance(t *testing.T) {
 	m, st, rt, _ := newManager()
 	st.sessions["s1"] = domain.SessionRecord{
 		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
 		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
 	}
-	if err := m.InterruptTUI(context.Background(), "s1"); err != nil {
-		t.Fatalf("InterruptTUI: %v", err)
+	if err := m.InterruptTUI(context.Background(), "s1"); !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
+		t.Fatalf("InterruptTUI error = %v, want unsupported", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("runtime interrupts = %v, want none", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWithoutSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.StopTUITurn(context.Background(), "s1"); err != nil {
+		t.Fatalf("StopTUITurn: %v", err)
 	}
 	if got := rt.interrupts; !reflect.DeepEqual(got, []string{"runtime-1"}) {
 		t.Fatalf("runtime interrupts = %v", got)
+	}
+}
+
+// Ctrl+C on an idle Claude Code, Codex or Gemini prompt arms "press again to
+// exit", so a second stop request could quit the agent.
+func TestStopTUITurnRefusesIdleSession(t *testing.T) {
+	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityBlocked, ""} {
+		m, st, rt, _ := newManager()
+		st.sessions["s1"] = domain.SessionRecord{
+			ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+			Activity: domain.Activity{State: state},
+			Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+		}
+		if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrNoActiveTurn) {
+			t.Fatalf("StopTUITurn(%q) error = %v, want no active turn", state, err)
+		}
+		if len(rt.interrupts) != 0 {
+			t.Fatalf("StopTUITurn(%q) interrupts = %v, want none", state, rt.interrupts)
+		}
 	}
 }
 

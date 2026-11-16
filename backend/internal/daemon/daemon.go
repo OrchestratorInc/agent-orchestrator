@@ -1684,7 +1684,8 @@ type reportSemanticSession interface {
 }
 
 // sessionConversationService routes the shared Stop endpoint to the controller
-// that owns the session's current interface.
+// that owns the session's current interface. A TUI stop goes through
+// StopTUITurn, not the report path's InterruptTUI.
 type sessionConversationService struct {
 	*chatsvc.Service
 	sessions sessionLifecycle
@@ -1693,13 +1694,15 @@ type sessionConversationService struct {
 func (s sessionConversationService) Interrupt(ctx context.Context, id domain.SessionID) error {
 	err := s.Service.Interrupt(ctx, id)
 	if errors.Is(err, chatsvc.ErrNotChatMode) {
-		err = s.sessions.InterruptTUI(ctx, id)
+		err = s.sessions.StopTUITurn(ctx, id)
 		switch {
 		case errors.Is(err, sessionmanager.ErrNotFound):
 			return apierr.NotFound("SESSION_NOT_FOUND", "session not found")
 		case errors.Is(err, sessionmanager.ErrTerminated):
 			return apierr.Conflict("SESSION_TERMINATED", "session is terminated", nil)
-		case errors.Is(err, sessionmanager.ErrSemanticAcceptanceUnsupported):
+		case errors.Is(err, sessionmanager.ErrNoActiveTurn):
+			return apierr.Conflict("SESSION_NO_ACTIVE_TURN", "there is no turn in flight to interrupt", nil)
+		case errors.Is(err, sessionmanager.ErrInterruptUnsupported):
 			return apierr.Conflict("SESSION_INTERRUPT_UNAVAILABLE", "this terminal session cannot be interrupted", nil)
 		}
 	}

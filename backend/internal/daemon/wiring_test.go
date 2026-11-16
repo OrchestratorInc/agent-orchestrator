@@ -968,7 +968,7 @@ func (f *fakeSessionLifecycle) Kill(_ context.Context, _ domain.SessionID) (bool
 	return false, nil
 }
 
-func (f *fakeSessionLifecycle) InterruptTUI(_ context.Context, id domain.SessionID) error {
+func (f *fakeSessionLifecycle) StopTUITurn(_ context.Context, id domain.SessionID) error {
 	f.interrupted = id
 	return f.interruptErr
 }

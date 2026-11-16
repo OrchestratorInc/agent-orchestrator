@@ -5493,8 +5493,41 @@ func semanticMessageAccepted(rec domain.SessionRecord, clientMessageID string) b
 		rec.Metadata.ConversationCheckpointTurnID == clientMessageID
 }
 
-// InterruptTUI requests cancellation through the session's owned runtime.
+// InterruptTUI requests cancellation through the session's owned runtime
+// before a report is delivered. It requires semantic acceptance: the report
+// coordinator retries a batch whose delivery is not confirmed, and each retry
+// would interrupt the orchestrator again.
 func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || !m.harnessSemanticAcceptance(rec.Harness) {
+		return ErrSemanticAcceptanceUnsupported
+	}
+	interrupter, ok := m.runtime.(runtimeInterrupter)
+	if !ok || rec.Metadata.RuntimeHandleID == "" {
+		return ErrSemanticAcceptanceUnsupported
+	}
+	return interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID})
+}
+
+var (
+	// ErrNoActiveTurn means StopTUITurn found no turn to stop. Ctrl+C on an
+	// idle agent prompt arms "press again to exit", so it is refused.
+	ErrNoActiveTurn = errors.New("session: no active turn")
+	// ErrInterruptUnsupported means the session's runtime cannot deliver an
+	// interrupt.
+	ErrInterruptUnsupported = errors.New("session: interrupt unsupported")
+)
+
+// StopTUITurn interrupts a TUI session's active turn on an explicit user
+// request. Unlike InterruptTUI it needs no delivery confirmation, since
+// nothing is sent after it.
+func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
 		return err
@@ -5506,11 +5539,14 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 		return ErrTerminated
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
-		return ErrSemanticAcceptanceUnsupported
+		return ErrInterruptUnsupported
+	}
+	if rec.Activity.State != domain.ActivityActive {
+		return ErrNoActiveTurn
 	}
 	interrupter, ok := m.runtime.(runtimeInterrupter)
 	if !ok || rec.Metadata.RuntimeHandleID == "" {
-		return ErrSemanticAcceptanceUnsupported
+		return ErrInterruptUnsupported
 	}
 	return interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID})
 }
