@@ -6,16 +6,19 @@ import { Button } from "../ui/button";
 export function ConversationBranchNavigator({
 	point,
 	pending,
+	disabled = false,
 	error,
 	onActivate,
 }: {
 	point: ConversationBranchPoint;
 	pending: boolean;
+	disabled?: boolean;
 	error?: string;
 	onActivate: (branchId: string) => Promise<unknown> | void;
 }) {
 	const { t } = useTranslation();
 	if (point.total <= 1) return null;
+	const isActionDisabled = pending || disabled;
 	return (
 		<div className="flex min-w-0 items-center gap-0.5 text-caption text-muted-foreground">
 		{point.previousBranchId ? (
@@ -24,8 +27,9 @@ export function ConversationBranchNavigator({
 					type="button"
 					variant="quiet"
 					size="icon-sm"
-					disabled={pending}
+					disabled={isActionDisabled}
 					onClick={() => {
+						if (isActionDisabled) return;
 						void Promise.resolve(onActivate(point.previousBranchId as string)).catch(() => {});
 					}}
 					aria-label={t("chat.branch.previous")}
@@ -46,8 +50,9 @@ export function ConversationBranchNavigator({
 					type="button"
 					variant="quiet"
 					size="icon-sm"
-					disabled={pending}
+					disabled={isActionDisabled}
 					onClick={() => {
+						if (isActionDisabled) return;
 						void Promise.resolve(onActivate(point.nextBranchId as string)).catch(() => {});
 					}}
 					aria-label={t("chat.branch.next")}

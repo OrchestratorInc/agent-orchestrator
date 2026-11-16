@@ -835,6 +835,71 @@ describe("HumanMessage", () => {
 			expect(screen.getByText("attachment-b.pdf").closest("li")).toHaveClass("h-16");
 		});
 	});
+
+	describe("branch navigation", () => {
+		const branchPoint = {
+			turnId: "turn-1",
+			position: 2,
+			total: 3,
+			previousBranchId: "branch-prev",
+			nextBranchId: "branch-next",
+		};
+
+		it("disables branch navigation when activateBranchDisabled is true", () => {
+			render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchDisabled
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Previous conversation branch" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
+		});
+
+		it("disables branch navigation globally while activateBranchPending is true regardless of activateBranchTarget", () => {
+			render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchPending
+					activateBranchTarget="unrelated-branch"
+				/>,
+			);
+			expect(screen.getByRole("button", { name: "Previous conversation branch" })).toBeDisabled();
+			expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
+		});
+
+		it("shows activateBranchError only when branch matches activateBranchTarget", () => {
+			const { rerender } = render(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchTarget="unrelated-branch"
+					activateBranchError="stop the current turn before switching conversation branches"
+				/>,
+			);
+			expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+			rerender(
+				<HumanMessage
+					message={human({ turnId: "turn-1" })}
+					sessionId="s1"
+					branchPoint={branchPoint}
+					onActivateBranch={vi.fn()}
+					activateBranchTarget="branch-prev"
+					activateBranchError="stop the current turn before switching conversation branches"
+				/>,
+			);
+			expect(screen.getByRole("alert")).toHaveTextContent("stop the current turn before switching conversation branches");
+		});
+	});
 });
 
 describe("ProviderSwitchMarker", () => {
