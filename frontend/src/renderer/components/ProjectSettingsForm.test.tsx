@@ -1496,7 +1496,8 @@ describe("ProjectSettingsForm", () => {
 
 		renderSettings("proj-1", [], "agents");
 
-		expect(await screen.findByText("Worker and orchestrator agents are required.")).toBeInTheDocument();
+		// The readiness query retries once after about a second before failing.
+		expect(await screen.findByText("Worker and orchestrator agents are required.", undefined, { timeout: 3000 })).toBeInTheDocument();
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
