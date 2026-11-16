@@ -63,6 +63,10 @@ export class RemoteRegistry {
 		return [...this.live.values()].some(({ proxy }) => proxy.isAgentBrowserUrl(url));
 	}
 
+	isRenderUrl(url: string): boolean {
+		return [...this.live.values()].some(({ proxy }) => proxy.isRenderUrl(url));
+	}
+
 	agentBrowserUrl(hostId: string, sessionId: string): Promise<string> {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
 		if (!connected) throw new Error(`Host ${hostId} is not connected`);
