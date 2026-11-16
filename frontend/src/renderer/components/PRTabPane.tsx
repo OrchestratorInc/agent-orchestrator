@@ -1,5 +1,5 @@
 import { CheckStateGlyph, type PRCheckState } from "@aoagents/product-ui";
-import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileText, MessageSquare, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileText, MessageSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { usePRDetailsLoad } from "../hooks/usePRDetailsLoad";
@@ -21,8 +21,7 @@ import { PRDescriptionBody } from "./PRDescriptionBody";
 import { prStateIcon } from "./PRPills";
 import { PRStackSection, usePRStackSection } from "./PRStack";
 import { ProductExternalLink } from "./ProductExternalLink";
-import { TerminalTabFrame, terminalTabActionClassName } from "./TerminalTabFrame";
-import { Pressable } from "./ui/pressable";
+import { TabCloseButton, TerminalTabFrame } from "./TerminalTabFrame";
 import { Skeleton } from "./ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
@@ -46,23 +45,9 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 	const pr = useSessionPR(session, url, hostId);
 	const state = prStateIcon[pr?.state ?? "open"];
 	const name = pr ? `#${pr.number} ${pr.title}` : t("pr.tab.loading");
-	// The close button takes the state icon's slot on hover, like a file tab's.
-	const closeAction = (
-		<Pressable
-			aria-label={t("files.closeTab", { name })}
-			className={terminalTabActionClassName}
-			onClick={(event) => {
-				event.stopPropagation();
-				onClose();
-			}}
-			type="button"
-		>
-			<X aria-hidden="true" className="size-icon-sm" />
-		</Pressable>
-	);
 	return (
 		<TerminalTabFrame
-			action={closeAction}
+			action={<TabCloseButton label={t("files.closeTab", { name })} onClose={onClose} />}
 			active={active}
 			buttonProps={{
 				"aria-label": name,
@@ -75,6 +60,7 @@ export function PRTabChip({ active, hostId, onActivate, onClose, session, url }:
 			}}
 			icon={<state.icon aria-hidden="true" className={cn("size-icon-base shrink-0", state.className)} />}
 			label={name}
+			onClose={onClose}
 		/>
 	);
 }

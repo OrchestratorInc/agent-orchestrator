@@ -11,41 +11,47 @@ import (
 	"time"
 )
 
-func TestInlineLocalImagesReportsAFIFOAsMissingWithoutBlocking(t *testing.T) {
-	pipe := filepath.Join(t.TempDir(), "pipe.png")
-	if err := syscall.Mkfifo(pipe, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	opens := 0
-	stubOpenRenderImage(t, func(name string) (*os.File, error) {
-		opens++
-		return os.Open(name)
-	})
-
+// inlineWithin fails the test if inlineLocalImages has not returned in time.
+func inlineWithin(t *testing.T, html string) (missing []string, err error) {
+	t.Helper()
 	type result struct {
 		missing []string
 		err     error
 	}
 	done := make(chan result, 1)
 	go func() {
-		_, missing, err := inlineLocalImages(`<img src="` + pipe + `">`)
+		_, missing, err := inlineLocalImages(html)
 		done <- result{missing, err}
 	}()
 	select {
 	case r := <-done:
-		// Opening a FIFO blocks until a writer appears, so it must never be opened.
-		if r.err != nil || !slices.Equal(r.missing, []string{pipe}) || opens != 0 {
-			t.Fatalf("err=%v missing=%q opens=%d", r.err, r.missing, opens)
-		}
+		return r.missing, r.err
 	case <-time.After(5 * time.Second):
-		t.Fatal("inlineLocalImages blocked on a FIFO")
+		t.Fatal("inlineLocalImages is stuck")
+		return nil, nil
 	}
 }
 
-func TestInlineLocalImagesRefusesAFIFOSwappedInAfterTheStat(t *testing.T) {
-	png := writeImage(t, t.TempDir(), "shot.png", pngSignature)
-	open := openRenderImage
-	stubOpenRenderImage(t, func(name string) (*os.File, error) {
+func TestInlineLocalImagesNeverOpensAFIFO(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "stream.png")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := false
+	wrapOpenRenderImage(t, func(name string, _ func(string) (*os.File, error)) (*os.File, error) {
+		opened = true
+		return os.Open(name)
+	})
+
+	missing, err := inlineWithin(t, `<img src="`+fifo+`">`)
+	if err != nil || opened || !slices.Equal(missing, []string{fifo}) {
+		t.Fatalf("err=%v opened=%v missing=%q", err, opened, missing)
+	}
+}
+
+func TestInlineLocalImagesRefusesAFIFOThatReplacesAnImage(t *testing.T) {
+	chart := writeImage(t, t.TempDir(), "chart.png", pngSignature)
+	wrapOpenRenderImage(t, func(name string, open func(string) (*os.File, error)) (*os.File, error) {
 		if err := os.Remove(name); err != nil {
 			t.Fatal(err)
 		}
@@ -55,21 +61,8 @@ func TestInlineLocalImagesRefusesAFIFOSwappedInAfterTheStat(t *testing.T) {
 		return open(name)
 	})
 
-	type result struct {
-		missing []string
-		err     error
-	}
-	done := make(chan result, 1)
-	go func() {
-		_, missing, err := inlineLocalImages(`<img src="` + png + `">`)
-		done <- result{missing, err}
-	}()
-	select {
-	case r := <-done:
-		if r.err != nil || !slices.Equal(r.missing, []string{png}) {
-			t.Fatalf("err=%v missing=%q", r.err, r.missing)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("inlineLocalImages blocked on a FIFO swapped in after the stat")
+	missing, err := inlineWithin(t, `<img src="`+chart+`">`)
+	if err != nil || !slices.Equal(missing, []string{chart}) {
+		t.Fatalf("err=%v missing=%q", err, missing)
 	}
 }

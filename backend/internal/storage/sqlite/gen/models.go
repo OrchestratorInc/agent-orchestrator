@@ -465,6 +465,22 @@ type DeletedSessionAccountUsage struct {
 	EstimatedCostNanos int64
 }
 
+type KeptArtifact struct {
+	ID            string
+	SessionID     string
+	Path          string
+	RegisteredAt  sql.NullTime
+	PreviousPaths string
+	CreatedAt     time.Time
+}
+
+type KeptArtifactSession struct {
+	SessionID string
+	ProjectID sql.NullString
+	Title     string
+	KeptAt    time.Time
+}
+
 type ManagedHarnessRelease struct {
 	Harness   string
 	Release   string
@@ -698,21 +714,29 @@ type Review struct {
 }
 
 type ReviewRun struct {
-	ID               string
-	ReviewID         string
-	SessionID        domain.SessionID
-	Harness          domain.ReviewerHarness
-	PRURL            string
-	TargetSha        string
-	Status           domain.ReviewRunStatus
-	Verdict          domain.ReviewVerdict
-	Body             string
-	CreatedAt        time.Time
-	GithubReviewID   string
-	DeliveredAt      sql.NullTime
-	BatchID          string
-	AutoInjectReview bool
-	TriggerSource    domain.ReviewTriggerSource
+	ID                string
+	ReviewID          string
+	SessionID         domain.SessionID
+	Harness           domain.ReviewerHarness
+	PRURL             string
+	TargetSha         string
+	Status            domain.ReviewRunStatus
+	Verdict           domain.ReviewVerdict
+	Body              string
+	CreatedAt         time.Time
+	GithubReviewID    string
+	DeliveredAt       sql.NullTime
+	BatchID           string
+	AutoInjectReview  bool
+	TriggerSource     domain.ReviewTriggerSource
+	FailureReason     domain.ReviewFailureReason
+	CancelledBy       domain.ReviewCancelledBy
+	LaunchID          string
+	LaunchingAt       sql.NullTime
+	StartedAt         sql.NullTime
+	FirstActivityAt   sql.NullTime
+	CancelRequestedAt sql.NullTime
+	EndedAt           sql.NullTime
 }
 
 type Session struct {

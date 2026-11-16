@@ -255,7 +255,7 @@ export class AgentBrowserRuntime {
 			// A native daemon restart can renumber tabs between list and close.
 			// Close the exact AO-owned target, then notify an existing daemon.
 			await provider.closeTarget(requestedTabId);
-			this.sessions.get(sessionId)?.bridge.reconcileTargets();
+			this.reconcileTargets(sessionId);
 			return { tabId: requestedTabId, targetId: requestedTabId, closed: true, untrustedExternalContent: true };
 		}
 		if (requestedTabId) {
@@ -301,6 +301,15 @@ export class AgentBrowserRuntime {
 			this.log(`agent-browser screenshot annotations were unreadable: ${(error as Error).message}`);
 			return undefined;
 		}
+	}
+
+	/**
+	 * Tells a connected agent-browser daemon about tabs Orchestrator opened or
+	 * closed itself, without running a command. A no-op before the session's
+	 * first command: the daemon discovers every target when it connects.
+	 */
+	reconcileTargets(sessionId: string): void {
+		this.sessions.get(sessionId)?.bridge.reconcileTargets();
 	}
 
 	async screenshot(
