@@ -126,18 +126,18 @@ func formatMiB(n int) string {
 
 // missingImagesError refuses a page that names images nobody can read.
 func missingImagesError(missing []string) error {
-	return errors.New("These local images could not be read: " + strings.Join(missing, ", ") +
-		". Use absolute paths to existing image files, or remove them.")
+	return errors.New("Cannot inline these local images: " + strings.Join(missing, ", ") +
+		". Check their paths, permissions, and image formats.")
 }
 
 // imageTooLarge names an image's size, "12.0 MiB" or "over 10.0 MiB".
 func imageTooLarge(path, size string) error {
-	return fmt.Errorf("%s is %s; each local image must be at most %s.", path, size, formatMiB(maxRenderImageBytes))
+	return fmt.Errorf("Local image %s exceeds %s (%s). Resize it before rendering.", path, formatMiB(maxRenderImageBytes), size)
 }
 
 func pageTooLarge(size int) error {
-	return fmt.Errorf("With its images inlined the page is %s; the limit is %s. Use smaller images.",
-		formatMiB(size), formatMiB(maxRenderPageBytes))
+	return fmt.Errorf("The page exceeds the %s limit after embedding images (%s). Use smaller images.",
+		formatMiB(maxRenderPageBytes), formatMiB(size))
 }
 
 // inlineLocalImages replaces every absolute local image reference with a data URI.

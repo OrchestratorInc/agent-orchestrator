@@ -255,9 +255,9 @@ func TestInlineLocalImagesSizeLimits(t *testing.T) {
 		want string
 	}{
 		{"one image over the limit", `<img src="` + six + `"><img src="` + huge + `">`,
-			huge + " is 12.0 MiB; each local image must be at most 10.0 MiB."},
+			"Local image " + huge + " exceeds 10.0 MiB (12.0 MiB). Resize it before rendering."},
 		{"a page that grows past the limit", `<img src="` + nine + `"><img src="` + six + `">` + `<img src="` + nine + `">`,
-			"With its images inlined the page is 32.0 MiB; the limit is 25.0 MiB. Use smaller images."},
+			"The page exceeds the 25.0 MiB limit after embedding images (32.0 MiB). Use smaller images."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, _, err := inlineLocalImages(tc.html); err == nil || err.Error() != tc.want {
@@ -277,7 +277,7 @@ func TestInlineLocalImagesCatchesAnImageThatGrowsAfterItsStat(t *testing.T) {
 	})
 
 	_, _, err := inlineLocalImages(`<img src="` + chart + `">`)
-	if want := chart + " is over 10.0 MiB; each local image must be at most 10.0 MiB."; err == nil || err.Error() != want {
+	if want := "Local image " + chart + " exceeds 10.0 MiB (over 10.0 MiB). Resize it before rendering."; err == nil || err.Error() != want {
 		t.Fatalf("err = %v\nwant  %s", err, want)
 	}
 }
