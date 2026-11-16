@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -188,9 +189,39 @@ func parseProviderModelRecords(raw []byte, provider string) []ports.AgentModelIn
 		}
 		// These native catalogs store unqualified model IDs, including org/model.
 		models = append(models, ports.AgentModelInfo{ID: modelProvider + "/" + id, Label: label, Provider: modelProvider,
-			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: piThinkingLevels(record)})
+			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: recordEfforts(record)})
 	}
 	return models
+}
+
+// recordEfforts reads Pi's thinkingLevelMap, falling back to the
+// thinking.efforts list OMP stores in its models.db records.
+func recordEfforts(record map[string]any) []string {
+	if efforts := piThinkingLevels(record); efforts != nil {
+		return efforts
+	}
+	return ompThinkingEfforts(record)
+}
+
+// ompThinkingLevels are the levels `omp --thinking` accepts besides off and
+// auto, which pick no specific effort.
+var ompThinkingLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+
+// ompThinkingEfforts are a reasoning OMP model's thinking.efforts, limited to
+// levels --thinking accepts and kept in OMP's order.
+func ompThinkingEfforts(record map[string]any) []string {
+	if reasoning, _ := record["reasoning"].(bool); !reasoning {
+		return nil
+	}
+	thinking, _ := record["thinking"].(map[string]any)
+	listed, _ := thinking["efforts"].([]any)
+	var efforts []string
+	for _, value := range listed {
+		if level, _ := value.(string); slices.Contains(ompThinkingLevels, level) && !slices.Contains(efforts, level) {
+			efforts = append(efforts, level)
+		}
+	}
+	return efforts
 }
 
 // piThinkingLevels are a reasoning Pi model's thinking levels as effort choices,

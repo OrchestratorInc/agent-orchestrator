@@ -1869,6 +1869,11 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
+	// Before OMP accepted effort, role or project settings could hold any level
+	// for it. A level the request did not carry is cleared when the catalog
+	// cannot confirm it, instead of failing a launch that used to succeed.
+	inheritedOMPEffort := cfg.Harness == domain.HarnessOMP && !cfg.EffortOverride &&
+		strings.TrimSpace(requested.Effort) == ""
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
@@ -1881,13 +1886,13 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		}
 		return resolved, nil
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessOMP {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, and omp agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
@@ -1909,6 +1914,9 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		if validateClaudeModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
+		if inheritedOMPEffort {
+			resolved.Effort = ""
+		}
 		return resolved, nil
 	}
 	// A spawn never waits on live model discovery: it runs the agent's CLI and
@@ -1929,7 +1937,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
 		}
 		NoteSpawnModel(ctx, modelID, false)
-		if modelChangedWithoutExplicitEffort {
+		if modelChangedWithoutExplicitEffort || inheritedOMPEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -1975,12 +1983,20 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	if selected == nil {
 		// The saved catalog does not list the model, so the CLI owns its
 		// capabilities. A level no Claude model accepts is still certain.
+		if inheritedOMPEffort {
+			resolved.Effort = ""
+			return resolved, nil
+		}
 		if cfg.Harness == domain.HarnessClaudeCode && !containsString(claudeEffortLevels, resolved.Effort) {
 			return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 		}
 		return resolved, nil
 	}
 	if !containsString(selected.Efforts, resolved.Effort) {
+		if inheritedOMPEffort {
+			resolved.Effort = ""
+			return resolved, nil
+		}
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
