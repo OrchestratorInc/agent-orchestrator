@@ -848,7 +848,9 @@ export function DeleteArchivedSessionDialog({
 	const keepable = !session.hostId;
 	const artifactCount = sessionDeliverables(session).length;
 	const checkboxId = useId();
-	const keeping = keepable && artifactCount > 0 && !deleteArtifacts;
+	// An empty or stale list is no proof the folder is empty; the daemon deletes
+	// a session without files plainly.
+	const keeping = keepable && !deleteArtifacts;
 	const confirmDelete = async () => {
 		setDeleting(true);
 		setError(null);

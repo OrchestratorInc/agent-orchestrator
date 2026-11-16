@@ -313,7 +313,8 @@ describe("archived session delete", () => {
 		}),
 	]);
 
-	it("deletes a released session permanently once confirmed", async () => {
+	// An empty list may be stale or a failed read, so files still on disk are kept.
+	it("deletes a released session permanently once confirmed, keeping files the list did not show", async () => {
 		workspaceQueryMock.mockReturnValue({ data: [archived({ workspaceCleanup: "removed" })], isError: false, isSuccess: true });
 		renderArchive();
 
@@ -326,7 +327,7 @@ describe("archived session delete", () => {
 		await userEvent.click(within(dialog).getByRole("button", { name: "Confirm, delete session permanently" }));
 
 		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
-			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true } },
+			params: { path: { sessionId: "standalone-dead" }, query: { cleanup: true, keepArtifacts: true } },
 		}));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(navigateMock).not.toHaveBeenCalled();
