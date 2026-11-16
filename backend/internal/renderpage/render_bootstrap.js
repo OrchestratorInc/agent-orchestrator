@@ -4,8 +4,8 @@
 // zooms the page (the artifact viewer) gets its pinch and Cmd+=/-/0 forwarded,
 // hears when the pointer nears the bottom edge where its zoom controls float,
 // and sets the page zoom.
-// The messages are the MCP Apps postMessage methods T3 Code also uses, so this
-// host could later show upstream MCP apps.
+// The messages are the MCP Apps postMessage methods, so this host could later
+// show upstream MCP apps.
 (function () {
   var theme = document.getElementById("ao-theme");
   // Created now, so it precedes the page's own styles and they win over it.
