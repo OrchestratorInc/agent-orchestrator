@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactCount, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, groupArtifactsByProject, withShareAccess } from "./artifacts";
+import { artifactChangeError, artifactCount, artifactKey, artifactLocation, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, findHostShareLink, groupArtifactsByProject, hostArtifactLocation, withHostShareLinks, withShareAccess } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -90,15 +90,26 @@ describe("groupArtifactsByProject", () => {
 		expect(group.rows[0].projectId).toBeUndefined();
 	});
 
-	it("skips remote hosts and PR-only output", () => {
+	it("skips PR-only output", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
 				session("ao-1", [artifact("pr-only.md", "2026-10-09T10:00:00Z")], { outputType: "pr" }),
 			]),
-			workspace("remote", "remote-project", [session("r-1", [artifact("remote.md", "2026-10-09T10:00:00Z")])], { hostId: "host-2" }),
 		]);
 
 		expect(groups).toEqual([]);
+	});
+
+	it("lists a remote host's projects apart from this computer's project with the same ID", () => {
+		const groups = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [artifact("local.md", "2026-10-09T10:00:00Z")])]),
+			workspace("ao", "agent-orchestrator", [session("ao-1", [artifact("remote.md", "2026-10-09T11:00:00Z")])], { hostId: "host-2" }),
+		]);
+
+		expect(groups.map((group) => [group.id, group.hostId, group.rows.map((row) => [row.name, row.hostId, row.projectId])])).toEqual([
+			["remote:host-2:ao", "host-2", [["remote.md", "host-2", "ao"]]],
+			["ao", undefined, [["local.md", undefined, "ao"]]],
+		]);
 	});
 
 	it("lists an orchestrator's artifacts beside its workers', titled as the orchestrator", () => {
@@ -182,6 +193,17 @@ describe("filterArtifactGroups", () => {
 	it("keeps only artifacts on this machine or only cloud ones", () => {
 		expect(filterArtifactGroups(groups, { query: "", location: "local" }).map((group) => group.id)).toEqual(["px0", "ao"]);
 		expect(names(filterArtifactGroups(groups, { query: "", location: "cloud" }))).toEqual(["report.pdf", "chart.png", "demo.mp4"]);
+	});
+
+	it("keeps only one remote host's artifacts", () => {
+		const withHost = groupArtifactsByProject([
+			workspace("ao", "agent-orchestrator", [session("ao-1", [artifact("local.md", "2026-10-09T10:00:00Z")])]),
+			workspace("ao", "agent-orchestrator", [session("ao-1", [artifact("vm.md", "2026-10-09T11:00:00Z")])], { hostId: "host-2" }),
+			workspace("lab", "lab", [session("lab-1", [artifact("other-vm.md", "2026-10-09T12:00:00Z")])], { hostId: "host-3" }),
+		]);
+		expect(names(filterArtifactGroups(withHost, { query: "", location: hostArtifactLocation("host-2") }))).toEqual(["vm.md"]);
+		expect(names(filterArtifactGroups(withHost, { query: "", location: "local" }))).toEqual(["local.md"]);
+		expect(names(filterArtifactGroups(withHost, { query: "", projectIds: ["remote:host-2:ao"] }))).toEqual(["vm.md"]);
 	});
 
 	it("keeps only the chosen file type, together with the other filters", () => {
@@ -290,5 +312,49 @@ describe("canChangeSessionArtifacts", () => {
 
 	it("leaves the decision to a control plane too old to name the creator", () => {
 		expect(canChangeSessionArtifacts({ orgId: "org-1" }, "u-2")).toBe(true);
+	});
+});
+
+describe("artifactKey", () => {
+	it("keeps this computer's key as it was, so saved pins still match, and names a remote host's", () => {
+		expect(artifactKey({ sessionId: "ao-1", path: "plan.md" })).toBe(JSON.stringify(["ao-1", "plan.md"]));
+		expect(artifactKey({ sessionId: "ao-1", path: "plan.md", hostId: "host-2" })).not.toBe(artifactKey({ sessionId: "ao-1", path: "plan.md" }));
+		expect(artifactKey({ sessionId: "ao-1", path: "plan.md", hostId: "host-2" })).not.toBe(artifactKey({ sessionId: "ao-1", path: "plan.md", hostId: "host-3" }));
+	});
+});
+
+describe("artifactLocation", () => {
+	it("is the row's remote host, this computer, or the cloud", () => {
+		expect(artifactLocation({ hostId: "host-2" }, { cloud: false })).toBe("host:host-2");
+		expect(artifactLocation({}, { cloud: false })).toBe("local");
+		expect(artifactLocation({ cloud: { orgId: "org-1" } }, { cloud: false })).toBe("cloud");
+	});
+});
+
+describe("withHostShareLinks", () => {
+	const groups = groupArtifactsByProject([
+		workspace("ao", "agent-orchestrator", [session("ao-1", [{ ...artifact("deck.html", "2026-10-09T10:00:00Z", "html"), id: "art-7" }, artifact("notes.md", "2026-10-09T09:00:00Z")])]),
+		workspace("ao", "agent-orchestrator", [session("ao-1", [{ ...artifact("deck.html", "2026-10-09T10:00:00Z", "html"), id: "art-7" }, artifact("notes.md", "2026-10-09T09:00:00Z")])], { hostId: "host-2" }),
+	]);
+	const links = [
+		{ hostId: "host-2", sessionId: "ao-1", artifactId: "art-7", url: "https://deck.share.test/", access: "restricted" as const },
+		{ hostId: "host-2", sessionId: "ao-1", path: "notes.md", url: "https://notes.share.test/" },
+		{ hostId: "host-3", sessionId: "ao-1", path: "notes.md", url: "https://elsewhere.share.test/" },
+	];
+
+	it("marks a remote host's files by artifact ID, else by path, and leaves this computer's alone", () => {
+		const marked = withHostShareLinks(groups, links);
+		const rows = (hostId?: string) => marked.find((group) => group.hostId === hostId)?.rows.map((row) => [row.name, row.shareUrl, row.shareAccess]);
+		expect(rows("host-2")).toEqual([
+			["deck.html", "https://deck.share.test/", "restricted"],
+			["notes.md", "https://notes.share.test/", undefined],
+		]);
+		expect(rows(undefined)).toEqual([["deck.html", undefined, undefined], ["notes.md", undefined, undefined]]);
+		expect(artifactSharing(marked.find((group) => group.hostId === "host-2")!.rows[0]!)).toBe("shared");
+	});
+
+	it("finds one file's link on its own host only", () => {
+		expect(findHostShareLink(links, "host-3", "ao-1", { path: "notes.md" })?.url).toBe("https://elsewhere.share.test/");
+		expect(findHostShareLink(links, "host-3", "ao-1", { id: "art-7", path: "deck.html" })).toBeUndefined();
 	});
 });

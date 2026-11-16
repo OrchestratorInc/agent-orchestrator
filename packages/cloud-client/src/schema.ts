@@ -54,6 +54,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/agent-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The authenticated user's coding-agent accounts: every login or key they saved for Claude Code, Codex, Cursor and opencode. Present only on a control plane whose CurrentAccount reports agentAccounts. */
+        get: operations["listAgentAccounts"];
+        put?: never;
+        /** @description Validates, encrypts and saves another account for an agent. The first account of an agent becomes its default. 409 AGENT_ACCOUNT_DUPLICATE when the user already saved the same login. */
+        post: operations["addAgentAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Removes an account. 409 AGENT_ACCOUNT_IN_USE while a live session runs on it: move or end those sessions first. Removing an agent's default makes its most recently checked other account the default. */
+        delete: operations["removeAgentAccount"];
+        options?: never;
+        head?: never;
+        patch: operations["renameAgentAccount"];
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Makes the account its agent's default, the one new sessions run on. Sessions already running keep their own account. */
+        post: operations["makeAgentAccountDefault"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/agent-accounts/{accountId}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Signs an account in again. The credential must be the same kind (subscription login or key) and, where the login names one, the same account: 409 AGENT_ACCOUNT_MISMATCH otherwise, since sessions running on the account were set up for it. Save a different login with addAgentAccount. */
+        put: operations["replaceAgentAccountCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/me/artifact-shares": {
         parameters: {
             query?: never;
@@ -887,6 +962,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get: operations["getSessionAgentAccount"];
+        /** @description Moves the session's agent to another of its creator's accounts for the same agent, through the session's interface transition: the agent stops (after its turn with drain, at once with interrupt) and resumes the same conversation on the new account, or stays on the old one if that fails. Only the session's creator may move it. 409 AGENT_ACCOUNT_UNCHANGED for the account it runs on, 422 AGENT_ACCOUNT_UNUSABLE for an account that is not signed in or is another agent's. */
+        put: operations["switchSessionAgentAccount"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition": {
         parameters: {
             query?: never;
@@ -900,6 +995,7 @@ export interface paths {
         get: operations["getSessionInterfaceTransition"];
         put?: never;
         post: operations["startSessionInterfaceTransition"];
+        /** @description An agent switch or a move to another account can be cancelled only by the session's creator (403 forbidden otherwise); an interface-only switch by any member who may switch it. */
         delete: operations["cancelSessionInterfaceTransition"];
         options?: never;
         head?: never;
@@ -1724,8 +1820,29 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Take back a message whose turn is still queued, before the agent starts on it: the turn ends at once with chat.turn_interrupted of attempt 0 and reason deleted, and a client drops the message. Unlike cancelTurn it never stops a turn that left the queue. Allowed for whoever may stop the turn: the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins. Deleting a message already deleted answers 202 again. Offered when offering.features lists queued-delete. */
+        /** @description Take back a message whose turn is still queued, before the agent starts on it: the turn ends at once with chat.turn_interrupted of attempt 0 and reason deleted, and a client drops the message. Unlike cancelTurn it never stops a turn that left the queue. Allowed for whoever may stop the turn: the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins. Deleting a message already deleted answers 202 again. Offered when offering.features lists queued-delete. A message being steered into the running turn (steerQueuedMessage) deletes too: if the worker has not taken the steer yet it is withdrawn (chat.turn_steer_failed with deleteRequested) and the message deleted at once; if the worker is taking it, the answer is 202 with pending and the steer's outcome decides: chat.turn_interrupted of reason deleted when the agent did not take it, or chat.turn_steered with deleteRequested when it did (the message was delivered). Deleting another queued message is unaffected by a steer in flight. */
         post: operations["deleteQueuedMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer-queued": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Steer a message whose turn is still queued into the session's running turn, instead of leaving it to run as a turn of its own. The text steered is the queued message's own; a steer carries text alone, so a message with files (or with no text) is refused and runs as its own turn. Allowed for whoever may stop the queued turn (see deleteQueuedMessage) and, like a steer, only with the composer lease. Answers chat.turn_steer_requested naming the queued turn (payload.queuedTurnId). The message leaves the queue only once the agent takes the guidance: chat.turn_steered with its queuedTurnId, then chat.turn_interrupted of reason steered for the queued turn. When the agent does not take it (it refused, the running turn ended, the worker did not answer in time) chat.turn_steer_failed names the queued turn and says why, and the message stays queued, in its place. While a steer of a queued message is in flight the queue waits for it, so a message is never both steered and run. Offered when offering.features lists queued-steer. */
+        post: operations["steerQueuedMessage"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3226,7 +3343,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), automations when cloud automations can be scheduled (createAutomation). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), automations when cloud automations can be scheduled (createAutomation). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -3252,6 +3369,10 @@ export interface components {
             sandboxProviders?: components["schemas"]["SandboxProviders"];
             /** @description Harnesses a session can start in, or switch to, Chat with. */
             chatHarnesses?: string[];
+            /** @description Harnesses a running session can switch its coding agent to (startSessionInterfaceTransition with targetHarness). Absent from a control plane that cannot switch a session's agent. */
+            agentSwitchHarnesses?: components["schemas"]["CloudAgentHarness"][];
+            /** @description The control plane keeps several accounts per coding agent (listAgentAccounts) and moves a session between them (switchSessionAgentAccount). Absent or false otherwise. */
+            agentAccounts?: boolean;
         };
         /** @enum {string} */
         AgentCapability: "interface.chat" | "interface.tui" | "model.catalog" | "model.custom" | "attachments" | "browser.preview" | "review.execute" | "session.resume";
@@ -4730,6 +4851,26 @@ export interface components {
             errorDetail?: string;
             /** Format: date-time */
             noticeAcknowledgedAt?: string;
+            /** @description The agent the session ran before an agent switch. Set only on an agent switch. */
+            sourceHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The agent an agent switch moves the session to. Set only on an agent switch; the session's harness becomes it once the switch commits, and goes back to sourceHarness if it fails. */
+            targetHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The model the session ran before an agent switch. */
+            sourceModel?: string;
+            /** @description The model the switched-to agent starts with. */
+            targetModel?: string;
+            /** @description The effort the switched-to agent starts at. */
+            targetReasoningEffort?: string;
+            /**
+             * Format: uuid
+             * @description The account the session ran on before an account move. Set only on an account move.
+             */
+            sourceAccountId?: string;
+            /**
+             * Format: uuid
+             * @description The account an account move moves the session to. Set only on an account move; the session runs on it once the move commits.
+             */
+            targetAccountId?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -4747,10 +4888,12 @@ export interface components {
         StartSessionInterfaceTransitionInput: {
             targetMode: components["schemas"]["SessionInterfaceMode"];
             policy: components["schemas"]["SessionInterfaceTransitionPolicy"];
-            /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. */
+            /** @description Switches the session's coding agent to this harness (one of the current account's agentSwitchHarnesses), in the same sandbox and checkout. targetMode may then be the session's current mode. The new agent starts a new conversation with a handoff note of the conversation so far, even when the session ran it before. Messages sent while the switch runs reach the new agent. A control plane without agent switching refuses the field. Only the session's creator may switch its agent, since the new agent runs on their login for it. Anyone else, an org admin included, gets 403 forbidden, whatever logins the creator has. */
+            targetHarness?: components["schemas"]["CloudAgentHarness"];
+            /** @description The model the terminal agent starts with, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's model. With targetHarness, the model the new agent starts with (any target mode); its default model when omitted. */
             model?: string;
             /**
-             * @description The effort the terminal agent starts at, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's effort.
+             * @description The effort the terminal agent starts at, as the Chat ran it. Chat to terminal handoff only; validated as a Chat turn's effort. With targetHarness, the effort the new agent starts at.
              * @enum {string}
              */
             reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -5176,6 +5319,11 @@ export interface components {
             projectId: string;
             kind: components["schemas"]["SessionKind"];
             harness: string;
+            /**
+             * Format: uuid
+             * @description The creator's account for harness the session runs on; the harness's default account when omitted. Accepted only by a control plane whose CurrentAccount reports agentAccounts.
+             */
+            agentAccountId?: string;
             displayName: string;
             prompt: string;
             /** @default trusted */
@@ -5731,10 +5879,10 @@ export interface components {
                 /** @description 0 for a turn stopped while still queued, before the agent started on it. */
                 attempt: number;
                 /**
-                 * @description Why a turn ended before it started. deleted: the person took the queued message back (cancelTurn), so a client drops it from the transcript. interface_switch: a stop-now switch to the terminal ended the queued message, which a client keeps, shown interrupted. Absent for a stopped running turn and for events written before reasons existed; a client reads a missing or unknown reason as a plain interruption and keeps the message.
+                 * @description Why a turn ended before it started. deleted: the person took the queued message back (cancelTurn), so a client drops it from the transcript. interface_switch: a stop-now switch to the terminal ended the queued message, which a client keeps, shown interrupted. steered: the message was steered into the running turn instead (chat.turn_steered with this turn as its queuedTurnId), so a client shows it there, as the steer, and drops it from the queue. Absent for a stopped running turn and for events written before reasons existed; a client reads a missing or unknown reason as a plain interruption and keeps the message.
                  * @enum {string}
                  */
-                reason?: "deleted" | "interface_switch";
+                reason?: "deleted" | "interface_switch" | "steered";
             };
             /** Format: date-time */
             createdAt: string;
@@ -5779,11 +5927,86 @@ export interface components {
             sequence: number;
             /** @constant */
             type: "chat.turn_steered";
+            /** @description The agent took the guidance. With queuedTurnId, the queued turn then ends with chat.turn_interrupted of reason steered. */
+            payload: {
+                /**
+                 * Format: uuid
+                 * @description The running turn the guidance is for.
+                 */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+                /**
+                 * Format: uuid
+                 * @description Set when the steer carries a queued message (steerQueuedMessage, or a message the project's orchestrator sent while the session was busy): the queued turn whose message it is.
+                 */
+                queuedTurnId?: string;
+                /** @description With queuedTurnId: the person deleted the message while the agent was taking its steer (deleteQueuedMessage). On chat.turn_steered the agent took it anyway, so it was delivered; on chat.turn_steer_failed it was deleted. */
+                deleteRequested?: boolean;
+                /** @description With queuedTurnId: automation for a message the project's orchestrator sent (senderLabel names it), absent for a person's. */
+                origin?: string;
+                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator). */
+                senderLabel?: string;
+                /** @description With queuedTurnId, the person whose message it is. */
+                authorUserId?: string;
+                /** @description With authorUserId, their name when they sent it. */
+                authorName?: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description Guidance was asked of the agent (steerTurn, steerQueuedMessage, or a message the project's orchestrator sent while the session was busy). Its outcome follows as chat.turn_steered or chat.turn_steer_failed with the same clientMessageId; until then a client shows it as steering. */
+        TurnSteerRequestedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steer_requested";
             payload: {
                 /** Format: uuid */
                 turnId: string;
                 text: string;
                 clientMessageId: string;
+                /**
+                 * Format: uuid
+                 * @description Set when the steer carries a queued message, which stays queued until the outcome.
+                 */
+                queuedTurnId?: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description The agent did not take the guidance: it refused, the running turn ended first, or the worker did not answer in time. payload.error says why. With queuedTurnId the message stays queued, in its place, and runs as its own turn; a client shows it back in the queue with the reason. */
+        TurnSteerFailedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.turn_steer_failed";
+            payload: {
+                /**
+                 * Format: uuid
+                 * @description The running turn the guidance is for.
+                 */
+                turnId: string;
+                text: string;
+                clientMessageId: string;
+                /**
+                 * Format: uuid
+                 * @description Set when the steer carries a queued message (steerQueuedMessage, or a message the project's orchestrator sent while the session was busy): the queued turn whose message it is.
+                 */
+                queuedTurnId?: string;
+                /** @description With queuedTurnId: the person deleted the message while the agent was taking its steer (deleteQueuedMessage). On chat.turn_steered the agent took it anyway, so it was delivered; on chat.turn_steer_failed it was deleted. */
+                deleteRequested?: boolean;
+                /** @description With queuedTurnId: automation for a message the project's orchestrator sent (senderLabel names it), absent for a person's. */
+                origin?: string;
+                /** @description With queuedTurnId and origin automation, who sent the message (Orchestrator). */
+                senderLabel?: string;
+                /** @description With queuedTurnId, the person whose message it is. */
+                authorUserId?: string;
+                /** @description With authorUserId, their name when they sent it. */
+                authorName?: string;
+                error?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -5799,7 +6022,28 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["ScriptStepEvent"];
+        /** @description The session's coding agent changed (an agent switch committed). Turns after it are answered by targetHarness. */
+        AgentSwitchedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.agent_switched";
+            payload: {
+                /** Format: uuid */
+                transitionId: string;
+                sourceHarness: components["schemas"]["CloudAgentHarness"];
+                targetHarness: components["schemas"]["CloudAgentHarness"];
+                sourceModel?: string;
+                targetModel?: string;
+                targetReasoningEffort?: string;
+                /** @description The new agent resumed its own earlier conversation in this session instead of starting a new one. */
+                resumed?: boolean;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["TurnSteerRequestedEvent"] | components["schemas"]["TurnSteerFailedEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AgentSwitchedEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -5940,6 +6184,59 @@ export interface components {
             /** Format: date-time */
             expiresAt: string;
         };
+        CloudAgentAccount: {
+            /** Format: uuid */
+            id: string;
+            agent: components["schemas"]["CloudAgentHarness"];
+            /** @description The name the user gave the account; empty when they gave none. */
+            name: string;
+            /** @enum {string} */
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            /** @description New sessions of the agent run on it. */
+            isDefault: boolean;
+            /** @enum {string} */
+            validationState: "pending" | "valid" | "invalid";
+            /** @description Why the account stopped working, when validationState is invalid. */
+            invalidReason?: string;
+            /** @description The login's email, when the login names one. */
+            email?: string;
+            /** @description The login's plan (such as plus or pro), when it names one. */
+            plan?: string;
+            /** Format: date-time */
+            validatedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AddAgentAccountInput: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            name?: string;
+            /** @enum {string} */
+            credentialType: "oauth_token" | "api_key" | "access_token" | "auth_json" | "opencode_api_key" | "anthropic_api_key" | "openai_api_key" | "openrouter_api_key";
+            secret: string;
+        };
+        RenameAgentAccountInput: {
+            name: string;
+        };
+        SessionAgentAccount: {
+            agent: components["schemas"]["CloudAgentHarness"];
+            /**
+             * Format: uuid
+             * @description The account the session's agent runs on; absent when the account was removed.
+             */
+            accountId?: string;
+            /**
+             * Format: date-time
+             * @description When the session started running on it.
+             */
+            boundAt?: string;
+        };
+        SwitchSessionAgentAccountInput: {
+            /** Format: uuid */
+            accountId: string;
+            policy?: components["schemas"]["SessionInterfaceTransitionPolicy"];
+        };
         RedactedProviderConnection: {
             id: string;
             provider: components["schemas"]["ProviderName"];
@@ -6014,6 +6311,7 @@ export interface components {
         };
     };
     parameters: {
+        AgentAccountId: string;
         AutomationId: string;
         CueId: string;
         ReviewRunId: string;
@@ -6145,6 +6443,160 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listAgentAccounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's coding-agent accounts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccounts: components["schemas"]["CloudAgentAccount"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    addAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The account was saved. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    removeAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account was removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    renameAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The account was renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    makeAgentAccountDefault: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account is its agent's default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    replaceAgentAccountCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AgentAccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAgentProviderConnectionInput"];
+            };
+        };
+        responses: {
+            /** @description The account's credential was replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        agentAccount: components["schemas"]["CloudAgentAccount"];
+                    };
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -7854,6 +8306,60 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getSessionAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account the session's agent runs on. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionAgentAccount"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    switchSessionAgentAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SwitchSessionAgentAccountInput"];
+            };
+        };
+        responses: {
+            /** @description The move was accepted; the transition reports its progress. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        transition: components["schemas"]["SessionInterfaceTransition"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     getSessionInterfaceTransition: {
         parameters: {
             query?: never;
@@ -9120,7 +9626,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkerOKResponse"];
+                    "application/json": {
+                        /** @constant */
+                        ok: true;
+                        /** @description The worker is taking the message as a steer; its outcome decides whether it is deleted or was delivered. */
+                        pending?: boolean;
+                    };
                 };
             };
             /** @description forbidden. The caller may not stop this turn, or only watches the session. */
@@ -9132,7 +9643,67 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description TURN_NOT_QUEUED: the agent started on the message, or it was stopped or ended otherwise, so it can no longer be deleted (the turn is left as it is). SESSION_TERMINATED: the session ended. */
+            /** @description TURN_NOT_QUEUED: the agent started on the message, or it was stopped or ended otherwise, so it can no longer be deleted (the turn is left as it is). SESSION_TERMINATED: the session ended. ALREADY_STEERED: the agent already took the message as a steer into its running turn, so it was delivered and cannot be deleted. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    steerQueuedMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                turnId: components["parameters"]["TurnId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * Format: int64
+                     * @description The composer lease grant the caller holds; 0 or absent for none.
+                     */
+                    composerEpoch?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The steer was asked of the agent; its outcome follows as an event. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["TurnSteerRequestedEvent"];
+                    };
+                };
+            };
+            /** @description forbidden. The caller may not direct this turn, or only watches the session. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description TURN_NOT_QUEUED: the agent started on the message, or it ended. TURN_NOT_STEERABLE: no running turn can take guidance (nothing is running, or its agent cannot steer); the message stays queued. STEER_CONTENT_UNSUPPORTED: the message has files or no text, which a steer cannot carry; it stays queued. STEER_IN_PROGRESS: a steer of this message is already in flight. COMPOSER_LOCKED, COMPOSER_LEASE_LOST: someone else holds the composer. */
             409: {
                 headers: {
                     [name: string]: unknown;

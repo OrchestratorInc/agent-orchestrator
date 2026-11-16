@@ -73,7 +73,8 @@ export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLogin
 export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
 	const name = agentAccountName(account, t);
 	const email = account.email?.toLowerCase();
-	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email) : [];
+	const orgKnown = (peer: Pick<AgentAccount, "orgId" | "orgName">) => Boolean(peer.orgId || peer.orgName);
+	const twins = email ? peers.filter((peer) => peer.id !== account.id && peer.email?.toLowerCase() === email && orgKnown(peer) === orgKnown(account)) : [];
 	if (twins.length === 0) return name;
 	const org = (peer: Pick<AgentAccount, "orgId" | "orgName">) => peer.orgId ?? `name:${peer.orgName ?? ""}`;
 	const otherOrgs = twins.filter((twin) => org(twin) !== org(account));
@@ -122,11 +123,16 @@ export function useAgentAccountUsage(days = 30, hostId?: HostId) {
 	});
 }
 
+/** The account a session runs on, for each provider. */
+export async function fetchSessionAgentAccounts(sessionId: string, hostId?: HostId) {
+	return unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId } } })) ?? {};
+}
+
 export function useSessionAgentAccounts(sessionId: string | undefined, hostId?: HostId) {
 	return useQuery({
 		queryKey: sessionAccountsKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId),
-		queryFn: async () => unwrap(await client(hostId).GET("/api/v1/agents/accounts/sessions/{sessionId}", { params: { path: { sessionId: sessionId ?? "" } } })) ?? {},
+		queryFn: () => fetchSessionAgentAccounts(sessionId ?? "", hostId),
 	});
 }
 

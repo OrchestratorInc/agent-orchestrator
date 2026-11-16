@@ -8,7 +8,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { useImportedAgentBlock } from "../../lib/session-import";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
-import { useSideChatsAvailable } from "../../lib/side-chats";
+import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats";
 /**
  * The central surface for a chat-mode session.
  *
@@ -71,6 +71,9 @@ export interface ConversationWorkState {
 
 export const SessionChatSurface = memo(function SessionChatSurface({
 	sideChatContainer,
+	onSideChatsChange,
+	subagentContainer,
+	onRevealSubagents,
 	session,
 	hostId,
 	assetBaseUrl,
@@ -121,6 +124,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
+	/** Whether this session has any side chat, and whether one is being created, once its list has loaded. */
+	onSideChatsChange?: (state: SideChatsState) => void;
+	/** The inspector's Subagents tab body while that tab shows; null otherwise. */
+	subagentContainer?: HTMLDivElement | null;
+	/** Brings the Subagents tab up the way the host switches any inspector tab, resizing it on the way. */
+	onRevealSubagents?: () => void;
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
@@ -464,7 +473,22 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		sideCreationEnabled,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
+	const sideChatsPresent = sideChats.loaded ? sideChats.sides.length > 0 : undefined;
+	const sideChatCreating = sideChats.pending;
+	useEffect(() => {
+		if (sideChatsPresent !== undefined) onSideChatsChange?.({ present: sideChatsPresent, creating: sideChatCreating });
+	}, [onSideChatsChange, sideChatCreating, sideChatsPresent]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
+	const reportSubagents = useCallback(
+		(available: boolean) => useUiStore.getState().setSubagentsAvailable(uiSessionId, available),
+		[uiSessionId],
+	);
+	const subagentPanel = useMemo(
+		() => subagentContainer === undefined || !onRevealSubagents
+			? undefined
+			: { container: subagentContainer, reveal: onRevealSubagents, onAvailableChange: reportSubagents, models },
+		[models, onRevealSubagents, reportSubagents, subagentContainer],
+	);
 	// A pending action owns its destination; an unanswered creation owns only its
 	// request identity. Reselecting text must not turn a lost reply into a new fork.
 	const selectionSideScope = useMemo(() => ({ active: true,
@@ -669,6 +693,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
+				subagentPanel={subagentPanel}
 				checkingSideChatAvailability={sideEnabled && !sideChats.activeId && (!snapshot || snapshot.capabilities === undefined)}
 				annotationNavigationRequest={annotationNavigation.request}
 				onAnnotationNavigationHandled={annotationNavigation.handled}
@@ -718,6 +743,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				accountMoving={accountMoving}
 				accountMoveQueues={accountMoveQueues}
 				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
+				// A stand-in is on screen until the conversation is read; an existing
+				// session may hold messages, so its composer opens docked. One still
+				// being created has none and opens centered, like the start before it.
+				historyUnread={!conversationShown && !renderShellFallback && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}

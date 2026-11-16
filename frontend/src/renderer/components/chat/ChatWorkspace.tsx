@@ -12,7 +12,8 @@ import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudAttachmentReference } from "../../lib/cloud-attachments";
 import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
-import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
+import { isSettingsPageOpen, onDedicatedShortcut } from "../../hooks/useAppShortcut";
+import { agentAccountProviderFor, fetchSessionAgentAccounts } from "../../hooks/useAgentAccounts";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useEdgeFadeRef } from "../../hooks/useEdgeFade";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -49,6 +50,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "@/components/app-icons";
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -111,10 +113,11 @@ import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { isLinuxPlatform, isMacPlatform } from "../../lib/platform";
 import { handleTerminalTabListKeyDown } from "../../lib/terminal-tabs";
 import { agentLabel } from "../../lib/agent-options";
+import { labelForHost } from "../../lib/host-clients";
 import type { ApprovalMode } from "../../types/conversation";
 import type { ConversationLocalEcho } from "../../hooks/useConversation";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
-import { inspectorIsOpen, sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
+import { sidebarOccupiesLayout, useUiStore } from "../../stores/ui-store";
 import type { TerminalTarget } from "../../types/terminal";
 import {
 	isOrchestratorSession,
@@ -148,6 +151,7 @@ import {
 	TurnActions,
 	TurnResults,
 	TurnOutcome,
+	LoginStatusNote,
 	LiveResponseStatus,
 	LiveStepChoices,
 	RevealedChatActivity,
@@ -156,6 +160,7 @@ import {
 	liveTaskLabel,
 	reconnectCopy,
 	stepInProgress,
+	type TurnOutcomeLogin,
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
@@ -195,13 +200,17 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
+import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
+import { isSubagentLaunch, partitionSubagentSteps, readSubagent, type SubagentRef } from "./subagent-team";
 import { isOrdinaryActivity } from "./activity-action";
 import { isFailedCall } from "./activity-command";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
 import { ElicitationDock, ElicitationHistory } from "./ElicitationDock";
-import { agentAccountProviderFor } from "../../hooks/useAgentAccounts";
+import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
+import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -216,6 +225,7 @@ import {
 	isUserQueuePrompt,
 	needsReauth,
 	queuedTurnIds,
+	turnsThatDidWork,
 	type BatchedDelivery,
 	type ConversationPlan,
 	type ConversationSnapshot,
@@ -392,6 +402,8 @@ export type ChatFindRequest = { id: string; query: string; messageId?: string };
 
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	/** The inspector tab that shows one subagent's conversation. Without it, a subagent opens inline. */
+	subagentPanel?: SubagentPanelHost;
 	checkingSideChatAvailability?: boolean;
 	annotationNavigationRequest?: { id: string; text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number; activitySequence?: number };
 	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
@@ -442,6 +454,12 @@ export interface ChatWorkspaceProps {
 	loadingQuietly?: boolean;
 	/** The history hasn't been read yet and may hold messages: arrive as in a chat that has some, never greet it as a new one. */
 	historyPending?: boolean;
+	/**
+	 * The chat opens on a stand-in while an existing session's conversation is
+	 * read. Read at mount: the composer starts docked at its final size and stays
+	 * there, without the arrival chrome historyPending brings.
+	 */
+	historyUnread?: boolean;
 	/**
 	 * A stopped agent is being resumed after the chat opened. Unlike a mode
 	 * handoff, the history is final, so it stays readable; only sending waits.
@@ -660,7 +678,24 @@ export interface ChatWorkspaceProps {
 	steerPending?: boolean;
 	/** Why the last steer was refused, from the daemon's typed answer. */
 	steerRefusal?: string;
+	/**
+	 * Steers a queued message into the running turn (the queue's Steer). Absent means this
+	 * chat cannot, and the queue offers no Steer: a Steer that reached nothing would show the
+	 * message as steered while it stayed queued.
+	 */
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
+	/**
+	 * Why the last steer of a queued message failed, by its turn, from the host's durable
+	 * record (a Cloud chat's events), so the row says so after a remount too.
+	 */
+	queuedSteerErrors?: Readonly<Record<string, string>>;
+	/**
+	 * Queued messages the host's durable record shows being steered (a Cloud chat's events).
+	 * With it, a message being steered stays in the queue, in its place, marked steering and
+	 * still deletable, until the agent takes it; without it (a local chat) it leaves the queue
+	 * for the running turn at once.
+	 */
+	steeringQueuedTurnIds?: ReadonlySet<string>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
 	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
 	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
@@ -778,6 +813,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 
 function ChatWorkspaceContent({
 	onAddToSideChat,
+	subagentPanel,
 	checkingSideChatAvailability,
 	annotationNavigationRequest,
 	onAnnotationNavigationHandled,
@@ -803,6 +839,7 @@ function ChatWorkspaceContent({
 	accountMoveQueues = false,
 	loadingQuietly,
 	historyPending = false,
+	historyUnread = false,
 	agentResuming = false,
 	startingSteps,
 	settingsReady = true,
@@ -906,6 +943,8 @@ function ChatWorkspaceContent({
 	steerPending,
 	steerRefusal,
 	onPromoteQueuedTurn,
+	queuedSteerErrors,
+	steeringQueuedTurnIds,
 	onEditQueuedTurn,
 	canEditQueuedMessage,
 	onCancelQueuedTurn,
@@ -950,6 +989,15 @@ function ChatWorkspaceContent({
 	const latestSettledTurn = snapshot.turns.findLast((entry) =>
 		!entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled",
 	);
+	const retryableTurns = useMemo(() => retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)), [snapshot]);
+	const chatLogin = useChatLogin({
+		snapshot,
+		retryable: retryableTurns,
+		retryControl,
+		hostId: activeRemoteHostId,
+		cloud: Boolean(session?.cloud),
+		newWorkDisabled: Boolean(newWorkDisabled),
+	});
 	const limitedTurn = latestSettledTurn?.state === "failed" && latestSettledTurn.usageLimit &&
 		latestSettledTurn.providerTurnId && !latestSettledTurn.hasRetryAttempt &&
 		!snapshot.turns.some((entry) => entry.retryOfTurnId === latestSettledTurn.id) &&
@@ -1045,6 +1093,9 @@ function ChatWorkspaceContent({
 			if (
 				newWorkDisabled ||
 				event.key !== "Escape" ||
+				// Portaled content (the Subagents panel in the inspector) still bubbles keys
+				// here; Escape over there must not stop this chat's turn and its children.
+				!(event.target instanceof Node && event.currentTarget.contains(event.target)) ||
 				event.defaultPrevented ||
 				isDialogOrMenuOpen() ||
 				event.altKey ||
@@ -1214,14 +1265,20 @@ function ChatWorkspaceContent({
 			})),
 		[backgroundWakeQueuedTurnIds, localEchos, snapshot.items, snapshot.latestSequence],
 	);
+	// A host that records steers keeps a message being steered in the queue (see steeringQueuedTurnIds).
+	const steerInQueue = steeringQueuedTurnIds !== undefined;
 	const visibleQueuedMessages = useMemo(
 		() => [
 			...queuedMessages.filter(
-				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && !steerStartedAt.has(message.turnId),
+				(message) => !backgroundWakeQueuedTurnIds.has(message.turnId) && (steerInQueue || !steerStartedAt.has(message.turnId)),
 			),
 			...pendingQueuedMessages,
 		],
-		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerStartedAt],
+		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages, steerInQueue, steerStartedAt],
+	);
+	const steeringTurnIds = useMemo(
+		() => (steerInQueue ? new Set([...steeringQueuedTurnIds, ...steerStartedAt.keys()]) : undefined),
+		[steerInQueue, steeringQueuedTurnIds, steerStartedAt],
 	);
 	// A steer sent from the composer shows in its turn at once, as a send's echo does.
 	// The daemon places its row when the agent accepts the steer, so until then the echo
@@ -1240,7 +1297,7 @@ function ChatWorkspaceContent({
 		});
 	}, [pendingSteerEchoes]);
 	const timelineSnapshot = useMemo(() => {
-		const steering = queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
+		const steering = steerInQueue ? [] : queuedMessages.filter(({ turnId }) => steerStartedAt.has(turnId));
 		if (turn?.state !== "running" || (steering.length === 0 && pendingSteerEchoes.length === 0)) return snapshot;
 		const items = [...snapshot.items];
 		pendingSteerEchoes.forEach((echo, index) => {
@@ -1277,7 +1334,7 @@ function ChatWorkspaceContent({
 				})),
 			],
 		};
-	}, [pendingSteerEchoes, queuedMessages, snapshot, steerStartedAt, turn]);
+	}, [pendingSteerEchoes, queuedMessages, snapshot, steerInQueue, steerStartedAt, turn]);
 	// The dock omits queued turns that are not the user's own; the daemon needs
 	// the whole queue, with those turns left where they were.
 	const reorderQueuedTurns = useCallback(
@@ -1687,7 +1744,7 @@ function ChatWorkspaceContent({
 
 	useEffect(
 		() =>
-			!hideHeader ? aoBridge.app.onCloseShellTerminalShortcut(() => {
+			!hideHeader ? onDedicatedShortcut("close-shell-terminal", (handler) => aoBridge.app.onCloseShellTerminalShortcut(handler), () => {
 				if (closeFocusedSplitPane) closeFocusedSplitPane();
 				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (shellTarget) onCloseShellTerminal?.(shellTarget.handleId);
@@ -1697,8 +1754,12 @@ function ChatWorkspaceContent({
 
 	useEffect(() => {
 		if (hideHeader) return;
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
+		const disposePrevious = onDedicatedShortcut("previous-tab", (handler) => aoBridge.app.onPreviousTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(-1);
+		});
+		const disposeNext = onDedicatedShortcut("next-tab", (handler) => aoBridge.app.onNextTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(1);
+		});
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -1842,7 +1903,13 @@ function ChatWorkspaceContent({
 		[onResolveInput, stablePendingUserInput],
 	);
 	const canSteerQueuedMessage =
-		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
+		Boolean(onSteer) && Boolean(onPromoteQueuedTurn) && can(snapshot, "steer") && turn?.state === "running";
+	// A failure the host recorded shows until the person retries; one this view saw first
+	// (a refused request) shows over it.
+	const queuedSteerFailures = useMemo(
+		() => (queuedSteerErrors && Object.keys(queuedSteerErrors).length > 0 ? { ...queuedSteerErrors, ...steerErrors } : steerErrors),
+		[queuedSteerErrors, steerErrors],
+	);
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
@@ -1851,7 +1918,7 @@ function ChatWorkspaceContent({
 					editingTurnId={queueEdit?.turnId}
 					disabled={Boolean(queueEdit?.clientMessageId)}
 					canSteer={canSteerQueuedMessage}
-					onPromoteQueuedTurn={newWorkDisabled ? undefined : promoteQueuedTurn}
+					onPromoteQueuedTurn={newWorkDisabled || !onPromoteQueuedTurn ? undefined : promoteQueuedTurn}
 					onBeginQueuedEdit={
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
@@ -1863,7 +1930,8 @@ function ChatWorkspaceContent({
 					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
-					steerErrors={steerErrors}
+					steerErrors={queuedSteerFailures}
+					steeringTurnIds={steeringTurnIds}
 				/>
 			) : null,
 		[
@@ -1877,13 +1945,15 @@ function ChatWorkspaceContent({
 			newWorkDisabled,
 			onCancelQueuedTurn,
 			onEditQueuedTurn,
+			onPromoteQueuedTurn,
 			onReorderQueuedTurns,
 			reorderQueuedTurns,
 			promoteQueuedTurn,
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
 			queueEdit?.turnId,
-			steerErrors,
+			queuedSteerFailures,
+			steeringTurnIds,
 			visibleQueuedMessages,
 		],
 	);
@@ -1941,7 +2011,16 @@ function ChatWorkspaceContent({
 	});
 	const openingStarting = Boolean(openingStartedAt) && startupState !== "failed" && !openingTurnSettled(snapshot, controllerStopped) &&
 		!(turn?.state === "running" && snapshot.controller.state !== "connecting");
-	const conversationEmpty = !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
+	// An existing session opens docked before its history is read, never centered
+	// and then dropped once it loads. One that turns out empty stays docked: only a
+	// chat known to be new (the new chat page, a session still being created) centers.
+	// Settled the first time the chat itself shows: behind a shell tab the surface
+	// holds a fallback, and the stand-in only arrives once Chat is picked. Until
+	// then it counts as docked, so nothing glides in when Chat appears.
+	const [settledDocked, setSettledDocked] = useState<boolean | undefined>(shellActive ? undefined : historyUnread);
+	if (settledDocked === undefined && !shellActive) setSettledDocked(historyUnread);
+	const openedDocked = settledDocked !== false;
+	const conversationEmpty = !openedDocked && !arrivingWithHistory && snapshot.items.length === 0 && !turn && (localEchos?.length ?? 0) === 0 && (!hasStartup || sessionRole === "orchestrator");
 	const { t } = useTranslation();
 	const [emptyChatPlaceholder] = useState(
 		() => sessionRole === "orchestrator"
@@ -2136,9 +2215,10 @@ function ChatWorkspaceContent({
 					role="tabpanel"
 				>
 				<HoldWhileHidden hidden={reviewerActive || shellActive}>
-					{snapshot.account ? (
+					{/* The band on the chat box already offers the login; the banner would say it twice. */}
+					{snapshot.account && !chatLogin.band ? (
 						<ReauthBanner key={`${snapshot.sessionId}:${snapshot.conversationId}`} account={snapshot.account} harness={snapshot.harness} sessionId={snapshot.sessionId}
-							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} />
+							hostId={activeRemoteHostId} cloud={Boolean(session?.cloud)} onLogIn={chatLogin.logIn} />
 					) : null}
 					{!draftPersistenceAvailable ? (
 						<div role="status" className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-4 py-2 text-xs text-muted-foreground">
@@ -2146,7 +2226,7 @@ function ChatWorkspaceContent({
 							{t("chat.draft.storageUnavailable")}
 						</div>
 					) : null}
-					{savedCopy || importBlock ? null : (
+					{savedCopy && activeRemoteHostId ? <HostAwayBanner hostId={activeRemoteHostId} /> : savedCopy || importBlock ? null : (
 						<ControllerBanner
 							controller={snapshot.controller}
 							quietConnect={Boolean(openingStartedAt) && !firstTurnSettled(snapshot)}
@@ -2175,7 +2255,7 @@ function ChatWorkspaceContent({
 						agentStopped={controllerStopped}
 					/>
 					<div
-						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", arrivingWithHistory && snapshot.items.length === 0 && "justify-end")}
+						className={cn("flex min-h-0 flex-1 flex-col", conversationEmpty && "justify-center", conversationEmpty && centerInWindow && "pb-inspector-tabs", (arrivingWithHistory || openedDocked) && snapshot.items.length === 0 && "justify-end")}
 						data-composer-placement={conversationEmpty ? "center" : "dock"}
 					>
 						<ChatLinkProvider
@@ -2196,6 +2276,7 @@ function ChatWorkspaceContent({
 								<Timeline
 									shownAt={panelShownAt}
 							onAddToSideChat={onAddToSideChat}
+									subagentPanel={subagentPanel}
 									checkingSideChatAvailability={checkingSideChatAvailability}
 									findRequest={findRequest}
 									onFindRequestHandled={onFindRequestHandled}
@@ -2207,6 +2288,8 @@ function ChatWorkspaceContent({
 									assetBaseUrl={assetBaseUrl}
 									remoteHost={Boolean(activeRemoteHostId)}
 									findUnavailable={Boolean(session?.cloud)}
+									loginLines={chatLogin.lines}
+									retryableTurns={retryableTurns}
 									draftScope={draftScope}
 									draftPersistenceAvailable={draftPersistenceAvailable}
 									hasOlder={hasOlder}
@@ -2301,6 +2384,7 @@ function ChatWorkspaceContent({
 										<p className="py-3 text-sm text-muted-foreground" role="status">{t("sessionImport.terminalArchive")}</p>
 									) : <ChatComposer
 										notice={composerNotice}
+										trayBand={chatLogin.band ? <ChatLoginBand {...chatLogin.band} /> : undefined}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -2360,6 +2444,9 @@ function ChatWorkspaceContent({
 										starting={orchestratorStarting || arrivingInChat || cloudStarting || composerStarting}
 										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && !accountMoveQueues && (!resumingAgent || session?.provisionState === "failed" || terminated)) || (controllerTransitioning && !accountMoveQueues) || (newWorkDisabled && sendBlockedReason === undefined) || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										sendBlockedReason={sendBlockedReason}
+										// Signed out: nothing typed could be sent until the login takes. The box
+										// keeps its look; the agent and model can still be changed.
+										typingLocked={chatLogin.locked}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
@@ -2611,15 +2698,61 @@ function RolledBackNotice({ count }: { count: number }) {
  */
 type TimelineRun =
 	| { kind: "activities"; key: string; items: ConversationItem[] }
+	| { kind: "subagents"; key: string; items: ConversationActivity[] }
 	| { kind: "single"; key: string; items: [ConversationItem] };
+
+/**
+ * The items a turn draws in its own flow. A subagent's steps leave it and hang
+ * under their launch, so the child's commands stop reading as the parent's own,
+ * and a failed turn's provider failure shows once, as its outcome.
+ */
+function turnFlowItems(group: TimelineGroup): ConversationItem[] {
+	const hasTerminalFailure = group.outcome?.state === "failed" && Boolean(group.outcome.error);
+	return group.items.filter((item) => {
+		if (group.subagents?.stepIds.has(item.id)) return false;
+		if (item.id === group.liveProviderFailure?.id) return false;
+		if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
+		return !(
+			hasTerminalFailure &&
+			item.kind === "activity" &&
+			item.detail?.event === "provider.failure" &&
+			item.status === "failed"
+		);
+	});
+}
+
+/**
+ * The subagent whose child took this step, with where its launch is drawn: the
+ * launch's group and the team run holding it. Undefined for the parent's own steps.
+ */
+function owningSubagent(groups: readonly TimelineGroup[], activityId: string): { launchId: string; groupIndex: number; teamKey: string } | undefined {
+	for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+		const group = groups[groupIndex]!;
+		if (!group.subagents) continue;
+		for (const [launchId, steps] of group.subagents.steps) {
+			if (!steps.some((step) => step.id === activityId)) continue;
+			const run = runsOf(turnFlowItems(group)).find((each) => each.kind === "subagents" && each.items.some((item) => item.id === launchId));
+			if (!run) return undefined;
+			return { launchId, groupIndex, teamKey: `${group.key}:${run.key}` };
+		}
+	}
+	return undefined;
+}
 
 function runsOf(items: ConversationItem[]): TimelineRun[] {
 	const runs: TimelineRun[] = [];
 	for (const item of items) {
+		const last = runs.at(-1);
+		// Subagents launched back to back are one team: the parent fanned the work
+		// out in one breath, so it reads as one block rather than one per child.
+		if (isSubagentLaunch(item)) {
+			if (last?.kind === "subagents") last.items.push(item);
+			else runs.push({ kind: "subagents", key: `subagents-${item.sequence}`, items: [item] });
+			continue;
+		}
 		// Approvals, user input, errors, reasoning, and stamped system events stay
 		// boundaries. Confirmed AO actions have no event stamp, so they batch.
 		const runnable = isOrdinaryActivity(item);
-		const last = runs.at(-1);
 		if (runnable && last?.kind === "activities") {
 			last.items.push(item);
 			continue;
@@ -2649,6 +2782,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     header meter instead.
  *   - reasoning. Providers can emit one per tool call and they usually carry no
  *     readable body, so they are internal signal rather than conversation chrome.
+ *     A subagent launch is the exception: ACP files Claude's `Agent` tool as
+ *     reasoning, and it is the row the child's steps hang from.
  *
  *   - a plan row whose turn already carries the plan. The daemon writes both, from
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
@@ -2676,7 +2811,7 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
 		if (item.activityKind === "plan" && item.detail?.superseded) return false;
-		if (item.activityKind === "reasoning") return false;
+		if (item.activityKind === "reasoning" && !isSubagentLaunch(item)) return false;
 		// The page an html_render call shows is its own row right after it.
 		if (isShownAORender(item)) return false;
 		// Reading Orchestrator's own guides or `ao --help` is how the agent learns the
@@ -3138,6 +3273,23 @@ const relatchBand = (node: HTMLElement) => Math.min(320, Math.round(node.clientH
 const CHAT_ESTIMATED_TURN_HEIGHT = 600;
 const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
+/**
+ * Space the minimap needs between the text column and its track. The hovered
+ * dash grows 7px past the track's left edge; the rest keeps it off the text.
+ */
+const MINIMAP_TEXT_CLEARANCE_PX = 16;
+
+/**
+ * Whether the minimap, in the timeline's right gutter, would sit over the
+ * centered text column: the chat is too narrow for both.
+ */
+function minimapCrowdsText(track: HTMLElement, content: HTMLElement): boolean {
+	const trackRect = track.getBoundingClientRect();
+	const contentRect = content.getBoundingClientRect();
+	// Not laid out yet: nothing on screen to overlap.
+	if (!trackRect.width || !contentRect.width) return false;
+	return trackRect.left - contentRect.right < MINIMAP_TEXT_CLEARANCE_PX;
+}
 
 /**
  * The conversation transcript: turn grouping, live status, "Worked for", and
@@ -3146,6 +3298,7 @@ const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
  */
 export function Timeline({
 	onAddToSideChat,
+	subagentPanel,
 	checkingSideChatAvailability,
 	onAddToChat,
 	annotations,
@@ -3187,6 +3340,8 @@ export function Timeline({
 	workerUpdates = false,
 	openingStartedAt,
 	openingStartupLabel,
+	loginLines,
+	retryableTurns: chatRetryableTurns,
 	controllerStopped = false,
 	shownAt,
 	findRequest,
@@ -3197,6 +3352,7 @@ export function Timeline({
 	/** When the panel holding this transcript was last shown again after being covered (epoch ms). */
 	shownAt?: number;
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
+	subagentPanel?: SubagentPanelHost;
 	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
@@ -3248,6 +3404,10 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
+	/** The line under each message the agent refused for its login. */
+	loginLines?: ReadonlyMap<string, TurnOutcomeLogin>;
+	/** The failed turns a retry can pick up, as the chat already worked them out for this snapshot's turns. */
+	retryableTurns?: ReadonlyMap<string, ConversationTurn>;
 	/** Opens find in chat with a query; see ChatWorkspaceProps.findRequest. */
 	findRequest?: ChatFindRequest;
 	onFindRequestHandled?: ChatWorkspaceProps["onFindRequestHandled"];
@@ -3680,13 +3840,11 @@ export function Timeline({
 		() => () => setChatDraftBoundary(draftScope.sessionId, "inline-edit", undefined),
 		[draftScope.sessionId],
 	);
-	// The inspector changes the minimap's visibility, but it must not cause this
-	// entire timeline to rerender. A live conversation can contain hundreds of
-	// DOM nodes, and inspector toggles are otherwise a broad synchronous commit.
-	// Keep that small accessibility/interaction boundary imperative instead.
-	const inspectorOpenRef = useRef(
-		inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId),
-	);
+	// True while the chat is too narrow for the minimap to sit beside the text.
+	// Resizes flip it, but they must not rerender this entire timeline: a live
+	// conversation can contain hundreds of DOM nodes. Keep that small
+	// accessibility/interaction boundary imperative instead.
+	const minimapCrowdedRef = useRef(false);
 	const turn = activeTurn(snapshot, { controllerStopped });
 	// The daemon refuses a retry while any turn is open, settled on screen or not.
 	const durableTurn = activeTurn(snapshot);
@@ -3703,10 +3861,9 @@ export function Timeline({
 			visible: boolean;
 		}>,
 	});
-	// Show turn ticks whenever the inspector is closed and there are human
-	// prompts — not only when the transcript overflows. Closing the rail
-	// widens chat; shorter histories (common on non-Codex harnesses) often
-	// stop overflowing and used to lose the minimap exactly then.
+	// Show turn ticks whenever there are human prompts — not only when the
+	// transcript overflows. A wider chat often fits a short history (common on
+	// non-Codex harnesses), and the minimap used to vanish exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
 	// Replies rendered with the chat's first commit were already on screen
 	// before the switch; streamed text in them must not fade in again.
@@ -3715,8 +3872,8 @@ export function Timeline({
 		chatOpening.current = false;
 	}, []);
 	// The minimap appears once the opened chat is measured. That first reveal is
-	// part of opening the chat, so it is instant; only later changes (the inspector
-	// covering it) fade.
+	// part of opening the chat, so it is instant; only later changes (the chat
+	// narrowing past it) fade.
 	const [minimapRevealed, setMinimapRevealed] = useState(false);
 	useEffect(() => {
 		if (!minimapEnabled || minimapRevealed) return;
@@ -3826,53 +3983,50 @@ export function Timeline({
 		if (draftPersistenceAvailable && readChatSessionDraft(draftScope).inlineEditDelivery) return;
 		setMessageEdit(undefined);
 	}, [draftPersistenceAvailable, draftScope, snapshot.activeBranchId, snapshot.sessionId]);
-	useEffect(() => {
-		const setInspectorOpen = (isOpen: boolean) => {
-			inspectorOpenRef.current = isOpen;
+	// Measured before paint, so a chat that opens too narrow never flashes the
+	// minimap; then on every resize (a narrow window, split view, either sidebar).
+	useLayoutEffect(() => {
+		const setCrowded = (crowded: boolean) => {
+			minimapCrowdedRef.current = crowded;
 			const track = scrollTrack.current;
 			if (track) {
-				track.dataset.inspectorOpen = String(isOpen);
-				track.setAttribute("aria-hidden", String(isOpen));
-				track.tabIndex = minimapEnabled && !isOpen ? 0 : -1;
-				track.classList.toggle("cursor-pointer", minimapEnabled && !isOpen);
-				track.classList.toggle("pointer-events-none", !minimapEnabled || isOpen);
-				track.classList.toggle("opacity-100", minimapEnabled && !isOpen);
-				track.classList.toggle("opacity-0", !minimapEnabled || isOpen);
-				if (isOpen && document.activeElement === track) track.blur();
+				track.dataset.crowded = String(crowded);
+				track.setAttribute("aria-hidden", String(crowded));
+				track.tabIndex = minimapEnabled && !crowded ? 0 : -1;
+				track.classList.toggle("cursor-pointer", minimapEnabled && !crowded);
+				track.classList.toggle("pointer-events-none", !minimapEnabled || crowded);
+				track.classList.toggle("opacity-100", minimapEnabled && !crowded);
+				track.classList.toggle("opacity-0", !minimapEnabled || crowded);
+				if (crowded && document.activeElement === track) track.blur();
 			}
-			if (isOpen) {
+			if (crowded) {
 				drag.current = null;
 				if (hoveredMarkerRef.current !== null) setHoveredMarker(null);
 			}
 		};
-		setInspectorOpen(inspectorIsOpen(useUiStore.getState().inspectorSessions, uiSessionId));
-		return useUiStore.subscribe((state, previous) => {
-			const currentOpen = inspectorIsOpen(state.inspectorSessions, uiSessionId);
-			const previousOpen = inspectorIsOpen(previous.inspectorSessions, uiSessionId);
-			if (currentOpen !== previousOpen) setInspectorOpen(currentOpen);
+		const crowdsText = () => {
+			const track = scrollTrack.current;
+			const content = scrollContent.current;
+			return Boolean(minimapEnabled && track && content && minimapCrowdsText(track, content));
+		};
+		setCrowded(crowdsText());
+		const node = scroller.current;
+		if (!minimapEnabled || !node || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(() => {
+			const crowded = crowdsText();
+			if (crowded !== minimapCrowdedRef.current) setCrowded(crowded);
 		});
-	}, [minimapEnabled, uiSessionId]);
-	const consumedRetrySources = useMemo(() => retrySourceTurnIds(snapshot), [snapshot]);
-	const retryableTurns = useMemo(() => {
-		// A steer can split one logical turn into several visual groups. Its prompt
-		// still makes the final failed group retryable, even when it is in an earlier one.
-		const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
-			item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
-				? [item.turnId]
-				: [],
-		));
-		return new Map(
-			snapshot.turns
-				.filter(
-					(turn) =>
-						turn.state === "failed" &&
-						Boolean(turn.providerTurnId) &&
-						!consumedRetrySources.has(turn.id) &&
-						(humanPromptTurnIds.has(turn.id) || Boolean(turn.usageLimit && turn.hasHumanPrompt)),
-				)
-				.map((turn) => [turn.id, turn]),
-		);
-	}, [snapshot.items, snapshot.turns, consumedRetrySources]);
+		observer.observe(node);
+		return () => observer.disconnect();
+	}, [minimapEnabled]);
+	// The chat works these out once, for its login band too. A page find jumped to
+	// brings turns of its own, and a side chat passes none: then they are worked out here.
+	const retryableTurns = useMemo(
+		() => chatRetryableTurns && snapshot.turns === sourceSnapshot.turns
+			? chatRetryableTurns
+			: retryableFailedTurns(snapshot, retrySourceTurnIds(snapshot)),
+		[chatRetryableTurns, snapshot, sourceSnapshot.turns],
+	);
 
 	useEffect(() => {
 		pinnedRef.current = pinned;
@@ -4289,7 +4443,7 @@ export function Timeline({
 		// An AO action outlives a rolled-back or hidden turn, so it stands on its own there.
 		const dropped = new Set([...hiddenTurns, ...snapshot.turns.filter((turn) => turn.rolledBack).map((turn) => turn.id)]);
 		const kept = dropped.size > 0 ? timelineItems.map((item) => outlivingAction(item, dropped)) : timelineItems;
-		const items = atCarryingSteer(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
+		const items = atCarrier(kept, snapshot.batchedDeliveries ?? [], batchedReports.moved);
 		const groups = groupByTurn({ ...snapshot, items }, { controllerStopped })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
@@ -4304,6 +4458,32 @@ export function Timeline({
 			.filter((group) => group.items.length > 0);
 	}, [batchedReports, controllerStopped, openingPending, openingStartedAt, openingStartupLabel, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
+	// Read from every group, not the mounted ones: the timeline is virtualized, and the
+	// panel lists a child whose turn has scrolled far out of view.
+	const subagentPanelEnabled = subagentPanel !== undefined;
+	const subagents = useMemo(
+		() => (subagentPanelEnabled ? conversationSubagents(groups) : NO_SUBAGENTS),
+		[groups, subagentPanelEnabled],
+	);
+	const [openSubagentId, setOpenSubagentId] = useState<string>();
+	const closeSubagent = useCallback(() => setOpenSubagentId(undefined), []);
+	const hasSubagents = subagents.length > 0;
+	const reportSubagents = subagentPanel?.onAvailableChange;
+	useEffect(() => {
+		if (!reportSubagents) return;
+		reportSubagents(hasSubagents);
+		return () => reportSubagents(false);
+	}, [hasSubagents, reportSubagents]);
+	const revealSubagents = subagentPanel?.reveal;
+	const openSubagent = useMemo(
+		() => revealSubagents
+			? (launchId: string) => {
+				setOpenSubagentId(launchId);
+				revealSubagents();
+			}
+			: undefined,
+		[revealSubagents],
+	);
 	// Whether the reader opened a step from the live row, kept for the step's own row
 	// (LiveStepChoices). Read once, when that row mounts, so nothing re-renders on it.
 	const [liveStepChoices] = useState(() => new Map<string, boolean>());
@@ -4478,15 +4658,30 @@ export function Timeline({
 			}
 			const activity = groups[index]!.items.find((item) => item.kind === "activity" && item.sequence === activitySequence)!;
 			setRevealedActivity(activity.id);
-			const disclosureKey = `${groups[index]!.key}:worked`;
-			if (!activityDisclosureOverrides[disclosureKey]) setActivityDisclosureOverrides((current) => ({ ...current, [disclosureKey]: true }));
-			const row = Array.from(scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-activity-id]") ?? [])
+			// A child's step is drawn under its launch, not in its own turn: in the
+			// Subagents panel when the chat has one, else inline under the launch's team.
+			const owner = owningSubagent(groups, activity.id);
+			const inPanel = Boolean(owner && openSubagent);
+			const holder = owner?.groupIndex ?? index;
+			if (owner && inPanel) {
+				if (openSubagentId !== owner.launchId) openSubagent!(owner.launchId);
+			} else {
+				const keys = [`${groups[holder]!.key}:worked`];
+				if (owner) keys.push(owner.teamKey, `${owner.teamKey}:agent:${owner.launchId}`);
+				if (keys.some((key) => !activityDisclosureOverrides[key])) {
+					setActivityDisclosureOverrides((current) => ({ ...current, ...Object.fromEntries(keys.map((key) => [key, true])) }));
+				}
+			}
+			// The panel's body exists only while its tab shows, so the row is looked for
+			// again once revealing the tab mounts it.
+			const rowRoot = inPanel ? subagentPanel?.container : scrollContent.current;
+			const row = Array.from(rowRoot?.querySelectorAll<HTMLElement>("[data-chat-activity-id]") ?? [])
 				.find((element) => element.dataset.chatActivityId === activity.id);
 			const range = row ? annotationReferenceRange(row, annotationTarget) : undefined;
 			// The row mounts once its folds open, and its output a moment later. Output
 			// shows only its tail, so a word earlier in a long log marks the whole row.
 			if (!row || !range) {
-				if (!row && virtualized) virtualizer.scrollToIndex(index, { align: "center" });
+				if (!row && virtualized && !inPanel) virtualizer.scrollToIndex(holder, { align: "center" });
 				if (annotationRetryCount.current++ >= (row ? 5 : 20)) {
 					if (!row) return toTurn();
 				} else {
@@ -4500,7 +4695,10 @@ export function Timeline({
 				annotationHighlightCleanup.current = highlightChatAnnotation(row!, annotationTarget.text);
 				const scrollerNode = scroller.current;
 				const view = scrollerNode?.getBoundingClientRect();
-				if (scrollerNode && view) {
+				if (inPanel) {
+					// The panel scrolls on its own, apart from the timeline.
+					row!.scrollIntoView({ block: "center", behavior: "auto" });
+				} else if (scrollerNode && view) {
 					const delta = activityRevealScrollDelta((range ?? row!).getBoundingClientRect(), view, Boolean(range));
 					if (delta !== 0) scrollerNode.scrollTo({ top: scrollerNode.scrollTop + delta, behavior: "auto" });
 				}
@@ -4615,7 +4813,7 @@ export function Timeline({
 			setAnnotationTarget(undefined);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt]);
+	}, [annotationTarget, groups, hasOlder, loadingOlder, onLoadOlder, virtualized, virtualizer, virtualRows, activityDisclosureOverrides, showFindWindowAt, openSubagent, openSubagentId, subagentPanel?.container]);
 	useEffect(() => {
 		const node = scroller.current;
 		const content = virtualized ? virtualContent.current
@@ -4901,12 +5099,14 @@ export function Timeline({
 			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
 		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
 		if (!turn) return undefined;
-		const top = node.getBoundingClientRect().top;
+		const { top, bottom } = node.getBoundingClientRect();
 		const rows = Array.from(turn.children) as HTMLElement[];
 		const rects = rows.map((row) => row.getBoundingClientRect());
 		const following = pinnedRef.current;
 		const index = following ? -1 : rects.findIndex((rect) => rect.bottom > top);
-		if (!following && index < 0) return undefined;
+		// A reader who sees none of the turn has nothing to hold: below it, no row reaches
+		// their view; above it, the first row starts past the view's bottom edge.
+		if (!following && (index < 0 || rects[index]!.top >= bottom)) return undefined;
 		return {
 			turn,
 			rows,
@@ -4922,7 +5122,9 @@ export function Timeline({
 	// that lands on the end. For a reader who scrolled up, a row still in the turn
 	// (the prompt, a steer, the reply) holds its place; a step that folded away hands
 	// its place to "Worked for", which lands at the top of the view with the reply
-	// under it. Then every row that still moved slides there from where it was.
+	// under it. A turn that began lower in the view keeps its top where it was
+	// instead: the reader is still on what came before it. Then every row that still
+	// moved slides there from where it was.
 	const restoreSettle = useCallback((settle: SettleAnchor) => {
 		const node = scroller.current;
 		if (!node) return;
@@ -4960,7 +5162,7 @@ export function Timeline({
 					?? rows.slice(index + 1).find((row) => row.isConnected);
 			if (target) {
 				held = target;
-				const landing = kept ? offset : 0;
+				const landing = kept || (index === 0 && offset > 0) ? offset : 0;
 				const place = () => {
 					const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
 					if (Math.abs(delta) < 0.5) return;
@@ -5207,7 +5409,7 @@ export function Timeline({
 
 	function onScrollbarPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
 		cancelScrollFollow();
-		if (!minimapEnabled || inspectorOpenRef.current) return;
+		if (!minimapEnabled || minimapCrowdedRef.current) return;
 		const track = scrollTrack.current;
 		const node = scroller.current;
 		if (!track || !node) return;
@@ -5233,7 +5435,7 @@ export function Timeline({
 	}
 
 	function onScrollbarPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-		if (!minimapEnabled || inspectorOpenRef.current) return;
+		if (!minimapEnabled || minimapCrowdedRef.current) return;
 		const active = drag.current;
 		const node = scroller.current;
 		const track = scrollTrack.current;
@@ -5270,7 +5472,7 @@ export function Timeline({
 
 	function onScrollbarWheel(event: ReactWheelEvent<HTMLDivElement>) {
 		cancelScrollFollow();
-		if (!minimapEnabled || inspectorOpenRef.current) return;
+		if (!minimapEnabled || minimapCrowdedRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
 		event.preventDefault();
@@ -5280,7 +5482,7 @@ export function Timeline({
 
 	function onScrollbarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		cancelScrollFollow();
-		if (!minimapEnabled || inspectorOpenRef.current) return;
+		if (!minimapEnabled || minimapCrowdedRef.current) return;
 		const node = scroller.current;
 		if (!node) return;
 		const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
@@ -5305,6 +5507,24 @@ export function Timeline({
 
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
+		<OpenSubagentContext.Provider value={openSubagent}>
+		{subagentPanel?.container ? createPortal(
+			// A search match in a child's step opens the child here, so its folds read the
+			// revealed row the way the timeline's do.
+			<RevealedChatActivity.Provider value={revealedActivity}>
+			<SubagentPanel
+				subagents={subagents}
+				openId={openSubagentId}
+				onOpen={setOpenSubagentId}
+				onBack={closeSubagent}
+				harness={snapshot.harness}
+				models={subagentPanel.models}
+				disclosureOverrides={activityDisclosureOverrides}
+				onDisclosureChange={onActivityDisclosureChange}
+			/>
+			</RevealedChatActivity.Provider>,
+			subagentPanel.container,
+		) : null}
 		<ChatEntrance.Provider value={entranceGate}>
 		<RevealedChatActivity.Provider value={revealedActivity}>
 		<LiveStepChoices.Provider value={liveStepChoices}>
@@ -5415,6 +5635,9 @@ export function Timeline({
 								<TurnGroup
 									group={group}
 									harness={snapshot.harness}
+									login={group.turnId && group.outcome?.state === "failed" && group.outcome.failureCode === "auth_required"
+										? loginLines?.get(group.turnId)
+										: undefined}
 									workerUpdates={workerUpdates}
 									startup={group.key === startupGroupKey ? rowStartup : undefined}
 									onSelectAnnotation={selectAnnotation}
@@ -5523,9 +5746,9 @@ export function Timeline({
 					ref={scrollTrack}
 					role="scrollbar"
 					data-testid="chat-conversation-minimap"
-					data-inspector-open={inspectorOpenRef.current}
-					tabIndex={minimapEnabled && !inspectorOpenRef.current ? 0 : -1}
-					aria-hidden={inspectorOpenRef.current || undefined}
+					data-crowded={minimapCrowdedRef.current}
+					tabIndex={minimapEnabled && !minimapCrowdedRef.current ? 0 : -1}
+					aria-hidden={minimapCrowdedRef.current}
 				aria-label="Conversation scrollbar"
 				aria-orientation="vertical"
 				aria-valuemin={0}
@@ -5538,7 +5761,7 @@ export function Timeline({
 				onWheel={onScrollbarWheel}
 				onKeyDown={onScrollbarKeyDown}
 				onFocus={() => {
-						if (!minimapEnabled || inspectorOpenRef.current || scrollbar.markers.length === 0) return;
+						if (!minimapEnabled || minimapCrowdedRef.current || scrollbar.markers.length === 0) return;
 					setHoveredMarker(
 						Math.min(
 							scrollbar.markers.length - 1,
@@ -5551,14 +5774,15 @@ export function Timeline({
 					className={cn(
 						"group/scroll absolute inset-y-3 right-1 z-10 w-6 touch-none rounded-full outline-none focus-visible:ring-1 focus-visible:ring-logo-accent/60",
 						minimapRevealed && "transition-opacity",
-						minimapEnabled && !inspectorOpenRef.current
+						minimapEnabled && !minimapCrowdedRef.current
 							? "cursor-pointer opacity-100"
 							: "pointer-events-none opacity-0",
-						"data-[inspector-open=true]:pointer-events-none data-[inspector-open=true]:opacity-0",
+						"data-[crowded=true]:pointer-events-none data-[crowded=true]:opacity-0",
 					)}
 				>
+					{/* Kept while crowded: widening the chat reveals the track without a rerender. */}
 					<div className="absolute inset-0 cursor-grab group-active/scroll:cursor-grabbing">
-						{minimapEnabled && !inspectorOpenRef.current
+						{minimapEnabled
 						? scrollbar.markers.map((marker, index) => {
 								const distance =
 									hoveredMarker === null
@@ -5633,6 +5857,7 @@ export function Timeline({
 		</LiveStepChoices.Provider>
 		</RevealedChatActivity.Provider>
 		</ChatEntrance.Provider>
+		</OpenSubagentContext.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
@@ -5741,6 +5966,7 @@ const TurnGroup = memo(function TurnGroup({
 	canRollback,
 	rollbackDisabled,
 	retry,
+	login,
 	busy,
 	queued,
 	newHumanMessageIds,
@@ -5783,6 +6009,8 @@ const TurnGroup = memo(function TurnGroup({
 	rollbackDisabled: boolean;
 	/** Present only when this failed turn is eligible for a new attempt. */
 	retry?: TurnOutcomeRetryControl;
+	/** This failed turn's login was refused: how its card offers the login. */
+	login?: TurnOutcomeLogin;
 	busy?: boolean;
 	/** This turn was recorded but not sent, so its message can say so. */
 	queued: boolean;
@@ -5796,23 +6024,11 @@ const TurnGroup = memo(function TurnGroup({
 	const batched = useContext(BatchedReportsContext);
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
-	const hasTerminalFailure =
-		group.outcome?.state === "failed" && Boolean(group.outcome.error);
+	const { steps: subagentSteps, live: subagentsLive, stopped: subagentsStopped } = groupSubagents(group);
 	const runs = useMemo(
-		() =>
-			runsOf(
-				group.items.filter((item) => {
-					if (item.id === group.liveProviderFailure?.id) return false;
-					if (hasTerminalFailure && item.kind === "activity" && item.activityKind === "error" && item.summary === group.outcome?.error) return false;
-					return !(
-						hasTerminalFailure &&
-						item.kind === "activity" &&
-						item.detail?.event === "provider.failure" &&
-						item.status === "failed"
-					);
-				}),
-			),
-		[group.items, group.liveProviderFailure, group.outcome?.error, hasTerminalFailure],
+		() => runsOf(turnFlowItems(group)),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- turnFlowItems reads only these fields of the group.
+		[group.items, group.subagents, group.liveProviderFailure, group.outcome?.state, group.outcome?.error],
 	);
 	const lastAssistantId = [...group.items]
 		.reverse()
@@ -5829,6 +6045,11 @@ const TurnGroup = memo(function TurnGroup({
 	// An account switch shows its own marker instead of an outcome, so its turn keeps
 	// the answer's row (or the tool-only fallback) like a finished one.
 	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	// A message refused for its login, in a turn that did nothing else, says what
+	// happens to it under its own bubble, so the turn needs no outcome of its own.
+	const loginNoteMessageId = login?.align === "end"
+		? group.items.find((item) => item.kind === "message" && item.role === "user" && item.origin === "human")?.id
+		: undefined;
 	const copyableMessage = endsWithOutcome && copyableMessageId
 		? group.items.find(
 				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
@@ -5857,14 +6078,20 @@ const TurnGroup = memo(function TurnGroup({
 	// Questions, errors, and system warnings stay readable after the turn settles, and
 	// so does anything the user said mid-turn: folding a steer away would leave the
 	// reply under the Worked row answering a message the reader can no longer see.
+	// So does a subagent team while a child still works past the turn; once every
+	// child is done, the team folds into "Worked for" with the rest of the work.
+	const teamWorking = (run: TimelineRun) =>
+		run.kind === "subagents" &&
+		run.items.some((launch) => readSubagent(launch, subagentSteps.get(launch.id) ?? [], subagentsLive.has(launch.id), subagentsStopped).state === "working");
 	const noticeRuns = group.outcome
-		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run))
+		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run) || teamWorking(run))
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
 	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
 	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && isWorkerLead(group.items[0]);
 	// What the live row names: the step the agent is on right now. Items the user acts
-	// on (approvals, questions) are not work, and a provider retry has its own slot.
+	// on (approvals, questions) are not work, and a provider retry has its own slot. A
+	// subagent's step is the child's work, named in its own row and panel instead.
 	const currentTask = group.live
 		? [...group.items]
 				.reverse()
@@ -5872,6 +6099,7 @@ const TurnGroup = memo(function TurnGroup({
 					(item): item is ConversationActivity =>
 						item.kind === "activity" &&
 						item.status === "running" &&
+						!group.subagents?.stepIds.has(item.id) &&
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&
@@ -5885,6 +6113,21 @@ const TurnGroup = memo(function TurnGroup({
 	// The live row names a visible step while it runs; between steps it says Thinking.
 	const liveTask = liveStep ?? currentTask;
 	const renderRun = (run: TimelineRun) => {
+		if (run.kind === "subagents") {
+			return (
+				<SubagentTeam
+					key={run.key}
+					launches={run.items}
+					steps={subagentSteps}
+					live={subagentsLive}
+					stopped={subagentsStopped}
+					harness={harness}
+					disclosureKey={`${group.key}:${run.key}`}
+					disclosureOverrides={activityDisclosureOverrides}
+					onDisclosureChange={onActivityDisclosureChange}
+				/>
+			);
+		}
 		if (run.kind !== "activities") return renderSingleRun(run);
 		const activities = run.items.filter(
 			(item): item is ConversationActivity => item.kind === "activity" && item.id !== liveStep?.id,
@@ -5936,6 +6179,9 @@ const TurnGroup = memo(function TurnGroup({
 			}
 			rollbackDisabled={rollbackDisabled}
 			onSelectAnnotation={onSelectAnnotation}
+			status={run.items[0]?.id === loginNoteMessageId && login
+				? <LoginStatusNote status={login.status} {...(login.ownRetry && retry ? { retry } : {})} />
+				: undefined}
 		/>
 	);
 	// One flat keyed list rather than a slot per section, so a run keeps its element
@@ -6015,7 +6261,8 @@ const TurnGroup = memo(function TurnGroup({
 	const hasFoldedWork = foldedRuns.length > 0 || spawnedLine !== null;
 	const foldedWork = (): ReactNode[] => [...foldedRuns.flatMap(renderWorkerRun), ...(spawnedLine ? [spawnedLine] : [])];
 	const showsWorked = Boolean(
-		outcome && !onlyRead && (hasFoldedWork || workedDurationMs !== undefined),
+		// A message refused for its login did no work, so it gets no "Worked for".
+		outcome && !onlyRead && !loginNoteMessageId && (hasFoldedWork || workedDurationMs !== undefined),
 	);
 	// The prompt's hover actions (time, edit, copy) float in the row under its bubble.
 	// "Worked for" fills that row; without it, an empty row of the same height keeps
@@ -6116,7 +6363,7 @@ const TurnGroup = memo(function TurnGroup({
 					rollbackDisabled={rollbackDisabled}
 				/>
 			) : null}
-			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched ? (
+			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched && !loginNoteMessageId ? (
 				<TurnOutcome
 					state={group.outcome.state}
 					error={group.outcome.error}
@@ -6124,6 +6371,7 @@ const TurnGroup = memo(function TurnGroup({
 					onConfigure={harness === "deepseek-harness" && group.outcome.failureCode === "provider_key_missing"
 						? () => useUiStore.getState().openGlobalSettings("harness", { focusAgentId: harness, ...(hostId ? { hostId } : {}), harnessView: "local", preserveProject: true, startLogin: true })
 						: undefined}
+					login={login}
 					usageLimit={group.outcome.usageLimit}
 					retry={group.outcome.state === "failed" ? retry : undefined}
 					copyText={copyableMessage?.text}
@@ -6176,6 +6424,7 @@ function TimelineItem({
 	onRollback,
 	rollbackDisabled,
 	onSelectAnnotation,
+	status,
 }: {
 	item: ConversationItem;
 	sessionId: string;
@@ -6213,8 +6462,8 @@ function TimelineItem({
 	/** Keep the action row mounted while another turn is running. */
 	rollbackDisabled?: boolean;
 	onSelectAnnotation?: (annotation: { text: string; snapshot?: ChatExcerptSnapshot; messageId?: string; revision?: number }) => void;
-	/** This message is the live edge of its turn, rather than an earlier fragment
-	 * followed by tool activity. */
+	/** Where a human message stands, leading the row under its bubble. */
+	status?: ReactNode;
 }) {
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
@@ -6263,6 +6512,7 @@ function TimelineItem({
 					activateBranchPending={activateBranchPending}
 					activateBranchError={activateBranchError}
 					onSelectAnnotation={onSelectAnnotation}
+					status={status}
 				/>
 			);
 		}
@@ -6297,7 +6547,7 @@ function TimelineItem({
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
 				) : (
-					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
 				)}
 			</FromAgent>
 		);
@@ -6460,11 +6710,28 @@ function sameGroup(a: TimelineGroup, b: TimelineGroup): boolean {
 		sameContent(a.outcome, b.outcome) &&
 		sameContent(a.diff, b.diff) &&
 		sameContent(a.plan, b.plan) &&
+		sameSubagents(a.subagents, b.subagents) &&
 		a.items.length === b.items.length &&
 		// The items are already identity-stable by the time a group is compared, so a
 		// reference check here is exact and avoids walking their contents twice.
 		a.items.every((item, index) => item === b.items[index])
 	);
+}
+
+/**
+ * A child's steps can sit in a later group than its launch, so the launch's group
+ * changes when they do even though its own items stay as they were.
+ */
+function sameSubagents(a: GroupSubagents | undefined, b: GroupSubagents | undefined): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.stopped !== b.stopped || a.live.size !== b.live.size || a.steps.size !== b.steps.size || a.stepIds.size !== b.stepIds.size) return false;
+	for (const id of a.live) if (!b.live.has(id)) return false;
+	for (const id of a.stepIds) if (!b.stepIds.has(id)) return false;
+	for (const [launchId, steps] of a.steps) {
+		const other = b.steps.get(launchId);
+		if (other?.length !== steps.length || steps.some((step, index) => step !== other[index])) return false;
+	}
+	return true;
 }
 
 /**
@@ -6529,6 +6796,9 @@ type SettleAnchor = {
 	offset: number;
 };
 
+/** How long after a login a waiting turn still runs again by itself. */
+const LOGIN_RETRY_WINDOW_MS = 60_000;
+
 type TimelineGroup = {
 	key: string;
 	turnId?: string;
@@ -6544,7 +6814,7 @@ type TimelineGroup = {
 		durationMs?: number;
 		error?: string;
 		usageLimit?: ConversationUsageLimit;
-		failureCode?: "provider_key_missing";
+		failureCode?: ConversationTurn["failureCode"];
 	};
 	/** What the turn changed on disk, when the daemon reported anything. */
 	diff?: TurnDiff;
@@ -6564,7 +6834,53 @@ type TimelineGroup = {
 	rollbackable?: boolean;
 	/** An account switch stopped this turn; its notice replaces the outcome. */
 	accountSwitched?: boolean;
+	/** Subagents' steps, read from the whole conversation. See `withSubagentSteps`. */
+	subagents?: GroupSubagents;
 };
+
+type GroupSubagents = {
+	/** Each of this group's launches, with every step its child took, in any turn. */
+	steps: ReadonlyMap<string, ConversationActivity[]>;
+	/** This group's items that are a child's steps, wherever the child's launch is. */
+	stepIds: ReadonlySet<string>;
+	/**
+	 * This group's launches whose child can still be working: an AO turn holding the
+	 * launch or one of its steps is still running, even when this group is a settled
+	 * part before a steer.
+	 */
+	live: ReadonlySet<string>;
+	/** The controller has really stopped: no child is working, whatever its records say. */
+	stopped: boolean;
+};
+
+const NO_SUBAGENT_STEPS: ReadonlyMap<string, ConversationActivity[]> = new Map();
+const NO_LIVE_SUBAGENTS: ReadonlySet<string> = new Set();
+const NO_STEPS: readonly ConversationActivity[] = [];
+const NO_SUBAGENTS: readonly SubagentRef[] = [];
+
+/** The steps a group's launches read, and which of them can still be working. */
+function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, ConversationActivity[]>; live: ReadonlySet<string>; stopped: boolean } {
+	return {
+		steps: group.subagents?.steps ?? NO_SUBAGENT_STEPS,
+		live: group.subagents?.live ?? NO_LIVE_SUBAGENTS,
+		stopped: group.subagents?.stopped ?? false,
+	};
+}
+
+/**
+ * Every subagent the chat shows, in launch order. A launch nested under another is one
+ * of that child's steps, so only the outermost ones are listed.
+ */
+function conversationSubagents(groups: readonly TimelineGroup[]): SubagentRef[] {
+	return groups.flatMap((group) => {
+		const { steps, live, stopped } = groupSubagents(group);
+		return group.items.flatMap((item) =>
+			isSubagentLaunch(item) && !group.subagents?.stepIds.has(item.id)
+				? [{ launch: item, steps: steps.get(item.id) ?? NO_STEPS, live: live.has(item.id), stopped }]
+				: [],
+		);
+	});
+}
 
 type GroupPreview = { title: string; detail?: string };
 
@@ -6609,6 +6925,258 @@ function settledTurnDuration(turn: ConversationTurn): number | undefined {
 	// Match the live label's start fallback and whole-second minimum so completion
 	// cannot make a visible timer disappear or jump backward.
 	return Math.max(1_000, completedAt - startedAt);
+}
+
+/** The failed turns a retry can still pick up, by id. */
+function retryableFailedTurns(snapshot: ConversationSnapshot, consumed: ReadonlySet<string>): Map<string, ConversationTurn> {
+	// A steer can split one logical turn into several visual groups. Its prompt
+	// still makes the final failed group retryable, even when it is in an earlier one.
+	// A usage limit and a refused login are offered on their own (the limit's notice,
+	// the login band), so the daemon's word that the turn has a prompt is enough
+	// for them, even when history paging left that prompt out.
+	const humanPromptTurnIds = new Set(snapshot.items.flatMap((item) =>
+		item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId
+			? [item.turnId]
+			: [],
+	));
+	return new Map(
+		snapshot.turns
+			.filter(
+				(turn) =>
+					turn.state === "failed" &&
+					Boolean(turn.providerTurnId) &&
+					!consumed.has(turn.id) &&
+					(humanPromptTurnIds.has(turn.id) ||
+						Boolean((turn.usageLimit || turn.failureCode === "auth_required") && turn.hasHumanPrompt)),
+			)
+			.map((turn) => [turn.id, turn]),
+	);
+}
+
+/**
+ * A refused login, for the whole chat: the band on the chat box, the line under
+ * each refused message, and sending the latest one again once the login takes.
+ *
+ * Only the latest refused message is offered. A message sent while signed out is
+ * refused the same way and becomes the latest, so it is the one sent again after
+ * the login: that is how it queues.
+ */
+function useChatLogin({ snapshot, retryable, retryControl, hostId, cloud, newWorkDisabled }: {
+	snapshot: ConversationSnapshot;
+	/** The snapshot's failed turns a retry can pick up. */
+	retryable: ReadonlyMap<string, ConversationTurn>;
+	retryControl?: ChatRetryControl;
+	hostId?: string;
+	cloud: boolean;
+	newWorkDisabled: boolean;
+}): { band?: ChatLoginBandProps; lines: ReadonlyMap<string, TurnOutcomeLogin>; locked: boolean; logIn: () => void } {
+	const workedTurnIds = useMemo(() => turnsThatDidWork(snapshot), [snapshot]);
+	const latest = snapshot.turns.findLast((entry) => !entry.rolledBack && entry.state !== "queued" && entry.state !== "cancelled");
+	// Switching the chat to another agent leaves this agent's login behind: a switch
+	// after the latest turn's last item.
+	const switchedAway = useMemo(() => {
+		if (!latest) return false;
+		let lastSwitch = -Infinity;
+		let latestEnd = -Infinity;
+		for (const item of snapshot.items) {
+			if (item.kind === "activity" && item.detail?.event === "provider_switch") lastSwitch = Math.max(lastSwitch, item.sequence);
+			if (item.turnId === latest.id) latestEnd = Math.max(latestEnd, item.sequence);
+		}
+		return lastSwitch > latestEnd;
+	}, [latest, snapshot.items]);
+	const refused = latest?.state === "failed" && latest.failureCode === "auth_required" && !switchedAway &&
+		!snapshot.turns.some((entry) => entry.retryOfTurnId === latest.id)
+		? latest
+		: undefined;
+	const refusedId = refused?.id;
+	const resendable = Boolean(refusedId && retryControl && retryable.has(refusedId));
+	// A message that ran no tool and changed nothing can be sent again on its own
+	// once the login takes: there is nothing it could do twice. Any other, and every
+	// cloud one (the cloud connection's login is not watched from here), is the
+	// user's to send again. So is one whose start paging left out: its work may not
+	// be loaded.
+	const historyLoaded = !snapshot.hasMoreBefore || snapshot.items.some((item) =>
+		item.kind === "message" && item.role === "user" && item.turnId === refusedId);
+	const queued = resendable && !cloud && historyLoaded && !workedTurnIds.has(refusedId!);
+	// The daemon found this session's login working again after the refusal, however
+	// it came back (a login in a terminal, a token that refreshed): the user is in.
+	const account = snapshot.account;
+	const loginConfirmed = Boolean(refused?.completedAt && account?.authenticationState === "authenticated" &&
+		account.authVerifiedAt && Date.parse(account.authVerifiedAt) >= Date.parse(refused.completedAt));
+	// Only a login for the account this session runs on fixes it.
+	const provider = agentAccountProviderFor(snapshot.harness);
+	const stored = useUiStore((state) => state.loginReturn);
+	const own = stored?.sessionId === snapshot.sessionId ? stored : undefined;
+	// A login seen for one refused message does not cover another: the agent refused
+	// the message sent again (a chat that never saw it running sees only that), so
+	// the user is signed out once more.
+	const loginSpent = Boolean(refusedId && own?.settled && own.turnId !== refusedId);
+	const loginReturn = loginSpent ? undefined : own;
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
+	const forRefused = (turnId?: string) => !turnId || turnId === refusedId;
+	// Sending it again was refused (the daemon or the network), also from the
+	// signed-out band before any login: the band says what failed and offers it once more.
+	const sendError = refusedId && forRefused(retryControl?.turnId) ? retryControl?.error : undefined;
+	const loggedIn = loginReturn?.loggedInAt !== undefined || loginConfirmed;
+	// The message this chat sends again on its own, from the moment it starts until
+	// that send settles: the retry's own pending state shows a render later, and the
+	// band must not offer Send again for a message already on its way.
+	const [autoSending, setAutoSending] = useState<string>();
+	const sending = Boolean(refusedId && (
+		(retryControl?.pending && forRefused(retryControl.turnId)) || (autoSending === refusedId && !sendError)));
+	const state: ChatLoginBandProps["state"] = sending
+		? "sending"
+		: sendError
+			? "failed"
+			: loginReturn?.loggedInAt !== undefined
+				? loginReturn.settled ? "loggedIn" : "sending"
+				: loginConfirmed ? "loggedIn"
+					: loginReturn ? "waiting" : "signedOut";
+	const retryTurn = useStableCallback(retryControl?.retry);
+	const sendAgain = useStableCallback(() => {
+		if (refusedId && !newWorkDisabled) void Promise.resolve(retryTurn(refusedId)).catch(() => undefined);
+	});
+	// The account this session runs on, read as soon as a login is on offer, so Log
+	// in signs in that account rather than this computer's CLI login. A remote
+	// host's accounts are not readable from here, and the cloud's login is its own.
+	const readsAccount = Boolean(provider && !hostId && !cloud && (refused || needsReauth(snapshot)));
+	const [sessionAccount, setSessionAccount] = useState<{ sessionId: string; provider: string; accountId?: string }>();
+	useEffect(() => {
+		if (!readsAccount || !provider) return;
+		const sessionId = snapshot.sessionId;
+		let current = true;
+		void fetchSessionAgentAccounts(sessionId).then((accounts) => {
+			if (current) setSessionAccount({ sessionId, provider, accountId: accounts[provider] });
+		}).catch(() => undefined);
+		return () => {
+			current = false;
+		};
+	}, [provider, readsAccount, snapshot.sessionId]);
+	const logIn = useStableCallback(() => {
+		const ui = useUiStore.getState();
+		const sessionId = snapshot.sessionId;
+		const known = sessionAccount?.sessionId === sessionId && sessionAccount.provider === provider ? sessionAccount : undefined;
+		const accountId = known?.accountId;
+		// Not read yet: read it while the Harness page opens, and count no login until
+		// it is known, so only that account's login brings the user back. A session
+		// with no account of its own, a read that fails, and a remote host take any
+		// login for the agent.
+		const reading = !known && readsAccount ? provider : undefined;
+		ui.startLoginReturn({
+			sessionId,
+			agentId: snapshot.harness,
+			...(hostId ? { hostId } : {}),
+			...(accountId ? { accountId } : {}),
+			...(reading ? { accountPending: true } : {}),
+		});
+		if (reading) {
+			// A login started since for another agent is not this read's to change.
+			const agentId = snapshot.harness;
+			const ours = () => {
+				const waiting = useUiStore.getState().loginReturn;
+				return waiting?.sessionId === sessionId && waiting.agentId === agentId;
+			};
+			void fetchSessionAgentAccounts(sessionId).then(
+				(accounts) => {
+					if (!ours()) return;
+					const store = useUiStore.getState();
+					const found = accounts[reading];
+					store.setLoginReturnAccount(sessionId, found);
+					// Settings opened before the account was known: sign in that saved account.
+					if (found && store.settingsModal?.scope === "global") {
+						useUiStore.setState({ accountLogin: found });
+					}
+				},
+				() => {
+					if (ours()) useUiStore.getState().setLoginReturnAccount(sessionId, undefined);
+				},
+			);
+		}
+		ui.openGlobalSettings("harness", {
+			focusAgentId: snapshot.harness,
+			...(hostId ? { hostId } : {}),
+			harnessView: cloud ? "cloud" : "local",
+			...(accountId ? { loginAccountId: accountId } : { startLogin: true }),
+			preserveProject: true,
+		});
+	});
+	useEffect(() => {
+		const ui = useUiStore.getState();
+		if (loginSpent) {
+			ui.clearLoginReturn(snapshot.sessionId);
+			return;
+		}
+		if (!loginReturn) return;
+		// No refused message to send (it was sent again, the chat moved past it, or the
+		// login was started from the banner): the login still brings the user back,
+		// and then nothing more waits on it. Settings closed without a login drops it
+		// too, so a later refusal starts signed out rather than waiting.
+		if (!refusedId) {
+			if (loginReturn.loggedInAt !== undefined || !settingsOpen) ui.clearLoginReturn(snapshot.sessionId);
+			return;
+		}
+		if (loginReturn.loggedInAt === undefined || loginReturn.settled) return;
+		// A login that took long ago, or a chat busy with something else, leaves the
+		// message for the user to send again.
+		if (!queued || Date.now() - loginReturn.loggedInAt > LOGIN_RETRY_WINDOW_MS || activeTurn(snapshot) || retryControl?.pending || newWorkDisabled) {
+			ui.settleLoginReturn(snapshot.sessionId, refusedId);
+			return;
+		}
+		// Settled, not cleared, so a send that fails still knows the user is in. The
+		// band says it is sending from now on, not only once the retry reports pending.
+		ui.settleLoginReturn(snapshot.sessionId, refusedId);
+		setAutoSending(refusedId);
+		void Promise.resolve(retryTurn(refusedId)).catch(() => undefined).finally(() => {
+			setAutoSending((current) => current === refusedId ? undefined : current);
+		});
+	}, [loginReturn, loginSpent, newWorkDisabled, queued, refusedId, retryControl?.pending, retryTurn, settingsOpen, snapshot]);
+	const lines = useMemo(() => {
+		const map = new Map<string, TurnOutcomeLogin>();
+		for (const turn of snapshot.turns) {
+			if (turn.state !== "failed" || turn.failureCode !== "auth_required" || turn.rolledBack) continue;
+			const status: TurnOutcomeLogin["status"] = turn.id !== refusedId
+				? "stopped"
+				: state === "sending" ? "sending"
+					: !queued ? "resend"
+						: state === "waiting" ? "waiting"
+							: state === "signedOut" ? "queued"
+								// In, but it was not sent: the band offers Send again.
+								: "stopped";
+			map.set(turn.id, {
+				status,
+				align: workedTurnIds.has(turn.id) ? "start" : "end",
+				// The band offers only the latest refusal; an earlier one keeps its own Retry.
+				...(turn.id !== refusedId ? { ownRetry: true } : {}),
+			});
+		}
+		return map;
+	}, [queued, refusedId, snapshot.turns, state, workedTurnIds]);
+	return {
+		lines,
+		logIn,
+		// Until the login takes, the daemon finds it working again, or the chat moves to
+		// another agent, nothing new can be sent: the agent would refuse it the same way.
+		// Only when the message can be sent again: the waiting band offers that, so a
+		// login finished where this chat does not look always has a way on. A cloud
+		// login is not watched from here, so a cloud chat stays open.
+		locked: Boolean(refused) && !cloud && resendable &&
+			(state === "signedOut" || state === "waiting" || (state === "failed" && !loggedIn)),
+		...(refused ? {
+			band: {
+				harness: snapshot.harness,
+				agent: agentLabel(snapshot.harness),
+				...(hostId ? { host: labelForHost(hostId) ?? hostId } : {}),
+				state,
+				queued,
+				onLogin: logIn,
+				// Offered from signed out on, also for a message that did work: sending it
+				// again is the user's click, never automatic.
+				...(resendable && !newWorkDisabled ? { onSendAgain: sendAgain } : {}),
+				signedOut: !loggedIn,
+				...(sendError ? { error: sendError } : {}),
+			},
+		} : {}),
+	};
 }
 
 // Retry correlation is daemon-owned rather than inferred from repeated text.
@@ -6823,7 +7391,72 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 		};
 	}
 
-	return groups.flatMap(splitAtSteers);
+	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
+	if (!conversation) return groups.flatMap(splitAtSteers);
+	return groups.flatMap((group) =>
+		splitAtSteers(group)
+			.map((segment) => withSubagentSteps(segment, conversation))
+			// A part made only of steps that moved under a launch elsewhere has nothing
+			// left to draw. A live one keeps its Working row, and one whose turn did not
+			// simply complete keeps how it ended: a failure must not vanish with its steps.
+			.filter((segment) =>
+				segment.live
+				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
+				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
+	);
+}
+
+type ConversationSubagents = {
+	steps: ReadonlyMap<string, ConversationActivity[]>;
+	stepIds: ReadonlySet<string>;
+	live: ReadonlySet<string>;
+	stopped: boolean;
+};
+
+/**
+ * Every launch's steps, read from the whole conversation before any turn is split.
+ *
+ * A child's records do not always land in its launch's AO turn. It keeps working while
+ * the user steers, so its later steps and its hand-back land after the steer; and a
+ * child that outlives its turn, or that the parent picks up again later, records into
+ * a later turn or into none. Read one turn or one segment at a time, the team would
+ * never get its report and the child's steps would read as loose parent work.
+ *
+ * `items` is the whole conversation in sequence order, so each child's steps keep the
+ * order they happened in even when they span turns.
+ *
+ * A child can still be working while any AO turn holding its launch or one of its
+ * steps runs. That is the real turn's state, so a launch before a steer, or a child
+ * that has not recorded a step yet, does not read as finished with no report.
+ */
+function subagentsOfConversation(items: ConversationItem[], groups: readonly TimelineGroup[], stopped: boolean): ConversationSubagents | undefined {
+	const launches = items.filter(isSubagentLaunch);
+	if (launches.length === 0) return undefined;
+	const { steps } = partitionSubagentSteps(items);
+	const stepIds = new Set([...steps.values()].flat().map((step) => step.id));
+	const liveItems = new Set(groups.flatMap((group) => (group.live ? group.items.map((item) => item.id) : [])));
+	const live = new Set(
+		launches
+			.filter((launch) => liveItems.has(launch.id) || steps.get(launch.id)?.some((step) => liveItems.has(step.id)))
+			.map((launch) => launch.id),
+	);
+	return { steps, stepIds, live, stopped };
+}
+
+/** Give one segment its own launches' steps and live state, and mark the steps it holds. */
+function withSubagentSteps(segment: TimelineGroup, conversation: ConversationSubagents): TimelineGroup {
+	const steps = new Map<string, ConversationActivity[]>();
+	const stepIds = new Set<string>();
+	const live = new Set<string>();
+	for (const item of segment.items) {
+		if (conversation.stepIds.has(item.id)) stepIds.add(item.id);
+		else if (isSubagentLaunch(item)) {
+			steps.set(item.id, conversation.steps.get(item.id) ?? []);
+			if (conversation.live.has(item.id)) live.add(item.id);
+		}
+	}
+	if (steps.size === 0 && stepIds.size === 0) return segment;
+	return { ...segment, subagents: { steps, stepIds, live, stopped: conversation.stopped } };
 }
 
 /**
@@ -6937,41 +7570,46 @@ function outlivingAction(item: ConversationItem, dropped: ReadonlySet<string>): 
 const carriedRows = new WeakMap<ConversationItem, ConversationItem>();
 const carriedInto = new WeakMap<ConversationItem, string>();
 
-function atCarryingSteer(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
+function atCarrier(items: ConversationItem[], deliveries: readonly BatchedDelivery[], moved: ReadonlySet<string>): ConversationItem[] {
 	if (deliveries.length === 0) return items;
 	const steers = new Map(items.flatMap((item) => (item.kind === "activity" && item.turnId && isSteer(item) ? [[item.id, item] as const] : [])));
+	const leaders = new Map<string, ConversationItem>();
+	for (const item of items) {
+		if (item.kind === "message" && item.role === "user" && item.turnId && !leaders.has(item.turnId)) leaders.set(item.turnId, item);
+	}
 	const carriers = new Map(deliveries.flatMap((delivery) => {
-		const steer = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : undefined;
-		return steer && !moved.has(delivery.turnId) ? [[delivery.turnId, steer] as const] : [];
+		const carrier = delivery.steerActivityId ? steers.get(delivery.steerActivityId) : leaders.get(delivery.deliveredWithTurnId);
+		return carrier && !moved.has(delivery.turnId) ? [[delivery.turnId, carrier] as const] : [];
 	}));
 	if (carriers.size === 0) return items;
 	const sentAt = (turnId: string) => {
-		const index = carriers.get(turnId)?.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1;
+		const carrier = carriers.get(turnId);
+		const index = carrier?.kind === "activity" ? carrier.detail?.providerInputSourceTurnIds?.indexOf(turnId) ?? -1 : -1;
 		return index < 0 ? Number.MAX_SAFE_INTEGER : index;
 	};
 	const carried = items.filter((item) => item.turnId && carriers.has(item.turnId));
 	const blocks = new Map<ConversationItem, ConversationItem[]>();
 	for (const item of carried.sort((a, b) => sentAt(a.turnId!) - sentAt(b.turnId!) || a.sequence - b.sequence)) {
-		const steer = carriers.get(item.turnId!)!;
-		const block = blocks.get(steer);
+		const carrier = carriers.get(item.turnId!)!;
+		const block = blocks.get(carrier);
 		if (block) block.push(item);
-		else blocks.set(steer, [item]);
+		else blocks.set(carrier, [item]);
 	}
 	const isCarried = new Set(carried);
-	const place = new Map([...blocks].flatMap(([steer, block]) => {
-		const next = items.reduce((min, item) => (!isCarried.has(item) && item.sequence > steer.sequence && item.sequence < min ? item.sequence : min), steer.sequence + 1);
-		return block.map((item, index) => [item, steer.sequence + ((next - steer.sequence) * (index + 1)) / (block.length + 1)] as const);
+	const place = new Map([...blocks].flatMap(([carrier, block]) => {
+		const next = items.reduce((min, item) => (!isCarried.has(item) && item.sequence > carrier.sequence && item.sequence < min ? item.sequence : min), carrier.sequence + 1);
+		return block.map((item, index) => [item, carrier.sequence + ((next - carrier.sequence) * (index + 1)) / (block.length + 1)] as const);
 	}));
 	return items
 		.map((item) => {
-			const steer = item.turnId ? carriers.get(item.turnId) : undefined;
+			const carrier = item.turnId ? carriers.get(item.turnId) : undefined;
 			const sequence = place.get(item);
-			if (!steer || sequence === undefined) return item;
+			if (!carrier || sequence === undefined) return item;
 			const cached = carriedRows.get(item);
-			if (cached && carriedInto.get(cached) === steer.turnId && cached.sequence === sequence) return cached;
+			if (cached && carriedInto.get(cached) === carrier.turnId && cached.sequence === sequence) return cached;
 			const row = { ...item, sequence };
 			carriedRows.set(item, row);
-			carriedInto.set(row, steer.turnId!);
+			carriedInto.set(row, carrier.turnId!);
 			return row;
 		})
 		.sort((a, b) => a.sequence - b.sequence);
