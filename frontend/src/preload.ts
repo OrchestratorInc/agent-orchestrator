@@ -70,6 +70,7 @@ import {
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
+	type HostShareLink,
 } from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type { PushFolderInput, PushFolderPreview, PushFolderResult } from "./main/cloud-folder-push";
@@ -548,6 +549,8 @@ const api = {
 		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
+		/** The links this computer published remote hosts' files to; their daemons list none. */
+		hostLinks: (baseUrl: string) => ipcRenderer.invoke("cloudShare:hostLinks", { baseUrl }) as Promise<HostShareLink[]>,
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,

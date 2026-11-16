@@ -141,6 +141,7 @@ export const aoBridge: AoBridge =
 			list: async () => {
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
+			hostLinks: async () => [],
 			publish: async () => {
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},

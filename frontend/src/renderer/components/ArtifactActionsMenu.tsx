@@ -13,8 +13,6 @@ import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudA
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpClient } from "../lib/cloud-cp";
 import { artifactChangeError, artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
-import { artifactFileType, artifactSource, type ArtifactActionSurface } from "../lib/artifact-telemetry";
-import { captureRendererEvent } from "../lib/telemetry";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
@@ -87,7 +85,6 @@ export function ArtifactActionsMenu({
 	onTogglePin,
 	onOpenInSession,
 	onDeleted,
-	telemetrySurface,
 	errorClassName,
 	className,
 	children,
@@ -112,8 +109,6 @@ export function ArtifactActionsMenu({
 	onTogglePin?: () => void;
 	onOpenInSession?: () => void;
 	onDeleted?: () => void;
-	/** Where this menu is, for artifact telemetry: the Artifacts page, a session's tab, or the open artifact. */
-	telemetrySurface?: ArtifactActionSurface;
 	errorClassName?: string;
 	className?: string;
 	children?: ReactNode;
@@ -141,10 +136,6 @@ export function ArtifactActionsMenu({
 	const cloudFileUrl = session.cloud
 		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
 		: undefined;
-	// Enums only: where the menu is, the file's type bucket and where its session runs.
-	const telemetry = { surface: telemetrySurface, file_type: artifactFileType(artifact.path), source: artifactSource({ cloud: session.cloud, hostId }) };
-	const captureExternal = (target: "file_manager" | "terminal" | "browser" | "download") =>
-		void captureRendererEvent("ao.artifacts.opened_externally", { ...telemetry, target });
 	// The deleted file leaves the session's artifact list on the next read.
 	const remove = useMutation({
 		mutationFn: () => session.cloud
@@ -152,8 +143,7 @@ export function ArtifactActionsMenu({
 			: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
 		onSuccess: async () => {
 			setConfirmingDelete(false);
-			void captureRendererEvent("ao.artifacts.deleted", { surface: telemetrySurface, source: telemetry.source, count: 1 });
-			if (!hostId) useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path }));
+			useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path, hostId }));
 			onDeleted?.();
 			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
 		},
@@ -166,7 +156,6 @@ export function ArtifactActionsMenu({
 	const reveal = (targetId: OpenArtifactsTargetId) => {
 		browser.reset();
 		setCopyError("");
-		captureExternal(targetId === "terminal" ? "terminal" : "file_manager");
 		open.mutate({ sessionId: session.id, targetId, path: artifact.path });
 	};
 	// The main process resolves the path inside the session's artifact
@@ -176,7 +165,6 @@ export function ArtifactActionsMenu({
 	const openInBrowser = async () => {
 		open.reset();
 		setCopyError("");
-		captureExternal("browser");
 		if (!session.cloud) {
 			browser.mutate({ sessionId: session.id, path: artifact.path });
 			return;
@@ -197,7 +185,6 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		try {
 			if (!session.cloud) return;
-			captureExternal("file_manager");
 			await openCloudArtifactsFolder(cloudClient, cloudBaseUrl, session.cloud.orgId, session.id, artifact);
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
@@ -220,7 +207,6 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		try {
 			if (!cloudFileUrl) throw new Error(t("artifacts.accessError"));
-			captureExternal("download");
 			const bytes = await aoBridge.cloudArtifact.fetch(cloudFileUrl);
 			await aoBridge.chatImage.save({ name: artifact.name, bytes });
 		} catch (error) {
@@ -233,7 +219,6 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		try {
 			await aoBridge.clipboard.writeText(url);
-			void captureRendererEvent("ao.artifacts.share_link_copied", { surface: "menu" });
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}

@@ -1490,7 +1490,7 @@ function ArtifactPreviewTile({
 	session: WorkspaceSession;
 	shareAccess: ShareAccessByUrl;
 }) {
-	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined };
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud, hostId: session.hostId, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined };
 	return (
 		<Pressable
 			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
