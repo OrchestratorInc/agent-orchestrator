@@ -7451,8 +7451,10 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	}
 
 	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
-	const segments = !conversation ? groups.flatMap(splitAtSteers) : groups.flatMap((group) =>
-		splitAtSteers(group)
+	const parts = groups.flatMap((group) => {
+		const segments = splitAtSteers(group);
+		if (!conversation) return segments;
+		return segments
 			.map((segment) => withSubagentSteps(segment, conversation))
 			// A part made only of steps that moved under a launch elsewhere has nothing
 			// left to draw. A live one keeps its Working row, and one whose turn did not
@@ -7460,27 +7462,41 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 			.filter((segment) =>
 				segment.live
 				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
-				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
-	);
-	// A steer's part sorts at the steer, so it draws below a turn that began while the
-	// steered turn ran, such as a Codex subagent's turn adopted from its child thread.
-	// A turn that started only after a steered turn ended (one that waited in the queue)
-	// sorts after that turn's last row instead.
-	const ended = new Map<string, { at: number; last: number }>();
-	for (const segment of segments) {
-		const completedAt = segment.turnId && segment.key.includes(":steer:") ? Date.parse(byTurn.get(segment.turnId)?.completedAt ?? "") : NaN;
-		if (Number.isFinite(completedAt)) ended.set(segment.turnId!, { at: completedAt, last: segment.items.at(-1)!.sequence });
-	}
-	if (ended.size === 0) return segments.sort((a, b) => a.anchor - b.anchor);
-	const sortKey = new Map(segments.map((segment) => {
-		const startedAt = segment.turnId ? Date.parse(byTurn.get(segment.turnId)?.startedAt ?? "") : NaN;
-		let key = segment.anchor;
-		for (const [turnId, turn] of ended) {
-			if (turnId !== segment.turnId && startedAt >= turn.at && key < turn.last) key = turn.last + 0.001;
+				|| segment.items.some((item) => !conversation.stepIds.has(item.id)));
+	});
+	return inDrawOrder(parts, groups, byTurn);
+}
+
+/**
+ * The parts of every turn in the order they happened. A part sorts by its first row, so
+ * a steer's part lands below a turn that ran beside the steered one, such as a Codex
+ * subagent's. A queued prompt is recorded when it is sent but runs later, so a turn also
+ * sorts no earlier than the last row of every turn that ended before it started.
+ */
+function inDrawOrder(parts: TimelineGroup[], turns: readonly TimelineGroup[], byTurn: ReadonlyMap<string, ConversationTurn>): TimelineGroup[] {
+	const time = (turnId: string | undefined, field: "startedAt" | "completedAt") =>
+		Date.parse((turnId && byTurn.get(turnId)?.[field]) || "");
+	const ended = turns
+		.map((turn) => ({ at: time(turn.turnId, "completedAt"), startedAt: time(turn.turnId, "startedAt"), last: turn.items.at(-1)!.sequence }))
+		.filter(({ at, startedAt }) => Number.isFinite(at) && !(startedAt > at))
+		.sort((a, b) => a.at - b.at);
+	for (let index = 1; index < ended.length; index += 1) ended[index]!.last = Math.max(ended[index]!.last, ended[index - 1]!.last);
+	const position = (part: TimelineGroup) => {
+		const startedAt = time(part.turnId, "startedAt");
+		let low = 0;
+		let high = ended.length;
+		while (low < high) {
+			const middle = (low + high) >> 1;
+			if (ended[middle]!.at < startedAt) low = middle + 1;
+			else high = middle;
 		}
-		return [segment, key] as const;
-	}));
-	return segments.sort((a, b) => sortKey.get(a)! - sortKey.get(b)!);
+		const before = ended[low - 1]?.last ?? -Infinity;
+		return before > part.anchor ? before + 0.001 : part.anchor;
+	};
+	return parts
+		.map((part) => ({ part, at: position(part) }))
+		.sort((a, b) => a.at - b.at)
+		.map(({ part }) => part);
 }
 
 type ConversationSubagents = {

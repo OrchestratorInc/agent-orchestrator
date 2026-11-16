@@ -1058,6 +1058,37 @@ describe("ChatWorkspace steering", () => {
 		expect(follows(answer, document.querySelector("[data-turn-live-row]")!)).toBe(true);
 	});
 
+	it("draws queued turns in the order they ran after the queue was reordered", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 14,
+					// B and C were queued in that order while A ran; C was moved ahead of B.
+					turns: [
+						{ id: "a", state: "completed", providerTurnId: "provider-a", requestedAt: at(0), startedAt: at(0), completedAt: at(3) },
+						{ id: "c", state: "completed", providerTurnId: "provider-c", requestedAt: at(1), startedAt: at(3), completedAt: at(5) },
+						{ id: "b", state: "completed", providerTurnId: "provider-b", requestedAt: at(2), startedAt: at(5), completedAt: at(7) },
+					],
+					items: [
+						{ kind: "message", id: "a-prompt", turnId: "a", sequence: 9, revision: 0, role: "user", origin: "human", text: "Fix the flaky test", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "b-prompt", turnId: "b", sequence: 10, revision: 0, role: "user", origin: "human", text: "Then update the changelog", streaming: false, createdAt: at(1) },
+						{ kind: "message", id: "c-prompt", turnId: "c", sequence: 11, revision: 0, role: "user", origin: "human", text: "First bump the version", streaming: false, createdAt: at(2) },
+						{ kind: "message", id: "a-answer", turnId: "a", sequence: 12, revision: 0, role: "assistant", origin: "provider", text: "Fixed the test.", streaming: false, createdAt: at(3) },
+						{ kind: "message", id: "c-answer", turnId: "c", sequence: 13, revision: 0, role: "assistant", origin: "provider", text: "Bumped the version.", streaming: false, createdAt: at(5) },
+						{ kind: "message", id: "b-answer", turnId: "b", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Updated the changelog.", streaming: false, createdAt: at(7) },
+					],
+				}}
+			/>,
+		);
+		const order = ["Fix the flaky test", "Fixed the test.", "First bump the version", "Bumped the version.", "Then update the changelog", "Updated the changelog."]
+			.map((text) => screen.getByText(text));
+		for (const [index, row] of order.slice(1).entries()) {
+			expect(order[index]!.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		}
+	});
+
 	it("keeps a steered turn's first part where the turn began when its prompt is above the loaded history", () => {
 		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
 		render(
