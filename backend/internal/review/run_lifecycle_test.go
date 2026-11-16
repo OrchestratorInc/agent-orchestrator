@@ -1031,3 +1031,26 @@ func TestARelaunchMustReportItsOwnFirstActivity(t *testing.T) {
 	s.wait(t, DefaultRunLifecycleConfig().FirstActivityWindow)
 	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureNeverStarted)
 }
+
+// A machine sleep right after a timed-out reviewer was interrupted does not
+// eat its cancellation grace: with no run active any more, the gap is still
+// kept for the pending stop.
+func TestSleepIsNotCountedAgainstAPendingStop(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1", killOnDestroy: true}
+	s := newLifecycleEngine(t, launcher)
+	run := s.trigger(t)
+	s.wait(t, DefaultRunLifecycleConfig().MaxDuration)
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureTimedOut)
+	if len(s.pendingStops()) != 1 {
+		t.Fatalf("pending stops = %+v, want the interrupted reviewer", s.pendingStops())
+	}
+	s.advance(10 * time.Minute) // the laptop sleeps
+	s.pass(t)
+	if launcher.destroyed {
+		t.Fatal("the sleep was counted toward the pending stop: force-killed with no observed grace")
+	}
+	s.wait(t, DefaultRunLifecycleConfig().CancelTimeout)
+	if !launcher.destroyed {
+		t.Fatal("reviewer not force-stopped after its observed grace")
+	}
+}

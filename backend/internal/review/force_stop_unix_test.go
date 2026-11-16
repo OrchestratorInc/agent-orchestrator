@@ -43,11 +43,17 @@ func TestForceStopKillsAStoppedDescendantOfARealProcessTree(t *testing.T) {
 	if err := wrapper.Start(); err != nil {
 		t.Fatalf("start wrapper: %v", err)
 	}
+	// One waiter reaps the wrapper as soon as ForceStop's teardown kills it,
+	// so it does not linger as a zombie; cleanup waits on that same waiter.
+	waited := make(chan struct{})
+	go func() {
+		_ = wrapper.Wait()
+		close(waited)
+	}()
 	t.Cleanup(func() {
 		_ = syscall.Kill(-wrapper.Process.Pid, syscall.SIGKILL)
-		_ = wrapper.Wait()
+		<-waited
 	})
-	go func() { _ = wrapper.Wait() }()
 
 	agent := waitForChild(t, wrapper.Process.Pid)
 	if err := syscall.Kill(agent, syscall.SIGSTOP); err != nil {

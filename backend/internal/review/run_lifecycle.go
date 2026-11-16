@@ -494,7 +494,7 @@ func (e *Engine) ApplyReviewerObservations(ctx stdctx.Context, pass ports.Review
 	if err != nil {
 		return err
 	}
-	e.pruneGaps(runs)
+	e.pruneGaps(runs, e.pendingStops())
 	bySession := groupRunsBySession(runs)
 	var errs []error
 	if pass.Boot {
@@ -577,19 +577,27 @@ func (e *Engine) noteObservation(now time.Time) {
 	e.runs.gaps = append(e.runs.gaps, suspendGap{from: last, to: now})
 }
 
-// pruneGaps drops the suspend gaps that ended before every active run's
-// earliest reference time: no time limit can overlap them any more. Age alone
-// would not do: a run that sleeps twice must keep both gaps.
-func (e *Engine) pruneGaps(active []domain.ReviewRun) {
+// pruneGaps drops the suspend gaps that ended before the earliest reference
+// time anything still timed relies on: an active run's creation, or a pending
+// stop's grace start. Age alone would not do: a run that sleeps twice must
+// keep both gaps, and a reviewer interrupted just before the machine slept
+// must not lose its grace to the sleep.
+func (e *Engine) pruneGaps(active []domain.ReviewRun, stops []pendingStop) {
 	var oldest time.Time
-	for _, run := range active {
-		if ref := run.CreatedAt; !ref.IsZero() && (oldest.IsZero() || ref.Before(oldest)) {
+	consider := func(ref time.Time) {
+		if !ref.IsZero() && (oldest.IsZero() || ref.Before(oldest)) {
 			oldest = ref
 		}
 	}
+	for _, run := range active {
+		consider(run.CreatedAt)
+	}
+	for _, stop := range stops {
+		consider(stop.since)
+	}
 	e.runs.mu.Lock()
 	defer e.runs.mu.Unlock()
-	if len(active) == 0 {
+	if len(active) == 0 && len(stops) == 0 {
 		e.runs.gaps = nil
 		return
 	}

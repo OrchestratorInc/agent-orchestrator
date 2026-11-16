@@ -222,7 +222,10 @@ pass. A reviewer interrupted because its pass timed out stays supervised until
 it stops or is force-stopped. A force-stop captures the reviewer's whole
 process tree before tearing down its runtime and kills any survivor, so an
 agent that cannot react to hangup is not left running; the stop counts as
-confirmed only when none of those processes remains.
+confirmed only when none of those processes remains. A process is identified
+by pid and start time, which survives exec and changes on pid reuse, and
+survivors of an unconfirmed attempt are carried into the retry. Suspend gaps
+are kept for a pending stop's grace as they are for active runs.
 
 ### 4. Change data capture
 
