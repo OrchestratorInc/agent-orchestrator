@@ -10,6 +10,7 @@ import type { TFunction } from "i18next";
 import { CloudCpError, type CloudCpAutomation, type CloudCpAutomationRun, type CloudCpCreateAutomationRequest, type CloudCpUpdateAutomationRequest } from "../lib/cloud-cp";
 import { AUTOMATIONS_FEATURE } from "../lib/cloud-offering";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudMeUserId } from "./useCloudMeUserId";
 import { useCloudOffering } from "./useCloudOffering";
 
 export type CloudAutomation = CloudCpAutomation;
@@ -45,15 +46,18 @@ export function cloudRunsPollInterval(runs: ReadonlyArray<Pick<CloudAutomationRu
 
 /** Whether cloud automations are offered, and the organization and query key they live under. */
 export function useCloudAutomationsScope() {
-	const { client, baseUrl, userId } = useCloudCp();
+	const { client, baseUrl } = useCloudCp();
 	const offering = useCloudOffering();
 	const orgId = offering.org?.id ?? "";
 	const available = offering.ready && orgId !== "" && offering.features.includes(AUTOMATIONS_FEATURE);
-	return { client, orgId, userId, available, queryKey: [...cloudAutomationsQueryKey, baseUrl, orgId] as const };
+	return { client, orgId, available, queryKey: [...cloudAutomationsQueryKey, baseUrl, orgId] as const };
 }
 
 export function useCloudAutomations() {
-	const { client, orgId, userId, available, queryKey } = useCloudAutomationsScope();
+	const { client, orgId, available, queryKey } = useCloudAutomationsScope();
+	// runAs and createdByUserId are control-plane user ids (GET /me user.id),
+	// not the desktop's sign-in account id, which is the identity provider's.
+	const userId = useCloudMeUserId();
 	const query = useQuery({
 		queryKey,
 		enabled: available,
@@ -69,7 +73,7 @@ export function useCloudAutomations() {
 		},
 		refetchInterval: (current) => cloudAutomationPollInterval(current.state.data),
 	});
-	/** The signed-in Cloud user: an edit by anyone else makes the automation run as the editor. */
+	/** The signed-in Cloud user's control-plane id, undefined until known: an edit by anyone else makes the automation run as the editor. */
 	return { ...query, available, orgId, userId };
 }
 

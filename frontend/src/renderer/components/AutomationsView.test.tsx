@@ -1175,5 +1175,23 @@ describe("automation starters", () => {
 			const dialog = screen.getByRole("dialog", { name: "Edit automation" });
 			expect(within(dialog).getByText("Saving makes it run as you, with your Codex login in AO Cloud.")).toBeInTheDocument();
 		});
+
+		it("tells the person it runs as nothing about it running as them", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true, enabled: false, nextRunAt: undefined, runAs: { userId: "u1", displayName: "Me" } }];
+			mocks.updateCloud.mockRejectedValue(new CloudCpError("Connect and validate your Codex credential first.", { status: 422, code: "agent_provider_required" }));
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			const toggle = within(row).getByRole("switch", { name: "Enable Nightly debt" });
+			await user.hover(toggle);
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+			await user.click(toggle);
+			expect(await screen.findByText("Connect your agent account in AO Cloud first: the automation runs with it.")).toBeInTheDocument();
+			await user.click(within(row).getByRole("button", { name: "Edit Nightly debt" }));
+			const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			expect(within(dialog).queryByText(/Saving makes it run as you/)).not.toBeInTheDocument();
+		});
 	});
 });
