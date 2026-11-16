@@ -793,10 +793,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description The organization's automations, newest first, each with its latest run. Every member sees every automation of the organization's projects. Offered when offering.features lists automations; 404 otherwise. */
+        /** @description The organization's automations, newest first, each with its latest run. Every member sees every automation of the organization's projects. Offered when offering.features lists automations; every /automations route answers 404 otherwise. */
         get: operations["listAutomations"];
         put?: never;
-        /** @description Schedule a prompt for a project's worker to run in AO Cloud. It runs as the caller, with their personal coding-agent credential for the harness (agent_provider_required without one), and they are subscribed to its results. Refused with AUTOMATION_LIMIT_REACHED when the organization has as many as it may, and AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project. */
+        /** @description Schedule a prompt for a project's worker to run in AO Cloud. It runs as the caller, with their personal coding-agent credential for the harness (422 agent_provider_required without a validated one), and they are subscribed to its results. Refused with 409 AUTOMATION_LIMIT_REACHED when the organization has as many as it may, 422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project, and 422 validation_error for an invalid field or schedule. */
         post: operations["createAutomation"];
         delete?: never;
         options?: never;
@@ -814,6 +814,7 @@ export interface paths {
             };
             cookie?: never;
         };
+        /** @description One automation of the organization, with its latest run. */
         get: operations["getAutomation"];
         put?: never;
         post?: never;
@@ -821,7 +822,7 @@ export interface paths {
         delete: operations["deleteAutomation"];
         options?: never;
         head?: never;
-        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (AUTOMATION_EDIT_FORBIDDEN). A change to anything but enabled makes the caller the person it runs as, and needs their credential for the harness. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
+        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or turning the automation on, makes the caller the person it runs as (runAs), with their own credential: a caller without a validated credential for the harness gets 422 agent_provider_required. Turning it off changes only enabled. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
         patch: operations["updateAutomation"];
         trace?: never;
     };
@@ -838,7 +839,7 @@ export interface paths {
         /** @description The automation's runs, newest occurrence first. */
         get: operations["listAutomationRuns"];
         put?: never;
-        /** @description Run the automation now, as the caller with their own credential for its harness. Any member may. Refused with AUTOMATION_RUN_ACTIVE while a run is in flight. The run starts within seconds; follow it in the run list. */
+        /** @description Run the automation now, as the caller with their own credential for its harness (422 agent_provider_required without a validated one). Any member may. Refused with 409 AUTOMATION_RUN_ACTIVE while a run is in flight. The control plane does not replay this command for a reused Idempotency-Key: a retry while the run is in flight gets AUTOMATION_RUN_ACTIVE, and one after it finished starts another run. The run starts within seconds; follow it in the run list. */
         post: operations["runAutomationNow"];
         delete?: never;
         options?: never;
@@ -3696,7 +3697,7 @@ export interface components {
         /** @enum {string} */
         AutomationMode: "standard" | "trusted";
         /**
-         * @description pending, starting and running are in flight. completed means the session's opening turn finished. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), or the organization or plan was full (the create-session refusal's code). timed_out means it reached maxRuntimeMinutes and its session was stopped.
+         * @description pending, starting and running are in flight. completed means the session's opening turn finished. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), the automation was turned off before it started (AUTOMATION_DISABLED), or the organization or plan was full (the create-session refusal's code: SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL, ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED). failed means it started and did not finish, or its start was refused for any other reason. timed_out means it reached maxRuntimeMinutes and its session was stopped.
          * @enum {string}
          */
         AutomationRunStatus: "pending" | "starting" | "running" | "completed" | "failed" | "skipped" | "timed_out";
@@ -3728,7 +3729,9 @@ export interface components {
             startedAt?: string;
             /** Format: date-time */
             finishedAt?: string;
+            /** @description Why a skipped, failed or timed_out run did not finish: a skip's code (AutomationRunStatus), TIMED_OUT, AGENT_FAILED (the opening turn failed), SESSION_ENDED (its session was deleted first), START_FAILED, or the create-session refusal's own code (such as agent_provider_required). Clients show errorMessage for a code they do not know. */
             errorCode?: string;
+            /** @description The reason in words, for a person to read. */
             errorMessage?: string;
             /** Format: date-time */
             createdAt: string;
@@ -3759,7 +3762,7 @@ export interface components {
             maxRuntimeMinutes: number;
             /** @description The branch its runs work on. */
             branch: string;
-            /** @description Whose credential its scheduled runs use: whoever last changed what it does or when. */
+            /** @description Whose credential its scheduled runs use: whoever last changed what it does or when, or turned it on. */
             runAs: {
                 /** Format: uuid */
                 userId: string;
@@ -3768,8 +3771,9 @@ export interface components {
             };
             /** Format: uuid */
             createdByUserId?: string;
+            /** @description Failed or timed_out runs in a row; a completed run resets it and a skipped one leaves it. At 5 the automation is turned off. */
             consecutiveFailures: number;
-            /** @description Why it was turned off automatically, such as after 5 runs in a row that did not finish. */
+            /** @description Why it was turned off automatically, such as after 5 failed or timed_out runs in a row, in words for a person to read. Absent while enabled or turned off by a person. */
             disabledReason?: string;
             /** @description Whether the caller is notified of its runs. */
             subscribed: boolean;

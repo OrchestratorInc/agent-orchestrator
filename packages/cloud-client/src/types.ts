@@ -42,6 +42,7 @@ export type Automation = Schemas["Automation"];
 export type AutomationRun = Schemas["AutomationRun"];
 export type AutomationRunStatus = Schemas["AutomationRunStatus"];
 export type AutomationHarness = Schemas["AutomationHarness"];
+export type AutomationMode = Schemas["AutomationMode"];
 export type AutomationList = Schemas["AutomationList"];
 export type AutomationRunList = Schemas["AutomationRunList"];
 export type AutomationSubscription = Schemas["AutomationSubscription"];
