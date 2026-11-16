@@ -58,3 +58,30 @@ func toContractPRFacts(prs []domain.PRFacts) []contract.PRFacts {
 	}
 	return facts
 }
+
+// clearStaleChangesRequested re-derives the aggregate review decision after a
+// new push. GitHub keeps CHANGES_REQUESTED until the reviewer re-reviews, but
+// the request was made against an older head: when no person's request and no
+// AO pass for the current head still asks for changes, the PR is awaiting
+// re-review, not "Changes requested". The Kanban reducer already reads only
+// current-head verdicts; this brings the status and PR card in line with it.
+func clearStaleChangesRequested(prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun) []domain.PRFacts {
+	out := make([]domain.PRFacts, len(prs))
+	copy(out, prs)
+	for i, pr := range out {
+		if pr.Review != domain.ReviewChangesRequest || pr.ExternalChangesRequested {
+			continue
+		}
+		current := false
+		for _, run := range runs {
+			if run.PRURL == pr.URL && run.Verdict == domain.VerdictChangesRequested {
+				current = true
+				break
+			}
+		}
+		if !current {
+			out[i].Review = domain.ReviewRequired
+		}
+	}
+	return out
+}

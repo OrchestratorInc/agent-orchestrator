@@ -215,3 +215,30 @@ func TestHarnessSignalsCapabilityGate(t *testing.T) {
 		t.Fatal("harnessSignals(amp) = true with codex-only predicate")
 	}
 }
+
+func TestStaleChangesRequestedIsClearedAfterNewPush(t *testing.T) {
+	const url = "pr/1"
+	cr := domain.PRFacts{URL: url, Review: domain.ReviewChangesRequest}
+	tests := []struct {
+		name string
+		pr   domain.PRFacts
+		runs []domain.CurrentHeadReviewRun
+		want domain.ReviewDecision
+	}{
+		{"person's request on current head stands", domain.PRFacts{URL: url, Review: domain.ReviewChangesRequest, ExternalChangesRequested: true}, nil, domain.ReviewChangesRequest},
+		{"AO pass on current head stands", cr, []domain.CurrentHeadReviewRun{{PRURL: url, Verdict: domain.VerdictChangesRequested}}, domain.ReviewChangesRequest},
+		{"request on an older head awaits re-review", cr, nil, domain.ReviewRequired},
+		{"approval untouched", domain.PRFacts{URL: url, Review: domain.ReviewApproved}, nil, domain.ReviewApproved},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := clearStaleChangesRequested([]domain.PRFacts{tc.pr}, tc.runs)
+			if got[0].Review != tc.want {
+				t.Fatalf("review = %s, want %s", got[0].Review, tc.want)
+			}
+			if st := deriveStatus(statusRec(domain.ActivityIdle, false), got, statusNow, false); tc.want == domain.ReviewRequired && st != domain.StatusReviewPending {
+				t.Fatalf("status = %s, want review_pending", st)
+			}
+		})
+	}
+}
