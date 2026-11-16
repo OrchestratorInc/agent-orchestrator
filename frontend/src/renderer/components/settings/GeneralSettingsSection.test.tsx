@@ -12,7 +12,6 @@ const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
 const idle = { update: vi.fn(), saving: false, error: undefined };
 vi.mock("../../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: settingsMock(), isLoading: false, error: null }),
-	useUpdateCloudOffering: () => idle,
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
@@ -47,7 +46,6 @@ function settings(overrides: Partial<Settings>): Settings {
 		chatHarnesses: [],
 		client: "",
 		localEnabled: true,
-		cloudOffering: false,
 		cloudEnabled: false,
 		cloudControlPlaneUrl: "",
 		trackerIntakeEnabled: false,

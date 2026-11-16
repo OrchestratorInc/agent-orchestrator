@@ -3,7 +3,7 @@
 Drive native desktop apps (read the screen, click, type) through
 [Cua Driver](https://cua.ai). The user installs Cua Driver and turns on **Let
 agents use this computer** in **Settings > Computer use agents**. Chat sessions
-started while it is on get these tools from AO's `ao` tool server:
+started while it is on get these tools from Orchestrator's `ao` tool server:
 
 - `list_windows`: the open windows, with each one's `pid` and `window_id`.
 - `launch_app`: open an app in the background.
@@ -54,14 +54,14 @@ role and label you see, not `AX` names.
    not). Use `x`/`y` pixels only for canvases and other surfaces missing
    from the tree; they are in the screenshot's pixels, so pass that window's
    `pid` and `window_id` with them.
-4. Check the result before the next step. AO reads the window after every
+4. Check the result before the next step. Orchestrator reads the window after every
    action and returns it under the action's summary: the screenshot, the
    window line with a new `snapshot_id`, and the rows that changed since your
    last read (the full tree when there is no earlier read with the same
    `query`). Look at the screenshot; the driver often cannot confirm an
    action's effect. The read makes earlier tokens stale (`stale_element_token`),
    and live apps reorder their lists, so act next with the new `snapshot_id`,
-   as the diff says. If the result says `observation skipped`, AO could not
+   as the diff says. If the result says `observation skipped`, Orchestrator could not
    tell the window: read it with `get_window_state`.
 5. If an action by token did something other than what the screenshot led you
    to expect (it hovered or opened a neighbouring element, say), the page has
@@ -73,7 +73,7 @@ Background windows do not always render. Chromium-based browsers and apps
 (Chrome, Brave, Edge, Electron), on Windows especially, throttle or stop
 painting windows that are hidden behind others, so `get_window_state` can
 return a blank page, or a lazily loaded dialog that never gets past its
-loading skeleton; AO marks such a read with a `warning:` line. If a window
+loading skeleton; Orchestrator marks such a read with a `warning:` line. If a window
 reads blank or stuck loading twice, stop retrying and ask the user whether
 you may bring it to the front. If they agree, call `bring_to_front` with its
 `pid` and `window_id`, which sends no keys or clicks, and act on the window
@@ -82,7 +82,7 @@ alone and tell them what you could not do. Skip asking only when the user
 said they are away from the computer. The window stays drawn only while it
 is in front: if the user switches away, it can go blank again.
 
-AO refuses foreground input (`delivery_mode: "foreground"` and `run_steps`'
+Orchestrator refuses foreground input (`delivery_mode: "foreground"` and `run_steps`'
 `foreground_fallback`): it would raise the window and send real keys and
 clicks to whatever has focus, which may be the user's own window. When the
 driver suggests it, bring the window to the front instead, as above.
@@ -98,14 +98,14 @@ as Cmd+F that did not move focus, leaves the cursor in another field. In
 messaging apps, confirm in the screenshot that you are in the right field and
 chat before typing, and again before pressing Return to send.
 
-AO refuses actions that would land wherever the user is working:
+Orchestrator refuses actions that would land wherever the user is working:
 `scope: "desktop"` (or a desktop `target`), pixel coordinates without the
 window's `pid` and `window_id`, and `type_text` without a field to type into.
 The same checks apply to every step of `run_steps`.
 
-All calls from one AO session run in the same Cua Driver session, so a pixel
+All calls from one Orchestrator-managed session run in the same Cua Driver session, so a pixel
 `click` can use the screenshot an earlier `get_window_state` took. A driver
-session ends after a few idle minutes; AO starts it again on the next call,
+session ends after a few idle minutes; Orchestrator starts it again on the next call,
 but its screenshots are gone, so read the window again if a pixel action
 reports `screenshot_context_missing`.
 
@@ -115,14 +115,14 @@ Tips:
   which is cheaper when you only need fresh element tokens.
 - `{"query":"Save"}` filters the tree to matching rows; `max_elements` and
   `max_depth` bound very large trees.
-- Screenshots are saved under AO's data directory, grouped by session, and old
+- Screenshots are saved under Orchestrator's data directory, grouped by session, and old
   ones are pruned automatically.
 - Cua Driver's own browser tools are turned off because they conflict with
   `ao browser`.
 
 ## Web pages and the user's own browser
 
-Use `ao browser` for web pages. It drives the AO Browser panel, which keeps
+Use `ao browser` for web pages. It drives the Orchestrator Browser panel, which keeps
 drawing when it is not on top. Its profile is temporary unless the user gives
 the session a named one; if a page needs the user's sign-ins, ask them to give
 this session a signed-in browser profile (Settings > Browser can import one
@@ -144,7 +144,7 @@ Safari) with these tools only when the user explicitly asks for it, such as
   the user's windows. Ask the user first, or bring it to the front when it
   reads blank, as above.
 - Text boxes in web pages, such as a post or message composer, may refuse
-  `type_text` in the background, and AO does not send foreground keys. Fill
+  `type_text` in the background, and Orchestrator does not send foreground keys. Fill
   the box with a `run_steps` `set_value` step and read it to check the text.
   `set_value` sets the field directly, with no key presses, so the page may
   not register it and could send an empty or old draft. Before anything is
@@ -182,12 +182,12 @@ account rather than posting, sending, or buying as the wrong person.
   `pid` and `window_id` of the window whose screenshot you measured on.
 - `COMPUTER_USE_TEXT_TARGET_REQUIRED`: `type_text` without a field. Read the
   window and pass the field's `element_token`.
-- `COMPUTER_USE_DESKTOP_SCOPE_DISABLED`: AO does not act on the whole screen.
+- `COMPUTER_USE_DESKTOP_SCOPE_DISABLED`: Orchestrator does not act on the whole screen.
   Name the window instead, even if a driver error suggests `scope="desktop"`.
-- `COMPUTER_USE_FOREGROUND_DISABLED`: AO does not send foreground input. Act
+- `COMPUTER_USE_FOREGROUND_DISABLED`: Orchestrator does not send foreground input. Act
   in the background; if the window is not drawing, ask the user, then use
   `bring_to_front`.
-- `COMPUTER_USE_STEP_UNSUPPORTED`: a `run_steps` step names a tool AO does
+- `COMPUTER_USE_STEP_UNSUPPORTED`: a `run_steps` step names a tool Orchestrator does
   not know. Use one of the action tools the error lists.
 - `COMPUTER_USE_CALL_FAILED`: the driver's own message follows. For example,
   `window_id_not_found` means the window closed, so list windows again;

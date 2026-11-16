@@ -36,6 +36,6 @@ describe("useSettings tracker intake gate", () => {
 		const { result } = renderHook(() => useSettings(), { wrapper: wrapper(queryClient) });
 
 		await waitFor(() => expect(result.current.settings?.trackerIntakeEnabled).toBe(expected));
-		expect(getMock).toHaveBeenCalledWith("/api/v1/settings");
+		expect(getMock).toHaveBeenCalledWith("/api/v1/settings", { signal: expect.any(AbortSignal) });
 	});
 });

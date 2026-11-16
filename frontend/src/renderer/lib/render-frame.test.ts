@@ -4,6 +4,7 @@ import {
 	measuredRenderHeight,
 	readArtifactRef,
 	readRenderContentHeight,
+	readRenderImageRequest,
 	readRenderLinkRequest,
 	readRenderRef,
 	readRenderTheme,
@@ -108,6 +109,21 @@ describe("render-frame helpers", () => {
 		expect(readRenderContentHeight({ method: "ui/notifications/size-changed", params: { height: 412 } })).toBeUndefined();
 		expect(readRenderLinkRequest({ jsonrpc: "2.0", id: 1, method: "ui/open-link", params: { url: "https://x.dev/a" } })).toBe("https://x.dev/a");
 		expect(readRenderLinkRequest({ jsonrpc: "2.0", id: 1, method: "ui/open-link", params: { url: "javascript:alert(1)" } })).toBeUndefined();
+		const image = (params: unknown) => readRenderImageRequest({ jsonrpc: "2.0", method: "ao/open-image", params });
+		expect(image({ src: "data:image/png;base64,AA==", alt: "Before" })).toEqual({ src: "data:image/png;base64,AA==", alt: "Before" });
+		expect(image({ src: "DATA:IMAGE/svg+xml,<svg/>" })).toEqual({ src: "DATA:IMAGE/svg+xml,<svg/>", alt: "" });
+		for (const src of [
+			"https://evil.example/?d=secret",
+			"https://192.168.1.1/x.png",
+			"http://127.0.0.1:3001/api/v1/sessions",
+			"//evil.example/x.png",
+			"blob:null/1",
+			"data:text/html,<b>x</b>",
+			"javascript:alert(1)",
+			7,
+		]) {
+			expect(image({ src })).toBeUndefined();
+		}
 	});
 
 	it("maps AO tokens to the agent-facing variables and follows data-theme", () => {
@@ -128,11 +144,12 @@ describe("render-frame helpers", () => {
 			variables: { "--background": "#fff" },
 			displayMode: "fullscreen",
 			wrapContent: false,
+			openImages: true,
 		});
 		expect(renderThemeMessage(theme, "inline")).toEqual({
 			jsonrpc: "2.0",
 			method: "ui/notifications/host-context-changed",
-			params: { theme: "light", styles: { variables: { "--background": "#fff" } }, displayMode: "inline", wrapContent: false },
+			params: { theme: "light", styles: { variables: { "--background": "#fff" } }, displayMode: "inline", wrapContent: false, openImages: true },
 		});
 	});
 

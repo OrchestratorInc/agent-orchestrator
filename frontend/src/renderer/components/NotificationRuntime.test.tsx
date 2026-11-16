@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { CloudCpNotification } from "../lib/cloud-cp/types";
 import type { NotificationDTO, NotificationsCache } from "../lib/notifications";
 import { NotificationRuntime } from "./NotificationCenter";
 
@@ -36,9 +37,22 @@ const unreadCache: NotificationsCache = {
 	pageParams: [""],
 };
 
-const { setBadge } = vi.hoisted(() => ({ setBadge: vi.fn() }));
+const { setBadge, show, clickListeners, navigateToSession, cloud } = vi.hoisted(() => ({
+	setBadge: vi.fn(),
+	show: vi.fn(),
+	clickListeners: new Set<(id: string) => void>(),
+	navigateToSession: vi.fn(),
+	// The Cloud inbox CloudNotificationRuntime keeps live; absent until a test loads one.
+	cloud: { data: undefined as { items: CloudCpNotification[]; unreadCount: number } | undefined, orgId: "org-1" },
+}));
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn(), useParams: () => ({}) }));
+vi.mock("../lib/navigate-to-session", () => ({ useNavigateToSession: () => navigateToSession }));
+vi.mock("../hooks/useCloudNotifications", () => ({
+	useCloudNotifications: () => ({ data: cloud.data, items: cloud.data?.items }),
+}));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ userId: "user-1" }) }));
+vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: { id: cloud.orgId } }) }));
 
 vi.mock("../hooks/useNotificationsQuery", () => ({
 	useNotificationsQuery: () => ({ data: unreadCache, isError: false }),
@@ -53,9 +67,12 @@ vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		notifications: {
 			setBadge,
-			show: vi.fn(),
+			show,
 			devBounce: vi.fn(),
-			onClick: () => () => undefined,
+			onClick: (listener: (id: string) => void) => {
+				clickListeners.add(listener);
+				return () => clickListeners.delete(listener);
+			},
 		},
 	},
 }));
@@ -80,5 +97,72 @@ describe("NotificationRuntime badge sync", () => {
 		// of NotificationCenter, which Linux hides from the topbar and only mounts
 		// on the sessions board.
 		await waitFor(() => expect(setBadge).toHaveBeenCalledWith(notifications.length));
+	});
+});
+
+function cloudNotification(id: string, overrides: Partial<CloudCpNotification> = {}): CloudCpNotification {
+	return {
+		id,
+		source: "cloud",
+		orgId: "org-1",
+		projectId: "cloud-proj",
+		sessionId: "cloud-sess",
+		type: "needs_input",
+		title: `Cloud ${id}`,
+		body: "Waiting on you",
+		status: "unread",
+		createdAt: "2026-06-16T12:00:00Z",
+		updatedAt: "2026-06-16T12:00:00Z",
+		...overrides,
+	};
+}
+
+describe("NotificationRuntime Cloud notifications", () => {
+	it("counts Cloud unread in the launcher badge, as the bell does", async () => {
+		setBadge.mockClear();
+		cloud.data = { items: [cloudNotification("c1")], unreadCount: 3 };
+		try {
+			renderRuntimeOnly();
+			await waitFor(() => expect(setBadge).toHaveBeenCalledWith(notifications.length + 3));
+		} finally {
+			cloud.data = undefined;
+		}
+	});
+
+	it("raises an OS notification for a new Cloud row without replaying the loaded inbox, and opens its session on click", () => {
+		show.mockClear();
+		navigateToSession.mockClear();
+		cloud.orgId = "org-1";
+		cloud.data = { items: [cloudNotification("old")], unreadCount: 1 };
+		try {
+			const view = renderRuntimeOnly();
+			expect(show).not.toHaveBeenCalled();
+
+			cloud.data = { items: [cloudNotification("new"), cloudNotification("read", { status: "read" }), cloudNotification("old")], unreadCount: 2 };
+			view.rerender(
+				<QueryClientProvider client={new QueryClient()}>
+					<NotificationRuntime />
+				</QueryClientProvider>,
+			);
+			expect(show).toHaveBeenCalledTimes(1);
+			expect(show).toHaveBeenCalledWith({ id: "cloud-notification:new", title: "Cloud new", body: "Waiting on you", type: "needs_input", watched: false });
+
+			act(() => { for (const listener of clickListeners) listener("cloud-notification:new"); });
+			expect(navigateToSession).toHaveBeenCalledWith("cloud-proj", "cloud-sess");
+
+			// Another organization's inbox is a new inbox, not a burst of new rows.
+			cloud.orgId = "org-2";
+			cloud.data = { items: [cloudNotification("other-org", { orgId: "org-2" })], unreadCount: 1 };
+			view.rerender(
+				<QueryClientProvider client={new QueryClient()}>
+					<NotificationRuntime />
+				</QueryClientProvider>,
+			);
+			expect(show).toHaveBeenCalledTimes(1);
+			view.unmount();
+		} finally {
+			cloud.data = undefined;
+			cloud.orgId = "org-1";
+		}
 	});
 });

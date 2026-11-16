@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChromeApi } from "./chrome-api";
 import { ConsentManager } from "./consent";
 
@@ -76,4 +76,59 @@ describe("ConsentManager", () => {
 		await consent.revoke();
 		await expect(pending).rejects.toMatchObject({ code: "BROWSER_CHROME_STOPPED" });
 	});
+
+	it("remembers allowing every session until a person revokes it, not when a session ends", async () => {
+		const { chrome, created } = fakeChrome();
+		const consent = new ConsentManager(chrome);
+		consent.start();
+		const first = consent.ensure("s1");
+		await waitForPrompt(created, 1);
+		await consent.decide({ type: "ao-consent-decision", sessionId: "s1", allow: true, trusted: true, allSessions: true });
+		await first;
+
+		await expect(consent.ensure("s2")).resolves.toMatchObject({ trusted: true });
+		expect(created).toHaveLength(1);
+
+		// A session ending keeps the choice.
+		await consent.revoke("s1");
+		await expect(consent.ensure("s3")).resolves.toMatchObject({ trusted: true });
+		expect(created).toHaveLength(1);
+
+		// A person revoking one session ends it, and the next session asks again.
+		await consent.revoke("s3", true);
+		const asked = consent.ensure("s4");
+		await waitForPrompt(created, 2);
+		await consent.decide({ type: "ao-consent-decision", sessionId: "s4", allow: false, trusted: false });
+		await expect(asked).rejects.toMatchObject({ code: "BROWSER_CHROME_CONSENT_DENIED" });
+	});
+
+	it("does not treat allowing one session as allowing every session", async () => {
+		const { chrome, created } = fakeChrome();
+		const consent = new ConsentManager(chrome);
+		consent.start();
+		const first = consent.ensure("s1");
+		await waitForPrompt(created, 1);
+		await consent.decide({ type: "ao-consent-decision", sessionId: "s1", allow: true, trusted: true });
+		await first;
+		const second = consent.ensure("s2");
+		await waitForPrompt(created, 2);
+		await consent.decide({ type: "ao-consent-decision", sessionId: "s2", allow: false, trusted: false });
+		await expect(second).rejects.toMatchObject({ code: "BROWSER_CHROME_CONSENT_DENIED" });
+	});
+
+	it("the kill switch ends allowing every session", async () => {
+		const { chrome, created } = fakeChrome();
+		const consent = new ConsentManager(chrome);
+		consent.start();
+		const first = consent.ensure("s1");
+		await waitForPrompt(created, 1);
+		await consent.decide({ type: "ao-consent-decision", sessionId: "s1", allow: true, trusted: true, allSessions: true });
+		await first;
+		await consent.revoke();
+		expect(consent.approvalFor(await consent.approvals(), "s2")).toBeUndefined();
+	});
 });
+
+async function waitForPrompt(created: string[], count: number): Promise<void> {
+	await vi.waitFor(() => expect(created).toHaveLength(count));
+}

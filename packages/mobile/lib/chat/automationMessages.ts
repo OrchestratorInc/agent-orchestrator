@@ -450,9 +450,9 @@ export const GIT_ACTION_LABELS: Record<GitAction, string> = {
 };
 
 export const NOTICE_LABELS: Record<AutomationNotice, string> = {
-	orchestratorReplaced: "AO is replacing this orchestrator. A fresh one takes over in a new workspace.",
+	orchestratorReplaced: "The orchestrator agent is being replaced. A fresh one takes over in a new workspace.",
 	contextCarried: "Context carried over from the previous agent",
-	reviewTask: "AO gave this reviewer its review task",
+	reviewTask: "Review task assigned.",
 };
 
 /**
