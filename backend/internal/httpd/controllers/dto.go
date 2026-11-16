@@ -1532,7 +1532,8 @@ type SessionPRFacts struct {
 	ReviewComments bool                  `json:"reviewComments"`
 	UpdatedAt      time.Time             `json:"updatedAt"`
 	// StackParent is the number of the open PR whose branch this PR targets.
-	// Absent when the PR's base branch has no open PR, e.g. the default branch.
+	// Absent when the PR's base branch has no open PR in a live session, e.g.
+	// the default branch.
 	StackParent int `json:"stackParent,omitempty"`
 }
 

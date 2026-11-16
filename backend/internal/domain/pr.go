@@ -38,8 +38,9 @@ type PRFacts struct {
 	ExternalApproved         bool
 	ExternalChangesRequested bool
 	ExternalComments         bool
-	// StackParent is the number of the open PR, in any session, whose source
-	// branch this PR targets; 0 when its base branch has no open PR.
+	// StackParent is the number of the open PR, in any live session, whose
+	// source branch this PR targets; 0 when its base branch has no open PR AO
+	// still polls.
 	StackParent int
 }
 

@@ -589,10 +589,14 @@ SELECT
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
-    -- never be a parent.
+    -- never be a parent. Only a parent the SCM observer still polls counts:
+    -- an archived session's or project's PR keeps whatever state it had when
+    -- polling stopped, so its "open" may be long stale.
     CAST(COALESCE((
         SELECT parent.number
         FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
         WHERE parent.source_branch = pr.target_branch
           AND parent.repo = pr.repo COLLATE NOCASE
           AND parent.host = pr.host
@@ -601,6 +605,8 @@ SELECT
           AND parent.source_branch != parent.target_branch
           AND parent.url != pr.url
           AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
         ORDER BY parent.updated_at DESC
         LIMIT 1
     ), 0) AS INTEGER) AS stack_parent_number
@@ -791,10 +797,14 @@ SELECT
     -- The open PR whose source branch this PR targets, in any session, so a
     -- PR stacked on it is not read as ready to merge. A PR whose source and
     -- target branch are the same (a fork PR opened from its own main) can
-    -- never be a parent.
+    -- never be a parent. Only a parent the SCM observer still polls counts:
+    -- an archived session's or project's PR keeps whatever state it had when
+    -- polling stopped, so its "open" may be long stale.
     CAST(COALESCE((
         SELECT parent.number
         FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
         WHERE parent.source_branch = pr.target_branch
           AND parent.repo = pr.repo COLLATE NOCASE
           AND parent.host = pr.host
@@ -803,6 +813,8 @@ SELECT
           AND parent.source_branch != parent.target_branch
           AND parent.url != pr.url
           AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
         ORDER BY parent.updated_at DESC
         LIMIT 1
     ), 0) AS INTEGER) AS stack_parent_number

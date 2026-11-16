@@ -300,13 +300,23 @@ func TestListPRFactsProjectsTheOpenStackParent(t *testing.T) {
 	// A merged parent and a same-named branch in another repository.
 	write(domain.PullRequest{URL: "landed", SessionID: parentSession.ID, Number: 8100, Merged: true, SourceBranch: "old-base", TargetBranch: "main"})
 	write(domain.PullRequest{URL: "elsewhere", SessionID: parentSession.ID, Number: 50, Repo: "acme/other", SourceBranch: "other-base", TargetBranch: "main"})
+	// An archived session's PR still reads open, but nothing polls it any more,
+	// so that state may be stale and it must not hold a PR back.
+	archivedSession, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	write(domain.PullRequest{URL: "parked", SessionID: archivedSession.ID, Number: 7000, SourceBranch: "parked-base", TargetBranch: "main"})
+	archivedSession.IsTerminated = true
+	archivedSession.UpdatedAt = now
+	if err := s.UpdateSession(ctx, archivedSession); err != nil {
+		t.Fatal(err)
+	}
 
 	write(domain.PullRequest{URL: "stacked", SessionID: childSession.ID, Number: 8487, SourceBranch: "fast", TargetBranch: "dev-warm"})
 	write(domain.PullRequest{URL: "on-main", SessionID: childSession.ID, Number: 8484, SourceBranch: "icons", TargetBranch: "main"})
 	write(domain.PullRequest{URL: "on-landed", SessionID: childSession.ID, Number: 8101, SourceBranch: "follow-up", TargetBranch: "old-base"})
 	write(domain.PullRequest{URL: "on-other-repo", SessionID: childSession.ID, Number: 8102, SourceBranch: "cross", TargetBranch: "other-base"})
+	write(domain.PullRequest{URL: "on-archived", SessionID: childSession.ID, Number: 8103, SourceBranch: "late", TargetBranch: "parked-base"})
 
-	want := map[string]int{"stacked": 8277, "on-main": 0, "on-landed": 0, "on-other-repo": 0}
+	want := map[string]int{"stacked": 8277, "on-main": 0, "on-landed": 0, "on-other-repo": 0, "on-archived": 0}
 	check := func(label string, facts []domain.PRFacts) {
 		t.Helper()
 		if len(facts) != len(want) {
