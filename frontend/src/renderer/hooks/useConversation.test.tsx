@@ -1234,53 +1234,38 @@ describe("conversation branching commands", () => {
 		);
 	});
 
-	it("disables branch navigation while a turn is active", () => {
+	// One client for the whole test: the shared wrapper builds a new one per
+	// render, which would drop the branch mutation's error on rerender.
+	function renderBranchCommands() {
 		const queryClient = new QueryClient({
 			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
 		});
-		const customWrapper = ({ children }: { children: ReactNode }) => (
-			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		return renderHook(
+			({ turnActive }) => useConversationCommands("ao-1", undefined, false, turnActive),
+			{
+				wrapper: ({ children }: { children: ReactNode }) => (
+					<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+				),
+				initialProps: { turnActive: true },
+			},
 		);
-		queryClient.setQueryData(conversationQueryKey("ao-1"), {
-			pages: [{ sessionId: "ao-1", turns: [{ id: "turn-1", state: "running" }], items: [] }],
-			pageParams: [undefined],
-		});
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper: customWrapper });
+	}
+
+	it("disables branch navigation while a turn is active", () => {
+		const { result, rerender } = renderBranchCommands();
 		expect(result.current.activateBranchDisabled).toBe(true);
 
-		act(() => {
-			queryClient.setQueryData(conversationQueryKey("ao-1"), {
-				pages: [{ sessionId: "ao-1", turns: [{ id: "turn-1", state: "completed" }], items: [] }],
-				pageParams: [undefined],
-			});
-		});
+		rerender({ turnActive: false });
 		expect(result.current.activateBranchDisabled).toBe(false);
 	});
 
 	it("clears CHAT_EDIT_BUSY branch error when the turn finishes", async () => {
 		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
 		apiErrorMessageMock.mockImplementation((error: { message?: string } | undefined) => error?.message ?? "error");
-		const runningWire = {
-			...WIRE,
-			turns: [{ id: "turn-1", state: "running" }],
-			messages: [],
-			activities: [],
-		};
-		getMock.mockResolvedValue({ data: runningWire, error: undefined });
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		const customWrapper = ({ children }: { children: ReactNode }) => (
-			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-		);
-		queryClient.setQueryData(conversationQueryKey("ao-1"), {
-			pages: [{ sessionId: "ao-1", turns: [{ id: "turn-1", state: "running" }], items: [] }],
-			pageParams: [undefined],
-		});
 		const busyError = { code: "CHAT_EDIT_BUSY", message: "stop the current turn before switching conversation branches" };
 		postMock.mockResolvedValue({ data: undefined, error: busyError });
 
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper: customWrapper });
+		const { result, rerender } = renderBranchCommands();
 		await act(async () => {
 			await expect(result.current.activateBranch("branch-previous")).rejects.toBe(busyError);
 		});
@@ -1288,12 +1273,7 @@ describe("conversation branching commands", () => {
 			expect(result.current.activateBranchError).toBe("stop the current turn before switching conversation branches");
 		});
 
-		act(() => {
-			queryClient.setQueryData(conversationQueryKey("ao-1"), {
-				pages: [{ sessionId: "ao-1", turns: [{ id: "turn-1", state: "completed" }], items: [] }],
-				pageParams: [undefined],
-			});
-		});
+		rerender({ turnActive: false });
 		await waitFor(() => {
 			expect(result.current.activateBranchError).toBeUndefined();
 		});
@@ -1302,27 +1282,10 @@ describe("conversation branching commands", () => {
 	it("preserves unrelated branch errors when a turn finishes", async () => {
 		apiErrorCodeMock.mockImplementation((error: { code?: string } | undefined) => error?.code);
 		apiErrorMessageMock.mockImplementation((error: { message?: string } | undefined) => error?.message ?? "error");
-		const runningWire = {
-			...WIRE,
-			turns: [{ id: "turn-1", state: "running" }],
-			messages: [],
-			activities: [],
-		};
-		getMock.mockResolvedValue({ data: runningWire, error: undefined });
-		const queryClient = new QueryClient({
-			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-		});
-		const customWrapper = ({ children }: { children: ReactNode }) => (
-			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-		);
-		queryClient.setQueryData(conversationQueryKey("ao-1"), {
-			pages: [{ sessionId: "ao-1", turns: [{ id: "turn-1", state: "running" }], items: [] }],
-			pageParams: [undefined],
-		});
 		const genericError = { code: "SERVER_ERROR", message: "server error" };
 		postMock.mockResolvedValue({ data: undefined, error: genericError });
 
-		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper: customWrapper });
+		const { result, rerender } = renderBranchCommands();
 		await act(async () => {
 			await expect(result.current.activateBranch("branch-previous")).rejects.toBe(genericError);
 		});
@@ -1330,12 +1293,7 @@ describe("conversation branching commands", () => {
 			expect(result.current.activateBranchError).toBe("server error");
 		});
 
-		act(() => {
-			queryClient.setQueryData(conversationQueryKey("ao-1"), {
-				pages: [{ sessionId: "ao-1", turns: [{ id: "turn-1", state: "completed" }], items: [] }],
-				pageParams: [undefined],
-			});
-		});
+		rerender({ turnActive: false });
 		await waitFor(() => {
 			expect(result.current.activateBranchError).toBe("server error");
 		});

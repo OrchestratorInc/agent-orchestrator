@@ -52,7 +52,7 @@ import { clientForSessionHost } from "../../lib/host-clients";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
-import { can } from "../../types/conversation";
+import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
@@ -207,7 +207,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
+	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(snapshot && activeTurn(snapshot)));
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();

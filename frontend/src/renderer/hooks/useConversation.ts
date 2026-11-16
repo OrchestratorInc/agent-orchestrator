@@ -21,7 +21,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
@@ -33,15 +33,14 @@ import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
 import { useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
-import {
-	type ActivityKind,
-	type ApprovalMode,
-	type ActivityStatus,
-	activeTurn,
-	type ConversationActivity,
-	type ConversationItem,
-	type ConversationMessage,
-	type ConversationSnapshot,
+import type {
+	ActivityKind,
+	ApprovalMode,
+	ActivityStatus,
+	ConversationActivity,
+	ConversationItem,
+	ConversationMessage,
+	ConversationSnapshot,
 	ControllerState,
 	DecisionOption,
 	DiffStatus,
@@ -662,8 +661,12 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	});
 }
 
-/** Commands against a conversation. Each refetches the snapshot on success. */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false) {
+/**
+ * Commands against a conversation. Each refetches the snapshot on success.
+ * `turnActive` comes from the caller's snapshot: reading the conversation
+ * cache here would re-render every consumer on each streamed chunk.
+ */
+export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false, turnActive = false) {
 	const queryClient = useQueryClient();
 	const restoreSession = useRestoreSession();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
@@ -695,23 +698,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		staleTime: Number.POSITIVE_INFINITY,
 	}).data;
 	const trackedDispatch = stateSessionId ? trackedDispatches[stateSessionId] : undefined;
-	const cachedSnapshot = useSyncExternalStore(
-		useCallback(
-			(onStoreChange) => queryClient.getQueryCache().subscribe(onStoreChange),
-			[queryClient],
-		),
-		() => {
-			if (!sessionId) return undefined;
-			const data = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
-				conversationQueryKey(sessionId, hostId),
-			);
-			return data?.pages?.[0];
-		},
-	);
-	const hasActiveTurn = Boolean(
-		(cachedSnapshot && activeTurn(cachedSnapshot)) ||
-		trackedDispatch !== undefined,
-	);
+	const hasActiveTurn = turnActive || trackedDispatch !== undefined;
 	const invalidateSession = useCallback(
 		async (targetSessionId: string) => {
 			if (hostId) await refreshRemoteConversation(queryClient, targetSessionId, hostId);
