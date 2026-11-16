@@ -57,7 +57,8 @@ describe("toCloudWorkspaceSession artifacts", () => {
 		expect(session.requestedOutput).toBe("artifact");
 		expect(session.outputType).toBe("artifact");
 		expect(session.artifactFiles).toEqual([
-			{ kind: "html", name: "report.html", path: "report.html", size: 12, updatedAt: "2026-10-16T01:00:00Z" },
+			// Its SHA-256 lets the Publish button tell it changed since publishing without reading it.
+			{ kind: "html", name: "report.html", path: "report.html", size: 12, updatedAt: "2026-10-16T01:00:00Z", sha256: "a".repeat(64) },
 		]);
 	});
 

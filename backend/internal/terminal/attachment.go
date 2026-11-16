@@ -70,6 +70,11 @@ type attachment struct {
 	opened       bool
 	inputReady   bool
 	pendingInput []pendingInput
+
+	// inputForgotten (guarded by mu) means ForgetTerminalInput dropped this
+	// terminal's input timestamp after its runtime was destroyed: the view
+	// takes no more input and exits instead of re-attaching.
+	inputForgotten bool
 }
 
 type pendingInput struct {
@@ -111,6 +116,13 @@ func (a *attachment) run(ctx context.Context) {
 	failures := 0
 	for {
 		if a.shouldStop(ctx) {
+			return
+		}
+		// The runtime this view was opened on was destroyed. Re-attaching could
+		// reach a new runtime under the same id with input still refused, so
+		// exit and let the client open a fresh view.
+		if a.isInputForgotten() {
+			a.markExited()
 			return
 		}
 
@@ -233,6 +245,10 @@ func reattachBackoff(failures int) time.Duration {
 	return d
 }
 
+// errInputRefused means writeLeased dropped the bytes without writing or
+// buffering them: the view is closed, exited, or its input was forgotten.
+var errInputRefused = errors.New("terminal: attachment closed")
+
 // writeLeased takes ownership of release and calls it only after the bytes
 // reach the PTY or are conclusively discarded. In particular, input buffered
 // during attach keeps its session-input lease until setPTY flushes it, so an
@@ -245,10 +261,10 @@ func (a *attachment) writeLeased(p []byte, release func()) error {
 	chunk := append([]byte(nil), p...)
 
 	a.mu.Lock()
-	if a.closed || a.exited {
+	if a.closed || a.exited || a.inputForgotten {
 		a.mu.Unlock()
 		releaseInput(release)
-		return errors.New("terminal: attachment closed")
+		return errInputRefused
 	}
 	pty := a.pty
 	if pty == nil || !a.inputReady {
@@ -408,6 +424,25 @@ func (a *attachment) isClosed() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.closed
+}
+
+// forgetInput stops the view taking input for a destroyed runtime: input
+// buffered for a pending attach is dropped (its leases released), later writes
+// are refused, and the attach loop exits instead of re-attaching. The caller
+// holds the terminal's write fence, so no write or replay is in flight.
+func (a *attachment) forgetInput() {
+	a.mu.Lock()
+	a.inputForgotten = true
+	pending := a.pendingInput
+	a.pendingInput = nil
+	a.mu.Unlock()
+	releasePendingInput(pending)
+}
+
+func (a *attachment) isInputForgotten() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inputForgotten
 }
 
 func (a *attachment) shouldStop(ctx context.Context) bool {

@@ -7,7 +7,7 @@ import { apiErrorCode, apiErrorDetails } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
 import { LOCAL_HOST } from "../lib/hosts";
-import type { AgentLoginRequest } from "../../main/agent-login-ipc";
+import type { AgentLoginMenuAction, AgentLoginRequest } from "../../main/agent-login-ipc";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "./useShellTerminals";
 
 export type AgentAuthPlan = components["schemas"]["AgentAuthPlan"];
@@ -31,10 +31,22 @@ async function viaMain<T>(hostId: string | undefined, request: AgentLoginRequest
 }
 
 // Credentials stay out of React Query's mutation cache and terminal replay.
-export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string): Promise<AgentLoginSnapshot> {
-	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "start", agentId, method, ...(secret ? { secret } : {}) })
+// An empty secret on a provider-key method reuses the key AO already saved;
+// device publishes the key to the OS user environment or withdraws it; left
+// undefined, the key keeps its current setting.
+export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string, model?: string, device?: boolean): Promise<AgentLoginSnapshot> {
+	return startLogin(agentId, method, hostId, { ...(secret ? { secret } : {}), ...(model ? { model } : {}), ...(device !== undefined ? { device } : {}) });
+}
+
+/** Saves a key for a provider picked from the harness's own catalog, in that harness's own store. */
+export async function startCatalogKeyLogin(agentId: string, provider: string, secret: string, hostId?: string): Promise<AgentLoginSnapshot> {
+	return startLogin(agentId, "provider_key", hostId, { secret, provider });
+}
+
+async function startLogin(agentId: string, method: string, hostId: string | undefined, options: { secret?: string; model?: string; device?: boolean; provider?: string }): Promise<AgentLoginSnapshot> {
+	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "start", agentId, method, ...options })
 		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations", {
-			params: { path: { agent: agentId } }, body: { method, ...(secret ? { secret } : {}) },
+			params: { path: { agent: agentId } }, body: { method, ...options },
 		});
 	// Recover a login whose dialog was lost on reload without starting a second
 	// native process against the same credential store.
@@ -47,13 +59,26 @@ export async function startAgentUILogin(agentId: string, method: string, secret:
 }
 
 export async function getAgentUILogin(agentId: string, operationId: string, hostId?: string): Promise<AgentLoginSnapshot> {
-	let result = await viaMain<AgentLoginSnapshot>(hostId, { action: "get", agentId, operationId });
-	if (result === null) {
-		const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } });
-		result = { data, error, status: response?.status };
-	}
+	const result: LoginResult<AgentLoginSnapshot> = await viaMain<AgentLoginSnapshot>(hostId, { action: "get", agentId, operationId })
+		?? await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } })
+			.then(({ data, error, response }) => ({ data, error, status: response?.status }));
 	const { data, error, status } = result;
 	if (error || !data) throw Object.assign(apiErrorException(error, "Could not check sign-in."), { code: apiErrorCode(error), status });
+	return data;
+}
+
+export type { AgentLoginMenuAction };
+
+/**
+ * Answers the native sign-in menu. option is the label the user chose; the
+ * daemon rejects the action when the menu on screen no longer offers it there.
+ */
+export async function actOnAgentUILogin(agentId: string, operationId: string, action: AgentLoginMenuAction, hostId?: string, option?: string): Promise<AgentLoginSnapshot> {
+	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "act", agentId, operationId, menuAction: action, ...(option ? { option } : {}) })
+		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/actions", {
+			params: { path: { agent: agentId, operationId } }, body: { action, ...(option ? { option } : {}) },
+		});
+	if (error || !data) throw apiErrorException(error, "Could not control sign-in.");
 	return data;
 }
 
@@ -121,4 +146,13 @@ export async function probeAgentAuth(agentId: string, hostId?: string) {
 	});
 	if (error || !data) throw new AgentCheckError("Authentication probe", error, response?.status);
 	return data;
+}
+
+export type CatalogProvider = components["schemas"]["CatalogProvider"];
+
+/** Key-only providers in the harness's own provider catalog on this host. */
+export async function fetchCatalogProviders(agentId: string, hostId?: string): Promise<CatalogProvider[]> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/providers", { params: { path: { agent: agentId } } });
+	if (error || !data) throw apiErrorException(error, "Could not load providers.");
+	return data.providers;
 }

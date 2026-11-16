@@ -186,6 +186,7 @@ type AppSetting struct {
 	VersionRefresh       bool
 	ComputerUse          bool
 	SessionRetentionDays int64
+	AccountHandoff       bool
 	LimitHistory         bool
 }
 
@@ -585,6 +586,19 @@ type PRComment struct {
 	ReviewID         string
 }
 
+type PRDetail struct {
+	PRURL                string
+	Description          string
+	DescriptionTruncated int64
+	Labels               string
+	RequestedReviewers   string
+	Commits              string
+	CommitCount          int64
+	ObservedAt           time.Time
+	Conversation         string
+	ProviderUpdatedAt    sql.NullTime
+}
+
 type PRReview struct {
 	PRURL            string
 	ReviewID         string
@@ -784,6 +798,8 @@ type Session struct {
 	TerminatedAt                     sql.NullTime
 	ImportSource                     string
 	DisplayNameExplicit              bool
+	AcceptedDeliveryID               string
+	AcceptedDeliveryLaunchID         string
 }
 
 type SessionAgentAccount struct {
@@ -831,6 +847,17 @@ type SessionCleanupFact struct {
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
 	ReportOnly           bool
+}
+
+type SessionFork struct {
+	ForkSessionID   string
+	SourceSessionID string
+	RootSessionID   string
+	SourceTurnID    string
+	SourceTitle     string
+	ContextMode     string
+	ForkNumber      int64
+	CreatedAt       time.Time
 }
 
 type SessionHarnessRelease struct {
@@ -882,6 +909,15 @@ type SessionInterfaceTransitionMessage struct {
 type SessionNumFloor struct {
 	IDPrefix string
 	MaxNum   int64
+}
+
+type SessionSearchDeleted struct {
+	SessionID string
+}
+
+type SessionSearchOwner struct {
+	ID    int64
+	Token string
 }
 
 type SessionTelemetry struct {

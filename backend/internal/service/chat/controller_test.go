@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -571,6 +572,40 @@ func TestFailedChatProbeCanBeRetriedThenCached(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Fatalf("Probe attempts = %d, want one failed attempt plus one cached success", attempts)
+	}
+}
+
+func TestContextualChatPreflightRevalidatesEnvironmentAfterCapabilityCache(t *testing.T) {
+	sentinel := errors.New("required native config missing")
+	driver := acpdriver.New(acpdriver.Config{
+		Harness:      domain.HarnessCodex,
+		Capabilities: productionCaps(),
+		Probe:        func(context.Context) error { return nil },
+		Launch: func(context.Context, acpdriver.LaunchConfig) (acpdriver.Launch, error) {
+			t.Fatal("preflight launched a provider")
+			return acpdriver.Launch{}, nil
+		},
+		ValidateEnvironment: func(_ context.Context, env map[string]string) error {
+			if env["CONFIG"] != "/project/native.yaml" {
+				return sentinel
+			}
+			return nil
+		},
+	}, nil)
+	svc := chatsvc.New(chatsvc.Options{Drivers: fakeRegistry{driver: driver}})
+	if err := svc.PreflightChat(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault); err != nil {
+		t.Fatalf("global capability probe: %v", err)
+	}
+	if err := svc.PreflightChatWithEnv(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault, map[string]string{"CONFIG": "/project/native.yaml"}); err != nil {
+		t.Fatalf("project config rejected: %v", err)
+	}
+	if err := svc.PreflightChatWithEnv(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault, nil); !errors.Is(err, sentinel) {
+		t.Fatalf("cached capabilities bypassed required config: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := svc.PreflightChatWithEnv(ctx, domain.HarnessCodex, ports.PermissionModeDefault, map[string]string{"CONFIG": "/project/native.yaml"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cached capabilities bypassed cancellation: %v", err)
 	}
 }
 
@@ -3198,6 +3233,17 @@ func newHarnessWithConversationAndStoreForHarness(
 	agentHarness domain.AgentHarness,
 ) *harness {
 	t.Helper()
+	return newHarnessInWorkspace(t, conv, wrapStore, agentHarness, t.TempDir())
+}
+
+func newHarnessInWorkspace(
+	t *testing.T,
+	conv ports.ChatConversation,
+	wrapStore func(*sqlite.Store) chatsvc.Store,
+	agentHarness domain.AgentHarness,
+	workspace string,
+) *harness {
+	t.Helper()
 	st := openStore(t)
 	if agentHarness != domain.HarnessCodex {
 		record, found, err := st.GetSession(context.Background(), testSession)
@@ -3271,7 +3317,7 @@ func newHarnessWithConversationAndStoreForHarness(
 		SessionID:     testSession,
 		ProjectID:     testProject,
 		Harness:       agentHarness,
-		WorkspacePath: t.TempDir(),
+		WorkspacePath: workspace,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -3466,6 +3512,9 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	if snapshot.Turns[0].ErrorMessage != message {
 		t.Fatalf("turn error = %q", snapshot.Turns[0].ErrorMessage)
 	}
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
 	if snapshot.Conversation.Account.ReauthReason != message {
 		t.Fatalf("reauth reason = %q", snapshot.Conversation.Account.ReauthReason)
 	}
@@ -3473,6 +3522,49 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 		if activity.Kind == domain.ActivityKindError || strings.Contains(activity.ProviderItemID, "ao-reauth-") {
 			t.Fatalf("terminal failure was duplicated as an activity: %#v", activity)
 		}
+	}
+}
+
+// Claude's adapter sends "Not logged in · Please run /login" as a typed login
+// failure. The chat turns that into a sign-in button, so the turn carries the
+// code; a failure that is not about the login carries none.
+func TestRefusedLoginTurnCarriesAuthRequiredCode(t *testing.T) {
+	h := newHarness(t)
+	signedOut, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "signed-out-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: signedOut.ProviderTurnID,
+		TurnState: domain.TurnStateCompleted,
+		Err:       ports.NewChatProviderFailure("Not logged in · Please run /login", "", ports.ErrChatAuthRequired),
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	other, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "again", ClientMessageID: "overloaded-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: other.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("provider overloaded"),
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 2 && s.Turns[1].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("signed-out turn failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
+	if snapshot.Turns[0].ErrorMessage != "Not logged in · Please run /login" {
+		t.Fatalf("signed-out turn keeps the provider text for details, got %q", snapshot.Turns[0].ErrorMessage)
+	}
+	if got := snapshot.Turns[1].FailureCode; got != "" {
+		t.Fatalf("ordinary failure code = %q, want none", got)
 	}
 }
 

@@ -5,8 +5,12 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { LOCAL_HOST } from "../lib/hosts";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 
-/** How long a live card stays on screen with its preview drawn before its snapshot is taken. */
-const SNAPSHOT_AFTER_MS = 1_500;
+/**
+ * How long a live card stays on screen with its preview drawn before its snapshot is taken.
+ * Short, so a card scrolled back to shows its snapshot instead of drawing its preview again;
+ * a scroll that only passes a card still asks for none.
+ */
+const SNAPSHOT_AFTER_MS = 500;
 
 // Snapshot URLs that answered "not cached", so a card that comes back goes straight to its live
 // preview; and those rendered since, whose URL gets a fresh query so no failed load is reused.
@@ -71,7 +75,9 @@ export function ArtifactSnapshotThumbnail({ row, previewLive = true }: { row: Ar
 			<img
 				alt=""
 				className="size-full object-cover object-top"
+				decoding="async"
 				draggable={false}
+				loading="lazy"
 				onError={() => {
 					missing.add(url);
 					missed();

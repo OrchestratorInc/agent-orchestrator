@@ -6,11 +6,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareFile, CloudShareGrant, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
-import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
+import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, resetShareCachesForTests, useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
 import { TooltipProvider } from "./ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
 	status: "authenticated" as string,
+	userId: "u-1",
 	baseUrl: "https://cp.test",
 	openSettings: vi.fn(),
 }));
@@ -19,7 +20,7 @@ vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloud
 vi.mock("../lib/cloud-session", () => ({
 	useCloudSession: () => ({
 		status: mocks.status,
-		session: mocks.status === "authenticated" ? { user: { id: "u-1", email: "aditi@acme.co", displayName: "Aditi Chauhan" } } : null,
+		session: mocks.status === "authenticated" ? { user: { id: mocks.userId, email: "aditi@acme.co", displayName: "Aditi Chauhan" } } : null,
 	}),
 }));
 vi.mock("../stores/ui-store", () => ({
@@ -31,7 +32,7 @@ const SHARE_ID = "0b6e7a3c-2f4d-4a51-9c8e-1d2f3a4b5c6d";
 const localFile = { sessionId: "sess-1", path: "docs/report.html", projectId: "proj-1" };
 /** A cloud session's file, already in the bucket: the click publishes it. */
 const cloudFile: Omit<CloudShareFile, "baseUrl" | "shareId"> = { source: "cloud", orgId: "org-1", sessionId: "cloud-1", path: "docs/report.html", projectId: "" };
-const inspection: CloudShareInspection = { name: "report.html", size: 2048, secretFindings: [], unsupported: false, fingerprint: "fp-1" };
+const inspection: CloudShareInspection = { name: "report.html", size: 2048, unsupported: false, fingerprint: "fp-1" };
 const links: CloudShareLinks = { shares: [], limit: 3, used: 1, unlimited: false, privateLinks: true };
 const share: CloudShareLink = {
 	id: SHARE_ID, slug: "abc", name: "report.html", contentUrl: "https://abc.share.test/", viewerUrl: "https://viewer.test/artifact/abc",
@@ -72,9 +73,11 @@ async function openMenuPanel(file: Omit<CloudShareFile, "baseUrl" | "shareId"> =
 
 beforeEach(() => {
 	mocks.status = "authenticated";
+	mocks.userId = "u-1";
 	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
 	vi.restoreAllMocks();
+	resetShareCachesForTests();
 });
 
 describe("ShareArtifactButton on a cloud session's file", () => {
@@ -136,7 +139,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
 		await userEvent.type(field, "Maya@acme.co,");
-		await userEvent.click(screen.getByRole("button", { name: "Invite" }));
+		await userEvent.click(screen.getByRole("button", { name: "Add" }));
 		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, ["Maya@acme.co"]);
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(screen.getByText("Can view")).toBeTruthy();
@@ -148,16 +151,16 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByText("Only you")).toBeTruthy();
 	});
 
-	it("keeps Invite disabled while a chip is not an email address, and says which", async () => {
+	it("keeps Add disabled while a chip is not an email address, and says which", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([]);
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
 		await userEvent.type(field, "maya@acme.co ravi@acme ");
 		expect(screen.getByRole("alert").textContent).toBe("“ravi@acme” isn't an email address.");
-		expect(screen.getByRole("button", { name: "Invite" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
 		await userEvent.click(screen.getByRole("button", { name: "Remove ravi@acme" }));
-		expect(screen.getByRole("button", { name: "Invite" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
 		expect(invite).not.toHaveBeenCalled();
 	});
 
@@ -183,15 +186,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(await screen.findByText("Anyone without an invite now has to sign in, and can't open it. Pages already open stop working when refreshed.")).toBeTruthy();
 		await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
 		expect(writeText).toHaveBeenCalledWith("https://viewer.test/artifact/abc");
-	});
-
-	it("shows a credential warning on a private link, and in the menu before making it public", async () => {
-		stub({ ...inspection, secretFindings: ["AWS access key"] }, links, { status: "published", replaced: false, share });
-		await openPopover(cloudFile);
-		// A private link exposes nothing yet: it publishes at once, warning on the link.
-		expect((await screen.findByRole("alert")).textContent).toContain("Only you and the people you invite can open it.");
-		await userEvent.click(screen.getByRole("button", { name: "Only you" }));
-		expect(screen.getByRole("menuitemradio", { name: /Anyone with the link/ }).textContent).toContain("AWS access key");
 	});
 
 	it("unpublishes after an inline confirmation naming who it was shared with, then offers to publish again", async () => {
@@ -384,30 +378,12 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya, dev]);
 		const popover = await openPopover(cloudFile, "report.html", "Published");
 		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Invite" }));
+		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("dev@acme.co")).toBeTruthy();
 		// The read started on opening lands last, without dev.
 		act(() => answerRead([maya]));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(within(popover).getByText("dev@acme.co")).toBeTruthy();
-	});
-
-	it("asks before making a link public while it looks like it holds a credential", async () => {
-		const setAccess = vi.spyOn(aoBridge.cloudShare, "setAccess").mockResolvedValue({ ...share, access: "anyone" });
-		stub({ ...inspection, shareId: SHARE_ID, secretFindings: ["AWS access key"] }, { ...links, shares: [share] });
-		const popover = await openPopover(cloudFile, "report.html", "Published");
-		await userEvent.click(await within(popover).findByRole("button", { name: "Only you" }));
-		await userEvent.click(screen.getByRole("menuitemradio", { name: /Anyone with the link/ }));
-		expect(await within(popover).findByText("Make this link public?")).toBeTruthy();
-		expect(setAccess).not.toHaveBeenCalled();
-		await userEvent.click(within(popover).getByRole("button", { name: "Make public" }));
-		expect(setAccess).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, "anyone");
-	});
-
-	it("warns about a credential the published copy held, though the file no longer does", async () => {
-		stub({ ...inspection, shareId: SHARE_ID, publishedSecretFindings: ["GitHub token"] }, { ...links, shares: [share] });
-		const popover = await openPopover(cloudFile, "report.html", "Published");
-		expect((await within(popover).findByRole("alert")).textContent).toContain("GitHub token");
 	});
 
 	it("opens a published file from the artifact menu without publishing again", async () => {
@@ -447,11 +423,47 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...localFile, baseUrl: "https://cp.test", fingerprint: "fp-1", access: "anyone" });
 	});
 
-	it("shows a credential found above Publish", async () => {
-		stub({ ...inspection, secretFindings: ["AWS access key"] }, links);
-		await openPopover(localFile);
-		expect((await screen.findByRole("alert")).textContent).toContain("AWS access key");
-		expect(screen.getByRole("button", { name: "Publish" })).toBeTruthy();
+	it("keeps who it is for, as chosen, when a fresher link list decides the panel again", async () => {
+		// The button reads the list for a link since unpublished, so the panel opens on that cached list.
+		const revoked = { ...share, revokedAt: "2026-11-01T00:00:00Z" };
+		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [revoked] }, { status: "published", replaced: false, share: { ...share, access: "anyone" } });
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Publish: report.html" });
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
+		let answer: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		await userEvent.click(button);
+		await userEvent.click(await screen.findByRole("button", { name: "Only you" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: /Anyone with the link/ }));
+		// The background read answers late, with another link used since: the panel is decided again.
+		await act(async () => answer({ ...links, used: 2, shares: [revoked] }));
+		expect(screen.getByRole("button", { name: "Anyone with the link" })).toBeTruthy();
+		expect(screen.getByText("1 of 3 free links left")).toBeTruthy();
+		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...localFile, baseUrl: "https://cp.test", fingerprint: "fp-1", access: "anyone" });
+	});
+
+	it("never lets the opening's background list read undo a publish that answered changed", async () => {
+		// Opened on the list the button read; the refresh behind it answers late.
+		const revoked = { ...share, revokedAt: "2026-11-01T00:00:00Z" };
+		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [revoked] }, {
+			status: "changed",
+			inspection: { ...inspection, shareId: SHARE_ID, fingerprint: "fp-2" },
+		});
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Publish: report.html" });
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
+		let answer: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		await userEvent.click(button);
+		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
+		expect(await screen.findByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
+		// The late answer differs, but the publish's answer stands.
+		await act(async () => answer({ ...links, used: 2, shares: [revoked] }));
+		expect(screen.getByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
+		publishSpy.mockResolvedValue({ status: "published", replaced: false, share });
+		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
+		expect(publishSpy).toHaveBeenLastCalledWith(expect.objectContaining({ fingerprint: "fp-2" }));
 	});
 
 	it("says Publishing while it uploads, with Cancel, and keeps going when the popover closes", async () => {
@@ -482,15 +494,14 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		expect(publishSpy).toHaveBeenCalledTimes(1);
 	});
 
-	it("shows the file again, with what it now holds, when it changed while publishing", async () => {
+	it("shows the file again when it changed while publishing, and publishes its newest version", async () => {
 		const { publishSpy } = stub(inspection, links, {
 			status: "changed",
-			inspection: { ...inspection, size: 4096, secretFindings: ["GitHub token"], fingerprint: "fp-2" },
+			inspection: { ...inspection, size: 4096, fingerprint: "fp-2" },
 		});
 		await openPopover(localFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Publish" }));
 		expect(await screen.findByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
-		expect(screen.getByRole("alert").textContent).toContain("GitHub token");
 		publishSpy.mockResolvedValue({ status: "published", replaced: false, share });
 		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
 		expect(publishSpy).toHaveBeenLastCalledWith({ ...localFile, baseUrl: "https://cp.test", fingerprint: "fp-2", access: "restricted" });
@@ -519,29 +530,23 @@ describe("ShareArtifactButton on a file on this computer", () => {
 });
 
 describe("ShareArtifactButton once the file changed", () => {
-	it("splits into Republish and the link's access; Republish puts the newer version on the same link", async () => {
+	it("shows one Republish button, with no separate access button, and it puts the newer version on the same link", async () => {
 		const { inspectSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] }, { status: "published", replaced: true, share });
 		publishSpy.mockImplementation(async () => {
 			inspectSpy.mockResolvedValue({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" });
 			return { status: "published", replaced: true, share };
 		});
-		renderButton(cloudFile);
-		await userEvent.click(await screen.findByRole("button", { name: "Republish: report.html" }));
+		const { container } = renderButton(cloudFile);
+		const republish = await screen.findByRole("button", { name: "Republish: report.html" });
+		expect(container.querySelector("[data-share-split]")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Access and people: report.html" })).toBeNull();
+		await userEvent.click(republish);
 		await waitFor(() => expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID }));
 		// The popover opens on the published link, and never offers Republish itself.
 		expect(await within(screen.getByRole("dialog")).findByText("Published")).toBeTruthy();
 		expect(within(screen.getByRole("dialog")).queryByRole("button", { name: "Republish" })).toBeNull();
 		// Once republished, the button checks again and is back to Published.
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
-	});
-
-	it("opens the popover from the access half without republishing", async () => {
-		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [share] });
-		renderButton(cloudFile);
-		await screen.findByRole("button", { name: "Republish: report.html" });
-		await userEvent.click(screen.getByRole("button", { name: "Access and people: report.html" }));
-		expect(await within(screen.getByRole("dialog")).findByText("Published")).toBeTruthy();
-		expect(publishSpy).not.toHaveBeenCalled();
 	});
 
 	it("says Republish after a pure rename, and one click updates the same link under the new name", async () => {
@@ -558,28 +563,15 @@ describe("ShareArtifactButton once the file changed", () => {
 		}));
 	});
 
-	it("waits under a warning before republishing a credential to a public link", async () => {
-		const publicShare = { ...share, access: "anyone" as const };
-		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0", secretFindings: ["AWS access key"] }, { ...links, shares: [publicShare] }, { status: "published", replaced: true, share: publicShare });
-		renderButton(cloudFile);
-		await userEvent.click(await screen.findByRole("button", { name: "Republish: report.html" }));
-		const dialog = screen.getByRole("dialog");
-		expect((await within(dialog).findByRole("alert")).textContent).toContain("AWS access key");
-		expect(publishSpy).not.toHaveBeenCalled();
-		await userEvent.click(within(dialog).getByRole("button", { name: "Republish" }));
-		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1", shareId: SHARE_ID });
-	});
-
 	it("stays on the link, with the newest version to republish, when the file changes during a republish", async () => {
 		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-0" }, { ...links, shares: [{ ...share, access: "anyone" }] }, {
 			status: "changed",
-			inspection: { ...inspection, shareId: SHARE_ID, secretFindings: ["GitHub token"], fingerprint: "fp-2" },
+			inspection: { ...inspection, shareId: SHARE_ID, fingerprint: "fp-2" },
 		});
 		renderButton(localFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Republish: report.html" }));
 		const dialog = await screen.findByRole("dialog");
 		expect(await within(dialog).findByText("This file changed while it was being published. Check it and publish again.")).toBeTruthy();
-		expect(within(dialog).getByRole("alert").textContent).toContain("GitHub token");
 		publishSpy.mockResolvedValue({ status: "published", replaced: true, share });
 		await userEvent.click(within(dialog).getByRole("button", { name: "Republish" }));
 		expect(publishSpy).toHaveBeenLastCalledWith({ ...localFile, baseUrl: "https://cp.test", fingerprint: "fp-2", shareId: SHARE_ID });
@@ -636,15 +628,6 @@ describe("ShareArtifactButton where links are public only", () => {
 		expect(screen.queryByRole("button", { name: "Anyone with the link" })).toBeNull();
 	});
 
-	it("waits for Publish under the warning when the file looks like it holds a credential", async () => {
-		const { publishSpy } = stub({ ...inspection, secretFindings: ["AWS access key"] }, publicOnly, { status: "published", replaced: false, share });
-		await openPopover(cloudFile);
-		expect((await screen.findByRole("alert")).textContent).toBe("This file looks like it contains secrets (AWS access key). Publishing it makes them public.");
-		expect(publishSpy).not.toHaveBeenCalled();
-		await userEvent.click(screen.getByRole("button", { name: "Publish" }));
-		expect(publishSpy).toHaveBeenCalledExactlyOnceWith({ ...cloudFile, baseUrl: "https://cp.test", fingerprint: "fp-1" });
-	});
-
 	it("sets up a file on this computer with only Publish", async () => {
 		const { publishSpy } = stub(inspection, publicOnly, { status: "published", replaced: false, share });
 		await openPopover(localFile);
@@ -688,6 +671,129 @@ describe("ShareArtifactButton states", () => {
 		vi.spyOn(aoBridge.cloudShare, "inspect").mockRejectedValue(new Error("Error invoking remote method 'cloudShare:inspect': CloudShareError: The file is no longer available."));
 		await userEvent.click(screen.getByRole("button", { name: "Try again" }));
 		expect(await screen.findByText("Publishing failed: The file is no longer available.")).toBeTruthy();
+	});
+
+	it("opens on the link list the button already read, without waiting for another", async () => {
+		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Published: report.html" });
+		expect(listSpy).toHaveBeenCalledTimes(1);
+		// The control plane is slow now: the panel still opens on its link at once.
+		let answer: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		await userEvent.click(button);
+		expect(await screen.findByRole("button", { name: "Copy link" })).toBeTruthy();
+		expect(screen.queryByText("Checking the file…")).toBeNull();
+		// The list is read again behind it; an unchanged answer changes nothing.
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));
+		await act(async () => answer({ ...links, shares: [share] }));
+		expect(screen.getByRole("button", { name: "Copy link" })).toBeTruthy();
+	});
+
+	it("opens again on the fresh list when the cached one was out of date", async () => {
+		const { listSpy, publishSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Published: report.html" });
+		// Unpublished somewhere else since the button read the list.
+		listSpy.mockResolvedValue({ ...links, shares: [{ ...share, revokedAt: "2026-11-01T00:00:00Z" }] });
+		await userEvent.click(button);
+		expect(await screen.findByText("This file's link was unpublished. Publishing gives it a new link.")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "Copy link" })).toBeNull();
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("checks the file once to draw the button and once when Publish opens, and nothing on hover", async () => {
+		const { inspectSpy } = stub(inspection, links);
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Publish: report.html" });
+		await waitFor(() => expect(inspectSpy).toHaveBeenCalledTimes(1));
+		await userEvent.hover(button);
+		expect(inspectSpy).toHaveBeenCalledTimes(1);
+		await userEvent.click(button);
+		expect(await screen.findByRole("button", { name: "Publish" })).toBeTruthy();
+		expect(inspectSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("names a cloud file's version by the SHA-256 its list gave, and shows Republish when it changed", async () => {
+		const { inspectSpy } = stub({ ...inspection, shareId: SHARE_ID, fingerprint: "sha-2", publishedFingerprint: "sha-1" }, { ...links, shares: [share] });
+		renderButton({ ...cloudFile, fingerprint: "sha-2" });
+		expect(await screen.findByRole("button", { name: "Republish: report.html" })).toBeTruthy();
+		expect(inspectSpy).toHaveBeenCalledWith(expect.objectContaining({ source: "cloud", fingerprint: "sha-2" }));
+	});
+
+	it("treats a fingerprint recorded with a content hash by an older version as the same size and time", async () => {
+		stub({ ...inspection, shareId: SHARE_ID, fingerprint: "2048:1700000000000", publishedFingerprint: "abc123:2048:1700000000000" }, { ...links, shares: [share] });
+		renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
+	});
+
+	it.each(["restricted", "anyone"] as const)("keeps the Publish icon on a %s link's Published button", async (access) => {
+		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, access }] });
+		renderButton(localFile);
+		const button = await screen.findByRole("button", { name: "Published: report.html" });
+		// Who the link opens for is in the popover, not on the button.
+		expect(button.querySelector("svg")).toHaveClass("icon-share");
+		expect(button.querySelector(".icon-globe, .icon-link, .icon-lock")).toBeNull();
+	});
+
+	it("reads Published at once for a file the artifact list has published, before its check answers", async () => {
+		const { inspectSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		inspectSpy.mockReturnValue(new Promise(() => undefined));
+		render(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" published /></TooltipProvider></QueryClientProvider>);
+		const button = await screen.findByRole("button", { name: "Published: report.html" });
+		expect(button.querySelector("svg")).toHaveClass("icon-share");
+	});
+
+	it("never reads one account's cached links after signing out and in again", async () => {
+		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		const first = renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
+		// Signed out: the mounted button sees it, and the cached list is dropped.
+		mocks.status = "unauthenticated";
+		first.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
+		first.unmount();
+		// Signed in again; this time the list has no links.
+		mocks.status = "authenticated";
+		listSpy.mockResolvedValue({ ...links, shares: [] });
+		renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Publish: report.html" })).toBeTruthy();
+		expect(listSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("never reads another account's cached links, even without seeing a sign-out", async () => {
+		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		const first = renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
+		first.unmount();
+		mocks.userId = "u-2";
+		listSpy.mockResolvedValue({ ...links, shares: [] });
+		renderButton(localFile);
+		expect(await screen.findByRole("button", { name: "Publish: report.html" })).toBeTruthy();
+		expect(listSpy).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops a list read started for an account that signed out before it answered", async () => {
+		const { listSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		let answer: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+		const first = renderButton(localFile);
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(1));
+		mocks.status = "unauthenticated";
+		first.rerender(<QueryClientProvider client={new QueryClient()}><TooltipProvider><ShareArtifactButton file={localFile} name="report.html" /></TooltipProvider></QueryClientProvider>);
+		// The old read answers after the sign-out: it is not kept for the next sign-in.
+		await act(async () => answer({ ...links, shares: [share] }));
+		first.unmount();
+		mocks.status = "authenticated";
+		const inspectSpy = vi.mocked(aoBridge.cloudShare.inspect);
+		const checks = inspectSpy.mock.calls.length;
+		let empty: (value: CloudShareLinks) => void = () => undefined;
+		listSpy.mockReturnValue(new Promise((resolve) => { empty = resolve; }));
+		renderButton(localFile);
+		// The new button's check runs; it must ask for the list, not reuse the old answer.
+		await waitFor(() => expect(inspectSpy.mock.calls.length).toBeGreaterThan(checks));
+		await waitFor(() => expect(listSpy).toHaveBeenCalledTimes(2));
+		await act(async () => empty({ ...links, shares: [] }));
+		expect(screen.getByRole("button", { name: "Publish: report.html" })).toBeTruthy();
 	});
 
 	it("disables Publish for a video", async () => {
@@ -736,6 +842,21 @@ describe("useReconciledShareLinks", () => {
 		await waitFor(() => expect(result.current.size).toBe(2));
 		expect(result.current.get("https://viewer.test/artifact/abc")).toBe("restricted");
 		expect(result.current.get("https://pub.share.test/")).toBe("anyone");
+	});
+
+	it("shares one list read between surfaces mounted together", async () => {
+		mocks.baseUrl = "https://reconcile-shared.test";
+		vi.spyOn(aoBridge.cloudShare, "available").mockResolvedValue(true);
+		const list = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		const client = new QueryClient();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const first = renderHook(() => useReconciledShareLinks(), { wrapper });
+		const second = renderHook(() => useReconciledShareLinks(), { wrapper });
+		await waitFor(() => expect(first.result.current.size).toBe(1));
+		expect(second.result.current.get("https://viewer.test/artifact/abc")).toBe("restricted");
+		expect(list).toHaveBeenCalledTimes(1);
+		expect(invalidate).toHaveBeenCalledTimes(1);
 	});
 
 	it("asks for nothing while signed out", async () => {

@@ -89,6 +89,13 @@ describe("NewTaskNavigator", () => {
 		]);
 	});
 
+	it("marks the page only for a report, so the next new chat is a normal one", () => {
+		renderNavigator();
+		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID, undefined, { report: true }));
+		act(() => useUiStore.getState().requestNewTask(STANDALONE_WORKSPACE_ID));
+		expect(navigateMock.mock.calls.map(([target]) => target.search.report)).toEqual([true, undefined]);
+	});
+
 	it("replaces the new chat page rather than stacking another one", () => {
 		route.onNewChat = true;
 		renderNavigator();

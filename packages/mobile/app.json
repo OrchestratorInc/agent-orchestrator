@@ -2,7 +2,7 @@
 	"expo": {
 		"name": "Orchestrator",
 		"slug": "ao-mobile",
-		"version": "2.3.0",
+		"version": "2.4.0",
 		"runtimeVersion": {
 			"policy": "fingerprint"
 		},

@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference, formatCapturedFileReferences } from "../../../shared/chat-file-reference";
 import { cloudAttachmentReference } from "../../lib/cloud-attachments";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { settingsQueryKey } from "../../hooks/useSettings";
@@ -14,7 +15,7 @@ import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
-import { appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, toSnapshot } from "./CloudSessionChatSurface";
+import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -24,22 +25,32 @@ const cloudMocks = vi.hoisted(() => ({
 	sendSessionMessage: vi.fn(),
 	cancelTurn: vi.fn(),
 	steerTurn: vi.fn(),
+	editQueuedMessage: vi.fn(),
+	deleteQueuedMessage: vi.fn(),
+	steerQueuedMessage: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
 	listUserAgentModels: vi.fn(),
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
+	listUserProviderConnections: vi.fn(),
+	getSession: vi.fn(),
+	getInterfaceTransition: vi.fn(),
+	startInterfaceTransition: vi.fn(),
 	chatProps: vi.fn(),
 }));
 // The control plane's base URL and attachment limit, for the tests that attach files.
-const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined }));
+const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined, features: [] as string[], agentSwitchHarnesses: [] as string[], meUserId: "user-1" }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks, baseUrl: cloudSetup.baseUrl, userId: "user-1" }),
 }));
+vi.mock("../../hooks/useCloudMeUserId", () => ({ useCloudMeUserId: () => cloudSetup.meUserId }));
 vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({
-		features: cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"],
+		features: [...(cloudSetup.maxAttachmentBytes === undefined ? [] : ["attachments"]), ...cloudSetup.features],
 		maxAttachmentBytes: cloudSetup.maxAttachmentBytes,
+		agentSwitchHarnesses: cloudSetup.agentSwitchHarnesses,
+		chatHarnesses: ["claude-code", "codex", "cursor"],
 	}),
 }));
 vi.mock("./ChatWorkspace", () => ({
@@ -97,6 +108,130 @@ describe("CloudSessionChatSurface", () => {
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
 		cloudSetup.maxAttachmentBytes = undefined;
+		cloudSetup.features = [];
+		cloudSetup.agentSwitchHarnesses = [];
+		cloudSetup.meUserId = "user-1";
+	});
+
+	describe("switching the session's agent", () => {
+		const cloudSession = { ...session, cloud: { orgId: "org-1", createdByUserId: "user-1" } };
+		const transition = {
+			id: "transition-1", sessionId: session.id, sourceMode: "chat", targetMode: "chat", policy: "drain", phase: "requested",
+			sourceHarness: "codex", targetHarness: "claude-code", createdAt: session.updatedAt, updatedAt: session.updatedAt,
+		};
+		beforeEach(() => {
+			cloudSetup.agentSwitchHarnesses = ["claude-code", "codex", "cursor", "opencode"];
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+			cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+			// Signed in to Claude Code and Cursor; not to opencode, which has no Chat anyway.
+			cloudMocks.listUserProviderConnections.mockReset().mockResolvedValue({ providerConnections: [
+				{ provider: "claude-code", label: "default", validationState: "valid" },
+				{ provider: "cursor", label: "default", validationState: "valid" },
+			] });
+			cloudMocks.getSession.mockReset().mockResolvedValue({ session: { interfaceMode: "chat" } });
+			cloudMocks.getInterfaceTransition.mockReset().mockResolvedValue({ supported: true, targetMode: "tui" });
+			cloudMocks.startInterfaceTransition.mockReset().mockResolvedValue({ transition });
+			cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+			cloudMocks.chatProps.mockClear();
+		});
+
+		function renderSurface() {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			return render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={cloudSession} /></QueryClientProvider>);
+		}
+
+		it("offers the agents the control plane can switch to that the person is signed in to", async () => {
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.map((agent: { id: string }) => agent.id))
+				.toEqual(["claude-code", "codex", "cursor"]));
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ disabled: false, cloudOrgId: "org-1", harnessView: "cloud" });
+		});
+
+		it("keeps the session's agent where the control plane cannot switch it", async () => {
+			cloudSetup.agentSwitchHarnesses = [];
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps).toHaveBeenCalled());
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ agents: [{ id: "codex" }], disabled: true });
+		});
+
+		// The new agent runs on the creator's login for it, and the control plane
+		// refuses anyone else (403): a member sees the session's agent, no switch.
+		it("offers no switch to a member who did not start the session", async () => {
+			cloudSetup.meUserId = "user-2";
+			renderSurface();
+			// Once the person's logins are in, the creator would be offered Claude Code and Cursor.
+			await waitFor(() => expect(cloudMocks.listUserProviderConnections).toHaveBeenCalled());
+			await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch).toMatchObject({ agents: [{ id: "codex" }], disabled: true });
+		});
+
+		it("switches with the next message, which goes to the new agent without the old agent's picks", async () => {
+			localStorage.setItem(`cloud-chat-settings:org-1:${session.id}:codex`, JSON.stringify({ model: "gpt-5-codex", reasoningEffort: "high" }));
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.length).toBeGreaterThan(1));
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness: "claude-code", model: "claude-opus-4-5", effort: "high" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness: "claude-code" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("now with Claude", undefined, "switch-1"); });
+			expect(cloudMocks.startInterfaceTransition).toHaveBeenCalledWith("org-1", session.id,
+				{ targetMode: "chat", policy: "drain", targetHarness: "claude-code", model: "claude-opus-4-5", reasoningEffort: "high" });
+			expect(cloudMocks.sendSessionMessage).toHaveBeenCalledTimes(1);
+			expect(cloudMocks.startInterfaceTransition.mock.invocationCallOrder[0]).toBeLessThan(cloudMocks.sendSessionMessage.mock.invocationCallOrder[0]);
+			const request = cloudMocks.sendSessionMessage.mock.calls[0][2];
+			expect(request.text).toBe("now with Claude");
+			expect(request).not.toHaveProperty("model");
+			expect(request).not.toHaveProperty("reasoningEffort");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toBeUndefined());
+		});
+
+		it("keeps the switch's model and effort as the new agent's choice, so its next message sends them", async () => {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+			const surface = (provider: WorkspaceSession["provider"]) => <QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...cloudSession, provider }} /></QueryClientProvider>;
+			const view = render(surface("codex"));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.length).toBeGreaterThan(1));
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness: "claude-code", model: "sonnet", effort: "low" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness: "claude-code" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("now with Claude", undefined, "switch-3"); });
+			expect(cloudMocks.startInterfaceTransition).toHaveBeenCalledWith("org-1", session.id,
+				expect.objectContaining({ targetHarness: "claude-code", model: "sonnet", reasoningEffort: "low" }));
+			// The switch committed: the session now runs Claude Code, on the model and effort it was switched with.
+			view.rerender(surface("claude-code"));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "sonnet", reasoningEffort: "low" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("and again", undefined, "after-switch"); });
+			expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).toMatchObject({ text: "and again", model: "sonnet", reasoningEffort: "low" });
+
+			// On Claude the effort becomes High; then to Codex and back to Claude, switched on Low again.
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].onChooseSettings({ ...cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings, reasoningEffort: "high" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ reasoningEffort: "high" }));
+			const switchTo = async (harness: string, model: string, provider: WorkspaceSession["provider"]) => {
+				act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness, model, effort: "low" }));
+				await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness }));
+				await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend(`now with ${harness}`, undefined, `switch-${harness}`); });
+				view.rerender(surface(provider));
+			};
+			await switchTo("codex", "gpt-5.6-terra", "codex");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "gpt-5.6-terra", reasoningEffort: "low" }));
+			await switchTo("claude-code", "sonnet", "claude-code");
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings).toMatchObject({ model: "sonnet", reasoningEffort: "low" }));
+			await act(async () => { await cloudMocks.chatProps.mock.lastCall?.[0].onSend("back on Claude", undefined, "after-switch-back"); });
+			expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).toMatchObject({ text: "back on Claude", model: "sonnet", reasoningEffort: "low" });
+		});
+
+		it("keeps the draft and says why when the switch is refused", async () => {
+			cloudMocks.startInterfaceTransition.mockReset().mockRejectedValue(
+				new CloudCpError("The session's owner has no valid cursor login.", { status: 409, code: "AGENT_LOGIN_REQUIRED" }));
+			renderSurface();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.agents.length).toBeGreaterThan(1));
+			act(() => cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.onPendingChange({ harness: "cursor" }));
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toMatchObject({ harness: "cursor" }));
+			let failure: unknown;
+			await act(async () => {
+				failure = await cloudMocks.chatProps.mock.lastCall?.[0].onSend("hi", undefined, "switch-2").catch((error: unknown) => error);
+			});
+			expect(failure).toMatchObject({ code: "AGENT_SWITCH_FAILED" });
+			expect(cloudMocks.sendSessionMessage).not.toHaveBeenCalled();
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].composerNotice).toBeTruthy());
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].agentSwitch.pending).toBeUndefined();
+		});
 	});
 
 	it("lists the session's agent's models from Cloud's list for the account, not this computer's", async () => {
@@ -389,6 +524,459 @@ describe("CloudSessionChatSurface", () => {
 		]).items.filter((item) => item.kind === "message")).toEqual([]);
 	});
 
+	// An edit of a queued message reads in its place: the new text and files,
+	// its quotes gone. It opens no turn of its own, and one whose message is on
+	// an older page, not loaded, changes nothing here.
+	it("shows a queued message as edited", () => {
+		const files = [{ id: "a2", fileName: "spec.pdf", contentType: "application/pdf", size: 13313 }];
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Explain this\n\nquote", displayText: "Explain this", content: [{ type: "excerpt", text: "q" }], turnId: "turn-1", attachments: [{ id: "a1", fileName: "shot.png", contentType: "image/png", size: 1 }] }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message_edited", payload: { turnId: "turn-1", messageSequence: 1, text: "Explain that", attachments: files }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.user_message_edited", payload: { turnId: "turn-0", messageSequence: 0, text: "older" }, createdAt: session.updatedAt },
+		], undefined, { partial: true });
+		const messages = snapshot.items.filter((item) => item.kind === "message");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]).toMatchObject({ turnId: "turn-1", text: "Explain that", revision: 2, cloudAttachments: files });
+		expect(messages[0]).not.toHaveProperty("content");
+		expect(snapshot.turns.map((turn) => turn.id)).toEqual(["turn-1"]);
+		const withoutFiles = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "first", turnId: "turn-1", attachments: files }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message_edited", payload: { turnId: "turn-1", messageSequence: 1, text: "second" }, createdAt: session.updatedAt },
+		]).items[0];
+		expect(withoutFiles).toMatchObject({ text: "second" });
+		expect(withoutFiles).not.toHaveProperty("cloudAttachments");
+	});
+
+	// The queue editor lets go of an edit only for a refusal that proves it was
+	// not applied; any other failure keeps it pending, to retry, with its
+	// Cancel and the message's own Cancel held. A control plane's refusal is
+	// such proof, so the edit is handed back with its reason.
+	it("hands a refused queued edit back to the editor, and keeps one without an answer pending", async () => {
+		cloudSetup.features = ["queued-edit"];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [], hasMore: false, nextAfter: 0, hasOlder: false, nextBefore: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onEditQueuedTurn).toEqual(expect.any(Function)));
+		const edit = (text: string) => cloudMocks.chatProps.mock.lastCall?.[0].onEditQueuedTurn("turn-1", text) as Promise<unknown>;
+		const file = { id: "a1", fileName: "shot.png", contentType: "image/png", size: 1 };
+
+		cloudMocks.editQueuedMessage.mockReset().mockResolvedValue({ event: {} });
+		await act(async () => { await edit(`Use the parser\n\nAttached files (read these files in the workspace):\n- ${cloudAttachmentReference(file)}`); });
+		expect(cloudMocks.editQueuedMessage).toHaveBeenCalledWith("org-1", session.id, "turn-1", { text: "Use the parser", attachmentIds: ["a1"] });
+
+		const outcome = async (error: Error) => {
+			cloudMocks.editQueuedMessage.mockReset().mockRejectedValue(error);
+			let thrown: unknown;
+			await act(async () => { thrown = await edit("Use the parser").catch((reason: unknown) => reason); });
+			return thrown;
+		};
+		// The control plane's own words, true of a turn the agent took and of one that was stopped.
+		expect(await outcome(new CloudCpError("This message is no longer queued: the agent started on it, or it was stopped. It can no longer be edited.", { status: 409, code: "TURN_NOT_QUEUED" })))
+			.toMatchObject({ code: "CHAT_TURN_NOT_QUEUED", message: "This message is no longer queued: the agent started on it, or it was stopped. It can no longer be edited." });
+		// A session that ended meanwhile lets go of the message the same way, said for an edit.
+		expect(await outcome(new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" })))
+			.toMatchObject({ code: "CHAT_TURN_NOT_QUEUED", message: "This session has ended, so this message can no longer be edited." });
+		expect(await outcome(new CloudCpError("text must be at most 65536 bytes", { status: 422, code: "validation_error" })))
+			.toMatchObject({ code: "CHAT_QUEUED_EDIT_REFUSED", message: "text must be at most 65536 bytes" });
+		expect(await outcome(new CloudCpError("This session's sandbox runs an older AO worker that cannot receive attached files.", { status: 409, code: "ATTACHMENTS_UNSUPPORTED" })))
+			.toMatchObject({ code: "CHAT_QUEUED_EDIT_REFUSED" });
+		// A server error or a lost answer says nothing about the edit.
+		expect(await outcome(new CloudCpError("The request could not be completed.", { status: 500, code: "internal_error" }))).toMatchObject({ code: "internal_error" });
+		expect(await outcome(new CloudCpError("Too many requests.", { status: 429, code: "rate_limited" }))).toMatchObject({ code: "rate_limited" });
+		expect(await outcome(new TypeError("Failed to fetch"))).not.toHaveProperty("code");
+	});
+
+	// The control plane edits any queued message of its author, and drops the
+	// quotes and captures it recorded; the agent got them inlined in its text,
+	// which the composer cannot rebuild. So Edit is offered only on the
+	// viewer's own messages without them.
+	it("offers Edit on the viewer's own queued messages, not on a teammate's or one with quotes", async () => {
+		cloudSetup.features = ["queued-edit"];
+		const message = (sequence: number, turnId: string, payload: Record<string, unknown>) =>
+			({ sessionId: session.id, sequence, type: "chat.user_message", payload: { turnId, ...payload }, createdAt: session.updatedAt });
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId: "running" }, createdAt: session.updatedAt },
+			message(2, "plain", { text: "mine", authorUserId: "user-1" }),
+			message(3, "quoted", { text: "Explain this\n\nquote", displayText: "Explain this", content: [{ type: "excerpt", text: "quote" }], authorUserId: "user-1" }),
+			message(4, "theirs", { text: "theirs", authorUserId: "teammate" }),
+		];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 4, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items.filter((item: { kind: string }) => item.kind === "message")).toHaveLength(3));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.onEditQueuedTurn).toEqual(expect.any(Function));
+		const editable = Object.fromEntries(props.snapshot.items
+			.filter((item: { kind: string }) => item.kind === "message")
+			.map((item: { turnId: string }) => [item.turnId, props.canEditQueuedMessage(item)]));
+		expect(editable).toEqual({ plain: true, quoted: false, theirs: false });
+	});
+
+	// Delete stops a queued message's turn before the agent starts on it
+	// (cancelTurn). The control plane lets its author, the session's creator,
+	// the organization's owners and admins and the composer lease holder do
+	// that, so Delete shows for those, and a refusal reads for a person.
+	it("deletes a queued message by stopping its turn, where the control plane lets this person", async () => {
+		const message = (sequence: number, turnId: string, authorUserId: string) =>
+			({ sessionId: session.id, sequence, type: "chat.user_message", payload: { turnId, text: turnId, authorUserId }, createdAt: session.updatedAt });
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId: "running" }, createdAt: session.updatedAt },
+			message(2, "mine", "user-1"),
+			message(3, "theirs", "teammate"),
+		];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 3, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const deletable = async (cloud: { orgId: string; createdByUserId?: string }) => {
+			cloudMocks.chatProps.mockClear();
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items.filter((item: { kind: string }) => item.kind === "message")).toHaveLength(2));
+			const props = cloudMocks.chatProps.mock.lastCall?.[0];
+			const verdicts = Object.fromEntries(props.snapshot.items
+				.filter((item: { kind: string }) => item.kind === "message")
+				.map((item: { turnId: string }) => [item.turnId, props.canCancelQueuedMessage(item)]));
+			return { props, verdicts, view };
+		};
+		// A teammate started the session: only the viewer's own message.
+		const asMember = await deletable({ orgId: "org-1", createdByUserId: "teammate" });
+		expect(asMember.verdicts).toEqual({ mine: true, theirs: false });
+		asMember.view.unmount();
+		// The viewer started it: every queued message.
+		const asCreator = await deletable({ orgId: "org-1", createdByUserId: "user-1" });
+		expect(asCreator.verdicts).toEqual({ mine: true, theirs: true });
+
+		const cancel = (turnId: string) => asCreator.props.onCancelQueuedTurn(turnId) as Promise<unknown>;
+		cloudMocks.cancelTurn.mockReset().mockResolvedValue({ ok: true });
+		cloudMocks.deleteQueuedMessage.mockReset();
+		await act(async () => { await cancel("mine"); });
+		// A control plane without queued-delete only stops turns.
+		expect(cloudMocks.cancelTurn).toHaveBeenCalledWith("org-1", session.id, "mine");
+		expect(cloudMocks.deleteQueuedMessage).not.toHaveBeenCalled();
+		const outcome = async (error: Error) => {
+			cloudMocks.cancelTurn.mockReset().mockRejectedValue(error);
+			let thrown: unknown = "resolved";
+			await act(async () => { thrown = await cancel("mine").then(() => "resolved", (reason: unknown) => reason); });
+			return thrown;
+		};
+		// It ran meanwhile: nothing is left to delete, and the dock lets it go.
+		expect(await outcome(new CloudCpError("The turn is already finished.", { status: 409, code: "TURN_FINISHED" }))).toBe("resolved");
+		expect(await outcome(new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" })))
+			.toMatchObject({ message: "This session has ended, so this message can no longer be deleted." });
+		expect(await outcome(new CloudCpError("You do not have access to this organization.", { status: 403, code: "forbidden" })))
+			.toMatchObject({ message: "Only the person who sent this message, whoever started the session, or a workspace admin can delete it." });
+		expect(await outcome(new CloudCpError("The request could not be completed.", { status: 500, code: "internal_error" })))
+			.toMatchObject({ message: "The request could not be completed." });
+	});
+
+	// Where the control plane offers queued-delete, Delete takes the message
+	// back only while it is queued (deleteQueuedMessage) and never stops a turn
+	// the agent took meanwhile, as a local chat's Delete does: that answers 409
+	// TURN_NOT_QUEUED, which reads for a person and lets the row go.
+	it("deletes a queued message without stopping a started turn where the control plane offers it", async () => {
+		cloudSetup.features = ["queued-delete"];
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId: "running" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { turnId: "mine", text: "mine", authorUserId: "user-1" }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 2, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onCancelQueuedTurn).toEqual(expect.any(Function)));
+		const cancel = (turnId: string) => cloudMocks.chatProps.mock.lastCall?.[0].onCancelQueuedTurn(turnId) as Promise<unknown>;
+		cloudMocks.cancelTurn.mockReset();
+		cloudMocks.deleteQueuedMessage.mockReset().mockResolvedValue({ ok: true });
+		await act(async () => { await cancel("mine"); });
+		expect(cloudMocks.deleteQueuedMessage).toHaveBeenCalledWith("org-1", session.id, "mine");
+		expect(cloudMocks.cancelTurn).not.toHaveBeenCalled();
+		const outcome = async (error: Error) => {
+			cloudMocks.deleteQueuedMessage.mockReset().mockRejectedValue(error);
+			let thrown: unknown = "resolved";
+			await act(async () => { thrown = await cancel("mine").then(() => "resolved", (reason: unknown) => reason); });
+			return thrown;
+		};
+		expect(await outcome(new CloudCpError("This message is no longer queued: the agent started on it, or it was stopped. It can no longer be deleted.", { status: 409, code: "TURN_NOT_QUEUED" })))
+			.toMatchObject({ message: "This message is no longer queued, so it was not deleted. If the agent started on it, stop that turn instead." });
+		expect(await outcome(new CloudCpError("This session was deleted. Restore it to continue.", { status: 409, code: "SESSION_TERMINATED" })))
+			.toMatchObject({ message: "This session has ended, so this message can no longer be deleted." });
+		expect(cloudMocks.cancelTurn).not.toHaveBeenCalled();
+	});
+
+	// A message the person deleted from the queue leaves the conversation, as a
+	// local chat drops a queued message deleted from its dock: no bubble, no
+	// "Worked for", no "interrupted by you". The control plane ends it with
+	// turn_interrupted of reason deleted, so it is known on a page without its
+	// message too.
+	const queueEvents = (reason?: string) => {
+		const at = (sequence: number, type: string, payload: Record<string, unknown>) =>
+			({ sessionId: session.id, sequence, type, payload, createdAt: `2026-11-13T09:0${sequence}:00Z` });
+		return [
+			at(1, "chat.user_message", { text: "long job", turnId: "turn-run" }),
+			at(2, "chat.turn_started", { turnId: "turn-run", attempt: 1 }),
+			at(3, "chat.user_message", { text: "ended while queued", turnId: "turn-ended" }),
+			at(4, "chat.user_message", { text: "still queued", turnId: "turn-next" }),
+			at(5, "chat.turn_interrupted", { turnId: "turn-ended", attempt: 0, ...(reason ? { reason } : {}) }),
+		];
+	};
+	it("drops a queued message the person deleted, on a page without it too", () => {
+		const events = queueEvents("deleted");
+		const full = toSnapshot(session, events);
+		expect(full.items.filter((item) => item.kind === "message").map((item) => item.turnId)).toEqual(["turn-run", "turn-next"]);
+		expect(full.turns.map((turn) => [turn.id, turn.state])).toEqual([["turn-run", "running"], ["turn-ended", "cancelled"], ["turn-next", "queued"]]);
+		const partial = toSnapshot(session, events.slice(4), undefined, { partial: true });
+		expect(partial.items).toEqual([]);
+		expect(partial.turns.find((turn) => turn.id === "turn-ended")?.state).toBe("cancelled");
+	});
+
+	// A queued message steered into the running turn reads from the events, so
+	// a remount (a tab switch, a screen change) shows what the control plane
+	// holds: steering while the agent has not answered, the steer in the turn
+	// once it took it, and the message back in the queue, with the reason,
+	// when it did not. It was once kept only in the view, and a remount put a
+	// message shown as steered back in the queue.
+	const steerEvents = () => {
+		const at = (sequence: number, type: string, payload: Record<string, unknown>) =>
+			({ sessionId: session.id, sequence, type, payload, createdAt: `2026-11-13T09:0${sequence}:00Z` });
+		const requested = { turnId: "turn-run", text: "report progress now", clientMessageId: "key-1", queuedTurnId: "turn-orch" };
+		return {
+			queued: [
+				at(1, "chat.user_message", { text: "long job", turnId: "turn-run" }),
+				at(2, "chat.turn_started", { turnId: "turn-run", attempt: 1 }),
+				at(3, "chat.turn_capabilities", { turnId: "turn-run", attempt: 1, steering: true }),
+				at(4, "chat.user_message", { text: "report progress now", turnId: "turn-orch", origin: "automation", senderLabel: "Orchestrator", displayText: "report progress now" }),
+				at(5, "chat.user_message", { text: "mine, later", turnId: "turn-mine", authorUserId: "user-1" }),
+				at(6, "chat.turn_steer_requested", requested),
+			],
+			steered: [
+				at(7, "chat.turn_steered", { ...requested, origin: "automation", senderLabel: "Orchestrator" }),
+				at(8, "chat.turn_interrupted", { turnId: "turn-orch", attempt: 0, reason: "steered" }),
+			],
+			failed: [at(7, "chat.turn_steer_failed", { ...requested, origin: "automation", senderLabel: "Orchestrator", error: "The agent finished first." })],
+		};
+	};
+	const queuedTurns = (snapshot: ReturnType<typeof toSnapshot>) =>
+		snapshot.turns.filter((turn) => turn.state === "queued" && snapshot.items.some((item) => item.kind === "message" && item.turnId === turn.id)).map((turn) => turn.id);
+	const steers = (snapshot: ReturnType<typeof toSnapshot>) =>
+		snapshot.items.filter((item) => item.kind === "activity" && item.detail?.event === "steer")
+			.map((item) => item.kind === "activity" ? { turnId: item.turnId, text: item.detail?.text, origin: item.detail?.origin, from: item.detail?.senderDisplayName } : undefined);
+
+	it("keeps a queued message being steered in its place in the queue, marked steering, on every read", () => {
+		const { queued } = steerEvents();
+		const snapshot = toSnapshot(session, queued);
+		expect(queuedTurns(snapshot)).toEqual(["turn-orch", "turn-mine"]);
+		expect(steers(snapshot)).toEqual([]);
+		expect([...cloudSteeringQueuedTurns(queued)]).toEqual(["turn-orch"]);
+		expect(cloudQueuedSteerErrors(queued)).toEqual({});
+		// A remount reads the same events, and the same chat.
+		expect(toSnapshot(session, [...queued])).toEqual(snapshot);
+	});
+
+	it("drops a steered message from the queue and keeps its steer in the running turn, as its sender's", () => {
+		const { queued, steered } = steerEvents();
+		const snapshot = toSnapshot(session, [...queued, ...steered]);
+		expect(queuedTurns(snapshot)).toEqual(["turn-mine"]);
+		expect(snapshot.items.some((item) => item.kind === "message" && item.turnId === "turn-orch")).toBe(false);
+		expect(snapshot.turns.find((turn) => turn.id === "turn-orch")?.state).toBe("cancelled");
+		expect(steers(snapshot)).toEqual([{ turnId: "turn-run", text: "report progress now", origin: "automation", from: "Orchestrator" }]);
+		// On a page holding only the outcome too.
+		const partial = toSnapshot(session, steered, undefined, { partial: true });
+		expect(partial.turns.find((turn) => turn.id === "turn-orch")?.state).toBe("cancelled");
+	});
+
+	it("puts a message whose steer failed back in the queue, in its place, saying why", () => {
+		const { queued, failed } = steerEvents();
+		const events = [...queued, ...failed];
+		const snapshot = toSnapshot(session, events);
+		expect(queuedTurns(snapshot)).toEqual(["turn-orch", "turn-mine"]);
+		expect(steers(snapshot)).toEqual([]);
+		expect(cloudQueuedSteerErrors(events)).toEqual({ "turn-orch": "Couldn't steer: The agent finished first. It's back in the queue; select Steer to try again." });
+		// Steering it again clears the reason.
+		expect(cloudQueuedSteerErrors([...events, { ...queued[5], sequence: 8 }])).toEqual({});
+	});
+
+	// The queue's Steer is offered only where the control plane records it
+	// (queued-steer) and the running turn can take guidance; it asks the
+	// control plane, and a refusal comes back as the row's error rather than
+	// as a steer that never happened.
+	it("steers a queued message through the control plane only where it offers queued-steer", async () => {
+		const { queued, failed } = steerEvents();
+		const events = queued.slice(0, 5);
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: 5, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const mount = async () => {
+			cloudMocks.chatProps.mockClear();
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSteer).toEqual(expect.any(Function)));
+			return view;
+		};
+		const older = await mount();
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn).toBeUndefined();
+		older.unmount();
+
+		cloudSetup.features = ["queued-steer"];
+		await mount();
+		const promote = cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn as (turnId: string) => Promise<unknown>;
+		expect(promote).toEqual(expect.any(Function));
+		cloudMocks.steerQueuedMessage.mockReset().mockResolvedValue({ event: queued[5] });
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: failed, hasMore: false, nextAfter: 7, hasOlder: false, nextBefore: 7 });
+		let outcome: unknown;
+		await act(async () => { outcome = await promote("turn-orch").then(() => "steered", (error: unknown) => error); });
+		expect(cloudMocks.steerQueuedMessage).toHaveBeenCalledWith("org-1", session.id, "turn-orch", {}, { idempotencyKey: expect.any(String) });
+		expect(outcome).toMatchObject({ message: "Couldn't steer: The agent finished first. It's back in the queue; select Steer to try again." });
+
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: steerEvents().steered, hasMore: false, nextAfter: 8, hasOlder: false, nextBefore: 7 });
+		await act(async () => { outcome = await promote("turn-orch").then(() => "steered", (error: unknown) => error); });
+		expect(outcome).toBe("steered");
+	});
+
+	// A steer the agent never answered (the worker went silent before the
+	// control plane recorded the expiry) is not read as steering forever: past
+	// the time it could be answered in, the message is back in the queue with
+	// why.
+	it("reads a queued steer left unanswered too long as failed, with the message back in the queue", () => {
+		const { queued } = steerEvents();
+		const requestedAt = Date.parse(queued[5].createdAt);
+		expect([...cloudSteeringQueuedTurns(queued, requestedAt + 1_000)]).toEqual(["turn-orch"]);
+		expect(cloudQueuedSteerErrors(queued, requestedAt + 1_000)).toEqual({});
+		expect([...cloudSteeringQueuedTurns(queued, requestedAt + QUEUED_STEER_STALE_MS)]).toEqual([]);
+		expect(cloudQueuedSteerErrors(queued, requestedAt + QUEUED_STEER_STALE_MS)).toEqual({
+			"turn-orch": "Couldn't steer: the agent did not answer in time. It's back in the queue; select Steer to try again.",
+		});
+
+		// The chat's clock moves on at each unanswered steer's deadline in turn,
+		// so a later one fails too after an earlier one did.
+		const later = { ...queued[5], sequence: 7, createdAt: new Date(requestedAt + 30_000).toISOString(), payload: { ...queued[5].payload, queuedTurnId: "turn-mine" } };
+		const both = [...queued, later];
+		expect(nextQueuedSteerDeadline(both, requestedAt)).toBe(requestedAt + QUEUED_STEER_STALE_MS);
+		expect(nextQueuedSteerDeadline(both, requestedAt + QUEUED_STEER_STALE_MS)).toBe(requestedAt + 30_000 + QUEUED_STEER_STALE_MS);
+		expect(nextQueuedSteerDeadline(both, requestedAt + 30_000 + QUEUED_STEER_STALE_MS)).toBeUndefined();
+	});
+
+	// What the chat shows after a failed or a delivered steer comes from the
+	// control plane's events, so it is the same after a remount (a tab or
+	// screen switch): queued with the reason when the steer failed, gone from
+	// the queue into the running turn when it was delivered.
+	it("shows a failed or a delivered queued steer the same after a remount", async () => {
+		const { queued, failed, steered } = steerEvents();
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		const shown = async (events: CloudCpClientEvent[]) => {
+			cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events, hasMore: false, nextAfter: events.at(-1)!.sequence, hasOlder: false, nextBefore: 1 });
+			cloudMocks.chatProps.mockClear();
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const view = render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.latestSequence).toBe(events.at(-1)!.sequence));
+			const props = cloudMocks.chatProps.mock.lastCall?.[0] as { snapshot: ReturnType<typeof toSnapshot>; queuedSteerErrors: Record<string, string> };
+			view.unmount();
+			return { queue: queuedTurns(props.snapshot), steers: steers(props.snapshot), errors: props.queuedSteerErrors };
+		};
+		const failedView = { queue: ["turn-orch", "turn-mine"], steers: [], errors: { "turn-orch": "Couldn't steer: The agent finished first. It's back in the queue; select Steer to try again." } };
+		expect(await shown([...queued, ...failed])).toEqual(failedView);
+		expect(await shown([...queued, ...failed])).toEqual(failedView);
+		const steeredView = { queue: ["turn-mine"], steers: [{ turnId: "turn-run", text: "report progress now", origin: "automation", from: "Orchestrator" }], errors: {} };
+		expect(await shown([...queued, ...steered])).toEqual(steeredView);
+		expect(await shown([...queued, ...steered])).toEqual(steeredView);
+	});
+
+	// A steer the control plane refuses, or cannot be asked (offline), comes
+	// back as the row's reason, never as a steer that silently did nothing.
+	it("turns a refused or unreachable queued steer into the row's reason", async () => {
+		cloudSetup.features = ["queued-steer"];
+		const { queued } = steerEvents();
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: queued.slice(0, 5), hasMore: false, nextAfter: 5, hasOlder: false, nextBefore: 1 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.chatProps.mockClear();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn).toEqual(expect.any(Function)));
+		const promote = cloudMocks.chatProps.mock.lastCall?.[0].onPromoteQueuedTurn as (turnId: string) => Promise<unknown>;
+		const outcome = async (error: unknown) => {
+			cloudMocks.steerQueuedMessage.mockReset().mockRejectedValue(error);
+			let thrown: unknown;
+			await act(async () => { thrown = await promote("turn-mine").then(() => "steered", (reason: unknown) => reason); });
+			return (thrown as Error).message;
+		};
+		expect(await outcome(new TypeError("Failed to fetch")))
+			.toBe("Couldn't steer: AO Cloud could not be reached. It's back in the queue; select Steer to try again.");
+		expect(await outcome(new CloudCpError("The agent is not running a turn it can take guidance in.", { status: 409, code: "TURN_NOT_STEERABLE" })))
+			.toBe("Couldn't steer: the agent's running turn can't take guidance. It's back in the queue; select Steer to try again.");
+		expect(await outcome(new CloudCpError("The request could not be completed.", { status: 500, code: "internal_error" })))
+			.toBe("Couldn't steer: The request could not be completed. It's back in the queue; select Steer to try again.");
+	});
+
+	// A queued message ended any other way (a stop-now switch to the terminal,
+	// an event from before reasons, a reason this desktop does not know) keeps
+	// the person's text, shown interrupted as a local chat shows a queued
+	// message its Stop or switch ended. It never started, so it has no working
+	// time to show, on a page without its message too.
+	it.each([["a switch to the terminal", "interface_switch"], ["no reason", undefined], ["an unknown reason", "session_ended"]])(
+		"keeps a queued message ended by %s, shown interrupted without working time",
+		(_name, reason) => {
+			const events = queueEvents(reason);
+			const full = toSnapshot(session, events);
+			expect(full.items.filter((item) => item.kind === "message").map((item) => item.turnId)).toEqual(["turn-run", "turn-ended", "turn-next"]);
+			const ended = full.turns.find((turn) => turn.id === "turn-ended");
+			expect(ended).toMatchObject({ state: "interrupted", completedAt: "2026-11-13T09:05:00Z" });
+			expect(ended).not.toHaveProperty("startedAt");
+			const partial = toSnapshot(session, events.slice(4), undefined, { partial: true });
+			const partialEnded = partial.turns.find((turn) => turn.id === "turn-ended");
+			expect(partialEnded?.state).toBe("interrupted");
+			expect(partialEnded).not.toHaveProperty("startedAt");
+		},
+	);
+
+	// A queued message the control plane refused when its turn came never ran:
+	// it reads as not run, with the reason, not as a run that failed.
+	it("shows a queued message refused when its turn came as not run, with its reason", () => {
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "write a file", turnId: "turn-refused" }, createdAt: "2026-11-13T09:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_aborted", payload: { turnId: "turn-refused", attempt: 1, error: "Not run: the person who sent this message can no longer write to this session." }, createdAt: "2026-11-13T09:01:00Z" },
+		]);
+		expect(snapshot.items.filter((item) => item.kind === "message")).toHaveLength(1);
+		expect(snapshot.turns[0]).toMatchObject({ id: "turn-refused", state: "failed", notRun: true, errorMessage: "The person who sent this message can no longer write to this session." });
+	});
+
+	// The control plane marks a message it did not run (reason
+	// author_cannot_write), so a page holding only that end, without the
+	// message or its start, still reads it as not run; one without a reason
+	// there is a normal failure.
+	it("shows a refused message as not run on a page holding only its end", () => {
+		const aborted = (reason?: string) => toSnapshot(session, [
+			{ sessionId: session.id, sequence: 9, type: "chat.turn_aborted", payload: { turnId: "turn-refused", attempt: 1, error: "Not run: the person who sent this message can no longer write to this session.", ...(reason ? { reason } : {}) }, createdAt: "2026-11-13T09:01:00Z" },
+		], undefined, { partial: true }).turns[0];
+		const refused = aborted("author_cannot_write");
+		expect(refused).toMatchObject({ id: "turn-refused", state: "failed", notRun: true, errorMessage: "The person who sent this message can no longer write to this session." });
+		expect(refused).not.toHaveProperty("startedAt");
+		expect(aborted()).not.toHaveProperty("notRun");
+	});
+
+	// A turn the agent ran and the person stopped reads as it always did.
+	it("keeps a running turn the person stopped as interrupted", () => {
+		const snapshot = toSnapshot(session, [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "long job", turnId: "turn-1" }, createdAt: "2026-11-13T09:00:00Z" },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1", attempt: 1 }, createdAt: "2026-11-13T09:00:01Z" },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_interrupted", payload: { turnId: "turn-1", attempt: 1 }, createdAt: "2026-11-13T09:00:30Z" },
+		]);
+		expect(snapshot.items.filter((item) => item.kind === "message")).toHaveLength(1);
+		expect(snapshot.turns[0]).toMatchObject({ id: "turn-1", state: "interrupted", startedAt: "2026-11-13T09:00:01Z", completedAt: "2026-11-13T09:00:30Z" });
+		expect(snapshot.turns[0]).not.toHaveProperty("notRun");
+	});
+
+	// The control plane lets only a message's author edit it.
+	it("knows the turns of the viewer's own messages", () => {
+		const events: CloudCpClientEvent[] = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "mine", turnId: "turn-1", authorUserId: "me" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.user_message", payload: { text: "theirs", turnId: "turn-2", authorUserId: "teammate" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.user_message", payload: { text: "report", turnId: "turn-3", origin: "automation" }, createdAt: session.updatedAt },
+		];
+		expect([...ownMessageTurns(events, "me")]).toEqual(["turn-1"]);
+		expect(ownMessageTurns(events, undefined).size).toBe(0);
+	});
+
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
@@ -576,6 +1164,70 @@ describe("CloudSessionChatSurface", () => {
 			session.id,
 			expect.objectContaining({ mode: "trusted" }),
 			{ idempotencyKey: "agent-1" },
+		);
+	});
+
+	// Claude asks to leave Plan mode (its ExitPlanMode tool) with one option per
+	// mode it can carry on in, and "plan" to keep planning, as claude-agent-acp
+	// sends it to local Chat.
+	const planApproval: CloudCpClientEvent[] = [
+		{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "outline only", turnId: "turn-1", mode: "read-only" }, createdAt: session.updatedAt },
+		{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+		{ sessionId: session.id, sequence: 3, type: "chat.approval_requested", payload: {
+			turnId: "turn-1", requestId: "plan-approval", summary: "Ready to code?", toolKind: "switch_mode", subjectKind: "mcp_tool",
+			decisions: [
+				{ id: "acceptEdits", label: "Yes, and auto-accept edits", kind: "allow_always" },
+				{ id: "default", label: "Yes, and manually approve edits", kind: "allow_once" },
+				{ id: "plan", label: "No, keep planning", kind: "reject_once" },
+			],
+		}, createdAt: session.updatedAt },
+	];
+	const planningSurface = async () => {
+		localStorage.setItem("cloud-chat-settings:org-1:session-1:claude-code", JSON.stringify({ executionMode: "plan" }));
+		cloudMocks.listChatEvents.mockResolvedValue({ events: planApproval, hasMore: false, nextAfter: 3 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [{ id: "opus", displayName: "Opus", default: true }], modes: ["default", "plan"] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		cloudMocks.decideChatApproval.mockReset().mockResolvedValue({ ok: true });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}>
+			<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+		</QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].currentValue).toBe("plan"));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toContainEqual(expect.objectContaining({
+			activityKind: "approval", requestId: "plan-approval", status: "pending",
+		})));
+	};
+
+	it("leaves Plan mode for the mode the user approved the plan with, as local Chat does", async () => {
+		await planningSurface();
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onDecide("plan-approval", "acceptEdits"));
+		await waitFor(() => expect(cloudMocks.decideChatApproval).toHaveBeenCalledWith("org-1", session.id, "plan-approval", "acceptEdits"));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].currentValue).toBe("agent"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("next step", [], "after-plan");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith(
+			"org-1",
+			session.id,
+			{ text: "next step", mode: "trusted", approvalMode: "accept-edits" },
+			{ idempotencyKey: "after-plan" },
+		);
+	});
+
+	it("keeps planning when the user rejects the plan, or the approval is refused", async () => {
+		await planningSurface();
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onDecide("plan-approval", "plan"));
+		await waitFor(() => expect(cloudMocks.decideChatApproval).toHaveBeenCalledWith("org-1", session.id, "plan-approval", "plan"));
+		// The control plane refuses an approval whose turn already ended: the plan was not approved.
+		cloudMocks.decideChatApproval.mockRejectedValueOnce(new CloudCpError("The turn has finished.", { status: 409, code: "turn_finished" }));
+		act(() => cloudMocks.chatProps.mock.lastCall?.[0].onDecide("plan-approval", "default"));
+		await waitFor(() => expect(cloudMocks.decideChatApproval).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeTruthy());
+		expect(cloudMocks.chatProps.mock.lastCall?.[0].configOptions?.[0].currentValue).toBe("plan");
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("revise it", [], "still-planning");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith(
+			"org-1",
+			session.id,
+			{ text: "revise it", mode: "read-only" },
+			{ idempotencyKey: "still-planning" },
 		);
 	});
 
@@ -1751,6 +2403,38 @@ describe("CloudSessionChatSurface", () => {
 		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).toMatchObject({ approvalMode: "bypass-permissions" });
 	});
 
+	it("sends the approval mode picked from the chat's own settings bar with the next turn", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(
+			<QueryClientProvider client={queryClient}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].onSend).toBeTypeOf("function"));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.snapshot.settings?.approvalMode).toBe("bypass-permissions");
+		// The bar as ChatWorkspace draws it for this chat: the unified one, with the agent picker.
+		const user = userEvent.setup();
+		render(
+			<QueryClientProvider client={queryClient}>
+				<TurnSettingsBar harness={props.snapshot.harness} models={props.models ?? []} settings={props.snapshot.settings}
+					showApprovalMode={props.showApprovalMode} approvalModes={props.approvalModes} approvalModeLimits={props.approvalModeLimits}
+					onChange={props.onChooseSettings} onRememberPermissions={props.onRememberPermissions} agentSwitch={props.agentSwitch} />
+			</QueryClientProvider>,
+		);
+		await user.click(screen.getByRole("button", { name: "Approval policy for the next turn" }));
+		await user.click(screen.getByRole("menuitemradio", { name: /Accept edits/ }));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.settings?.approvalMode).toBe("accept-edits"));
+		await cloudMocks.chatProps.mock.lastCall?.[0].onSend("go", [], "picked-from-bar");
+		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, {
+			text: "go", mode: "trusted", approvalMode: "accept-edits",
+		}, { idempotencyKey: "picked-from-bar" });
+		expect(JSON.parse(localStorage.getItem("cloud-chat-settings:org-1:session-1:claude-code") ?? "{}")).toMatchObject({ approvalMode: "accept-edits" });
+	});
+
 	it("stops showing a pick the session's mode no longer allows", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
@@ -2421,5 +3105,44 @@ describe("Cloud excerpt display snapshots", () => {
 			payload: { text: "Explain", content: [{ ...display, snapshot: original.snapshot }] }, createdAt: session.updatedAt }]);
 		expect(projected.items[0]).toMatchObject({ content: [{ text: excerpt.text, snapshot: original.snapshot }] });
 		expect(excerpt).toEqual(original);
+	});
+});
+
+describe("toSnapshot agent switches", () => {
+	it("draws chat.agent_switched as the Switched line a local switch draws", () => {
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "hi", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_completed", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 4, type: "chat.agent_switched", createdAt: session.updatedAt,
+				payload: { transitionId: "t-1", sourceHarness: "codex", targetHarness: "claude-code", sourceModel: "gpt-5", targetModel: "claude-opus-4-5", targetReasoningEffort: "high", resumed: false } },
+		] as CloudCpClientEvent[];
+		const marker = toSnapshot(session, events).items.find((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
+		expect(marker).toMatchObject({
+			sequence: 4,
+			detail: { event: "provider_switch", sourceHarness: "codex", targetHarness: "claude-code", sourceModel: "gpt-5", targetModel: "claude-opus-4-5", targetEffort: "high" },
+		});
+	});
+
+	it("draws the Switched line above the message the switch held for the new agent", () => {
+		const events = [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "first", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 3, type: "chat.turn_completed", payload: { turnId: "turn-1" }, createdAt: session.updatedAt },
+			// Sent while the switch ran: recorded before the switch commits, answered after.
+			{ sessionId: session.id, sequence: 4, type: "chat.user_message", payload: { text: "held", turnId: "turn-2" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 5, type: "chat.agent_switched", createdAt: session.updatedAt,
+				payload: { transitionId: "t-1", sourceHarness: "claude-code", targetHarness: "codex", resumed: false } },
+			{ sessionId: session.id, sequence: 6, type: "chat.turn_started", payload: { turnId: "turn-2" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 7, type: "chat.assistant_delta", payload: { turnId: "turn-2", text: "answer" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 8, type: "chat.turn_completed", payload: { turnId: "turn-2" }, createdAt: session.updatedAt },
+		] as CloudCpClientEvent[];
+		const items = toSnapshot(session, events).items;
+		const marker = items.findIndex((item) => item.kind === "activity" && item.detail?.event === "provider_switch");
+		const held = items.findIndex((item) => item.kind === "message" && item.role === "user" && item.text === "held");
+		const first = items.findIndex((item) => item.kind === "message" && item.role === "user" && item.text === "first");
+		expect(first).toBeLessThan(marker);
+		expect(marker).toBeLessThan(held);
+		expect(items[marker].sequence).toBeLessThan(items[held].sequence);
 	});
 });

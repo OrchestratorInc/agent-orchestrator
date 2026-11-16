@@ -28,6 +28,9 @@ const {
 	workspaceQueryMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
+	offeringMock,
+	participantsMock,
+	shareDialogMock,
 	routerListeners,
 	fakeRouter,
 } = vi.hoisted(() => {
@@ -52,12 +55,25 @@ const {
 		workspaceQueryMock: vi.fn(),
 		cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
 		spawnCloudOrchestratorMock: vi.fn(),
+		offeringMock: vi.fn((): Record<string, unknown> => ({ defaultProvider: "coder" })),
+		participantsMock: vi.fn((): ReadonlyMap<string, unknown[]> => new Map()),
+		shareDialogMock: vi.fn(),
 	};
 });
 
 vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
 
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => offeringMock() }));
+vi.mock("../hooks/useSessionParticipants", () => ({ useSessionParticipants: () => participantsMock() }));
+vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => true }));
+vi.mock("./ShareSessionDialog", () => ({
+	ShareSessionDialog: (props: { open: boolean; sessionId?: string; sessionName?: string; projectName?: string; orgId: string; projectId: string }) => {
+		shareDialogMock(props);
+		return props.open ? (
+			<div role="dialog" aria-label="Share dialog" data-session={props.sessionId ?? ""} data-session-name={props.sessionName ?? ""} data-project-name={props.projectName ?? ""} data-org={props.orgId} data-project={props.projectId} />
+		) : null;
+	},
+}));
 
 
 vi.mock("@tanstack/react-router", () => ({
@@ -172,7 +188,7 @@ function renderBoardWithClient(queryClient: QueryClient, projectId?: string) {
 
 /** Opens the archive modal from the board's button; its cards mount the frame after it opens. */
 async function expandArchive() {
-	await userEvent.click(screen.getByRole("button", { name: /^Archive, \d+ sessions?$/ }));
+	await userEvent.click(screen.getByRole("button", { name: /^Archived sessions, \d+$/ }));
 	const dialog = await screen.findByRole("dialog", { name: "Archived sessions" });
 	await within(dialog).findAllByTestId("session-archive-card");
 	return dialog;
@@ -188,6 +204,9 @@ beforeEach(() => {
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
+	offeringMock.mockReset().mockReturnValue({ defaultProvider: "coder" });
+	participantsMock.mockReset().mockReturnValue(new Map());
+	shareDialogMock.mockReset();
 });
 
 describe("SessionsBoard", () => {
@@ -314,6 +333,51 @@ describe("SessionsBoard", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
+	describe("sharing from a card", () => {
+		const shareName = (title: string) => `Share “${title}”`;
+		function cloudBoard(sessions: WorkspaceSession[], project: Partial<WorkspaceSummary> = {}) {
+			offeringMock.mockReturnValue({ defaultProvider: "coder", features: ["share"], org: { id: "org-mine" } });
+			workspaceQueryMock.mockReturnValue({
+				data: [{ ...workspaceWithSessions(sessions), name: "acme/web", kind: "cloud", cloudOrgId: "org-mine", ...project }],
+				isSuccess: true, isError: false,
+			});
+		}
+
+		it("opens the session's share dialog from its card, without opening the session", async () => {
+			cloudBoard([boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } })]);
+			renderBoard("p1");
+			expect(screen.queryByRole("dialog", { name: "Share dialog" })).toBeNull();
+			await userEvent.click(await screen.findByRole("button", { name: shareName("Fix login") }));
+			const dialog = await screen.findByRole("dialog", { name: "Share dialog" });
+			expect(dialog.dataset).toMatchObject({ session: "s1", sessionName: "Fix login", projectName: "acme/web", org: "org-mine", project: "p1" });
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
+		it("opens the same dialog from the people circles on an already shared session", async () => {
+			cloudBoard([boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } })]);
+			participantsMock.mockReturnValue(new Map([["s1", [{ userId: "v", name: "Vaanya", present: true, state: "idle" }]]]));
+			renderBoard("p1");
+			const circles = await screen.findByRole("button", { name: /Vaanya/ });
+			await userEvent.click(circles);
+			expect((await screen.findByRole("dialog", { name: "Share dialog" })).dataset.session).toBe("s1");
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["a local session", boardSession({ id: "s1", title: "Fix login", status: "working" }), {}, { features: ["share"], org: { id: "org-mine" } }],
+			["a session shared from another organization", boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-elsewhere", shared: true } }), {}, { features: ["share"], org: { id: "org-mine" } }],
+			["an organization without sharing", boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } }), {}, { features: [], org: { id: "org-mine" } }],
+			["a terminated session", boardSession({ id: "s1", title: "Fix login", status: "working", isTerminated: true, cloud: { orgId: "org-mine" } }), {}, { features: ["share"], org: { id: "org-mine" } }],
+		])("offers no Share on %s", async (_name, session, project, offering) => {
+			cloudBoard([session, boardSession({ id: "s2", title: "Other task", status: "working" })], project);
+			offeringMock.mockReturnValue({ defaultProvider: "coder", ...offering });
+			renderBoard("p1");
+			await screen.findByText("Other task");
+			expect(screen.queryByRole("button", { name: shareName("Fix login") })).toBeNull();
+			expect(document.querySelector("[data-board-share-session]")).toBeNull();
+		});
+	});
+
 	it("says a session's status could not be verified, without offering a retry", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [workspaceWithSessions([boardSession({ id: "unverified", title: "Unverified task", status: "unknown", displayStatus: "Working", statusReadiness: "unavailable" })])],
@@ -381,7 +445,7 @@ describe("SessionsBoard", () => {
 			isSuccess: true, isError: false,
 		});
 		renderBoard("p1");
-		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archived sessions, \d+$/ })).not.toBeInTheDocument();
 		const indicator = screen.getByTestId("app-memory-indicator");
 		// In the board's action row, ahead of the Task button.
 		expect(indicator.closest(".workspace-topbar-actions")).not.toBeNull();
@@ -810,7 +874,7 @@ describe("SessionsBoard", () => {
 		});
 		view.rerender(<QueryClientProvider client={queryClient}><TooltipProvider><SessionsBoard projectId="p1" /></TooltipProvider></QueryClientProvider>);
 		expect(within(card()).queryByRole("status")).not.toBeInTheDocument();
-		expect(within(card()).getByText("ao/composer-review/root")).toBeInTheDocument();
+		expect(within(card()).getByText("composer-review")).toBeInTheDocument();
 	});
 
 	it("shows start failure instead of Idle on a failed card", () => {
@@ -1072,7 +1136,7 @@ describe("SessionsBoard", () => {
 		renderBoard("p1");
 
 		// The board keeps only a quiet entry point; no cards render until it opens.
-		const archiveButton = screen.getByRole("button", { name: "Archive, 2 sessions" });
+		const archiveButton = screen.getByRole("button", { name: "Archived sessions, 2" });
 		expect(archiveButton).toHaveAttribute("aria-haspopup", "dialog");
 		expect(within(archiveButton).getByText("2")).toBeInTheDocument();
 		expect(screen.queryByText("dead worker")).not.toBeInTheDocument();
@@ -1672,7 +1736,7 @@ describe("SessionsBoard", () => {
 		const readyLane = screen.getByRole("region", { name: "Ready sessions" });
 		expect(within(readyLane).getByText("Ready")).toHaveClass("text-status-ready");
 		expect(within(readyLane).getByText("merged worker")).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^Archive, \d+ sessions?$/ })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /^Archived sessions, \d+$/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Restore merged worker" })).not.toBeInTheDocument();
 
 		await userEvent.click(screen.getByText("merged worker"));

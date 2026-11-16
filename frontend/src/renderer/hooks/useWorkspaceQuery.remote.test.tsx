@@ -16,6 +16,7 @@ import { appI18n } from "../i18n";
 import { sessionUiKey } from "../lib/hosts";
 import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { clearOptimisticSessionKill, trackOptimisticSessionKill } from "./optimistic-session-kills";
+import { clearOptimisticProjectRemoval, trackOptimisticProjectRemoval } from "./optimistic-project-removals";
 import { remoteWorkspaceQueryKey, useRemoteWorkspaces, useWorkspaceQuery, useWorkspaceSession } from "./useWorkspaceQuery";
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -72,6 +73,7 @@ it.each([
 	[401, true],
 	[426, true],
 	[502, true],
+	[504, true],
 	[530, true],
 	[500, false],
 ])("rechecks a connected host after a remote HTTP %i response only when connection health is in doubt", async (status, shouldRecheck) => {
@@ -82,7 +84,17 @@ it.each([
 	const dispatched = vi.spyOn(window, "dispatchEvent");
 	const { result } = renderHook(() => useWorkspaceSession("session-1", hostId), { wrapper });
 	await waitFor(() => expect(result.current.isError).toBe(true));
-	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-hosts-changed")).toBe(shouldRecheck);
+	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-host-check" && (event as CustomEvent<string>).detail === hostId)).toBe(shouldRecheck);
+});
+
+it("rechecks a connected host when a remote read gets no answer", async () => {
+	remoteConnect.mockResolvedValue({ hostId: "box-silent", label: "Box", url: "http://box:3001", base: "http://127.0.0.1:4000" });
+	vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("fetch failed"); }));
+	await connectHost("http://box:3001");
+	const dispatched = vi.spyOn(window, "dispatchEvent");
+	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
+	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-silent"]), { timeout: 3000 });
+	expect(dispatched.mock.calls.some(([event]) => event.type === "ao:remote-host-check" && (event as CustomEvent<string>).detail === "box-silent")).toBe(true);
 });
 
 it("coalesces simultaneous and repeated remote request failures into one host recheck", async () => {
@@ -93,13 +105,13 @@ it("coalesces simultaneous and repeated remote request failures into one host re
 	const dispatched = vi.spyOn(window, "dispatchEvent");
 	const { result } = renderHook(() => useRemoteWorkspaces(), { wrapper });
 	await waitFor(() => expect(result.current.failedHostIds).toEqual(["box-gate"]), { timeout: 3000 });
-	const refreshCount = () => dispatched.mock.calls.filter(([event]) => event.type === "ao:remote-hosts-changed").length;
-	expect(refreshCount()).toBe(1);
+	const checkCount = () => dispatched.mock.calls.filter(([event]) => event.type === "ao:remote-host-check").length;
+	expect(checkCount()).toBe(1);
 	await act(async () => { await result.current.refetch(); });
-	expect(refreshCount()).toBe(1);
-	now.mockReturnValue(1_015_000);
+	expect(checkCount()).toBe(1);
+	now.mockReturnValue(1_002_000);
 	await act(async () => { await result.current.refetch(); });
-	expect(refreshCount()).toBe(2);
+	expect(checkCount()).toBe(2);
 });
 
 it("keeps a host's registered projects visible when its sessions request fails", async () => {
@@ -279,15 +291,52 @@ it("marks a remote session terminated while its kill is in flight, and rolls it 
 	expect(result.current.data[0]?.sessions[0]?.isTerminated).not.toBe(true);
 });
 
-it("renames a remote Scratchpad when the language changes", async () => {
+it("hides a remote project while its removal is in flight, even when a poll returns it", () => {
+	const live = { id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] };
+	const { client, result } = renderCachedHost([live]);
+	const projectsKey = ["remote-workspaces", "box-a", "projects"];
+	expect(result.current.data.map((project) => project.id)).toEqual(["project-1"]);
+	try {
+		act(() => trackOptimisticProjectRemoval("project-1", "box-a"));
+		expect(result.current.data).toEqual([]);
+
+		// The host still lists the project while it tears it down.
+		act(() => client.setQueryData(projectsKey, [{ id: "project-1", name: "Remote", path: "/remote" }]));
+		expect(result.current.data).toEqual([]);
+		// A local project with the same id is a different project.
+		act(() => trackOptimisticProjectRemoval("project-1"));
+		act(() => clearOptimisticProjectRemoval("project-1"));
+		expect(result.current.data).toEqual([]);
+	} finally {
+		act(() => clearOptimisticProjectRemoval("project-1", "box-a"));
+	}
+	// Rolled back: the host's list shows it again.
+	expect(result.current.data.map((project) => project.id)).toEqual(["project-1"]);
+});
+
+it("keeps a removed local project out of a list fetched while its removal is in flight", async () => {
+	localGet.mockImplementation(async (path: string) => path === "/api/v1/projects"
+		? { data: { projects: [{ id: "project-1", name: "Gone", path: "/gone" }, { id: "project-2", name: "Kept", path: "/kept" }] } }
+		: { data: { sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "working", prs: [] }] } });
+	trackOptimisticProjectRemoval("project-1");
+	try {
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.data).toBeDefined());
+		expect(result.current.data?.map((project) => project.id)).toEqual(["project-2"]);
+	} finally {
+		clearOptimisticProjectRemoval("project-1");
+	}
+});
+
+it("renames a remote Sessions list when the language changes", async () => {
 	const { result } = renderCachedHost([{ id: "session-1", harness: "codex", status: "working", prs: [] }], []);
-	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
+	expect(result.current.data.map((project) => project.name)).toEqual(["Sessions"]);
 	try {
 		await act(() => appI18n.changeLanguage("de"));
-		expect(result.current.data.map((project) => project.name)).toEqual(["Notizblock"]);
-		expect(result.current.data[0]?.sessions[0]?.workspaceName).toBe("Notizblock");
+		expect(result.current.data.map((project) => project.name)).toEqual(["Sitzungen"]);
+		expect(result.current.data[0]?.sessions[0]?.workspaceName).toBe("Sitzungen");
 	} finally {
 		await act(() => appI18n.changeLanguage("en"));
 	}
-	expect(result.current.data.map((project) => project.name)).toEqual(["Scratchpad"]);
+	expect(result.current.data.map((project) => project.name)).toEqual(["Sessions"]);
 });

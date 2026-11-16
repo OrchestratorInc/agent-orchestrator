@@ -22,6 +22,8 @@ import { mouseCapture } from "./pointer-capture";
 import { BridgeError } from "./protocol";
 
 const PROTOCOL_VERSION = "1.3";
+/** How long a debugger screenshot may wait for Chrome to produce a frame. */
+export const SCREENSHOT_TIMEOUT_MS = 4_000;
 
 type Send = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type InputEvent = [string, Record<string, unknown>];
@@ -107,11 +109,15 @@ export class TrustedInput {
 				);
 			}
 			await send("Page.enable").catch(() => undefined);
+			// Input and screenshots reach a covered window or background tab, but
+			// pages that check focus or visibility would ignore the agent there.
+			await send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => undefined);
 		}
 		try {
 			return await fn(send);
 		} finally {
 			if (!this.pendingDialogs.has(tabId)) {
+				await send("Emulation.setFocusEmulationEnabled", { enabled: false }).catch(() => undefined);
 				await send("Page.disable").catch(() => undefined);
 				await this.chrome.debugger.detach(target).catch(() => undefined);
 			}
@@ -222,6 +228,32 @@ export class TrustedInput {
 		this.assertNoDialog(tabId);
 		const events = keyEvents(chord).map((event): InputEvent => ["Input.dispatchKeyEvent", event]);
 		return this.withDebugger(tabId, (send) => this.dispatch(tabId, send, events, 0, signal), signal);
+	}
+
+	/**
+	 * A PNG of this tab's viewport, base64. Unlike captureVisibleTab it needs
+	 * neither the tab in front nor its window on screen, and it can never
+	 * contain another tab.
+	 */
+	async screenshot(tabId: number, signal?: AbortSignal, timeoutMs = SCREENSHOT_TIMEOUT_MS): Promise<string> {
+		this.assertNoDialog(tabId);
+		return this.withDebugger(tabId, async (send) => {
+			throwIfAborted(signal);
+			// A page that loaded inside a minimized window has never painted, and
+			// Chrome waits for a frame that never comes. Detaching (on the way
+			// out) cancels the request.
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const timedOut = new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new BridgeError("SCREENSHOT_TIMEOUT", "Chrome produced no frame for the session's tab")), timeoutMs);
+			});
+			const result = (await Promise.race([send("Page.captureScreenshot", { format: "png" }), timedOut]).finally(() => clearTimeout(timer))) as
+				| { data?: unknown }
+				| undefined;
+			if (typeof result?.data !== "string" || result.data === "") {
+				throw new BridgeError("SCREENSHOT_UNAVAILABLE", "Chrome returned no screenshot for the session's tab");
+			}
+			return result.data;
+		}, signal);
 	}
 
 	/** Console messages and exceptions Chrome kept for the page. */

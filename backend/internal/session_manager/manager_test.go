@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -1271,7 +1272,8 @@ type fakeWorkspace struct {
 	calls []string
 	// sharedLog, when non-nil, receives entries alongside calls so ordering
 	// tests can compare workspace calls against store calls in one sequence.
-	sharedLog *[]string
+	sharedLog      *[]string
+	restoredBranch string
 }
 
 type fetchDefaultBranchCall struct {
@@ -1425,7 +1427,11 @@ func (w *fakeWorkspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) 
 		w.calls = append(w.calls, entry)
 		return ports.WorkspaceInfo{Path: cfg.Path, Branch: cfg.Branch, BaseRef: cfg.BaseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID, RepoPath: cfg.RepoPath}, nil
 	}
-	return w.Create(ctx, cfg)
+	info, err := w.Create(ctx, cfg)
+	if w.restoredBranch != "" {
+		info.Branch = w.restoredBranch
+	}
+	return info, err
 }
 func (w *fakeWorkspace) ForceDestroy(_ context.Context, info ports.WorkspaceInfo) error {
 	entry := "ForceDestroy:" + string(info.SessionID)
@@ -1734,6 +1740,14 @@ func TestMemcodeIgnoresInheritedModelFromPreviousHarness(t *testing.T) {
 	cfg.Worker.AgentConfig.Model = "opus"
 	if got := effectiveAgentConfig(domain.HarnessMemcode, domain.KindWorker, cfg).Model; got != "opus" {
 		t.Fatalf("memcode project choice = %q, want opus", got)
+	}
+}
+
+func TestSpawn_RefusesAnAccountWithoutAccountService(t *testing.T) {
+	m, _, _, _ := newManager()
+	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, AgentAccountID: "acct-1"})
+	if !errors.Is(err, ports.ErrAgentAccountUnknown) || !errors.Is(err, ErrSpawnAgentAccount) {
+		t.Fatalf("spawn err = %v, want an unknown agent account", err)
 	}
 }
 
@@ -4378,6 +4392,34 @@ func TestKill_RefusesWorkspaceTeardownWhenShellTerminalsWontClose(t *testing.T) 
 
 // A nil closer (SetShellTerminalCloser never called, e.g. a daemon boot path
 // that skips shellterm) must be a no-op, not a nil-pointer panic.
+type fakeBranchStateRecorder struct {
+	st    *fakeStore
+	ws    *fakeWorkspace
+	calls []string
+}
+
+func (f *fakeBranchStateRecorder) ReconcileSessionBranchState(_ context.Context, id domain.SessionID) error {
+	f.calls = append(f.calls, fmt.Sprintf("%s terminated=%v destroyed=%d", id, f.st.sessions[id].IsTerminated, f.ws.destroyed))
+	return nil
+}
+
+func TestKill_RecordsTheWorktreeBranchBeforeTeardown(t *testing.T) {
+	m, st, _, ws := newManager()
+	recorder := &fakeBranchStateRecorder{st: st, ws: ws}
+	m.SetBranchStateRecorder(recorder)
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if want := []string{"mer-1 terminated=false destroyed=0"}; !reflect.DeepEqual(recorder.calls, want) {
+		t.Fatalf("branch records = %v, want %v", recorder.calls, want)
+	}
+	if ws.destroyed != 1 || !st.sessions["mer-1"].IsTerminated {
+		t.Fatalf("destroyed=%d terminated=%v, want the kill to finish", ws.destroyed, st.sessions["mer-1"].IsTerminated)
+	}
+}
+
 func TestKill_NilShellTerminalCloserIsNoop(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.sessions["mer-1"] = mkLive("mer-1")
@@ -4537,6 +4579,102 @@ func TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone(t *testing.T)
 	}
 	if st.sessions["mer-1"].IsTerminated {
 		t.Fatal("session must stay active while the runtime may be live")
+	}
+}
+
+// forgettingInputGate records which terminals Session Manager tells the
+// terminal mux to forget.
+type forgettingInputGate struct {
+	mu        sync.Mutex
+	forgotten []string
+	err       error
+}
+
+func (g *forgettingInputGate) BeginInputDrain(string) (time.Time, func()) {
+	return time.Time{}, func() {}
+}
+
+func (g *forgettingInputGate) ForgetTerminalInput(_ context.Context, terminalID string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.forgotten = append(g.forgotten, terminalID)
+	return g.err
+}
+
+func (g *forgettingInputGate) calls() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.forgotten)
+}
+
+// A killed session's runtime is gone, so the terminal mux can drop its input
+// timestamp; it is keyed by the runtime handle id (#5691).
+func TestKill_ForgetsTerminalInputAfterRuntimeDestroy(t *testing.T) {
+	m, st, rt, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	rt.onDestroy = func(int, ports.RuntimeHandle) {
+		if got := gate.calls(); len(got) != 0 {
+			t.Errorf("forgot %v before the runtime was destroyed", got)
+		}
+	}
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h1]", got)
+	}
+}
+
+// A failed destroy leaves the runtime possibly live with a draft in it, so its
+// input timestamp must stay for the idle and draft proofs.
+func TestKill_KeepsTerminalInputWhenRuntimeDestroyFails(t *testing.T) {
+	m, st, rt, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	st.sessions["mer-1"] = mkLive("mer-1")
+	rt.destroyErr = errors.New("runtime still alive")
+
+	if _, err := m.Kill(ctx, "mer-1"); err == nil {
+		t.Fatal("kill succeeded, want the runtime error")
+	}
+	if got := gate.calls(); len(got) != 0 {
+		t.Fatalf("forgotten terminals = %v, want none after a failed destroy", got)
+	}
+}
+
+// Cleanup destroys a terminated session's leftover runtime (usually already
+// gone after the agent exited on its own) and then drops its input timestamp.
+func TestCleanup_ForgetsTerminalInputOfTerminatedSessions(t *testing.T) {
+	m, st, _, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", RuntimeHandleID: "h-mer-1"})
+
+	if _, err := m.Cleanup(ctx, "mer"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h-mer-1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h-mer-1]", got)
+	}
+}
+
+// Forgetting waits on the terminal's write fence under the caller's context.
+// If that fails the runtime is still destroyed, so the kill must not fail: the
+// only cost is one stale input timestamp.
+func TestKill_SucceedsWhenForgettingTerminalInputFails(t *testing.T) {
+	m, st, _, _ := newManager()
+	gate := &forgettingInputGate{err: context.DeadlineExceeded}
+	m.SetTerminalInputGate(gate)
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatalf("kill failed after the runtime was destroyed: %v", err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h1]", got)
 	}
 }
 
@@ -4747,6 +4885,44 @@ func TestRestore_ReopensTerminal(t *testing.T) {
 	}
 	if rt.created != 1 {
 		t.Fatal("restore should relaunch")
+	}
+}
+
+func TestRestorePassesTheLastCheckedOutBranch(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state *domain.SessionBranchState
+		want  string
+	}{
+		{"recorded branch", &domain.SessionBranchState{Branch: "b/pr", RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"pushed before the branch was recorded", &domain.SessionBranchState{RemoteBranch: "origin/b/pr"}, "b/pr"},
+		{"never observed", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
+			rec := st.sessions["mer-1"]
+			rec.BranchState = tc.state
+			st.sessions["mer-1"] = rec
+			if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+				t.Fatal(err)
+			}
+			if got := ws.restoreConfigs[0]; got.Branch != "b" || got.LastBranch != tc.want {
+				t.Fatalf("workspace restore branch %q, last branch %q; want %q and %q", got.Branch, got.LastBranch, "b", tc.want)
+			}
+		})
+	}
+}
+
+func TestRestoreOnTheLastBranchKeepsTheSessionBranch(t *testing.T) {
+	m, st, _, ws := newManager()
+	ws.restoredBranch = "b/pr"
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b/root", AgentSessionID: "agent-x"})
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Branch; got != "b/root" {
+		t.Fatalf("session branch after restore = %q, want b/root", got)
 	}
 }
 
@@ -11054,6 +11230,29 @@ func pastStartupGate(rec domain.SessionRecord) domain.SessionRecord {
 	return rec
 }
 
+type semanticDeliveryKey struct {
+	sessionID       domain.SessionID
+	runtimeLaunchID string
+	deliveryID      string
+}
+
+type fakeSemanticReceiptStore struct {
+	*fakeStore
+	accepted map[semanticDeliveryKey]bool
+}
+
+func newFakeSemanticReceiptStore(st *fakeStore) *fakeSemanticReceiptStore {
+	return &fakeSemanticReceiptStore{fakeStore: st, accepted: map[semanticDeliveryKey]bool{}}
+}
+
+func (s *fakeSemanticReceiptStore) SemanticDeliveryAccepted(_ context.Context, id domain.SessionID, launchID, deliveryID string) (bool, error) {
+	return s.accepted[semanticDeliveryKey{sessionID: id, runtimeLaunchID: launchID, deliveryID: deliveryID}], nil
+}
+
+func (s *fakeSemanticReceiptStore) accept(id domain.SessionID, launchID, deliveryID string) {
+	s.accepted[semanticDeliveryKey{sessionID: id, runtimeLaunchID: launchID, deliveryID: deliveryID}] = true
+}
+
 func TestSend_SkipsConfirmForHooklessHarness(t *testing.T) {
 	// A harness whose adapter does NOT implement the activity-signal interfaces (plain
 	// fakeAgent) must skip confirmActive entirely: one Send, no nudges, and the
@@ -11084,6 +11283,7 @@ func TestSendSemanticTUIRequiresCorrelatedPromptAcceptance(t *testing.T) {
 		Activity: domain.Activity{State: domain.ActivityIdle},
 		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
 	})
+	receipts := newFakeSemanticReceiptStore(st)
 	msg := &fakeMessenger{onSend: func(id domain.SessionID, message string) {
 		if message == "" {
 			return
@@ -11091,14 +11291,16 @@ func TestSendSemanticTUIRequiresCorrelatedPromptAcceptance(t *testing.T) {
 		if got, ok := domain.ReportDeliveryID(message); !ok || got != deliveryID {
 			t.Fatalf("delivery envelope = %q, %v", got, ok)
 		}
+		receipts.accept(id, "launch-1", deliveryID)
 		rec := st.sessions[id]
-		rec.Activity.State = domain.ActivityActive
-		rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointCoordination
-		rec.Metadata.ConversationCheckpointGeneration = "launch-1"
-		rec.Metadata.ConversationCheckpointTurnID = deliveryID
+		rec.Metadata.LatestUserPrompt = "human prompt submitted afterward"
+		rec.Metadata.ConversationCheckpointState = domain.ConversationCheckpointPrompt
+		rec.Metadata.ConversationCheckpointGeneration = ""
+		rec.Metadata.ConversationCheckpointTurnID = ""
 		st.sessions[id] = rec
 	}}
 	m := newSendTestManager(t, semanticSignalingAgent{}, msg, st)
+	m.store = receipts
 
 	if err := m.SendSemantic(context.Background(), "s1", "Reports since your previous turn:", deliveryID); err != nil {
 		t.Fatalf("SendSemantic: %v", err)
@@ -11114,6 +11316,33 @@ func TestSendSemanticTUIRequiresCorrelatedPromptAcceptance(t *testing.T) {
 	}
 }
 
+// A batch accepted before the upgrade that added accepted-delivery columns is
+// recorded only in the conversation checkpoint, and must not be pasted again.
+func TestSendSemanticTUIAcceptsCheckpointRecordedBeforeUpgrade(t *testing.T) {
+	const deliveryID = "report-batch:preupgrade1"
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{
+			RuntimeLaunchID:                  "launch-1",
+			ConversationCheckpointState:      domain.ConversationCheckpointCoordination,
+			ConversationCheckpointGeneration: "launch-1",
+			ConversationCheckpointTurnID:     deliveryID,
+		},
+	})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, semanticSignalingAgent{}, msg, st)
+	m.store = newFakeSemanticReceiptStore(st)
+
+	if err := m.SendSemantic(context.Background(), "s1", "report", deliveryID); err != nil {
+		t.Fatalf("SendSemantic: %v", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
+	}
+}
+
 func TestSendSemanticTUIDoesNotAcceptPaneWrite(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
@@ -11121,14 +11350,49 @@ func TestSendSemanticTUIDoesNotAcceptPaneWrite(t *testing.T) {
 		Activity: domain.Activity{State: domain.ActivityActive},
 		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
 	})
-	msg := &fakeMessenger{}
+	receipts := newFakeSemanticReceiptStore(st)
+	msg := &fakeMessenger{onSend: func(id domain.SessionID, _ string) {
+		rec := st.sessions[id]
+		rec.Activity.State = domain.ActivityExited
+		st.sessions[id] = rec
+	}}
 	m := newSendTestManager(t, semanticSignalingAgent{}, msg, st)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-	defer cancel()
+	m.store = receipts
 
-	err := m.SendSemantic(ctx, "s1", "report", "report-batch:unaccepted")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("SendSemantic error = %v, want context deadline", err)
+	err := m.SendSemantic(context.Background(), "s1", "report", "report-batch:unaccepted")
+	if !errors.Is(err, ErrTerminated) {
+		t.Fatalf("SendSemantic error = %v, want terminated", err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("pane writes = %d, want 1", len(msg.msgs))
+	}
+}
+
+func TestSendSemanticTUIReadsReceiptBeforeLaterOwnerExit(t *testing.T) {
+	const deliveryID = "report-batch:late123"
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	})
+	receipts := newFakeSemanticReceiptStore(st)
+	msg := &fakeMessenger{onSend: func(id domain.SessionID, message string) {
+		if got, ok := domain.ReportDeliveryID(message); !ok || got != deliveryID {
+			t.Fatalf("delivery envelope = %q, %v", got, ok)
+		}
+		receipts.accept(id, "launch-1", deliveryID)
+		rec := st.sessions[id]
+		rec.Metadata.RuntimeLaunchID = "launch-2"
+		rec.Activity.State = domain.ActivityExited
+		rec.IsTerminated = true
+		st.sessions[id] = rec
+	}}
+	m := newSendTestManager(t, semanticSignalingAgent{}, msg, st)
+	m.store = receipts
+
+	if err := m.SendSemantic(context.Background(), "s1", "report", deliveryID); err != nil {
+		t.Fatalf("SendSemantic: %v", err)
 	}
 	if len(msg.msgs) != 1 {
 		t.Fatalf("pane writes = %d, want 1", len(msg.msgs))
@@ -11140,13 +11404,35 @@ func TestSendSemanticTUIRejectsAdapterWithoutAcceptanceSignal(t *testing.T) {
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
 		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
 		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
 	})
+	receipts := newFakeSemanticReceiptStore(st)
 	msg := &fakeMessenger{}
 	m := newSendTestManager(t, signalingAgent{}, msg, st)
+	m.store = receipts
 
 	err := m.SendSemantic(context.Background(), "s1", "report", "report-batch:unsupported")
 	if !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
 		t.Fatalf("SendSemantic error = %v", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
+	}
+}
+
+func TestSendSemanticTUIRejectsMissingReceiptStore(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch-1"},
+	})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, semanticSignalingAgent{}, msg, st)
+
+	err := m.SendSemantic(context.Background(), "s1", "report", "report-batch:unsupported")
+	if !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
+		t.Fatalf("SendSemantic error = %v, want unsupported", err)
 	}
 	if len(msg.msgs) != 0 {
 		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
@@ -12260,6 +12546,18 @@ func TestAOSkillPointerRemoteHostNamesRemoteBrowserGuide(t *testing.T) {
 	}
 }
 
+func TestAOSkillPointerNamesBugTriageSkill(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	skill := filepath.ToSlash(filepath.Join(dir, "skills", "bug-triage", "SKILL.md"))
+	for _, chat := range []bool{false, true} {
+		pointer := m.aoSkillPointer(chat)
+		if !strings.Contains(pointer, "To report Orchestrator bugs, read `"+skill+"`.") {
+			t.Fatalf("chat=%v pointer does not lead to the skill:\n%s", chat, pointer)
+		}
+	}
+}
+
 func TestAOSkillPointerDesktopHostKeepsDesktopGuide(t *testing.T) {
 	m := &Manager{dataDir: t.TempDir()}
 	pointer := m.aoSkillPointer(false)
@@ -12281,6 +12579,56 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 	var relaunchErr *RelaunchError
 	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
+	}
+}
+
+func TestSpawn_BaseBranchOverridesTheProjectDefaultForThisSessionOnly(t *testing.T) {
+	m, st, _, ws := newManager()
+	config := testRoleAgents()
+	config.DefaultBranch = "develop"
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: config}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ws.lastCfg.BaseBranch; got != "feat/parent" {
+		t.Fatalf("workspace base branch = %q", got)
+	}
+	if got := ws.resolves[0].configuredBranch; got != "feat/parent" {
+		t.Fatalf("resolved branch = %q", got)
+	}
+	if got := st.projects["mer"].Config.DefaultBranch; got != "develop" {
+		t.Fatalf("project default changed to %q", got)
+	}
+}
+
+// An existing branch keeps its own history and would not start from the base,
+// so a branch named with a base must be new.
+func TestSpawn_BaseBranchWithANamedBranchRequiresItToBeNew(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent", Branch: "feat/child"}); err != nil {
+		t.Fatal(err)
+	}
+	if !ws.lastCfg.RequireNewBranch || ws.lastCfg.Branch != "feat/child" {
+		t.Fatalf("workspace branch = %q, require new = %v", ws.lastCfg.Branch, ws.lastCfg.RequireNewBranch)
+	}
+	// Without a base, a named branch may be an existing one to continue.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Branch: "feat/other"}); err != nil {
+		t.Fatal(err)
+	}
+	if ws.lastCfg.RequireNewBranch {
+		t.Fatal("a named branch without a base must not be required to be new")
+	}
+}
+
+func TestSpawn_BaseBranchNeedsARepositoryProject(t *testing.T) {
+	for _, kind := range []domain.ProjectKind{domain.ProjectKindScratch, domain.ProjectKindWorkspace} {
+		m, st, _, _ := newManager()
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: kind}
+		_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, BaseBranch: "feat/parent"})
+		if !errors.Is(err, ErrBaseBranchUnsupported) {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
 	}
 }
 

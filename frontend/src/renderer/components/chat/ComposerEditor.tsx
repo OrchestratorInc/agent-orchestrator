@@ -27,6 +27,7 @@ import {
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
+	SKIP_DOM_SELECTION_TAG,
 	TextNode,
 	type EditorConfig,
 	type LexicalEditor,
@@ -55,8 +56,9 @@ import {
 import { Box, Image as ImageIcon } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
+import { createDraftFaviconWarmer } from "../../lib/link-preload";
 import { composerFileIcon } from "./composerFileIcon";
-import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { findActiveTrigger, skillCommandName, type TriggerKind } from "./composerSuggest";
 import { listBackspace, listEnter, listIndent, type LinePrefixEdit } from "./composerLists";
 import { splitInlineImagePaths } from "./messageAttachments";
 import type { ComposerSentToken } from "./sentComposerTokens";
@@ -84,7 +86,7 @@ export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
-	setText(text: string, caret?: "start" | "end"): void;
+	setText(text: string, caret?: "start" | "end", options?: { preserveFocus?: boolean }): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
@@ -189,13 +191,6 @@ const COMPOSER_TEXT_INSET = "px-[7px]";
  * nor pushes the text off-centre; overlay scrollbars reserve nothing.
  */
 const COMPOSER_SCROLL_GUTTER = "chat-composer-scrollbar [scrollbar-gutter:stable_both-edges]";
-/**
- * Pulls the composer's trailing send controls in from the right edge. The leading +
- * is a 28px ghost button whose glyph's ink starts ~10px inside it (7px of centring
- * plus the icon's own margin); the filled send circle is its own edge. This inset
- * puts the circle that same ~22px from the right as the + glyph is from the left.
- */
-export const COMPOSER_SEND_INSET = "me-2.5";
 
 /**
  * One letter of a dictation in progress. A letter fades in once, when it first
@@ -331,7 +326,10 @@ function $createComposerTokenNode(kind: TokenKind, value: string): ComposerToken
 	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
-	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
+	// A `skill:` command reads as `/name` like every other agent's; the wire still
+	// carries the command the agent runs.
+	const skillName = skillCommandName(value);
+	const display = kind === "skill" ? (skillName ? `/${skillName}` : wire) : slash >= 0 ? value.slice(slash + 1) : value;
 	return new ComposerTokenNode(kind, value, display, wire);
 }
 
@@ -636,6 +634,17 @@ const EditorBridge = forwardRef<
 
 	useEffect(() => editor.setEditable(!disabled), [disabled, editor]);
 
+	// Links typed or pasted here load their site icons before they are sent.
+	useEffect(() => {
+		const warmer = createDraftFaviconWarmer();
+		warmer.update(editor.getEditorState().read(() => $getRoot().getTextContent()));
+		const unregister = editor.registerTextContentListener((text) => warmer.update(text));
+		return () => {
+			unregister();
+			warmer.dispose();
+		};
+	}, [editor]);
+
 	useImperativeHandle(
 		ref,
 		() => ({
@@ -649,8 +658,9 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			setText: (text, caret) => {
+			setText: (text, caret, options) => {
 				editor.update(() => {
+					if (options?.preserveFocus) $addUpdateTag(SKIP_DOM_SELECTION_TAG);
 					$replaceEditorText(text, attachedImages(), caret);
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
@@ -913,6 +923,8 @@ export const ComposerEditor = forwardRef<
 	ComposerEditorHandle,
 	{
 		disabled?: boolean;
+		/** Takes no input but looks exactly as usual: same text, no dimming. */
+		readOnly?: boolean;
 		enterSends: boolean;
 		/** Hides the text while a send is in flight; the draft is still held for recovery. */
 		concealed?: boolean;
@@ -935,6 +947,7 @@ export const ComposerEditor = forwardRef<
 >(function ComposerEditor(
 	{
 		disabled,
+		readOnly = false,
 		enterSends,
 		concealed,
 		dictating,
@@ -958,7 +971,8 @@ export const ComposerEditor = forwardRef<
 	const suggestionDescriptionId = useId();
 	const [dismissedSuggestionId, setDismissedSuggestionId] = useState<string>();
 	const [empty, setEmpty] = useState(true);
-	const suggestion = empty && !disabled && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
+	const locked = Boolean(disabled) || readOnly;
+	const suggestion = empty && !locked && !concealed && !dictating && promptSuggestion?.id !== dismissedSuggestionId
 		? promptSuggestion
 		: undefined;
 	const dismissSuggestion = useCallback(() => {
@@ -970,7 +984,7 @@ export const ComposerEditor = forwardRef<
 	const initialConfig = {
 		namespace: "AOChatComposer",
 		nodes: [ComposerTokenNode, DictationLetterNode],
-		editable: !disabled,
+		editable: !locked,
 		theme: { paragraph: "m-0" },
 		onError(error: Error) {
 			throw error;
@@ -1058,7 +1072,7 @@ export const ComposerEditor = forwardRef<
 				<HistoryPlugin />
 				<EditorBridge
 					ref={ref}
-					disabled={disabled}
+					disabled={locked}
 					enterSends={enterSends}
 					promptSuggestion={suggestion}
 					onDismissSuggestion={dismissSuggestion}

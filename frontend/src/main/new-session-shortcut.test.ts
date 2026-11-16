@@ -43,6 +43,15 @@ function fakeTarget() {
 }
 
 describe("attachAppShortcuts", () => {
+	it.each([false, true])("leaves default and custom selection shortcuts to the renderer (Mac: %s)", isMac => {
+		const source = fakeSource(), target = fakeTarget();
+		attachAppShortcuts(source, isMac, target);
+		expect(source.emit({ key: "l", control: !isMac, meta: isMac }).preventDefault).not.toHaveBeenCalled();
+		attachAppShortcuts(source, isMac, target, false, () => ({ "add-selection-to-chat": [{ key: "j", ctrl: !isMac, meta: isMac, shift: true, alt: true }] }));
+		expect(source.emit({ key: "j", control: !isMac, meta: isMac, shift: true, alt: true }).preventDefault).not.toHaveBeenCalled();
+		expect(target.send).not.toHaveBeenCalled();
+		expect(target.focus).not.toHaveBeenCalled();
+	});
 	it("routes Ctrl+Shift+I to shell DevTools when no Browser view is available", async () => {
 		const source = fakeSource();
 		const target = { ...fakeTarget(), toggleDevTools: vi.fn() };

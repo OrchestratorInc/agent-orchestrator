@@ -49,6 +49,32 @@ type AgentAccount struct {
 // Device reports the "This computer" account.
 func (a AgentAccount) Device() bool { return strings.TrimSpace(a.Home) == "" }
 
+// AgentAccountProblemKind says why an account's identity or limits could not
+// be read, so the app can say it plainly instead of showing the CLI's error.
+type AgentAccountProblemKind string
+
+// Problem kinds. Slow, rate limited and unavailable pass on their own; a
+// missing CLI and another login need the user.
+const (
+	// AgentAccountProblemSlow: the CLI did not answer in time.
+	AgentAccountProblemSlow AgentAccountProblemKind = "slow"
+	// AgentAccountProblemRateLimited: the provider refused the check for now.
+	AgentAccountProblemRateLimited AgentAccountProblemKind = "rate_limited"
+	// AgentAccountProblemUnavailable: any other failed check.
+	AgentAccountProblemUnavailable AgentAccountProblemKind = "unavailable"
+	// AgentAccountProblemCLIMissing: the provider's CLI is not installed.
+	AgentAccountProblemCLIMissing AgentAccountProblemKind = "cli_missing"
+	// AgentAccountProblemOtherLogin: the folder is signed in as another login.
+	AgentAccountProblemOtherLogin AgentAccountProblemKind = "other_login"
+	// AgentAccountProblemOtherOrg: the folder is signed in to another organization.
+	AgentAccountProblemOtherOrg AgentAccountProblemKind = "other_org"
+)
+
+// Transient reports a problem the next check may not have.
+func (k AgentAccountProblemKind) Transient() bool {
+	return k == AgentAccountProblemSlow || k == AgentAccountProblemRateLimited || k == AgentAccountProblemUnavailable
+}
+
 // AgentAccountLimitWindow is one usage meter of an account, such as the
 // five-hour session or the weekly limit.
 type AgentAccountLimitWindow struct {
@@ -57,6 +83,7 @@ type AgentAccountLimitWindow struct {
 	UsedPercent     float64    `json:"usedPercent" minimum:"0" maximum:"100"`
 	ResetsAt        *time.Time `json:"resetsAt,omitempty"`
 	DurationMinutes int        `json:"durationMinutes,omitempty" minimum:"0"`
+	Scope           string     `json:"-"`
 }
 
 // AgentLimitReading is one limit window's value as read at one moment.
@@ -80,6 +107,8 @@ type AgentAccountLimits struct {
 	// AutoResumeResetsAt is present only when native rolling limits identify an
 	// unambiguous future deadline. Nil does not establish available capacity.
 	AutoResumeResetsAt *time.Time `json:"-"`
+	// ReachedScopes are the meter scopes the provider reports as exhausted.
+	ReachedScopes []string `json:"-"`
 	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
 	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
 	// ResetCredits counts Codex usage-limit resets the account can spend.
@@ -88,6 +117,36 @@ type AgentAccountLimits struct {
 	// not only in AO. Codex reports it; Claude does not.
 	Activity  *AgentAccountActivity `json:"activity,omitempty"`
 	FetchedAt time.Time             `json:"fetchedAt"`
+}
+
+// HandoffHeadroom reports the room left in the meters a request for model draws on.
+func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string) (float64, bool) {
+	model = normalizeLimitScope(model)
+	fullest, relevant := 0.0, false
+	meters := append([]AgentAccountLimitWindow{}, l.Windows...)
+	for _, scope := range l.ReachedScopes {
+		meters = append(meters, AgentAccountLimitWindow{Scope: scope, UsedPercent: 100})
+	}
+	for _, w := range meters {
+		scope := normalizeLimitScope(w.Scope)
+		switch {
+		case scope == "":
+		case model == "":
+		case model != "" && (strings.Contains(model, scope) || p == AgentAccountProviderClaude && strings.Contains(scope, model)):
+		default:
+			continue
+		}
+		relevant = true
+		fullest = max(fullest, w.UsedPercent)
+	}
+	if !relevant || fullest >= 100 {
+		return 0, false
+	}
+	return 100 - fullest, true
+}
+
+func normalizeLimitScope(s string) string {
+	return strings.NewReplacer(" ", "-", "_", "-").Replace(strings.ToLower(strings.TrimSpace(s)))
 }
 
 // AgentAccountActivity is the provider's own record of an account's use.
@@ -130,4 +189,6 @@ type AgentAccountIdentityCheck struct {
 	LoggedIn bool
 	Email    string
 	Plan     string
+	OrgID    string
+	OrgName  string
 }

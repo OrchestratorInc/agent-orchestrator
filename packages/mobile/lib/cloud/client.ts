@@ -1,3 +1,4 @@
+import { noteRequestAnswered } from "../answeredRequests";
 import { CLOUD_API_PREFIX, cloudAddressIsSafe, cloudWebSocketBase } from "./config";
 import { CloudAuthError, CloudError, isPlanRefusal } from "./errors";
 import type {
@@ -152,6 +153,7 @@ export function createCloudClient(options: CloudClientOptions) {
 		init.signal?.addEventListener("abort", abort);
 		const timer = setTimeout(abort, init.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 		let response: Response;
+		const startedAt = Date.now();
 		try {
 			response = await doFetch(buildUrl(baseUrl, path, init.query), {
 				method,
@@ -159,6 +161,7 @@ export function createCloudClient(options: CloudClientOptions) {
 				body: init.body === undefined ? undefined : JSON.stringify(init.body),
 				signal: controller.signal,
 			});
+			noteRequestAnswered(startedAt);
 		} catch (cause) {
 			if (init.signal?.aborted) throw Object.assign(new Error("Request cancelled"), { name: "AbortError" });
 			throw new CloudError("Couldn't reach Orchestrator Cloud.", { status: 0, cause });

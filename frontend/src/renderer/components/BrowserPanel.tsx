@@ -1,5 +1,7 @@
 import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { BrowserIcon } from "./icons";
+import { BrowserSiteBlockRow, continueLabel, useUserBrowser } from "./BrowserContinueElsewhere";
+import { canOpenInUserBrowser } from "../../shared/browser-site-block";
 import {
 	memo,
 	useCallback,
@@ -83,6 +85,7 @@ import {
 import { SETTINGS_MENU_ROW, SETTINGS_MENU_SURFACE } from "./settings/SettingsMenuTrigger";
 import { Input } from "./ui/input";
 import { Pressable } from "./ui/pressable";
+import { TabCloseButton, TerminalTabFrame } from "./TerminalTabFrame";
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { cn } from "../lib/utils";
@@ -462,6 +465,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		setAnnotationMode,
 		annotationAction = async () => undefined,
 	} = browserView;
+	const userBrowser = useUserBrowser();
 	const [urlInput, setUrlInput] = useState(navState.url);
 	// A popped-out panel is portaled outside #root; the popout flag covers that
 	// case, so this one marks only a live page docked inside the shell.
@@ -482,6 +486,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// computer's own. Before the viewer's first report the tab shows the viewer
 	// itself, an ao-preview-….localhost address, so that is held back too.
 	const agentPageOnHost = onAgentTab && isHostLocalWebLink(navState.url);
+	const canOpenElsewhere = Boolean(viewId) && canOpenInUserBrowser(navState.url, { agentTab: onAgentTab }) && !browserUnavailable;
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);
 	const [customDeviceWidth, setCustomDeviceWidth] = useState("390");
@@ -712,6 +717,20 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 			showGlobalToast(t("browser.screenshotCopied"), undefined, "top-center");
 		} catch {
 			showGlobalToast(t("browser.screenshotFailed"), undefined, "top-center");
+		}
+	}, [showGlobalToast, t, viewId]);
+
+	// The browser menu's way out, for any page detection did not catch.
+	const openPageElsewhere = useCallback(async () => {
+		try {
+			const used = await window.ao?.browser.openInUserBrowser(viewId);
+			showGlobalToast(
+				used?.name ? t("browser.continueElsewhere.openedIn", { browser: used.name }) : t("browser.continueElsewhere.openedInYourBrowser"),
+				undefined,
+				"top-center",
+			);
+		} catch {
+			showGlobalToast(t("browser.continueElsewhere.failed"), undefined, "top-center");
 		}
 	}, [showGlobalToast, t, viewId]);
 
@@ -1123,6 +1142,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 						<div
 							aria-label={t("browser.tabs")}
 							className="browser-panel__tab-strip edge-fade edge-fade-x"
+							data-tab-strip
 							onKeyDown={draggedTopTabId ? undefined : handleTabListKeyDown}
 							ref={tabScrollRef}
 							role="tablist"
@@ -1143,17 +1163,22 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 					{draggedTopTab ? <BrowserTopTabDragOverlay tab={draggedTopTab} /> : null}
 				</DragOverlay>
 			</DndContext>
+			{/* The session strip's New terminal button, in its action slot. */}
+			<div className="workspace-topbar-actions shrink-0 pl-(--gap-topbar-control)" data-tab-strip-action>
 				<BrowserControlTooltip label={t("browser.openNewTab")}>
-					<Pressable
+					<Button
 						aria-label={t("browser.openNewTab")}
-						className={cn("browser-panel__tab-new", draggedTopTabId && "browser-panel__tab-new--dragging")}
+						className={cn(draggedTopTabId && "browser-panel__tab-new--dragging")}
 						disabled={browserUnavailable}
 						onClick={() => void handleOpenTab()}
+						size="icon-sm"
 						type="button"
+						variant="quiet"
 					>
-						<Plus aria-hidden="true" className="size-icon-base" />
-					</Pressable>
+						<Plus aria-hidden="true" className="size-icon-md" />
+					</Button>
 				</BrowserControlTooltip>
+			</div>
 		</div>
 	);
 	const annotationIdle = annotationState.count === 0 && !annotationState.hasDraft;
@@ -1666,6 +1691,10 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 									<Camera aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t("browser.takeScreenshot")}</span>
 								</DropdownMenuItem>
+								<DropdownMenuItem className="gap-2" disabled={!canOpenElsewhere} onSelect={() => void openPageElsewhere()}>
+									<ExternalLink aria-hidden="true" className="size-icon-base shrink-0" />
+									<span className="flex-1">{continueLabel(t, userBrowser, "open")}</span>
+								</DropdownMenuItem>
 								<DropdownMenuItem className="gap-2" onSelect={() => openGlobalSettings("browserProfiles")}>
 									<Download aria-hidden="true" className="size-icon-base shrink-0" />
 									<span className="flex-1">{t("browser.downloads.title")}</span>
@@ -1682,6 +1711,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 				</DropdownMenu>
 				</div>
 			</div>
+			<BrowserSiteBlockRow siteBlock={navState.siteBlock} viewId={viewId} />
 			<AnimatePresence initial={false}>
 				{annotationMode ? (
 					<motion.div
@@ -1840,6 +1870,10 @@ function BrowserControlTooltip({
 	);
 }
 
+// A page's tab: the shared tab frame, with the page's favicon in the icon
+// slot and the ghost close button always showing at its right end. The slot
+// around it is what the strip sorts; the frame's button carries the drag
+// listeners.
 const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	tab,
 	selected,
@@ -1854,74 +1888,73 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	const { t } = useTranslation();
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
 	const label = browserTabLabel(tab.title, tab.url);
-	const closeLabel = t("browser.closeTab", { title: label.title });
+	const close = useCallback(() => onClose(tab.id), [onClose, tab.id]);
 	return (
 		<div
-			className={cn(
-				"browser-panel__tab",
-				selected && "browser-panel__tab--active",
-				isDragging && "browser-panel__tab--drag-placeholder",
-			)}
+			className={cn("browser-panel__tab", isDragging && "browser-panel__tab--drag-placeholder")}
 			data-browser-tab-id={tab.id}
 			ref={setNodeRef}
 			style={{ transform: CSS.Transform.toString(transform), transition }}
 		>
-			<BrowserControlTooltip label={label.title}>
-				<Pressable
-					{...attributes}
-					{...listeners}
-					aria-selected={selected}
-					className="browser-panel__tab-select"
-					onClick={() => void onSelect(tab.id)}
-					role="tab"
-					tabIndex={selected ? 0 : -1}
-					type="button"
-				>
-					{tab.favicon ? (
-						<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
-					) : (
-						<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
-					)}
-					<span className="browser-panel__tab-title">{label.title}</span>
-				</Pressable>
-			</BrowserControlTooltip>
-			<BrowserControlTooltip label={closeLabel}>
-				<Pressable
-					aria-label={closeLabel}
-					className="browser-panel__tab-close"
-					onClick={() => onClose(tab.id)}
-					type="button"
-				>
-					<X aria-hidden="true" className="size-icon-base" />
-				</Pressable>
-			</BrowserControlTooltip>
+			<TerminalTabFrame
+				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
+				actionPinned
+				actionPosition="end"
+				active={selected}
+				buttonProps={{
+					...attributes,
+					...listeners,
+					"aria-selected": selected,
+					onClick: () => void onSelect(tab.id),
+					role: "tab",
+					tabIndex: selected ? 0 : -1,
+					title: label.title,
+					type: "button",
+				}}
+				icon={<BrowserTabIcon favicon={tab.favicon} />}
+				label={label.title}
+				onClose={close}
+			/>
 		</div>
 	);
 });
 
+function BrowserTabIcon({ favicon }: { favicon?: string }) {
+	return favicon ? (
+		<img alt="" className="size-icon-sm object-cover" src={favicon} />
+	) : (
+		<BrowserIcon aria-hidden="true" className="size-icon-sm" />
+	);
+}
+
+const noop = () => undefined;
+
+// The tab under the pointer while it is dragged: the same frame in its
+// dragging look, as a dragged session tab shows.
 export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 	tab,
 }: {
 	tab: BrowserViewModel["tabs"][number];
 }) {
+	const { t } = useTranslation();
 	const label = browserTabLabel(tab.title, tab.url);
 	return (
 		<div
 			aria-hidden="true"
 			className="browser-panel__tab browser-panel__tab--drag-overlay"
+			data-dragging=""
 			data-testid="browser-tab-drag-overlay"
+			inert
 		>
-			<div className="browser-panel__tab-select">
-				{tab.favicon ? (
-					<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
-				) : (
-					<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
-				)}
-				<span className="browser-panel__tab-title">{label.title}</span>
-			</div>
-			<span className="browser-panel__tab-close">
-				<X aria-hidden="true" className="size-icon-base" />
-			</span>
+			<TerminalTabFrame
+				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={noop} />}
+				actionPinned
+				actionPosition="end"
+				active={tab.active}
+				buttonProps={{ tabIndex: -1, type: "button" }}
+				icon={<BrowserTabIcon favicon={tab.favicon} />}
+				label={label.title}
+			/>
 		</div>
 	);
 });

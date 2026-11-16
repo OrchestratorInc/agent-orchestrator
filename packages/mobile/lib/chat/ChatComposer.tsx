@@ -34,6 +34,7 @@ import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
 import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
+import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { EffortSliderOverlay } from "../effort-slider";
 import { useChatEffort } from "./useChatEffort";
 import { compactCount } from "../files/model";
@@ -123,6 +124,7 @@ export function ChatComposer({
 	onInterrupt,
 	onSettings,
 	onConfigOption,
+	otherAgents,
 	restingInset,
 	dockRiseOverride,
 	onOpenUsage,
@@ -175,6 +177,8 @@ export function ChatComposer({
 	onInterrupt(): void;
 	onSettings(settings: TurnSettings): Promise<void>;
 	onConfigOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
+	/** The model menu's other agents; choosing one's model switches the session's agent. */
+	otherAgents?: ChatTurnSettingsControlProps["otherAgents"];
 	/**
 	 * What the dock owes with the keyboard down — the home-indicator inset. The
 	 * dock keeps it at all times and closes the difference to the keyboard by
@@ -757,7 +761,7 @@ export function ChatComposer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl {...settingsProps} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
+						<ChatTurnSettingsControl {...settingsProps} otherAgents={otherAgents} effort={{ choices: effort.choices, open: effort.open, onToggle: effort.toggle }} />
 					</View>
 					{steerAction}
 				</Animated.View>

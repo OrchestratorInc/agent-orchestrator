@@ -1,4 +1,4 @@
-import { isSettingsPageOpen } from "../hooks/useAppShortcut";
+import { isSettingsPageOpen, onDedicatedShortcut } from "../hooks/useAppShortcut";
 import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
@@ -31,7 +31,7 @@ import { handleTerminalTabListKeyDown } from "../lib/terminal-tabs";
 import { cn } from "../lib/utils";
 import { sidebarOccupiesLayout, useUiStore, type Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
-import { isOrchestratorSession, sessionIsActive, type WorkspaceSession } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame, terminalTabRenameInputClassName } from "./TerminalTabFrame";
@@ -414,7 +414,7 @@ export function CenterPane({
 
 	useEffect(
 		() =>
-			aoBridge.app.onCloseShellTerminalShortcut(() => {
+			onDedicatedShortcut("close-shell-terminal", (handler) => aoBridge.app.onCloseShellTerminalShortcut(handler), () => {
 				if (closeFocusedSplitPane) closeFocusedSplitPane();
 				else if (activeWorkspaceTab?.onClose) activeWorkspaceTab.onClose();
 				else if (target.kind === "shell") onCloseShellTerminal?.(target.handleId);
@@ -423,8 +423,12 @@ export function CenterPane({
 	);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(-1));
-		const disposeNext = aoBridge.app.onNextTabShortcut(() => !isSettingsPageOpen() && selectAdjacentTab(1));
+		const disposePrevious = onDedicatedShortcut("previous-tab", (handler) => aoBridge.app.onPreviousTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(-1);
+		});
+		const disposeNext = onDedicatedShortcut("next-tab", (handler) => aoBridge.app.onNextTabShortcut(handler), () => {
+			if (!isSettingsPageOpen()) selectAdjacentTab(1);
+		});
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -825,14 +829,14 @@ export function SessionPaneTab({
 	);
 	if (rename.isEditing || (!session && !tabMenu)) return tabFrame;
 	// Archive only where the ⇧⌘A confirmation is mounted (SessionTopbarActions):
-	// an active local or remote worker. The orchestrator goes with its project.
+	// an active local, remote, or Cloud worker. The orchestrator goes with its project.
 	const menu: TabMenuSpec = session
 		? {
 				kind: "session",
 				tabKey,
 				session,
 				onRename: renameSession ? rename.begin : undefined,
-				canArchive: !isOrchestratorSession(session) && !session.cloud && sessionIsActive(session),
+				canArchive: canArchiveWorkerSession(session),
 			}
 		: { kind: "plain", tabKey };
 	// The ⋮ button in the action slot opens this same spec.

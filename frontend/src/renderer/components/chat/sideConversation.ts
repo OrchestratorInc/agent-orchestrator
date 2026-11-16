@@ -57,6 +57,7 @@ export function sideConversationMessage(message: SideMessage, turns: readonly Si
 					type: "excerpt",
 					annotationId: ref.id, annotationOrder: ref.order,
 					text: ref.selection,
+					comment: ref.comment || undefined,
 					sourceConversationId: ref.conversationId,
 					sourceMessageId: ref.messageId,
 					sourceRevision: ref.revision, snapshot: ref.snapshot,

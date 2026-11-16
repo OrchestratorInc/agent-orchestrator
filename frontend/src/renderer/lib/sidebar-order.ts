@@ -69,9 +69,9 @@ function listedSessions(
 
 /**
  * Every session reachable from the sidebar, in the order the sidebar shows
- * them: pinned sessions, then projects (pinned first) in the user's order, then remote hosts,
- * then the Scratchpad. A session that appears twice (pinned and under its
- * project) counts once, at its first position. Keyboard navigation and the
+ * them: pinned sessions, then Sessions (the projectless agents), then projects
+ * (pinned first) in the user's order, then remote hosts. A session that appears
+ * twice (pinned and under its project) counts once, at its first position. Keyboard navigation and the
  * ⌘1–9 jump both walk this list so they always agree with what is on screen.
  */
 export function buildSidebarSessionOrder({
@@ -102,6 +102,16 @@ export function buildSidebarSessionOrder({
 	for (const { workspace, session } of pinned) add(session, workspace);
 
 	const scratchpads = ownScratchpadWorkspaces(workspaces);
+	// The Sessions section, above Projects, lists its local sessions and the
+	// person's Cloud standalone agents as one list, in its own order; each agent
+	// still routes by its project.
+	const scratchpadOf = new Map(scratchpads.flatMap((workspace) => workspace.sessions.map((session) => [session.id, workspace] as const)));
+	const scratchpad: WorkspaceSummary = {
+		...(scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND) ??
+			{ id: STANDALONE_WORKSPACE_ID, name: "", kind: STANDALONE_PROJECT_KIND, path: "" }),
+		sessions: scratchpads.flatMap((workspace) => workspace.sessions),
+	};
+	for (const session of listedSessions(scratchpad, sessionOrders)) add(session, scratchpadOf.get(session.id) ?? scratchpad);
 	const projects = workspaces.filter((workspace) => !scratchpads.includes(workspace));
 	const orderedProjects = pinnedFirst(applyOrder(projects, (item) => item.id, projectOrder, "start"), (item) => item.id, pinnedProjectIds);
 	for (const workspace of orderedProjects) {
@@ -110,15 +120,6 @@ export function buildSidebarSessionOrder({
 	for (const workspace of remoteWorkspaces) {
 		for (const session of listedSessions(workspace, sessionOrders)) add(session, workspace);
 	}
-	// The Scratchpad lists its local sessions and the person's Cloud standalone
-	// agents as one list, in its own order; each agent still routes by its project.
-	const scratchpadOf = new Map(scratchpads.flatMap((workspace) => workspace.sessions.map((session) => [session.id, workspace] as const)));
-	const scratchpad: WorkspaceSummary = {
-		...(scratchpads.find((workspace) => workspace.kind === STANDALONE_PROJECT_KIND) ??
-			{ id: STANDALONE_WORKSPACE_ID, name: "", kind: STANDALONE_PROJECT_KIND, path: "" }),
-		sessions: scratchpads.flatMap((workspace) => workspace.sessions),
-	};
-	for (const session of listedSessions(scratchpad, sessionOrders)) add(session, scratchpadOf.get(session.id) ?? scratchpad);
 	return entries;
 }
 

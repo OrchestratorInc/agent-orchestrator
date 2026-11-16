@@ -66,6 +66,9 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { LinkFavicon } from "../LinkPreviewCard";
+import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
+import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
@@ -434,7 +437,7 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string };
+type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement };
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
@@ -462,7 +465,42 @@ function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 		: <MarkdownLinkTarget {...props} />;
 }
 
-function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLinkProps) {
+/** Whether a markdown link wraps a picture, which marks itself. */
+function linksImage(node: HastElement | undefined): boolean {
+	return node?.children.some((child) => child.type === "element" && child.tagName === "img") ?? false;
+}
+
+/**
+ * A web link's site icon before its text, behind a shimmering globe until it
+ * arrives and a still one when none does. Asked for as soon as the link
+ * renders (its site root only, once per site). A fixed 14px slot, so the text
+ * never moves when the icon arrives or fails.
+ */
+function InlineLinkFavicon({ href }: { href: string }) {
+	const cachedState = useCachedLinkFavicons(href);
+	const favicons = cachedState === "failed" ? undefined : cachedState;
+	const cached = Boolean(favicons);
+	const loadable = useMemo(() => canLoadLinkFavicon(href), [href]);
+	useEffect(() => {
+		if (!cached && loadable) preloadLinkFavicon(href);
+	}, [cached, href, loadable]);
+	return (
+		<span
+			aria-hidden="true"
+			data-link-favicon=""
+			className="me-1 inline-flex size-3.5 select-none align-[-0.15em] text-muted-foreground"
+		>
+			<LinkFavicon
+				faviconUrl={favicons?.faviconUrl}
+				faviconDarkUrl={favicons?.faviconDarkUrl}
+				pending={cachedState === undefined && loadable}
+				className="size-3.5 shrink-0"
+			/>
+		</span>
+	);
+}
+
+function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -522,6 +560,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 			rel="noreferrer noopener"
 			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
+			{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}
 			<ChatImageLinkScope>
 				<InsideMarkdownLink.Provider value>
 					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>

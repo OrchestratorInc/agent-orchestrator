@@ -1,11 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
+import { noPRDetails } from "../lib/pr-display";
 import { appI18n } from "../i18n";
 import { useLocaleStore } from "../stores/locale-store";
 import { PRCardStatusSummary, PRSummaryMeta, PRSummaryParts } from "./PRSummaryDisplay";
 
 const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
+	...noPRDetails(),
 	url: "https://github.com/acme/repo/pull/7",
 	htmlUrl: "https://github.com/acme/repo/pull/7",
 	number: 7,
@@ -21,7 +23,7 @@ const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary =>
 	additions: 10,
 	deletions: 3,
 	changedFiles: 2,
-	ci: { autoInjectCI: true, state: "passing", failingChecks: [] },
+	ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
 	review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 	mergeability: { state: "mergeable", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
 	updatedAt: "2026-06-15T00:00:00Z",
@@ -76,7 +78,7 @@ describe("PRSummaryParts", () => {
 		const { container } = render(
 			<PRCardStatusSummary
 				pr={summary({
-					ci: { autoInjectCI: true, state: "pending", failingChecks: [] },
+					ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [] },
 					review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 					mergeability: {
 						state: "blocked",
@@ -121,6 +123,7 @@ describe("PRSummaryParts", () => {
 				pr={summary({
 					ci: {
 						autoInjectCI: true,
+						checks: [],
 						state: "failing",
 						failingChecks: [
 							{ name: "renderer-smoke", status: "failed", conclusion: "failure", url: "https://ci/smoke" },
@@ -151,6 +154,7 @@ describe("PRSummaryParts", () => {
 				pr={summary({
 					ci: {
 						autoInjectCI: true,
+						checks: [],
 						state: "failing",
 						failingChecks: [
 							{ name: "unit", status: "failed", conclusion: "failure", url: "https://checks.example/unit" },
@@ -175,6 +179,7 @@ describe("PRSummaryParts", () => {
 				pr={summary({
 					ci: {
 						autoInjectCI: true,
+						checks: [],
 						state: "failing",
 						failingChecks: [
 							{ name: "unit", status: "failed", conclusion: "failure", url: "https://checks.example/unit" },

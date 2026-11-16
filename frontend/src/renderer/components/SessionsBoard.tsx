@@ -1,5 +1,5 @@
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -9,7 +9,7 @@ import {
 	largestSession,
 	type ChipTone,
 } from "@aoagents/product-ui";
-import { AlertTriangle, Archive, RotateCw, WifiOff } from "@/components/app-icons";
+import { AlertTriangle, Archive, RotateCw } from "@/components/app-icons";
 import {
 	CLOUD_PROJECT_KIND,
 	isScratchpadWorkspace,
@@ -34,12 +34,12 @@ import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
 import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useCloudOffering } from "../hooks/useCloudOffering";
-import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
+import { FREESTYLE_PROVIDER, projectSandboxProvider, SHARE_FEATURE } from "../lib/cloud-offering";
+import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
+import { ShareSessionDialog } from "./ShareSessionDialog";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { ProjectImportOffer } from "./ProjectImportOffer";
-import { noDragStyle, PageTopbar, PageTopbarTitle } from "./PageTopbar";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
-import { formatTimeCompact } from "../lib/format-time";
+import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
@@ -49,7 +49,7 @@ import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
-import type { RemoteHost } from "../hooks/useRemoteHosts";
+import { HostOfflineStatus, hostOfflineReasonKey } from "./HostOfflineStatus";
 import { cn } from "../lib/utils";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
@@ -165,7 +165,24 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
 	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
-	const { userId: cloudUserId } = useCloudCp(!hostId && activeSessions.some((session) => Boolean(session.cloud)));
+	const cloudBoard = !hostId && activeSessions.some((session) => Boolean(session.cloud));
+	const { userId: cloudUserId } = useCloudCp(cloudBoard);
+	// Share on a card, as the session header has it: only the session's own
+	// organization shares it, once WorkOS enables sharing for that organization,
+	// and a standalone agent shared with this person stays its owner's to share.
+	const shareOffering = useCloudOffering(cloudBoard);
+	const teams = useTeamsEnabled();
+	const sharingEnabled = cloudBoard && shareOffering.features?.includes(SHARE_FEATURE) === true;
+	const canShareSession = (session: WorkspaceSession): boolean => {
+		if (!sharingEnabled || !session.cloud || session.isTerminated === true || isOrchestratorSession(session)) return false;
+		if (session.cloud.orgId !== shareOffering.org?.id) return false;
+		const owner = workspaces.find((candidate) => candidate.id === session.workspaceId);
+		return !(owner?.standaloneAgent && owner.shared);
+	};
+	// The card the share dialog is for, kept while it closes so its content stays put.
+	const [shareTarget, setShareTarget] = useState<WorkspaceSession | null>(null);
+	const [shareOpen, setShareOpen] = useState(false);
+	const shareTargetWorkspace = shareTarget ? workspaces.find((candidate) => candidate.id === shareTarget.workspaceId) : undefined;
 	const boardSessions = activeSessions.map((session) =>
 		session.status === "no_signal" || session.displayStatus === "No signal"
 			? { ...session, kanbanColumn: "building" as const }
@@ -356,6 +373,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								onOpenArtifact={(path) => openSessionArtifact(session, path)}
 								onOpenArtifacts={() => openSessionArtifacts(session)}
 								onTerminate={!hostId || connected ? ({ deleteArtifacts }) => terminateSession.mutate({ ...session, deleteArtifacts }) : undefined}
+								onShare={canShareSession(session) ? () => {
+									setShareTarget(session);
+									setShareOpen(true);
+								} : undefined}
 								session={session}
 							/>
 						)}
@@ -370,7 +391,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 				<div className="flex shrink-0 items-center border-t border-border p-1">
 					<Button
 						aria-haspopup="dialog"
-						aria-label={t("shell.archiveSessionsAria", { count: archivedCount })}
+						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						data-testid="board-archive-button"
 						// The shell's archive modal, the same one the sidebar and Cmd+K open.
 						onClick={(event) => useUiStore.getState().openArchive({ projectId, hostId, returnFocus: event.currentTarget })}
@@ -381,46 +402,25 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						variant="quiet"
 					>
 						<Archive className="size-icon-sm" aria-hidden="true" />
-						{t("shell.archive")}
+						{t("shell.archivedSessions")}
 						<span className="tabular-nums text-passive">{archivedCount}</span>
 					</Button>
 				</div>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
-		</div>
-	);
-}
-
-function hostOfflineReasonKey(host: RemoteHost | undefined) {
-	return host?.failureReason === "unauthorized" ? "remote.hostUnauthorized" as const
-		: host?.failureReason === "incompatible" ? "remote.hostIncompatible" as const
-		: "remote.hostOffline" as const;
-}
-
-function HostOfflineStatus({ host, label, updatedAt }: { host: RemoteHost | undefined; label: string; updatedAt?: number }) {
-	const { t } = useTranslation();
-	const shell = useShellMaybe();
-	const action = host?.status === "connecting"
-		? <Button type="button" size="sm" variant="secondary" disabled>{t("terminal.connecting")}</Button>
-		: host?.failureReason === "unauthorized"
-			? <Button type="button" size="sm" variant="secondary" onClick={() => useUiStore.getState().openGlobalSettings("remoteHosts", { preserveProject: true })}>{t("remote.editHost", { label })}</Button>
-			: <Button type="button" size="sm" variant="secondary" aria-label={t("remote.retryHost", { label })} disabled={!shell?.retryRemoteHosts} onClick={() => shell?.retryRemoteHosts?.()}>
-				<RotateCw className="size-3.5" aria-hidden="true" />
-				{t("remote.retry")}
-			</Button>;
-	return (
-		<div className="flex min-w-0 items-center gap-2 text-xs" data-testid="board-host-offline" role="status" style={noDragStyle}>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<span className="inline-flex shrink-0 items-center gap-1.5 text-warning" tabIndex={0}>
-						<WifiOff className="size-icon-sm" aria-hidden="true" />
-						{t("remote.offline")}
-					</span>
-				</TooltipTrigger>
-				<TooltipContent className="max-w-72">{t(hostOfflineReasonKey(host))}{updatedAt ? ` ${t("remote.offlineCopy")}` : ""}</TooltipContent>
-			</Tooltip>
-			{updatedAt ? <span className="truncate text-muted-foreground">· {t("shell.updatedAt", { time: formatTimeCompact(new Date(updatedAt).toISOString()) })}</span> : null}
-			{action}
+			{shareTarget?.cloud ? (
+				<ShareSessionDialog
+					open={shareOpen}
+					onOpenChange={setShareOpen}
+					orgId={shareTarget.cloud.orgId}
+					projectId={shareTarget.workspaceId}
+					sessionId={shareTarget.id}
+					sessionName={shareTarget.title}
+					projectName={shareTargetWorkspace?.name}
+					people={teams}
+					standaloneAgent={shareTargetWorkspace?.standaloneAgent}
+				/>
+			) : null}
 		</div>
 	);
 }

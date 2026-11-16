@@ -59,12 +59,12 @@ describe("Cloud standalone agents in the Scratchpad", () => {
 			workspaces: workspaces(),
 			sessionOrders: { [STANDALONE_WORKSPACE_ID]: ["cloud-1", "local-1"] },
 		});
-		// Projects first (a shared agent stays among them), then the Scratchpad in its own order.
+		// Sessions first in their own order, then projects (a shared agent stays among them).
 		expect(order.map((entry) => [entry.sessionId, entry.projectId])).toEqual([
-			["w-1", "proj-1"],
-			["cloud-shared", "agent-shared"],
 			["cloud-1", "agent-1"],
 			["local-1", STANDALONE_WORKSPACE_ID],
+			["w-1", "proj-1"],
+			["cloud-shared", "agent-shared"],
 		]);
 	});
 

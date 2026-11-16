@@ -1,9 +1,9 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, ChevronRight, CircleAlert, Folder, Loader2 } from "@/components/app-icons";
+import { ArrowLeft, Bell, Check, ChevronRight, CircleAlert, Coffee, Loader2, Smartphone } from "@/components/app-icons";
 import { effectiveShortcutBindings, shortcutBindingKeys, type AppShortcutId } from "../../shared/shortcuts";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type AnimationEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -17,8 +17,16 @@ import {
 	buildCommands,
 	buildContentSearchCommands,
 	buildFileSessionCommands,
+	buildProjectActions,
 	buildSessionActions,
+	buildSessionSearchCommands,
+	withoutChatHitsCoveredBySessionSearch,
 	buildWorkspaceFileCommands,
+	bestMatch,
+	goToCommands,
+	findSubmenuEntries,
+	menuEntryCommands,
+	type PaletteMenuView,
 	displayGroups,
 	filterCommands,
 	isSearchGroup,
@@ -39,24 +47,49 @@ import {
 	commandPaletteFileSearchQueryOptions,
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
-import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
+import { startProblemReport } from "../lib/report-problem";
+import { buildChoiceCommands, buildSettingsCommands, buildShortcutCommands, choiceValue, type PalettePreferences } from "../lib/palette-registry";
+import { previewDocumentThemeStyle } from "../lib/theme";
+import { renameCloudSession, renameSession } from "../lib/rename-session";
+import { runAppMenuAction } from "../hooks/useAppMenuCommand";
+import { useTerminateSession } from "../hooks/useTerminateSession";
+import { useProjectAvatars } from "../hooks/useProjectAvatars";
+import { ProjectIcon } from "./ProjectIcon";
+import { useStayAwake } from "../hooks/useStayAwake";
+import { useSessionSwitchStore } from "../stores/session-switch-store";
+import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
+import { useLocaleStore } from "../stores/locale-store";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
+import { useSoundNotificationsStore } from "../stores/sound-notifications-store";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { SessionArchiveDialog } from "./SessionArchiveDialog";
+import { useCopyToClipboard, useSessionMenuEntries } from "./SessionContextMenuItems";
+import type { MenuEntry } from "./menu-model";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
+import { LOCAL_HOST } from "../lib/hosts";
+import { isMacPlatform } from "../lib/platform";
+import { revealSessionSearchMatch } from "../lib/session-search-reveal";
+import { usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
 import { sessionUiKey } from "../lib/hosts";
 import { beginModalHandoff } from "../lib/modal-handoff";
-import { isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
+import { getSessionRowIndicator } from "../lib/session-presentation";
+import { SessionStatusDot } from "./Sidebar";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import {
 	CLOUD_PROJECT_KIND,
 	findProjectOrchestrator,
 	hasConfiguredOrchestratorAgent,
+	isOrchestratorSession,
 	openPRs,
 	STANDALONE_WORKSPACE_ID,
 	workerSessions,
+	type WorkspaceSession,
+	type WorkspaceSummary,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
 import { useSessionImportStore } from "../stores/session-import-store";
@@ -65,6 +98,7 @@ import { CreateProjectFlow } from "./CreateProjectFlow";
 import { requestOpenShareLink } from "./OpenShareLinkDialog";
 import { Button } from "./ui/button";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "./ui/command";
+import { Switch } from "./ui/switch";
 
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
 const PALETTE_REVIEW_DEFER_MS = 120;
@@ -73,12 +107,30 @@ const PALETTE_FILE_SEARCH_DEBOUNCE_MS = 150;
 const PALETTE_FILE_VIEW_ROWS = 50;
 const isMac = isMacPlatform();
 const PALETTE_FILE_SEARCH_MIN_CHARS = 2;
+// Session-text search starts at two characters: one character matches nearly
+// every past session and would make the palette flash a useless list.
+const PALETTE_SESSION_SEARCH_MIN_CHARS = 2;
+// How many recent sessions the palette lists before a query is typed.
+const PALETTE_RECENTS_LIMIT = 5;
 const EMPTY_REVIEW_STATES: Readonly<Record<string, PRReviewState[]>> = {};
 type PaletteView =
 	| { mode: "root" }
 	| { mode: "session-actions"; sessionId: string }
 	| { mode: "file-session-picker"; projectId: string }
-	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" };
+	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" }
+	// Nested lists go back to the view they were opened from.
+	| (PaletteMenuView & { parent: PaletteView });
+
+/** The submenu entry with this id, searched through nested submenus. */
+function findSubmenuOwner(entries: readonly MenuEntry[], entryId: string): Extract<MenuEntry, { kind: "submenu" }> | undefined {
+	for (const entry of entries) {
+		if (entry.kind !== "submenu") continue;
+		if (entry.id === entryId) return entry;
+		const nested = findSubmenuOwner(entry.items, entryId);
+		if (nested) return nested;
+	}
+	return undefined;
+}
 
 /**
  * Whether two search keys differ only in their query text, so an answer for
@@ -107,7 +159,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const cloudReady = cloud.ready;
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
-	const { cloneProject, createProject, initializeProjectRepository } = useShell();
+	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
 	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
 	const setThemePreference = useUiStore((s) => s.setThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
@@ -138,6 +190,10 @@ export const CommandPalette = memo(function CommandPalette() {
 	// cmdk selects the first row by itself whenever the query changes; only a
 	// navigation key or pointer move counts as the user choosing one.
 	const userPickRef = useRef(false);
+	// cmdk only re-applies a controlled value when the string changes.
+	// Flipping a trailing space (cmdk trims it) puts the best match back
+	// after cmdk selects its own first row.
+	const [valueResync, setValueResync] = useState(false);
 	const runGenerationRef = useRef(0);
 	const viewRef = useRef(view);
 	viewRef.current = view;
@@ -168,6 +224,29 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, [params.hostId, params.sessionId, workspaces]);
 	const currentSession = currentSessionContext?.session;
 	const currentProjectId = currentSession?.workspaceId ?? params.projectId;
+	// The Actions heading is the project they act on, drawn as the sidebar draws it.
+	const currentProject = currentProjectId
+		? workspaces.find((workspace) => workspace.id === currentProjectId && (workspace.hostId ?? "") === (params.hostId ?? ""))
+		: undefined;
+	const avatarProjects = useMemo(() => (currentProject ? [currentProject] : []), [currentProject]);
+	const headingAvatars = useProjectAvatars(avatarProjects);
+	const actionsHeading = currentProject ? (
+		<span className="inline-flex min-w-0 items-center gap-2.5">
+			<span className="flex size-icon-base shrink-0 items-center justify-center" aria-hidden="true">
+				<ProjectIcon avatarUrl={headingAvatars.get(currentProject.id)} className="size-icon-sm" expanded={false} name={currentProject.name} seed={currentProject.path || currentProject.id} />
+			</span>
+			<span className="truncate">{currentProject.name}</span>
+		</span>
+	) : undefined;
+	// The session's own sidebar mark: spinner, alert, PR state or read dot.
+	const sessionHeading = currentSession ? (
+		<span className="inline-flex min-w-0 items-center gap-2.5">
+			<span className="flex size-icon-base shrink-0 items-center justify-center" aria-hidden="true">
+				<SessionStatusDot indicator={getSessionRowIndicator(currentSession)} session={currentSession} />
+			</span>
+			<span className="truncate">{currentSession.title}</span>
+		</span>
+	) : undefined;
 	const currentWorkspace = useMemo(
 		() => currentSessionContext?.workspace ?? workspaces.find((workspace) =>
 			workspace.id === currentProjectId && (workspace.hostId ?? "") === (params.hostId ?? "")),
@@ -192,6 +271,7 @@ export const CommandPalette = memo(function CommandPalette() {
 			? currentFileTarget
 			: undefined;
 	const normalizedFileQuery = debouncedQuery.trim();
+	const normalizedSessionQuery = debouncedQuery.trim();
 	const fileSearchEnabled = isOpen
 		&& normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS
 		&& commandPaletteFileSearchAvailable(activeFileTarget, cloud.ready);
@@ -216,7 +296,8 @@ export const CommandPalette = memo(function CommandPalette() {
 	const searchQueryReady = isOpen && normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS;
 	// A Cloud session's contents are searched by its worker, once Cloud is signed in.
 	const contentTarget = activeFileTarget && (!activeFileTarget.cloudOrgId || cloudReady) ? activeFileTarget : undefined;
-	const contentSearchEnabled = searchQueryReady && (view.mode === "root" || view.mode === "file-search") && Boolean(contentTarget);
+	// Text inside files is searched only from Go to file, not the main list.
+	const contentSearchEnabled = searchQueryReady && view.mode === "file-search" && Boolean(contentTarget);
 	const contentSearchOptions = commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError"), cloud);
 	const contentSearchQuery = useQuery({
 		...contentSearchOptions,
@@ -240,6 +321,19 @@ export const CommandPalette = memo(function CommandPalette() {
 		enabled: chatSearchEnabled && cloudReady && cloudChatOrgIds.length > 0,
 		placeholderData: keepPreviousData,
 	});
+
+	// Session-text search shares the debounced query with file search: one timer
+	// per keystroke, two endpoints. Its rows show only in the root view, so it is
+	// off while another view (session actions, a file picker) owns the input.
+	// Recents before a query, matches after: opening the palette to get back to
+	// a recent session should not require remembering a word from it.
+	const sessionSearchEnabled = isOpen
+		&& view.mode === "root"
+		&& (normalizedSessionQuery.length === 0
+			|| normalizedSessionQuery.length >= PALETTE_SESSION_SEARCH_MIN_CHARS);
+	const sessionSearchQuery = usePaletteSessionSearch(normalizedSessionQuery, LOCAL_HOST, sessionSearchEnabled);
+	const sessionSearchIndexStatus = useSessionSearchIndexStatus(LOCAL_HOST, isOpen && sessionSearchEnabled);
+	const sessionSearchHits = sessionSearchQuery.data?.results ?? [];
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -303,6 +397,59 @@ export const CommandPalette = memo(function CommandPalette() {
 	}, [isOpen, reviewActionsReady, reviewQuerySummary.reviewStatesBySessionId]);
 	const reviewStatesForCommands = isOpen && reviewActionsReady ? reviewStatesSnapshot : EMPTY_REVIEW_STATES;
 
+	const themePreference = useUiStore((s) => s.themePreference);
+	const themeStyle = useUiStore((s) => s.themeStyle);
+	const locale = useLocaleStore((s) => s.locale);
+	const terminalClickMode = useUiStore((s) => s.terminalClickMode);
+	const chatSendKeyMode = useUiStore((s) => s.chatSendKeyMode);
+	const windowTranslucency = useUiStore((s) => s.windowTranslucency);
+	const projectAvatars = useUiStore((s) => s.projectAvatars);
+	const renderMath = useUiStore((s) => s.renderMath);
+	const navigationGestures = useUiStore((s) => s.navigationGestures);
+	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
+	const sideChats = useUiStore((s) => s.sideChats);
+	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
+	// Stay Awake, as the sidebar's switch: polled only while the palette is open.
+	const stayAwake = useStayAwake(isOpen && isMac);
+	const stayToggleRef = useRef(stayAwake.toggle);
+	stayToggleRef.current = stayAwake.toggle;
+	// The chat ↔ terminal switch the session's own view offers.
+	const switchMenus = useSessionSwitchStore((state) => state.menus);
+	const switchItemFor = useCallback((sessionId: string | undefined): CommandItemModel[] => {
+		const menu = sessionId ? switchMenus[sessionId] : undefined;
+		const action = menu?.switchAction;
+		if (!menu || !action) return [];
+		return [{
+			id: "session-switch-interface",
+			group: "current",
+			title: menu.switchTarget === "chat" ? t("agentSwitch.switchToChat") : t("agentSwitch.switchToTerminal"),
+			icon: <RoundedInterfaceIcon className="size-icon-base" target={menu.switchTarget} />,
+			keywords: ["tui", "terminal", "chat", "interface", "ui", "mode"],
+			disabled: action.disabled,
+			...(action.reason ? { disabledReason: action.reason } : {}),
+			action: { kind: "run", run: action.run },
+		}];
+	}, [switchMenus, t]);
+
+	const prefs = useMemo((): PalettePreferences => ({
+		themePreference,
+		themeStyle,
+		locale,
+		terminalClickMode,
+		chatSendKeyMode,
+		toggles: {
+			transparency: windowTranslucency,
+			"project-avatars": projectAvatars,
+			"render-math": renderMath,
+			"navigation-gestures": navigationGestures,
+			"copy-on-select": terminalCopyOnSelect,
+			sound: soundNotifications,
+			"developer-mode": developerMode,
+			"side-chats": sideChats,
+			"split-panes": splitPanes,
+		},
+	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, sideChats, splitPanes]);
+
 	const rootItems = useMemo(
 		() => [
 			...buildCommands({
@@ -315,19 +462,124 @@ export const CommandPalette = memo(function CommandPalette() {
 				cloudReady,
 				developerMode,
 			}, t),
-			...buildShortcutCommands(t, { splitPanes }),
-			...buildSettingsCommands(t, { developerMode, diagnostics }),
+			...buildShortcutCommands(t, {
+				splitPanes,
+				// A routed session is on screen even when it lives on a remote host
+				// this list does not hold; only a local one has a worktree here.
+				...(params.sessionId
+					? { session: currentSession && !currentSession.cloud && !currentSession.hostId && !params.hostId ? "local" as const : "elsewhere" as const }
+					: {}),
+			}),
+			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac, prefs }),
+			// The bell's panel and the footer's Connect mobile, which have no route.
+			{ id: "global-notifications", group: "global" as const, title: t("notify.title"), icon: <Bell aria-hidden="true" />, keywords: ["alerts", "inbox", "bell"], action: { kind: "run" as const, run: () => runAppMenuAction("toggle-notifications") } },
+			...(isMac && stayAwake.supported
+				? [{ id: "global-stay-awake", group: "global" as const, title: t("awake.title"), icon: <Coffee aria-hidden="true" />, keywords: ["awake", "sleep", "caffeinate", "lid closed", "keep awake"], searchOnly: true, toggled: stayAwake.on, keepOpen: true, action: { kind: "run" as const, run: () => stayToggleRef.current() } }]
+				: []),
+			{ id: "global-connect-mobile", group: "global" as const, title: t("settings.connectMobile"), icon: <Smartphone aria-hidden="true" />, keywords: ["phone", "pair", "ios", "android", "qr code"], searchOnly: true, action: { kind: "run" as const, run: () => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }) } },
 		],
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, prefs, stayAwake.on, stayAwake.supported, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
 		[view, workspaces],
 	);
-	const sessionActionItems = useMemo(
-		() => (scoped ? buildSessionActions(scoped.workspace, scoped.session, t) : []),
-		[scoped, t],
-	);
+	// The session whose right-click menu the palette is showing: in its actions,
+	// one of that menu's submenus, or renaming it.
+	const menuSession = view.mode === "root"
+		? currentSession
+		: view.mode === "session-actions"
+		? scoped?.session
+		: view.mode === "menu-submenu" || view.mode === "rename-session"
+			? findSession(workspaces, view.sessionId)?.session
+			: undefined;
+	const [archiveTarget, setArchiveTarget] = useState<WorkspaceSession | null>(null);
+	const [removeTarget, setRemoveTarget] = useState<WorkspaceSummary | null>(null);
+	const { mutate: terminateSession } = useTerminateSession();
+	const copyToClipboard = useCopyToClipboard();
+	const pinnedProjectIds = useSidebarOrderStore((state) => state.pinnedProjectIds);
+	const sessionMenuEntries = useSessionMenuEntries(menuSession, {
+		// Archive asks first, as from the sidebar; the confirm outlives the palette.
+		onArchive: menuSession && !menuSession.cloud?.shared ? () => {
+			setArchiveTarget(menuSession);
+			closePalette();
+		} : undefined,
+		onRename: menuSession && !isOrchestratorSession(menuSession) ? () => {
+			pushView({ mode: "rename-session", sessionId: menuSession.id, parent: viewRef.current });
+			setQuery(menuSession.title);
+		} : undefined,
+	});
+	const sessionActionItems = useMemo(() => {
+		if (!scoped) return [];
+		const own = buildSessionActions(scoped.workspace, scoped.session, t);
+		// The palette's own rows already cover these.
+		const skip = new Set(["menu:session-copy-branch", ...(own.some((item) => item.action?.kind === "resume-session") ? ["menu:session-resume"] : [])]);
+		return [...own, ...switchItemFor(scoped.session.id), ...paletteMenuRows(sessionMenuEntries, scoped.session.id).filter((item) => !skip.has(item.id))];
+	}, [scoped, sessionMenuEntries, switchItemFor, t]);
+	const projectActionsFor = useCallback((workspace: WorkspaceSummary): CommandItemModel[] => {
+		const canPin = workspace.id !== STANDALONE_WORKSPACE_ID && !workspace.hostId;
+		return buildProjectActions(workspace, {
+			canPin,
+			isPinned: canPin && pinnedProjectIds.includes(workspace.id),
+			restarting: restartingProjectIds.has(workspace.id),
+			hasOrchestrator: Boolean(findProjectOrchestrator(workspaces, workspace.id)),
+			setPinned: (pinned) => useSidebarOrderStore.getState().setProjectPinned(workspace.id, pinned),
+			copyPath: () => copyToClipboard(workspace.path),
+			// Remote projects remove through their host, which the sidebar handles.
+			...(removeProject && !workspace.hostId ? { remove: () => setRemoveTarget(workspace) } : {}),
+		}, t);
+	}, [workspaces, pinnedProjectIds, restartingProjectIds, copyToClipboard, removeProject, t]);
+	const menuViewItems = useMemo((): CommandItemModel[] => {
+		switch (view.mode) {
+			case "menu-submenu":
+				return menuSession ? menuEntryCommands(findSubmenuEntries(sessionMenuEntries, view.entryId) ?? [], menuSession.id) : [];
+			case "go-to":
+				return goToCommands(rootItems, view.target);
+			case "choices":
+				return buildChoiceCommands(view.menu, t, prefs);
+			case "rename-session": {
+				const name = query.trim();
+				return [{
+					id: "rename:commit",
+					group: "current",
+					title: name || (menuSession?.title ?? ""),
+					subtitle: t("shell.rename"),
+					disabled: !menuSession || !name || name === menuSession.title,
+					action: { kind: "run", run: () => {
+						if (!menuSession) return;
+						const done = menuSession.cloud
+							? renameCloudSession(queryClient, { id: menuSession.id, cloud: menuSession.cloud }, name)
+							: renameSession(menuSession.id, name, menuSession.hostId).then(() => queryClient.invalidateQueries({ queryKey: workspaceQueryKey }));
+						done.catch((error: unknown) => useUiStore.getState().showGlobalToast(t("shell.rename"), error instanceof Error ? error.message : undefined, "error"));
+					} },
+				}];
+			}
+			case "project-actions": {
+				const workspace = workspaces.find((candidate) => candidate.id === view.projectId);
+				return workspace ? projectActionsFor(workspace) : [];
+			}
+			default:
+				return [];
+		}
+	}, [view, rootItems, menuSession, sessionMenuEntries, prefs, query, projectActionsFor, queryClient, t]);
+	// On the blank list: the open session's own menu under its name, and the
+	// project's remaining sidebar-menu actions beside the ones above.
+	const rootContextItems = useMemo((): CommandItemModel[] => {
+		if (view.mode !== "root") return [];
+		// The blank list keeps a session's few main actions; the rest wait for a search.
+		const sessionRows = currentSession
+			? [...switchItemFor(currentSession.id), ...paletteMenuRows(sessionMenuEntries, currentSession.id).filter((item) => item.id !== "menu:session-copy-branch")]
+				.map((item) => ({ ...item, group: "session" as const, ...(BLANK_SESSION_ACTIONS.has(item.id) ? {} : { searchOnly: true }) }))
+			: [];
+		const projectRows = currentProject
+			? projectActionsFor(currentProject)
+				.filter((item) => ["project-action:board", "project-action:copy-path", "project-action:pin", "project-action:remove"].includes(item.id))
+				// Removing waits for a search, so it never sits in the default list.
+				.map((item) => (item.id === "project-action:remove" ? { ...item, searchOnly: true } : item))
+			: [];
+		// On a session page the project's actions wait for a search too.
+		return [...sessionRows, ...(currentSession ? projectRows.map((item) => ({ ...item, searchOnly: true })) : projectRows)];
+	}, [view.mode, currentSession, currentProject, sessionMenuEntries, switchItemFor, projectActionsFor]);
 	const filePickerWorkspace = view.mode === "file-session-picker"
 		? workspaces.find((workspace) => workspace.id === view.projectId && (workspace.hostId ?? "") === (params.hostId ?? ""))
 		: undefined;
@@ -374,11 +626,19 @@ export const CommandPalette = memo(function CommandPalette() {
 				const workspace = findChatWorkspace(hit.sessionId);
 				return {
 					title: workspace?.sessions.find((session) => session.id === hit.sessionId)?.title,
-					place: workspace?.name,
+					// The project is named only when it is not the one on screen.
+					place: workspace && workspace.id !== currentProjectId ? workspace.name : undefined,
 				};
 			});
 		},
-		[chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
+		[currentProjectId, chatSearchEnabled, chatSearchQuery.data, cloudChatSearchQuery.data, cloudReady, findChatWorkspace, findCloudChatWorkspace, findLocalChatWorkspace, t],
+	);
+	// Session-text rows are only shown once the query has settled, so a row the
+	// person is about to press cannot be replaced by a later response.
+	const sessionSearchSettled = normalizedSessionQuery === query.trim();
+	const sessionSearchItems = useMemo(
+		() => (sessionSearchSettled ? buildSessionSearchCommands(sessionSearchHits, query.trim(), t) : []),
+		[sessionSearchHits, query, sessionSearchSettled, t],
 	);
 
 	const groups = useMemo(() => {
@@ -391,8 +651,38 @@ export const CommandPalette = memo(function CommandPalette() {
 		if (view.mode === "file-search") {
 			return displayGroups([...fileItems, ...contentItems], query, t, PALETTE_FILE_VIEW_ROWS);
 		}
-		return displayGroups([...rootItems, ...fileItems, ...contentItems, ...chatItems], query, t);
-	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
+		if (view.mode !== "root") {
+			// Renaming shows its one row whatever is typed; other lists filter.
+			return [{ id: "menu", label: "", items: view.mode === "rename-session" ? menuViewItems : filterCommands(menuViewItems, query) }];
+		}
+		// On a session page the project's actions and Copy branch wait for a search.
+		const shownRootItems = currentSession
+			? rootItems.map((item) => (item.group === "current" || item.id === "current-copy-branch" ? { ...item, searchOnly: true } : item))
+			: rootItems;
+		// A message the session-text group already lists is not repeated as a chat row.
+		const settledChatItems = withoutChatHitsCoveredBySessionSearch(chatItems, sessionSearchItems);
+		const commandGroups = displayGroups([...shownRootItems, ...rootContextItems, ...fileItems, ...settledChatItems], query, t);
+		// Recents are a jumping-off point, so they sit last, capped, and skip
+		// sessions Needs attention already lists. Once a query is typed, transcript
+		// matches follow the commands and sessions, ahead of files and chats.
+		const recents = normalizedSessionQuery === "";
+		// The open session heads the list with its own actions, so it is listed too.
+		const listed = new Set([
+			...(currentSession ? [currentSession.id] : []),
+			// Needs attention and session rows are "attention:<id>" and "session:<id>".
+			...commandGroups.flatMap((group) => (group.id === "attention" || group.id === "sessions"
+				? group.items.map((item) => item.id.slice(item.id.indexOf(":") + 1))
+				: [])),
+		]);
+		const searchRows = recents
+			? sessionSearchItems.filter((item) => item.action?.kind !== "open-search-result" || !listed.has(item.action.sessionId)).slice(0, PALETTE_RECENTS_LIMIT)
+			: sessionSearchItems;
+		if (searchRows.length === 0) return commandGroups;
+		const searchGroup = { id: "search" as const, label: recents ? t("command.recentSessions") : t("command.sessionText"), items: searchRows };
+		if (recents) return [...commandGroups, searchGroup];
+		const at = commandGroups.findIndex((group) => isSearchGroup(group.id as CommandItemModel["group"]));
+		return at === -1 ? [...commandGroups, searchGroup] : [...commandGroups.slice(0, at), searchGroup, ...commandGroups.slice(at)];
+	}, [view.mode, rootItems, rootContextItems, currentSession, sessionActionItems, fileSessionItems, menuViewItems, fileItems, contentItems, chatItems, sessionSearchItems, normalizedSessionQuery, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	// Rows a search found for an earlier query stay visible while the next one
@@ -406,7 +696,17 @@ export const CommandPalette = memo(function CommandPalette() {
 	const value =
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
 			? selectedValue
-			: (visibleItems.find(autoSelectable) ?? (searchStale ? undefined : visibleItems[0]))?.id) ?? "";
+			: ((view.mode === "root" && query.trim() ? bestMatch(visibleItems.filter(autoSelectable), query) : undefined)
+				?? visibleItems.find(autoSelectable) ?? (searchStale ? undefined : visibleItems[0]))?.id) ?? "";
+
+	// Arrowing through Color theme previews each theme; leaving the list without
+	// picking one puts the saved theme back.
+	const previewTheme = view.mode === "choices" && view.menu === "color-theme" ? choiceValue(value) : undefined;
+	useEffect(() => {
+		if (!previewTheme) return;
+		previewDocumentThemeStyle(previewTheme as Parameters<typeof previewDocumentThemeStyle>[0], useUiStore.getState().themeStyle);
+		return () => previewDocumentThemeStyle(null, useUiStore.getState().themeStyle);
+	}, [previewTheme]);
 
 	const resetTransient = useCallback(() => {
 		runGenerationRef.current += 1;
@@ -494,6 +794,8 @@ export const CommandPalette = memo(function CommandPalette() {
 		const current = viewRef.current;
 		if (current.mode === "file-search" && current.parent === "picker") {
 			setView({ mode: "file-session-picker", projectId: current.target.projectId });
+		} else if ("parent" in current && typeof current.parent === "object") {
+			setView(current.parent);
 		} else {
 			setView({ mode: "root" });
 		}
@@ -537,6 +839,8 @@ export const CommandPalette = memo(function CommandPalette() {
 			switch (target.to) {
 				case "/":
 				case "/usage":
+				case "/automations":
+				case "/artifacts":
 					void navigate({ to: target.to });
 					break;
 				case "/settings":
@@ -564,7 +868,8 @@ export const CommandPalette = memo(function CommandPalette() {
 
 	const sessionRoute = useCallback(
 		(projectId: string, sessionId: string): Extract<NavigateTarget, { to: "/sessions/$sessionId" | "/projects/$projectId/sessions/$sessionId" }> => {
-			return projectId === STANDALONE_WORKSPACE_ID
+			// A search hit for a standalone session carries no project id at all.
+			return !projectId || projectId === STANDALONE_WORKSPACE_ID
 				? { to: "/sessions/$sessionId", params: { sessionId } }
 				: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId, sessionId } };
 		},
@@ -674,6 +979,13 @@ export const CommandPalette = memo(function CommandPalette() {
 						closePalette();
 						requestOpenShareLink();
 						break;
+					case "report-problem": {
+						const failure = await startProblemReport(daemonStatus.state);
+						if (failure) throw new Error(failure);
+						if (!isCurrentRun()) break;
+						closePalette();
+						break;
+					}
 				case "open-pr":
 					await aoBridge.app.openExternal(action.url);
 					if (!isCurrentRun()) break;
@@ -697,6 +1009,15 @@ export const CommandPalette = memo(function CommandPalette() {
 				}
 				case "open-session-actions":
 					pushView({ mode: "session-actions", sessionId: action.sessionId });
+					break;
+				case "open-view":
+					pushView({ ...action.view, parent: viewRef.current });
+					// Like opening the submenu in the context menu (Open in looks for new terminals).
+					if (action.view.mode === "menu-submenu") findSubmenuOwner(sessionMenuEntries, action.view.entryId)?.onOpenChange?.(true);
+					break;
+				case "run":
+					action.run();
+					if (!item.keepOpen) closePalette();
 					break;
 				case "open-file-search":
 					if (action.target) {
@@ -762,6 +1083,19 @@ export const CommandPalette = memo(function CommandPalette() {
 						closePalette();
 						break;
 					}
+					case "open-search-result": {
+						// Hand the match to the session before navigating: the Chat
+						// timeline is mounted by the shell, so it picks the target up
+						// when it renders rather than from route state.
+						revealSessionSearchMatch(action);
+						navigateToTarget(sessionRoute(action.projectId, action.sessionId));
+						closePalette();
+						break;
+					}
+					case "copy-resume-command":
+						await aoBridge.clipboard.writeText(action.command);
+						closePalette();
+						break;
 					case "open-new-task":
 						if (blockedByRestart(action.projectId)) break;
 						// New task opens the new chat page (a cloud project, the New task
@@ -781,7 +1115,7 @@ export const CommandPalette = memo(function CommandPalette() {
 						// was opened from (a composer, a terminal) when it closes.
 						const returnFocus = returnFocusRef.current;
 						useUiStore.getState().openArchive({
-							projectId: action.projectId,
+							...(action.projectId ? { projectId: action.projectId } : {}),
 							hostId: params.hostId,
 							returnFocus: returnFocus instanceof HTMLElement ? returnFocus : null,
 						});
@@ -798,7 +1132,7 @@ export const CommandPalette = memo(function CommandPalette() {
 				}
 			}
 		},
-		[findChatWorkspace, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[daemonStatus.state, findChatWorkspace, sessionMenuEntries, navigate, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -872,8 +1206,12 @@ export const CommandPalette = memo(function CommandPalette() {
 			?.sessions.find((session) => session.id === view.target.sessionId)
 		: undefined;
 	const contextLabel =
-		view.mode === "session-actions"
-			? (scoped?.session.title ?? t("command.sessionFallback"))
+		view.mode === "session-actions" || view.mode === "rename-session"
+			? (scoped?.session.title ?? menuSession?.title ?? t("command.sessionFallback"))
+			: view.mode === "menu-submenu" || view.mode === "choices" || view.mode === "go-to"
+				? view.title
+				: view.mode === "project-actions"
+					? (workspaces.find((workspace) => workspace.id === view.projectId)?.name ?? "")
 			: view.mode === "file-session-picker"
 					? t("command.chooseFileSession")
 					: view.mode === "file-search"
@@ -900,7 +1238,10 @@ export const CommandPalette = memo(function CommandPalette() {
 		: null;
 	// One notice for everything that went wrong, so a daemon that is down reads
 	// as one problem rather than three red boxes.
-	const notices = [...new Set([error, fileSearchError, contentSearchError, chatSearchError].filter((message): message is string => Boolean(message)))];
+	const sessionSearchError = sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.error
+		? (sessionSearchQuery.error instanceof Error ? sessionSearchQuery.error.message : t("command.searchSessionsError"))
+		: null;
+	const notices = [...new Set([error, fileSearchError, contentSearchError, chatSearchError, sessionSearchError].filter((message): message is string => Boolean(message)))];
 	const selectedItem = visibleItems.find((item) => item.id === value);
 	const scopeSessionTitle = view.mode === "file-search"
 		? (fileSearchSession?.title ?? t("command.sessionFallback"))
@@ -946,8 +1287,14 @@ export const CommandPalette = memo(function CommandPalette() {
 				}}
 				commandProps={{
 					shouldFilter: false,
-					value,
-					onValueChange: setSelectedValue,
+					value: valueResync ? `${value} ` : value,
+					// cmdk picks the first row in the list after each query; the palette
+					// picks the best match instead, so only a row the person moved to
+					// (arrow keys, pointer) replaces it.
+					onValueChange: (next: string) => {
+						if (userPickRef.current) setSelectedValue(next);
+						else if (next !== value) setValueResync((on) => !on);
+					},
 					onKeyDownCapture: (event) => {
 						if (isRowNavigationKey(event)) userPickRef.current = true;
 					},
@@ -976,8 +1323,8 @@ export const CommandPalette = memo(function CommandPalette() {
 								? <Loader2 className="size-icon-md shrink-0 animate-spin text-muted-foreground" role="status" aria-label={t("command.searching")} />
 								: null}
 							placeholder={
-								view.mode === "session-actions"
-									? t("command.searchActionsPlaceholder")
+								view.mode === "session-actions" || view.mode === "project-actions" || view.mode === "menu-submenu" || view.mode === "choices" || view.mode === "go-to"
+									? `${contextLabel} · ${t("command.searchActionsPlaceholder")}`
 									: view.mode === "file-session-picker"
 										? t("command.chooseFileSession")
 										: view.mode === "file-search"
@@ -1008,8 +1355,23 @@ export const CommandPalette = memo(function CommandPalette() {
 									onSelectItem(selectedItem, true);
 									return;
 								}
+								// → on a row that opens a list (the ones with ›) opens it, as Enter does.
+								if (wantsSecondary && event.key === "ArrowRight" && selectedItem && !selectedItem.disabled && rowOpensList(selectedItem)) {
+									event.preventDefault();
+									event.stopPropagation();
+									onSelectItem(selectedItem);
+									return;
+								}
 								if (event.key === "Backspace" && query === "" && viewRef.current.mode !== "root") {
 									event.preventDefault();
+									requestDismiss("pop");
+								}
+								// ← at the start of the field goes back out of a nested list, as → went in.
+								if (event.key === "ArrowLeft" && !event.shiftKey && !event.metaKey && !event.altKey && !event.ctrlKey
+									&& viewRef.current.mode !== "root"
+									&& event.currentTarget.selectionStart === 0 && event.currentTarget.selectionEnd === 0) {
+									event.preventDefault();
+									event.stopPropagation();
 									requestDismiss("pop");
 								}
 							}}
@@ -1033,10 +1395,15 @@ export const CommandPalette = memo(function CommandPalette() {
 											: t("command.searchFilesEmpty")
 									: searching
 										? t("command.searching")
-										: t("command.noResults")}
+										: view.mode === "root" ? (
+											<>
+												<span className="block text-foreground">{t("command.noResults")}</span>
+												<span className="mt-1 block text-caption">{t("command.noResultsHint")}</span>
+											</>
+										) : t("command.noResults")}
 							</CommandEmpty>
 							{groups.map((group) => (
-								<CommandGroup key={group.id} heading={group.label || undefined}>
+								<CommandGroup key={group.id} heading={(group.id === "current" && actionsHeading) || (group.id === "session" && sessionHeading) || group.label || undefined}>
 									{group.items.map((item) => (
 										<PaletteRow
 											key={item.id}
@@ -1050,6 +1417,23 @@ export const CommandPalette = memo(function CommandPalette() {
 									))}
 								</CommandGroup>
 							))}
+							{sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.isFetching && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchingSessions")}</div>
+							)}
+							{/* An empty session-text result over an incomplete index is not the
+							    same answer as one over a complete index. */}
+							{sessionSearchEnabled && sessionSearchSettled && !sessionSearchQuery.error && sessionSearchItems.length === 0 && !sessionSearchQuery.isFetching && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">
+									{sessionSearchIndexStatus.data?.state === "backfilling"
+										? t("command.searchSessionsBackfilling", { count: sessionSearchIndexStatus.data.pendingSources })
+										: sessionSearchIndexStatus.data?.state === "unavailable"
+											? t("command.searchSessionsUnavailable")
+											: t("command.noSessionMatches")}
+									{sessionSearchIndexStatus.data?.unindexedHarnesses?.length
+										? ` ${t("command.searchSessionsUnindexed", { harnesses: sessionSearchIndexStatus.data.unindexedHarnesses.join(", ") })}`
+										: ""}
+								</div>
+							)}
 						</CommandList>
 						{view.mode === "file-search" && fileSearchEnabled && !searchCatchingUp && fileSearchQuery.data?.truncated && (
 							<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchFilesTruncated")}</div>
@@ -1057,13 +1441,42 @@ export const CommandPalette = memo(function CommandPalette() {
 						<CommandFooter aria-hidden="true">
 							<FooterHint keys={["↑", "↓"]} label={t("command.navigate")} />
 							{selectedItem && <FooterHint keys={["Enter"]} label={t("command.open")} />}
-							{selectedItem?.secondaryAction && <FooterHint keys={[isMac ? "⌘" : "Ctrl", "Enter"]} label={t("command.actions")} />}
+							{selectedItem?.secondaryAction && (
+								<FooterHint
+									keys={[isMac ? "⌘" : "Ctrl", "Enter"]}
+									label={selectedItem.secondaryAction.kind === "copy-resume-command" ? t("command.copyResumeCommand") : t("command.actions")}
+								/>
+							)}
 							<FooterHint keys={["Esc"]} label={view.mode === "root" ? t("command.close") : t("command.back")} />
 							<span className="ml-auto min-w-0 truncate">{scope}</span>
 						</CommandFooter>
 					</>
 			</CommandDialog>
 
+			<SessionArchiveDialog
+				open={archiveTarget !== null}
+				session={archiveTarget ?? undefined}
+				onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}
+				onConfirm={({ deleteArtifacts }) => {
+					if (archiveTarget) terminateSession({ ...archiveTarget, deleteArtifacts });
+					setArchiveTarget(null);
+				}}
+			/>
+			<ConfirmDialog
+				open={removeTarget !== null}
+				title={removeTarget?.kind === CLOUD_PROJECT_KIND ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle")}
+				description={removeTarget?.kind === CLOUD_PROJECT_KIND
+					? t("shell.deleteCloudProjectLead", { name: removeTarget.name })
+					: t("shell.removeProjectBody")}
+				confirmLabel={removeTarget?.kind === CLOUD_PROJECT_KIND ? t("shell.deleteCloudProjectConfirm") : t("shell.remove")}
+				destructive
+				onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}
+				onConfirm={() => {
+					if (removeTarget) removeProject?.(removeTarget.id, removeTarget.kind === CLOUD_PROJECT_KIND);
+					setRemoveTarget(null);
+					closePalette();
+				}}
+			/>
 			{createProjectFlowMounted ? (
 				<CreateProjectFlow
 					mode="choose"
@@ -1133,10 +1546,11 @@ function PaletteRow({
 	blocked: boolean;
 	onSelect: () => void;
 }) {
+	const { t } = useTranslation();
 	const Icon = iconForCommand(item);
 	const pathSubtitle = PATH_SUBTITLE_GROUPS.has(item.group);
 	// A row that leads to a list of choices rather than doing something.
-	const opensPicker = item.action?.kind === "open-file-search" && !item.action.target;
+	const opensPicker = rowOpensList(item);
 	return (
 		<CommandItem
 			value={item.id}
@@ -1147,20 +1561,20 @@ function PaletteRow({
 			<span className={cn("flex size-icon-base shrink-0 items-center justify-center", item.snippet && "mt-0.75")} aria-hidden="true">
 				{item.status ? (
 					<span className={cn("size-2 rounded-full", item.status.className, item.status.breathe && "animate-status-pulse")} />
+				) : item.icon ? (
+					item.icon
 				) : Icon ? (
 					<Icon />
 				) : null}
 			</span>
 			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 				<span className="flex min-w-0 items-baseline gap-2">
-					<span className="max-w-full shrink-0 truncate" data-slot={item.emphasis && !query ? undefined : "command-item-title"}>
+					<span className="max-w-full shrink-0 truncate" data-slot="command-item-title">
 						{item.group === "content" && item.title.includes(":") ? (
 							<>
 								{item.title.slice(0, item.title.lastIndexOf(":"))}
 								<span className="text-muted-foreground">{item.title.slice(item.title.lastIndexOf(":"))}</span>
 							</>
-						) : item.emphasis && !query ? (
-							<TitleIn title={item.title} name={item.emphasis} />
 						) : (
 							<Highlighted text={item.title} spans={item.contentMatch ? [] : titleHighlights(query, item.title)} />
 						)}
@@ -1182,33 +1596,40 @@ function PaletteRow({
 			{pending ? (
 				<Loader2 className="size-icon-md animate-spin" aria-hidden="true" />
 			) : item.disabled && item.disabledReason ? (
-				<span className="shrink-0 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.disabledReason}</span>
+				<span className="max-w-[45%] shrink-0 truncate text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.disabledReason}</span>
+			) : item.toggled !== undefined ? (
+				// Shows the state only; the row itself is what flips it.
+				<span className="flex shrink-0 items-center">
+					<span className="sr-only">{item.toggled ? t("command.on") : t("command.off")}</span>
+					<Switch checked={item.toggled} tabIndex={-1} aria-hidden="true" className="pointer-events-none" />
+				</span>
+			) : item.checked ? (
+				<Check className="size-icon-md" aria-label={t("command.on")} />
 			) : keys ? (
 				<CommandShortcut keys={keys} />
+			) : item.state && !opensPicker ? (
+				<span className="shrink-0 text-caption tabular-nums text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">{item.state}</span>
 			) : opensPicker ? (
-				<ChevronRight className="size-icon-md" aria-hidden="true" />
+				<span className="flex shrink-0 items-center gap-1 text-caption text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
+					{item.state}
+					<ChevronRight className="size-icon-md" aria-hidden="true" />
+				</span>
 			) : null}
 		</CommandItem>
 	);
 }
 
-/** "New task in **app**", in the word order the locale gives. */
-function TitleIn({ title, name }: { title: ReactNode; name: string }) {
-	const { t } = useTranslation();
-	const template = t("command.titleIn", { title: "\u0001", name: "\u0002", interpolation: { escapeValue: false } });
-	return (
-		<>
-			{template.split(/([\u0001\u0002])/).map((part, index) =>
-				part === "\u0001" ? <span key={index} data-slot="command-item-title">{title}</span>
-					: part === "\u0002" ? (
-						<span key={index} className="ml-1 font-medium text-muted-foreground group-data-[selected=true]/command-item:text-foreground/75">
-							<Folder className="mr-1 inline size-icon-md! -translate-y-px align-middle" aria-hidden="true" />
-							{name}
-						</span>
-					)
-						: part)}
-		</>
-	);
+/** The open session's actions the blank list shows; the others wait for a search. */
+const BLANK_SESSION_ACTIONS = new Set(["session-switch-interface", "menu:open-in", "menu:session-rename", "menu:session-resume", "menu:session-open-pr", "menu:session-archive"]);
+
+/** A session's menu rows; Rename opens the palette's own rename field, so it keeps the palette open. */
+function paletteMenuRows(entries: readonly MenuEntry[], sessionId: string): CommandItemModel[] {
+	return menuEntryCommands(entries, sessionId).map((item) => (item.id === "menu:session-rename" ? { ...item, keepOpen: true } : item));
+}
+
+/** A row whose action opens a nested list rather than doing something; drawn with ›. */
+function rowOpensList(item: CommandItemModel): boolean {
+	return (item.action?.kind === "open-file-search" && !item.action.target) || item.action?.kind === "open-view";
 }
 
 function Highlighted({ text, spans }: { text: string; spans: readonly { start: number; end: number }[] }) {

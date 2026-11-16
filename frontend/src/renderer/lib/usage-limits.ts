@@ -1,5 +1,5 @@
 import type { components } from "../../api/schema";
-import type { AgentAccount, AgentAccountLimitWindow, AgentAccountProvider } from "../hooks/useAgentAccounts";
+import { withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountProvider } from "../hooks/useAgentAccounts";
 
 export type UsageLimitWindows = components["schemas"]["UsageLimitWindowsResponse"];
 export type UsageLimitLogin = components["schemas"]["UsageLimitLogin"];
@@ -19,9 +19,10 @@ export const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "
 
 export function groupAccounts(accounts: readonly AgentAccount[]): ProviderAccounts[] {
 	return PROVIDER_ORDER.flatMap((provider) => {
-		const providerAccounts = accounts
+		const sorted = accounts
 			.filter((account) => account.provider === provider)
 			.sort((a, b) => Number(b.default) - Number(a.default) || a.id.localeCompare(b.id));
+		const providerAccounts = withoutSameLogins(sorted, sorted.find((account) => account.default)?.id);
 		if (providerAccounts.length === 0) return [];
 		const checked = providerAccounts.map((account) => account.limits?.fetchedAt).filter((value): value is string => Boolean(value)).sort();
 		return [{ provider, accounts: providerAccounts, checkedAt: checked.at(-1) ?? null }];
