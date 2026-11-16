@@ -121,7 +121,7 @@ func (c *commandContext) executeImport(ctx context.Context, cfg config.Config, o
 	}
 	defer func() { _ = lock.Release() }()
 
-	store, err := sqlite.Open(cfg.DataDir)
+	store, err := sqlite.OpenWithSchemaPolicy(cfg.DataDir, cfg.AllowNewerSchema)
 	if err != nil {
 		return legacyimport.Report{}, fmt.Errorf("open store: %w", err)
 	}
