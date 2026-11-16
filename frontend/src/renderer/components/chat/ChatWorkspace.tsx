@@ -638,8 +638,6 @@ export interface ChatWorkspaceProps {
 	/** Switch the visible conversation to another branch. */
 	onActivateBranch?: (branchId: string) => void | Promise<unknown>;
 	activateBranchPending?: boolean;
-	activateBranchDisabled?: boolean;
-	activateBranchTarget?: string;
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
@@ -929,8 +927,6 @@ function ChatWorkspaceContent({
 	editMessageError,
 	onActivateBranch,
 	activateBranchPending,
-	activateBranchDisabled,
-	activateBranchTarget,
 	activateBranchError,
 	skills,
 	filePaths,
@@ -2314,8 +2310,6 @@ function ChatWorkspaceContent({
 									editError={editMessageError}
 									onActivateBranch={onActivateBranch}
 									activateBranchPending={activateBranchPending}
-									activateBranchDisabled={activateBranchDisabled}
-									activateBranchTarget={activateBranchTarget}
 									activateBranchError={activateBranchError}
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(durableTurn || rollbackPending || newWorkDisabled)}
@@ -3336,8 +3330,6 @@ export function Timeline({
 	editError,
 	onActivateBranch,
 	activateBranchPending,
-	activateBranchDisabled,
-	activateBranchTarget,
 	activateBranchError,
 	newWorkDisabled,
 	rollbackDisabled = false,
@@ -3396,8 +3388,6 @@ export function Timeline({
 	editError?: string;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
-	activateBranchDisabled?: boolean;
-	activateBranchTarget?: string;
 	activateBranchError?: string;
 	newWorkDisabled?: boolean;
 	rollbackDisabled?: boolean;
@@ -5109,12 +5099,14 @@ export function Timeline({
 			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
 		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
 		if (!turn) return undefined;
-		const top = node.getBoundingClientRect().top;
+		const { top, bottom } = node.getBoundingClientRect();
 		const rows = Array.from(turn.children) as HTMLElement[];
 		const rects = rows.map((row) => row.getBoundingClientRect());
 		const following = pinnedRef.current;
 		const index = following ? -1 : rects.findIndex((rect) => rect.bottom > top);
-		if (!following && index < 0) return undefined;
+		// A reader who sees none of the turn has nothing to hold: below it, no row reaches
+		// their view; above it, the first row starts past the view's bottom edge.
+		if (!following && (index < 0 || rects[index]!.top >= bottom)) return undefined;
 		return {
 			turn,
 			rows,
@@ -5130,7 +5122,9 @@ export function Timeline({
 	// that lands on the end. For a reader who scrolled up, a row still in the turn
 	// (the prompt, a steer, the reply) holds its place; a step that folded away hands
 	// its place to "Worked for", which lands at the top of the view with the reply
-	// under it. Then every row that still moved slides there from where it was.
+	// under it. A turn that began lower in the view keeps its top where it was
+	// instead: the reader is still on what came before it. Then every row that still
+	// moved slides there from where it was.
 	const restoreSettle = useCallback((settle: SettleAnchor) => {
 		const node = scroller.current;
 		if (!node) return;
@@ -5168,7 +5162,7 @@ export function Timeline({
 					?? rows.slice(index + 1).find((row) => row.isConnected);
 			if (target) {
 				held = target;
-				const landing = kept ? offset : 0;
+				const landing = kept || (index === 0 && offset > 0) ? offset : 0;
 				const place = () => {
 					const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
 					if (Math.abs(delta) < 0.5) return;
@@ -5679,8 +5673,6 @@ export function Timeline({
 									newHumanMessageIds={turnNewHumanMessageIds(group, newHumanMessageIds)}
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
-									activateBranchDisabled={activateBranchDisabled || Boolean(durableTurn)}
-									activateBranchTarget={activateBranchTarget}
 									activateBranchError={activateBranchError}
 									// Only a turn the provider actually accepted can be undone: a turn it
 									// never saw holds no history to discard, and the daemon refuses it
@@ -5970,8 +5962,6 @@ const TurnGroup = memo(function TurnGroup({
 	editableTurns,
 	onActivateBranch,
 	activateBranchPending,
-	activateBranchDisabled,
-	activateBranchTarget,
 	activateBranchError,
 	canRollback,
 	rollbackDisabled,
@@ -6012,8 +6002,6 @@ const TurnGroup = memo(function TurnGroup({
 	editableTurns: Set<string>;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
-	activateBranchDisabled?: boolean;
-	activateBranchTarget?: string;
 	activateBranchError?: string;
 	/** The daemon would accept a rollback of this turn, so offer the affordance. */
 	canRollback: boolean;
@@ -6178,8 +6166,6 @@ const TurnGroup = memo(function TurnGroup({
 			editableTurns={editableTurns}
 			onActivateBranch={onActivateBranch}
 			activateBranchPending={activateBranchPending}
-			activateBranchDisabled={activateBranchDisabled}
-			activateBranchTarget={activateBranchTarget}
 			activateBranchError={activateBranchError}
 			busy={busy}
 			queued={queued}
@@ -6429,8 +6415,6 @@ function TimelineItem({
 	editableTurns,
 	onActivateBranch,
 	activateBranchPending,
-	activateBranchDisabled,
-	activateBranchTarget,
 	activateBranchError,
 	busy,
 	queued,
@@ -6462,8 +6446,6 @@ function TimelineItem({
 	editableTurns: Set<string>;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
-	activateBranchDisabled?: boolean;
-	activateBranchTarget?: string;
 	activateBranchError?: string;
 	busy?: boolean;
 	/**
@@ -6528,8 +6510,6 @@ function TimelineItem({
 					branchPoint={item.turnId ? branchPoints.get(item.turnId) : undefined}
 					onActivateBranch={onActivateBranch}
 					activateBranchPending={activateBranchPending}
-					activateBranchDisabled={activateBranchDisabled}
-					activateBranchTarget={activateBranchTarget}
 					activateBranchError={activateBranchError}
 					onSelectAnnotation={onSelectAnnotation}
 					status={status}
