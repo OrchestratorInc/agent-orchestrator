@@ -3037,6 +3037,7 @@ html.sidebar-reordering * {
 }
 
 /* Join only a notice that actually rendered, after the floating queue. */
+[data-composer-notice] + [data-composer-notice],
 [data-composer-notice] + .cursor-chat-composer {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
