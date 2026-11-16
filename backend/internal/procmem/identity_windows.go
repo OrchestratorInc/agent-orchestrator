@@ -44,6 +44,7 @@ func Identities(ctx context.Context) (map[int]Identity, error) {
 					continue // the pid was reused after the snapshot
 				}
 				identity.Start = strconv.FormatInt(creation.Nanoseconds(), 10)
+				identity.StartedAt = created
 			}
 			_ = windows.CloseHandle(h)
 		}

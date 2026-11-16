@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Identities reads every live process's parent and start time (clock ticks
@@ -25,6 +26,7 @@ func Identities(ctx context.Context) (map[int]Identity, error) {
 	if err != nil {
 		return nil, fmt.Errorf("procmem: read /proc: %w", err)
 	}
+	bootTime, bootErr := readBootTime()
 	out := map[int]Identity{}
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
@@ -44,10 +46,37 @@ func Identities(ctx context.Context) (map[int]Identity, error) {
 		case !ok:
 			out[pid] = Identity{PPID: -1}
 		case alive:
+			if bootErr == nil {
+				if ticks, err := strconv.ParseInt(identity.Start, 10, 64); err == nil {
+					identity.StartedAt = bootTime.Add(time.Duration(ticks) * time.Second / userHZ)
+				}
+			}
 			out[pid] = identity
 		}
 	}
 	return out, nil
+}
+
+// userHZ is the clock-tick rate /proc reports start times in. The kernel's
+// USER_HZ is 100 on every architecture Linux supports today.
+const userHZ = 100
+
+// readBootTime reads the boot time (btime) from /proc/stat.
+func readBootTime() (time.Time, error) {
+	stat, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return time.Time{}, err
+	}
+	for _, line := range strings.Split(string(stat), "\n") {
+		if rest, ok := strings.CutPrefix(line, "btime "); ok {
+			secs, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+			if err != nil {
+				return time.Time{}, err
+			}
+			return time.Unix(secs, 0), nil
+		}
+	}
+	return time.Time{}, errors.New("procmem: no btime in /proc/stat")
 }
 
 // parseProcStat returns field 4 (ppid) and field 22 (starttime) of

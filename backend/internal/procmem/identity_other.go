@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Identities reads every live process's parent and start time from one ps
@@ -29,7 +30,12 @@ func Identities(ctx context.Context) (map[int]Identity, error) {
 		if err1 != nil || err2 != nil || strings.HasPrefix(fields[2], "Z") {
 			continue
 		}
-		ids[pid] = Identity{PPID: ppid, Start: strings.Join(fields[3:], " ")}
+		start := strings.Join(fields[3:], " ")
+		identity := Identity{PPID: ppid, Start: start}
+		if at, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", start, time.Local); err == nil {
+			identity.StartedAt = at
+		}
+		ids[pid] = identity
 	}
 	return ids, nil
 }

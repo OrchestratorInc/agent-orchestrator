@@ -159,20 +159,34 @@ func (l *agentLauncher) stopCaptured(ctx context.Context, handleID string, tree 
 // the same processes. A runtime that reports no roots has nothing running. A
 // member whose identity cannot be read makes the capture untrustworthy.
 func (l *agentLauncher) captureReviewerTree(ctx context.Context, handle ports.RuntimeHandle, hooks forceStopHooks) ([]capturedProcess, error) {
-	inspector, ok := l.runtime.(ports.RuntimeProcessRootInspector)
-	if !ok {
-		return nil, errors.New("runtime cannot report its process roots")
-	}
-	roots, err := inspector.ProcessRootPIDs(ctx, handle)
+	bounded, err := l.reviewerRoots(ctx, handle)
 	if err != nil {
 		return nil, err
 	}
-	if len(roots) == 0 {
+	if len(bounded) == 0 {
 		return nil, nil
 	}
 	identities, err := hooks.identities(ctx)
 	if err != nil {
 		return nil, err
+	}
+	var roots []int
+	for _, root := range bounded {
+		identity, ok := identities[root.PID]
+		if !ok {
+			continue // it exited
+		}
+		if !root.StartedBy.IsZero() {
+			if identity.StartedAt.IsZero() {
+				return nil, fmt.Errorf("cannot read when reviewer root %d started", root.PID)
+			}
+			if identity.StartedAt.After(root.StartedBy.Add(rootStartSlack)) {
+				// The runtime's process exited and another one took its pid:
+				// nothing below it is the reviewer's.
+				continue
+			}
+		}
+		roots = append(roots, root.PID)
 	}
 	children := map[int][]int{}
 	for pid, identity := range identities {
@@ -199,6 +213,32 @@ func (l *agentLauncher) captureReviewerTree(ctx context.Context, handle ports.Ru
 		pending = append(pending, children[pid]...)
 	}
 	return tree, nil
+}
+
+// rootStartSlack absorbs the coarseness of start-time sources (Linux derives
+// wall-clock start from the boot time; registry bounds are whole seconds)
+// when checking a root against the latest moment it can have started.
+const rootStartSlack = 2 * time.Second
+
+// reviewerRoots returns the runtime's process-tree roots, with start bounds
+// when the runtime can vouch for them.
+func (l *agentLauncher) reviewerRoots(ctx context.Context, handle ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	if inspector, ok := l.runtime.(ports.RuntimeProcessRootBoundInspector); ok {
+		return inspector.BoundedProcessRoots(ctx, handle)
+	}
+	inspector, ok := l.runtime.(ports.RuntimeProcessRootInspector)
+	if !ok {
+		return nil, errors.New("runtime cannot report its process roots")
+	}
+	pids, err := inspector.ProcessRootPIDs(ctx, handle)
+	if err != nil {
+		return nil, err
+	}
+	roots := make([]ports.ProcessRoot, 0, len(pids))
+	for _, pid := range pids {
+		roots = append(roots, ports.ProcessRoot{PID: pid})
+	}
+	return roots, nil
 }
 
 func mergeCaptured(previous, current []capturedProcess) []capturedProcess {

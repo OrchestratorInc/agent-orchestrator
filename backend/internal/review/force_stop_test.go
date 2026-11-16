@@ -31,11 +31,13 @@ type scriptedTable struct {
 	// started is each process's start time; it survives exec and differs
 	// for a reused pid.
 	started map[int]string
-	killed  []int
+	// startedAt is each process's wall-clock start, for root start bounds.
+	startedAt map[int]time.Time
+	killed    []int
 }
 
 func newScriptedTable(lines ...string) *scriptedTable {
-	t := &scriptedTable{processes: map[int]procmem.Process{}, started: map[int]string{}}
+	t := &scriptedTable{processes: map[int]procmem.Process{}, started: map[int]string{}, startedAt: map[int]time.Time{}}
 	table, err := procmem.Parse(strings.Join(lines, "\n"))
 	if err != nil {
 		panic(err)
@@ -54,7 +56,7 @@ func (t *scriptedTable) identities(context.Context) (map[int]procmem.Identity, e
 	defer t.mu.Unlock()
 	out := map[int]procmem.Identity{}
 	for pid, p := range t.processes {
-		out[pid] = procmem.Identity{PPID: p.PPID, Start: t.started[pid]}
+		out[pid] = procmem.Identity{PPID: p.PPID, Start: t.started[pid], StartedAt: t.startedAt[pid]}
 	}
 	return out, nil
 }
@@ -116,5 +118,38 @@ func TestForceStopLeavesAReusedPidAlone(t *testing.T) {
 	stopped, err := forceStopLauncher(rt, table).ForceStop(context.Background(), "review-mer-1")
 	if err != nil || !stopped || len(table.killed) != 0 {
 		t.Fatalf("ForceStop = %v, %v killed=%v; want confirmed without killing the reused pid", stopped, err, table.killed)
+	}
+}
+
+// boundedRuntime reports its root with the latest moment that root can have
+// started, as the ConPTY runtime does from its spawn and registration times.
+type boundedRuntime struct {
+	*fakeRuntime
+	roots []ports.ProcessRoot
+}
+
+func (r *boundedRuntime) BoundedProcessRoots(context.Context, ports.RuntimeHandle) ([]ports.ProcessRoot, error) {
+	return r.roots, nil
+}
+
+// A runtime can still report a root pid after its host exited, and another
+// process may hold that pid now. That process started after the host's start
+// bound, so neither it nor anything below it is the reviewer's: nothing is
+// killed.
+func TestForceStopNeverWalksDownFromAReusedRootPid(t *testing.T) {
+	table := newScriptedTable(
+		"44487 1 100 0:00 someone-elses-server",
+		"44493 44487 100 0:00 someone-elses-worker",
+	)
+	hostStartedBy := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	table.startedAt[44487] = hostStartedBy.Add(10 * time.Minute)
+	table.startedAt[44493] = hostStartedBy.Add(10 * time.Minute)
+	rt := &boundedRuntime{fakeRuntime: &fakeRuntime{}, roots: []ports.ProcessRoot{{PID: 44487, StartedBy: hostStartedBy}}}
+	stopped, err := forceStopLauncher(rt, table).ForceStop(context.Background(), "review-mer-1")
+	if err != nil || !stopped {
+		t.Fatalf("ForceStop = %v, %v; want confirmed with nothing of the reviewer's left", stopped, err)
+	}
+	if len(table.killed) != 0 {
+		t.Fatalf("killed unrelated processes %v that took the dead host's pid", table.killed)
 	}
 }
