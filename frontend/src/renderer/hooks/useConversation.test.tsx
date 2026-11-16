@@ -1691,3 +1691,55 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
 });
+
+describe("opening a local chat it has cached", () => {
+	const page = (latestSequence: number, oldestSequence: number, hasMoreBefore: boolean, turnState = "running") => ({
+		data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence, oldestSequence, hasMoreBefore,
+			turns: [{ id: "t1", state: turnState, requestedAt: "2026-11-16T00:00:00Z" }], messages: [], activities: [],
+		},
+		error: undefined,
+	});
+	const mount = (queryClient: QueryClient) => renderHook(() => useConversation("ao-1"), {
+		wrapper: ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+	});
+
+	it("reads only the live page when the chat changed while closed, keeping older pages", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 11, true))
+			.mockResolvedValueOnce(page(20, 1, false))
+			.mockResolvedValueOnce(page(21, 11, true, "completed"))
+			.mockRejectedValue(new Error("an older page was read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		act(() => first.result.current.loadOlder());
+		await waitFor(() => expect(first.result.current.hasOlder).toBe(false));
+		first.unmount();
+
+		// The turn finishes while another session is on screen: the event only marks the chat stale.
+		await queryClient.invalidateQueries({ queryKey: conversationQueryKey("ao-1") });
+		expect(getMock).toHaveBeenCalledTimes(2);
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(second.result.current.snapshot?.turns[0]?.state).toBe("completed"));
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(getMock.mock.calls[2][1]).toMatchObject({ params: { query: { beforeSequence: undefined } } });
+		expect(second.result.current.snapshot).toMatchObject({ latestSequence: 21, oldestSequence: 1 });
+		expect(second.result.current.hasOlder).toBe(false);
+	});
+
+	it("makes no request when the chat did not change while closed", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		getMock.mockReset().mockResolvedValueOnce(page(20, 1, false)).mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+
+		const second = mount(queryClient);
+		expect(second.result.current.snapshot?.latestSequence).toBe(20);
+		await act(async () => {});
+		expect(getMock).toHaveBeenCalledTimes(1);
+	});
+});

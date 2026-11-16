@@ -14,6 +14,7 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
 import {
 	type InfiniteData,
 	type QueryClient,
+	type QueryKey,
 	infiniteQueryOptions,
 	useInfiniteQuery,
 	useIsMutating,
@@ -491,6 +492,14 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 		throw error;
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
+	applyLiveConversationPage(queryClient, key, latest);
+}
+
+/**
+ * Puts a freshly read live page in front of the older pages already held, so
+ * one read updates the chat without reading its older history again.
+ */
+function applyLiveConversationPage(queryClient: QueryClient, key: QueryKey, latest: ConversationSnapshot): void {
 	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (previous) => {
 		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
 		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
@@ -535,6 +544,28 @@ export function refreshRemoteConversationOnce(queryClient: QueryClient, sessionI
 	})();
 }
 
+const localConversationRefreshes = new WeakMap<QueryClient, Set<string>>();
+
+/**
+ * Brings a local chat that changed while it was closed up to date as it opens.
+ * Events only mark a closed chat stale, and refetching it as an infinite query
+ * reads every page it holds, one after another, before showing any of them, so
+ * the chat sat on its old copy (a finished turn still "Thinking") until the
+ * oldest page arrived. Reading the live page alone shows what changed at once.
+ */
+function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: string): void {
+	let running = localConversationRefreshes.get(queryClient);
+	if (!running) localConversationRefreshes.set(queryClient, (running = new Set()));
+	if (running.has(sessionId)) return;
+	running.add(sessionId);
+	const key = conversationQueryKey(sessionId);
+	void fetchConversationPage(sessionId)
+		.then((latest) => applyLiveConversationPage(queryClient, key, latest))
+		// The query's own read retries and reports what keeps failing.
+		.catch(() => queryClient.invalidateQueries({ queryKey: key }))
+		.finally(() => running.delete(sessionId));
+}
+
 /**
  * A cached local chat whose controller is ready or working. Such a chat learns
  * every change through events; one still starting up or waking does not.
@@ -553,10 +584,10 @@ export function conversationQueryOptions(sessionId: string, hostId?: string) {
 		// A local chat changes only through events, which invalidate it even while
 		// it is closed, and a reconnect invalidates every chat. Opening an unchanged
 		// chat again therefore needs no request; refetching here reloaded every page
-		// it had. A remote chat refreshes its live page when it opens, and events
-		// refresh it while it is open, so a cached remote page is not refetched whole.
+		// it had. Either kind of chat reads only its live page when it opens (see
+		// useConversation), so a cached chat is never refetched whole on open.
 		staleTime: Infinity,
-		...(hostId ? { refetchOnMount: false } : {}),
+		refetchOnMount: false,
 		gcTime: 30 * 60_000,
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading
@@ -588,11 +619,14 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		select: selectConversationPages,
 	});
 	useEffect(() => {
+		if (!sessionId) return;
+		const cached = queryClient.getQueryState(conversationQueryKey(sessionId, hostId));
+		if (cached?.data === undefined) return;
 		// A cached remote page (an earlier visit, a prefetch, or the disk copy) shows
 		// at once; the open reads what changed since.
-		if (hostId && sessionId && queryClient.getQueryData(conversationQueryKey(sessionId, hostId))) {
-			refreshRemoteConversationOnce(queryClient, sessionId, hostId);
-		}
+		if (hostId) refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		// A cached local chat is current unless an event marked it stale while closed.
+		else if (cached.isInvalidated) refreshLocalConversationOnce(queryClient, sessionId);
 	}, [hostId, queryClient, sessionId]);
 
 	if (query.error && (!hostId || !query.data)) {
