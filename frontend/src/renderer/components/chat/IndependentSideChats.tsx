@@ -1570,7 +1570,6 @@ export function useIndependentSideChats(
 										)
 									}
 									actionPinned
-									actionPosition="end"
 									active={active}
 									buttonProps={{
 										"aria-keyshortcuts": "F2",

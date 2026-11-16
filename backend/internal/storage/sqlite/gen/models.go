@@ -465,6 +465,22 @@ type DeletedSessionAccountUsage struct {
 	EstimatedCostNanos int64
 }
 
+type KeptArtifact struct {
+	ID            string
+	SessionID     string
+	Path          string
+	RegisteredAt  sql.NullTime
+	PreviousPaths string
+	CreatedAt     time.Time
+}
+
+type KeptArtifactSession struct {
+	SessionID string
+	ProjectID sql.NullString
+	Title     string
+	KeptAt    time.Time
+}
+
 type ManagedHarnessRelease struct {
 	Harness   string
 	Release   string
@@ -994,6 +1010,19 @@ type TelemetryEvent struct {
 type TelemetryLifetimeSession struct {
 	Singleton int64
 	Count     int64
+}
+
+type TimestampRepairControl struct {
+	ID     int64
+	Paused int64
+}
+
+type TimestampRepairProgress struct {
+	TableName  string
+	Signature  string
+	Generation int64
+	Completed  int64
+	Rejected   int64
 }
 
 type UsageBinding struct {
