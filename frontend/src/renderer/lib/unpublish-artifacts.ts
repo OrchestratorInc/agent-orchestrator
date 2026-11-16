@@ -21,8 +21,11 @@ export type UnpublishTarget = Omit<CloudShareFile, "baseUrl" | "shareId">;
 /** The part of the share bridge unpublishing uses. */
 export type UnpublishBridge = Pick<typeof aoBridge.cloudShare, "inspect" | "unpublish">;
 
-/** An artifact as a delete names it: its ID when it has one, its path, and whether it is published. */
-export type DeletedArtifact = { id?: string; path: string; shareUrl?: string };
+/**
+ * An artifact as a delete names it: its ID when it has one, its path, its
+ * link when a local file is published, and a cloud file's committed version.
+ */
+export type DeletedArtifact = { id?: string; path: string; shareUrl?: string; sha256?: string };
 
 /** The links a delete will unpublish once it succeeds. */
 export interface PendingUnpublish {
@@ -38,6 +41,40 @@ export interface PendingUnpublish {
 const NOTHING_TO_UNPUBLISH: PendingUnpublish = { unpublish: async () => 0 };
 
 const listeners = new Set<() => void>();
+
+/** Publishes still running, by control plane, session and path, with the file each publishes. */
+const publishing = new Map<string, { target: UnpublishTarget; done: Promise<unknown> }>();
+
+function publishKey(baseUrl: string, target: Pick<UnpublishTarget, "sessionId" | "path">): string {
+	return JSON.stringify([baseUrl, target.sessionId, target.path]);
+}
+
+/**
+ * Records a publish while it runs. A delete started meanwhile waits for it,
+ * then looks up the link it made: the file is not marked published yet, and
+ * the upload can finish after the file is gone.
+ */
+export function trackPublish(baseUrl: string, target: UnpublishTarget, done: Promise<unknown>): void {
+	const key = publishKey(baseUrl, target);
+	const entry = { target, done };
+	publishing.set(key, entry);
+	const clear = () => {
+		if (publishing.get(key) === entry) publishing.delete(key);
+	};
+	done.then(clear, clear);
+}
+
+/** What a delete removes: one file, or every file of a session when path is unset. */
+export type DeleteScope = { sessionId: string; path?: string };
+
+/** Waits for the publishes running on what a delete removes, and returns their files. */
+async function settledPublishes(baseUrl: string, deleting: readonly DeleteScope[]): Promise<UnpublishTarget[]> {
+	const running = [...publishing.entries()].filter(([key, { target }]) =>
+		JSON.parse(key)[0] === baseUrl
+		&& deleting.some((scope) => scope.sessionId === target.sessionId && (scope.path === undefined || scope.path === target.path)));
+	await Promise.allSettled(running.map(([, { done }]) => done));
+	return running.map(([, { target }]) => target);
+}
 
 /** Calls listener after links were unpublished here, so link lists are read again. */
 export function onArtifactLinksUnpublished(listener: () => void): () => void {
@@ -63,7 +100,18 @@ export function publishedArtifacts<T extends Pick<DeletedArtifact, "shareUrl">>(
 }
 
 /**
- * The share file of a session's artifact. A local file's project only names
+ * Whether a delete must look an artifact's link up. A local file says whether
+ * it is published (its shareUrl, from this computer's records). A cloud file's
+ * list never does: its link is recorded on this computer by org, session and
+ * artifact ID, so each one is looked up.
+ */
+export function mayBePublished(session: Pick<WorkspaceSession, "cloud">, artifact: Pick<DeletedArtifact, "shareUrl">): boolean {
+	return Boolean(session.cloud) || Boolean(artifact.shareUrl);
+}
+
+/**
+ * The share file of a session's artifact. A cloud file carries its committed
+ * version, so looking its link up reads only this computer's records. A local file's project only names
  * the document a publish writes to, but the main process requires one, so a
  * session without a project uses the Scratchpad's, as the session view does.
  */
@@ -73,37 +121,84 @@ export function unpublishTarget(
 ): UnpublishTarget {
 	const artifactId = artifact.id ? { artifactId: artifact.id } : {};
 	if (session.cloud) {
-		return { source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: artifact.path, projectId: "", ...artifactId };
+		const fingerprint = artifact.sha256 ? { fingerprint: artifact.sha256 } : {};
+		return { source: "cloud", orgId: session.cloud.orgId, sessionId: session.id, path: artifact.path, projectId: "", ...artifactId, ...fingerprint };
 	}
 	return { sessionId: session.id, path: artifact.path, projectId: session.workspaceId || STANDALONE_WORKSPACE_ID, ...artifactId };
 }
 
 /**
- * The published artifacts of a session, as files to unpublish. A remote
- * host's session has none: links are published from, and recorded on, this
- * computer only.
+ * The files whose links a delete of these artifacts must look up and
+ * unpublish. A remote host's session has none: links are published from, and
+ * recorded on, this computer only.
  */
-export function sessionUnpublishTargets(session: WorkspaceSession): UnpublishTarget[] {
+export function deleteUnpublishTargets(
+	session: Pick<WorkspaceSession, "id" | "cloud" | "hostId"> & { workspaceId?: string },
+	artifacts: readonly DeletedArtifact[],
+): UnpublishTarget[] {
 	if (session.hostId) return [];
-	return publishedArtifacts(sessionArtifacts(session)).map((artifact) => unpublishTarget(session, artifact));
+	return artifacts.filter((artifact) => mayBePublished(session, artifact)).map((artifact) => unpublishTarget(session, artifact));
 }
 
-/** How many published links a session's delete would stop. */
-export function sessionPublishedCount(session: WorkspaceSession | undefined): number {
-	return session ? sessionUnpublishTargets(session).length : 0;
+/** The files whose links deleting a session's artifacts must look up and unpublish. */
+export function sessionUnpublishTargets(session: WorkspaceSession): UnpublishTarget[] {
+	return deleteUnpublishTargets(session, sessionArtifacts(session));
+}
+
+/**
+ * What a delete's confirm counts as published: the local files known to be
+ * (`known`) and the cloud files whose links must be looked up first (`lookup`).
+ */
+export type PublishedCheck = { known: number; lookup: UnpublishTarget[] };
+
+export const NOTHING_PUBLISHED: PublishedCheck = { known: 0, lookup: [] };
+
+/** The PublishedCheck of deleting these artifacts of one session. */
+export function publishedCheck(
+	session: Pick<WorkspaceSession, "id" | "cloud" | "hostId"> & { workspaceId?: string },
+	artifacts: readonly DeletedArtifact[],
+): PublishedCheck {
+	if (session.hostId) return NOTHING_PUBLISHED;
+	if (session.cloud) return { known: 0, lookup: deleteUnpublishTargets(session, artifacts) };
+	return { known: publishedArtifacts(artifacts).length, lookup: [] };
+}
+
+/** The PublishedCheck of deleting a whole session's artifacts. */
+export function sessionPublishedCheck(session: WorkspaceSession | undefined): PublishedCheck {
+	return session ? publishedCheck(session, sessionArtifacts(session)) : NOTHING_PUBLISHED;
+}
+
+/** Adds checks up, for a delete that spans sessions. */
+export function combinePublishedChecks(checks: readonly PublishedCheck[]): PublishedCheck {
+	return { known: checks.reduce((sum, check) => sum + check.known, 0), lookup: checks.flatMap((check) => check.lookup) };
+}
+
+/**
+ * How many of these files have a link recorded on this computer. A file that
+ * cannot be looked up is not counted: this only words a confirm.
+ */
+export async function countPublished(baseUrl: string, files: readonly UnpublishTarget[], bridge: UnpublishBridge = aoBridge.cloudShare): Promise<number> {
+	if (!baseUrl || files.length === 0) return 0;
+	const lookups = await Promise.allSettled(files.map((file) => bridge.inspect({ ...file, baseUrl })));
+	return new Set(lookups.flatMap((lookup) => lookup.status === "fulfilled" && lookup.value.shareId ? [lookup.value.shareId] : [])).size;
 }
 
 /**
  * Looks up the links of files about to be deleted. Call it before the
  * delete, then `unpublish` once the delete succeeded. It never throws.
+ * `deleting` names what the delete removes, so a publish still running on it
+ * is waited for and its link looked up too; it defaults to `files`.
  */
 export async function prepareUnpublish(
 	baseUrl: string,
-	files: readonly UnpublishTarget[],
-	bridge: UnpublishBridge = aoBridge.cloudShare,
+	known: readonly UnpublishTarget[],
+	{ deleting = known, bridge = aoBridge.cloudShare }: { deleting?: readonly DeleteScope[]; bridge?: UnpublishBridge } = {},
 ): Promise<PendingUnpublish> {
+	if (!baseUrl) return known.length === 0 ? NOTHING_TO_UNPUBLISH : { unpublish: async () => known.length };
+	const publishedMeanwhile = (await settledPublishes(baseUrl, deleting))
+		.filter((target) => !known.some((file) => file.sessionId === target.sessionId && file.path === target.path));
+	const files = [...known, ...publishedMeanwhile];
 	if (files.length === 0) return NOTHING_TO_UNPUBLISH;
-	if (!baseUrl) return { unpublish: async () => files.length };
 	const lookups = await Promise.allSettled(files.map((file) => bridge.inspect({ ...file, baseUrl })));
 	const shareIds = new Set<string>();
 	let unresolved = 0;

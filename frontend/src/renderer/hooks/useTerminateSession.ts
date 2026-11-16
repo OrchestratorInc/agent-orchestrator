@@ -51,7 +51,9 @@ type TerminateResult = {
  */
 async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<TerminateResult> {
 	const links = session.deleteArtifacts
-		? await prepareUnpublish(queryClient.getQueryData<Settings>(settingsQueryKey)?.cloudControlPlaneUrl ?? "", sessionUnpublishTargets(session))
+		? await prepareUnpublish(queryClient.getQueryData<Settings>(settingsQueryKey)?.cloudControlPlaneUrl ?? "", sessionUnpublishTargets(session), {
+			deleting: session.hostId ? [] : [{ sessionId: session.id }],
+		})
 		: undefined;
 	const artifactsDeleted = await archiveSession(queryClient, session);
 	return { artifactsDeleted, linksLive: artifactsDeleted && links ? await links.unpublish() : 0 };

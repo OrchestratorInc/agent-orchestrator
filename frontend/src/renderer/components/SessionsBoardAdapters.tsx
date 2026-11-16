@@ -22,7 +22,7 @@ import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
-import { prepareUnpublish, sessionPublishedCount, sessionUnpublishTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { prepareUnpublish, sessionPublishedCheck, sessionUnpublishTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
@@ -833,13 +833,14 @@ export function DeleteArchivedSessionDialog({
 	}
 	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
 	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
-	const publishedCount = sessionPublishedCount(session);
+	// Only a local session is deleted here, and its files say whether they are published.
+	const publishedCount = sessionPublishedCheck(session).known;
 	const confirmDelete = async () => {
 		setDeleting(true);
 		setError(null);
 		try {
 			// Looked up while the files are there; unpublished only once they are gone.
-			const links = await prepareUnpublish(baseUrl, sessionUnpublishTargets(session));
+			const links = await prepareUnpublish(baseUrl, sessionUnpublishTargets(session), { deleting: session.hostId ? [] : [{ sessionId: session.id }] });
 			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
 				params: { path: { sessionId: session.id }, query: { cleanup: true } },
 			});

@@ -21,7 +21,7 @@ import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
-import { onArtifactLinksUnpublished } from "../lib/unpublish-artifacts";
+import { onArtifactLinksUnpublished, trackPublish } from "../lib/unpublish-artifacts";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -833,6 +833,7 @@ function SharePanel({
 			invited,
 		};
 		setPending(key, pending);
+		trackPublish(baseUrl, file, pending.result);
 		try {
 			settle(await pending.result, links, share);
 		} catch (error) {

@@ -1,8 +1,17 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { expect, test, vi } from "vitest";
+import { aoBridge } from "../lib/bridge";
 import type { WorkspaceSession } from "../types/workspace";
 import { SessionArchiveDialog } from "./SessionArchiveDialog";
+
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "https://cp.test" } }) }));
+
+function withQueries(ui: ReactNode) {
+	return <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>{ui}</QueryClientProvider>;
+}
 
 const cloudSession = {
 	id: "session-1",
@@ -20,7 +29,7 @@ const cloudSession = {
 
 test("offers to delete a cloud session's artifacts", async () => {
 	const onConfirm = vi.fn();
-	render(<SessionArchiveDialog open onOpenChange={vi.fn()} onConfirm={onConfirm} session={cloudSession} trigger={<span />} />);
+	render(withQueries(<SessionArchiveDialog open onOpenChange={vi.fn()} onConfirm={onConfirm} session={cloudSession} trigger={<span />} />));
 
 	const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
 	await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
@@ -43,4 +52,13 @@ test("says how many of the artifacts are published, since their links stop worki
 	const dialog = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
 	expect(within(dialog).getByRole("checkbox", { name: "Delete 2 artifacts" })).toBeTruthy();
 	expect(within(dialog).getByText(/1 is published; its link will stop working\./)).toBeTruthy();
+});
+
+test("looks a cloud session's links up on this computer, since its file list does not say which are published", async () => {
+	const inspect = vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ name: "report.html", unsupported: false, fingerprint: "f", shareId: "share-1" });
+	render(withQueries(<SessionArchiveDialog open onOpenChange={vi.fn()} onConfirm={vi.fn()} session={cloudSession} trigger={<span />} />));
+
+	expect(await screen.findByText(/is published; its link will stop working/)).toBeInTheDocument();
+	expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ source: "cloud", orgId: "org-1", sessionId: "session-1", path: "report.html", baseUrl: "https://cp.test" }));
+	inspect.mockRestore();
 });

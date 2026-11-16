@@ -1,7 +1,9 @@
 import { type ReactElement, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { sessionArtifacts, type WorkspaceSession } from "../types/workspace";
-import { sessionPublishedCount } from "../lib/unpublish-artifacts";
+import { sessionPublishedCheck, type PublishedCheck } from "../lib/unpublish-artifacts";
+import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
+import { useSettings } from "../hooks/useSettings";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
 
@@ -47,7 +49,7 @@ export function SessionArchiveDialog({
 	const isCloud = session?.cloud !== undefined;
 	const body = isCloud ? t("archive.bodyCloud") : t("archive.body");
 	const artifactCount = session ? sessionArtifacts(session).length : 0;
-	const publishedCount = sessionPublishedCount(session);
+	const published = sessionPublishedCheck(session);
 	const deleting = artifactCount > 0 && deleteArtifacts;
 	return (
 		<>
@@ -77,7 +79,7 @@ export function SessionArchiveDialog({
 							</label>
 							<p className="text-settings-muted">
 								{t("archive.deleteArtifactsHint", { count: artifactCount })}
-								{publishedCount > 0 ? ` ${t("archive.deleteArtifactsPublished", { count: publishedCount })}` : null}
+								{published.lookup.length > 0 ? <LookedUpPublishedNote check={published} /> : <PublishedNote count={published.known} />}
 							</p>
 						</div>
 					</div>
@@ -85,4 +87,18 @@ export function SessionArchiveDialog({
 			</ConfirmDialog>
 		</>
 	);
+}
+
+function PublishedNote({ count }: { count: number }) {
+	const { t } = useTranslation();
+	return count > 0 ? <>{` ${t("archive.deleteArtifactsPublished", { count })}`}</> : null;
+}
+
+/**
+ * The note for a cloud session, whose files' links are recorded on this
+ * computer only and so are looked up; mounted only then, while the confirm is open.
+ */
+function LookedUpPublishedNote({ check }: { check: PublishedCheck }) {
+	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
+	return <PublishedNote count={usePublishedLinkCount(baseUrl, check, true)} />;
 }

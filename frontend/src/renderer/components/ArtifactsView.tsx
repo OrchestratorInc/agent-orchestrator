@@ -41,7 +41,8 @@ import { useUiStore } from "../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSummary } from "../types/workspace";
 import { DeferredArtifactActionsMenu } from "./ArtifactActionsMenu";
 import { useArtifactShareFile, useHostShareLinks, useReconciledShareLinks, useShareAccess } from "./ShareArtifactPopover";
-import { prepareUnpublish, publishedArtifacts, unpublishTarget, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { combinePublishedChecks, deleteUnpublishTargets, prepareUnpublish, publishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { ArtifactGalleryCard, type ArtifactCardSelection } from "./ArtifactGalleryCard";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -213,7 +214,6 @@ export function ArtifactsView() {
 		() => groups.flatMap((group) => group.rows).filter((row) => selectedIds.has(artifactKey(row))),
 		[groups, selectedIds],
 	);
-	const selectedPublished = publishedArtifacts(selectedRows).length;
 	const selectableVisibleIds = cards.filter(({ row }) => !deleteBlockedReason(row)).map(({ row }) => artifactKey(row));
 	const allVisibleSelected = selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selectedIds.has(id));
 	const toggleSelected = (id: string) => setSelectedIds((current) => {
@@ -238,11 +238,16 @@ export function ArtifactsView() {
 	// A published file's link is looked up before its delete and unpublished
 	// once that file is gone; a file that failed to delete keeps its link.
 	const { baseUrl: shareBaseUrl } = useShareAccess();
+	const selectedPublished = usePublishedLinkCount(
+		shareBaseUrl,
+		combinePublishedChecks(selectedRows.map((row) => publishedCheck(rowSession(row), [row]))),
+		confirmingBulkDelete,
+	);
 	const bulkDelete = useMutation({
 		mutationFn: async (rows: readonly ArtifactRow[]) => {
-			const links = await Promise.all(rows.map((row) => prepareUnpublish(shareBaseUrl, row.shareUrl
-				? [unpublishTarget({ id: row.sessionId, cloud: row.cloud, workspaceId: row.projectId }, row)]
-				: [])));
+			const links = await Promise.all(rows.map((row) => prepareUnpublish(shareBaseUrl, deleteUnpublishTargets(rowSession(row), [row]), {
+				deleting: row.hostId ? [] : [{ sessionId: row.sessionId, path: row.path }],
+			})));
 			const results = await Promise.allSettled(rows.map((row) => row.cloud
 				? cloudClient.deleteSessionArtifact(row.cloud.orgId, row.sessionId, row.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
 				: deleteSessionArtifactFile({ path: row.path, sessionId: row.sessionId, hostId: row.hostId })));
@@ -789,4 +794,9 @@ function CreateArtifactMenu({
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);
+}
+
+/** The session of a row, as unpublishing names it. */
+function rowSession(row: ArtifactRow) {
+	return { id: row.sessionId, cloud: row.cloud, hostId: row.hostId, workspaceId: row.projectId };
 }
