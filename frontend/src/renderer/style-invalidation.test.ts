@@ -25,7 +25,8 @@ import { describe, expect, it } from "vitest";
 
 const ROOTS = [path.resolve(process.cwd(), "src"), path.resolve(process.cwd(), "../packages/product-ui/src")];
 
-const STRUCTURAL = "has|first|last|only|odd|even|empty|nth-[\\w-]+|first-of-type|last-of-type|only-of-type";
+// Variant names only: suffixes such as -of-type, -last, -3 or -[2n+1] are matched after them.
+const STRUCTURAL = "has|first|last|only|odd|even|empty|nth";
 const FORBIDDEN = [
 	new RegExp(`\\b(?:group|peer)-(?:${STRUCTURAL})(?:-[\\w-]*\\[[^\\s"'\`]*?\\]|-[\\w-]+)?(?:/[\\w-]+)?:[\\w[!-]`, "g"),
 	/\bin-\[[^\s"'`\]]*(?::has\(|:first|:last|:only|:nth|:empty)[^\s"'`]*\]:[\w[!-]/g,
@@ -56,6 +57,9 @@ describe("style invalidation", () => {
 		expect(hits("group-has-data-\u005bstate=open]:opacity-100")).toBe(true);
 		expect(hits("group\u002dlast/inspector-section:pb-0")).toBe(true);
 		expect(hits("peer\u002dfirst:mt-0")).toBe(true);
+		expect(hits("group\u002dnth-\u005b2n+1]:block")).toBe(true);
+		expect(hits("group\u002dnth-last-of-type-2:block")).toBe(true);
+		expect(hits("peer\u002dfirst-of-type:mt-0")).toBe(true);
 		expect(hits("in-\u005btr:first-child]:pt-3")).toBe(true);
 		expect(hits("focus-visible-in-session-row:opacity-100")).toBe(false);
 		expect(hits("[:last-child>*>&]:pb-0")).toBe(false);
