@@ -122,6 +122,106 @@ func TestSendReloadsTurnsAnotherProcessWroteBeforeItLeft(t *testing.T) {
 	awaitSent(t, resumed, "after the terminal")
 }
 
+func TestImportedClaudeReloadPlacesTerminalTurnsBeforeTheNewPrompt(t *testing.T) {
+	for _, asleep := range []bool{false, true} {
+		t.Run(fmt.Sprintf("already_asleep=%v", asleep), func(t *testing.T) {
+			resumed := &nativeHistoryConversation{fakeConversation: newFakeConversation(), events: []ports.ChatEvent{
+				{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "terminal-turn", ProviderEventID: "terminal-start"},
+				{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "terminal-turn", ProviderEventID: "terminal-user", ProviderItemID: "terminal-user", Text: "Remember FALCON"},
+				{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "terminal-turn", ProviderEventID: "terminal-assistant", ProviderItemID: "terminal-assistant", Text: "Remembered FALCON"},
+				{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "terminal-turn", ProviderEventID: "terminal-end", TurnState: domain.TurnStateRecovered},
+			}}
+			resumed.turnSeq = 1
+			h, old := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
+				opts.HibernationEnabled = func() bool { return true }
+				driver := opts.Drivers.(fakeRegistry).driver.(fakeDriver)
+				driver.resume = func(ports.ChatResumeConfig) (ports.ChatConversation, error) { return resumed, nil }
+				opts.Drivers = fakeRegistry{driver: driver}
+			})
+			ctx := context.Background()
+			rec, found, err := h.st.GetSession(ctx, testSession)
+			if err != nil || !found {
+				t.Fatalf("load session: found=%v err=%v", found, err)
+			}
+			rec.Harness = domain.HarnessClaudeCode
+			rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: old.ProviderConversationID(), Adopted: true, Prepared: true, Transferred: true}
+			if err := h.st.UpdateSession(ctx, rec); err != nil {
+				t.Fatal(err)
+			}
+			if asleep {
+				if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped {
+					t.Fatalf("hibernate = %v, %v", stopped, err)
+				}
+			}
+			var open, wrote atomic.Bool
+			wrote.Store(!asleep)
+			h.svc.SetOtherWriterCheck(otherWriter(&open, &wrote))
+			woke := wakeOnNewRelease(t, h, old, nil)
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "What words do you remember?", ClientMessageID: "after-history"}); err != nil {
+				t.Fatal(err)
+			}
+			expectWake(t, woke)
+			awaitSent(t, resumed.fakeConversation, "What words do you remember?")
+			snapshot, err := h.svc.Snapshot(ctx, testSession)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var terminalPrompt, terminalReply, newPrompt int64
+			for _, message := range snapshot.Messages {
+				switch message.Text {
+				case "Remember FALCON":
+					terminalPrompt = message.Sequence
+				case "Remembered FALCON":
+					terminalReply = message.Sequence
+				case "What words do you remember?":
+					newPrompt = message.Sequence
+				}
+			}
+			if terminalPrompt == 0 || terminalReply <= terminalPrompt || newPrompt <= terminalReply {
+				t.Fatalf("sequences: terminal prompt=%d reply=%d new prompt=%d; want terminal history before the new prompt", terminalPrompt, terminalReply, newPrompt)
+			}
+		})
+	}
+}
+
+func TestImportedClaudeReloadFailureDoesNotRecordTheNewPrompt(t *testing.T) {
+	h, old, _ := resumingHarness(t, true)
+	ctx := context.Background()
+	rec, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("load session: found=%v err=%v", found, err)
+	}
+	rec.Harness = domain.HarnessClaudeCode
+	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: old.ProviderConversationID(), Adopted: true, Prepared: true, Transferred: true}
+	if err := h.st.UpdateSession(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	if stopped, err := h.svc.HibernateChat(ctx, testSession); err != nil || !stopped {
+		t.Fatalf("hibernate = %v, %v", stopped, err)
+	}
+	woke := wakeOnNewRelease(t, h, old, errors.New("history could not be loaded"))
+	if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "do work", ClientMessageID: "hibernate-1"}); err != nil || turn.ID != "" {
+		t.Fatalf("accepted retry = %+v, %v; want a successful no-op without waking", turn, err)
+	}
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "changed retry", ClientMessageID: "hibernate-1"}); !errors.Is(err, domain.ErrClientMessageConflict) {
+		t.Fatalf("changed retry = %v; want a payload conflict", err)
+	}
+	expectNoWake(t, woke)
+	_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "keep this in the draft", ClientMessageID: "failed-history-reload"})
+	if !errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("send = %v; want a definitive resume refusal", err)
+	}
+	snapshot, err := h.svc.Snapshot(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range snapshot.Messages {
+		if message.ClientMessageID == "failed-history-reload" {
+			t.Fatal("the new prompt was recorded before history finished loading")
+		}
+	}
+}
+
 func TestSendKeepsProviderWhenNoOtherProcessWrites(t *testing.T) {
 	h, conv := hibernationHarnessWith(t, domain.TurnStateCompleted, func(opts *chatsvc.Options) {
 		opts.HibernationEnabled = func() bool { return false }

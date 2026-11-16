@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1387,12 +1388,31 @@ func (s *Service) Send(
 		}
 		return domain.ConversationTurn{}, writerErr
 	}
-	if restarting {
+	sharedClaudeImport := record.Harness == domain.HarnessClaudeCode && record.Metadata.ImportSource != nil &&
+		record.Metadata.ProviderConversationID == cmp.Or(record.Metadata.ImportSource.ResumeNativeID, record.Metadata.ImportSource.NativeID)
+	if restarting && !sharedClaudeImport {
 		defer s.startBackgroundWake(id)
 	}
 	if restarting || s.switchBeforeSend(ctx, record) {
-		// The provider stopped. The hibernated path below queues this message
-		// and wakes the session.
+		// The provider stopped. Refresh the durable hibernation state before
+		// reloading imported history or queuing this message for a wake.
+		if record, err = s.requireChatSession(ctx, id); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
+	if sharedClaudeImport && record.HibernatedAt != nil {
+		if found, err := s.sentMessageRetry(ctx, id, msg); found || err != nil {
+			return domain.ConversationTurn{}, err
+		}
+		// Native history must be projected before this prompt gets a sequence.
+		// Queuing it before the reload puts older terminal turns below it.
+		if err := s.wakeHibernated(ctx, id); err != nil {
+			s.versionSwitchFailed(ctx, id, err)
+			return domain.ConversationTurn{}, fmt.Errorf("%w: reload imported conversation: %w", ports.ErrChatResumeFailed, err)
+		}
+		if version, switched := s.takeVersionSwitch(id); switched {
+			s.observeVersionSwitch(id, version, "succeeded")
+		}
 		if record, err = s.requireChatSession(ctx, id); err != nil {
 			return domain.ConversationTurn{}, err
 		}
