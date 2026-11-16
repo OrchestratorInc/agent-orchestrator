@@ -432,14 +432,14 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			return TriggerResult{}, err
 		}
 	}
-	hadRunningReviewer := reviewRunsContainRunningForHarness(runs, harness)
+	hadRunningReviewer := HasRunningRun(runs, harness)
 	reviews := Plan(prs, runs)
 	if source == domain.ReviewTriggerAuto || opts.Rerun {
+		planner := Plan
 		if source == domain.ReviewTriggerAuto {
-			reviews = PlanAuto(prs, reviewRunsForHarness(runs, harness))
-		} else {
-			reviews = Plan(prs, reviewRunsForHarness(runs, harness))
+			planner = PlanAuto
 		}
+		reviews = planner(prs, reviewRunsForHarness(runs, harness))
 		// Automatic sweeps may discover another eligible PR while this harness is
 		// already reviewing one. Reconciliation above has proved the reviewer
 		// terminal is still alive, so do not append work to its active batch. A
@@ -937,7 +937,9 @@ func reviewerPaneReusable(reviewRow domain.Review, hadRunningReviewer bool) bool
 	return hadRunningReviewer
 }
 
-func reviewRunsContainRunningForHarness(runs []domain.ReviewRun, harness domain.ReviewerHarness) bool {
+// HasRunningRun reports whether the harness has a running pass on any head,
+// including legacy runs with no recorded harness.
+func HasRunningRun(runs []domain.ReviewRun, harness domain.ReviewerHarness) bool {
 	for _, run := range runs {
 		if (run.Harness == harness || run.Harness == "") && run.Status == domain.ReviewRunRunning {
 			return true

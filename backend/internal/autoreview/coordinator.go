@@ -114,13 +114,10 @@ func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) 
 		return Result{}, err
 	}
 	harnessRuns := make([]domain.ReviewRun, 0, len(runs))
-	hasRunning := false
+	hasRunning := reviewcore.HasRunningRun(runs, harness)
 	for _, run := range runs {
 		if run.Harness == harness || run.Harness == "" {
 			harnessRuns = append(harnessRuns, run)
-			if run.Status == domain.ReviewRunRunning {
-				hasRunning = true
-			}
 		}
 	}
 	states := reviewcore.PlanAuto(prs, harnessRuns)
@@ -132,7 +129,6 @@ func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) 
 	for _, state := range states {
 		switch state.Status {
 		case reviewcore.ReviewStateRunning:
-			hasRunning = true
 			reason = "review_running"
 		case reviewcore.ReviewStateUpToDate:
 			reason = "already_approved"
@@ -170,12 +166,12 @@ func triggerResultReason(prs []domain.PullRequest, result reviewcore.TriggerResu
 			return "review_running"
 		}
 	}
+	if reviewcore.HasRunningRun(result.Runs, harness) {
+		return "review_running"
+	}
 	runs := make([]domain.ReviewRun, 0, len(result.Runs))
 	for _, run := range result.Runs {
 		if run.Harness == harness || run.Harness == "" {
-			if run.Status == domain.ReviewRunRunning {
-				return "review_running"
-			}
 			runs = append(runs, run)
 		}
 	}
