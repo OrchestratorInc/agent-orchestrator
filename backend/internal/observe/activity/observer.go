@@ -2,7 +2,6 @@ package activity
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -185,10 +184,8 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		session.Activity.State != domain.ActivityWaitingInput && (!nativeDecisionCards || session.Activity.State != domain.ActivityBlocked) {
 		return
 	}
-	handle := ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}
 	var output string
 	var err error
-	usedStyled := false
 	if requiresRendered {
 		reader, ok := o.runtime.(interface {
 			GetStyledOutput(context.Context, ports.RuntimeHandle, int) (string, error)
@@ -196,19 +193,11 @@ func (o *Observer) reconcile(ctx context.Context, session domain.SessionRecord, 
 		if !ok {
 			return
 		}
-		output, err = reader.GetStyledOutput(ctx, handle, o.outputLines)
-		usedStyled = true
-	} else if _, inspectsSurface := agent.(ports.TerminalSurfaceInspector); inspectsSurface || options.PreferStyledOutput {
-		if styled, supported := o.runtime.(ports.StyledTerminalOutputReader); supported {
-			output, err = styled.GetStyledOutput(ctx, handle, o.outputLines)
-			// Older detached hosts may lack rendered-screen support. Only that
-			// capability miss permits fallback; errors and partial screens must
-			// not turn stale output into an idle observation.
-			usedStyled = options.PreferStyledOutput || !errors.Is(err, ports.ErrStyledTerminalOutputUnavailable)
-		}
-	}
-	if !usedStyled {
-		output, err = o.runtime.GetOutput(ctx, handle, o.outputLines)
+		output, err = reader.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	} else if rendered, ok := o.runtime.(ports.StyledTerminalOutputReader); options.PreferStyledOutput && ok {
+		output, err = rendered.GetStyledOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
+	} else {
+		output, err = o.runtime.GetOutput(ctx, ports.RuntimeHandle{ID: session.Metadata.RuntimeHandleID}, o.outputLines)
 	}
 	if err != nil {
 		o.logger.Debug("activity observer: terminal output unavailable", "session", session.ID, "err", err)

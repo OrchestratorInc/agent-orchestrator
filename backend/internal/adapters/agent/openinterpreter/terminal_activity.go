@@ -28,6 +28,12 @@ func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bo
 	}
 }
 
+// TerminalActivityOptions requests the rendered screen: an empty composer shows
+// a dim placeholder that only styled output distinguishes from typed text.
+func (*Plugin) TerminalActivityOptions() ports.TerminalActivityOptions {
+	return ports.TerminalActivityOptions{PreferStyledOutput: true}
+}
+
 // ComposerIsEmpty is conservative when current native chrome is absent.
 func (p *Plugin) ComposerIsEmpty(output string) bool {
 	return p.InspectTerminalSurface(output).Composer == ports.TerminalComposerEmpty

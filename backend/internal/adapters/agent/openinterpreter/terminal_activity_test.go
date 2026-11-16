@@ -57,3 +57,10 @@ func TestComposerDraftAndModalAreNotEmpty(t *testing.T) {
 		t.Fatalf("composer = %q", got.Composer)
 	}
 }
+
+func TestTerminalActivityPrefersStyledOutput(t *testing.T) {
+	var provider ports.TerminalActivityOptionsProvider = New()
+	if !provider.TerminalActivityOptions().PreferStyledOutput {
+		t.Fatal("Open Interpreter must read the rendered screen to tell its placeholder from typed text")
+	}
+}
