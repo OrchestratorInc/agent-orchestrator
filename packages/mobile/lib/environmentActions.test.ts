@@ -2,12 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentMachineDraft } from "./environmentEditor";
 import type { Host } from "./hosts";
 
+// What persistManualHostEdit saves: the typed route, as plain as it was unless a test says otherwise.
+const savedAsTyped = vi.hoisted(() => async (host: Host, config: { host: string; httpPort: string }, _name: string, index: number): Promise<Host> => ({
+	...host,
+	endpoints: host.endpoints.map((endpoint, i) => i === index ? { ...endpoint, host: config.host.trim(), port: Number(config.httpPort) } : endpoint),
+}));
+
 const fixtures = vi.hoisted(() => ({
 	activeHostMetadata: vi.fn<() => Promise<{ id: string } | null>>(async () => null),
 	loadHosts: vi.fn<() => Promise<Host[]>>(async () => []),
 	forgetServer: vi.fn(async () => {}),
 	forgetPairedHost: vi.fn(async () => {}),
-	persist: vi.fn(async () => ({})),
+	persist: vi.fn(savedAsTyped),
+	probeManualRoutes: vi.fn(),
 	updateHostAppearance: vi.fn(async () => {}),
 }));
 
@@ -17,7 +24,7 @@ vi.mock("./api", () => ({
 	},
 	pingServer: vi.fn(),
 }));
-vi.mock("./connectRuntime", () => ({ probeEndpoint: vi.fn() }));
+vi.mock("./connectRuntime", () => ({ probeManualRoutes: fixtures.probeManualRoutes }));
 vi.mock("./disconnect", () => ({ forgetServer: fixtures.forgetServer, forgetPairedHost: fixtures.forgetPairedHost }));
 vi.mock("./hosts", () => ({
 	activeHostMetadata: fixtures.activeHostMetadata,
@@ -42,7 +49,7 @@ const b: Host = { ...a, id: "b", name: "B", token: "b-token", lastConnected: 1 }
 
 beforeEach(() => {
 	for (const mock of Object.values(fixtures)) mock.mockReset();
-	fixtures.persist.mockResolvedValue({});
+	fixtures.persist.mockImplementation(savedAsTyped);
 });
 
 describe("forgetting a machine", () => {
@@ -101,6 +108,14 @@ describe("saving a machine", () => {
 		expect(fixtures.updateHostAppearance).toHaveBeenCalledWith("a", { symbol: "cloud" });
 		expect(await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }), "ios")).toEqual({ routeChanged: true });
 		expect(fixtures.updateHostAppearance).toHaveBeenCalledOnce();
+		expect(fixtures.persist).toHaveBeenLastCalledWith(a, expect.anything(), "A", 0, expect.objectContaining({ probe: fixtures.probeManualRoutes }));
+	});
+
+	// Whether the route speaks TLS is only known once it answered, so the change
+	// is read from what was saved rather than from the draft.
+	it("counts a route that answered over TLS this time as changed", async () => {
+		fixtures.persist.mockImplementationOnce(async (host: Host) => ({ ...host, endpoints: [{ ...host.endpoints[0], secure: true }] }));
+		expect(await saveEnvironmentMachine(a, draft(), "ios")).toEqual({ routeChanged: true });
 	});
 
 	it("puts a rejected password against the password field", async () => {
@@ -116,5 +131,11 @@ describe("saving a machine", () => {
 		const unreachable = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }), "ios").catch((error: MachineSaveError) => error);
 		expect(unreachable).toBeInstanceOf(MachineSaveError);
 		expect(unreachable).toMatchObject({ field: "host" });
+	});
+
+	it("names the port it tried when Port was left empty", async () => {
+		fixtures.persist.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(500));
+		const failed = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9", httpPort: "" }), "ios").catch((error: MachineSaveError) => error);
+		expect(failed).toMatchObject({ field: "host", message: expect.stringContaining("10.0.0.9:3011 answered") });
 	});
 });

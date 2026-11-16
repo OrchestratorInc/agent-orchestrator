@@ -10,7 +10,7 @@ it("does not send machine A's saved bearer when manually pairing machine B", () 
 	// start blank rather than load the active machine's saved credentials.
 	expect(config).toMatch(/export const DEFAULT_CONFIG:[\s\S]*?host: ""[\s\S]*?password: ""/);
 	expect(form).toContain('password: editingHost?.token ?? ""');
-	expect(form).toContain("const [cfg, setCfg] = useState<ServerConfig>(() => {");
+	expect(form).toContain("const [cfg, setCfg] = useState<ServerConfig>(() => saved && editingHost");
 	expect(form).not.toMatch(/\bloadConfig\b/);
 });
 

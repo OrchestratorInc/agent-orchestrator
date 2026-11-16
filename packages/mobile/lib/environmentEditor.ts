@@ -45,18 +45,20 @@ export function machineEditDraft(host: Host, activeConfig?: ServerConfig | null)
 	return { machineName: host.name, appearance: machineAppearance(host), config: editConfig(host, endpointIndex), endpointIndex };
 }
 
-/** Whether the draft differs from what it started from, so leaving would lose something. */
+/**
+ * Whether the draft differs from what it started from, so leaving would lose
+ * something. TLS is not edited: the address decides it when the route is saved.
+ */
 export function isDraftDirty(initial: EnvironmentMachineDraft, draft: EnvironmentMachineDraft): boolean {
 	return draft.machineName !== initial.machineName ||
 		draft.appearance.symbol !== initial.appearance.symbol ||
 		draft.config.host !== initial.config.host ||
 		draft.config.httpPort !== initial.config.httpPort ||
-		Boolean(draft.config.secure) !== Boolean(initial.config.secure) ||
 		draft.config.password !== initial.config.password;
 }
 
 export function canSaveDraft(draft: EnvironmentMachineDraft): boolean {
-	return Boolean(draft.machineName.trim()) && resolveManualAddress(draft.config.host, draft.config.httpPort, draft.config.secure).ok;
+	return Boolean(draft.machineName.trim()) && resolveManualAddress(draft.config.host, draft.config.httpPort).ok;
 }
 
 /** A save the machine refused, said against the field it is about. */

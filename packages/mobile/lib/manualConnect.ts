@@ -1,5 +1,5 @@
 import type { ServerConfig } from "./config";
-import { resolveManualAddress } from "./connectionFields";
+import { endpointKindForHost, type ManualRoute, resolveManualAddress } from "./connectionFields";
 import { isPairingSecret, type PairDeviceResult } from "./deviceToken";
 import { normalizeServerHost, type Endpoint } from "./endpoints";
 import type { Host } from "./hosts";
@@ -12,8 +12,12 @@ export type AdoptManualDeps = {
 };
 
 export type PersistManualHostEditDeps = {
-	/** Public identity probe. This must run before ping presents the saved credential. */
-	probe: (endpoint: Endpoint) => Promise<{ hostId: string }>;
+	/**
+	 * Public identity probe over the typed address's routes, best first: says
+	 * which one answered and as which machine. This must run before ping
+	 * presents the saved credential.
+	 */
+	probe: (host: string, routes: readonly ManualRoute[]) => Promise<{ route: ManualRoute; hostId: string }>;
 	ping: (cfg: ServerConfig) => Promise<unknown>;
 	saveHost: (host: Host) => Promise<void>;
 	renameHost: (id: string, name: string) => Promise<void>;
@@ -78,7 +82,8 @@ export async function adoptManualConnection(
 export function editedManualHost(host: Host, cfg: ServerConfig, name: string, endpointIndex: number): Host {
 	const endpoint = manualEndpoint(cfg);
 	const previous = host.endpoints[endpointIndex];
-	if (previous) endpoint.kind = previous.kind;
+	// The same address keeps the kind the daemon advertised it as.
+	if (previous && previous.host === endpoint.host) endpoint.kind = previous.kind;
 	const endpoints = [...host.endpoints];
 	endpoints[endpointIndex] = endpoint;
 	return { ...host, name: name.trim(), token: cfg.password, endpoints, ...(cfg.password !== host.token ? { fallbackToken: undefined } : {}) };
@@ -103,48 +108,49 @@ export async function persistManualHostEdit(
 	const machineName = name.trim();
 	if (!machineName) throw new Error("Machine name is required");
 	if (!normalizeServerHost(cfg.host)) throw new Error("Host is required");
-	const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
-	if (!address.ok) throw new Error(address.incomplete ? "API port must be between 1 and 65535" : address.error);
-	const target = { ...cfg, host: address.host, httpPort: address.port };
-
-	const edited = editedManualHost(host, target, machineName, endpointIndex);
 	const before = host.endpoints[endpointIndex];
-	const after = edited.endpoints[endpointIndex];
-	const connectionChanged = !before || before.host !== after.host || before.port !== after.port ||
-		before.secure !== after.secure || host.token !== target.password;
-	if (connectionChanged && host.accountUserId) throw new AccountManagedHostError();
-	if (connectionChanged) {
-		const { hostId } = await deps.probe(after);
-		if (host.id && hostId !== host.id) throw new DifferentMachineError();
-		let credential = { ...target, hostId: host.id || hostId };
-		let saved = edited;
-		if (deps.pair && host.token !== target.password && isPairingSecret(target.password)) {
-			const paired = await deps.pair(credential);
-			if (paired.kind === "paired") {
-				credential = { ...credential, password: paired.token };
-				saved = { ...edited, token: paired.token, fallbackToken: paired.credential === "password" ? target.password : undefined };
-			}
+	const address = resolveManualAddress(cfg.host, cfg.httpPort, before);
+	if (!address.ok) throw new Error(address.incomplete ? "Host is required" : address.error);
+	// More than one route means the address changed and only asking it can tell
+	// which way it answers; one route is either the saved route or a typed one.
+	const [first] = address.routes;
+	const unchanged = address.routes.length === 1 && !!before && before.host === address.host &&
+		before.port === Number(first.port) && before.secure === first.secure && host.token === cfg.password;
+	if (unchanged) {
+		const edited = editedManualHost(host, { ...cfg, host: address.host, httpPort: first.port, secure: first.secure }, machineName, endpointIndex);
+		if (edited.name !== host.name) await deps.renameHost(host.id, edited.name);
+		return edited;
+	}
+	if (host.accountUserId) throw new AccountManagedHostError();
+
+	const { route, hostId } = await deps.probe(address.host, address.routes);
+	if (host.id && hostId !== host.id) throw new DifferentMachineError();
+	const target = { ...cfg, host: address.host, httpPort: route.port, secure: route.secure };
+	const edited = editedManualHost(host, target, machineName, endpointIndex);
+	let credential = { ...target, hostId: host.id || hostId };
+	let saved = edited;
+	if (deps.pair && host.token !== target.password && isPairingSecret(target.password)) {
+		const paired = await deps.pair(credential);
+		if (paired.kind === "paired") {
+			credential = { ...credential, password: paired.token };
+			saved = { ...edited, token: paired.token, fallbackToken: paired.credential === "password" ? target.password : undefined };
 		}
-		await deps.ping(credential);
-		await deps.saveHost(saved);
-		return saved;
 	}
-	if (edited.name !== host.name) {
-		await deps.renameHost(host.id, edited.name);
-	}
-	return edited;
+	await deps.ping(credential);
+	await deps.saveHost(saved);
+	return saved;
 }
 
 /**
  * A typed address is one endpoint, not a list — the daemon's own list replaces
- * this on the first successful connect. TLS by hand means the tailnet path;
- * everything else was plain LAN, which mirrors how migration reads the old
- * single-server config.
+ * this on the first successful connect. Its kind comes from its name, as the
+ * account directory's addresses do, so a typed tunnel is ranked and polled as
+ * a tunnel.
  */
 function manualEndpoint(cfg: ServerConfig): Endpoint {
 	const secure = cfg.secure === true;
 	return {
-		kind: secure ? "tailscale" : "lan",
+		kind: endpointKindForHost(normalizeServerHost(cfg.host), secure),
 		host: normalizeServerHost(cfg.host),
 		port: Number(cfg.httpPort) || 3011,
 		secure,

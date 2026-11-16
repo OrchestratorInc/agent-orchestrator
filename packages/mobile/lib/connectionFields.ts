@@ -1,10 +1,17 @@
 /** Validation shared by the forms that take a machine's address by hand. */
+import { isLocalNetworkHost, isTailscaleHost } from "./connectionError";
+import type { EndpointKind } from "./endpoints";
+import { isQuickTunnelHost } from "./staleTunnel";
 
 export function isValidPort(port: string): boolean {
 	return /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
 }
 
 export const PORT_ERROR = "Enter a port from 1 to 65535.";
+
+/** The Connect Mobile listener's port when nothing else is in the way. */
+const BRIDGE_PORT = "3011";
+const TLS_PORT = "443";
 
 /**
  * The port's error, said only once something is typed: an empty port just
@@ -14,22 +21,78 @@ export function portError(port: string): string | undefined {
 	return port.trim() && !isValidPort(port) ? PORT_ERROR : undefined;
 }
 
+/**
+ * A Cloudflare tunnel in front of a machine: a quick tunnel's name, or AO
+ * Cloud's fixed address, h-<20 hex>.<zone>. Both are only ever served over
+ * TLS on 443.
+ */
+export function isTunnelHost(host: string): boolean {
+	const name = host.trim().toLowerCase();
+	return isQuickTunnelHost(name) || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name);
+}
+
+/** Loopback, link-local and unique-local IPv6, bracketed or not. */
+function isPrivateIPv6(host: string): boolean {
+	const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+	if (!h.includes(":")) return false;
+	return h === "::1" || /^fe[89ab][0-9a-f]?:/.test(h) || /^f[cd][0-9a-f]{0,2}:/.test(h);
+}
+
+/**
+ * An address that only means something on the network the phone is on: a
+ * private or tailnet IP, a .local name, or a bare machine name. Nothing in
+ * front of the daemon gives these a certificate, so they speak plain HTTP.
+ */
+function isPrivateHost(host: string): boolean {
+	const h = host.trim().toLowerCase();
+	if (isLocalNetworkHost(h) || isTailscaleHost(h) || isPrivateIPv6(h)) return true;
+	return !h.includes(".") && !h.includes(":") && !h.startsWith("[");
+}
+
+/** What kind of route an address is, from its name: what the endpoint race ranks it by. */
+export function endpointKindForHost(host: string, secure: boolean): EndpointKind {
+	const h = host.trim().toLowerCase();
+	if (h.endsWith(".ts.net") || isTailscaleHost(h)) return "tailscale";
+	if (secure && isTunnelHost(h)) return "tunnel";
+	return "lan";
+}
+
+/** One way to reach a typed address: its port, and whether it speaks TLS. */
+export type ManualRoute = { port: string; secure: boolean };
+
+/** The route a machine is saved with, which an unchanged address keeps. */
+export type SavedRoute = { host: string; port: number; secure: boolean };
+
 export type ManualAddress =
-	| { ok: true; host: string; port: string; secure: boolean }
+	/** Routes to try, best first. One when the address says how to reach it; two when only asking it can tell. */
+	| { ok: true; host: string; routes: [ManualRoute, ...ManualRoute[]] }
 	| { ok: false; incomplete: true }
 	| { ok: false; incomplete?: false; error: string };
 
-export function resolveManualAddress(hostInput: string, portInput: string, secure: boolean | undefined): ManualAddress {
-	const tls = secure === true;
+/**
+ * Reads a hand-typed address into the routes worth trying.
+ *
+ * Whether to use TLS is never asked. A typed scheme decides it; otherwise
+ * the port and the name do: 443 and tunnel names are TLS, addresses that
+ * only exist on the local network or tailnet are plain HTTP. Any other name,
+ * a custom domain above all, gets both, TLS first, and the identity probe
+ * picks whichever answers. An empty port means 443 for TLS and the Connect
+ * Mobile port otherwise.
+ *
+ * `saved` is the route an edited machine already has. An address that still
+ * matches it keeps its TLS choice: a working pairing is not guessed again.
+ */
+export function resolveManualAddress(hostInput: string, portInput: string, saved?: SavedRoute): ManualAddress {
 	let rest = hostInput.trim();
 	const port = portInput.trim();
 
+	let typedTls: boolean | undefined;
 	const scheme = rest.match(/^([a-z][a-z0-9+.-]*):\/\//i);
 	if (scheme) {
 		rest = rest.slice(scheme[0].length);
 		const name = scheme[1].toLowerCase();
-		if (name === "https" && !tls) return { ok: false, error: "The host starts with https://. Turn on Use TLS, or remove https://." };
-		if (name === "http" && tls) return { ok: false, error: "The host starts with http://. Turn off Use TLS, or remove http://." };
+		if (name === "https" || name === "wss") typedTls = true;
+		if (name === "http" || name === "ws") typedTls = false;
 	}
 	rest = rest.replace(/\/+$/, "");
 	if (!rest) return { ok: false, incomplete: true };
@@ -52,14 +115,26 @@ export function resolveManualAddress(hostInput: string, portInput: string, secur
 	if (port && embedded && Number(port) !== Number(embedded)) {
 		return { ok: false, error: `The host says port ${Number(embedded)} but Port is ${Number(port)}. Make them match, or clear one.` };
 	}
+	const typedPort = port || embedded ? String(Number(port || embedded)) : "";
+	const route = (secure: boolean): ManualRoute => ({ port: typedPort || (secure ? TLS_PORT : BRIDGE_PORT), secure });
 
-	const resolved = port || embedded || (tls ? "443" : "");
-	if (!resolved) return { ok: false, incomplete: true };
-	return { ok: true, host, port: String(Number(resolved)), secure: tls };
+	if (typedTls !== undefined) return { ok: true, host, routes: [route(typedTls)] };
+	if (saved && saved.host.toLowerCase() === host.toLowerCase() && (!typedPort || Number(typedPort) === saved.port)) {
+		return { ok: true, host, routes: [{ port: String(saved.port), secure: saved.secure }] };
+	}
+	if (isTunnelHost(host)) {
+		if (typedPort && typedPort !== TLS_PORT) return { ok: false, error: "Tunnel addresses use port 443. Clear Port or enter 443." };
+		return { ok: true, host, routes: [route(true)] };
+	}
+	if (typedPort === TLS_PORT) return { ok: true, host, routes: [route(true)] };
+	if (isPrivateHost(host)) return { ok: true, host, routes: [route(false)] };
+	// A tailnet name with no port is Tailscale Serve's HTTPS address.
+	if (!typedPort && host.toLowerCase().endsWith(".ts.net")) return { ok: true, host, routes: [route(true)] };
+	return { ok: true, host, routes: [route(true), route(false)] };
 }
 
-export function manualAddressError(hostInput: string, portInput: string, secure: boolean | undefined): string | undefined {
+export function manualAddressError(hostInput: string, portInput: string, saved?: SavedRoute): string | undefined {
 	if (!hostInput.trim()) return portError(portInput);
-	const address = resolveManualAddress(hostInput, portInput, secure);
+	const address = resolveManualAddress(hostInput, portInput, saved);
 	return !address.ok && !address.incomplete ? address.error : undefined;
 }

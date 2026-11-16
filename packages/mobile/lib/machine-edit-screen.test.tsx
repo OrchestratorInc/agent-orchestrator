@@ -139,7 +139,8 @@ describe("editing a machine", () => {
 		expect(field("environment-port-a").props.text.value).toBe("3011");
 		expect(field("environment-password-a").type).toBe("SecureField");
 		expect(field("environment-password-a").props.text.value).toBe("secret");
-		expect(field("environment-tls-a").props).toMatchObject({ label: "Use TLS", isOn: true });
+		// The address decides TLS when the route is saved; there is nothing to switch.
+		expect(renderer!.root.findAll((node) => node.props.testID === "environment-tls-a" || node.props.label === "Use TLS")).toEqual([]);
 		expect(renderer!.root.findByType("Picker" as never).props.selection).toBe("laptop");
 		for (const [testID, label] of [["environment-name-a", "Name"], ["environment-host-a", "Host"], ["environment-port-a", "API port"], ["environment-password-a", "Password"]]) {
 			expect(modifiersOf(field(testID))).toContainEqual({ $type: "accessibilityLabel", args: [label] });

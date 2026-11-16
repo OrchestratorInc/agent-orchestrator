@@ -64,7 +64,7 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 		canSave,
 		saving,
 		failure,
-		portError: manualAddressError(draft.config.host, draft.config.httpPort, draft.config.secure),
+		portError: manualAddressError(draft.config.host, draft.config.httpPort, host.endpoints[draft.endpointIndex]),
 		/** Account sync owns this machine's route and password; only its name and icon edit here. */
 		accountManaged: Boolean(host.accountUserId),
 		setName: (machineName: string) => edit((current) => ({ ...current, machineName })),
@@ -72,7 +72,6 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 		setHost: setConfig("host"),
 		setPort: setConfig("httpPort"),
 		setPassword: setConfig("password"),
-		setSecure: (secure: boolean) => edit((current) => ({ ...current, config: { ...current.config, secure } })),
 		save,
 	};
 }

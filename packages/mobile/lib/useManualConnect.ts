@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG, saveConfig, type ServerConfig } from "./config";
 import { configForEndpoint } from "./connect";
 import { manualAddressError, resolveManualAddress } from "./connectionFields";
 import { classifyConnectionFailure, describeConnectionFailure, isLocalNetworkHost } from "./connectionError";
-import { probeEndpoint, probeIdentity } from "./connectRuntime";
+import { probeManualRoutes } from "./connectRuntime";
 import { haptics } from "./haptics";
 import { renameHost, saveHost, setActiveHost, type Host } from "./hosts";
 import { isPairingSecret } from "./deviceToken";
@@ -42,11 +42,13 @@ export type ManualConnectFailure = {
  * legacy mux port is unused against the Go daemon, so it stays hidden.
  */
 export function useManualConnect({ onConnected, onBusyChange, editingHost, editingEndpointIndex = 0 }: ManualConnectProps) {
-	// New pairings start blank; editing preloads only the pairing the user selected.
-	const [cfg, setCfg] = useState<ServerConfig>(() => {
-		const endpoint = editingHost?.endpoints[editingEndpointIndex];
-		return endpoint ? configForEndpoint(endpoint, editingHost.token, editingHost.id) : { ...DEFAULT_CONFIG, password: editingHost?.token ?? "" };
-	});
+	// New pairings start blank, the port too: an empty port follows the address
+	// (443 for TLS, the Connect Mobile port otherwise). Editing preloads only the
+	// pairing the user selected, and an unchanged address keeps how it connects.
+	const saved = editingHost?.endpoints[editingEndpointIndex];
+	const [cfg, setCfg] = useState<ServerConfig>(() => saved && editingHost
+		? configForEndpoint(saved, editingHost.token, editingHost.id)
+		: { ...DEFAULT_CONFIG, httpPort: "", password: editingHost?.token ?? "" });
 	const [machineName, setMachineName] = useState(editingHost?.name ?? "");
 	const [busy, setBusy] = useState(false);
 	useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
@@ -57,21 +59,17 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		setCfg((prev) => ({ ...prev, [key]: value }));
 		setFailure(null);
 	};
-	const setSecure = (secure: boolean) => {
-		setCfg((prev) => ({ ...prev, secure }));
-		setFailure(null);
-	};
-
 	async function connect() {
-		const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
+		const address = resolveManualAddress(cfg.host, cfg.httpPort, saved);
 		if (!address.ok) return;
 		setBusy(true);
 		setFailure(null);
-		const target = { ...cfg, host: address.host, httpPort: address.port };
+		// Until a route answers, failures are said against the best one.
+		let target: ServerConfig = { ...cfg, host: address.host, httpPort: address.routes[0].port, secure: address.routes[0].secure };
 		try {
 			if (editingHost) {
-				await persistManualHostEdit(editingHost, target, machineName, editingEndpointIndex, {
-					probe: (endpoint) => probeEndpoint(endpoint, new AbortController().signal),
+				await persistManualHostEdit(editingHost, cfg, machineName, editingEndpointIndex, {
+					probe: probeManualRoutes,
 					ping: pingServer,
 					saveHost,
 					renameHost,
@@ -83,9 +81,15 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 				return;
 			}
 			// Identity is public; reject unsupported hosts before presenting a password.
+			// It also says which route answers: TLS, or plain HTTP for an address
+			// that could be either. When none answers, the best route is tried with
+			// the credential, which says what is wrong.
 			let hostId = "";
-			try { hostId = await probeIdentity(target); }
-			catch (error) { if (error instanceof IncompatibleHostVersionError) throw error; }
+			try {
+				const answer = await probeManualRoutes(address.host, address.routes);
+				hostId = answer.hostId;
+				target = { ...target, httpPort: answer.route.port, secure: answer.route.secure };
+			} catch (error) { if (error instanceof IncompatibleHostVersionError) throw error; }
 			// Verify BEFORE persisting. pingServer takes the config it is handed, so
 			// nothing needs to be saved to test it — and saving first would leave
 			// known-bad credentials on disk. The background poller retries every 8s,
@@ -129,23 +133,21 @@ export function useManualConnect({ onConnected, onBusyChange, editingHost, editi
 		}
 	}
 
-	const address = resolveManualAddress(cfg.host, cfg.httpPort, cfg.secure);
+	const address = resolveManualAddress(cfg.host, cfg.httpPort, saved);
 	const canConnect = !!machineName.trim() && address.ok;
 	const editing = !!editingHost;
 	// What Connect is waiting for, said beside it: a disabled button alone does
 	// not say a name is required. A bad port or address has its own error.
-	const missingPort = !address.ok && address.incomplete && !!cfg.host.trim();
-	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host", missingPort && "a port (or turn on Use TLS for 443)"].filter(Boolean);
+	const missing = [!machineName.trim() && "a name", !cfg.host.trim() && "a host"].filter(Boolean);
 	const connectHint = missing.length ? `Add ${missing.join(" and ")} to ${editing ? "save" : "connect"}.` : undefined;
 	return {
 		cfg,
 		setField,
-		setSecure,
 		machineName,
 		setMachineName,
 		busy,
 		failure,
-		portError: manualAddressError(cfg.host, cfg.httpPort, cfg.secure),
+		portError: manualAddressError(cfg.host, cfg.httpPort, saved),
 		canConnect,
 		connectHint,
 		connect,

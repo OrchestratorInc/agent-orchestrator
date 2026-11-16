@@ -44,9 +44,11 @@ describe("machine editor draft", () => {
 		expect(canSaveDraft({ ...draft, machineName: "  " })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "" } })).toBe(false);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "70000" } })).toBe(false);
+		// An empty port follows the address (443 for TLS, 3011 otherwise), whatever
+		// the route was saved with: TLS is no longer the draft's to decide.
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, httpPort: "" } })).toBe(true);
-		expect(canSaveDraft({ ...draft, config: { ...draft.config, secure: false, httpPort: "" } })).toBe(false);
-		expect(canSaveDraft({ ...draft, config: { ...draft.config, secure: false, host: "192.168.1.24:3011", httpPort: "" } })).toBe(true);
+		expect(canSaveDraft({ ...draft, config: { ...draft.config, secure: false, httpPort: "" } })).toBe(true);
+		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "192.168.1.24:3011", httpPort: "" } })).toBe(true);
 		expect(canSaveDraft({ ...draft, config: { ...draft.config, host: "studio.tail123.ts.net:443" } })).toBe(false);
 	});
 });

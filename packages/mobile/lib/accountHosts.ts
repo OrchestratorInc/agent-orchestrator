@@ -1,6 +1,6 @@
 import { clearPreviousAccount, getAccountAccessToken, loadAccount, loadPreviousAccount, type Account } from "./account";
 import { ignoredAccountHosts, moveIgnoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
-import { isTailscaleHost } from "./connectionError";
+import { endpointKindForHost } from "./connectionFields";
 import { forgetPairedHost } from "./disconnect";
 import { noteRequestAnswered } from "./answeredRequests";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
@@ -13,19 +13,14 @@ const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https:/
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
 // Tunnels are a quick tunnel's name or AO Cloud's fixed address,
-// h-<20 hex>.<zone>, over https. Anything else, a custom domain included, is
-// kept beside the pairing's tunnel rather than in its place.
-function isTunnelAddress(url: URL): boolean {
-	const name = url.hostname.toLowerCase();
-	return url.protocol === "https:" && (isQuickTunnelHost(name) || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
-}
-
+// h-<20 hex>.<zone>, over https (see isTunnelHost). Anything else, a custom
+// domain included, is kept beside the pairing's tunnel rather than in its place.
 function endpoint(raw: string): Endpoint | null {
 	try {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale" : isTunnelAddress(url) ? "tunnel" : "lan",
+			kind: endpointKindForHost(url.hostname, url.protocol === "https:"),
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",

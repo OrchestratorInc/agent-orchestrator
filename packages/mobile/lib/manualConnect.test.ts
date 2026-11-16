@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ServerConfig } from "./config";
+import type { ManualRoute } from "./connectionFields";
 import {
 	AccountManagedHostError,
 	adoptManualConnection,
@@ -59,15 +60,21 @@ describe("adopting a manual connection", () => {
 		expect(d.setActiveHost).toHaveBeenCalledWith("h_manual");
 	});
 
-	// A TLS address entered by hand is the tailnet path; plain is the LAN.
-	it("records a secure address as a tailscale endpoint", async () => {
+	// The kind decides how the race ranks the route and how often a tunnel is
+	// polled, so it follows the name, not whether the route speaks TLS.
+	it.each([
+		["a quick tunnel", "abc.trycloudflare.com", true, "tunnel"],
+		["a fixed address", "h-0123456789abcdef0123.useao.dev", true, "tunnel"],
+		["a tailnet name", "my-pc.tail1234.ts.net", true, "tailscale"],
+		["a tailnet address", "100.101.102.103", false, "tailscale"],
+		["a private address behind TLS", "192.168.1.42", true, "lan"],
+		["a custom domain", "ao.example.com", true, "lan"],
+	])("records %s as a %s endpoint", async (_name, host, secure, kind) => {
 		const d = deps();
-		await adoptManualConnection({ ...cfg, secure: true, httpPort: "443" }, d, "Studio Mac");
-		expect(d.saveHost).toHaveBeenCalledWith(
-			expect.objectContaining({
-				endpoints: [{ kind: "tailscale", host: "192.168.1.42", port: 443, secure: true }],
-			}),
-		);
+		await adoptManualConnection({ ...cfg, host, secure, httpPort: secure ? "443" : "3011" }, d, "Studio Mac");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({
+			endpoints: [{ kind, host, port: secure ? 443 : 3011, secure }],
+		}));
 	});
 
 	it("uses a chosen name and stores a hostname rather than a pasted URL", async () => {
@@ -75,7 +82,7 @@ describe("adopting a manual connection", () => {
 		await adoptManualConnection({ ...cfg, host: "https://example.trycloudflare.com/", secure: true, httpPort: "443" }, d, " AzureLinux ");
 		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({
 			name: "AzureLinux",
-			endpoints: [{ kind: "tailscale", host: "example.trycloudflare.com", port: 443, secure: true }],
+			endpoints: [{ kind: "tunnel", host: "example.trycloudflare.com", port: 443, secure: true }],
 		}));
 	});
 
@@ -115,7 +122,7 @@ describe("persisting an inline machine edit", () => {
 
 	function editDeps(overrides: Partial<Parameters<typeof persistManualHostEdit>[4]> = {}) {
 		return {
-			probe: vi.fn(async () => ({ hostId: "h_manual" })),
+			probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[0], hostId: "h_manual" })),
 			ping: vi.fn(async () => {}),
 			saveHost: vi.fn(async () => {}),
 			renameHost: vi.fn(async () => {}),
@@ -157,7 +164,7 @@ describe("persisting an inline machine edit", () => {
 	it("verifies a changed route before authenticating and saving it", async () => {
 		const order: string[] = [];
 		const d = editDeps({
-			probe: vi.fn(async () => { order.push("probe"); return { hostId: "h_manual" }; }),
+			probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => { order.push("probe"); return { route: routes[0], hostId: "h_manual" }; }),
 			ping: vi.fn(async () => { order.push("ping"); }),
 			saveHost: vi.fn(async () => { order.push("save"); }),
 		});
@@ -210,7 +217,7 @@ describe("persisting an inline machine edit", () => {
 	});
 
 	it("does not send a credential when the changed address belongs to another machine", async () => {
-		const d = editDeps({ probe: vi.fn(async () => ({ hostId: "someone-else" })) });
+		const d = editDeps({ probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[0], hostId: "someone-else" })) });
 
 		await expect(persistManualHostEdit(
 			host,
@@ -223,13 +230,39 @@ describe("persisting an inline machine edit", () => {
 		expect(d.ping).not.toHaveBeenCalled();
 		expect(d.saveHost).not.toHaveBeenCalled();
 	});
+
+	it("asks a changed address that could be either which way it answers, and saves that", async () => {
+		const d = editDeps({ probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[1], hostId: "h_manual" })) });
+
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "ao.example.com", httpPort: "", password: "old" }, "Old", 0, d);
+
+		expect(d.probe).toHaveBeenCalledWith("ao.example.com", [{ port: "443", secure: true }, { port: "3011", secure: false }]);
+		expect(d.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "ao.example.com", httpPort: "3011", secure: false }));
+		expect(saved.endpoints[0]).toEqual({ kind: "lan", host: "ao.example.com", port: 3011, secure: false });
+	});
+
+	it("keeps a saved route's TLS when only the password changes", async () => {
+		const d = editDeps();
+
+		// The draft carries no TLS choice of its own any more.
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "old.trycloudflare.com", httpPort: "443", secure: false, password: "new" }, "Old", 1, d);
+
+		expect(d.probe).toHaveBeenCalledWith("old.trycloudflare.com", [{ port: "443", secure: true }]);
+		expect(saved.endpoints[1]).toEqual(host.endpoints[1]);
+	});
+
+	it("labels a changed address by its new name rather than the one it replaced", async () => {
+		const d = editDeps();
+		const saved = await persistManualHostEdit(host, { ...cfg, host: "my-pc.tail1234.ts.net", httpPort: "", password: "old" }, "Old", 1, d);
+		expect(saved.endpoints[1]).toEqual({ kind: "tailscale", host: "my-pc.tail1234.ts.net", port: 443, secure: true });
+	});
 });
 
 describe("a newly typed code or password on a saved machine", () => {
 	const host = { id: "h_manual", name: "Old", platform: "linux", token: "old", fallbackToken: "older", lastConnected: 42, endpoints: [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }] };
 	const token = "aod_" + "a".repeat(64);
 	const editDeps = (pair: NonNullable<Parameters<typeof persistManualHostEdit>[4]["pair"]>) => ({
-		probe: vi.fn(async () => ({ hostId: "h_manual" })),
+		probe: vi.fn(async (_host: string, routes: readonly ManualRoute[]) => ({ route: routes[0], hostId: "h_manual" })),
 		ping: vi.fn(async () => {}),
 		saveHost: vi.fn(async () => {}),
 		renameHost: vi.fn(async () => {}),
