@@ -1135,6 +1135,8 @@ function PRViewSummaryCard({
 			compact
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
 			headerless={layout === "focus"}
+			// The commits row under this card states the same diff: say it once, there.
+			hideDiffCounts={layout === "focus" && Boolean(work?.diff && work.diff.additions === pr.additions && work.diff.deletions === pr.deletions)}
 			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} detailsFailed={detailsFailed} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
