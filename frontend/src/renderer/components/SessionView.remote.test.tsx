@@ -303,7 +303,8 @@ it("resumes an exited remote agent on its own host when the chat opens, without 
 });
 
 it.each([
-	{ status: 500, code: "HARNESS_START_FAILED", reason: "codex is not installed", requests: 2 },
+	{ status: 503, code: "UPSTREAM_UNAVAILABLE", reason: "the host is restarting", requests: 2 },
+	{ status: 500, code: "HARNESS_START_FAILED", reason: "codex is not installed", requests: 1 },
 	{ status: 409, code: "WORKSPACE_LOCKED", reason: "the workspace is locked", requests: 1 },
 ])("shows why a remote resume failed after $requests request(s) when it answers $status", async ({ status, code, reason, requests }) => {
 	localGet.mockReset();

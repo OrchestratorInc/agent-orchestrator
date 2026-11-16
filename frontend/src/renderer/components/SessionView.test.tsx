@@ -1391,6 +1391,25 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(2);
 	});
 
+	it("drops the automatic retry when the user moves to another session during the wait", async () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		session.status = "exited";
+		session.activity = { state: "exited", lastActivityAt: "" };
+		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const view = render(<SessionView sessionId="sess-1" />);
+		try {
+			await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+			view.rerender(<SessionView sessionId="sess-2" />);
+			await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		} finally {
+			vi.useRealTimers();
+		}
+		await waitFor(() => expect(view.client.isMutating()).toBe(0));
+		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("keeps a newly selected Cloud session mounted while its row resolves", () => {
 		workspaceQueryState.data = [];
 		cloudSessionQueryState.isLoading = true;

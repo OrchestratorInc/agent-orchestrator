@@ -27,9 +27,11 @@ export function resumeAgentError(error: unknown, status?: number): Error {
 	return Object.assign(new Error(resumeAgentErrorMessage(error, status)), { code: apiErrorCode(error), status });
 }
 
+const RESUME_BUSY_CODES = new Set(["AGENT_RESUME_IN_PROGRESS", "AGENT_EXIT_IN_PROGRESS", "SESSION_OPERATION_IN_PROGRESS"]);
+
 export function resumeMayRecover(error: unknown): boolean {
 	const { code, status } = (error ?? {}) as { code?: string; status?: number };
-	return status === undefined || status >= 500 || code === "AGENT_RESUME_IN_PROGRESS" || code === "AGENT_EXIT_IN_PROGRESS";
+	return status === undefined || status === 502 || status === 503 || status === 504 || RESUME_BUSY_CODES.has(code ?? "");
 }
 
 /** A failed resume says another app still holds the chat. */
