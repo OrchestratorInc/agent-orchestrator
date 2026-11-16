@@ -1037,7 +1037,7 @@ describe("ChatWorkspace steering", () => {
 					// B was queued while A ran; C was queued after it and steered into A. B ran once A finished.
 					turns: [
 						{ id: "a", state: "completed", providerTurnId: "provider-a", requestedAt: at(0), startedAt: at(0), completedAt: at(5) },
-						{ id: "b", state: "running", providerTurnId: "provider-b", requestedAt: at(1), startedAt: at(6) },
+						{ id: "b", state: "running", providerTurnId: "provider-b", requestedAt: at(1), startedAt: at(5) },
 					],
 					items: [
 						{ kind: "message", id: "a-prompt", turnId: "a", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the flaky test", streaming: false, createdAt: at(0) },

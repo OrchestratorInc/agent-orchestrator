@@ -7477,10 +7477,13 @@ function inDrawOrder(parts: TimelineGroup[], turns: readonly TimelineGroup[], by
 	const time = (turnId: string | undefined, field: "startedAt" | "completedAt") =>
 		Date.parse((turnId && byTurn.get(turnId)?.[field]) || "");
 	const ended = turns
-		.map((turn) => ({ at: time(turn.turnId, "completedAt"), startedAt: time(turn.turnId, "startedAt"), last: turn.items.at(-1)!.sequence }))
+		.map((turn) => {
+			const last = turn.items.at(-1)!.sequence;
+			return { at: time(turn.turnId, "completedAt"), startedAt: time(turn.turnId, "startedAt"), last, lastSoFar: last };
+		})
 		.filter(({ at, startedAt }) => Number.isFinite(at) && !(startedAt > at))
 		.sort((a, b) => a.at - b.at);
-	for (let index = 1; index < ended.length; index += 1) ended[index]!.last = Math.max(ended[index]!.last, ended[index - 1]!.last);
+	for (let index = 1; index < ended.length; index += 1) ended[index]!.lastSoFar = Math.max(ended[index]!.last, ended[index - 1]!.lastSoFar);
 	const position = (part: TimelineGroup) => {
 		const startedAt = time(part.turnId, "startedAt");
 		let low = 0;
@@ -7490,7 +7493,12 @@ function inDrawOrder(parts: TimelineGroup[], turns: readonly TimelineGroup[], by
 			if (ended[middle]!.at < startedAt) low = middle + 1;
 			else high = middle;
 		}
-		const before = ended[low - 1]?.last ?? -Infinity;
+		let before = ended[low - 1]?.lastSoFar ?? -Infinity;
+		// Timestamps parse to the millisecond, so a turn that ended as this one started
+		// still ran first if it started earlier. That also leaves this turn out.
+		for (let index = low; ended[index]?.at === startedAt; index += 1) {
+			if (ended[index]!.startedAt < startedAt) before = Math.max(before, ended[index]!.last);
+		}
 		return before > part.anchor ? before + 0.001 : part.anchor;
 	};
 	return parts
