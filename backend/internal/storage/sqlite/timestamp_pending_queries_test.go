@@ -64,3 +64,71 @@ VALUES('pending','pending',1,'aider','idle',?,0,?,?);`, utc, utc, utc)
 		}
 	})
 }
+
+// The newest-reviewer pick sorts review.updated_at as text, so review must be
+// normalized before readers open while background repair is still pending.
+func TestPendingRepairNewestReview(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	const local = "2026-10-21 09:00:00 +0530 IST" // 03:30 UTC
+	_, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('p','/tmp/p','2026-10-21 03:00:00 +0000 UTC');
+INSERT INTO sessions(id,project_id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
+VALUES('s','p',1,'aider','idle','2026-10-21 03:00:00 +0000 UTC',0,'2026-10-21 03:00:00 +0000 UTC','2026-10-21 03:00:00 +0000 UTC');
+INSERT INTO review(id,session_id,project_id,harness,created_at,updated_at) VALUES('older','s','p','claude',?,?);
+CREATE TABLE aaa_repair(at TIMESTAMP); INSERT INTO aaa_repair VALUES(?);
+CREATE TRIGGER block_background BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT,'background blocked'); END`, local, local, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	newer := time.Date(2026, 10, 21, 4, 0, 0, 0, time.UTC)
+	if err := s.UpsertReview(context.Background(), domain.Review{ID: "newer", SessionID: "s", ProjectID: "p", Harness: "codex", CreatedAt: newer, UpdatedAt: newer}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.GetReviewBySession(context.Background(), "s")
+	if err != nil || !ok || got.ID != "newer" {
+		t.Fatalf("newest review = %q ok=%v err=%v; want newer", got.ID, ok, err)
+	}
+}
+
+// A row skipped over a same-instant conflict must be retried once that conflict
+// is resolved; otherwise its stale local-time text outranks newer bindings.
+func TestSkippedRowRetriedAfterConflictResolved(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	const local = "2026-10-21 09:00:00 +0530 IST" // 03:30 UTC
+	_, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('p','/tmp/p','2026-10-21 03:00:00 +0000 UTC');
+INSERT INTO sessions(id,project_id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
+VALUES('s','p',1,'aider','idle','2026-10-21 03:00:00 +0000 UTC',0,'2026-10-21 03:00:00 +0000 UTC','2026-10-21 03:00:00 +0000 UTC');
+INSERT INTO session_agent_accounts(session_id,provider,account_id,bound_at) VALUES('s','claude','legacy-account',?),('s','claude','utc-account','2026-10-21 03:30:00 +0000 UTC')`, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir) // skips the legacy row: same instant, different accounts
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	at := time.Date(2026, 10, 21, 3, 30, 0, 0, time.UTC)
+	if err := s.BindSessionAgentAccount(ctx, "s", domain.AgentAccountProviderClaude, "legacy-account", at); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairTimestamps(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	var legacy int
+	if err := db.QueryRow(`SELECT count(*) FROM session_agent_accounts WHERE CAST(bound_at AS TEXT) LIKE '%IST'`).Scan(&legacy); err != nil || legacy != 0 {
+		t.Fatalf("resolved conflict left %d legacy rows: %v", legacy, err)
+	}
+	if err := s.BindSessionAgentAccount(ctx, "s", domain.AgentAccountProviderClaude, "newest", at.Add(30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.GetSessionAgentAccount(ctx, "s", domain.AgentAccountProviderClaude); err != nil || !ok || got != "newest" {
+		t.Fatalf("account = %q ok=%v err=%v; want newest", got, ok, err)
+	}
+}

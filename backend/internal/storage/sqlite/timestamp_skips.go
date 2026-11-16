@@ -67,13 +67,21 @@ func (s *timestampRepairState) save() error {
 	}
 	return os.Rename(file.Name(), s.path)
 }
-func timestampSkipKey(table string, values []any, n int) (string, string) {
-	data := []byte(fmt.Sprintf("%#v", values[n+1:]))
-	return fmt.Sprintf("%s/%v", table, values[n]), fmt.Sprintf("%x", sha256.Sum256(data))
+func timestampSkipKey(table string, values []any, n int) string {
+	return fmt.Sprintf("%s/%v", table, values[n])
 }
+
+// A skipped row is retried on every pass, because the conflict that rejected it
+// can be resolved later. The ledger remembers what the row looked like and why
+// it was rejected, so an unchanged rejection stays quiet and a new cause is
+// counted and logged again.
 func (s *timestampRepairState) skip(table string, values []any, n int, err error) {
-	key, hash := timestampSkipKey(table, values, n)
-	s.rows[key] = hash
+	key := timestampSkipKey(table, values, n)
+	cause := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%#v|%v", values[n+1:], err))))
+	if s.rows[key] == cause {
+		return
+	}
+	s.rows[key] = cause
 	s.dirty = true
 	s.Skipped++
 	slog.Warn("timestamp repair skipped row", "table", table, "rowid", values[n], "error", err)

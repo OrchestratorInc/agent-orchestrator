@@ -78,7 +78,7 @@ func TestTimestampFenceAccountBindingCollision(t *testing.T) {
 	}
 }
 
-func TestTimestampFencePreservesDistinctExecutionsAndDoesNotRetry(t *testing.T) {
+func TestTimestampFencePreservesDistinctExecutionsAndStaysQuiet(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('p','/tmp/twins','2026-10-21 09:00:00 +0530 IST');
@@ -109,11 +109,13 @@ func TestTimestampFencePreservesDistinctExecutionsAndDoesNotRetry(t *testing.T) 
 	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE automation_run_id IN ('local','utc')`).Scan(&linked); err != nil || linked != 2 {
 		t.Fatalf("links=%d err=%v", linked, err)
 	}
-	if _, err := db.Exec(`CREATE TRIGGER never_retry BEFORE UPDATE ON automation_runs BEGIN SELECT RAISE(ABORT,'retried handled row'); END`); err != nil {
-		t.Fatal(err)
-	}
+	// A row rejected for the same reason is retried but stays quiet: nothing
+	// changes, and the unchanged rejection is not counted again.
 	result, err := runTimestampRepair(context.Background(), db, true)
 	if err != nil || result.Skipped != 0 || result.Repaired != 0 {
-		t.Fatalf("handled row was retried: %+v %v", result, err)
+		t.Fatalf("unchanged rejection was reported again: %+v %v", result, err)
+	}
+	if after := snapshot(); after != before {
+		t.Fatalf("retry changed execution history: %s", after)
 	}
 }

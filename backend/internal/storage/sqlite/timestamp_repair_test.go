@@ -282,9 +282,13 @@ func TestRepairFailureIsRecordedWithoutStopping(t *testing.T) {
 	if _, err := db.Exec(`DROP TRIGGER block_rewrite`); err != nil {
 		t.Fatal(err)
 	}
+	// The blocker is gone, so the skipped row is retried and repaired.
 	result, err := runTimestampRepair(context.Background(), db, false)
-	if err != nil || result.Skipped != 0 || result.Repaired != 0 {
-		t.Fatalf("handled row retried: %+v %v", result, err)
+	if err != nil || result.Skipped != 0 || result.Repaired != 1 {
+		t.Fatalf("skipped row was not retried once unblocked: %+v %v", result, err)
+	}
+	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err != nil {
+		t.Fatalf("retried row is still unreadable: %v", err)
 	}
 }
 

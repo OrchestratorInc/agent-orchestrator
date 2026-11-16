@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTimestampFenceInterruptedAndRetried(t *testing.T) {
@@ -155,5 +156,36 @@ func TestTimestampRepairIndexedBounds(t *testing.T) {
 	}
 	if first, last, done, err := timestampRepairBounds(ctx, db, columns); err != nil || done || first != 300 || last != 300 {
 		t.Fatalf("sparse bounds=%d,%d done=%v err=%v", first, last, done, err)
+	}
+}
+
+func TestOpenFailsWhenStartupRepairRunsOutOfTime(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	if _, err := db.Exec(`WITH RECURSIVE ids(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM ids WHERE i<2000)
+ INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
+ SELECT 'late-'||i,i,'aider','idle','2026-10-21 09:00:00 +0530 IST',0,'2026-10-21 09:00:00 +0530 IST','2026-10-21 09:00:00 +0530 IST' FROM ids`); err != nil {
+		t.Fatal(err)
+	}
+	previous := timestampFenceTimeout
+	timestampFenceTimeout = time.Nanosecond
+	s, err := Open(dir)
+	timestampFenceTimeout = previous
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("Open published readers over a partly repaired database")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "reopen to resume") {
+		t.Fatalf("error = %v", err)
+	}
+	// The next open resumes and finishes.
+	s, err = Open(dir)
+	if err != nil {
+		t.Fatalf("resumed open: %v", err)
+	}
+	defer s.Close()
+	var legacy int
+	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE CAST(created_at AS TEXT) LIKE '%IST'`).Scan(&legacy); err != nil || legacy != 0 {
+		t.Fatalf("resume left %d legacy rows: %v", legacy, err)
 	}
 }

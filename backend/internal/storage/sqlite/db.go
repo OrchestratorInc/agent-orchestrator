@@ -118,6 +118,10 @@ func checkLegacyDatabasePath(dataDir string) error {
 	return nil
 }
 
+// timestampFenceTimeout bounds the startup repair that must finish before any
+// reader opens. Variable so tests can shorten it.
+var timestampFenceTimeout = 5 * time.Minute
+
 // Open opens (creating if absent) the SQLite database under dataDir and returns
 // a Store. It uses TWO pools against the same file:
 //
@@ -152,15 +156,24 @@ func Open(dataDir string) (*Store, error) {
 	}
 	if !newDatabase {
 		started := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), timestampFenceTimeout)
 		err := repairTimestampTables(ctx, writeDB, true)
 		cancel()
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Readers compare timestamps as text, so opening on a partly repaired
+			// database returns wrong answers. Progress is committed per batch, so
+			// the next open resumes where this one stopped.
+			_ = writeDB.Close()
+			return nil, fmt.Errorf("timestamp repair incomplete after %s; reopen to resume: %w", time.Since(started).Round(time.Second), err)
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				_ = writeDB.Close()
 				return nil, err
 			}
-			slog.Error("timestamp startup repair incomplete; retrying on next open", "error", err)
+			// Retrying cannot clear a persistent failure, and refusing to open on
+			// every launch would be worse than serving the rows that did repair.
+			slog.Error("timestamp startup repair failed; continuing", "error", err)
 		}
 		slog.Info("timestamp startup fence completed", "duration", time.Since(started))
 	}
