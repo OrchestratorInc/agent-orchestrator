@@ -39,6 +39,7 @@ import { cn } from "../lib/utils";
 import { useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { usePendingMove, useSessionMovedTo } from "../hooks/useSessionMovedTo";
+import { LOCAL_HOST } from "../lib/hosts";
 import { moveKey, useMoveStore } from "../lib/move-runner";
 import { useShellTerminals } from "../hooks/useShellTerminals";
 import { placeCloudAttachment, uploadCloudAttachment } from "../lib/cloud-attachments";
@@ -1374,6 +1375,9 @@ function AttachedTerminal({
 	// disconnected: an open timeout lifts it, the backoff reconnect would
 	// otherwise pull it straight back down, and the "reattaching" banner already
 	// explains that window better than a blank overlay does.
+	// A session on another computer replays over the network, which takes long
+	// enough to read as a blank pane, so its cover says Connecting as Cloud's does.
+	const onOtherComputer = Boolean(session?.hostId) && session?.hostId !== LOCAL_HOST;
 	const showReplayCover =
 		Boolean(handleId) &&
 		(!replaySettled || replayPaintPending) &&
@@ -1510,7 +1514,7 @@ function AttachedTerminal({
 					</div>
 				)}
 				{showReplayCover && !isCloudConnecting && (
-					<ReplayCover message={attachSession?.cloud ? t("terminal.connecting") : undefined} />
+					<ReplayCover message={attachSession?.cloud || onOtherComputer ? t("terminal.connecting") : undefined} />
 				)}
 				{isCloudConnectError && <CloudConnectError onRetry={handleRetry} />}
 				{banner && !showEndedState && (
