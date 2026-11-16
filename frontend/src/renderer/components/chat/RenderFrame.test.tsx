@@ -139,6 +139,26 @@ describe("render activity", () => {
 			await waitFor(() => expect(fetch).toHaveBeenCalledWith(`${renderOrigin}/r1?source=1`, expect.anything()));
 		});
 
+		it("drops the previous origin while a reconnected host's lookup is pending", async () => {
+			let resolveNext!: (url: string) => void;
+			vi.spyOn(aoBridge.remotes, "previewUrl")
+				.mockResolvedValueOnce(`${renderOrigin}/r1`)
+				.mockReturnValueOnce(new Promise((resolve) => (resolveNext = resolve)));
+			const chat = (baseUrl: string) => (
+				<TooltipProvider>
+					<ChatImageSourceProvider sessionId="proj-1" assetBaseUrl={baseUrl} remoteHost hostId="h_box">
+						<ActivityRow activity={renderActivity()} />
+					</ChatImageSourceProvider>
+				</TooltipProvider>
+			);
+			const { rerender } = rtlRender(chat("http://127.0.0.1:4000/tok123"));
+			await waitFor(() => expect(frame().getAttribute("src")).toContain(renderOrigin));
+			rerender(chat("http://127.0.0.1:4001/tok456"));
+			expect(document.querySelector("iframe")).toBeNull();
+			act(() => resolveNext("http://ao-preview-4567.localhost:4001/r1"));
+			await waitFor(() => expect(frame().getAttribute("src")).toMatch(/^http:\/\/ao-preview-4567\.localhost:4001\/r1#/));
+		});
+
 		it("shows the note while the host is not connected", () => {
 			const previewUrl = vi.spyOn(aoBridge.remotes, "previewUrl");
 			remoteChat();
