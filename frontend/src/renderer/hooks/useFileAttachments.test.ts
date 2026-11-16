@@ -375,6 +375,27 @@ describe("useFileAttachments", () => {
 		}
 	});
 
+	it("previews an image too large to read from the file on disk", async () => {
+		const read = vi.spyOn(FileReader.prototype, "readAsDataURL");
+		const originalCreate = URL.createObjectURL;
+		URL.createObjectURL = vi.fn(() => "blob:app/photo");
+		const photo = file("photo.png", 8, "image/png");
+		Object.defineProperty(photo, "size", { value: INLINE_ATTACHMENT_BYTES + 1 });
+		try {
+			const { result } = renderHook(() => useFileAttachments());
+			await act(async () => {
+				await result.current.addFiles([photo]);
+			});
+			expect(result.current.attachments[0]).toMatchObject({ name: "photo.png", dataUrl: "blob:app/photo", file: photo });
+			expect(result.current.attachments[0]?.data).toBeUndefined();
+			expect(URL.createObjectURL).toHaveBeenCalledWith(photo);
+			expect(read).not.toHaveBeenCalled();
+		} finally {
+			URL.createObjectURL = originalCreate;
+			read.mockRestore();
+		}
+	});
+
 	it("still reads a file up to the inline size", async () => {
 		const { result } = renderHook(() => useFileAttachments());
 		await act(async () => {

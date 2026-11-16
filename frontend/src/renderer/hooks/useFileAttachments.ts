@@ -21,7 +21,11 @@ export type FileAttachment = {
 	bytes: number;
 	/** File name for display. */
 	name: string;
-	/** data: URL used to render the thumbnail preview (for images only). */
+	/**
+	 * URL used to render the thumbnail preview (for images only): a data: URL of
+	 * the bytes read, or, for an image too large to read, an object URL of the
+	 * file on disk.
+	 */
 	dataUrl?: string;
 	/**
 	 * Base64 payload without the "data:...;base64," prefix, for upload. Only a
@@ -337,6 +341,14 @@ const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "
 export const isSupportedImageAttachment = (type: string) =>
 	SUPPORTED_IMAGE_TYPES.has(type.toLowerCase().trim());
 
+/**
+ * A thumbnail URL for an image too large to read. It names the file on disk
+ * rather than holding its bytes, so it is not revoked: it costs a handle, and
+ * the attachment may be shown again after a remount.
+ */
+const fileObjectUrl = (file: File): string | undefined =>
+	typeof URL.createObjectURL === "function" ? URL.createObjectURL(file) : undefined;
+
 const readFileAsBase64 = (file: File): Promise<{ dataUrl: string; data: string }> =>
 	new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -490,7 +502,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				mimeType: file.type || "application/octet-stream",
 				bytes: file.size,
 				name: file.name,
-				dataUrl: isImage ? result?.dataUrl : undefined,
+				dataUrl: isImage ? result?.dataUrl ?? fileObjectUrl(file) : undefined,
 				data: result?.data,
 				file,
 			});
