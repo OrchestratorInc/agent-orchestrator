@@ -862,6 +862,16 @@ describe("TerminalPane replay cover", () => {
 		}
 	});
 
+	it("says Connecting while a session on another computer replays", () => {
+		replaySettled.value = false;
+		const view = renderPane({ ...worker, terminalHandleId: "term-1", hostId: "h_b" });
+		try {
+			expect(screen.getByTestId("terminal-replay-cover")).toHaveTextContent("Connecting");
+		} finally {
+			view.restore();
+		}
+	});
+
 	it("keeps the replay cover silent even when attachment takes longer", () => {
 		vi.useFakeTimers();
 		try {

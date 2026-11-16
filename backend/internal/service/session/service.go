@@ -216,6 +216,7 @@ type Service struct {
 	prMoved             PRMovedNotifier
 	manager             commander
 	terminalTitles      terminalTitleSource
+	remoteHandoffNote   func(ctx context.Context, rec domain.SessionRecord, source string) (string, error)
 	store               Store
 	prClaimer           ports.PRClaimer
 	scm                 scmProvider
@@ -1956,6 +1957,10 @@ func mapSessionError(err error) error {
 		// steer-or-send gives, so clients can offer a resume instead of a 500.
 		return apierr.Conflict("CHAT_CONTROLLER_NOT_READY",
 			"the agent controller for this session is not running", nil)
+	case errors.Is(err, sessionmanager.ErrSessionMoved):
+		return apierr.Conflict("SESSION_MOVED", err.Error(), nil)
+	case errors.Is(err, sessionmanager.ErrTransferPending):
+		return apierr.Conflict("TRANSFER_PENDING", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrAgentExited):
 		return apierr.Conflict("AGENT_EXITED",
 			"The agent process exited; relaunch it before sending another message", nil)

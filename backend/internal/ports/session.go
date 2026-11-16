@@ -107,6 +107,9 @@ type SpawnConfig struct {
 	TaskPreparation domain.TaskPreparationToken
 	// Fork makes this spawn a copy of another session. Nil for ordinary spawns.
 	Fork *SpawnFork
+	// Transfer, when set, continues a session moved from another machine
+	// instead of starting a new conversation.
+	Transfer *SpawnTransfer
 }
 
 // SpawnFork describes a fork of an existing session. The source's worktree and
@@ -165,6 +168,19 @@ type ForkTerminalLaunch struct {
 	Argv []string
 	// AgentSessionID is the fork's own native session, when known before launch.
 	AgentSessionID string
+}
+
+// SpawnTransfer is the moved state a spawn continues. Prompt is delivered as
+// the first new turn of the resumed conversation.
+type SpawnTransfer struct {
+	// PreservedRef is a local ref holding the moved uncommitted work. It is
+	// applied after the worktree exists and before the agent starts.
+	PreservedRef string
+	// NativeArchive is a nativetransfer archive of the agent's conversation.
+	NativeArchive string
+	// FallbackPrompt starts the agent on a new conversation when the moved
+	// one cannot be resumed here.
+	FallbackPrompt string
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the

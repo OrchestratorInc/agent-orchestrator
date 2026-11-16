@@ -174,12 +174,21 @@ func (m *Service) List(ctx context.Context) ([]Summary, error) {
 			SessionPrefix:     resolveSessionPrefix(row),
 			OrchestratorAgent: row.Config.Orchestrator.Harness,
 			FolderMissing:     folderMissing,
+			Repo:              row.RepoOriginURL,
+			RepoKey:           summaryRepoKey(row),
 		})
 		if pauser, ok := m.sessions.(autoSpawnPauser); ok {
 			out[len(out)-1].AutoSpawnPauses = pauser.AutoSpawnPauses(ctx, row)
 		}
 	}
 	return out, nil
+}
+
+func summaryRepoKey(row domain.ProjectRecord) string {
+	if row.Kind.WithDefault() != domain.ProjectKindSingleRepo || row.RepoOriginURL == "" {
+		return ""
+	}
+	return domain.RepositoryKey(row.RepoOriginURL)
 }
 
 // Get returns one active project by id.

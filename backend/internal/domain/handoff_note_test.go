@@ -246,3 +246,24 @@ func TestBuildHandoffNoteCarriesTheSessionAndPointsAtItsHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildHandoffNoteRemoteVariantDropsSourcePaths(t *testing.T) {
+	got := BuildHandoffNote(HandoffNoteInput{
+		WorkspacePath: "/Users/alice/.ao/data/worktrees/web/web-3",
+		ArtifactDir:   "/Users/alice/.ao/data/artifacts/web-3",
+		Artifacts:     []SessionArtifactFile{{Path: "plan.md"}},
+		HistoryFiles:  []HandoffHistoryFile{{Path: "/Users/alice/.codex/sessions/x.jsonl"}},
+		Turns:         []HandoffTurn{{UserRequest: "fix it", AgentResponse: "done"}},
+		RemoteSource:  "MacBook A",
+	})
+	for _, absent := range []string{"/Users/alice", "ao session history", "plan.md"} {
+		if strings.Contains(got, absent) {
+			t.Errorf("remote note contains %q:\n%s", absent, got)
+		}
+	}
+	for _, present := range []string{"moved here from MacBook A", "The full history stays on MacBook A."} {
+		if !strings.Contains(got, present) {
+			t.Errorf("remote note lacks %q:\n%s", present, got)
+		}
+	}
+}
