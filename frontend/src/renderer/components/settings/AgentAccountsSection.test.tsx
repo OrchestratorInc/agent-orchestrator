@@ -17,6 +17,12 @@ vi.mock("../../lib/api-client", () => ({
 	apiErrorCode: (error: unknown) => (error as { code?: string } | undefined)?.code,
 }));
 
+// The harness's sign-in panel follows an account's background sign-in here.
+vi.mock("../../hooks/useAgentAuth", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../hooks/useAgentAuth")>()),
+	getAgentUILogin: vi.fn(), cancelAgentUILogin: vi.fn(), startAgentUILogin: vi.fn(),
+}));
+
 vi.mock("../TerminalPane", () => ({
 	TerminalPane: ({ onTerminalStateChange }: { onTerminalStateChange?: (state: "attached" | "exited" | "error") => void }) => {
 		terminalState.value = onTerminalStateChange;
@@ -56,7 +62,7 @@ it("signs a signed-out saved account in again in its own folder", async () => {
 	renderPanel();
 	await user.click(await screen.findByRole("button", { name: "Sign in again" }));
 
-	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } });
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } }, body: {} });
 	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
 	// Only the signed-out saved account offers it; it cannot be made default while signed out.
 	expect(screen.getAllByRole("button", { name: "Sign in again" })).toHaveLength(1);
@@ -73,7 +79,7 @@ it("starts the sign-in a chat asked for, once", async () => {
 
 	expect(await screen.findByTestId("agent-account-login-terminal")).toBeInTheDocument();
 	expect(postMock.mock.calls.filter(([path]) => path === "/api/v1/agents/accounts/{accountId}/login")).toEqual([
-		["/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } } }],
+		["/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId: "acct-b" } }, body: {} }],
 	]);
 	expect(useUiStore.getState().accountLogin).toBeNull();
 	await user.click(screen.getByRole("button", { name: "Close sign-in" }));
@@ -426,51 +432,88 @@ it("turns the usage-limit handoff on through the daemon and shows what it stored
 	await waitFor(() => expect(toggle).toBeChecked());
 });
 
+const claudeMethods = [
+	{ id: "browser", label: "Claude subscription", secret: false },
+	{ id: "console", label: "Anthropic Console", secret: false },
+	{ id: "sso", label: "Organization SSO", secret: false },
+	{ id: "setup_token", label: "Setup token", secret: true },
+	{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true },
+];
 const keyAccount = { id: "acct-key", provider: "claude", device: false, default: false, signedIn: false, loggedIn: true, kind: "api_key", name: "Work", keyHint: "cdef" };
 
-it("adds an Anthropic API key from the add menu, checked by the daemon first", async () => {
+function renderPanelWithMethods() {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	return render(<QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="claude" loginMethods={claudeMethods} /></TooltipProvider></QueryClientProvider>);
+}
+
+it("adds an account through the harness's own sign-in panel, offering every Claude method", async () => {
+	const user = userEvent.setup();
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+
+	for (const name of ["Claude subscription", "Anthropic Console", "Organization SSO", "Setup token", "Anthropic API key"]) {
+		expect(screen.getByRole("button", { name })).toBeInTheDocument();
+	}
+	// The account panel has no terminal: the in-app sign-in is the way in.
+	expect(screen.queryByTestId("agent-account-login-terminal")).not.toBeInTheDocument();
+});
+
+it("adds an Anthropic API key from the panel, checked by the daemon first", async () => {
 	const user = userEvent.setup();
 	postMock.mockImplementation((path: string) => {
 		if (path !== "/api/v1/agents/accounts/api-keys") return Promise.resolve({ data: {} });
 		return postMock.mock.calls.filter(([called]) => called === path).length === 1
-			? Promise.resolve({ error: { code: "AGENT_ACCOUNT_KEY_REJECTED", message: "Anthropic did not accept this API key." } })
+			? Promise.resolve({ error: { code: "AGENT_ACCOUNT_KEY_REJECTED", message: "rejected" } })
 			: Promise.resolve({ data: { accounts: [device, saved, keyAccount] } });
 	});
-	renderPanel();
-
+	renderPanelWithMethods();
 	await user.click(await screen.findByRole("button", { name: "Add account" }));
-	expect(screen.getByRole("menuitem", { name: /Sign in with Claude subscription/ })).toBeInTheDocument();
-	await user.click(screen.getByRole("menuitem", { name: /Add Anthropic API key/ }));
+	await user.click(screen.getByRole("button", { name: "Anthropic API key" }));
 
-	const form = await screen.findByTestId("agent-account-api-key-form");
-	expect(form).toHaveTextContent("billed per token to your API account");
-	const add = within(form).getByRole("button", { name: "Check and add" });
-	expect(add).toBeDisabled();
-	await user.type(within(form).getByLabelText("Name"), "Work");
-	await user.type(within(form).getByLabelText("API key"), "sk-ant-api03-secret");
-	await user.click(add);
-
-	// A refused key keeps the form open with the provider's answer.
-	expect(await within(form).findByRole("alert")).toHaveTextContent("The provider rejected this key.");
+	expect(screen.getByText(/billed per token to your API account/)).toBeInTheDocument();
+	await user.type(screen.getByLabelText("Name"), "Work");
+	await user.type(screen.getByLabelText("API key"), "sk-ant-api03-secret");
+	await user.click(screen.getByRole("button", { name: "Save and verify" }));
+	expect(await screen.findByText("The provider rejected this key.")).toBeInTheDocument();
 	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/api-keys", { body: { provider: "claude", name: "Work", apiKey: "sk-ant-api03-secret" } });
 
-	await user.click(within(form).getByRole("button", { name: "Check and add" }));
-	await waitFor(() => expect(screen.queryByTestId("agent-account-api-key-form")).not.toBeInTheDocument());
+	await user.type(screen.getByLabelText("API key"), "sk-ant-api03-secret");
+	await user.click(screen.getByRole("button", { name: "Save and verify" }));
+	await waitFor(() => expect(screen.queryByRole("button", { name: "Anthropic API key" })).not.toBeInTheDocument());
 	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]');
-	expect(row).not.toBeNull();
-	expect(row).toHaveTextContent("Work");
-	expect(row).toHaveTextContent("API key");
 	expect(row).toHaveTextContent("Key ending cdef · Billed per token");
 	expect(row).not.toHaveTextContent("secret");
 });
 
-it("shows an API key account with its key actions instead of a sign-in", async () => {
+it("signs a subscription in through the CLI in the background and saves the account once it finishes", async () => {
+	const user = userEvent.setup();
+	const { getAgentUILogin } = await import("../../hooks/useAgentAuth");
+	const running = { id: "auth-1", agentId: "claude-code", method: "browser", status: "running", expiresAt: "2026-11-17T10:00:00Z", loginUrl: "https://claude.ai/oauth" };
+	vi.mocked(getAgentUILogin).mockReset()
+		.mockResolvedValueOnce(running as never)
+		.mockResolvedValue({ ...running, status: "succeeded", loginUrl: undefined } as never);
+	postMock.mockImplementation((path: string) => {
+		if (path === "/api/v1/agents/accounts/login") return Promise.resolve({ data: { operationId: "acct-op", provider: "claude", authOperationId: "auth-1" } });
+		if (path === "/api/v1/agents/accounts/login/{operationId}/verify") return Promise.resolve({ data: { status: "complete", account: saved } });
+		return Promise.resolve({ data: {} });
+	});
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", { body: { provider: "claude", method: "browser" } });
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId: "acct-op" } } }), { timeout: 4000 });
+	await waitFor(() => expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument());
+	expect(postMock).not.toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/cancel", expect.anything());
+});
+
+it("shows an API key account with Replace key in the same panel instead of a sign-in", async () => {
 	const user = userEvent.setup();
 	getMock.mockImplementation((path: string) => Promise.resolve({
 		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, keyAccount] },
 	}));
 	putMock.mockReset().mockResolvedValue({ data: { accounts: [device, { ...keyAccount, keyHint: "wxyz" }] } });
-	renderPanel();
+	renderPanelWithMethods();
 
 	const row = await waitFor(() => {
 		const found = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]');
@@ -483,11 +526,11 @@ it("shows an API key account with its key actions instead of a sign-in", async (
 	expect(screen.queryByRole("switch", { name: "Move to another account at a usage limit" })).not.toBeInTheDocument();
 
 	await user.click(within(row).getByRole("button", { name: "Replace key" }));
-	const form = await screen.findByTestId("agent-account-api-key-form");
-	expect(form).toHaveTextContent("Replace the key for Work");
-	expect(within(form).queryByLabelText("Name")).not.toBeInTheDocument();
-	await user.type(within(form).getByLabelText("API key"), "sk-ant-api03-new");
-	await user.click(within(form).getByRole("button", { name: "Check and save" }));
+	// Only the key method, already open, and no name: the account keeps its own.
+	expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument();
+	expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+	await user.type(screen.getByLabelText("API key"), "sk-ant-api03-new");
+	await user.click(screen.getByRole("button", { name: "Save and verify" }));
 
 	expect(putMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/api-key", { params: { path: { accountId: "acct-key" } }, body: { apiKey: "sk-ant-api03-new" } });
 	await waitFor(() => expect(row).toHaveTextContent("Key ending wxyz"));

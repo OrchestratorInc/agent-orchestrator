@@ -2455,9 +2455,9 @@ func agentOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/login", id: "startAgentAccountLogin", tag: "agents",
-			summary: "Add an account by running the provider's own sign-in in a terminal",
+			summary: "Add an account by running the provider's own sign-in, in the background or in a terminal",
 			reqBody: controllers.StartAgentAccountLoginRequest{},
-			resps:   []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			resps:   []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/login/{operationId}/verify", id: "verifyAgentAccountLogin", tag: "agents",
@@ -2495,7 +2495,8 @@ func agentOperations() []operation {
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/login", id: "signInAgentAccountAgain", tag: "agents",
 			summary: "Sign a saved account in again, in its own folder", pathParams: []any{controllers.AgentAccountIDParam{}},
-			resps: []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+			reqBody: controllers.SignInAgentAccountAgainRequest{},
+			resps:   []respUnit{{http.StatusAccepted, controllers.StartAgentAccountLoginResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/agents/accounts/{accountId}/default", id: "setDefaultAgentAccount", tag: "agents",

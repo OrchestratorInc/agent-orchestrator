@@ -202,13 +202,13 @@ func (s *Service) readAPIKeyAccount(ctx context.Context, account domain.AgentAcc
 }
 
 // usable reports whether account can launch its CLI as itself now: a
-// subscription account signed in as its own login, or an API key account with
-// its key saved.
+// subscription account signed in as its own login, or a per-token account (an
+// API key saved, or a metered CLI sign-in) that is logged in.
 func usable(account domain.AgentAccount, r *reading) bool {
 	if r == nil {
 		return false
 	}
-	if account.APIKey() {
+	if account.PerToken() {
 		return r.identity.LoggedIn
 	}
 	return r.identity.SignedIn

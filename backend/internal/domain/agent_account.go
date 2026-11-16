@@ -37,12 +37,17 @@ func DeviceAgentAccountID(p AgentAccountProvider) string { return "device-" + st
 // AgentAccountKind says how an account signs its CLI in.
 type AgentAccountKind string
 
-// Account kinds. A subscription account is the CLI's own sign-in; an API key
-// account launches the CLI with a saved key, billed per token, and has no
-// usage limits to read or move a session at.
+// Account kinds. A subscription account is the CLI's own sign-in, and a setup
+// token account a subscription signed in with a saved `claude setup-token`
+// token. An API key account launches the CLI with a saved key, and a metered
+// account is the CLI's own sign-in to API billing (Anthropic Console, an
+// OpenAI API key); both bill per token and have no usage limits to read or
+// move a session at.
 const (
 	AgentAccountKindSubscription AgentAccountKind = "subscription"
+	AgentAccountKindSetupToken   AgentAccountKind = "setup_token"
 	AgentAccountKindAPIKey       AgentAccountKind = "api_key"
+	AgentAccountKindMetered      AgentAccountKind = "metered"
 )
 
 // AgentAccount is one login AO can launch a provider's CLI with. Home is the
@@ -66,6 +71,16 @@ func (a AgentAccount) Device() bool { return strings.TrimSpace(a.Home) == "" }
 
 // APIKey reports an account that launches its CLI with a saved API key.
 func (a AgentAccount) APIKey() bool { return a.Kind == AgentAccountKindAPIKey }
+
+// SetupToken reports a subscription account signed in with a saved setup token.
+func (a AgentAccount) SetupToken() bool { return a.Kind == AgentAccountKindSetupToken }
+
+// PerToken reports an account billed per token: it has no usage limits, is
+// never the fallback for a signed-out default, and no session moves to or from
+// it at a usage limit.
+func (a AgentAccount) PerToken() bool {
+	return a.Kind == AgentAccountKindAPIKey || a.Kind == AgentAccountKindMetered
+}
 
 // AgentAccountProblemKind says why an account's identity or limits could not
 // be read, so the app can say it plainly instead of showing the CLI's error.

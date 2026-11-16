@@ -440,7 +440,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Add an account by running the provider's own sign-in in a terminal */
+        /** Add an account by running the provider's own sign-in, in the background or in a terminal */
         post: operations["startAgentAccountLogin"];
         delete?: never;
         options?: never;
@@ -5273,7 +5273,7 @@ export interface components {
             id: string;
             keyHint?: string;
             /** @enum {string} */
-            kind: "subscription" | "api_key";
+            kind: "subscription" | "setup_token" | "api_key" | "metered";
             limits?: components["schemas"]["AgentAccountLimits"];
             loggedIn: boolean;
             name?: string;
@@ -6610,6 +6610,11 @@ export interface components {
         };
         ControllersSetSessionAutoReviewRequest: {
             enabled: boolean;
+        };
+        ControllersSignInAgentAccountAgainRequest: {
+            /** @enum {string} */
+            method?: "browser" | "console" | "sso" | "setup_token" | "device_code" | "api_key" | "access_token";
+            secret?: string;
         };
         ConversationAccountPayload: {
             authFailureId?: string;
@@ -9049,13 +9054,19 @@ export interface components {
         };
         StartAgentAccountLoginRequest: {
             /** @enum {string} */
-            provider: "claude" | "codex";
-        };
-        StartAgentAccountLoginResponse: {
-            operationId: string;
+            method?: "browser" | "console" | "sso" | "setup_token" | "device_code" | "api_key" | "access_token";
+            name?: string;
             /** @enum {string} */
             provider: "claude" | "codex";
-            shellTerminal: components["schemas"]["CodexAccountLoginTerminalResponse"];
+            secret?: string;
+        };
+        StartAgentAccountLoginResponse: {
+            account?: components["schemas"]["AgentAccountResponse"];
+            authOperationId?: string;
+            operationId?: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            shellTerminal?: components["schemas"]["CodexAccountLoginTerminalResponse"];
         };
         StartAgentAuthResponse: {
             action: string;
@@ -11099,7 +11110,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersSignInAgentAccountAgainRequest"];
+            };
+        };
         responses: {
             /** @description Accepted */
             202: {
@@ -11108,6 +11123,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StartAgentAccountLoginResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
@@ -11130,6 +11154,15 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11284,8 +11317,26 @@ export interface operations {
                     "application/json": components["schemas"]["APIError"];
                 };
             };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

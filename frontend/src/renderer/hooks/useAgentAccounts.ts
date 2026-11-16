@@ -10,6 +10,8 @@ import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransit
 
 export type AgentAccount = components["schemas"]["AgentAccountResponse"];
 export type AgentAccountProvider = AgentAccount["provider"];
+/** How an account signs in: a method, its credential, and a new account's name. */
+export type AgentAccountLoginRequest = Omit<components["schemas"]["StartAgentAccountLoginRequest"], "provider">;
 /** The providers whose CLI can run on an API key account. */
 export type AgentAccountApiKeyProvider = components["schemas"]["ControllersAddAgentAccountAPIKeyRequest"]["provider"];
 export type AgentAccountLimitWindow = components["schemas"]["AgentAccountLimitWindow"];
@@ -57,10 +59,16 @@ export const agentAccountProviderNames: Record<AgentAccountProvider, string> = {
 
 type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentAccounts.oauthToken" | "settings.agentAccounts.apiKeyDefaultName", options?: { provider: string }) => string;
 
+/** Whether an account bills per token (an API key, or a metered sign-in such
+ * as Anthropic Console): it has no limits and never moves at a usage limit. */
+export function agentAccountPerToken(account: { kind?: AgentAccount["kind"] }): boolean {
+	return account.kind === "api_key" || account.kind === "metered";
+}
+
 /** Whether new work can start on an account: a subscription signed in as its
- * own login, or an API key account with its key saved. */
+ * own login, or a per-token account that is logged in. */
 export function agentAccountUsable(account: Pick<AgentAccount, "signedIn" | "loggedIn"> & { kind?: AgentAccount["kind"] }): boolean {
-	return account.kind === "api_key" ? account.loggedIn : account.signedIn;
+	return agentAccountPerToken(account) ? account.loggedIn : account.signedIn;
 }
 
 /** An account's name: its email, or the label of an API key account. A
@@ -69,6 +77,8 @@ export function agentAccountUsable(account: Pick<AgentAccount, "signedIn" | "log
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean; kind?: AgentAccount["kind"]; name?: string }, t: AccountNameT): string {
 	if (account.kind === "api_key") return account.name || t("settings.agentAccounts.apiKeyDefaultName");
 	if (account.email) return account.email;
+	// A setup token or a metered sign-in can report no email; its label stands in.
+	if (account.name) return account.name;
 	return account.provider === "claude" && account.signedIn
 		? t("settings.agentAccounts.oauthToken")
 		: t("settings.agentAccounts.cliLoginOf", { provider: agentAccountProviderNames[account.provider] });
@@ -156,11 +166,13 @@ export function useAgentAccountActions(hostId?: HostId) {
 	const setAccounts = (accounts: AgentAccount[]) => queryClient.setQueryData(agentAccountsQueryKeyFor(hostId), accounts);
 	return {
 		refresh: async () => setAccounts(await fetchAgentAccounts(true, hostId)),
-		startLogin: async (provider: AgentAccountProvider) =>
-			unwrap(await client(hostId).POST("/api/v1/agents/accounts/login", { body: { provider } })),
+		/** Adds an account. With a method the CLI signs in in the background and
+		 * the app follows its authOperationId; without one it runs in a terminal. */
+		startLogin: async (provider: AgentAccountProvider, request: AgentAccountLoginRequest = {}) =>
+			unwrap(await client(hostId).POST("/api/v1/agents/accounts/login", { body: { provider, ...request } })),
 		/** Signs a saved account in again in its own folder; verify and cancel are the same as a new sign-in. */
-		signInAgain: async (accountId: string) =>
-			unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } } })),
+		signInAgain: async (accountId: string, request: Omit<AgentAccountLoginRequest, "name"> = {}) =>
+			unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/login", { params: { path: { accountId } }, body: request })),
 		verifyLogin: async (operationId: string) => {
 			const result = unwrap(await client(hostId).POST("/api/v1/agents/accounts/login/{operationId}/verify", { params: { path: { operationId } } }));
 			if (result.status === "complete") await queryClient.invalidateQueries({ queryKey: agentAccountsQueryKeyFor(hostId) });

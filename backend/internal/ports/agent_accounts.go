@@ -23,12 +23,14 @@ var (
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
 )
 
-// API key account errors the API maps to client responses.
+// Account kind and sign-in method errors the API maps to client responses.
 var (
-	ErrAgentAccountKeyRejected  = errors.New("the provider rejected the API key")
-	ErrAgentAccountKeyUnchecked = errors.New("the provider could not be reached to check the API key")
-	ErrAgentAccountKindMismatch = errors.New("the account's kind does not support this")
-	ErrAgentAccountNoLimits     = errors.New("an API key account has no usage limits")
+	ErrAgentAccountKeyRejected       = errors.New("the provider rejected the key or token")
+	ErrAgentAccountKeyUnchecked      = errors.New("the provider could not be reached to check the API key")
+	ErrAgentAccountKindMismatch      = errors.New("the account's kind does not support this")
+	ErrAgentAccountNoLimits          = errors.New("a per-token account has no usage limits")
+	ErrAgentAccountMethodInvalid     = errors.New("the sign-in method cannot add an account of this provider")
+	ErrAgentAccountSignInUnavailable = errors.New("the in-app sign-in is unavailable")
 )
 
 // AgentAccountProviderCLI reads and prepares one provider's CLI config

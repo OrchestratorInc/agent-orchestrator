@@ -109,7 +109,7 @@ func TestAPIKeyAccountLaunchesWithItsKeyAndHasNoLimits(t *testing.T) {
 		t.Fatalf("HandoffTarget = %q, %v; want none", target, err)
 	}
 
-	if _, err := svc.StartSignInAgain(ctx, account.ID); !errors.Is(err, ports.ErrAgentAccountKindMismatch) {
+	if _, err := svc.StartSignInAgain(ctx, account.ID, LoginRequest{}); !errors.Is(err, ports.ErrAgentAccountKindMismatch) {
 		t.Fatalf("sign in again: err = %v, want ErrAgentAccountKindMismatch", err)
 	}
 	if _, err := svc.ReplaceAPIKey(ctx, domain.DeviceAgentAccountID(domain.AgentAccountProviderClaude), otherKey); !errors.Is(err, ports.ErrAgentAccountKindMismatch) {

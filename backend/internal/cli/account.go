@@ -139,6 +139,15 @@ func writeAccountList(cmd *cobra.Command, accounts []agentAccount) error {
 			state, plan = "key saved", "API key"
 		case account.Kind == "api_key":
 			state, plan = "key missing", "API key"
+		case account.Kind == "metered" && account.LoggedIn:
+			plan = "API billing"
+		case account.Kind == "metered":
+			state, plan = "signed out", "API billing"
+		case account.Kind == "setup_token" && plan == "":
+			plan = "Setup token"
+			if !account.SignedIn {
+				state = "signed out"
+			}
 		case !account.SignedIn:
 			state = "signed out"
 		}
@@ -172,6 +181,10 @@ func accountLabel(account agentAccount) string {
 		return label
 	}
 	label := account.Email
+	if label == "" {
+		// A setup token or metered sign-in can have no email; its name stands in.
+		label = account.Name
+	}
 	if label == "" {
 		label = "(no email)"
 	}

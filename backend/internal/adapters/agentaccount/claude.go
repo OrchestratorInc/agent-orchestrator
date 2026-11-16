@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -61,15 +62,68 @@ var _ ports.AgentAccountProviderCLI = (*Claude)(nil)
 // Provider names Claude.
 func (*Claude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
 
+// claudeTokenFile holds a setup token account's `claude setup-token` token in
+// its own folder, readable by the user only. It never leaves the folder except
+// as the launch environment of that account's CLI.
+const claudeTokenFile = ".ao-oauth-token" //nolint:gosec // a file name, not a credential
+
+// claudeSetupToken matches a token from `claude setup-token`.
+var claudeSetupToken = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
+
 // LaunchEnv points Claude Code at home. Claude keys the folder's Keychain login
-// on the exact path text, so both variables carry the same string.
+// on the exact path text, so both variables carry the same string. A setup
+// token account's CLI signs in with its saved token.
 func (*Claude) LaunchEnv(home string) map[string]string {
 	if home == "" {
 		return nil
 	}
 	env := map[string]string{"CLAUDE_CONFIG_DIR": home, "CLAUDE_SECURESTORAGE_CONFIG_DIR": home}
 	neutralize(env, claudeCredentialEnv...)
+	if token, err := readSetupToken(home); err == nil {
+		env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+	}
 	return env
+}
+
+// SaveSetupToken saves a `claude setup-token` token as home's sign-in.
+func (*Claude) SaveSetupToken(home, token string) error {
+	token = strings.TrimSpace(token)
+	if strings.TrimSpace(home) == "" || !claudeSetupToken.MatchString(token) {
+		return ports.ErrAgentAccountKeyRejected
+	}
+	// CreateTemp makes the file readable by the user only (0600).
+	tmp, err := os.CreateTemp(home, claudeTokenFile+".*")
+	if err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	// Gone after the rename; removed here only when saving failed.
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(token); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(home, claudeTokenFile)); err != nil {
+		return fmt.Errorf("save setup token: %w", err)
+	}
+	return nil
+}
+
+// SetupTokenOf is the setup token home signs in with, if it has one.
+func (*Claude) SetupTokenOf(home string) (string, error) { return readSetupToken(home) }
+
+func readSetupToken(home string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(home, claudeTokenFile))
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(data))
+	if !claudeSetupToken.MatchString(token) {
+		return "", errors.New("the saved setup token is invalid")
+	}
+	return token, nil
 }
 
 // LoginArgv is Claude Code's own sign-in.

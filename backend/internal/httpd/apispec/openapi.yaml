@@ -1102,6 +1102,12 @@ paths:
           description: Agent account identifier; device-claude and device-codex are
             this computer's own logins.
           type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersSignInAgentAccountAgainRequest'
+        required: true
       responses:
         "202":
           content:
@@ -1109,6 +1115,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/StartAgentAccountLoginResponse'
           description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
         "404":
           content:
             application/json:
@@ -1127,6 +1139,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
       summary: Sign a saved account in again, in its own folder
       tags:
       - agents
@@ -1243,13 +1261,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
         "501":
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Add an account by running the provider's own sign-in in a terminal
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Add an account by running the provider's own sign-in, in the background
+        or in a terminal
       tags:
       - agents
   /api/v1/agents/accounts/login/{operationId}/cancel:
@@ -15825,7 +15856,9 @@ components:
         kind:
           enum:
           - subscription
+          - setup_token
           - api_key
+          - metered
           type: string
         limits:
           $ref: '#/components/schemas/AgentAccountLimits'
@@ -19318,6 +19351,21 @@ components:
           type: boolean
       required:
       - enabled
+      type: object
+    ControllersSignInAgentAccountAgainRequest:
+      properties:
+        method:
+          enum:
+          - browser
+          - console
+          - sso
+          - setup_token
+          - device_code
+          - api_key
+          - access_token
+          type: string
+        secret:
+          type: string
       type: object
     ConversationAccountPayload:
       properties:
@@ -25646,16 +25694,34 @@ components:
       type: object
     StartAgentAccountLoginRequest:
       properties:
+        method:
+          enum:
+          - browser
+          - console
+          - sso
+          - setup_token
+          - device_code
+          - api_key
+          - access_token
+          type: string
+        name:
+          type: string
         provider:
           enum:
           - claude
           - codex
+          type: string
+        secret:
           type: string
       required:
       - provider
       type: object
     StartAgentAccountLoginResponse:
       properties:
+        account:
+          $ref: '#/components/schemas/AgentAccountResponse'
+        authOperationId:
+          type: string
         operationId:
           type: string
         provider:
@@ -25666,9 +25732,7 @@ components:
         shellTerminal:
           $ref: '#/components/schemas/CodexAccountLoginTerminalResponse'
       required:
-      - operationId
       - provider
-      - shellTerminal
       type: object
     StartAgentAuthResponse:
       properties:

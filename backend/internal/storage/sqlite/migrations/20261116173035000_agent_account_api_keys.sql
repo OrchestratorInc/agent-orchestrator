@@ -1,9 +1,11 @@
 -- +goose Up
--- An account is a subscription sign-in or an Anthropic API key. An API key
--- account is a config folder like any other, and its key is kept in a 0600
--- file in that folder, never here; key_hint is the key's last four characters,
--- for telling keys apart. name is the label the user gave an API key account.
-ALTER TABLE agent_accounts ADD COLUMN kind TEXT NOT NULL DEFAULT 'subscription' CHECK (kind IN ('subscription', 'api_key'));
+-- An account is a subscription sign-in, a subscription setup token, an
+-- Anthropic API key, or a metered (per-token) sign-in such as Anthropic
+-- Console. Every account is a config folder; a saved key or token is kept in a
+-- 0600 file in that folder, never here. key_hint is a key's last four
+-- characters, for telling keys apart; name is the label the user gave an
+-- account that has no email of its own.
+ALTER TABLE agent_accounts ADD COLUMN kind TEXT NOT NULL DEFAULT 'subscription' CHECK (kind IN ('subscription', 'setup_token', 'api_key', 'metered'));
 ALTER TABLE agent_accounts ADD COLUMN name TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_accounts ADD COLUMN key_hint TEXT NOT NULL DEFAULT '';
 

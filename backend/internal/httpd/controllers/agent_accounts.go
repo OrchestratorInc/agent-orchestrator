@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,8 +21,8 @@ import (
 // subscription accounts AO launches agents with.
 type AgentAccountService interface {
 	List(context.Context, bool) ([]agentaccounts.AccountView, error)
-	StartLogin(context.Context, domain.AgentAccountProvider) (agentaccounts.LoginStart, error)
-	StartSignInAgain(context.Context, string) (agentaccounts.LoginStart, error)
+	StartLogin(context.Context, domain.AgentAccountProvider, agentaccounts.LoginRequest) (agentaccounts.LoginStart, error)
+	StartSignInAgain(context.Context, string, agentaccounts.LoginRequest) (agentaccounts.LoginStart, error)
 	VerifyLogin(context.Context, string) (agentaccounts.LoginStatus, *agentaccounts.AccountView, error)
 	CancelLogin(context.Context, string) error
 	AddAPIKeyAccount(context.Context, domain.AgentAccountProvider, string, string) (agentaccounts.AccountView, error)
@@ -113,7 +114,7 @@ func (c *AgentAccountsController) startLogin(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	start, err := c.Svc.StartLogin(r.Context(), in.Provider)
+	start, err := c.Svc.StartLogin(r.Context(), in.Provider, agentaccounts.LoginRequest{Method: in.Method, Secret: in.Secret, Name: in.Name})
 	if err != nil {
 		writeAgentAccountError(w, r, err)
 		return
@@ -126,7 +127,13 @@ func (c *AgentAccountsController) signInAgain(w http.ResponseWriter, r *http.Req
 		apispec.NotImplemented(w, r, "POST", "/api/v1/agents/accounts/{accountId}/login")
 		return
 	}
-	start, err := c.Svc.StartSignInAgain(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")))
+	// The body is optional: none opens the CLI's own sign-in in a terminal.
+	var in SignInAgentAccountAgainRequest
+	if err := decodeJSONStrict(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	start, err := c.Svc.StartSignInAgain(r.Context(), strings.TrimSpace(chi.URLParam(r, "accountId")), agentaccounts.LoginRequest{Method: in.Method, Secret: in.Secret})
 	if err != nil {
 		writeAgentAccountError(w, r, err)
 		return
@@ -135,10 +142,15 @@ func (c *AgentAccountsController) signInAgain(w http.ResponseWriter, r *http.Req
 }
 
 func writeAgentAccountLoginStart(w http.ResponseWriter, start agentaccounts.LoginStart) {
-	envelope.WriteJSON(w, http.StatusAccepted, StartAgentAccountLoginResponse{
-		OperationID: start.OperationID, Provider: start.Provider,
-		ShellTerminal: CodexAccountLoginTerminalResponse{HandleID: start.Terminal.HandleID, Title: start.Terminal.Title, CreatedAt: start.Terminal.CreatedAt},
-	})
+	out := StartAgentAccountLoginResponse{OperationID: start.OperationID, Provider: start.Provider, AuthOperationID: start.AuthOperationID}
+	if start.Terminal.HandleID != "" {
+		out.ShellTerminal = &CodexAccountLoginTerminalResponse{HandleID: start.Terminal.HandleID, Title: start.Terminal.Title, CreatedAt: start.Terminal.CreatedAt}
+	}
+	if start.Account != nil {
+		account := agentAccountResponse(*start.Account)
+		out.Account = &account
+	}
+	envelope.WriteJSON(w, http.StatusAccepted, out)
 }
 
 func (c *AgentAccountsController) verifyLogin(w http.ResponseWriter, r *http.Request) {
@@ -324,11 +336,15 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, ports.ErrAgentAccountProviderMismatch):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_PROVIDER_INVALID", "Accounts are available for Claude Code and Codex only", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyRejected):
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_KEY_REJECTED", "Anthropic did not accept this API key. Check it and try again.", nil)
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_KEY_REJECTED", "The provider did not accept this key or token. Check it and try again.", nil)
 	case errors.Is(err, ports.ErrAgentAccountKeyUnchecked):
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_KEY_UNCHECKED", "Orchestrator could not reach Anthropic to check this API key. Try again in a moment.", nil)
 	case errors.Is(err, ports.ErrAgentAccountKindMismatch):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_KIND_MISMATCH", "This account does not support that action", nil)
+	case errors.Is(err, ports.ErrAgentAccountMethodInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_METHOD_INVALID", "This sign-in method cannot add an account here", nil)
+	case errors.Is(err, ports.ErrAgentAccountSignInUnavailable):
+		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_SIGN_IN_UNAVAILABLE", "The in-app sign-in is unavailable. Use the terminal sign-in instead.", nil)
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountUnsharedMessage, nil)
 	case errors.Is(err, ports.ErrAgentAccountInUse):

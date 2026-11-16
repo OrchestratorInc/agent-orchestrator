@@ -1,7 +1,9 @@
 import { Info, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import type { components } from "../../../api/schema";
+import { getAgentUILogin, type AgentLoginSnapshot } from "../../hooks/useAgentAuth";
+import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { apiErrorCode } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
@@ -15,14 +17,34 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { HarnessLoginPanel } from "./harness/HarnessLoginPanel";
 import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
-import { KEY_FIELD_CLASS, KeyWarning } from "./providerKeyUi";
 
 const providerNames = agentAccountProviderNames;
+
+type LoginMethod = components["schemas"]["AgentLoginMethod"];
+type AccountKind = AgentAccount["kind"];
+
+/** The harness whose CLI signs in an account of each provider. */
+const providerHarness: Record<AgentAccountProvider, "claude-code" | "codex"> = { claude: "claude-code", codex: "codex" };
+
+/** Claude Code's API key method, which AO saves as an account's own key. */
+const API_KEY_METHOD = "env_ANTHROPIC_API_KEY";
+
+/** The harness's sign-in methods that add an account, and those that sign a
+ * saved account of each kind in again; a method always makes its own kind. */
+const accountMethods: Record<AgentAccountProvider, { add: string[] } & Partial<Record<AccountKind, string[]>>> = {
+	claude: {
+		add: ["browser", "console", "sso", "setup_token", API_KEY_METHOD],
+		subscription: ["browser", "sso"], metered: ["console"], setup_token: ["setup_token"], api_key: [API_KEY_METHOD],
+	},
+	codex: {
+		add: ["browser", "device_code", "api_key", "access_token"],
+		subscription: ["browser", "device_code", "access_token"], metered: ["api_key"],
+	},
+};
 
 // One sign-in per host and provider, kept outside the page so leaving Settings
 // does not lose a browser sign-in in progress.
@@ -37,9 +59,11 @@ export type CliLoginControls = {
 	onLogout: () => void;
 };
 
-/** One CLI's subscription accounts on its Harness Account tab: the CLI's own
- * login and the accounts added in AO, with their limits, default and sign-in. */
-export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls; hostId?: string }) {
+/** One CLI's accounts on its Harness Account tab: the CLI's own login and the
+ * accounts added in AO, with their limits, default and sign-in. loginMethods
+ * are the harness's own sign-in methods; adding an account or signing one in
+ * again offers those that suit it in the same panel, instead of a terminal. */
+export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls; hostId?: string; loginMethods?: LoginMethod[] }) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts(true, hostId);
 	const usage = useAgentAccountUsage(30, hostId);
@@ -50,18 +74,20 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState("");
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
-	// The API key form: adding a new account, or replacing one account's key.
-	const [keyForm, setKeyForm] = useState<{ account?: AgentAccount } | null>(null);
-	const [keyError, setKeyError] = useState("");
-	// Apart from busy, which a sign-in check resets: a key request in flight
-	// keeps its form pending, so it cannot be sent twice.
-	const [savingKey, setSavingKey] = useState(false);
-	const focusKeyForm = useRef(false);
+	// The in-app sign-in: adding an account, or signing one in again. The
+	// account's own sign-in it started is kept to save or cancel it.
+	const [signIn, setSignIn] = useState<{ account?: AgentAccount } | null>(null);
+	const accountOperation = useRef<string | undefined>(undefined);
+	const harness = providerHarness[provider];
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
 	// Only subscriptions take part in moving at a usage limit.
-	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => account.kind !== "api_key" && (!account.device || account.signedIn)).length > 1;
-	const apiKeys = provider === "claude";
+	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => !perToken(account) && (!account.device || account.signedIn)).length > 1;
+	// The harness's methods that suit adding an account, or account's kind.
+	const methodsFor = (account?: AgentAccount) => {
+		const allowed = account ? accountMethods[provider][account.kind] ?? [] : accountMethods[provider].add;
+		return (loginMethods ?? []).filter((method) => allowed.includes(method.id));
+	};
 	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[loginKey];
@@ -120,29 +146,79 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 		setLogin(undefined);
 		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
-	const openKeyForm = (account?: AgentAccount) => {
-		setError("");
-		setKeyError("");
-		setKeyForm({ account });
-	};
-	// The daemon checks the key with the provider before saving it; the key
-	// lives only in the form until then and is never shown again.
-	const saveKey = async (name: string, key: string) => {
-		if (savingKey) return;
-		setSavingKey(true);
-		setKeyError("");
-		try {
-			if (keyForm?.account) await actions.replaceApiKey(keyForm.account.id, key);
-			else if (provider === "claude") await actions.addApiKey(provider, name, key);
-			setKeyForm(null);
-		} catch (err) {
-			const code = err instanceof Error ? apiErrorCode(err.cause) : undefined;
-			setKeyError(code === "AGENT_ACCOUNT_KEY_REJECTED" ? t("settings.apiKeys.rejected")
-				: code === "AGENT_ACCOUNT_KEY_UNCHECKED" ? t("settings.apiKeys.unreachable")
-				: err instanceof Error ? err.message : String(err));
-		} finally {
-			setSavingKey(false);
+	// Opens the in-app sign-in for a new account, or for account again; with no
+	// method that suits it, the CLI's own sign-in runs in a terminal instead.
+	const openSignIn = (account?: AgentAccount) => {
+		if (methodsFor(account).length === 0) {
+			void startLogin(account?.id);
+			return;
 		}
+		setError("");
+		if (login) closeLogin(login);
+		setSignIn({ account });
+	};
+	// A sign-in that finished at once (a key or token) leaves nothing to follow.
+	const finishedAtOnce = (method: string): AgentLoginSnapshot => ({ id: "", agentId: harness, method, status: "succeeded", expiresAt: new Date().toISOString() });
+	const credentialError = (err: unknown) => {
+		const code = err instanceof Error ? apiErrorCode(err.cause) : undefined;
+		return new Error(code === "AGENT_ACCOUNT_KEY_REJECTED" ? t("settings.apiKeys.rejected")
+			: code === "AGENT_ACCOUNT_KEY_UNCHECKED" ? t("settings.apiKeys.unreachable")
+			: err instanceof Error ? err.message : String(err));
+	};
+	// Runs method for the account. An API key is checked and saved by the
+	// daemon, a setup token saved at once; any other method signs the account's
+	// own folder in in the background, which the panel follows like the
+	// harness's own sign-in.
+	const startAccountSignIn = async (method: string, secret: string, name: string): Promise<AgentLoginSnapshot> => {
+		const target = signIn?.account;
+		setError("");
+		try {
+			if (method === API_KEY_METHOD) {
+				if (target) await actions.replaceApiKey(target.id, secret);
+				else if (provider === "claude") await actions.addApiKey(provider, name, secret);
+				return finishedAtOnce(method);
+			}
+			const request = { method, ...(secret ? { secret } : {}) } as AgentAccountLoginRequest;
+			const started = target
+				? await actions.signInAgain(target.id, request)
+				: await actions.startLogin(provider, { ...request, ...(name ? { name } : {}) });
+			if (started.account || !started.authOperationId) {
+				await actions.refresh();
+				return finishedAtOnce(method);
+			}
+			accountOperation.current = started.operationId;
+			return await getAgentUILogin(harness, started.authOperationId, hostId);
+		} catch (err) {
+			throw credentialError(err);
+		}
+	};
+	// Saves the account once its sign-in finished; a sign-in that finished at
+	// once is already saved.
+	const verifyAccountSignIn = async (): Promise<boolean> => {
+		const operation = accountOperation.current;
+		if (!operation) return true;
+		const result = await actions.verifyLogin(operation);
+		if (result.status === "waiting") return false;
+		if (result.status === "not_subscription") {
+			setError(t("settings.agentAccounts.loginNotSubscription"));
+			return false;
+		}
+		accountOperation.current = undefined;
+		if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
+		if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
+		if (result.status !== "complete") return false;
+		// A chat turn that sent the user here to log in gets them back.
+		const ui = useUiStore.getState();
+		const waiting = ui.loginReturn;
+		if (waiting && agentAccountProviderFor(waiting.agentId) === provider) ui.completeLoginReturn(waiting.agentId, hostId, result.account?.id);
+		return true;
+	};
+	// Closing before the sign-in was saved stops it and removes its new folder.
+	const closeSignIn = () => {
+		setSignIn(null);
+		const operation = accountOperation.current;
+		accountOperation.current = undefined;
+		if (operation) void actions.cancelLogin(operation).catch(() => undefined);
 	};
 	const requestedLogin = useUiStore((state) => state.accountLogin);
 	useEffect(() => {
@@ -151,48 +227,38 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 		if (!account || (account.device && (!cliLogin || cliLogin.disabled))) return;
 		useUiStore.setState({ accountLogin: null });
 		if (account.device) cliLogin?.onSignIn();
-		else void startLogin(account.id);
+		else openSignIn(account);
 	}, [requestedLogin, accounts.data, cliLogin?.disabled, hostId]);
+	const signInTarget = signIn?.account;
 
 	return <>
 		<HarnessDetailGroup
 			title={t("settings.codexAccounts.title")}
 			action={<div className="flex items-center gap-1">
 				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.refresh")} disabled={busy !== null} onClick={() => void run("refresh", actions.refresh)}>{busy === "refresh" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}</Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.refresh")}</TooltipContent></Tooltip>
-				{apiKeys
-					? <DropdownMenu>
-						<Tooltip><TooltipTrigger asChild><DropdownMenuTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null || savingKey}><Plus aria-hidden="true" /></Button></DropdownMenuTrigger></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
-						<DropdownMenuContent
-							align="end"
-							className="w-72"
-							onCloseAutoFocus={(event) => {
-								// The key form takes focus; the menu must not hand it back to "+".
-								if (!focusKeyForm.current) return;
-								focusKeyForm.current = false;
-								event.preventDefault();
-							}}
-						>
-							<DropdownMenuItem onSelect={() => void startLogin()}>
-								<AddAccountChoice title={t("settings.agentAccounts.addSubscription")} hint={t("settings.agentAccounts.addSubscriptionHint")} />
-							</DropdownMenuItem>
-							<DropdownMenuItem onSelect={() => { focusKeyForm.current = true; openKeyForm(); }}>
-								<AddAccountChoice title={t("settings.agentAccounts.addApiKey")} hint={t("settings.agentAccounts.addApiKeyHint")} />
-							</DropdownMenuItem>
-						</DropdownMenuContent>
-					</DropdownMenu>
-					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null || savingKey} onClick={() => void startLogin()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>}
+				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} aria-expanded={signIn !== null && !signInTarget} data-terminal-focus-handoff="true" disabled={busy !== null || signIn !== null} onClick={() => openSignIn()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
 			</div>}
 		>
 			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
-			{/* A new form for each account, so a typed key never carries over. */}
-			{keyForm ? <div className="px-3 py-2.5"><ApiKeyForm
-				key={keyForm.account?.id ?? "new"}
-				replacing={keyForm.account ? agentAccountLabel(keyForm.account, rows, t) : undefined}
-				pending={savingKey}
-				error={keyError}
-				onSubmit={(name, key) => void saveKey(name, key)}
-				onClose={() => setKeyForm(null)}
-			/></div> : null}
+			{/* The harness's own sign-in panel, for this account's folder. A new
+			    panel for each account, so a typed key never carries over. Keys and
+			    tokens are saved by AO itself, so they have no terminal sign-in. */}
+			{signIn ? <HarnessLoginPanel
+				key={signInTarget?.id ?? "new"}
+				agentId={harness}
+				methods={methodsFor(signInTarget)}
+				hostId={hostId}
+				title={signInTarget
+					? t("settings.agentAccounts.signInAgainTitle", { name: agentAccountLabel(signInTarget, rows, t) })
+					: t("settings.agentAccounts.addTitle", { provider: providerNames[provider] })}
+				account={{ start: startAccountSignIn, named: !signInTarget }}
+				onVerify={verifyAccountSignIn}
+				onClose={closeSignIn}
+				onTerminal={signInTarget && (signInTarget.kind === "api_key" || signInTarget.kind === "setup_token") ? undefined : async () => {
+					closeSignIn();
+					await startLogin(signInTarget?.id);
+				}}
+			/> : null}
 			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
@@ -206,12 +272,12 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				account={account}
 				name={agentAccountLabel(account, rows, t)}
 				aoTokens={(tokensByAccount.get(account.id) ?? 0) + (cliTwin ? tokensByAccount.get(cliTwin.id) ?? 0 : 0) || undefined}
-				busy={busy ?? (savingKey ? "api-key" : null)}
+				busy={busy}
 				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
-				onSignInAgain={() => void startLogin(account.id)}
-				onReplaceKey={() => openKeyForm(account)}
+				onSignInAgain={() => openSignIn(account)}
+				onReplaceKey={() => openSignIn(account)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
@@ -242,15 +308,25 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	onRemove: () => void;
 }) {
 	const { t, i18n } = useTranslation();
-	const apiKey = account.kind === "api_key";
+	const kind = account.kind;
+	// A key or setup token is AO's to replace; any other sign-in signs in again.
+	const replaces = kind === "api_key" || kind === "setup_token";
 	const plan = formatPlanName(account.plan);
 	const resets = account.limits?.resetCredits ?? 0;
-	const meta = (apiKey ? [
+	const badge = kind === "api_key" ? t("settings.agentAccounts.apiKeyBadge")
+		: kind === "metered" ? t("settings.agentAccounts.meteredBadge")
+		: kind === "setup_token" ? t("settings.agentAccounts.setupTokenBadge")
+		: null;
+	const meta = (kind === "api_key" ? [
 		// An API key account bills per token and has no limits to show.
 		account.keyHint ? t("settings.agentAccounts.apiKeyEnding", { hint: account.keyHint }) : null,
 		account.loggedIn ? t("settings.agentAccounts.apiKeyBilled") : t("settings.agentAccounts.apiKeyMissing"),
+	] : kind === "metered" ? [
+		// So does a metered sign-in, such as Anthropic Console.
+		account.loggedIn ? t("settings.agentAccounts.apiKeyBilled") : t("settings.agentAccounts.signedOut"),
 	] : [
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
+		kind === "setup_token" && account.keyHint ? t("settings.agentAccounts.tokenEnding", { hint: account.keyHint }) : null,
 		// An API key (or a cloud provider login) in the CLI's own folder launches
 		// it but is not a subscription: no limits, and no account to move to.
 		account.signedIn ? null : account.loggedIn ? t("settings.agentAccounts.noSubscription") : t("settings.agentAccounts.signedOut"),
@@ -260,20 +336,20 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 			<div className="min-w-0">
 				<p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
 					<span className="truncate">{name}</span>
-					{apiKey ? <Badge>{t("settings.agentAccounts.apiKeyBadge")}</Badge> : null}
+					{badge ? <Badge>{badge}</Badge> : null}
 				</p>
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
 			</div>
 			<div className="flex shrink-0 items-center gap-2">
 				{cliLogin
 					? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.agentAccounts.signInAgain")}</Button>
-					: !apiKey && !account.signedIn && !account.device
+					: !replaces && !agentAccountUsable(account) && !account.device
 						? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null} onClick={onSignInAgain}>{t("settings.agentAccounts.signInAgain")}</Button>
 						: null}
 				{account.default
 					? <span className="text-xs text-muted-foreground">{t("settings.agentAccounts.default")}</span>
 					: agentAccountUsable(account) ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
-				{apiKey ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onReplaceKey}>{t("settings.agentAccounts.replaceKey")}</Button> : null}
+				{replaces ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onReplaceKey}>{t(kind === "api_key" ? "settings.agentAccounts.replaceKey" : "settings.agentAccounts.replaceToken")}</Button> : null}
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
 				{account.device
 					? cliLogin?.canLogout && account.loggedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onLogout}>{t("settings.harness.logout")}</Button> : null
@@ -437,60 +513,4 @@ function LoginTerminal({ login, hostId, note, pending, onCheck, onClose }: {
 			<Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onCheck(login)}>{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.agentAccounts.checkSignIn")}</Button>
 		</div>
 	</div>;
-}
-
-/** One way to add an account in the add menu, named with what it means. */
-function AddAccountChoice({ title, hint }: { title: string; hint: string }) {
-	return <span className="flex min-w-0 flex-col gap-0.5">
-		<span className="text-foreground">{title}</span>
-		<span className="text-xs text-muted-foreground">{hint}</span>
-	</span>;
-}
-
-/** Adds an Anthropic API key account, or replaces one account's key. The key
- * stays in this form only until the daemon has checked and saved it. */
-function ApiKeyForm({ replacing, pending, error, onSubmit, onClose }: {
-	/** The account whose key is replaced; undefined adds a new account. */
-	replacing?: string;
-	pending: boolean;
-	error: string;
-	onSubmit: (name: string, key: string) => void;
-	onClose: () => void;
-}) {
-	const { t } = useTranslation();
-	const id = useId();
-	const [name, setName] = useState("");
-	const [key, setKey] = useState("");
-	const labelClass = "text-xs text-muted-foreground";
-	return <form
-		className="overflow-hidden rounded-md border border-border"
-		data-settings-inline-edit=""
-		data-testid="agent-account-api-key-form"
-		onSubmit={(event) => {
-			event.preventDefault();
-			if (key.trim() && !pending) onSubmit(name, key);
-		}}
-	>
-		<div className="flex min-h-10 items-center justify-between gap-3 border-b border-border px-3 py-2">
-			<p className="truncate text-xs font-medium text-foreground">{replacing ? t("settings.agentAccounts.apiKeyReplaceTitle", { name: replacing }) : t("settings.agentAccounts.apiKeyAddTitle")}</p>
-			<Button type="button" size="icon-sm" variant="quiet" aria-label={t("settings.agentAccounts.apiKeyClose")} className="shrink-0" onClick={onClose}><X aria-hidden="true" /></Button>
-		</div>
-		<div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 px-3 py-3">
-			{replacing ? null : <>
-				<label htmlFor={`${id}-name`} className={labelClass}>{t("settings.agentAccounts.apiKeyName")}</label>
-				<Input id={`${id}-name`} className={cn(KEY_FIELD_CLASS, "font-sans placeholder:font-sans")} value={name} disabled={pending} autoComplete="off" maxLength={80} placeholder={t("settings.agentAccounts.apiKeyNamePlaceholder")} onChange={(event) => setName(event.target.value)} />
-			</>}
-			<label htmlFor={`${id}-key`} className={labelClass}>{t("settings.agentAccounts.apiKeyField")}</label>
-			<Input id={`${id}-key`} className={KEY_FIELD_CLASS} type="password" value={key} disabled={pending} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder={t("settings.agentAccounts.apiKeyPlaceholder")} autoFocus onChange={(event) => setKey(event.target.value)} />
-			<KeyWarning className="col-start-2">{t("settings.agentAccounts.apiKeyBilling")}</KeyWarning>
-			{error ? <p role="alert" className="col-start-2 text-xs text-error">{error}</p> : null}
-			<div className="col-start-2 flex justify-end gap-2">
-				<Button type="button" size="sm" variant="ghost" disabled={pending} onClick={onClose}>{t("confirm.cancel")}</Button>
-				<Button type="submit" size="sm" variant="primary" disabled={pending || !key.trim()}>
-					{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-					{replacing ? t("settings.agentAccounts.apiKeySave") : t("settings.agentAccounts.apiKeyAdd")}
-				</Button>
-			</div>
-		</div>
-	</form>;
 }

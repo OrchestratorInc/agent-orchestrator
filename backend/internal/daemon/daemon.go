@@ -977,6 +977,7 @@ func Run(buildVersion string) (retErr error) {
 	defer agentAuthSvc.Close()
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
+	agentAccountSvc.SetUILogin(accountUILogin{auth: agentAuthSvc})
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
 	// worktree is torn down (shellTermSvc cannot exist before sessMgr does; see
 	// SetShellTerminalCloser).
@@ -1863,6 +1864,21 @@ func stabilizeWorkingDirectory(dataDir string) error {
 		return fmt.Errorf("daemon working directory: chdir %s: %w", dataDir, err)
 	}
 	return nil
+}
+
+// accountUILogin runs an account folder's sign-in through the harness's
+// in-app sign-in, so adding an account shows the same link, device code and
+// code field as signing the CLI in, instead of a terminal.
+type accountUILogin struct{ auth *agentauth.Service }
+
+func (l accountUILogin) StartAccountLogin(ctx context.Context, harness domain.AgentHarness, method, secret string, env map[string]string) (string, error) {
+	snapshot, err := l.auth.StartAccountLogin(ctx, string(harness), method, secret, env)
+	return snapshot.ID, err
+}
+
+func (l accountUILogin) CancelAccountLogin(ctx context.Context, harness domain.AgentHarness, id string) error {
+	_, err := l.auth.CancelLogin(ctx, string(harness), id)
+	return err
 }
 
 // newAgentAccounts builds the Claude Code and Codex account catalog. Each
