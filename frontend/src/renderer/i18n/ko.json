@@ -4610,6 +4610,8 @@
 	"automations.cloud.runError.AUTOMATION_DISABLED": "건너뜀: 이 실행이 시작되기 전에 자동화가 꺼졌습니다.",
 	"automations.cloud.scheduleInZone": "{{schedule}} ({{timezone}})",
 	"automations.cloud.rebindNotice": "저장하면 AO Cloud의 내 {{agent}} 로그인으로, 나로 실행됩니다.",
+	"automations.cloud.turnOnRebinds": "켜면 AO Cloud의 내 {{agent}} 로그인으로, 나로 실행됩니다.",
+	"automations.cloud.error.turnOnNeedsLogin": "켜면 나로 실행됩니다. 먼저 AO Cloud에서 {{agent}}에 로그인하세요.",
 	"automations.summary.daily": "매일",
 	"automations.summary.dailyAt": "매일 {{time}}",
 	"automations.summary.weekdays": "평일",

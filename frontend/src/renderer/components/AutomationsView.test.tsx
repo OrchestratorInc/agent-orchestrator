@@ -7,6 +7,7 @@ import { fireEvent } from "@testing-library/react";
 import { AUTOMATION_TEMPLATES } from "../lib/automation-templates";
 import { AutomationsView } from "./AutomationsView";
 import { useUiStore } from "../stores/ui-store";
+import { CloudCpError } from "../lib/cloud-cp";
 import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
@@ -1047,6 +1048,16 @@ describe("automation starters", () => {
 			expect(mocks.subscribe).toHaveBeenCalledWith({ id: "c1", subscribed: true });
 		});
 
+		it("lines up a read-only row's actions with an editable row's", () => {
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [cloudAutomation, { ...cloudAutomation, id: "c2", displayName: "Docs drift", canEdit: true }];
+			renderView();
+			const actions = (name: RegExp) => within(screen.getByRole("heading", { name }).closest("article")!).getByRole("switch").closest("div.flex")!;
+			// Run now, notify, Edit and Delete (or their places), then the switch.
+			expect(actions(/Nightly debt/).children).toHaveLength(5);
+			expect(actions(/Docs drift/).children).toHaveLength(5);
+		});
+
 		it("keeps the notify toggle's name and reports its state with aria-pressed", () => {
 			mocks.cloudAvailable = true;
 			mocks.cloudAutomations = [{ ...cloudAutomation, subscribed: true }];
@@ -1112,6 +1123,21 @@ describe("automation starters", () => {
 			await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 			await waitFor(() => expect(mocks.updateCloud).toHaveBeenCalledTimes(1));
 			expect(mocks.updateCloud).toHaveBeenCalledWith({ id: "c1", body: { displayName: "Weekly debt" } });
+		});
+
+		it("says turning a teammate's automation on makes it run as you, and why it could not", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true, enabled: false, nextRunAt: undefined }];
+			mocks.updateCloud.mockRejectedValue(new CloudCpError("Connect and validate your Codex credential first.", { status: 422, code: "agent_provider_required" }));
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			const toggle = within(row).getByRole("switch", { name: "Enable Nightly debt" });
+			await user.hover(toggle);
+			expect(await screen.findByRole("tooltip")).toHaveTextContent("Turning it on makes it run as you, with your Codex login in AO Cloud.");
+			await user.click(toggle);
+			expect(mocks.updateCloud).toHaveBeenCalledWith({ id: "c1", body: { enabled: true } });
+			expect(await screen.findByText("Turning it on makes it run as you. Log in to Codex in AO Cloud first.")).toBeInTheDocument();
 		});
 
 		it("tells an editor who is not its run-as person that saving makes it run as them", async () => {

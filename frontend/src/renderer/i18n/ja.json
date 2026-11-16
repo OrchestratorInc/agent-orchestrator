@@ -4610,6 +4610,8 @@
 	"automations.cloud.runError.AUTOMATION_DISABLED": "スキップ: この実行の開始前にオートメーションがオフになりました。",
 	"automations.cloud.scheduleInZone": "{{schedule}} ({{timezone}})",
 	"automations.cloud.rebindNotice": "保存すると、AO Cloud のあなたの {{agent}} ログインで、あなたとして実行されます。",
+	"automations.cloud.turnOnRebinds": "オンにすると、AO Cloud のあなたの {{agent}} ログインで、あなたとして実行されます。",
+	"automations.cloud.error.turnOnNeedsLogin": "オンにすると、あなたとして実行されます。先に AO Cloud で {{agent}} にログインしてください。",
 	"automations.summary.daily": "毎日",
 	"automations.summary.dailyAt": "毎日 {{time}}",
 	"automations.summary.weekdays": "平日",

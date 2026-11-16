@@ -4670,6 +4670,8 @@
 	"automations.cloud.runError.AUTOMATION_DISABLED": "Skipped: the automation was turned off before this run started.",
 	"automations.cloud.scheduleInZone": "{{schedule}} ({{timezone}})",
 	"automations.cloud.rebindNotice": "Saving makes it run as you, with your {{agent}} login in AO Cloud.",
+	"automations.cloud.turnOnRebinds": "Turning it on makes it run as you, with your {{agent}} login in AO Cloud.",
+	"automations.cloud.error.turnOnNeedsLogin": "Turning it on makes it run as you. Log in to {{agent}} in AO Cloud first.",
 	"automations.summary.daily": "Daily",
 	"automations.summary.dailyAt": "Daily at {{time}}",
 	"automations.summary.weekdays": "Weekdays",

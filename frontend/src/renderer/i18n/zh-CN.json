@@ -4592,6 +4592,8 @@
 	"automations.cloud.runError.AUTOMATION_DISABLED": "已跳过：本次运行开始前自动化已被关闭。",
 	"automations.cloud.scheduleInZone": "{{schedule}}（{{timezone}}）",
 	"automations.cloud.rebindNotice": "保存后，它将以你的身份、使用你在 AO Cloud 中的 {{agent}} 登录运行。",
+	"automations.cloud.turnOnRebinds": "开启后，它将以你的身份、使用你在 AO Cloud 中的 {{agent}} 登录运行。",
+	"automations.cloud.error.turnOnNeedsLogin": "开启后，它将以你的身份运行。请先在 AO Cloud 中登录 {{agent}}。",
 	"automations.summary.daily": "每天",
 	"automations.summary.dailyAt": "每天 {{time}}",
 	"automations.summary.weekdays": "工作日",

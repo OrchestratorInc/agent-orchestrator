@@ -4610,6 +4610,8 @@
 	"automations.cloud.runError.AUTOMATION_DISABLED": "Übersprungen: Die Automatisierung wurde vor diesem Lauf ausgeschaltet.",
 	"automations.cloud.scheduleInZone": "{{schedule}} ({{timezone}})",
 	"automations.cloud.rebindNotice": "Nach dem Speichern läuft sie als du, mit deinem {{agent}}-Login in AO Cloud.",
+	"automations.cloud.turnOnRebinds": "Beim Einschalten läuft sie als du, mit deinem {{agent}}-Login in AO Cloud.",
+	"automations.cloud.error.turnOnNeedsLogin": "Beim Einschalten läuft sie als du. Melde dich zuerst in AO Cloud bei {{agent}} an.",
 	"automations.summary.daily": "Täglich",
 	"automations.summary.dailyAt": "Täglich um {{time}}",
 	"automations.summary.weekdays": "Werktags",

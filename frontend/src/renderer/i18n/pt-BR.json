@@ -4721,6 +4721,8 @@
 	"automations.cloud.runError.AUTOMATION_DISABLED": "Ignorada: a automação foi desativada antes do início desta execução.",
 	"automations.cloud.scheduleInZone": "{{schedule}} ({{timezone}})",
 	"automations.cloud.rebindNotice": "Ao salvar, ela passa a ser executada como você, com o seu login do {{agent}} no AO Cloud.",
+	"automations.cloud.turnOnRebinds": "Ao ativá-la, ela passa a ser executada como você, com o seu login do {{agent}} no AO Cloud.",
+	"automations.cloud.error.turnOnNeedsLogin": "Ao ativá-la, ela passa a ser executada como você. Entre no {{agent}} no AO Cloud primeiro.",
 	"automations.summary.daily": "Diariamente",
 	"automations.summary.dailyAt": "Diariamente às {{time}}",
 	"automations.summary.weekdays": "Dias úteis",

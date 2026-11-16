@@ -4824,6 +4824,8 @@
 	"automations.cloud.runError.AUTOMATION_DISABLED": "Пропущен: автоматизацию выключили до начала этого запуска.",
 	"automations.cloud.scheduleInZone": "{{schedule}} ({{timezone}})",
 	"automations.cloud.rebindNotice": "После сохранения она будет запускаться от вашего имени, с вашим входом {{agent}} в AO Cloud.",
+	"automations.cloud.turnOnRebinds": "После включения она будет запускаться от вашего имени, с вашим входом {{agent}} в AO Cloud.",
+	"automations.cloud.error.turnOnNeedsLogin": "После включения она будет запускаться от вашего имени. Сначала войдите в {{agent}} в AO Cloud.",
 	"automations.summary.daily": "Ежедневно",
 	"automations.summary.dailyAt": "Ежедневно в {{time}}",
 	"automations.summary.weekdays": "По будням",

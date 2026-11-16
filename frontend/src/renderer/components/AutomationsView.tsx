@@ -81,6 +81,7 @@ import {
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { agentLabel } from "../lib/agent-options";
+import { CloudCpError } from "../lib/cloud-cp";
 import { useUiStore } from "../stores/ui-store";
 import {
 	centeredOnboardingDialogClass,
@@ -329,7 +330,7 @@ export function AutomationsView() {
 							{visibleAutomations.length > 0 ? (
 								<div className="divide-y divide-border">
 									{visibleAutomations.map((entry) => entry.cloud ? (
-										<CloudAutomationRow key={entry.key} item={entry.cloud} projectName={projectName(entry.projectId)} busy={updateCloud.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setCloudEditTarget(entry.cloud ?? null)} onDelete={() => setDeleteTarget(entry)} onError={setActionError} onToggle={async (enabled) => { setActionError(null); try { await updateCloud.mutateAsync({ id: entry.cloud!.id, body: { enabled } }); } catch (error) { setActionError(cloudAutomationErrorMessage(error, t) ?? t("automations.updateError")); } }} />
+										<CloudAutomationRow key={entry.key} item={entry.cloud} userId={cloud.userId} projectName={projectName(entry.projectId)} busy={updateCloud.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setCloudEditTarget(entry.cloud ?? null)} onDelete={() => setDeleteTarget(entry)} onError={setActionError} onToggle={(enabled) => updateCloud.mutateAsync({ id: entry.cloud!.id, body: { enabled } })} />
 									) : entry.local ? (
 										<AutomationRow key={entry.key} item={entry.local} projectName={projectName(entry.projectId)} busy={update.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setEditTarget(entry.local ?? null)} onDelete={() => setDeleteTarget(entry)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: entry.local!.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
 									) : null)}
@@ -494,7 +495,7 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
  * An automation that runs in AO Cloud: the whole organization sees it and may
  * run it now; only the person it runs as, its creator and admins change it.
  */
-function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<void>; onError: (message: string | null) => void }) {
+function CloudAutomationRow({ item, userId, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; userId?: string; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<unknown>; onError: (message: string | null) => void }) {
 	const runs = useCloudAutomationRuns(expanded ? item.id : null);
 	const runNow = useRunCloudAutomationNow();
 	const subscribe = useSubscribeCloudAutomation();
@@ -515,6 +516,20 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 		onError(null);
 		try { await action(); } catch (error) { onError(cloudAutomationErrorMessage(error, t)); }
 	}
+	// Turning it on makes it run as whoever turned it on (ao-control-plane#122),
+	// so an editor who is not its run-as person is told before and after.
+	const turnOnRebinds = !item.enabled && item.canEdit && Boolean(userId) && item.runAs.userId !== userId;
+	async function toggle(enabled: boolean) {
+		onError(null);
+		try {
+			await onToggle(enabled);
+		} catch (error) {
+			onError(enabled && turnOnRebinds && error instanceof CloudCpError && error.code === "agent_provider_required"
+				? t("automations.cloud.error.turnOnNeedsLogin", { agent: agentLabel(item.harness) })
+				: cloudAutomationErrorMessage(error, t) ?? t("automations.updateError"));
+		}
+	}
+	const toggleSwitch = <Switch checked={item.enabled} disabled={busy || !item.canEdit} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void toggle(checked)} />;
 	// A toggle keeps one name; aria-pressed says whether it is on.
 	const subscribeLabel = t("automations.cloud.subscribe", { name: item.displayName });
 	return <article className="group">
@@ -558,8 +573,17 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 				{item.canEdit ? <>
 					<Button variant="quiet" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.edit.aria", { name: item.displayName })} onClick={onEdit}><Pencil className="size-3.5" /></Button>
 					<Button variant="destructive-ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-label={t("automations.delete.aria", { name: item.displayName })} onClick={onDelete}><Trash2 className="size-3.5" /></Button>
-				</> : null}
-				<Switch checked={item.enabled} disabled={busy || !item.canEdit} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void onToggle(checked)} />
+				</> : <>
+					{/* Hold Edit and Delete's places, so every row's columns line up. */}
+					<span aria-hidden="true" data-action-placeholder="" className="size-control-md shrink-0" />
+					<span aria-hidden="true" data-action-placeholder="" className="size-control-md shrink-0" />
+				</>}
+				{turnOnRebinds ? (
+					<Tooltip>
+						<TooltipTrigger asChild>{toggleSwitch}</TooltipTrigger>
+						<TooltipContent side="bottom">{t("automations.cloud.turnOnRebinds", { agent: agentLabel(item.harness) })}</TooltipContent>
+					</Tooltip>
+				) : toggleSwitch}
 			</div>
 		</div>
 		{latestError ? <p role="alert" className="mx-2 mb-2 rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{latestError}</p> : null}
