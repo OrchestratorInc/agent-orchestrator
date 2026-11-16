@@ -583,7 +583,7 @@ export function SessionMemoryPanel({
 function GroupRow({ label }: { label: string }) {
 	return (
 		<tr className="memory-group">
-			<td className={cn("pb-1 pt-4 text-xs font-medium leading-4 text-settings-muted in-[tr:first-child]:pt-3", cell.name)} colSpan={columnCount}>{label}</td>
+			<td className={cn("pb-1 pt-4 text-xs font-medium leading-4 text-settings-muted [tr:first-child>&]:pt-3", cell.name)} colSpan={columnCount}>{label}</td>
 		</tr>
 	);
 }
