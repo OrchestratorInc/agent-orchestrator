@@ -212,6 +212,7 @@ import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
+import type { OutgoingAttachment } from "../../lib/attachment-uploads";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
@@ -658,7 +659,7 @@ export interface ChatWorkspaceProps {
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
 	 */
-	onStageAttachments?: (attachments: { mimeType: string; data: string; name?: string }[], signal?: AbortSignal) => Promise<string[]>;
+	onStageAttachments?: (attachments: OutgoingAttachment[], signal?: AbortSignal) => Promise<string[]>;
 	/** Staged files are uploaded to AO Cloud, up to maxBytes each; see ChatComposer. */
 	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
@@ -2271,7 +2272,7 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 

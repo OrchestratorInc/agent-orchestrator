@@ -4330,6 +4330,21 @@ describe("useTaskLaunch Cloud start on send", () => {
 		expect(h.cloudCreateSession).not.toHaveBeenCalled();
 	});
 
+	// A file small enough to read inline is still over a lower Cloud limit.
+	it("holds a file already read inline to the Cloud per-file limit", async () => {
+		const queryClient = freestyleFixture();
+		h.cloudMaxAttachmentBytes = 1;
+		render(<Wrap queryClient={queryClient}><Launcher /></Wrap>);
+		await screen.findByText("ready");
+		let outcome: unknown;
+		await act(async () => {
+			outcome = await task.launch("Look at this", { clientRequestId: "req-f8", interfaceMode: "chat", attachments: [{ mimeType: "image/png", data: "aGk=", name: "shot.png" }] })
+				.catch((error: unknown) => error);
+		});
+		expect(outcome).toMatchObject({ name: "TaskCreateError", code: "CLOUD_ATTACHMENT_TOO_LARGE" });
+		expect(h.cloudCreateSession).not.toHaveBeenCalled();
+	});
+
 	// Its session was deleted again, so nothing is left to retry: the page
 	// hands the brief and files back with the reason.
 	it("returns a Cloud task whose files did not upload as final, once its session is deleted", async () => {

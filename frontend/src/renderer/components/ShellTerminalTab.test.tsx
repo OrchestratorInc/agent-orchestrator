@@ -150,7 +150,7 @@ describe("ShellTerminalTab rename", () => {
 			"pointer-events-none",
 			"group-hover:opacity-100",
 			"group-hover:pointer-events-auto",
-			"group-has-[:focus-visible]:opacity-100",
+			"focus-visible-in-group:opacity-100",
 		);
 		expect(slot).not.toHaveClass("mr-2");
 		const tab = screen.getByRole("tab", { name: "ao" });

@@ -143,7 +143,9 @@ export function getSessionRowMarker(session: {
 	switch (toKanbanColumn(session.kanbanColumn, sectionStatus)) {
 		case "needs_review":
 			// The review lane is the person's turn, short of the red states above.
-			// A draft is still the author's, so it stays quiet.
+			// A draft is still the author's, and a PR waiting on its stack parent
+			// is waiting on another PR, so both stay quiet.
+			if (display === "Waiting on base PR") return null;
 			return (display ? display === "Draft" : sectionStatus === "draft") ? null : "review";
 		case "validating":
 			// AO's own review loop needs nothing from the user unless it failed.

@@ -62,4 +62,36 @@ describe("StagedAttachmentItems with a just-sent local copy", () => {
 		expect(String(fetch.mock.calls[0]?.[0])).toBe("blob:app/1");
 		expect(String(fetch.mock.calls[1]?.[0])).toBe(`${attachmentURL(API, "s1", NOTES)}?raw=true`);
 	});
+
+	it("reads only the start of a large local copy for its text preview", async () => {
+		vi.stubGlobal("IntersectionObserver", class {
+			constructor(private readonly callback: IntersectionObserverCallback) {}
+			observe() {
+				this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+			}
+			disconnect() {}
+		});
+		// A file with no end: the tile must stop once it has enough to draw.
+		let pulls = 0;
+		const cancel = vi.fn();
+		const chunk = new TextEncoder().encode("x".repeat(1024));
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new TextEncoder().encode("first line\n"));
+			},
+			pull(controller) {
+				pulls += 1;
+				controller.enqueue(chunk);
+			},
+			cancel,
+		});
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
+		rememberSentAttachments([{ path: NOTES, mimeType: "text/plain", bytes: 5 * 1024 ** 3, file: new Blob(["local"], { type: "text/plain" }) }]);
+
+		render(<StagedAttachmentItems paths={[NOTES]} sessionId="s1" apiBaseUrl={API} ariaLabel="Attachments" />);
+
+		expect(await screen.findByText(/^first line/)).toBeInTheDocument();
+		await waitFor(() => expect(cancel).toHaveBeenCalled());
+		expect(pulls).toBeLessThan(8);
+	});
 });

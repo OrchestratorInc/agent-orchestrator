@@ -740,8 +740,20 @@ type AttachmentInput struct {
 	// derive the on-disk file extension. Explicitly blocked types are rejected.
 	MimeType string `json:"mimeType,omitempty"`
 	// Data is the raw file bytes, standard base64-encoded, without any
-	// "data:...;base64," prefix.
-	Data string `json:"data"`
+	// "data:...;base64," prefix. For small files; a large one is streamed
+	// first through POST /api/v1/attachment-uploads and named by UploadID.
+	Data string `json:"data,omitempty"`
+	// UploadID names a file streamed in through POST /api/v1/attachment-uploads,
+	// in place of Data.
+	UploadID string `json:"uploadId,omitempty"`
+}
+
+// AttachmentUploadResponse is the body of POST /api/v1/attachment-uploads.
+type AttachmentUploadResponse struct {
+	// UploadID is what an attachment names, as uploadId, in place of inline data.
+	UploadID string `json:"uploadId"`
+	// Bytes is the size of the file as written.
+	Bytes int64 `json:"bytes"`
 }
 
 // SessionResponse is the { session } body shared by session reads and updates.
@@ -761,8 +773,8 @@ type SpawnSessionResponse struct {
 // StageSessionAttachmentsRequest attaches files to a session that is already
 // running, for a caller that will name the returned paths in its next message.
 type StageSessionAttachmentsRequest struct {
-	// Attachments each carry their bytes as standard base64 (no data: URL prefix).
-	// The same count, size, and blocked-type rules as spawn apply.
+	// Attachments each carry their bytes as standard base64 (no data: URL
+	// prefix) or name an upload. The same count and blocked-type rules as spawn apply.
 	Attachments []AttachmentInput `json:"attachments"`
 }
 
@@ -1553,6 +1565,10 @@ type SessionPRFacts struct {
 	Mergeability   domain.Mergeability   `json:"mergeability" enum:"unknown,mergeable,conflicting,blocked,unstable"`
 	ReviewComments bool                  `json:"reviewComments"`
 	UpdatedAt      time.Time             `json:"updatedAt"`
+	// StackParent is the number of the open PR whose branch this PR targets.
+	// Absent when the PR's base branch has no open PR in a live session, e.g.
+	// the default branch.
+	StackParent int `json:"stackParent,omitempty"`
 }
 
 // SessionPRSummary is the concise desktop SCM read model returned by GET

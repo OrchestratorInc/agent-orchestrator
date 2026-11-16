@@ -29,6 +29,7 @@ import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
@@ -357,7 +358,8 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 	void queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
-const CONVERSATION_PAGE_SIZE = 200;
+const LOCAL_INITIAL_PAGE_SIZE = 30;
+const LOCAL_OLDER_PAGE_SIZE = 200;
 // A remote page crosses a tunnel, often on the host's upload: a small live page,
 // larger pages on scroll, and each tool output cut to its head and tail.
 const REMOTE_LIVE_PAGE_SIZE = 30;
@@ -424,7 +426,7 @@ async function fetchConversationWire(sessionId: string, hostId: string | undefin
 }
 
 function conversationPageQuery(hostId: string | undefined, beforeSequence?: number): ConversationPageQuery {
-	if (!hostId) return { beforeSequence, limit: CONVERSATION_PAGE_SIZE };
+	if (!hostId) return { beforeSequence, limit: beforeSequence ? LOCAL_OLDER_PAGE_SIZE : LOCAL_INITIAL_PAGE_SIZE };
 	return { beforeSequence, limit: beforeSequence ? REMOTE_OLDER_PAGE_SIZE : REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT };
 }
 
@@ -2114,7 +2116,7 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 }
 
 /**
- * Write staged images into the session worktree.
+ * Write staged files into the session worktree.
  *
  * Returns the worktree-relative paths the agent can open. The composer names those
  * paths in the message it sends, which is how an image reaches an agent whose
@@ -2122,12 +2124,15 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  */
 export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
 	return useCallback(
-		async (attachments: { mimeType: string; data: string; name?: string }[]): Promise<string[]> => {
+		async (attachments: OutgoingAttachment[], signal?: AbortSignal): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
+			// A file too large to inline is streamed from disk to this session's
+			// daemon first, and the request names the upload.
+			const wire = await toWireAttachments(attachments, hostId, signal);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
 				// The daemon names staged files itself; only the bytes go.
-				body: { attachments: attachments.map(({ mimeType, data }) => ({ mimeType, data })) },
+				body: { attachments: wire },
 			});
 			if (error) throw error;
 			return data?.paths ?? [];
