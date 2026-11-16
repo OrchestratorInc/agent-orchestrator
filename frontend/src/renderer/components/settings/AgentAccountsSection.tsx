@@ -112,7 +112,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	};
 	// accountId signs that saved account in again, in its own folder.
 	const startLogin = (accountId?: string) => run(`login:${provider}`, async () => {
-		if (login) await actions.cancelLogin(login.operationId).catch(() => undefined);
+		if (login?.operationId) await actions.cancelLogin(login.operationId).catch(() => undefined);
 		setLogin(undefined);
 		setLoginNote("");
 		setLogin(await (accountId ? actions.signInAgain(accountId) : actions.startLogin(provider)));
@@ -120,12 +120,12 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	// One check at a time: the CLI exiting checks on its own, and a second check
 	// racing a click would find the sign-in already finished and report an error.
 	const verifying = useRef(false);
-	const checkLogin = (current: AgentAccountLogin) => {
+	const checkLogin = (current: TerminalLogin) => {
 		// A closed sign-in's terminal still reports its exit; there is nothing left to check.
 		if (pendingLogins[loginKey]?.operationId !== current.operationId || verifying.current) return;
 		void verifyLogin(current);
 	};
-	const verifyLogin = (current: AgentAccountLogin) => run(`verify:${provider}`, async () => {
+	const verifyLogin = (current: TerminalLogin) => run(`verify:${provider}`, async () => {
 		verifying.current = true;
 		const result = await actions.verifyLogin(current.operationId).finally(() => { verifying.current = false; });
 		if (result.status === "waiting") setLoginNote(t("settings.agentAccounts.loginWaiting"));
@@ -144,7 +144,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 			}
 		}
 	});
-	const closeLogin = (current: AgentAccountLogin) => {
+	const closeLogin = (current: TerminalLogin) => {
 		setLogin(undefined);
 		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
@@ -156,7 +156,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 			return;
 		}
 		setError("");
-		if (login) closeLogin(login);
+		if (hasTerminal(login)) closeLogin(login);
 		// Another account's sign-in still pending is stopped, never verified as this one.
 		const pending = accountOperation.current;
 		accountOperation.current = undefined;
@@ -496,10 +496,10 @@ function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale:
 }
 
 /** A sign-in that runs in a terminal; a background one has none. */
-type TerminalLogin = AgentAccountLogin & { shellTerminal: NonNullable<AgentAccountLogin["shellTerminal"]> };
+type TerminalLogin = AgentAccountLogin & { operationId: string; shellTerminal: NonNullable<AgentAccountLogin["shellTerminal"]> };
 
 function hasTerminal(login: AgentAccountLogin | undefined): login is TerminalLogin {
-	return Boolean(login?.shellTerminal);
+	return Boolean(login?.operationId && login.shellTerminal);
 }
 
 function LoginTerminal({ login, hostId, note, pending, onCheck, onClose }: {
@@ -507,8 +507,8 @@ function LoginTerminal({ login, hostId, note, pending, onCheck, onClose }: {
 	hostId?: string;
 	note: string;
 	pending: boolean;
-	onCheck: (login: AgentAccountLogin) => void;
-	onClose: (login: AgentAccountLogin) => void;
+	onCheck: (login: TerminalLogin) => void;
+	onClose: (login: TerminalLogin) => void;
 }) {
 	const { t } = useTranslation();
 	const theme = useResolvedTheme();
