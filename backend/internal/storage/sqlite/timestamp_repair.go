@@ -83,13 +83,9 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 		table := group[0].table
 		names := make([]string, len(group))
 		for j, column := range group {
-			names[j] = column.column
+			names[j] = column.column + "\x00" + column.declaredType
 		}
-		var schema string
-		if err := reader.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&schema); err != nil {
-			return result, err
-		}
-		signature := "v1\x00" + strings.Join(names, "\x00") + "\x00" + schema
+		signature := "v2\x00" + strings.Join(names, "\x00")
 		generation, completed, err := beginTimestampProgress(ctx, db, table, signature)
 		if err != nil {
 			return result, err
@@ -521,10 +517,10 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []time
 	return binding, err
 }
 
-type timestampColumn struct{ table, column string }
+type timestampColumn struct{ table, column, declaredType string }
 
 func timestampColumns(ctx context.Context, db *sql.DB) ([]timestampColumn, error) {
-	rows, err := db.QueryContext(ctx, `SELECT m.name,p.name FROM sqlite_master AS m,pragma_table_info(m.name) AS p
+	rows, err := db.QueryContext(ctx, `SELECT m.name,p.name,upper(p.type) FROM sqlite_master AS m,pragma_table_info(m.name) AS p
 WHERE m.type='table' AND m.name NOT LIKE 'sqlite_%' AND m.sql NOT LIKE 'CREATE VIRTUAL%'
 AND upper(p.type) IN ('TIMESTAMP','DATETIME','DATE') ORDER BY m.name,p.cid`)
 	if err != nil {
@@ -534,7 +530,7 @@ AND upper(p.type) IN ('TIMESTAMP','DATETIME','DATE') ORDER BY m.name,p.cid`)
 	var columns []timestampColumn
 	for rows.Next() {
 		var c timestampColumn
-		if err := rows.Scan(&c.table, &c.column); err != nil {
+		if err := rows.Scan(&c.table, &c.column, &c.declaredType); err != nil {
 			return nil, err
 		}
 		columns = append(columns, c)

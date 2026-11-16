@@ -382,9 +382,24 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 	return store, nil
 }
 
-func migrate(db *sql.DB) error {
+func migrate(db *sql.DB) (err error) {
 	gooseMu.Lock()
 	defer gooseMu.Unlock()
+	// Triggers naming timestamp columns must not outlive a migration that
+	// drops those columns. Preserve completion only for unchanged definitions.
+	ctx := context.Background()
+	triggers, err := timestampProgressTriggerDefinitions(ctx, db)
+	if err != nil {
+		return fmt.Errorf("read timestamp repair triggers: %w", err)
+	}
+	if err := suspendTimestampProgressTriggers(ctx, db, triggers); err != nil {
+		return fmt.Errorf("suspend timestamp repair triggers before migrations: %w", err)
+	}
+	defer func() {
+		if restoreErr := restoreTimestampProgressTriggers(ctx, db, triggers); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore timestamp repair triggers: %w", restoreErr))
+		}
+	}()
 	goose.SetBaseFS(migrationsFS)
 	goose.SetLogger(goose.NopLogger())
 	if err := goose.SetDialect("sqlite3"); err != nil {
