@@ -46,6 +46,12 @@ Flags: `--rebuild`, `--reinstall`, `--no-launch`. Env: `AO_MOBILE_UDID`,
 - **Free profile allows 3 apps:** the error lists the bundle ids using the slots. Ask the
   user which one to remove before uninstalling anything.
 - **Port 8081 held by another process:** ask before stopping it.
+- **`waiting for another run to finish`:** another checkout is building or installing; let it
+  finish. Runs take turns because they share the build cache and the phone.
+- **`replacing Metro serving <checkout>`:** the phone now loads this checkout's JS, not the
+  other one's. Mention it to the user if that checkout belongs to another session.
+- **`launch failed; reinstalling`:** the app was probably deleted from the phone; the script
+  reinstalls and retries once.
 - **`expo prebuild changed tracked files`:** report `git status`; do not revert.
 - **Signing errors on a first build:** `-allowProvisioningUpdates` normally registers the
   bundle id; otherwise report the xcodebuild error.
@@ -53,7 +59,9 @@ Flags: `--rebuild`, `--reinstall`, `--no-launch`. Env: `AO_MOBILE_UDID`,
 ## After it runs
 
 The app is **AO Dev**, separate from any store build, and pairs with the desktop on its
-own the first time. iOS asks to allow Local Network access on first launch; it needs that
+own the first time, through its in-app QR scanner. It registers dev-only URL schemes
+(`aomobile-dev`, `ao-app-dev`), so the pairing QR scanned with the Camera opens the store
+app, not AO Dev. iOS asks to allow Local Network access on first launch; it needs that
 to reach Metro. Do not take screenshots of the phone or drive it unless asked.
 
 ## Stop

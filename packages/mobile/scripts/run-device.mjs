@@ -15,8 +15,13 @@
 //   4. Metro from this checkout on :8081 in tmux, then launch the app.
 //
 // The app installs under its own bundle id ("AO Dev"), next to any store or
-// Release build, and pairs with the desktop separately. Push is left out by
+// Release build, and pairs with the desktop separately (with its in-app QR
+// scanner). It registers dev-only URL schemes, so links and the pairing QR
+// opened from outside the app keep going to the store app. Push is left out by
 // default: personal (free) teams cannot sign it and dev builds don't need it.
+//
+// One run at a time per machine: runs from other checkouts wait on a lock, and
+// Metro on :8081 serves one checkout, so a run says whose Metro it replaces.
 //
 // Usage: node scripts/run-device.mjs [run|stop|status] [--rebuild] [--reinstall] [--no-launch]
 // Env:   AO_MOBILE_UDID       device to use (default: the one connected iPhone)
@@ -26,7 +31,7 @@
 //        AO_MOBILE_DEV_DIR    cache directory (default: ~/.ao/dev/mobile-device)
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,8 +43,12 @@ const DISPLAY_NAME = "AO Dev";
 const PORT = 8081;
 const TMUX = ["-L", "ao-mobile-device"];
 // Bump when the build steps below change, so older cached apps are not reused.
-const RECIPE = 1;
+const RECIPE = 2;
 const KEEP = 4;
+// Registered instead of the store app's aomobile / ao-app, which stay the store app's.
+const DEV_URL_SCHEMES = ["aomobile-dev", "ao-app-dev"];
+const LOCK = path.join(STORE, "lock");
+const METRO_STATE = path.join(STORE, "metro.json");
 
 const args = process.argv.slice(2);
 const command = args.find((a) => !a.startsWith("--")) ?? "run";
@@ -82,6 +91,12 @@ function clone(src, dst) {
 	rmSync(dst, { recursive: true, force: true });
 	run("cp", ["-c", "-R", src, dst]);
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// prune() keeps the most recently used entries, so mark an entry used on reuse.
+function touch(dir) {
+	const now = new Date();
+	utimesSync(dir, now, now);
+}
 function prune(dir) {
 	if (!existsSync(dir)) return;
 	const entries = readdirSync(dir)
@@ -89,7 +104,10 @@ function prune(dir) {
 		.sort((a, b) => b.mtime - a.mtime);
 	for (const { name } of entries.slice(KEEP)) rmSync(path.join(dir, name), { recursive: true, force: true });
 }
-const stopMetro = () => run("tmux", [...TMUX, "kill-server"], { capture: true, allowFail: true });
+function stopMetro() {
+	run("tmux", [...TMUX, "kill-server"], { capture: true, allowFail: true });
+	rmSync(METRO_STATE, { force: true });
+}
 const portHolder = () => out("lsof", ["-nP", `-iTCP:${PORT}`, "-sTCP:LISTEN", "-t"], { allowFail: true });
 
 if (process.platform !== "darwin") fail("iOS device runs need macOS with Xcode");
@@ -104,10 +122,56 @@ const branch = out("git", ["-C", repo, "rev-parse", "--abbrev-ref", "HEAD"]);
 const statePath = path.join(STORE, "installed.json");
 
 if (command === "status") {
-	console.log(JSON.stringify({ repo, branch, installed: readJSON(statePath, {}), metroPid: portHolder() || null }, null, 2));
+	const metroPid = portHolder() || null;
+	const metroServes = metroPid ? readJSON(METRO_STATE, null) : null;
+	console.log(JSON.stringify({ repo, branch, installed: readJSON(statePath, {}), metroPid, metroServes, lockedBy: readJSON(path.join(LOCK, "owner.json"), null) }, null, 2));
 	process.exit(0);
 }
 if (command !== "run") fail(`unknown command ${command}`);
+
+// Builds share derived data and the phone, so runs take turns. mkdir is atomic;
+// a lock whose owner process is gone is stale.
+async function acquireLock() {
+	const owner = path.join(LOCK, "owner.json");
+	mkdirSync(STORE, { recursive: true });
+	for (let i = 0; ; i += 1) {
+		try {
+			mkdirSync(LOCK);
+			writeJSON(owner, { pid: process.pid, checkout: repo, branch, startedAt: new Date().toISOString() });
+			break;
+		} catch (error) {
+			if (error.code !== "EEXIST") throw error;
+		}
+		const held = readJSON(owner, {});
+		let alive = false;
+		if (held.pid) {
+			try {
+				process.kill(held.pid, 0);
+				alive = true;
+			} catch (error) {
+				alive = error.code === "EPERM";
+			}
+		}
+		// No owner file yet means another run is between mkdir and writing it.
+		if (!alive && (held.pid || i >= 10)) {
+			// Only clear the lock this run judged stale, and move it aside atomically,
+			// so two waiters can't both clear it and then both take it.
+			if (readJSON(owner, {}).pid === held.pid) {
+				const aside = `${LOCK}.stale-${process.pid}`;
+				try {
+					renameSync(LOCK, aside);
+					rmSync(aside, { recursive: true, force: true });
+				} catch {}
+			}
+			continue;
+		}
+		if (i % 30 === 0) log(`waiting for another run to finish (${held.checkout ?? "unknown checkout"} on ${held.branch ?? "?"}, pid ${held.pid ?? "?"})`);
+		await sleep(1000);
+	}
+	process.on("exit", () => {
+		if (readJSON(owner, {}).pid === process.pid) rmSync(LOCK, { recursive: true, force: true });
+	});
+}
 
 // Configuration ---------------------------------------------------------------
 function listDevices() {
@@ -139,18 +203,23 @@ function pickDevice() {
 	return { udid: device.hardwareProperties.udid, name: name(device) };
 }
 
-// The team is the OU of the Apple Development certificate in the keychain.
+// The team is the OU of a valid Apple Development identity in the keychain.
+// Expired certificates and ones without a private key are not identities, so
+// they don't count.
 function signingTeam() {
 	if (process.env.AO_MOBILE_TEAM) return process.env.AO_MOBILE_TEAM;
-	const pems = out("security", ["find-certificate", "-a", "-c", "Apple Development", "-p"], { allowFail: true });
+	const identities = out("security", ["find-identity", "-v", "-p", "codesigning"], { allowFail: true });
+	const valid = new Set([...identities.matchAll(/^\s*\d+\)\s+([0-9A-F]{40})\s+"Apple Development:/gm)].map((m) => m[1]));
+	const certs = out("security", ["find-certificate", "-a", "-c", "Apple Development", "-Z", "-p"], { allowFail: true });
 	const teams = new Set();
-	for (const pem of pems.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? []) {
+	for (const [, hash, pem] of certs.matchAll(/SHA-1 hash:\s*([0-9A-F]{40})[\s\S]*?(-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----)/g)) {
+		if (!valid.has(hash)) continue;
 		const subject = run("openssl", ["x509", "-noout", "-subject"], { capture: true, input: pem, allowFail: true }).stdout;
 		const ou = subject.match(/OU\s*=\s*([A-Z0-9]{10})/)?.[1];
 		if (ou) teams.add(ou);
 	}
 	if (teams.size === 1) return [...teams][0];
-	if (teams.size === 0) fail("no Apple Development certificate found; sign in to Xcode with your Apple ID, or set AO_MOBILE_TEAM");
+	if (teams.size === 0) fail("no valid Apple Development identity found; sign in to Xcode with your Apple ID, or set AO_MOBILE_TEAM");
 	fail(`several signing teams found (${[...teams].join(", ")}); set AO_MOBILE_TEAM`);
 }
 
@@ -168,6 +237,7 @@ function deps() {
 	const stored = path.join(STORE, "node_modules", key);
 	if (existsSync(path.join(stored, ".ao-device-warm.json"))) {
 		log(`node_modules: cloning stored install ${key}`);
+		touch(stored);
 		clone(stored, nm);
 		return;
 	}
@@ -212,6 +282,7 @@ function build({ key, hash, team, bundleId, keepPush, udid }) {
 	if (existsSync(app) && !flag("rebuild")) {
 		const problem = profileProblem(app, udid);
 		if (!problem) {
+			touch(dir);
 			log(`native build reused (fingerprint ${hash.slice(0, 10)}, profile valid until ${new Date(profileInfo(app).expires).toISOString()})`);
 			return { app, dir, built: false };
 		}
@@ -227,7 +298,17 @@ function build({ key, hash, team, bundleId, keepPush, udid }) {
 	if (!keepPush) {
 		run("/usr/libexec/PlistBuddy", ["-c", "Delete :aps-environment", path.join(appDir, "Orchestrator.entitlements")], { capture: true, allowFail: true });
 	}
-	run("/usr/libexec/PlistBuddy", ["-c", `Set :CFBundleDisplayName ${DISPLAY_NAME}`, path.join(appDir, "Info.plist")], { capture: true, allowFail: true });
+	const plist = path.join(appDir, "Info.plist");
+	const buddy = (cmd, allowFail = false) => run("/usr/libexec/PlistBuddy", ["-c", cmd, plist], { capture: true, allowFail });
+	buddy("Delete :CFBundleDisplayName", true);
+	buddy(`Add :CFBundleDisplayName string ${DISPLAY_NAME}`);
+	// The store app owns aomobile:// (the desktop's pairing QR) and ao-app://.
+	// Sign-in still works: the auth session catches its own ao-app callback.
+	buddy("Delete :CFBundleURLTypes", true);
+	buddy("Add :CFBundleURLTypes array");
+	buddy("Add :CFBundleURLTypes:0 dict");
+	buddy("Add :CFBundleURLTypes:0:CFBundleURLSchemes array");
+	DEV_URL_SCHEMES.forEach((scheme, i) => buddy(`Add :CFBundleURLTypes:0:CFBundleURLSchemes:${i} string ${scheme}`));
 	const pbx = path.join(ios, "Orchestrator.xcodeproj/project.pbxproj");
 	const source = readFileSync(pbx, "utf8");
 	const patched = source.replace(/PRODUCT_BUNDLE_IDENTIFIER = "?aoagents\.ao"?;/g, `PRODUCT_BUNDLE_IDENTIFIER = "${bundleId}";`);
@@ -284,10 +365,13 @@ function withIP(app, ip) {
 	const copy = path.join(tmp, "Orchestrator.app");
 	clone(app, copy);
 	writeFileSync(path.join(copy, "ip.txt"), `${ip}\n`);
-	const identity = run("codesign", ["-dvv", app], { capture: true }).stderr.match(/^Authority=(.+)$/m)?.[1];
+	// Sign by the leaf certificate's SHA-1: a name can match several identities.
+	const certPrefix = path.join(tmp, "cert");
+	run("codesign", ["-d", `--extract-certificates=${certPrefix}`, app], { capture: true, allowFail: true });
+	const identity = existsSync(`${certPrefix}0`) ? createHash("sha1").update(readFileSync(`${certPrefix}0`)).digest("hex").toUpperCase() : null;
 	if (!identity) {
 		cleanup();
-		fail("could not read the signing identity of the cached app");
+		fail("could not read the signing certificate of the cached app");
 	}
 	const ents = path.join(tmp, "ents.plist");
 	writeFileSync(ents, run("codesign", ["-d", "--entitlements", "-", "--xml", app], { capture: true }).stdout);
@@ -301,12 +385,12 @@ function withIP(app, ip) {
 
 // A rebuild for the same fingerprint (a renewed profile) has a new builtAt, so
 // the phone gets it even though the key and IP are unchanged.
-function install(app, dir, key, udid) {
+function install(app, dir, key, udid, force = false) {
 	const ip = lanIP();
 	const builtAt = readJSON(path.join(dir, "meta.json"), {}).builtAt ?? null;
 	const state = readJSON(statePath, {});
 	const prev = state[udid];
-	if (prev?.key === key && prev?.ip === ip && prev?.builtAt === builtAt && !flag("reinstall")) {
+	if (!force && prev?.key === key && prev?.ip === ip && prev?.builtAt === builtAt && !flag("reinstall")) {
 		log("app on the phone already matches; no install");
 		return ip;
 	}
@@ -328,6 +412,10 @@ function install(app, dir, key, udid) {
 
 // 4. Metro + launch -----------------------------------------------------------
 async function metro() {
+	const serving = portHolder() ? readJSON(METRO_STATE, null) : null;
+	if (serving && (serving.checkout !== repo || serving.branch !== branch)) {
+		log(`replacing Metro serving ${serving.checkout} (${serving.branch}); the phone will load this checkout instead`);
+	}
 	stopMetro();
 	for (let i = 0; i < 20 && portHolder(); i += 1) await new Promise((r) => setTimeout(r, 250));
 	const holder = portHolder();
@@ -342,14 +430,19 @@ async function metro() {
 	for (let i = 0; i < 240; i += 1) {
 		try {
 			const res = await fetch(`http://127.0.0.1:${PORT}/status`);
-			if ((await res.text()).includes("packager-status:running")) return logFile;
+			if ((await res.text()).includes("packager-status:running")) {
+				writeJSON(METRO_STATE, { checkout: repo, branch, startedAt: new Date().toISOString() });
+				return logFile;
+			}
 		} catch {}
 		await new Promise((r) => setTimeout(r, 250));
 	}
+	stopMetro();
 	fail(`Metro did not come up in 60 s; see ${logFile}`);
 }
 
 const started = Date.now();
+await acquireLock();
 const device = pickDevice();
 const team = signingTeam();
 const bundleId = process.env.AO_MOBILE_BUNDLE_ID ?? `aoagents.ao.dev.${team.toLowerCase()}`;
@@ -359,8 +452,13 @@ const { hash, key } = fingerprint(team, bundleId, keepPush);
 const { app, dir, built } = build({ key, hash, team, bundleId, keepPush, udid: device.udid });
 const ip = install(app, dir, key, device.udid);
 const logFile = await metro();
-if (!flag("no-launch")) {
-	run("xcrun", ["devicectl", "device", "process", "launch", "--device", device.udid, "--terminate-existing", bundleId], { capture: true });
+const launch = () => run("xcrun", ["devicectl", "device", "process", "launch", "--device", device.udid, "--terminate-existing", bundleId], { capture: true, allowFail: true });
+if (!flag("no-launch") && launch().status !== 0) {
+	// Most often the app was deleted from the phone while installed.json still matches.
+	log("launch failed; reinstalling the app and trying again");
+	install(app, dir, key, device.udid, true);
+	const retry = launch();
+	if (retry.status !== 0) fail(`launching ${bundleId} failed\n${retry.stderr || retry.stdout}`);
 }
 log(
 	[
