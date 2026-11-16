@@ -198,6 +198,76 @@ func sessionTimestampRepairCases() map[string]string {
 }
 
 func TestOpenMessageBeforeSessionTimestampRepair(t *testing.T) {
+	for name, legacy := range map[string]string{
+		"named":           "2026-10-21 18:15:40.123456789 +0200 CEST",
+		"numeric":         "2026-10-21 18:15:40.123456789 +0200 +0200",
+		"rfc3339":         "2026-10-21T18:15:40.123456789+02:00",
+		"negative":        "2026-10-21 12:15:40.123456789 -0400 EDT",
+		"monotonic":       "2026-10-21 18:15:40.123456789 +0200 CEST m=+1.234",
+		"later lifecycle": "2026-10-21 18:15:40.123456789 +0200 CEST",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			db := openMigratedTestDBIn(t, dir)
+			const good = "2026-10-21 16:15:40.123456789 +0000 UTC"
+			updated := legacy
+			wantUpdated := time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC)
+			if name == "later lifecycle" {
+				updated = "2026-10-21 13:45:40.123456789 -0400 EDT"
+				wantUpdated = time.Date(2026, 10, 21, 17, 45, 40, 123456789, time.UTC)
+			}
+			_, err := db.Exec(`INSERT INTO sessions(id,num,harness,session_mode,controller_generation,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_user_prompt,latest_user_prompt_at,latest_assistant_update,conversation_checkpoint_state,conversation_checkpoint_generation,conversation_checkpoint_native_id) VALUES('pending',1,'aider','chat','gen-1','idle',?,0,?,?,'earlier',?,'old answer','complete','old-gen','old-native');
+INSERT INTO conversations(id,scope,session_id,current_session_id,created_at,updated_at) VALUES('pending-conv','session','pending','pending',?,?);
+CREATE TRIGGER block_repair BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT,'repair cannot reach sessions'); END;`, good, good, updated, legacy, good, good)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var before string
+			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT) FROM sessions WHERE id='pending'`).Scan(&before); err != nil || before != legacy {
+				t.Fatalf("fixture was repaired before send: %q %v", before, err)
+			}
+			// The trigger made the startup fence skip the session row; lift it so only the send itself can normalize.
+			if _, err := db.Exec(`DROP TRIGGER block_repair`); err != nil {
+				t.Fatal(err)
+			}
+			later := time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC)
+			created, err := s.AppendUserMessage(context.Background(), "pending-conv", "pending", "gen-1", domain.ConversationMessage{ID: "later-message", Text: "later UTC prompt", Origin: domain.MessageOriginHuman}, "later-turn", later)
+			if err != nil || !created {
+				t.Fatalf("send: created=%v err=%v", created, err)
+			}
+			got, ok, err := s.GetSession(context.Background(), "pending")
+			if err != nil || !ok {
+				t.Fatalf("read sent facts: ok=%v %v", ok, err)
+			}
+			if got.Metadata.LatestUserPrompt != "later UTC prompt" || !got.Metadata.LatestUserPromptAt.Equal(later) || !got.UpdatedAt.Equal(wantUpdated) {
+				t.Fatalf("send succeeded with stale prompt facts: %+v", got.Metadata)
+			}
+			if got.Metadata.LatestAssistantUpdate != "" || got.Metadata.ConversationCheckpointState != domain.ConversationCheckpointLegacy || got.Metadata.ConversationCheckpointGeneration != "" || got.Metadata.ConversationCheckpointNativeID != "" {
+				t.Fatalf("send kept stale checkpoint: %+v", got.Metadata)
+			}
+			for _, table := range []string{"conversation_messages", "conversation_turns"} {
+				var count int
+				if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 1 {
+					t.Fatalf("send persisted %d %s: %v", count, table, err)
+				}
+			}
+			if err := repairTimestamps(context.Background(), db); err != nil {
+				t.Fatal(err)
+			}
+			after, _, err := s.GetSession(context.Background(), "pending")
+			if err != nil || after.Metadata.LatestUserPrompt != got.Metadata.LatestUserPrompt || !after.Metadata.LatestUserPromptAt.Equal(later) {
+				t.Fatalf("background completion changed sent facts: %+v %v", after.Metadata, err)
+			}
+		})
+	}
+}
+
+func TestOpenMessageAfterLegacyWriterReentry(t *testing.T) {
 	for name, legacy := range sessionTimestampRepairCases() {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()

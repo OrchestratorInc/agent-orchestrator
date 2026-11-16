@@ -118,6 +118,16 @@ func checkLegacyDatabasePath(dataDir string) error {
 	return nil
 }
 
+// timestampFenceTimeout bounds the startup repair that must finish before any
+// reader opens. Variable so tests can shorten it.
+var timestampFenceTimeout = 5 * time.Minute
+
+type timestampOpenOptions struct {
+	driver      string
+	fenceBudget time.Duration
+	repairDone  chan<- struct{}
+}
+
 // Open opens (creating if absent) the SQLite database under dataDir and returns
 // a Store. It uses TWO pools against the same file:
 //
@@ -129,15 +139,8 @@ func checkLegacyDatabasePath(dataDir string) error {
 //     that hasn't caught up to the commit and read NULL.
 //   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
 //     it; WAL readers see the latest committed snapshot.
-type timestampOpenOptions struct {
-	driver      string
-	fenceBudget time.Duration
-	repairDone  chan<- struct{}
-}
-
-// Open opens the database and starts resumable timestamp repair.
 func Open(dataDir string) (*Store, error) {
-	return openWithTimestampOptions(dataDir, timestampOpenOptions{driver: "ao-sqlite", fenceBudget: 30 * time.Second})
+	return openWithTimestampOptions(dataDir, timestampOpenOptions{driver: "ao-sqlite", fenceBudget: timestampFenceTimeout})
 }
 
 func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store, error) {
@@ -182,6 +185,16 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 			repairErr = ctx.Err()
 		}
 		cancel()
+		if errors.Is(repairErr, context.DeadlineExceeded) {
+			_ = readDB.Close()
+			_ = writeDB.Close()
+			return nil, fmt.Errorf("timestamp repair incomplete after %s; reopen to resume: %w", time.Since(started).Round(time.Second), repairErr)
+		}
+		if errors.Is(repairErr, context.Canceled) {
+			_ = readDB.Close()
+			_ = writeDB.Close()
+			return nil, repairErr
+		}
 		if repairErr == nil {
 			slog.Info("timestamp startup fence completed", "duration", time.Since(started))
 		}
@@ -232,12 +245,6 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 	return store, nil
 }
 
-// withSearchIndex opens the reader pool beside an open, migrated writer, then
-// the optional session search index (search_db.go).
-//
-// The index never decides whether the store opens: one that cannot be opened
-// is recorded on the store (SessionSearchUnavailable) and search stays off,
-// while every other read and write works as usual.
 func openTimestampReaders(driverName, dsn string) (*sql.DB, error) {
 	readDB, err := sql.Open(driverName, dsn)
 	if err != nil {
@@ -248,6 +255,12 @@ func openTimestampReaders(driverName, dsn string) (*sql.DB, error) {
 	return readDB, nil
 }
 
+// withSearchIndex opens the reader pool beside an open, migrated writer, then
+// the optional session search index (search_db.go).
+//
+// The index never decides whether the store opens: one that cannot be opened
+// is recorded on the store (SessionSearchUnavailable) and search stays off,
+// while every other read and write works as usual.
 func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
 	readDB, err := openTimestampReaders("ao-sqlite", dsn)
 	if err != nil {

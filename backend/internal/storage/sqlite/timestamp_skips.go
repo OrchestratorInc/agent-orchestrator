@@ -106,7 +106,7 @@ func (s *timestampRepairState) save() error {
 }
 func timestampSkipKey(table string, values []any, n int) (string, string) {
 	data := []byte(fmt.Sprintf("%#v", values[n+1:]))
-	return fmt.Sprintf("%s/%v", table, values[n]), fmt.Sprintf("%x", sha256.Sum256(data))
+	return fmt.Sprintf("%s/%v", table, values[n]), fmt.Sprintf("policy:%x", sha256.Sum256(data))
 }
 func (s *timestampRepairState) skip(table string, values []any, n int, err error) {
 	key, hash := timestampSkipKey(table, values, n)

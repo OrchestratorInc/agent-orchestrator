@@ -29,6 +29,7 @@ var timestampFenceTables = map[string]bool{
 	"session_cleanup_facts": true, "usage_sources": true, "usage_bindings": true,
 	"model_usage_events": true, "session_interface_transitions": true,
 	"agent_switches": true, "codex_account_switches": true,
+	"review": true, "review_run": true,
 }
 
 // Scan forward by row identity, with bounded memory and write transactions.

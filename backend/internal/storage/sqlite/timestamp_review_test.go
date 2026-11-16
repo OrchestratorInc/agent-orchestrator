@@ -41,34 +41,6 @@ func TestTimestampCorruptLedgerStillRepairs(t *testing.T) {
 	}
 }
 
-func TestTimestampFenceTimeoutContinuesInBackground(t *testing.T) {
-	dir := t.TempDir()
-	db := openMigratedTestDBIn(t, dir)
-	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('deadline',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,'2026-10-21 09:00:00 +0530 IST')`); err != nil {
-		t.Fatal(err)
-	}
-	var logs bytes.Buffer
-	original := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-	defer slog.SetDefault(original)
-	done := make(chan struct{})
-	s, err := openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: time.Nanosecond, repairDone: done})
-	if err != nil {
-		t.Fatalf("deadline blocked startup: %v", err)
-	}
-	<-done
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(logs.String(), "timestamp startup fence incomplete") || strings.Contains(logs.String(), "timestamp startup fence completed") {
-		t.Fatalf("misleading deadline log: %s", logs.String())
-	}
-	var raw string
-	if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT) FROM sessions`).Scan(&raw); err != nil || raw != "2026-10-21 03:30:00 +0000 UTC" {
-		t.Fatalf("background did not finish: %q %v", raw, err)
-	}
-}
-
 type repairScanCounts struct{ connections, writer, reader atomic.Int64 }
 type repairScanDriver struct {
 	driver.Driver
