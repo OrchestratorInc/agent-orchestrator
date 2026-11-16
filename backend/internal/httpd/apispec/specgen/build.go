@@ -413,6 +413,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersWorkspaceFileBlobQuery":                   "WorkspaceFileBlobQuery",
 	"ControllersWorkspaceFileRevisionQuery":               "WorkspaceFileRevisionQuery",
 	"ControllersWorkspaceSearchQuery":                     "WorkspaceSearchQuery",
+	"ControllersAttachmentUploadResponse":                 "AttachmentUploadResponse",
 	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
 	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
 	"ControllersAttachmentInput":                          "AttachmentInput",
@@ -3647,6 +3648,18 @@ func sessionOperations() []operation {
 			pathParams:   []any{controllers.SessionIDParam{}},
 			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
 			contentTypes: map[int]string{http.StatusBadGateway: "text/plain"},
+		},
+		{
+			// The body is the file's raw bytes (any content type), streamed to
+			// disk with no size cap; the reflected spec has no raw-body form.
+			method: http.MethodPost, path: "/api/v1/attachment-uploads", id: "uploadAttachment", tag: "sessions",
+			summary: "Stream a file to disk for a later attachment to name by uploadId",
+			resps: []respUnit{
+				{http.StatusCreated, controllers.AttachmentUploadResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments", id: "stageSessionAttachments", tag: "sessions",
