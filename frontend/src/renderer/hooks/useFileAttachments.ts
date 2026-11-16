@@ -47,7 +47,7 @@ export type FileAttachment = {
 export type FileAttachmentPayload = OutgoingAttachment;
 
 /** The outgoing form of an attachment that has its bytes inline or on disk. */
-export function attachmentPayload({ mimeType, data, name, file }: Pick<FileAttachment, "mimeType" | "data" | "name" | "file">): FileAttachmentPayload[] {
+export function attachmentPayload({ mimeType, data, name, file }: Pick<FileAttachment, "mimeType" | "data" | "file"> & { name?: string }): FileAttachmentPayload[] {
 	if (data) return [{ mimeType, data, ...(name ? { name } : {}) }];
 	if (file) return [{ mimeType, data: "", file, ...(name ? { name } : {}) }];
 	return [];
