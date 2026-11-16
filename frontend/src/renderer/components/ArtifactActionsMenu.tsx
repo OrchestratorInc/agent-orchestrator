@@ -12,7 +12,7 @@ import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
 import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpClient } from "../lib/cloud-cp";
-import { artifactChangeError, artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
+import { artifactChangeError, artifactKey, canChangeSessionArtifacts, findHostShareLink } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { mayBePublished, prepareUnpublish, publishedCheck, unpublishTarget, warnLinksStillLive } from "../lib/unpublish-artifacts";
@@ -22,7 +22,7 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Button } from "./ui/button";
-import { ShareArtifactMenuPopover, VIDEO_FILE, useShareAccess, useShareAvailable } from "./ShareArtifactPopover";
+import { ShareArtifactMenuPopover, VIDEO_FILE, useHostShareLinks, useShareAccess, useShareAvailable } from "./ShareArtifactPopover";
 import type { CloudShareFile } from "../../shared/cloud-share";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -140,7 +140,10 @@ export function ArtifactActionsMenu({
 		: undefined;
 	const { baseUrl: shareBaseUrl } = useShareAccess();
 	// A cloud file's link is looked up while its delete is being confirmed.
-	const deletesLink = usePublishedLinkCount(shareBaseUrl, publishedCheck({ ...session, hostId }, [artifact]), confirmingDelete) > 0;
+	// A remote daemon lists no link: a host's file takes it from this computer's host links.
+	const hostLink = findHostShareLink(useHostShareLinks(), hostId ?? "", session.id, artifact);
+	const deleted = { ...artifact, ...(hostId && !artifact.shareUrl && hostLink ? { shareUrl: hostLink.url } : {}) };
+	const deletesLink = usePublishedLinkCount(shareBaseUrl, publishedCheck({ ...session, hostId }, [deleted]), confirmingDelete) > 0;
 	// The deleted file leaves the session's artifact list on the next read.
 	// Its link is looked up while the file is there and unpublished once it is
 	// gone; a remote host's file has no link recorded on this computer.
@@ -148,8 +151,8 @@ export function ArtifactActionsMenu({
 		mutationFn: async () => {
 			const links = await prepareUnpublish(
 				shareBaseUrl,
-				mayBePublished(session, artifact) && !hostId ? [share ?? unpublishTarget(session, artifact)] : [],
-				{ deleting: hostId ? [] : [{ sessionId: session.id, path: artifact.path }] },
+				mayBePublished(session, deleted) ? [share ?? unpublishTarget({ ...session, hostId }, artifact)] : [],
+				{ deleting: [{ sessionId: session.id, path: artifact.path }] },
 			);
 			await (session.cloud
 				? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })

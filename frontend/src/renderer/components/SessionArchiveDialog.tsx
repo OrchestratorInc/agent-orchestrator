@@ -4,6 +4,7 @@ import { sessionArtifacts, type WorkspaceSession } from "../types/workspace";
 import { sessionPublishedCheck, type PublishedCheck } from "../lib/unpublish-artifacts";
 import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { useSettings } from "../hooks/useSettings";
+import { useHostShareLinks } from "./ShareArtifactPopover";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Checkbox } from "./ui/checkbox";
 
@@ -79,7 +80,7 @@ export function SessionArchiveDialog({
 							</label>
 							<p className="text-settings-muted">
 								{t("archive.deleteArtifactsHint", { count: artifactCount })}
-								{published.lookup.length > 0 ? <LookedUpPublishedNote check={published} /> : <PublishedNote count={published.known} />}
+								{session?.hostId ? <HostPublishedNote session={session} /> : published.lookup.length > 0 ? <LookedUpPublishedNote check={published} /> : <PublishedNote count={published.known} />}
 							</p>
 						</div>
 					</div>
@@ -101,4 +102,9 @@ function PublishedNote({ count }: { count: number }) {
 function LookedUpPublishedNote({ check }: { check: PublishedCheck }) {
 	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
 	return <PublishedNote count={usePublishedLinkCount(baseUrl, check, true)} />;
+}
+
+/** The note for a remote host's session, whose links only this computer's host links name. */
+function HostPublishedNote({ session }: { session: WorkspaceSession }) {
+	return <PublishedNote count={sessionPublishedCheck(session, useHostShareLinks()).known} />;
 }

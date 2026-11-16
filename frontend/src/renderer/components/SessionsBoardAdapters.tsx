@@ -22,7 +22,7 @@ import { renameCloudSession, renameSession } from "../lib/rename-session";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../hooks/useSessionRename";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
-import { prepareUnpublish, sessionPublishedCheck, sessionUnpublishTargets, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { prepareUnpublish, sessionDeleteTargets, sessionPublishedCheck, warnLinksStillLive } from "../lib/unpublish-artifacts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
 import { formatTimeCompact } from "../lib/format-time";
@@ -49,6 +49,7 @@ import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
+import { useHostShareLinks } from "./ShareArtifactPopover";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
@@ -833,14 +834,15 @@ export function DeleteArchivedSessionDialog({
 	}
 	const released = session.workspaceCleanup === "removed" || session.workspaceCleanup === "not_applicable";
 	const baseUrl = useSettings().settings?.cloudControlPlaneUrl ?? "";
-	// Only a local session is deleted here, and its files say whether they are published.
-	const publishedCount = sessionPublishedCheck(session).known;
+	// Only a local or remote host's session is deleted here: its files, matched
+	// to this computer's host links on a remote host, say which are published.
+	const publishedCount = sessionPublishedCheck(session, useHostShareLinks()).known;
 	const confirmDelete = async () => {
 		setDeleting(true);
 		setError(null);
 		try {
 			// Looked up while the files are there; unpublished only once they are gone.
-			const links = await prepareUnpublish(baseUrl, sessionUnpublishTargets(session), { deleting: session.hostId ? [] : [{ sessionId: session.id }] });
+			const links = await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ sessionId: session.id }] });
 			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
 				params: { path: { sessionId: session.id }, query: { cleanup: true } },
 			});

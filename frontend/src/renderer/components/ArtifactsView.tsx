@@ -246,7 +246,7 @@ export function ArtifactsView() {
 	const bulkDelete = useMutation({
 		mutationFn: async (rows: readonly ArtifactRow[]) => {
 			const links = await Promise.all(rows.map((row) => prepareUnpublish(shareBaseUrl, deleteUnpublishTargets(rowSession(row), [row]), {
-				deleting: row.hostId ? [] : [{ sessionId: row.sessionId, path: row.path }],
+				deleting: [{ sessionId: row.sessionId, path: row.path }],
 			})));
 			const results = await Promise.allSettled(rows.map((row) => row.cloud
 				? cloudClient.deleteSessionArtifact(row.cloud.orgId, row.sessionId, row.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
