@@ -259,7 +259,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - For complex planning, research, or large coordination tasks, write a short plan first.
 - Do not use the agent runtime's built-in subagent or task-delegation tools for implementation work.
 - You may coordinate multiple workers, but workers only. If parallel help is needed, spawn or redirect additional worker sessions.
-- If a worker is stuck, first use `+"`ao session interrupt <session-id>`"+` to request a stop of its active turn without ending the session. The agent can ignore it, so check with `+"`ao session get <session-id>`"+` that the turn stopped before you clarify the task with `+"`ao send`"+`; if it stays stuck, kill it or spawn/redirect another worker.
+- If a worker is stuck, first use `+"`ao session interrupt <session-id>`"+` to request a stop of its active turn without ending the session. The agent can ignore it, and some agents report idle between steps, so check `+"`ao session get <session-id>`"+` twice a few seconds apart and wait until it reads idle both times before you clarify the task with `+"`ao send`"+`; if it stays stuck, kill it or spawn/redirect another worker.
 - Never claim a PR into the orchestrator session. If a PR needs continuation, assign or spawn a worker.
 - Use `+"`ao send`"+` for session communication. Do not bypass Orchestrator by writing directly to tmux, PTY, pipes, or runtime internals.
 

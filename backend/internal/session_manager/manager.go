@@ -540,10 +540,10 @@ type Manager struct {
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
-	// turnStops holds, per session, the LastActivityAt of the active turn
-	// StopTUITurn already interrupted, so a repeat for that turn is refused.
+	// turnStops holds, per session, the turn StopTUITurn already interrupted,
+	// so a repeat for that turn is refused.
 	turnStopsMu sync.Mutex
-	turnStops   map[domain.SessionID]time.Time
+	turnStops   map[domain.SessionID]tuiTurn
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context
@@ -5532,6 +5532,31 @@ var (
 	ErrTurnStopPending = errors.New("session: turn stop already requested")
 )
 
+// tuiTurn identifies one turn of a TUI session. LastActivityAt alone is not
+// enough, because a stopped turn can stay active (Claude Code reports nothing
+// on Ctrl+C) and a prompt submitted then keeps active without moving it. The
+// prompt facts do move, and coordination prompts set a checkpoint turn ID.
+type tuiTurn struct {
+	activityAt time.Time
+	promptAt   time.Time
+	prompt     string
+	turnID     string
+}
+
+func tuiTurnOf(rec domain.SessionRecord) tuiTurn {
+	return tuiTurn{
+		activityAt: rec.Activity.LastActivityAt,
+		promptAt:   rec.Metadata.LatestUserPromptAt,
+		prompt:     rec.Metadata.LatestUserPrompt,
+		turnID:     rec.Metadata.ConversationCheckpointTurnID,
+	}
+}
+
+func (t tuiTurn) same(o tuiTurn) bool {
+	return t.activityAt.Equal(o.activityAt) && t.promptAt.Equal(o.promptAt) &&
+		t.prompt == o.prompt && t.turnID == o.turnID
+}
+
 // StopTUITurn interrupts a TUI session's active turn on an explicit user
 // request. Unlike InterruptTUI it needs no delivery confirmation, since
 // nothing is sent after it.
@@ -5554,14 +5579,14 @@ func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		return ErrInterruptUnsupported
 	}
-	turn := rec.Activity.LastActivityAt
+	turn := tuiTurnOf(rec)
 	m.turnStopsMu.Lock()
 	if rec.Activity.State != domain.ActivityActive {
 		delete(m.turnStops, id)
 		m.turnStopsMu.Unlock()
 		return ErrNoActiveTurn
 	}
-	if stopped, ok := m.turnStops[id]; ok && stopped.Equal(turn) {
+	if stopped, ok := m.turnStops[id]; ok && stopped.same(turn) {
 		m.turnStopsMu.Unlock()
 		return ErrTurnStopPending
 	}
@@ -5571,14 +5596,14 @@ func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
 		return ErrInterruptUnsupported
 	}
 	if m.turnStops == nil {
-		m.turnStops = make(map[domain.SessionID]time.Time)
+		m.turnStops = make(map[domain.SessionID]tuiTurn)
 	}
 	m.turnStops[id] = turn
 	m.turnStopsMu.Unlock()
 	if err := interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}); err != nil {
 		// Nothing reached the agent, so a retry for this turn is allowed.
 		m.turnStopsMu.Lock()
-		if stopped, ok := m.turnStops[id]; ok && stopped.Equal(turn) {
+		if stopped, ok := m.turnStops[id]; ok && stopped.same(turn) {
 			delete(m.turnStops, id)
 		}
 		m.turnStopsMu.Unlock()

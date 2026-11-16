@@ -11525,6 +11525,46 @@ func TestStopTUITurnSendsOneInterruptPerTurn(t *testing.T) {
 	}
 }
 
+// A stopped turn can stay active (Claude Code sends no hook on Ctrl+C), and a
+// prompt submitted then keeps active without moving LastActivityAt. The new
+// prompt still starts a new turn that must be stoppable.
+func TestStopTUITurnStopsPromptSubmittedWithoutIdle(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{
+			RuntimeHandleID:    "runtime-1",
+			LatestUserPrompt:   "run the tests",
+			LatestUserPromptAt: turn,
+		},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+
+	rec := st.sessions["s1"]
+	rec.Metadata.LatestUserPrompt = "fix the lint instead"
+	rec.Metadata.LatestUserPromptAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a new prompt: %v", err)
+	}
+
+	// A coordination turn changes only the checkpoint turn ID.
+	rec = st.sessions["s1"]
+	rec.Metadata.ConversationCheckpointTurnID = "coord-1"
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a coordination prompt: %v", err)
+	}
+	if len(rt.interrupts) != 3 {
+		t.Fatalf("interrupts = %v, want three", rt.interrupts)
+	}
+}
+
 func TestStopTUITurnRetriesAfterFailedDelivery(t *testing.T) {
 	m, st, rt, _ := newManager()
 	st.sessions["s1"] = domain.SessionRecord{

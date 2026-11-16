@@ -210,9 +210,10 @@ ao session interrupt <id> [flags]
 |---|---|---|
 | `-p, --project string` | Project id to scope the lookup | - |
 
-Use this first when a worker is stuck in a no-progress turn. Check with
-`ao session get <id>` that the turn stopped before sending new instructions; use
-`kill` only when the session cannot be recovered.
+Use this first when a worker is stuck in a no-progress turn. Some agents report
+idle between steps, so run `ao session get <id>` twice a few seconds apart and
+wait until it reads idle both times before sending new instructions; use `kill`
+only when the session cannot be recovered.
 
 ---
 
