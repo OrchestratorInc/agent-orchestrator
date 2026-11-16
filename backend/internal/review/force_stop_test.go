@@ -47,28 +47,16 @@ func newScriptedTable(lines ...string) *scriptedTable {
 	return t
 }
 
-func (t *scriptedTable) starts(context.Context) (map[int]string, error) {
+// identities is one consistent reading of the table: each pid's parent and
+// start identity together.
+func (t *scriptedTable) identities(context.Context) (map[int]procmem.Identity, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	out := map[int]string{}
-	for pid := range t.processes {
-		out[pid] = t.started[pid]
+	out := map[int]procmem.Identity{}
+	for pid, p := range t.processes {
+		out[pid] = procmem.Identity{PPID: p.PPID, Start: t.started[pid]}
 	}
 	return out, nil
-}
-
-func (t *scriptedTable) snapshot(context.Context) (*procmem.Table, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	var lines []string
-	for _, p := range t.processes {
-		lines = append(lines, formatPS(p))
-	}
-	return procmem.Parse(strings.Join(lines, "\n"))
-}
-
-func formatPS(p procmem.Process) string {
-	return strings.Join([]string{strconv.Itoa(p.PID), strconv.Itoa(p.PPID), "100", "0:00", p.Command}, " ")
 }
 
 func (t *scriptedTable) kill(pid int) error {
@@ -108,7 +96,7 @@ func (r *destroyHookRuntime) Destroy(ctx context.Context, handle ports.RuntimeHa
 }
 
 func forceStopLauncher(rt reviewerRuntime, table *scriptedTable) *agentLauncher {
-	return &agentLauncher{runtime: rt, forceStop: forceStopHooks{snapshot: table.snapshot, starts: table.starts, kill: table.kill, wait: 50 * time.Millisecond, poll: 5 * time.Millisecond}}
+	return &agentLauncher{runtime: rt, forceStop: forceStopHooks{identities: table.identities, kill: table.kill, wait: 50 * time.Millisecond, poll: 5 * time.Millisecond}}
 }
 
 // A pid reused by an unrelated process after the agent exited is never killed.

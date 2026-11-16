@@ -223,8 +223,12 @@ it stops or is force-stopped. A force-stop captures the reviewer's whole
 process tree before tearing down its runtime and kills any survivor, so an
 agent that cannot react to hangup is not left running; the stop counts as
 confirmed only when none of those processes remains. A process is identified
-by pid and start time, which survives exec and changes on pid reuse, and
-survivors of an unconfirmed attempt are carried into the retry. Suspend gaps
+by pid and start time (which survives exec and changes on pid reuse), read
+together with its parent from one consistent observation; a process whose
+identity cannot be read is never killed and never counted as gone, and the
+runtime is not torn down until the tree has been captured. Survivors of an
+unconfirmed attempt are carried into the retry, and still killed if a new
+launch takes over the reviewer. Suspend gaps
 are kept for a pending stop's grace as they are for active runs.
 
 ### 4. Change data capture

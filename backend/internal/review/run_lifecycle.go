@@ -1052,6 +1052,37 @@ func (e *Engine) reapOrphan(ctx stdctx.Context, workerID domain.SessionID, revie
 	return e.store.ClearReviewerHandleByHarness(ctx, workerID, review.Harness)
 }
 
+// survivorStopper is implemented by launchers that remember the processes an
+// unconfirmed force-stop captured, and can kill just those later.
+type survivorStopper interface {
+	StopSurvivors(ctx stdctx.Context, handleID string) (bool, error)
+}
+
+// handOverStop settles a stop obligation whose review has moved on to a new
+// launch or new work, which now owns the reviewer handle. An interrupted
+// reviewer is simply that launch's business now. But a reviewer already
+// force-stopped without confirmation (an orphan, or a cancel the kill could
+// not confirm) may have left processes behind that belong to no launch: kill
+// those by their captured identity, without touching the new reviewer, and
+// keep the obligation until they are confirmed gone.
+func (e *Engine) handOverStop(ctx stdctx.Context, stop pendingStop) error {
+	if !stop.immediate {
+		e.forgetStop(stop.review.ID)
+		return nil
+	}
+	stopper, ok := e.launcher.(survivorStopper)
+	if !ok {
+		e.forgetStop(stop.review.ID)
+		return nil
+	}
+	stopped, err := stopper.StopSurvivors(ctx, reviewerProbeHandle(stop.review))
+	if err != nil || !stopped {
+		return err
+	}
+	e.forgetStop(stop.review.ID)
+	return nil
+}
+
 // forceStopper is implemented by launchers that can force-stop a reviewer's
 // whole process tree and confirm nothing in it survived.
 type forceStopper interface {
@@ -1128,8 +1159,7 @@ func (e *Engine) settleStopLocked(ctx stdctx.Context, stop pendingStop, observed
 		return err
 	}
 	if !ok || current.ID != stop.review.ID || current.ReviewerHandleID != stop.review.ReviewerHandleID || current.ReviewerLaunchID != stop.review.ReviewerLaunchID {
-		e.forgetStop(stop.review.ID)
-		return nil
+		return e.handOverStop(ctx, stop)
 	}
 	active, err := e.store.ListActiveReviewRunsBySession(ctx, stop.review.SessionID)
 	if err != nil {
@@ -1137,8 +1167,7 @@ func (e *Engine) settleStopLocked(ctx stdctx.Context, stop pendingStop, observed
 	}
 	for _, run := range active {
 		if run.ReviewID == current.ID {
-			e.forgetStop(stop.review.ID)
-			return nil
+			return e.handOverStop(ctx, stop)
 		}
 	}
 	now := e.clock()
