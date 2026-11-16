@@ -466,7 +466,7 @@ export function SplitGroupTab({
 						<span
 							className={cn(
 								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-								focused && "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0",
+								focused && "group-hover:opacity-0 focus-visible-in-group:opacity-0",
 							)}
 						>
 							{member.icon}
@@ -484,7 +484,7 @@ export function SplitGroupTab({
 								{segment}
 								{/* Takes the icon's slot on hover, like the close button on other tabs. */}
 								<span
-									className="pointer-events-none absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
+									className="pointer-events-none absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible-in-group:pointer-events-auto focus-visible-in-group:opacity-100"
 									data-terminal-tab-action
 								>
 									<Pressable

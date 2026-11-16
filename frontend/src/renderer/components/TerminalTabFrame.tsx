@@ -133,7 +133,7 @@ export function TerminalTabFrame({
 						<span
 							className={cn(
 								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-								iconAction && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
+								iconAction && (actionPinned ? "opacity-0" : "group-hover:opacity-0 focus-visible-in-group:opacity-0 [[data-terminal-tab-frame]:has([data-state=open])>button>&]:opacity-0 in-data-dragging:opacity-0"),
 							)}
 						>
 							{icon}
@@ -148,7 +148,7 @@ export function TerminalTabFrame({
 						"mr-2 grid size-icon-base shrink-0 place-items-center",
 						actionPinned
 							? undefined
-							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100",
+							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible-in-group:pointer-events-auto focus-visible-in-group:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100",
 					)}
 					data-terminal-tab-action
 				>
@@ -164,7 +164,7 @@ export function TerminalTabFrame({
 						// selects the tab (the icon lets it through) instead of closing it.
 						actionPinned
 							? undefined
-							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100",
+							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 focus-visible-in-group:pointer-events-auto focus-visible-in-group:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100",
 					)}
 					data-terminal-tab-action
 				>

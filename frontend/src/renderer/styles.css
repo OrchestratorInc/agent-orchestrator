@@ -10,6 +10,17 @@
 
 @custom-variant dark (&:is(.dark *, :root:not([data-theme="light"]) *));
 
+/*
+ * "A control inside the group has keyboard focus". Use these, never
+ * group-has-*: Tailwind compiles that to `:is(:where(.group):has(...) *)`, and a
+ * :has() inside :is() makes Chromium restyle the whole app on every DOM change
+ * anywhere (about 30 ms per streamed chat line, tooltip or session switch).
+ * Same elements, same specificity, written as a plain descendant selector.
+ */
+@custom-variant focus-visible-in-group (:where(.group):has(:focus-visible) &);
+@custom-variant focus-visible-in-session-row (:where(.group\/session-row):has(:focus-visible) &);
+@custom-variant focus-visible-in-scratchpad (:where(.group\/scratchpad):has(:focus-visible) &);
+
 @custom-media --layout-narrow (width <= 680px); /* --breakpoint-layout-narrow */
 
 /*

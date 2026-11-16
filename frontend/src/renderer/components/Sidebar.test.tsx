@@ -1577,7 +1577,7 @@ describe("Sidebar", () => {
 		expect(openSession).toHaveClass("pr-[36px]");
 		expect(openSession).toHaveClass(
 			"group-hover/session-row:pr-sidebar-project-actions",
-			"group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
+			"focus-visible-in-session-row:pr-sidebar-project-actions",
 		);
 		expect(label).toHaveClass("min-w-0", "flex-1", "truncate");
 		expect(actions).toHaveAttribute("data-session-actions");
@@ -1588,9 +1588,9 @@ describe("Sidebar", () => {
 			"opacity-0",
 			"scale-[0.8]",
 			"duration-normal",
-			"group-has-[:focus-visible]/session-row:pointer-events-auto",
-			"group-has-[:focus-visible]/session-row:scale-100",
-			"group-has-[:focus-visible]/session-row:opacity-100",
+			"focus-visible-in-session-row:pointer-events-auto",
+			"focus-visible-in-session-row:scale-100",
+			"focus-visible-in-session-row:opacity-100",
 		);
 		expect(actionButtons).toHaveAttribute("data-session-action-buttons", "");
 		expect(time).toHaveAttribute("datetime", lastUserMessageAt);
@@ -1598,7 +1598,7 @@ describe("Sidebar", () => {
 			"absolute",
 			"right-2",
 			"opacity-100",
-			"group-has-[:focus-visible]/session-row:opacity-0",
+			"focus-visible-in-session-row:opacity-0",
 		);
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
