@@ -40,9 +40,10 @@ type sessionCleanupOptions struct {
 }
 
 type sessionDeleteOptions struct {
-	project string
-	yes     bool
-	cleanup bool
+	project       string
+	yes           bool
+	cleanup       bool
+	keepArtifacts bool
 }
 
 type sessionClaimPROptions struct {
@@ -429,6 +430,7 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 		Use:   "delete <id>",
 		Short: "Permanently delete a terminated session",
 		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts, attachments and artifacts). " +
+			"With --keep-artifacts its artifact files are kept, view only, on the Artifacts page. " +
 			"The session must be terminated and its worktree cleaned up first (ao session cleanup, or --cleanup). Git branches, pull requests and agent account usage totals are kept.",
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -442,6 +444,7 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&opts.cleanup, "cleanup", false, "Clean up a worktree still on disk first (never forced; a dirty or locked one refuses the delete)")
+	cmd.Flags().BoolVar(&opts.keepArtifacts, "keep-artifacts", false, "Keep the session's artifact files, view only, on the Artifacts page")
 	return cmd
 }
 
@@ -881,6 +884,9 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 	params := url.Values{}
 	if opts.cleanup {
 		params.Set("cleanup", "true")
+	}
+	if opts.keepArtifacts {
+		params.Set("keepArtifacts", "true")
 	}
 	var res deleteSessionResponse
 	if err := c.deleteJSON(ctx, apiPath("sessions/"+url.PathEscape(id), params), &res); err != nil {

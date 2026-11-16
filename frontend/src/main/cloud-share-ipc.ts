@@ -222,6 +222,17 @@ function requireMainFrame(event: unknown): void {
 	}
 }
 
+// Refusals that mean the bytes never made it to AO Cloud: the upload, or the
+// machine or disk the file is read from.
+const UPLOAD_FAILURES = new Set(["upload_failed", "timeout", "host_unavailable", "disk_full", "source_changed", "file_missing"]);
+
+/** A refusal's category for publish telemetry. A file over the size limit is answered 413 or a too_large code. */
+function shareFailure(error: CloudShareError): { failure?: "too_large" | "upload_failed" } {
+	if (error.status === 413 || error.code.includes("too_large")) return { failure: "too_large" };
+	if (UPLOAD_FAILURES.has(error.code)) return { failure: "upload_failed" };
+	return {};
+}
+
 /**
  * Maps a refusal to its result. Every refusal is returned, not thrown: a
  * thrown error reaches the renderer wrapped in Electron's IPC text. Anything
@@ -239,7 +250,7 @@ function refusal(error: unknown): CloudSharePublishResult {
 			case "artifact_share_not_owner":
 				return { status: "not_owner" };
 		}
-		return { status: "error", message: error.message };
+		return { status: "error", message: error.message, ...shareFailure(error) };
 	}
 	throw error;
 }

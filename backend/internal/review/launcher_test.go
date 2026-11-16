@@ -675,7 +675,7 @@ func TestLauncherRestoreTerminalStartsIdlePane(t *testing.T) {
 		ID:             "run-1",
 		PRURL:          "https://github.com/o/r/pull/1",
 		TargetSHA:      "sha1",
-		Status:         domain.ReviewRunComplete,
+		Status:         domain.ReviewRunCompleted,
 		Verdict:        domain.VerdictChangesRequested,
 		Body:           "Fix the restore path.",
 		GithubReviewID: "484",

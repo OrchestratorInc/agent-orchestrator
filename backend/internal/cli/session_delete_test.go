@@ -140,6 +140,19 @@ func TestSessionDelete_CleanupAsksDaemonToCleanUpFirst(t *testing.T) {
 	}
 }
 
+func TestSessionDelete_KeepArtifactsAsksDaemonToKeepThem(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, requests := deleteCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "delete", "demo-old", "-y", "--keep-artifacts"); err != nil {
+		t.Fatalf("session delete failed: %v\nstderr=%s", err, errOut)
+	}
+	if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old?keepArtifacts=true"}) {
+		t.Fatalf("requests = %#v", got)
+	}
+}
+
 func TestSessionDelete_SurfacesDaemonRefusal(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, _ := deleteCommandServer(t)
