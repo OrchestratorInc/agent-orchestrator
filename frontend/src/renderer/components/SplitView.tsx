@@ -440,7 +440,8 @@ export function SplitGroupTab({
 						aria-selected={active && focused}
 						className={cn(
 							"inline-flex h-full min-w-0 cursor-pointer items-center gap-2 leading-none",
-							focused ? cn("max-w-shell-tab-max px-2 text-control", active ? tabFadeClassName : tabHoverFadeClassName) : "max-w-40 px-2 text-control",
+							// The focused member has every tab's width floor, so a short name keeps its icon clear of the close's fade.
+							focused ? cn("min-w-shell-tab-min max-w-shell-tab-max px-2 text-control", active ? tabFadeClassName : tabHoverFadeClassName) : "max-w-40 px-2 text-control",
 							active && focused ? "text-foreground" : active ? "text-muted-foreground hover:text-foreground" : "hover:text-foreground",
 						)}
 						data-split-member={member.key}

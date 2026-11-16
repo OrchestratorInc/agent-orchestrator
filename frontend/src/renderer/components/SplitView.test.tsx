@@ -129,6 +129,7 @@ it.each([true, false])("lays the focused member's close over its name's end, sho
 	expect(slot).toHaveClass("absolute", "right-2");
 	expect(slot).not.toHaveClass("mr-2");
 	expect(slot.classList.contains("opacity-0")).toBe(!active);
+	expect(focused).toHaveClass("min-w-shell-tab-min");
 	expect(focused).toHaveClass(active ? "[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]" : "group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]");
 	// The member keeps its icon on hover.
 	expect(focused.querySelector("svg")?.parentElement).not.toHaveClass("group-hover:opacity-0");
