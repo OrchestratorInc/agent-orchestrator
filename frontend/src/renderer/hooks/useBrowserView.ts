@@ -377,11 +377,13 @@ export function useBrowserView({
 	const hasNativeBrowser = Boolean(window.ao?.browser);
 
 	// The tab host keeps the agent on its own tab while its turn runs and the
-	// person browses another (BrowserSessionEntry.agentTabId).
+	// person browses another (BrowserSessionEntry.agentTabId). Right after a
+	// session switch, viewId still names the previous session's view until the
+	// switch effect below catches up: never report this session's turn on it.
 	useEffect(() => {
-		if (!viewId || !hasNativeBrowser) return;
+		if (!viewId || !hasNativeBrowser || stateSessionId !== sessionId) return;
 		void window.ao?.browser.setAgentTurn?.({ viewId, active: agentWorking })?.catch(() => undefined);
-	}, [agentWorking, hasNativeBrowser, viewId]);
+	}, [agentWorking, hasNativeBrowser, sessionId, stateSessionId, viewId]);
 
 	useEffect(() => {
 		activeRef.current = active;

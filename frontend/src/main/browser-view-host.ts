@@ -702,6 +702,9 @@ type BrowserSessionEntry = {
   agentTabId?: string;
   // The session's agent turn is running (reported by the renderer).
   agentTurnActive: boolean;
+  // Bumped whenever the turn starts or ends, so work that awaited across a
+  // turn boundary does not pin the agent into the next turn.
+  agentTurnGeneration: number;
   // Agent browser pages whose tabs closed here: they are closing, so the
   // agent tab sync must not bring them back meanwhile. A page a person closed
   // (closePage) stays closed for as long as reports still list it.
@@ -1403,7 +1406,7 @@ export function createBrowserViewHost(
           if (!isCurrentEntry() || session.tabs.get(popup.tabId) !== popup) return;
           // A popup from the agent's tab behind the person's stays behind it,
           // as the agent's tab.
-          if (session.agentTabId === entry.tabId) session.agentTabId = popup.tabId;
+          if (pinnedAgentTab(session) === entry.tabId) session.agentTabId = popup.tabId;
           else activateTab(session, popup.tabId, false);
           queueNativeActiveTabSync(session);
           pushTabsState(options, session, { kind: "popup", tabId: popup.tabId });
@@ -1576,6 +1579,7 @@ export function createBrowserViewHost(
         layoutRevision: 0,
         agentBrowserCommands: 0,
         agentTurnActive: false,
+        agentTurnGeneration: 0,
         browserOperations: 0,
         idleWaiters: [],
         profileSwitching: false,
@@ -2604,9 +2608,10 @@ export function createBrowserViewHost(
           .map(target),
       // With the person's tab in front, the agent's new tab opens behind it.
       createTarget: async (url) => {
-        const behind = session.agentTabId !== undefined;
+        const behind = pinnedAgentTab(session) !== undefined;
+        const turn = session.agentTurnGeneration;
         const entry = await openTab(session, url === "about:blank" ? undefined : url, !behind);
-        if (behind) session.agentTabId = entry.tabId;
+        if (behind && turn === session.agentTurnGeneration) session.agentTabId = entry.tabId;
         return target(entry);
       },
       activateTarget: async (targetId) => {
@@ -2618,7 +2623,7 @@ export function createBrowserViewHost(
           );
         await entry.ready;
         // With the person's tab in front, the agent switches tabs behind it.
-        if (session.agentTabId !== undefined) session.agentTabId = targetId;
+        if (pinnedAgentTab(session) !== undefined) session.agentTabId = targetId;
         else activateTab(session, targetId);
       },
       closeTarget: (targetId) => {
@@ -4031,6 +4036,7 @@ export function createBrowserViewHost(
     const session = entries.get(input?.viewId);
     if (!session || !isRendererOwned(event, input.viewId)) return;
     if (session.agentTurnActive !== (input.active === true))
+    if (session.agentTurnActive !== (input.active === true)) session.agentTurnGeneration += 1;
     session.agentTurnActive = input.active === true;
     // The turn is over: the agent follows the person's tab again.
     if (!session.agentTurnActive) session.agentTabId = undefined;
@@ -4551,7 +4557,7 @@ export function createBrowserViewHost(
                 // With the person's tab in front, the agent's selection stays
                 // behind it. An in-flight command must not overwrite a newer
                 // human selection either, even if they switched away and back.
-                if (session.agentTabId !== undefined && requestedEntry) {
+                if (pinnedAgentTab(session) !== undefined && requestedEntry) {
                   session.agentTabId = nativeArgs.tabId;
                 } else if (
                   session.activationRevision === activationRevision &&
@@ -5294,14 +5300,21 @@ function emptyDevToolsState(viewId: string): BrowserDevToolsState {
 
 // The tab agent commands act on: its own while the person has brought another
 // forward during its turn, otherwise the one in front.
+// The tab the agent is held on while the person has another in front. A pin
+// whose tab has closed no longer holds: the agent follows the front tab.
+function pinnedAgentTab(session: BrowserSessionEntry): string | undefined {
+  if (session.agentTabId !== undefined && !session.tabs.has(session.agentTabId))
+    session.agentTabId = undefined;
+  return session.agentTabId;
+}
+
 function agentTabIdFor(session: BrowserSessionEntry): string {
-  return session.agentTabId !== undefined && session.tabs.has(session.agentTabId)
-    ? session.agentTabId
-    : session.activeTabId;
+  return pinnedAgentTab(session) ?? session.activeTabId;
 }
 
 function agentEntry(session: BrowserSessionEntry): BrowserEntry {
-  const pinned = session.agentTabId === undefined ? undefined : session.tabs.get(session.agentTabId);
+  const pinnedTabId = pinnedAgentTab(session);
+  const pinned = pinnedTabId === undefined ? undefined : session.tabs.get(pinnedTabId);
   return pinned ?? activeEntry(session);
 }
 
@@ -5312,7 +5325,7 @@ function personChangesFrontTab(session: BrowserSessionEntry): void {
     session.agentTabId = undefined;
     return;
   }
-  if (session.agentTabId === undefined && session.tabs.has(session.activeTabId))
+  if (pinnedAgentTab(session) === undefined && session.tabs.has(session.activeTabId))
     session.agentTabId = session.activeTabId;
 }
 
@@ -5767,9 +5780,10 @@ function agentTabsResult(
 ): BrowserTabsState & { untrustedExternalContent: true } {
   return {
     viewId: session.viewId,
-    activeTabId: session.activeTabId,
+    // The agent's own tab, which its commands act on, not the person's.
+    activeTabId: agentTabIdFor(session),
     tabs: [...session.tabs.values()].map((entry) =>
-      agentTabResult(entry, entry.tabId === session.activeTabId),
+      agentTabResult(entry, entry.tabId === agentTabIdFor(session)),
     ),
     untrustedExternalContent: true,
   };

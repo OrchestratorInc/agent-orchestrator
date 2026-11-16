@@ -254,6 +254,19 @@ describe("useBrowserView", () => {
 		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenLastCalledWith({ viewId: "42:sess-1", active: false }));
 	});
 
+	it("never reports a newly shown session's turn on the previous session's view", async () => {
+		const bridge = setupBridge();
+		const { rerender } = renderHook(
+			({ sessionId, agentWorking }) => useBrowserView({ sessionId, active: true, poppedOut: false, agentWorking }),
+			{ initialProps: { sessionId: "sess-1", agentWorking: true } },
+		);
+		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenCalledWith({ viewId: "42:sess-1", active: true }));
+
+		rerender({ sessionId: "sess-2", agentWorking: false });
+		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenCalledWith({ viewId: "42:sess-2", active: false }));
+		expect(bridge.setAgentTurn.mock.calls.map(([input]) => input)).not.toContainEqual({ viewId: "42:sess-1", active: false });
+	});
+
 	it("ensures a scoped browser view and reports the measured slot bounds", async () => {
 		const bridge = setupBridge();
 		const slot = createSlot();
