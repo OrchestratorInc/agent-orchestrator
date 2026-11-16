@@ -6540,7 +6540,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Waiting on base PR" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -8420,6 +8420,7 @@ export interface components {
             /** @enum {string} */
             review: "none" | "approved" | "changes_requested" | "review_required";
             reviewComments: boolean;
+            stackParent?: number;
             /** @enum {string} */
             state: "draft" | "open" | "merged" | "closed";
             /** Format: date-time */
