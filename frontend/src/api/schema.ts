@@ -12453,7 +12453,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/octet-stream": string;
+                "application/octet-stream": unknown;
             };
         };
         responses: {

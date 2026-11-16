@@ -2140,10 +2140,7 @@ paths:
       operationId: uploadAttachment
       requestBody:
         content:
-          application/octet-stream:
-            schema:
-              format: binary
-              type: string
+          application/octet-stream: {}
         required: true
       responses:
         "201":

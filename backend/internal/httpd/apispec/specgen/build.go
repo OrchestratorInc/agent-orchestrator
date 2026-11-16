@@ -756,9 +756,10 @@ func setRawRequestBody(spec *openapi31.Spec, method, path, contentType string) e
 	if method != http.MethodPost || item.Post == nil {
 		return fmt.Errorf("raw request body for %s %s: only a POST operation is supported", method, path)
 	}
-	body := openapi31.RequestBody{Content: map[string]openapi31.MediaType{
-		contentType: {Schema: map[string]interface{}{"type": "string", "format": "binary"}},
-	}}
+	// OpenAPI 3.1 describes raw bytes by the media type with no schema;
+	// "type: string, format: binary" would type the body as a string, which a
+	// typed client cannot fill from a File or Blob without reading it whole.
+	body := openapi31.RequestBody{Content: map[string]openapi31.MediaType{contentType: {}}}
 	body.WithRequired(true)
 	item.Post.RequestBody = &openapi31.RequestBodyOrReference{RequestBody: &body}
 	return nil
