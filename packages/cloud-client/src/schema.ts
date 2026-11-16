@@ -822,7 +822,7 @@ export interface paths {
         delete: operations["deleteAutomation"];
         options?: never;
         head?: never;
-        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or turning the automation on, makes the caller the person it runs as (runAs), with their own credential: a caller without a validated credential for the harness gets 422 agent_provider_required. Turning it off changes only enabled. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
+        /** @description Change an automation; omitted fields keep their values. Only the person it runs as, its creator and the organization's admins may (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or turning the automation on when the caller is not already its runAs, makes the caller the person it runs as (runAs), with their own credential: a caller without a validated credential for the harness gets 422 agent_provider_required. Turning it off changes only enabled. The next run is computed afresh, so turning an automation back on never runs the occurrences it missed. */
         patch: operations["updateAutomation"];
         trace?: never;
     };
@@ -3771,9 +3771,9 @@ export interface components {
             };
             /** Format: uuid */
             createdByUserId?: string;
-            /** @description Failed or timed_out runs in a row; a completed run resets it and a skipped one leaves it. At 5 the automation is turned off. */
+            /** @description Scheduled runs in a row that failed or timed out; a completed scheduled run resets it, and skipped and manual runs leave it. At 5 the automation is turned off. */
             consecutiveFailures: number;
-            /** @description Why it was turned off automatically, such as after 5 failed or timed_out runs in a row, in words for a person to read. Absent while enabled or turned off by a person. */
+            /** @description Why it was turned off automatically, such as after 5 scheduled runs in a row that failed or timed out, in words for a person to read. Absent while enabled or turned off by a person. */
             disabledReason?: string;
             /** @description Whether the caller is notified of its runs. */
             subscribed: boolean;
