@@ -6386,9 +6386,10 @@ components:
     ProjectSandboxDocker:
       type: boolean
       description: >-
-        The session's agents may use Docker in the cloud sandbox. Docker access
-        amounts to root there, so while it is on, saved logins are not filled
-        into that sandbox's browser. Defaults to on.
+        Docker (Coder sandboxes): the session's agents may use Docker in a
+        Coder sandbox. Docker access amounts to root there, so while it is on,
+        saved logins are not filled into that sandbox's browser. Sandboxes whose
+        provider runs no Docker (Freestyle) ignore it. Defaults to on.
     ProjectAgentsCanUseSudo:
       type: boolean
       description: >-
