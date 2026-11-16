@@ -260,6 +260,24 @@ describe("cloud funnel telemetry", () => {
 		expect(captured[1]?.properties).toMatchObject({ plan: "starter" });
 	});
 
+	it("tells a free trial apart from a paid checkout", async () => {
+		const plans = [{ name: "starter", id: "price_1", trialDays: 7 }, { name: "pro", id: "price_2" }];
+		let summary = { enabled: true, exempt: false, plan: "free", entitled: false, plans } as Record<string, unknown>;
+		const client = instrumentCloudClient(fakeClient({ getBilling: vi.fn(async () => summary) } as unknown as Partial<CloudCpClient>));
+		await client.getBilling("org-1");
+		await client.createBillingCheckout("org-1", "starter");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "starter", trial: true } });
+		summary = { enabled: true, exempt: false, plan: "starter", entitled: true, subscriptionStatus: "trialing", plans: [plans[1]] };
+		await client.getBilling("org-1");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "starter", trial: true } });
+		// The trial is used up: a later checkout of another plan is paid.
+		await client.createBillingCheckout("org-1", "pro");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "pro", trial: false } });
+		summary = { enabled: true, exempt: false, plan: "pro", entitled: true, subscriptionStatus: "active", plans: [plans[1]] };
+		await client.getBilling("org-1");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "pro", trial: false } });
+	});
+
 	it("passes other client methods through untouched", async () => {
 		const deleteSession = vi.fn(async () => undefined);
 		const client = instrumentCloudClient(fakeClient({ deleteSession } as unknown as Partial<CloudCpClient>));
