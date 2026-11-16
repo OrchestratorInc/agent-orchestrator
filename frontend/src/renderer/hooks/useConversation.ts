@@ -545,6 +545,10 @@ export function refreshRemoteConversationOnce(queryClient: QueryClient, sessionI
 	})();
 }
 
+function cachedLivePage(queryClient: QueryClient, key: QueryKey): ConversationSnapshot | undefined {
+	return queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages[0];
+}
+
 /** Each local chat's open read in flight, with the older-page load waiting on it. */
 const localConversationRefreshes = new WeakMap<QueryClient, Map<string, { afterRead?: () => void }>>();
 
@@ -585,11 +589,16 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
 				// Marking an already stale query stale again records nothing, so take the
 				// mark off while reading for an event during the read to be seen.
 				queryClient.getQueryCache().find({ queryKey: key, exact: true })?.setState({ isInvalidated: false });
+				const before = cachedLivePage(queryClient, key);
 				const latest = await fetchConversationPage(sessionId);
 				// An older page that was already loading copied the previous live page when
 				// it started and writes it back when it lands, so this page goes in after it.
 				const loading = queryClient.getQueryCache().find({ queryKey: key, exact: true });
 				if (loading?.state.fetchStatus === "fetching" && loading.state.fetchMeta?.fetchMore) await loading.promise?.catch(() => undefined);
+				// A branch switch, edit or rollback during the read already refetched the
+				// chat on its new branch; this page shows the one it left.
+				const now = cachedLivePage(queryClient, key);
+				if (now?.conversationId !== before?.conversationId || now?.activeBranchId !== before?.activeBranchId) continue;
 				applyLiveConversationPage(queryClient, key, latest);
 			} while (missed && queryClient.getQueryCache().find({ queryKey: key, exact: true, type: "active" }));
 			// Still closed: the next open reads what changed.

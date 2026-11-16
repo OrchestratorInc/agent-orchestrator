@@ -1693,10 +1693,10 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 });
 
 describe("opening a local chat it has cached", () => {
-	const page = (latestSequence: number, oldestSequence: number, hasMoreBefore: boolean, turnState = "running") => ({
+	const page = (latestSequence: number, oldestSequence: number, hasMoreBefore: boolean, turnState = "running", activeBranchId?: string) => ({
 		data: {
 			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
-			latestSequence, oldestSequence, hasMoreBefore,
+			latestSequence, oldestSequence, hasMoreBefore, activeBranchId,
 			turns: [{ id: "t1", state: turnState, requestedAt: "2026-11-16T00:00:00Z" }], messages: [], activities: [],
 		},
 		error: undefined,
@@ -1807,6 +1807,31 @@ describe("opening a local chat it has cached", () => {
 		await waitFor(() => expect(second.result.current.hasOlder).toBe(false));
 		expect(getMock.mock.calls[2][1]).toMatchObject({ params: { query: { beforeSequence: 11 } } });
 		expect(second.result.current.snapshot).toMatchObject({ latestSequence: 21, oldestSequence: 1 });
+	});
+
+	it("drops an open read that lands after the chat moved to another branch", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = conversationQueryKey("ao-1");
+		const openRead = deferred<ReturnType<typeof page>>();
+		getMock.mockReset()
+			.mockResolvedValueOnce(page(20, 1, false, "running", "branch-a"))
+			.mockReturnValueOnce(openRead.promise)
+			.mockRejectedValue(new Error("read again"));
+		const first = mount(queryClient);
+		await waitFor(() => expect(first.result.current.snapshot?.latestSequence).toBe(20));
+		first.unmount();
+		await queryClient.invalidateQueries({ queryKey: key });
+
+		const second = mount(queryClient);
+		await waitFor(() => expect(getMock).toHaveBeenCalledTimes(2));
+		// The reader switches branch; its refetch lands before the open read does.
+		act(() => {
+			queryClient.setQueryData(key, { pages: [toSnapshot(page(22, 1, false, "completed", "branch-b").data as never)], pageParams: [undefined] });
+		});
+		await act(async () => { openRead.resolve(page(21, 1, false, "completed", "branch-a")); });
+
+		expect(second.result.current.snapshot).toMatchObject({ activeBranchId: "branch-b", latestSequence: 22 });
+		expect(getMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("makes no request when the chat did not change while closed", async () => {
