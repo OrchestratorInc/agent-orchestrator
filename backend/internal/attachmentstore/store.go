@@ -196,7 +196,7 @@ func (s *Store) Upload(ctx context.Context, body io.Reader) (string, int64, erro
 		return "", 0, fmt.Errorf("open attachment uploads: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	sweepUploads(root, time.Now())
+	sweepUploads(ctx, root, time.Now())
 	var suffix [16]byte
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return "", 0, err
@@ -289,13 +289,16 @@ func (s *Store) openUploadsRoot(ctx context.Context) (*os.Root, error) {
 
 // sweepUploads removes uploads, and temporary files a crash left behind, last
 // written more than UploadTTL ago. Best effort: a failure leaves the file for
-// the next sweep.
-func sweepUploads(root *os.Root, now time.Time) {
+// the next sweep. A cancelled request stops it between entries.
+func sweepUploads(ctx context.Context, root *os.Root, now time.Time) {
 	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil {
 		return
 	}
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return
+		}
 		info, err := entry.Info()
 		if err != nil || !info.Mode().IsRegular() || now.Sub(info.ModTime()) < UploadTTL {
 			continue
