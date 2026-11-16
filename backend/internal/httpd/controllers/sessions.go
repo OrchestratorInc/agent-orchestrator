@@ -430,6 +430,8 @@ func extensionForMimeType(mimeType string) string {
 		"image/jpg":       ".jpg",
 		"text/plain":      ".txt",
 		"video/quicktime": ".mov",
+		// Go's table also lists .f4v for MP4, and which comes first differs by platform.
+		"video/mp4": ".mp4",
 	}
 
 	// Check if we have a preferred extension for this MIME type

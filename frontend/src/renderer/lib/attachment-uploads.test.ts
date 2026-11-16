@@ -1,3 +1,4 @@
+import { Blob as NodeBlob } from "node:buffer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -26,7 +27,9 @@ describe("attachment uploads", () => {
 
 	it("streams the file itself as the body to the daemon that will use it", async () => {
 		h.fetch.mockResolvedValueOnce(uploaded("upload-a"));
-		const file = new File([new Uint8Array([1, 2, 3])], "clip.mov", { type: "video/quicktime" });
+		// Node's own Blob: jsdom's File is no body the Node Request can send, while
+		// Chromium streams a real File the same way.
+		const file = new NodeBlob([new Uint8Array([1, 2, 3])], { type: "video/quicktime" }) as unknown as Blob;
 		await expect(uploadAttachmentFile(file)).resolves.toBe("upload-a");
 		const request = h.fetch.mock.calls[0]![0];
 		expect(request.method).toBe("POST");
