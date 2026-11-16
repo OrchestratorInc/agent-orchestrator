@@ -234,6 +234,7 @@ if (typeof window !== "undefined") {
 			available: async () => true,
 			inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
 			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
+			hostLinks: async () => [],
 			publish: async () => ({ status: "cancelled" as const }),
 			cancel: async () => undefined,
 			unpublish: async () => undefined,

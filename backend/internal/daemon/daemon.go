@@ -674,6 +674,12 @@ func Run(buildVersion string) (retErr error) {
 		return fmt.Errorf("wire session service: %w", err)
 	}
 	lcStack.StartActivityObserver(wiredSessMgr.SessionRuntimeEnv)
+	// The runtime reaper also observes reviewers serving an in-progress review
+	// run; the review engine reduces each pass into run transitions. Its first
+	// pass (ReconcileRuntime, after Chat reviewer recovery) settles runs a
+	// previous daemon left in progress.
+	lcStack.runtimeReaper.BindReviewers(reviewSvc.ReviewerObserver())
+
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
@@ -783,6 +789,11 @@ func Run(buildVersion string) (retErr error) {
 			defer cancel()
 			return wake.WakeHibernatedChat(wakeCtx, id)
 		})
+	}
+	if check, ok := sessMgr.(interface {
+		ImportedChatWrittenElsewhere(context.Context, domain.SessionRecord, time.Time) (bool, bool)
+	}); ok {
+		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {

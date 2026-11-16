@@ -3944,6 +3944,10 @@ registerCloudShareIpc({
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+	// A remote host's file is read through its loopback proxy, which adds the
+	// host's credential; Node's fetch sends no Origin, as the proxy requires.
+	hostApiBase: (hostId) => remoteRegistry.apiBase(hostId),
+	fetchHost: (url, init) => fetch(url, init),
 });
 // Session and project share links this device made, so Copy link works again
 // later; only the signed-in account's, which the file names.

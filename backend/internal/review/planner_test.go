@@ -21,16 +21,16 @@ func TestPlanStatuses(t *testing.T) {
 		{name: "merged ineligible", pr: withMerged(planPR("pr1", 1, "sha1")), want: ReviewStateIneligible},
 		{name: "closed ineligible", pr: withClosed(planPR("pr1", 1, "sha1")), want: ReviewStateIneligible},
 		{name: "approved current sha up to date", pr: planPR("pr1", 1, "sha1"), runs: []domain.ReviewRun{
-			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now},
+			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now},
 		}, want: ReviewStateUpToDate},
 		{name: "changes requested current sha", pr: planPR("pr1", 1, "sha1"), runs: []domain.ReviewRun{
-			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested, CreatedAt: now},
+			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested, CreatedAt: now},
 		}, want: ReviewStateChangesRequested},
 		{name: "running current sha", pr: planPR("pr1", 1, "sha1"), runs: []domain.ReviewRun{
 			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning, CreatedAt: now},
 		}, want: ReviewStateRunning},
 		{name: "different sha needs review", pr: planPR("pr1", 1, "sha2"), runs: []domain.ReviewRun{
-			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now},
+			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now},
 		}, want: ReviewStateNeedsReview},
 		{name: "failed current sha retryable", pr: planPR("pr1", 1, "sha1"), runs: []domain.ReviewRun{
 			{ID: "run-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunFailed, CreatedAt: now},
@@ -68,7 +68,7 @@ func TestPlanPreservesPreviousVerdictWithoutChangingCurrentHeadState(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runs := []domain.ReviewRun{{
-				ID: "run-previous", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunDelivered,
+				ID: "run-previous", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCompleted,
 				Verdict: domain.VerdictChangesRequested, CreatedAt: now,
 			}}
 			if tt.currentRun != nil {
@@ -96,10 +96,10 @@ func TestPlanPreservesPreviousVerdictWithoutChangingCurrentHeadState(t *testing.
 func TestPlanPreviousRunChoosesNewestQualifyingDifferentHead(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	got := Plan([]domain.PullRequest{planPR("pr1", 1, "sha-current")}, []domain.ReviewRun{
-		{ID: "older", PRURL: "pr1", TargetSHA: "sha-old", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now},
-		{ID: "newest-other", PRURL: "pr1", TargetSHA: "sha-newer", Status: domain.ReviewRunDelivered, Verdict: domain.VerdictChangesRequested, CreatedAt: now.Add(time.Second)},
+		{ID: "older", PRURL: "pr1", TargetSHA: "sha-old", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now},
+		{ID: "newest-other", PRURL: "pr1", TargetSHA: "sha-newer", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested, CreatedAt: now.Add(time.Second)},
 		{ID: "failed-other", PRURL: "pr1", TargetSHA: "sha-failed", Status: domain.ReviewRunFailed, Verdict: domain.VerdictApproved, CreatedAt: now.Add(2 * time.Second)},
-		{ID: "current", PRURL: "pr1", TargetSHA: "sha-current", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now.Add(3 * time.Second)},
+		{ID: "current", PRURL: "pr1", TargetSHA: "sha-current", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now.Add(3 * time.Second)},
 	})
 
 	if got[0].PreviousRun == nil || got[0].PreviousRun.ID != "newest-other" {
@@ -119,14 +119,18 @@ func TestPlanAutoDraftPolicy(t *testing.T) {
 		{name: "unreviewed", want: ReviewStateIneligible},
 		{name: "failed", run: domain.ReviewRun{Status: domain.ReviewRunFailed}, want: ReviewStateIneligible},
 		{name: "cancelled", run: domain.ReviewRun{Status: domain.ReviewRunCancelled}, want: ReviewStateIneligible},
-		{name: "approved", run: domain.ReviewRun{Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved}, want: ReviewStateIneligible},
-		{name: "changes requested", run: domain.ReviewRun{Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested}, want: ReviewStateIneligible},
+		{name: "approved", run: domain.ReviewRun{Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved}, want: ReviewStateIneligible},
+		{name: "changes requested", run: domain.ReviewRun{Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested}, want: ReviewStateIneligible},
+		{name: "superseded", run: domain.ReviewRun{Status: domain.ReviewRunSuperseded}, want: ReviewStateIneligible},
+		{name: "queued", run: domain.ReviewRun{Status: domain.ReviewRunQueued}, want: ReviewStateRunning},
+		{name: "launching", run: domain.ReviewRun{Status: domain.ReviewRunLaunching}, want: ReviewStateRunning},
 		{name: "running", run: domain.ReviewRun{Status: domain.ReviewRunRunning}, want: ReviewStateRunning},
+		{name: "cancelling", run: domain.ReviewRun{Status: domain.ReviewRunCancelling}, want: ReviewStateRunning},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			prs := []domain.PullRequest{withDraft(planPR("draft", 2, "head")), planPR("ready", 1, "head")}
-			runs := []domain.ReviewRun{{ID: "previous", PRURL: "draft", TargetSHA: "old", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved}}
+			runs := []domain.ReviewRun{{ID: "previous", PRURL: "draft", TargetSHA: "old", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved}}
 			if tt.run.Status != "" {
 				tt.run.ID, tt.run.PRURL, tt.run.TargetSHA = "current", "draft", "head"
 				runs = append(runs, tt.run)

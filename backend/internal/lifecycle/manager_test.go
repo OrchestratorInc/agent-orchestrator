@@ -2730,6 +2730,87 @@ func TestPRObservation_ChangesRequestedReviewUsesPersistedBodyAndDecision(t *tes
 	}
 }
 
+// The chat shows a PR event at the time the reviewer wrote it, read from the
+// nudge text. A nudge can be delivered long after (held while the session
+// waited on the user), so the delivery time is not the event time.
+func TestPRObservation_ReviewNudgesCarryProviderTime(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	posted := time.Date(2026, 11, 16, 7, 54, 42, 0, time.FixedZone("IST", 5*3600+1800))
+	submitted := time.Date(2026, 11, 16, 7, 54, 41, 0, time.UTC)
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", Author: "alice", File: "telemetry.ts", Line: 12, Body: "fix this", CreatedAt: posted, AutoInjectReview: true}}
+	st.reviews["pr1"] = []domain.PullRequestReview{{ID: "r1", Author: "bob", State: domain.ReviewChangesRequest, Body: "change this", SubmittedAt: submitted, AutoInjectReview: true}}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("want comment and review nudges, got %v", msg.msgs)
+	}
+	// The time ends the first line, where older chat clients do not look; the
+	// comment heading keeps the shape they parse.
+	if first := strings.SplitN(msg.msgs[0], "\n", 2)[0]; !strings.HasSuffix(first, " Newest comment posted at 2026-11-16T02:24:42Z.") {
+		t.Fatalf("comment nudge first line missing UTC posted time: %q", first)
+	}
+	if !strings.Contains(msg.msgs[0], "\n1. telemetry.ts:12 (@alice):\nfix this") {
+		t.Fatalf("comment heading changed shape:\n%s", msg.msgs[0])
+	}
+	if first := strings.SplitN(msg.msgs[1], "\n", 2)[0]; first != "A changes-requested review from @bob is on your PR. Submitted at 2026-11-16T07:54:41Z." {
+		t.Fatalf("review nudge first line missing submitted time: %q", first)
+	}
+}
+
+func TestPRObservation_ReviewNudgesOmitUnknownProviderTime(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.comments["pr1"] = []domain.PullRequestComment{{ID: "1", Author: "alice", Body: "fix this", AutoInjectReview: true}}
+	st.reviews["pr1"] = []domain.PullRequestReview{{ID: "r1", Author: "bob", State: domain.ReviewChangesRequest, Body: "change this", AutoInjectReview: true}}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("want comment and review nudges, got %v", msg.msgs)
+	}
+	if strings.Contains(msg.msgs[0], "posted at") {
+		t.Fatalf("comment nudge invented a posted time:\n%s", msg.msgs[0])
+	}
+	if strings.Contains(msg.msgs[1], "Submitted at") {
+		t.Fatalf("review nudge invented a submitted time:\n%s", msg.msgs[1])
+	}
+}
+
+func TestSCMObservation_TerminalNotificationsUseProviderTime(t *testing.T) {
+	observed := time.Date(2026, 11, 16, 8, 26, 0, 0, time.UTC)
+	merged := time.Date(2026, 11, 16, 7, 54, 0, 0, time.UTC)
+	closed := time.Date(2026, 11, 16, 7, 40, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		pr   ports.SCMPRObservation
+		want time.Time
+	}{
+		{name: "merged", pr: ports.SCMPRObservation{URL: "https://github.com/o/r/pull/2", Number: 2, Merged: true, MergedAtProvider: merged}, want: merged},
+		{name: "closed", pr: ports.SCMPRObservation{URL: "https://github.com/o/r/pull/3", Number: 3, Closed: true, ClosedAtProvider: closed}, want: closed},
+		{name: "merged without provider time", pr: ports.SCMPRObservation{URL: "https://github.com/o/r/pull/4", Number: 4, Merged: true}, want: observed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			sink := &fakeNotificationSink{}
+			m := New(st, nil, WithNotificationSink(sink))
+			st.sessions["mer-1"] = working("mer-1")
+			if err := m.ApplySCMObservation(ctx, "mer-1", ports.SCMObservation{Fetched: true, ObservedAt: observed, PR: tc.pr}); err != nil {
+				t.Fatal(err)
+			}
+			if len(sink.intents) != 1 {
+				t.Fatalf("intents = %d, want 1", len(sink.intents))
+			}
+			if got := sink.intents[0].CreatedAt; !got.Equal(tc.want) {
+				t.Fatalf("CreatedAt = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSCMObservationProjectsToExistingPRReactions(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
