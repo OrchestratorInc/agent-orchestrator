@@ -267,3 +267,20 @@ describe("a running publish and a delete on another host", () => {
 		await done;
 	});
 });
+
+describe("a publish that finished before its file's list shows the link", () => {
+	it("is still found by a delete of the file, and forgotten once it is deleted", async () => {
+		const file = { sessionId: "ao-1", path: "fresh.md", projectId: "ao" };
+		const { fake, unpublished } = bridge({ "fresh.md": "share-fresh" });
+		trackPublish(BASE, file, Promise.resolve());
+		await Promise.resolve();
+
+		// The row still lacks shareUrl, so the delete names no link of its own.
+		const pending = await prepareUnpublish(BASE, [], { deleting: [{ sessionId: "ao-1", path: "fresh.md" }], bridge: fake });
+		await expect(pending.unpublish()).resolves.toBe(0);
+		expect(unpublished).toEqual(["share-fresh"]);
+
+		await (await prepareUnpublish(BASE, [], { deleting: [{ sessionId: "ao-1", path: "fresh.md" }], bridge: fake })).unpublish();
+		expect(fake.inspect).toHaveBeenCalledTimes(1);
+	});
+});

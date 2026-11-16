@@ -43,26 +43,33 @@ const NOTHING_TO_UNPUBLISH: PendingUnpublish = { unpublish: async () => 0 };
 
 const listeners = new Set<() => void>();
 
-/** Publishes still running, by control plane, host, session and path, with the file each publishes. */
-const publishing = new Map<string, { baseUrl: string; target: UnpublishTarget; done: Promise<unknown> }>();
+/**
+ * Publishes made here, running or done, by control plane, host, session and
+ * path, with the file each publishes. A done one is kept until a delete covers
+ * its file: the file shows its link only once its artifact list is read again,
+ * which can come after the delete, or not at all if that read fails.
+ */
+const publishes = new Map<string, { baseUrl: string; target: UnpublishTarget; done: Promise<unknown> }>();
+
+/** How many publishes are kept; past it, the oldest go first. */
+const MAX_TRACKED_PUBLISHES = 200;
 
 function publishKey(baseUrl: string, target: Pick<UnpublishTarget, "hostId" | "sessionId" | "path">): string {
 	return JSON.stringify([baseUrl, target.hostId ?? null, target.sessionId, target.path]);
 }
 
 /**
- * Records a publish while it runs. A delete started meanwhile waits for it,
- * then looks up the link it made: the file is not marked published yet, and
- * the upload can finish after the file is gone.
+ * Records a publish. A delete of its file, started while it runs or before the
+ * file's list shows the link, waits for it and then looks up the link it made.
  */
 export function trackPublish(baseUrl: string, target: UnpublishTarget, done: Promise<unknown>): void {
 	const key = publishKey(baseUrl, target);
-	const entry = { baseUrl, target, done };
-	publishing.set(key, entry);
-	const clear = () => {
-		if (publishing.get(key) === entry) publishing.delete(key);
-	};
-	done.then(clear, clear);
+	publishes.delete(key);
+	publishes.set(key, { baseUrl, target, done });
+	for (const oldest of publishes.keys()) {
+		if (publishes.size <= MAX_TRACKED_PUBLISHES) break;
+		publishes.delete(oldest);
+	}
 }
 
 /**
@@ -71,9 +78,9 @@ export function trackPublish(baseUrl: string, target: UnpublishTarget, done: Pro
  */
 export type DeleteScope = { hostId?: string; sessionId: string; path?: string };
 
-/** Waits for the publishes running on what a delete removes, and returns their files. */
+/** Waits for the publishes made on what a delete removes, and returns their files. */
 async function settledPublishes(baseUrl: string, deleting: readonly DeleteScope[]): Promise<UnpublishTarget[]> {
-	const running = [...publishing.values()].filter((entry) =>
+	const running = [...publishes.values()].filter((entry) =>
 		entry.baseUrl === baseUrl
 		&& deleting.some((scope) => (scope.hostId ?? null) === (entry.target.hostId ?? null)
 			&& scope.sessionId === entry.target.sessionId
@@ -253,6 +260,8 @@ export async function prepareUnpublish(
 	}
 	return {
 		unpublish: async () => {
+			// The files are gone: their publishes no longer need finding.
+			for (const file of files) publishes.delete(publishKey(baseUrl, file));
 			if (shareIds.size === 0) return unresolved;
 			const results = await Promise.allSettled([...shareIds].map((shareId) => bridge.unpublish(baseUrl, shareId)));
 			for (const listener of listeners) listener();
