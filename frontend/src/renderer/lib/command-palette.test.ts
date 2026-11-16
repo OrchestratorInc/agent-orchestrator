@@ -383,7 +383,7 @@ describe("buildCommands PR actions", () => {
 		const review = byId(buildCommands({ workspaces: workspaces() })).get("pr-review:w-pr:42");
 		expect(review?.group).toBe("prs");
 		expect(review?.title).toBe("Run review #42");
-		expect(review?.action).toEqual({ kind: "trigger-review", sessionId: "w-pr" });
+		expect(review?.action).toEqual({ kind: "trigger-review", sessionId: "w-pr", prUrl: "https://github.com/o/r/pull/42" });
 		expect(review?.disabled).toBeFalsy();
 		expect(review?.disabledReason).toBeUndefined();
 		expect(review?.searchOnly).toBe(true);
@@ -454,21 +454,62 @@ describe("buildCommands PR actions", () => {
 		expect(draftItem?.disabledReason).toBe("Not eligible for review");
 	});
 
-	it("emits per-PR action items for every open PR of a multi-PR session, all triggering the session", () => {
-		const multiWorkspaces: WorkspaceSummary[] = [
-			{
-				id: "proj-1",
-				name: "app",
-				path: "/repos/app",
-				type: "main",
-				sessions: [session({ id: "w-multi", title: "stacked", prs: [pr(1), pr(2)] })],
-			},
-		];
-		const map = byId(buildCommands({ workspaces: multiWorkspaces }));
+	const multiWorkspaces = (): WorkspaceSummary[] => [
+		{
+			id: "proj-1",
+			name: "app",
+			path: "/repos/app",
+			type: "main",
+			sessions: [session({ id: "w-multi", title: "stacked", prs: [pr(1), pr(2)] })],
+		},
+	];
+
+	it("emits per-PR action items for every open PR of a multi-PR session, each reviewing only its PR", () => {
+		const map = byId(buildCommands({ workspaces: multiWorkspaces() }));
 		expect(map.get("pr-open:w-multi:1")?.action).toEqual({ kind: "open-pr", url: "https://github.com/o/r/pull/1" });
 		expect(map.get("pr-open:w-multi:2")?.action).toEqual({ kind: "open-pr", url: "https://github.com/o/r/pull/2" });
-		expect(map.get("pr-review:w-multi:1")?.action).toEqual({ kind: "trigger-review", sessionId: "w-multi" });
-		expect(map.get("pr-review:w-multi:2")?.action).toEqual({ kind: "trigger-review", sessionId: "w-multi" });
+		expect(map.get("pr-review:w-multi:1")?.action).toEqual({ kind: "trigger-review", sessionId: "w-multi", prUrl: "https://github.com/o/r/pull/1" });
+		expect(map.get("pr-review:w-multi:2")?.action).toEqual({ kind: "trigger-review", sessionId: "w-multi", prUrl: "https://github.com/o/r/pull/2" });
+	});
+
+	it("adds one Review all row for a multi-PR session that reviews the whole session", () => {
+		const items = buildCommands({
+			workspaces: multiWorkspaces(),
+			reviewStatesBySessionId: { "w-multi": [reviewState(1, "needs_review"), reviewState(2, "needs_review")] },
+		});
+		const all = byId(items).get("pr-review-all:w-multi");
+		expect(all?.title).toBe("Review all due PRs (2)");
+		expect(all?.action).toEqual({ kind: "trigger-review", sessionId: "w-multi" });
+		expect(all?.disabled).toBe(false);
+		expect(all?.searchOnly).toBe(true);
+		expect(filterCommands(items, "review all").some((item) => item.id === "pr-review-all:w-multi")).toBe(true);
+	});
+
+	it("counts only PRs whose current commit needs a review, and disables Review all when none do", () => {
+		const oneDue = buildCommands({
+			workspaces: multiWorkspaces(),
+			reviewStatesBySessionId: { "w-multi": [reviewState(1, "needs_review"), reviewState(2, "up_to_date", { latestRun: reviewRun(2) })] },
+		});
+		expect(byId(oneDue).get("pr-review-all:w-multi")?.title).toBe("Review all due PRs (1)");
+
+		const noneDue = byId(buildCommands({
+			workspaces: multiWorkspaces(),
+			reviewStatesBySessionId: { "w-multi": [reviewState(1, "up_to_date"), reviewState(2, "ineligible")] },
+		})).get("pr-review-all:w-multi");
+		expect(noneDue?.disabled).toBe(true);
+		expect(noneDue?.disabledReason).toBe("No PR needs a review");
+
+		const running = byId(buildCommands({
+			workspaces: multiWorkspaces(),
+			reviewStatesBySessionId: { "w-multi": [reviewState(1, "running"), reviewState(2, "needs_review")] },
+		})).get("pr-review-all:w-multi");
+		expect(running?.disabled).toBe(true);
+		expect(running?.disabledReason).toBe("Review already running");
+	});
+
+	it("omits Review all for a single-PR session and while review state is loading", () => {
+		expect(byId(buildCommands({ workspaces: workspaces() })).has("pr-review-all:w-pr")).toBe(false);
+		expect(byId(buildCommands({ workspaces: multiWorkspaces(), reviewStatesBySessionId: {} })).has("pr-review-all:w-multi")).toBe(false);
 	});
 
 	it("does not create action items for merged or closed PRs", () => {

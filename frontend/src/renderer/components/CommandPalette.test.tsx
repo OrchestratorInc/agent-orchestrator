@@ -1217,13 +1217,14 @@ describe("CommandPalette PR and review actions", () => {
 		await waitFor(() => expect(paletteInput()).toBeNull());
 	});
 
-	it("triggers a review for the PR's session and closes", async () => {
+	it("triggers a review of only that PR and closes", async () => {
 		mockReviews([reviewState("needs_review")]);
 		await openPaletteWithQuery("review");
 		fireEvent.click(await screen.findByText(rowTitle("Review latest commit #7")));
 		await waitFor(() =>
 			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", {
 				params: { path: { sessionId: "w-merge" } },
+				body: { prUrl: "https://github.com/o/r/pull/7" },
 			}),
 		);
 		await waitFor(() => expect(paletteInput()).toBeNull());

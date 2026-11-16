@@ -91,7 +91,8 @@ export type CommandAction =
 	| { kind: "copy-branch"; branch: string }
 	| { kind: "open-pr"; url: string }
 	| { kind: "copy-pr-url"; url: string }
-	| { kind: "trigger-review"; sessionId: string }
+	/** Without prUrl the daemon reviews every eligible PR on the session. */
+	| { kind: "trigger-review"; sessionId: string; prUrl?: string }
 	| { kind: "toggle-theme" }
 	| { kind: "open-shared-link" }
 	| { kind: "report-problem" }
@@ -719,7 +720,8 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 			const dataLoadedForSession = reviewStatesBySessionId === undefined || sessionReviewStates !== undefined;
 			const openReviewStates = sessionReviewStates ? openReviewStatesFor(session, sessionReviewStates) : undefined;
 			const sessionReviewRunning = openReviewStates ? reviewIsRunning(openReviewStates) : false;
-			for (const pr of openPRs(session)) {
+			const sessionOpenPRs = openPRs(session);
+			for (const pr of sessionOpenPRs) {
 				const subtitle = `${session.title} · ${workspace.name}`;
 				const prKeywords = [
 					`#${pr.number}`,
@@ -761,6 +763,19 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 				if (sessionIsActive(session) && dataLoadedForSession) {
 					items.push(prReviewCommand(session, pr, openReviewStates, sessionReviewRunning, subtitle, prKeywords, t));
 				}
+			}
+			// With one PR the per-PR row already reviews everything there is.
+			if (sessionOpenPRs.length > 1 && sessionIsActive(session) && dataLoadedForSession) {
+				const sessionKeywords = [session.title, sessionBranchPresentation(session).branch ?? "", workspace.name];
+				items.push(reviewAllCommand(
+					session,
+					sessionOpenPRs.length,
+					openReviewStates,
+					sessionReviewRunning,
+					`${session.title} · ${workspace.name}`,
+					sessionKeywords,
+					t,
+				));
 			}
 		}
 	}
@@ -874,12 +889,12 @@ export function buildCommands(ctx: CommandPaletteContext, t: TFunction = appI18n
 }
 
 /**
- * Per-PR review command. The trigger endpoint is session-scoped (one run covers
- * all of the session's eligible open PRs, same as the Reviews tab button), so
- * the disabled state mirrors the shared ReviewPanel eligibility logic — both
- * sides read it from `lib/session-reviews`, so the two can't drift. Callers only
- * reach here once the session's review state is known; until then the row is
- * omitted rather than shown with a guessed enabled state.
+ * Per-PR review command. It sends the PR's URL so the pass reviews that PR
+ * alone; reviewAllCommand covers the whole session. The disabled state mirrors
+ * the shared ReviewPanel eligibility logic — both sides read it from
+ * `lib/session-reviews`, so the two can't drift. Callers only reach here once
+ * the session's review state is known; until then the row is omitted rather
+ * than shown with a guessed enabled state.
  */
 function prReviewCommand(
 	session: WorkspaceSession,
@@ -907,6 +922,42 @@ function prReviewCommand(
 		title: t("command.reviewPr", { action: runLabel, number: pr.number }),
 		subtitle,
 		keywords: [...keywords, "review", "run review", "re-run review", "ao review"],
+		searchOnly: true,
+		disabled,
+		disabledReason,
+		action: { kind: "trigger-review", sessionId: session.id, prUrl: pr.url },
+	};
+}
+
+/**
+ * Session-wide review command for a session with more than one open PR: the
+ * trigger without a PR URL reviews every PR whose current commit still needs a
+ * review. Before review state loads (tests only) every open PR counts as due.
+ */
+function reviewAllCommand(
+	session: WorkspaceSession,
+	prCount: number,
+	openReviewStates: PRReviewState[] | undefined,
+	sessionReviewRunning: boolean,
+	subtitle: string,
+	keywords: string[],
+	t: TFunction,
+): CommandItem {
+	const due = openReviewStates
+		? openReviewStates.filter((reviewState) => reviewState.status === "needs_review").length
+		: prCount;
+	const disabled = sessionReviewRunning || due === 0;
+	const disabledReason = sessionReviewRunning
+		? t("command.reviewAlreadyRunning")
+		: due === 0
+			? t("command.noPrsDueForReview")
+			: undefined;
+	return {
+		id: `pr-review-all:${session.id}`,
+		group: "prs",
+		title: t("command.reviewAllPrs", { due }),
+		subtitle,
+		keywords: [...keywords, "review", "review all", "all prs", "run review", "ao review"],
 		searchOnly: true,
 		disabled,
 		disabledReason,
