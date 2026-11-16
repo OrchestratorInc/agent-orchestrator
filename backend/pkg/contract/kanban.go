@@ -88,7 +88,10 @@ type KanbanExternalReviewFacts struct {
 
 // KanbanPRFacts are the per-PR facts the column reducer reads.
 type KanbanPRFacts struct {
-	URL            string
+	URL string
+	// Number is the provider's PR number, which StackParent refers to; 0 when
+	// unknown.
+	Number         int
 	Draft          bool
 	Merged         bool
 	Closed         bool
@@ -114,6 +117,17 @@ func derivePRKanbanColumn(session KanbanSessionFacts, pr KanbanPRFacts) KanbanCo
 		return KanbanNeedsReview
 	}
 	return column
+}
+
+// placeSessionPR places one of a session's PRs. A child stacked on a parent
+// the session also owns is placed on its own: the parent is in the same pool
+// and speaks for the stack, and landing it is the session's next step, so the
+// child waiting on it must not pull the session back into review.
+func placeSessionPR(session KanbanSessionFacts, pr KanbanPRFacts, owned map[int]bool) KanbanColumn {
+	if owned[pr.StackParent] {
+		return prKanbanColumnOnItsOwn(session, pr)
+	}
+	return derivePRKanbanColumn(session, pr)
 }
 
 // waitsOnStackParent reports a live PR whose base branch belongs to another
@@ -309,6 +323,8 @@ type KanbanPresentation struct {
 // wins; its facts are the ones the display status reads. A merged or closed
 // PR therefore cannot speak for a session that still has live work, and one
 // mergeable PR cannot speak for a session whose other PRs are still in review.
+// Within a stack the session owns, the parent speaks: a child waiting only on
+// it is ranked on its own and, tied, yields to the parent.
 func DeriveKanbanPresentation(
 	session KanbanSessionFacts,
 	prs []KanbanPRFacts,
@@ -336,11 +352,17 @@ func DeriveKanbanPresentation(
 	if len(pool) == 0 {
 		pool = prs
 	}
+	owned := make(map[int]bool, len(pool))
+	for _, pr := range pool {
+		if pr.Number > 0 {
+			owned[pr.Number] = true
+		}
+	}
 
 	column := KanbanColumn("")
 	var chosen KanbanPRFacts
 	for _, pr := range pool {
-		candidate := derivePRKanbanColumn(session, pr)
+		candidate := placeSessionPR(session, pr, owned)
 		if column == "" || outranksKanban(candidate, pr, column, chosen) {
 			column, chosen = candidate, pr
 		}

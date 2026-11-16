@@ -1087,6 +1087,10 @@ func TestDeriveKanbanPresentationLeastReadyPRSpeaks(t *testing.T) {
 		pr.ExternalReview.Approved = true
 		return pr
 	}
+	numbered := func(pr contract.KanbanPRFacts, number int) contract.KanbanPRFacts {
+		pr.Number = number
+		return pr
+	}
 
 	for _, tt := range []struct {
 		name string
@@ -1146,6 +1150,30 @@ func TestDeriveKanbanPresentationLeastReadyPRSpeaks(t *testing.T) {
 			name: "within review a pr waiting on its parent speaks after one awaiting review",
 			prs:  []contract.KanbanPRFacts{stacked(mergeable("pr/child", newer), 8277), awaiting("pr/review", older)},
 			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayAwaitingReview},
+		},
+		{
+			name: "a stack the session owns is ready when its parent is mergeable",
+			prs: []contract.KanbanPRFacts{
+				numbered(mergeable("pr/a", older), 10),
+				numbered(stacked(mergeable("pr/b", newer), 10), 11),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanReady, DisplayStatus: contract.DisplayMergeable},
+		},
+		{
+			name: "a stack the session owns follows its parent into review",
+			prs: []contract.KanbanPRFacts{
+				numbered(awaiting("pr/a", older), 10),
+				numbered(stacked(mergeable("pr/b", newer), 10), 11),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayAwaitingReview},
+		},
+		{
+			name: "a child in a stack the session owns still reports its own failing ci",
+			prs: []contract.KanbanPRFacts{
+				numbered(mergeable("pr/a", newer), 10),
+				numbered(stacked(contract.KanbanPRFacts{URL: "pr/b", CI: contract.CIFailing, UpdatedAt: older}, 10), 11),
+			},
+			want: contract.KanbanPresentation{Column: contract.KanbanNeedsReview, DisplayStatus: contract.DisplayCIFailing},
 		},
 		{
 			name: "a merged pr with a stack parent recorded is still merged",
