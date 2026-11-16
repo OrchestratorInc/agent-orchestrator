@@ -211,17 +211,23 @@ if [[ "$ARTIFACT" == *.pkg ]]; then
 	exit 0
 fi
 
+# Read the entitlements before searching them. Piping plutil into grep -q under
+# pipefail can fail the check: grep exits at the first match, and a later plutil
+# write then gets SIGPIPE.
+signed_entitlements() {
+	codesign -d --entitlements :- "$1" 2>/dev/null | plutil -p -
+}
+
 has_acp_node_entitlement() {
-	local entitlement="$1"
-	codesign -d --entitlements :- "$ACP_NODE" 2>/dev/null \
-		| plutil -p - \
-		| grep -Fq "\"$entitlement\" => true"
+	local entitlement="$1" entitlements
+	entitlements="$(signed_entitlements "$ACP_NODE")" || return 1
+	grep -Fq "\"$entitlement\" => true" <<<"$entitlements"
 }
 
 app_has_keychain_access_groups() {
-	codesign -d --entitlements :- "$APP" 2>/dev/null \
-		| plutil -p - \
-		| grep -Fq '"keychain-access-groups" =>'
+	local entitlements
+	entitlements="$(signed_entitlements "$APP")" || return 1
+	grep -Fq '"keychain-access-groups" =>' <<<"$entitlements"
 }
 
 # Seal intact. --deep walks nested code (helpers, frameworks, the bundled

@@ -220,6 +220,36 @@ describe("verify-mac-artifact.sh", () => {
 		else expect(stderr).toContain("provisioning profile for keychain-access-groups failed");
 	});
 
+	// grep -q stops reading at its first match. Under pipefail, a plutil write
+	// after that gets SIGPIPE and used to fail the entitlement check at random.
+	it("passes entitlement checks when plutil writes after the match", async () => {
+		const mockBin = join(dir, "late-plutil-bin");
+		const app = join(dir, "LatePlutil.app");
+		const node = join(app, "Contents", "Resources", "acp-runtime", "node", "bin", "node");
+		mkdirSync(mockBin, { recursive: true });
+		mkdirSync(dirname(node), { recursive: true });
+		writeFileSync(join(app, "Contents", "embedded.provisionprofile"), "fixture");
+
+		writeExecutable(join(mockBin, "uname"), "echo Darwin\n");
+		writeExecutable(join(mockBin, "codesign"), 'if [[ "$1" == "-d" ]]; then echo "<plist><dict></dict></plist>"; fi\n');
+		for (const tool of ["spctl", "xcrun", "ditto"]) writeExecutable(join(mockBin, tool), "exit 0\n");
+		writeExecutable(join(mockBin, "lipo"), "echo arm64\n");
+		writeExecutable(
+			join(mockBin, "plutil"),
+			"cat >/dev/null\n" +
+				"echo '  \"com.apple.security.cs.allow-jit\" => true'\n" +
+				"echo '  \"keychain-access-groups\" => ['\n" +
+				"sleep 0.2\n" +
+				"echo '  \"com.apple.security.get-task-allow\" => false'\n",
+		);
+		writeExecutable(node, "exit 0\n");
+
+		const { code, stderr } = await run([app], { PATH: `${mockBin}:${process.env.PATH}` });
+
+		expect(stderr).not.toContain("allow-jit entitlement failed");
+		expect(code).toBe(0);
+	});
+
 	it("encodes the verified command set (ditto, spctl -vv, stapler validate)", async () => {
 		const { readFileSync } = await import("node:fs");
 		const src = readFileSync(SCRIPT, "utf8");
