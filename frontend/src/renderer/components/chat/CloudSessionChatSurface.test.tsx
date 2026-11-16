@@ -9,7 +9,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { settingsQueryKey } from "../../hooks/useSettings";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { reportPlanRefusal } from "../../lib/cloud-telemetry";
+import { reportPlanRefusal, reportUpgradeViewed } from "../../lib/cloud-telemetry";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
@@ -45,6 +45,7 @@ const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManag
 vi.mock("../../lib/cloud-telemetry", async (original) => ({
 	...await original<typeof import("../../lib/cloud-telemetry")>(),
 	reportPlanRefusal: vi.fn(),
+	reportUpgradeViewed: vi.fn(),
 }));
 vi.mock("../../hooks/useCloudBilling", () => ({
 	useCloudBilling: () => ({ data: { plan: "starter" }, offering: billing.offering }),
@@ -116,6 +117,7 @@ describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
 		vi.mocked(reportPlanRefusal).mockClear();
+		vi.mocked(reportUpgradeViewed).mockClear();
 		billing.offering = { selfServeBilling: true, canManageBilling: true };
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
@@ -2582,7 +2584,7 @@ describe("CloudSessionChatSurface", () => {
 			payload: { turnId: "turn-1", activity: { id, kind: "command", status, detail } },
 		});
 		const refusal = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
-		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, nextAfter: events.at(-1)?.sequence ?? 0 });
+		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, hasOlder: false, nextAfter: events.at(-1)?.sequence ?? 0 });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset()
 			// History: an old refusal must not prompt.
@@ -2616,7 +2618,8 @@ describe("CloudSessionChatSurface", () => {
 		useUiStore.setState({ openGlobalSettings });
 		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("billing");
-		expect(reportPlanRefusal).toHaveBeenLastCalledWith("WORKER_SLOTS_FULL", true, "chat");
+		expect(reportPlanRefusal).toHaveBeenCalledTimes(1);
+		expect(reportUpgradeViewed).toHaveBeenCalledExactlyOnceWith("plan_refusal");
 		useUiStore.setState({ openGlobalSettings: originalOpenGlobalSettings });
 		// A member cannot buy a plan, so the notice sends them to an admin instead.
 		billing.offering = { selfServeBilling: true, canManageBilling: false };
@@ -2638,14 +2641,37 @@ describe("CloudSessionChatSurface", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
+
+	it("reports each refused activity in a batch once, including repeated updates", async () => {
+		const failed = (sequence: number, id = `spawn-${sequence}`): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+		});
+		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, hasOlder: false, nextAfter: events.at(-1)?.sequence ?? 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce(page())
+			.mockResolvedValueOnce(page(failed(1), failed(2), failed(3)))
+			.mockResolvedValue(page(failed(4, "spawn-1")));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await screen.findByRole("alert");
+		expect(reportPlanRefusal).toHaveBeenCalledTimes(3);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect(reportPlanRefusal).toHaveBeenCalledTimes(3);
+	});
+
 	it("does not report Upgrade opening when a plan notice is dismissed", async () => {
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset()
-			.mockResolvedValueOnce({ events: [], hasMore: false, nextAfter: 0 })
+			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
 			.mockResolvedValue({ events: [{
 				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
 				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
-			}], hasMore: false, nextAfter: 1 });
+			}], hasMore: false, hasOlder: false, nextAfter: 1 });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = ["cloud-chat-events", "org-1", session.id];
 		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
@@ -2679,7 +2705,7 @@ describe("CloudSessionChatSurface", () => {
 			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "mcp_tool", status: "completed", detail: { success: false, error: "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)" } } },
 		});
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
-		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [failed(2)], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [failed(2)], hasMore: false, hasOlder: false, nextAfter: 2 });
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = ["cloud-chat-events", "org-1", session.id];
 		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - 60_000 });
@@ -2690,44 +2716,45 @@ describe("CloudSessionChatSurface", () => {
 	});
 
 
-	it("ignores refusals loaded from older pages after opening history finishes", async () => {
+	it("ignores refusals prepended by recent history and scroll-up pages", async () => {
 		const failed = (sequence: number): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
 			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
 		});
+		const page = (sequence: number, hasOlder: boolean) => ({ events: [failed(sequence)], hasMore: false, hasOlder, nextBefore: sequence, nextAfter: sequence });
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
-		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [failed(10)], hasMore: false, nextAfter: 10 });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce(page(10, true))
+			.mockResolvedValueOnce(page(5, true))
+			.mockResolvedValueOnce(page(1, false))
+			.mockResolvedValue(page(11, false));
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const key = ["cloud-chat-events", "org-1", session.id];
 		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
-		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
-		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(1));
-		await act(async () => {
-			queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [failed(1)]));
-		});
 		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
 		expect(screen.queryByRole("alert")).toBeNull();
+		await act(async () => cloudMocks.chatProps.mock.lastCall?.[0].onLoadOlder());
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(3));
+		expect(screen.queryByRole("alert")).toBeNull();
 		expect(reportPlanRefusal).not.toHaveBeenCalled();
-		await act(async () => {
-			queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [failed(11)]));
-		});
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
 		await screen.findByRole("alert");
 		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
 	});
 
-	it("waits for opening history while streamed replay arrives in separate batches", async () => {
+	it.each([0, 10_000])("waits for opening history while streamed replay arrives in separate batches (staleTime %i)", async (staleTime) => {
 		const failed = (sequence: number): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
 			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
 		});
 		const replay = [failed(2), failed(3)];
-		let finishHistory!: (page: { events: CloudCpClientEvent[]; hasMore: boolean; nextAfter: number }) => void;
+		let finishHistory!: (page: { events: CloudCpClientEvent[]; hasMore: boolean; hasOlder: boolean; nextAfter: number }) => void;
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset().mockReturnValueOnce(new Promise((resolve) => { finishHistory = resolve; }))
-			.mockResolvedValue({ events: [], hasMore: false, nextAfter: 3 });
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			.mockResolvedValue({ events: [], hasMore: false, hasOlder: false, nextAfter: 3 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
 		const key = ["cloud-chat-events", "org-1", session.id];
-		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - 60_000 });
+		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - (staleTime ? 1_000 : 60_000) });
 		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
 		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
 		for (const event of replay) {
@@ -2739,7 +2766,7 @@ describe("CloudSessionChatSurface", () => {
 		expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(reportPlanRefusal).not.toHaveBeenCalled();
-		await act(async () => finishHistory({ events: replay, hasMore: false, nextAfter: 3 }));
+		await act(async () => finishHistory({ events: replay, hasMore: false, hasOlder: false, nextAfter: 3 }));
 		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
 		expect(screen.queryByRole("alert")).toBeNull();
 		// A refusal arriving after the opening history completed is still new.

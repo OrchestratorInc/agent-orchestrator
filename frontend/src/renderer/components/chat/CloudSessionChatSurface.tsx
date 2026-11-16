@@ -25,7 +25,7 @@ import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type 
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { reportPlanRefusal } from "../../lib/cloud-telemetry";
+import { reportPlanRefusal, reportUpgradeViewed } from "../../lib/cloud-telemetry";
 import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
@@ -580,7 +580,7 @@ function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: bo
 					className="mt-1 font-medium text-foreground underline underline-offset-2 hover:decoration-dashed"
 					onClick={() => {
 						useUiStore.getState().openGlobalSettings("billing");
-						reportPlanRefusal(code, true, "chat");
+						reportUpgradeViewed("plan_refusal");
 					}}
 				>
 					{appI18n.t("cloud.planLimit.upgrade")}
@@ -1664,6 +1664,10 @@ export function CloudSessionChatSurface({
 		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
 		enabled: Boolean(cloud && ready),
 		gcTime: CHAT_EVENTS_CACHE_MS,
+		// Each opening needs a history read, even within the cache's freshness
+		// window, to exclude refusals that happened while the chat was closed.
+		staleTime: 0,
+		refetchOnMount: "always",
 		// The event stream delivers events as they are committed; the poll only
 		// catches what a dropped or not-yet-open stream missed. An open stream
 		// counts from the moment it opens, so an idle chat slows down at once.
@@ -2066,11 +2070,13 @@ export function CloudSessionChatSurface({
 		for (const item of failed) {
 			if (baseline.seen.has(item.id) || !updated.has(item.id)) continue;
 			baseline.seen.add(item.id);
-			code ??= planRefusalCode(item);
+			const refusal = planRefusalCode(item);
+			if (!refusal) continue;
+			code ??= refusal;
+			reportPlanRefusal(refusal, false, "chat");
 		}
 		if (!code) return;
 		setPlanRefusal({ key, code });
-		reportPlanRefusal(code, false, "chat");
 	}, [eventsQuery.data, eventsQuery.dataUpdatedAt, eventsQuery.fetchStatus, eventsQuery.isSuccess, refusalKey, snapshot]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
