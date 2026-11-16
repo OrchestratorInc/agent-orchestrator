@@ -53,19 +53,13 @@ export function validateProjectSettings(
 	return null;
 }
 
-// Agents are optional: with Developer Mode on, the project starts on the most
-// preferred ready agent without asking. When the sheet does ask, both are required.
+// Agents are not chosen at setup: the project starts on the most preferred
+// ready agent and can be changed later in project settings.
 export type ProjectSetupSelection = {
-	workerAgent?: string;
-	orchestratorAgent?: string;
 	intakeEnabled?: boolean;
 	intakeAssignee?: string;
 };
 
 export function canSubmitProjectSetup(selection: ProjectSetupSelection): boolean {
-	return (
-		selection.workerAgent !== "" &&
-		selection.orchestratorAgent !== "" &&
-		(!selection.intakeEnabled || (selection.intakeAssignee?.trim() ?? "") !== "")
-	);
+	return !selection.intakeEnabled || (selection.intakeAssignee?.trim() ?? "") !== "";
 }

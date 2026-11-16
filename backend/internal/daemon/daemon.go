@@ -809,7 +809,8 @@ func Run(buildVersion string) (retErr error) {
 	if githubRepos != nil {
 		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
 	}
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), PreferredAgent: preferredProjectAgent(agentSvc), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
+	sessionSvc.SetPreferredProjectAgent(projectSvc.PreferredAgent)
 	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
@@ -1760,6 +1761,32 @@ func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarnes
 // drivers and model discovery each hold their own plugin instances, each
 // caching the path it found: missing one leaves it on the binary from before
 // the install.
+// preferredProjectAgent ranks this machine's agents the way the desktop's
+// loadProjectAgentDefaults does: from the cached readiness snapshot, running
+// display checks first only when the agent AO prefers most is not confirmed
+// yet. It returns "" when no agent can be ranked.
+func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domain.AgentHarness {
+	return func(ctx context.Context) domain.AgentHarness {
+		if agents == nil {
+			return ""
+		}
+		readiness, err := agents.CachedReadiness(ctx)
+		if err != nil {
+			return ""
+		}
+		snapshot := readiness.Agents
+		if domain.PreferredProjectAgentNeedsChecks(snapshot) {
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			checked, err := agents.EnsureReadiness(checkCtx, nil, domain.AgentReadinessPurposeDisplay)
+			cancel()
+			if err == nil && len(checked.Agents) > 0 {
+				snapshot = checked.Agents
+			}
+		}
+		return domain.PreferredProjectAgent(snapshot)
+	}
+}
+
 func invalidateHarnessBinary(readiness ports.AgentReadinessProvider, harness string, caches ...harnessBinaryCache) {
 	readiness.InvalidateAgentInstallation(harness)
 	for _, cache := range caches {

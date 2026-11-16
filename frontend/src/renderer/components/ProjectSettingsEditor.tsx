@@ -79,8 +79,14 @@ const roleFields: Record<ProjectSettingsRole, RoleFields> = {
 
 // Both persistence adapters render this page. Drafts, validation, autosave and
 // common controls live here so a UI change applies to local and Cloud projects.
-export function ProjectSettingsEditor({ initialValues, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, cloudOrgId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
+export function ProjectSettingsEditor({ initialValues, agentDefaults, section, capabilities, details, workspaceRepos, repository, renderAgent, defaultReviewer = () => "", modelScope, modelHostId, cloudOrgId, reviewerWarning, autoReviewDescription, intakeDescription, save, onSaveState, saveUnchanged = false, disabled = false, generalExtra }: {
 	initialValues: ProjectSettingsDraft;
+	/**
+	 * Agents for the worker and orchestrator roles the project names none for.
+	 * Filled into empty roles only, then saved like any edit; `null` while they
+	 * are still loading. Left undefined, empty roles stay empty.
+	 */
+	agentDefaults?: { workerAgent: string; orchestratorAgent: string } | null;
 	section: SettingsSection;
 	capabilities: Capabilities;
 	details: Array<{ label: string; value: string; href?: string }>;
@@ -169,6 +175,18 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 		const timeout = window.setTimeout(() => setDidSave(false), 1800);
 		return () => window.clearTimeout(timeout);
 	}, [didSave]);
+	// A project registered without a worker or orchestrator agent opens with the
+	// ranked default filled in, never an empty required picker. A role the user
+	// already set, here or before, is never replaced.
+	useEffect(() => {
+		if (!agentDefaults) return;
+		setDraft((current) => current.workerAgent && current.orchestratorAgent ? current : {
+			...current,
+			workerAgent: current.workerAgent || agentDefaults.workerAgent,
+			orchestratorAgent: current.orchestratorAgent || agentDefaults.orchestratorAgent,
+		});
+	}, [agentDefaults?.workerAgent, agentDefaults?.orchestratorAgent]);
+	const agentsMissing = capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && agentDefaults !== null;
 	const patch = (values: Partial<ProjectSettingsDraft>) => setDraft((current) => ({ ...current, ...values }));
 	const warning = reviewerWarning?.(draft.reviewerHarness);
 	return <ProjectSettingsFormView id="project-settings-form" className={`project-settings-form${capabilities.runtimeDefaults ? " cloud-project-settings-form" : ""}`} onSubmit={submit}>
@@ -231,7 +249,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 						<ProjectSettingsRow label={t("settings.project.approval")}><div className="min-w-0"><ProjectRolePermissions role={role} agent={agent} value={draft[fields.permissions]} runtimeDefaults={capabilities.runtimeDefaults} onChange={updatePermissions} /></div></ProjectSettingsRow>
 					</ProjectSettingsSection>;
 				})}
-				{capabilities.requiredAgents && (!draft.workerAgent || !draft.orchestratorAgent) && <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
+				{agentsMissing && <p className="px-(--settings-row-inset) text-xs text-error" role="alert">{t("settings.project.agentsRequired")}</p>}
 				{warning && <p className="px-(--settings-row-inset) text-xs text-warning" role="status">{warning}</p>}
 			</>}
 		</fieldset>

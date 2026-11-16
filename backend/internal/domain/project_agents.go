@@ -1,0 +1,120 @@
+package domain
+
+import "strings"
+
+// DefaultAgentPriority is the order AO prefers agents in when a project names
+// none. It must match DEFAULT_AGENT_PRIORITY in the desktop renderer
+// (frontend/src/renderer/lib/agent-select-options.ts).
+var DefaultAgentPriority = []AgentHarness{
+	HarnessClaudeCode, HarnessCodex, HarnessCursor, HarnessOpenCode, HarnessOpenCodeV2, HarnessAider,
+}
+
+func defaultAgentPriorityRank(id string) int {
+	for i, harness := range DefaultAgentPriority {
+		if string(harness) == id {
+			return i
+		}
+	}
+	return len(DefaultAgentPriority)
+}
+
+// agentLaunchable mirrors isLaunchableAgent: only definite failures rule an
+// agent out; unknown readiness is not a rejection.
+func agentLaunchable(agent AgentReadinessSnapshot) bool {
+	return agent.Installation.State != AgentInstallationNotInstalled &&
+		agent.Authentication.State != AgentAuthenticationUnauthorized
+}
+
+// agentConfirmed reports an agent AO found installed and signed in.
+// "configured" counts: AO cannot verify most credentials.
+func agentConfirmed(agent AgentReadinessSnapshot) bool {
+	if agent.Installation.State != AgentInstallationInstalled {
+		return false
+	}
+	switch agent.Authentication.State {
+	case AgentAuthenticationAuthorized, AgentAuthenticationNotApplicable, AgentAuthenticationConfigured:
+		return true
+	}
+	return false
+}
+
+// PreferredProjectAgent is the first entry of the renderer's
+// preferredAgentList: agents AO found installed and signed in come before
+// agents it has not confirmed yet, and within each group the integration
+// priority decides. Missing or signed-out agents are left out. It returns ""
+// when no agent can launch.
+func PreferredProjectAgent(agents []AgentReadinessSnapshot) AgentHarness {
+	var best *AgentReadinessSnapshot
+	for i := range agents {
+		agent := &agents[i]
+		if !agentLaunchable(*agent) {
+			continue
+		}
+		if best == nil || preferAgent(*agent, *best) {
+			best = agent
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return AgentHarness(best.ID)
+}
+
+func preferAgent(a, b AgentReadinessSnapshot) bool {
+	if ac, bc := agentConfirmed(a), agentConfirmed(b); ac != bc {
+		return ac
+	}
+	return priorityLess(a, b)
+}
+
+// PreferredProjectAgentNeedsChecks mirrors preferredAgentNeedsChecks: the
+// highest-priority usable agent is not confirmed yet, so running the pending
+// checks could change the pick. A snapshot taken before the first checks reads
+// "unknown" for every agent and would otherwise always pick Claude Code.
+func PreferredProjectAgentNeedsChecks(agents []AgentReadinessSnapshot) bool {
+	var first *AgentReadinessSnapshot
+	for i := range agents {
+		agent := &agents[i]
+		if !agentLaunchable(*agent) {
+			continue
+		}
+		if first == nil || priorityLess(*agent, *first) {
+			first = agent
+		}
+	}
+	return first != nil && !agentConfirmed(*first)
+}
+
+func priorityLess(a, b AgentReadinessSnapshot) bool {
+	if ar, br := defaultAgentPriorityRank(a.ID), defaultAgentPriorityRank(b.ID); ar != br {
+		return ar < br
+	}
+	if c := strings.Compare(a.Label, b.Label); c != 0 {
+		return c < 0
+	}
+	return a.ID < b.ID
+}
+
+// MissingRoleAgent reports whether the worker or orchestrator role names no agent.
+func (c ProjectConfig) MissingRoleAgent() bool {
+	return c.Worker.Harness == "" || c.Orchestrator.Harness == ""
+}
+
+// FillRoleAgents gives agent to the worker and orchestrator roles that name
+// none. A role the user already set is never changed. It reports whether
+// anything changed.
+func (c *ProjectConfig) FillRoleAgents(agent AgentHarness) bool {
+	if agent == "" {
+		return false
+	}
+	changed := false
+	if c.Worker.Harness == "" {
+		c.Worker.Harness = agent
+		changed = true
+	}
+	if c.Orchestrator.Harness == "" {
+		c.Orchestrator.Harness = agent
+		changed = true
+	}
+	return changed
+}

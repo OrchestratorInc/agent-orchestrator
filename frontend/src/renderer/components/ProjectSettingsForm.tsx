@@ -1,10 +1,10 @@
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ProjectSettingsSection as SettingsSection } from "@aoagents/product-ui";
 import type { components } from "../../api/schema";
-import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
+import { loadProjectAgentDefaults, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { useRemoteProjectQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { useConnectedHosts } from "../hooks/useHostConnection";
@@ -178,6 +178,30 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const lastOrchestratorRef = useRef(config.orchestrator?.agent ?? "");
 	const replacementAttemptedRef = useRef(false);
 	const replacementFailedRef = useRef(false);
+	// A project registered without a worker or orchestrator agent (an agent's
+	// `ao project add --worker-agent X`, a folder added by chat import, or an
+	// older build) gets the ranked default for each empty role, saved like any
+	// edit. A running orchestrator keeps its own agent, so filling the role
+	// never replaces it.
+	const missingRoleAgent = !config.worker?.agent || !config.orchestrator?.agent;
+	const activeOrchestratorRef = useRef(activeOrchestrator);
+	activeOrchestratorRef.current = activeOrchestrator;
+	const [agentDefaults, setAgentDefaults] = useState<{ workerAgent: string; orchestratorAgent: string } | null | undefined>(missingRoleAgent ? null : undefined);
+	useEffect(() => {
+		if (!missingRoleAgent || !hostConnected) return;
+		let active = true;
+		void loadProjectAgentDefaults(queryClient, hostId).then((defaults) => {
+			if (!active) return;
+			const orchestratorAgent = config.orchestrator?.agent || activeOrchestratorRef.current?.provider || defaults.orchestratorAgent;
+			// The filled orchestrator is the project's current one, not a change
+			// that should start a replacement on the next save.
+			if (!config.orchestrator?.agent) lastOrchestratorRef.current = orchestratorAgent;
+			setAgentDefaults({ workerAgent: defaults.workerAgent, orchestratorAgent });
+		});
+		return () => {
+			active = false;
+		};
+	}, [missingRoleAgent, hostConnected, hostId, queryClient]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	useEnsureAgentReadiness({ hostId });
 	const persist = async (values: ProjectSettingsDraft): Promise<SettingsSaveResult> => {
@@ -327,7 +351,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 			throw error;
 		}
 	};
-	return <ProjectSettingsEditor initialValues={initialValues} section={section} disabled={!hostConnected}
+	return <ProjectSettingsEditor initialValues={initialValues} agentDefaults={agentDefaults} section={section} disabled={!hostConnected}
 		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}

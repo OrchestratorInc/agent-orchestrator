@@ -1143,11 +1143,11 @@ func TestResolveSpawnHarness_OrchestratorDefault(t *testing.T) {
 	if got, err := resolveSpawnHarness("", "", project); err != nil || got != "codex" {
 		t.Fatalf("unset kind: got %q err %v, want codex", got, err)
 	}
-	// Orchestrator spawn with no orchestrator.agent configured surfaces the
-	// --orchestrator-agent hint (the error branch this PR adds).
+	// Orchestrator spawn with no orchestrator.agent configured leaves the
+	// harness to the daemon, which fills the project's empty roles.
 	noOrch := projectDetails{ID: "demo", Config: &projectConfig{Worker: roleOverride{Agent: "codex"}}}
-	if _, err := resolveSpawnHarness("", "orchestrator", noOrch); err == nil || !strings.Contains(err.Error(), "--orchestrator-agent") {
-		t.Fatalf("missing orchestrator agent: err=%v, want --orchestrator-agent hint", err)
+	if got, err := resolveSpawnHarness("", "orchestrator", noOrch); err != nil || got != "" {
+		t.Fatalf("missing orchestrator agent: got %q err %v, want daemon-resolved empty harness", got, err)
 	}
 }
 

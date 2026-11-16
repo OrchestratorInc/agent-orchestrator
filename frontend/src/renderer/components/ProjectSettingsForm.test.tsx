@@ -1363,7 +1363,10 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
-	it("requires worker and orchestrator agents for existing projects missing role config", async () => {
+	it.each([
+		{ name: "no role agents", config: {}, worker: "claude-code", workerLabel: "Claude Code" },
+		{ name: "only a worker agent", config: { worker: { agent: "codex" } }, worker: "codex", workerLabel: "Codex" },
+	])("fills and saves missing role agents from the ranked default for $name", async ({ config, worker, workerLabel }) => {
 		mockProject({
 			id: "proj-1",
 			name: "Project One",
@@ -1371,21 +1374,24 @@ describe("ProjectSettingsForm", () => {
 			path: "/repo/project-one",
 			repo: "",
 			defaultBranch: "main",
-			config: {},
+			config,
 		});
 
 		renderSettings("proj-1", undefined, "agents");
 
-		expect(await screen.findByText("Worker and orchestrator agents are required.")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Worker agent" })).toHaveTextContent("Select worker agent");
-		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent(
-			"Select orchestrator agent",
-		);
-
-		submitSettings();
-
-		expect(await screen.findAllByText("Worker and orchestrator agents are required.")).toHaveLength(2);
-		expect(putMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code"));
+		expect(screen.getByRole("button", { name: "Worker agent" })).toHaveTextContent(workerLabel);
+		expect(screen.queryByText("Worker and orchestrator agents are required.")).not.toBeInTheDocument();
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({
+				config: expect.objectContaining({
+					worker: expect.objectContaining({ agent: worker }),
+					orchestrator: expect.objectContaining({ agent: "claude-code" }),
+				}),
+			}),
+		})));
+		// Filling the empty role is not an orchestrator change: nothing is replaced.
+		expect(postMock).not.toHaveBeenCalled();
 	});
 
 	it("shows the resolved reviewer agent without an inherited placeholder", async () => {
