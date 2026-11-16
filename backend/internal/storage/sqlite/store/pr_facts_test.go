@@ -273,3 +273,59 @@ func TestListPRFactsProjectsChangeTimestamps(t *testing.T) {
 		}
 	}
 }
+
+// A PR whose base branch is another open PR's branch is stacked on it, even
+// when the parent belongs to a different session. The read projects the
+// parent's number so the board does not call the child ready to merge.
+func TestListPRFactsProjectsTheOpenStackParent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	parentSession, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	childSession, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	write := func(pr domain.PullRequest) {
+		t.Helper()
+		pr.Host, pr.UpdatedAt, pr.ObservedAt = "github.com", now, now
+		if pr.Repo == "" {
+			pr.Repo = "acme/app"
+		}
+		if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+			t.Fatalf("write %s: %v", pr.URL, err)
+		}
+	}
+	// Open parent in another session, and a fork PR opened from its own main.
+	write(domain.PullRequest{URL: "parent", SessionID: parentSession.ID, Number: 8277, SourceBranch: "dev-warm", TargetBranch: "main"})
+	write(domain.PullRequest{URL: "fork", SessionID: parentSession.ID, Number: 9000, SourceBranch: "main", TargetBranch: "main"})
+	// A merged parent and a same-named branch in another repository.
+	write(domain.PullRequest{URL: "landed", SessionID: parentSession.ID, Number: 8100, Merged: true, SourceBranch: "old-base", TargetBranch: "main"})
+	write(domain.PullRequest{URL: "elsewhere", SessionID: parentSession.ID, Number: 50, Repo: "acme/other", SourceBranch: "other-base", TargetBranch: "main"})
+
+	write(domain.PullRequest{URL: "stacked", SessionID: childSession.ID, Number: 8487, SourceBranch: "fast", TargetBranch: "dev-warm"})
+	write(domain.PullRequest{URL: "on-main", SessionID: childSession.ID, Number: 8484, SourceBranch: "icons", TargetBranch: "main"})
+	write(domain.PullRequest{URL: "on-landed", SessionID: childSession.ID, Number: 8101, SourceBranch: "follow-up", TargetBranch: "old-base"})
+	write(domain.PullRequest{URL: "on-other-repo", SessionID: childSession.ID, Number: 8102, SourceBranch: "cross", TargetBranch: "other-base"})
+
+	want := map[string]int{"stacked": 8277, "on-main": 0, "on-landed": 0, "on-other-repo": 0}
+	check := func(label string, facts []domain.PRFacts) {
+		t.Helper()
+		if len(facts) != len(want) {
+			t.Fatalf("%s: %d facts, want %d", label, len(facts), len(want))
+		}
+		for _, f := range facts {
+			if f.StackParent != want[f.URL] {
+				t.Fatalf("%s: %s stack parent = %d, want %d", label, f.URL, f.StackParent, want[f.URL])
+			}
+		}
+	}
+	single, err := s.ListPRFactsForSession(ctx, childSession.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("single", single)
+	batch, err := s.ListPRFactsForSessions(ctx, []domain.SessionID{childSession.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("batch", batch[childSession.ID])
+}

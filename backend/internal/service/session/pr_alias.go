@@ -119,6 +119,9 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 		if next.HeadSHA == "" {
 			next.HeadSHA = current.HeadSHA
 		}
+		if next.StackParent == 0 {
+			next.StackParent = current.StackParent
+		}
 		return next
 	}
 	current.ReviewComments = current.ReviewComments || next.ReviewComments
@@ -133,6 +136,9 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 	}
 	if current.HeadSHA == "" {
 		current.HeadSHA = next.HeadSHA
+	}
+	if current.StackParent == 0 {
+		current.StackParent = next.StackParent
 	}
 	return current
 }

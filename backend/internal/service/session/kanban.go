@@ -70,6 +70,7 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 				ChangesRequested: pr.ExternalChangesRequested,
 				Comments:         pr.ExternalComments,
 			},
+			StackParent: pr.StackParent,
 		}
 	}
 	return out

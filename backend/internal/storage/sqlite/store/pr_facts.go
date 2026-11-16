@@ -88,6 +88,7 @@ func prFactsFromListRow(r gen.ListPRFactsBySessionRow) domain.PRFacts {
 		ExternalComments:         r.ExternalComments,
 		ExternalApproved:         r.ExternalApproved,
 		ExternalChangesRequested: r.ExternalChangesRequested,
+		StackParent:              int(r.StackParentNumber),
 	}
 }
 
@@ -112,6 +113,7 @@ func prFactsFromBatchRow(r gen.ListPRFactsBySessionsRow) domain.PRFacts {
 		ExternalComments:         r.ExternalComments,
 		ExternalApproved:         r.ExternalApproved,
 		ExternalChangesRequested: r.ExternalChangesRequested,
+		StackParent:              int(r.StackParentNumber),
 	}
 }
 
