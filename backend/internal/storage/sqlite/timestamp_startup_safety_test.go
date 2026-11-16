@@ -85,3 +85,33 @@ func TestTimestampRepairWithConcurrentReadSnapshot(t *testing.T) {
 		t.Fatalf("snapshot repair failed: %q %v", raw, err)
 	}
 }
+
+func TestTimestampFenceKeepsUsageOnUTCDayAfterSessionDeletion(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
+VALUES('usage-day',1,'claude-code','idle',CURRENT_TIMESTAMP,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+INSERT INTO usage_bindings(id,session_id,harness,native_root_id,state,updated_at) VALUES(1,'usage-day','claude-code','native','complete',CURRENT_TIMESTAMP);
+INSERT INTO usage_sources(id,binding_id,kind,artifact_path,state,updated_at) VALUES(1,1,'claude_main','/tmp/usage-day.jsonl','complete',CURRENT_TIMESTAMP);
+INSERT INTO model_usage_events(binding_id,usage_source_id,provider_id,model_id,usage_measurement_kind,source_event_key,input_tokens,created_at)
+VALUES(1,1,'anthropic','claude-test','native_reported','event',17,'2026-10-20 23:30:00 -0200 X');`); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	check := func() {
+		t.Helper()
+		rows, err := s.AgentAccountUsageSince(context.Background(), time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC))
+		if err != nil || len(rows) != 1 || rows[0].Day != "2026-10-21" || rows[0].InputTokens != 17 {
+			t.Fatalf("usage escaped its UTC calendar day: %+v %v", rows, err)
+		}
+	}
+	check()
+	if deleted, err := s.DeleteTerminatedSession(context.Background(), "usage-day"); err != nil || !deleted {
+		t.Fatalf("delete session: %v %v", deleted, err)
+	}
+	check()
+}

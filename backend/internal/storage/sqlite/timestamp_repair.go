@@ -33,7 +33,7 @@ var timestampFenceTables = map[string]bool{
 	"conversations": true, "conversation_branches": true, "conversation_messages": true, "conversation_activities": true,
 	"pr": true, "pr_checks": true, "pr_reviews": true, "pr_comment": true, "pr_review_threads": true,
 	"change_log": true, "agent_accounts": true, "session_artifacts": true,
-	"session_forks": true, "telemetry_event": true, "shell_terminals": true,
+	"session_forks": true, "telemetry_event": true, "shell_terminals": true, "kept_artifact_sessions": true,
 }
 
 // Scan forward by row identity, with bounded memory and write transactions.
