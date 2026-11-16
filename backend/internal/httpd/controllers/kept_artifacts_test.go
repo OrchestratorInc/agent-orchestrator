@@ -97,6 +97,16 @@ func TestSessionsAPI_KeptArtifacts(t *testing.T) {
 		t.Fatalf("serve kept file = %d %s", status, body)
 	}
 
+	// The desktop reads markdown and text previews through this URL.
+	body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-gone/preview/files/report.md?source=artifact&raw=true", "")
+	if status != http.StatusOK || !strings.Contains(string(body), "# Kept") {
+		t.Fatalf("preview kept file = %d %s", status, body)
+	}
+	// A workspace preview still needs the session itself.
+	if body, status, _ = doRequest(t, srv, http.MethodGet, "/api/v1/sessions/ao-gone/preview/files/report.md", ""); status != http.StatusNotFound {
+		t.Fatalf("workspace preview of a deleted session = %d %s", status, body)
+	}
+
 	body, status, _ = doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-gone/artifact-files?path=report.md", "")
 	if status != http.StatusOK {
 		t.Fatalf("delete kept file = %d %s", status, body)

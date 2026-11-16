@@ -592,7 +592,15 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		apispec.NotImplemented(w, r, "GET", "/api/v1/sessions/{sessionId}/preview/files/*")
 		return
 	}
-	sess, err := c.Svc.Get(r.Context(), sessionID(r))
+	// Only artifact files outlive their session; workspace previews need it.
+	fromArtifacts := r.URL.Query().Get("source") == "artifact"
+	var sess domain.Session
+	var err error
+	if fromArtifacts {
+		sess, _, err = c.artifactSession(r.Context(), sessionID(r))
+	} else {
+		sess, err = c.Svc.Get(r.Context(), sessionID(r))
+	}
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -602,7 +610,7 @@ func (c *SessionsController) previewFile(w http.ResponseWriter, r *http.Request)
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "PREVIEW_NOT_FOUND", "Preview not found", nil)
 		return
 	}
-	if r.URL.Query().Get("source") == "artifact" {
+	if fromArtifacts {
 		if version := r.URL.Query().Get(artifactVersionQuery); version != "" {
 			c.serveArtifactVersionFile(w, r, sess, assetPath, version)
 			return
