@@ -6462,7 +6462,7 @@ const attachmentsDir = attachmentstore.WorkspaceDir
 func (m *Manager) writeSpawnAttachments(ctx context.Context, id domain.SessionID, workspacePath string, attachments []ports.SpawnAttachment) ([]string, error) {
 	refs := spawnAttachmentRefs(attachments)
 	for i, a := range attachments {
-		if err := m.attachments.Put(ctx, id, workspacePath, spawnAttachmentName(i, a), a.Data); err != nil {
+		if err := m.attachments.PutSource(ctx, id, workspacePath, spawnAttachmentName(i, a), attachmentSource(a)); err != nil {
 			return nil, fmt.Errorf("write attachment %d: %w", i+1, err)
 		}
 	}
