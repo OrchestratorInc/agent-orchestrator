@@ -117,15 +117,17 @@ func (s *Service) AddAPIKeyAccount(ctx context.Context, p domain.AgentAccountPro
 }
 
 // ReplaceAPIKey saves key in place of an API key account's key, once the
-// provider accepts it. Agents already running keep the key they started with
-// until they start again.
+// provider accepts it. A replacement that fails keeps the account's current key
+// and key hint. Agents already running keep the key they started with until
+// they start again.
 func (s *Service) ReplaceAPIKey(ctx context.Context, accountID, key string) (AccountView, error) {
-	account, err := s.find(ctx, accountID)
+	key, err := cleanAPIKey(key)
 	if err != nil {
 		return AccountView{}, err
 	}
-	if s.beingRemoved(account.ID) {
-		return AccountView{}, ports.ErrAgentAccountUnknown
+	account, err := s.find(ctx, accountID)
+	if err != nil {
+		return AccountView{}, err
 	}
 	if !account.APIKey() {
 		return AccountView{}, ports.ErrAgentAccountKindMismatch
@@ -134,21 +136,34 @@ func (s *Service) ReplaceAPIKey(ctx context.Context, accountID, key string) (Acc
 	if !ok {
 		return AccountView{}, ports.ErrAgentAccountProviderMismatch
 	}
-	key, err = cleanAPIKey(key)
-	if err != nil {
-		return AccountView{}, err
-	}
 	if err := s.checkKey(ctx, account.Provider, key); err != nil {
 		return AccountView{}, err
+	}
+	// One key change at a time, and none once a removal has begun, so the key
+	// file, its approval and its hint always describe the same key.
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	if s.beingRemoved(account.ID) {
+		return AccountView{}, ports.ErrAgentAccountUnknown
+	}
+	if account, err = s.find(ctx, accountID); err != nil {
+		return AccountView{}, err
+	}
+	previous, previousErr := readAPIKey(account.Home)
+	// Approving the new key first leaves the current one working if this fails.
+	if err := approver.ApproveAPIKey(account.Home, key); err != nil {
+		return AccountView{}, fmt.Errorf("approve api key: %w", err)
 	}
 	if err := writeAPIKey(account.Home, key); err != nil {
 		return AccountView{}, err
 	}
-	if err := approver.ApproveAPIKey(account.Home, key); err != nil {
-		return AccountView{}, fmt.Errorf("approve api key: %w", err)
-	}
 	account.KeyHint = apiKeyHint(key)
 	if err := s.store.UpdateAgentAccountKeyHint(ctx, account.ID, account.KeyHint); err != nil {
+		if previousErr == nil {
+			if restoreErr := writeAPIKey(account.Home, previous); restoreErr != nil {
+				s.log.Warn("restore api key after a failed replace", "account", account.ID, "error", restoreErr)
+			}
+		}
 		return AccountView{}, err
 	}
 	s.read(ctx, account)

@@ -75,6 +75,10 @@ type Service struct {
 	defaultChanged func(domain.AgentAccountProvider)
 	loginConfirmed func(domain.AgentAccount, time.Time)
 	keyCheck       KeyCheck
+
+	// keyMu serializes changes to an API key account's key with each other and
+	// with removing an account, apart from mu so a key check never holds it.
+	keyMu sync.Mutex
 }
 
 // reading is the last identity and limits read for one account.
@@ -1008,6 +1012,9 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 			return fmt.Errorf("%w: %w", ports.ErrAgentAccountInUse, err)
 		}
 	}
+	// A key change under way finishes first; any later one sees the removal.
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
 	// An API key account has no sign-in; removing its folder removes its key.
 	if !account.APIKey() {
 		if err := s.providers[account.Provider].Logout(ctx, account.Home); err != nil {

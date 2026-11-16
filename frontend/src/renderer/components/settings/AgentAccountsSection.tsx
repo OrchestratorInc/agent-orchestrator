@@ -53,6 +53,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	// The API key form: adding a new account, or replacing one account's key.
 	const [keyForm, setKeyForm] = useState<{ account?: AgentAccount } | null>(null);
 	const [keyError, setKeyError] = useState("");
+	// Apart from busy, which a sign-in check resets: a key request in flight
+	// keeps its form pending, so it cannot be sent twice.
+	const [savingKey, setSavingKey] = useState(false);
 	const focusKeyForm = useRef(false);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
@@ -125,7 +128,8 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	// The daemon checks the key with the provider before saving it; the key
 	// lives only in the form until then and is never shown again.
 	const saveKey = async (name: string, key: string) => {
-		setBusy("api-key");
+		if (savingKey) return;
+		setSavingKey(true);
 		setKeyError("");
 		try {
 			if (keyForm?.account) await actions.replaceApiKey(keyForm.account.id, key);
@@ -137,7 +141,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				: code === "AGENT_ACCOUNT_KEY_UNCHECKED" ? t("settings.apiKeys.unreachable")
 				: err instanceof Error ? err.message : String(err));
 		} finally {
-			setBusy(null);
+			setSavingKey(false);
 		}
 	};
 	const requestedLogin = useUiStore((state) => state.accountLogin);
@@ -157,7 +161,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.refresh")} disabled={busy !== null} onClick={() => void run("refresh", actions.refresh)}>{busy === "refresh" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}</Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.refresh")}</TooltipContent></Tooltip>
 				{apiKeys
 					? <DropdownMenu>
-						<Tooltip><TooltipTrigger asChild><DropdownMenuTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null}><Plus aria-hidden="true" /></Button></DropdownMenuTrigger></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
+						<Tooltip><TooltipTrigger asChild><DropdownMenuTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null || savingKey}><Plus aria-hidden="true" /></Button></DropdownMenuTrigger></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
 						<DropdownMenuContent
 							align="end"
 							className="w-72"
@@ -176,7 +180,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
-					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null} onClick={() => void startLogin()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>}
+					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null || savingKey} onClick={() => void startLogin()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>}
 			</div>}
 		>
 			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
@@ -184,7 +188,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			{keyForm ? <div className="px-3 py-2.5"><ApiKeyForm
 				key={keyForm.account?.id ?? "new"}
 				replacing={keyForm.account ? agentAccountLabel(keyForm.account, rows, t) : undefined}
-				pending={busy === "api-key"}
+				pending={savingKey}
 				error={keyError}
 				onSubmit={(name, key) => void saveKey(name, key)}
 				onClose={() => setKeyForm(null)}
@@ -202,7 +206,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				account={account}
 				name={agentAccountLabel(account, rows, t)}
 				aoTokens={(tokensByAccount.get(account.id) ?? 0) + (cliTwin ? tokensByAccount.get(cliTwin.id) ?? 0 : 0) || undefined}
-				busy={busy}
+				busy={busy ?? (savingKey ? "api-key" : null)}
 				cliLogin={account.device ? cliLogin : undefined}
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}

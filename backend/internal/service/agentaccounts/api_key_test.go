@@ -174,3 +174,44 @@ func TestAPIKeyAccountIsOnlyUsedWhenChosen(t *testing.T) {
 		t.Fatalf("DefaultSignIn = %+v, %v; an API key default with its key is ready", identity, handled)
 	}
 }
+
+// A replacement that fails keeps the account's current key and key hint, so
+// launches never use a key the account does not show.
+func TestReplaceAPIKeyKeepsTheCurrentKeyWhenItFails(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	svc, store, _ := newAPIKeyService(t, claude)
+	view, err := svc.AddAPIKeyAccount(ctx, domain.AgentAccountProviderClaude, "Work", goodKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := view.Account.Home
+	savedKey := func() string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(home, apiKeyFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+
+	claude.approveErr = errors.New("read .claude.json: invalid character")
+	if _, err := svc.ReplaceAPIKey(ctx, view.Account.ID, otherKey); err == nil {
+		t.Fatal("replace with a failing approval succeeded")
+	}
+	if got := savedKey(); got != goodKey {
+		t.Fatalf("after a failed approval the saved key is %q, want the current key", got)
+	}
+	claude.approveErr = nil
+
+	store.hintErr = errors.New("database is locked")
+	if _, err := svc.ReplaceAPIKey(ctx, view.Account.ID, otherKey); err == nil {
+		t.Fatal("replace with a failing hint update succeeded")
+	}
+	if got := savedKey(); got != goodKey {
+		t.Fatalf("after a failed hint update the saved key is %q, want the current key restored", got)
+	}
+	if hint := store.accounts[0].KeyHint; hint != "cdef" {
+		t.Fatalf("key hint = %q, want the current key's", hint)
+	}
+}

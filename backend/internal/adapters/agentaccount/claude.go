@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -388,10 +389,17 @@ func dropLoginKeys(settings map[string]json.RawMessage) bool {
 	return dropped
 }
 
+// claudeConfigMu serializes AO's read-modify-write of an account's .claude.json,
+// so a launch sharing the user's config never writes back a copy read before a
+// key approval and drops it.
+var claudeConfigMu sync.Mutex
+
 // shareGlobalConfig shares the user's MCP servers, one by one, and theme into
 // home's .claude.json, the file that also holds the account's own sign-in, so
 // no other key is touched.
 func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
+	claudeConfigMu.Lock()
+	defer claudeConfigMu.Unlock()
 	path := filepath.Join(home, ".claude.json")
 	account, err := readObject(path)
 	if err != nil {
@@ -436,6 +444,8 @@ func (c *Claude) ApproveAPIKey(home, key string) error {
 		suffix = suffix[len(suffix)-claudeApprovedKeyChars:]
 	}
 	path := filepath.Join(home, ".claude.json")
+	claudeConfigMu.Lock()
+	defer claudeConfigMu.Unlock()
 	account, err := readObject(path)
 	if err != nil {
 		return err // Claude's to repair; never overwrite it

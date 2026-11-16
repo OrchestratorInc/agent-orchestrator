@@ -21,6 +21,7 @@ type memStore struct {
 	accounts []domain.AgentAccount
 	defaults map[domain.AgentAccountProvider]string
 	bindings map[domain.SessionID]string
+	hintErr  error // fails UpdateAgentAccountKeyHint
 }
 
 func (m *memStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, error) {
@@ -31,6 +32,9 @@ func (m *memStore) CreateAgentAccount(_ context.Context, a domain.AgentAccount) 
 	return nil
 }
 func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string) error {
+	if m.hintErr != nil {
+		return m.hintErr
+	}
 	for i := range m.accounts {
 		if m.accounts[i].ID == id && m.accounts[i].APIKey() {
 			m.accounts[i].KeyHint = hint
@@ -74,15 +78,19 @@ type fakeClaude struct {
 	orgOf      map[string]string
 	orgNameOf  map[string]string
 	// mu guards approved and checked, which concurrent reads of List touch.
-	mu       sync.Mutex
-	approved map[string]string // the key each folder was told to accept
-	checked  []string          // every folder whose identity was read
+	mu         sync.Mutex
+	approved   map[string]string // the key each folder was told to accept
+	approveErr error             // fails ApproveAPIKey
+	checked    []string          // every folder whose identity was read
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
 func (f *fakeClaude) ApproveAPIKey(home, key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.approveErr != nil {
+		return f.approveErr
+	}
 	if f.approved == nil {
 		f.approved = map[string]string{}
 	}
