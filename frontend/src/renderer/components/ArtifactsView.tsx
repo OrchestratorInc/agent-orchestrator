@@ -12,10 +12,13 @@ import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCreateArtifactSession } from "../hooks/useCreateArtifactSession";
 import { deleteSessionArtifactFile } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { keptArtifactsQueryKey, useKeptArtifacts } from "../hooks/useKeptArtifacts";
+import { useStartSessionFromArtifact } from "../hooks/useStartSessionFromArtifact";
 import {
 	ARTIFACT_SHARINGS,
 	ARTIFACT_TYPES,
 	artifactChangeError,
+	artifactContext,
 	artifactCount,
 	artifactKey,
 	artifactLocation,
@@ -24,6 +27,7 @@ import {
 	groupArtifactsByProject,
 	hostArtifactLocation,
 	withHostShareLinks,
+	withKeptArtifacts,
 	withShareAccess,
 	type ArtifactGroup,
 	type ArtifactLocation,
@@ -109,9 +113,12 @@ export function ArtifactsView() {
 	// the publish records behind it up to date first.
 	const shareAccess = useReconciledShareLinks();
 	const hostShareLinks = useHostShareLinks();
+	// Artifacts kept after their session was deleted or their project removed.
+	const kept = useKeptArtifacts().data;
+	const noProjectName = t("artifacts.noProject");
 	const groups = useMemo(
-		() => withShareAccess(withHostShareLinks(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), hostShareLinks), shareAccess),
-		[workspaces, remoteWorkspaces, orchestratorTitle, hostShareLinks, shareAccess],
+		() => withShareAccess(withHostShareLinks(withKeptArtifacts(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), kept, workspaces ?? [], noProjectName), hostShareLinks), shareAccess),
+		[workspaces, remoteWorkspaces, orchestratorTitle, kept, noProjectName, hostShareLinks, shareAccess],
 	);
 	const [query, setQuery] = useState("");
 	// Each filter keeps several values at once; an empty list shows every artifact.
@@ -261,6 +268,7 @@ export function ArtifactsView() {
 			const hostIds = new Set(rows.flatMap((row) => row.hostId && !row.cloud ? [row.hostId] : []));
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }),
+				...(rows.some((row) => row.kept) ? [queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey })] : []),
 				...[...hostIds].map((hostId) => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) })),
 				...(rows.some((row) => row.cloud) ? [queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey })] : []),
 			]);
@@ -541,15 +549,20 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 	const share = useArtifactShareFile(row);
 	const requestWorkspaceFileOpen = useUiStore((state) => state.requestWorkspaceFileOpen);
 	const navigateToSession = useNavigateToSession();
+	const startSession = useStartSessionFromArtifact();
 	const KindIcon = artifactFileIcon(row);
 	const selectionDescriptionId = useId();
-	// An archived session's files stay listed, view only; the context says so.
-	const context = row.archived ? `${projectName} · ${row.sessionTitle} · ${t("artifacts.archivedSession")}` : `${projectName} · ${row.sessionTitle}`;
+	const context = artifactContext(t, row, projectName);
 
 	const open = () => {
 		onPreview(row, projectName);
 	};
+	// A kept file has no session to open; a new one can start from it.
 	const openInSession = () => {
+		if (row.kept) {
+			void startSession(row);
+			return;
+		}
 		requestWorkspaceFileOpen(row.sessionId, row.path, row.hostId, "artifact");
 		navigateToSession(row.projectId, row.sessionId, row.hostId ?? LOCAL_HOST);
 	};
@@ -624,6 +637,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 							iconOnly
 							share={share}
 							onOpenInSession={openInSession}
+							startsSession={Boolean(row.kept)}
 							pinned={pinned}
 							onTogglePin={() => togglePinnedArtifact(id)}
 							className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover/artifact:opacity-100 group-focus-within/artifact:opacity-100 data-[state=open]:opacity-100"
@@ -649,6 +663,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, pinned, view
 					iconOnly
 					share={share}
 					onOpenInSession={openInSession}
+					startsSession={Boolean(row.kept)}
 					pinned={pinned}
 					onTogglePin={() => togglePinnedArtifact(id)}
 					className="bg-[var(--solid-bg-secondary,var(--color-bg-secondary))] hover:bg-[var(--solid-accent,var(--accent))] dark:hover:bg-[var(--solid-accent,var(--accent))] transition-none duration-0 [@media(hover:hover)]:opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[state=open]:opacity-100"

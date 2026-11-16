@@ -27,7 +27,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
-	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
 type fakeTelemetrySink struct{ events []ports.TelemetryEvent }
@@ -6633,43 +6632,6 @@ func TestDeleteExpiredDeletesSessionsArchivedLongEnough(t *testing.T) {
 	mgr.refuse["mer-old"] = errors.New("disk I/O error")
 	if err := svc.DeleteExpired(ctx, 30); err == nil || !strings.Contains(err.Error(), "mer-old") {
 		t.Fatalf("failed delete err = %v, want it reported", err)
-	}
-}
-
-// Retention keeps an expired session that still has artifact files: they are
-// deleted only when the person deletes them. Version history alone is not an
-// artifact, so a session with only that, or no directory, is deleted.
-func TestDeleteExpiredKeepsSessionsWithArtifacts(t *testing.T) {
-	ctx := context.Background()
-	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
-	dataDir := t.TempDir()
-	write := func(id domain.SessionID, rel string) {
-		t.Helper()
-		path := filepath.Join(sessionartifacts.Dir(dataDir, id), filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("mer-artifacts", "notes/report.md")
-	write("mer-history", sessionartifacts.VersionsDir+"/report.md/1")
-	old := now.AddDate(0, 0, -60)
-	store := &expiringStore{fakeStore: newFakeStore(), archived: []domain.ArchivedSession{
-		{ID: "mer-artifacts", ArchivedAt: old},
-		{ID: "mer-history", ArchivedAt: old},
-		{ID: "mer-none", ArchivedAt: old},
-	}}
-	mgr := &deletingCommander{fakeCommander: &fakeCommander{}}
-	svc := NewWithDeps(Deps{Manager: mgr, Store: store, DataDir: dataDir})
-	svc.clock = func() time.Time { return now }
-
-	if err := svc.DeleteExpired(ctx, 30); err != nil {
-		t.Fatalf("DeleteExpired: %v", err)
-	}
-	if want := []domain.SessionID{"mer-history", "mer-none"}; !slices.Equal(mgr.deleted, want) {
-		t.Fatalf("deleted = %v, want %v", mgr.deleted, want)
 	}
 }
 

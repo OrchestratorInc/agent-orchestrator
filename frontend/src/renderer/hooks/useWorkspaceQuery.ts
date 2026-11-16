@@ -69,7 +69,7 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 	};
 }
 
-function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
+export function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
 	return {
 		...(artifact.id ? { id: artifact.id } : {}),
 		kind: artifact.kind,
