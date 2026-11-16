@@ -24,7 +24,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -67,14 +66,12 @@ type harnessProbe struct {
 	BinaryName            string
 	VersionArg            string
 	ExpectedVersionPrefix string
-	Resolver              ports.AgentBinaryResolver
 }
 
 type harnessProbeSpec struct {
 	BinaryName            string
 	VersionArg            string
 	ExpectedVersionPrefix string
-	UseAdapterResolver    bool
 }
 
 // harnessProbeSpecs overrides per-harness probe settings for agent harnesses whose
@@ -104,8 +101,9 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"stakpak":      {BinaryName: "stakpak", VersionArg: "--version"},
 	// MiniMax Code's CLI is `mcode`, not its harness ID.
 	"minimax-code": {BinaryName: "mcode", VersionArg: "--version"},
-	// Open Interpreter resolves through its adapter, which pins the inspected release.
-	"open-interpreter": {BinaryName: "interpreter", UseAdapterResolver: true},
+	// Open Interpreter is pinned to its inspected Rust release; the older Python
+	// CLI also installs `interpreter`, so the version line must identify it.
+	"open-interpreter": {BinaryName: "interpreter", VersionArg: "--version", ExpectedVersionPrefix: "interpreter 0.0.56"},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {
@@ -229,16 +227,12 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		if binaryName == "" {
 			binaryName = id
 		}
-		probe := harnessProbe{
+		checks = append(checks, c.checkHarness(ctx, harnessProbe{
 			Name:                  id,
 			BinaryName:            binaryName,
 			VersionArg:            spec.VersionArg,
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
-		}
-		if spec.UseAdapterResolver {
-			probe.Resolver, _ = ha.Agent.(ports.AgentBinaryResolver)
-		}
-		checks = append(checks, c.checkHarness(ctx, probe))
+		}))
 	}
 	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx), c.checkGitLabToken(ctx))
 	return checks
@@ -556,21 +550,11 @@ func checkHooksLog(dataDir string, now time.Time) doctorCheck {
 }
 
 func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe) doctorCheck {
-	var path string
-	var err error
-	if harness.Resolver != nil {
-		path, err = harness.Resolver.ResolveBinary(ctx)
-	} else {
-		path, err = c.deps.LookPath(harness.BinaryName)
-	}
+	path, err := c.deps.LookPath(harness.BinaryName)
 	if err != nil || path == "" {
-		message := fmt.Sprintf("%s not found in PATH", harness.BinaryName)
-		if harness.Resolver != nil {
-			message = fmt.Sprintf("%s not found in PATH or is incompatible", harness.BinaryName)
-		}
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
-			Message: message,
+			Message: fmt.Sprintf("%s not found in PATH", harness.BinaryName),
 		}
 	}
 	if harness.VersionArg == "" {

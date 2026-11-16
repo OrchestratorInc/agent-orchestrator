@@ -553,42 +553,39 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	}
 }
 
-func TestDoctorOpenInterpreterSkipsPythonCollision(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix executable fixture")
-	}
-	pathDir := t.TempDir()
-	pythonInterpreter := filepath.Join(pathDir, "interpreter")
-	if err := os.WriteFile(pythonInterpreter, []byte("#!/bin/sh\nprintf 'Open Interpreter --model --auto-run\\n'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	home := t.TempDir()
-	rustInterpreter := filepath.Join(home, ".local", "bin", "interpreter")
-	if err := os.MkdirAll(filepath.Dir(rustInterpreter), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(rustInterpreter, []byte("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'interpreter 0.0.56\\n'; else printf 'Open Interpreter\\n--no-daemon\\n--chat-completions\\nresume\\n'; fi\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", pathDir)
-	t.Setenv("HOME", home)
-	setConfigEnv(t)
-	c := doctorContext(t,
-		map[string]string{
-			"git": "/bin/git",
-		},
-		func(_ context.Context, name string, _ ...string) ([]byte, error) {
-			if name == "/bin/git" {
-				return []byte("git version 2.43.0\n"), nil
+// The CLI probes Open Interpreter like every other harness, through PATH and
+// its version line, never through the adapter. The pinned Rust release passes;
+// the older Python CLI that also installs `interpreter` does not.
+func TestDoctorOpenInterpreterRequiresPinnedRustVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		want    doctorLevel
+		message string
+	}{
+		{"pinned Rust release", "interpreter 0.0.56\n", doctorPass, "interpreter resolves to /bin/interpreter (interpreter 0.0.56)"},
+		{"Python CLI collision", "Open Interpreter 0.4.3 Developer Preview\n", doctorWarn, "does not identify the expected CLI"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setConfigEnv(t)
+			c := doctorContext(t,
+				map[string]string{"git": "/bin/git", "interpreter": "/bin/interpreter"},
+				func(_ context.Context, name string, args ...string) ([]byte, error) {
+					switch {
+					case name == "/bin/git":
+						return []byte("git version 2.43.0\n"), nil
+					case name == "/bin/interpreter" && len(args) == 1 && args[0] == "--version":
+						return []byte(tc.version), nil
+					}
+					t.Fatalf("unexpected CommandOutput call: %s %v", name, args)
+					return nil, nil
+				},
+			)
+			check := findDoctorCheck(t, c.runDoctor(context.Background()), "open-interpreter")
+			if check.Level != tc.want || !strings.Contains(check.Message, tc.message) {
+				t.Fatalf("open-interpreter check = %+v, want %s containing %q", check, tc.want, tc.message)
 			}
-			t.Fatalf("unexpected CommandOutput call for PATH-only harness: %s", name)
-			return nil, nil
-		},
-	)
-
-	check := findDoctorCheck(t, c.runDoctor(context.Background()), "open-interpreter")
-	if check.Level != doctorPass || !strings.Contains(check.Message, "interpreter resolves to "+rustInterpreter) {
-		t.Fatalf("open-interpreter check = %+v, want PASS with Rust interpreter fallback", check)
+		})
 	}
 }
 
