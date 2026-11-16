@@ -944,6 +944,7 @@
 	"inspector.sessionControls": "Управление сессией",
 	"inspector.currentTurn": "Текущий ход",
 	"inspector.stopTurn": "Остановить ход",
+	"inspector.stopRequested": "Остановка запрошена",
 	"inspector.stoppingTurn": "Остановка…",
 	"inspector.conflict": "Конфликт",
 	"inspector.files": "Файлы",

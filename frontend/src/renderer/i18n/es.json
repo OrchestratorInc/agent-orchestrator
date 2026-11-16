@@ -948,6 +948,7 @@
 	"inspector.sessionControls": "Controles de sesión",
 	"inspector.currentTurn": "Turno actual",
 	"inspector.stopTurn": "Detener turno",
+	"inspector.stopRequested": "Detención solicitada",
 	"inspector.stoppingTurn": "Deteniendo…",
 	"inspector.conflict": "Conflicto",
 	"inspector.files": "Archivos",

@@ -1683,15 +1683,14 @@ type reportSemanticSession interface {
 	InterruptTUI(context.Context, domain.SessionID) error
 }
 
-// sessionConversationService routes the shared Stop endpoint to the controller
-// that owns the session's current interface. A TUI stop goes through
-// StopTUITurn, not the report path's InterruptTUI.
+// sessionConversationService adds an explicit Stop turn endpoint. The existing
+// conversation interrupt keeps its Chat-only contract.
 type sessionConversationService struct {
 	*chatsvc.Service
 	sessions sessionLifecycle
 }
 
-func (s sessionConversationService) Interrupt(ctx context.Context, id domain.SessionID) error {
+func (s sessionConversationService) StopTurn(ctx context.Context, id domain.SessionID) error {
 	err := s.Service.Interrupt(ctx, id)
 	if errors.Is(err, chatsvc.ErrNotChatMode) {
 		err = s.sessions.StopTUITurn(ctx, id)
@@ -1703,7 +1702,9 @@ func (s sessionConversationService) Interrupt(ctx context.Context, id domain.Ses
 		case errors.Is(err, sessionmanager.ErrNoActiveTurn):
 			return apierr.Conflict("SESSION_NO_ACTIVE_TURN", "there is no turn in flight to interrupt", nil)
 		case errors.Is(err, sessionmanager.ErrInterruptUnsupported):
-			return apierr.Conflict("SESSION_INTERRUPT_UNAVAILABLE", "this terminal session cannot be interrupted", nil)
+			return apierr.Conflict("SESSION_INTERRUPT_UNAVAILABLE", "Stop turn is unavailable for this harness; use its terminal controls", nil)
+		case errors.Is(err, sessionmanager.ErrComposerBusy):
+			return apierr.Conflict("SESSION_COMPOSER_BUSY", "Clear or submit the draft in the terminal before stopping the turn", nil)
 		case errors.Is(err, sessionmanager.ErrTurnStopPending):
 			return apierr.Conflict("SESSION_TURN_STOP_PENDING", "a stop was already sent for this turn", nil)
 		case errors.Is(err, sessionmanager.ErrOperationInProgress):

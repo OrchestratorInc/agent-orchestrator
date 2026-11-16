@@ -13275,6 +13275,47 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/stop-turn:
+    post:
+      operationId: stopSessionTurn
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stop an active turn without ending the session
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/branches:
     get:
       operationId: listSessionWorkspaceBranches
@@ -16338,6 +16379,8 @@ components:
       properties:
         authentication:
           $ref: '#/components/schemas/AgentAuthenticationObservation'
+        canStopTurn:
+          type: boolean
         effectiveReadiness:
           enum:
           - ready

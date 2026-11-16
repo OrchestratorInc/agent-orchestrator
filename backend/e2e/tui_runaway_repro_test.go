@@ -3,10 +3,12 @@
 package e2e
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +19,10 @@ func TestCLIInterruptKeepsClaudeTUISession(t *testing.T) {
 	d := startDaemon(t, t.TempDir())
 	project := seedProject(t, d, "tuistop")
 	setPermissions(t, d, project, "bypass-permissions")
+	pidFile := filepath.Join(d.dataDir, "stop-turn.pid")
 	worker := spawn(t, d, map[string]any{
 		"projectId": project, "kind": "worker", "harness": "claude-code", "mode": "tui",
-		"prompt": "In this disposable test repo, run the shell command sleep 90, then report DONE. Do not edit files.",
+		"prompt": fmt.Sprintf("In this disposable test repo, run exactly this shell command:\n```sh\necho $$ > %q; exec sleep 90\n```\nThen report DONE. Do not edit other files.", pidFile),
 	})
 	if worker.Session.Mode != "tui" {
 		t.Fatalf("mode = %q", worker.Session.Mode)
@@ -34,13 +37,17 @@ func TestCLIInterruptKeepsClaudeTUISession(t *testing.T) {
 			Status string `json:"status"`
 		} `json:"session"`
 	}
+	var pid int
 	for {
 		d.mustCall("GET", "/sessions/"+worker.Session.ID, http.StatusOK, nil, &session)
-		if session.Session.Activity.State == "active" {
+		if data, err := os.ReadFile(pidFile); err == nil {
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+		}
+		if session.Session.Activity.State == "active" && pid > 0 && processAlive(pid) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("worker never became active: %+v", session.Session)
+			t.Fatalf("worker never started the sleep process: pid=%d session=%+v\n%s", pid, session.Session, d.tailLog())
 		}
 		time.Sleep(time.Second)
 	}
@@ -50,7 +57,13 @@ func TestCLIInterruptKeepsClaudeTUISession(t *testing.T) {
 	if err != nil || !strings.Contains(string(out), "interrupt requested for session "+worker.Session.ID) {
 		t.Fatalf("CLI interrupt: err=%v output=%s", err, out)
 	}
-	time.Sleep(2 * time.Second)
+	deadline = time.Now().Add(10 * time.Second)
+	for processAlive(pid) {
+		if time.Now().After(deadline) {
+			t.Fatalf("interrupt did not stop the sleep process %d", pid)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	d.mustCall("GET", "/sessions/"+worker.Session.ID, http.StatusOK, nil, &session)
 	if session.Session.IsTerminated || session.Session.Activity.State == "exited" {
 		t.Fatalf("interrupt ended the worker: %+v", session.Session)

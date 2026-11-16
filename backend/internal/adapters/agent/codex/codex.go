@@ -49,6 +49,8 @@ func New() *Plugin {
 // launch. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
+func (*Plugin) InterruptKey() string { return "\x03" }
+
 // EmitsSemanticMessageAcceptance reports that the Codex prompt hook includes
 // the accepted prompt, allowing AO delivery ids to be correlated semantically.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }

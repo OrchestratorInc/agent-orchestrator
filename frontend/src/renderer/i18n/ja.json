@@ -940,6 +940,7 @@
 	"inspector.sessionControls": "セッション制御",
 	"inspector.currentTurn": "現在のターン",
 	"inspector.stopTurn": "ターンを停止",
+	"inspector.stopRequested": "停止を要求しました",
 	"inspector.stoppingTurn": "停止中…",
 	"inspector.conflict": "コンフリクト",
 	"inspector.files": "ファイル",

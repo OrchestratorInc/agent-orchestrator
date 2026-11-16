@@ -196,8 +196,10 @@ ao session kill mer-3
 ### ao session interrupt
 
 Request a stop of an active turn without terminating the session or workspace.
-It sends Ctrl+C, which the agent can ignore. A session with no turn in flight,
-or one already sent a stop for this turn, is refused.
+Terminal UI supports Claude Code, Codex, and Gemini through their declared
+Ctrl+C binding, which the agent can ignore. Other harnesses are refused. A
+terminal draft, a session with no turn in flight, or a turn already sent a stop
+is refused. Chat sessions use their existing turn cancellation.
 
 **Syntax:**
 ```

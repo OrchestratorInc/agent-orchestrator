@@ -21,7 +21,7 @@ type reportDeliverySession struct {
 	sendErr     error
 }
 
-func TestSessionConversationInterruptRoutesByMode(t *testing.T) {
+func TestSessionStopTurnRoutesByMode(t *testing.T) {
 	for _, tc := range []struct {
 		mode    domain.SessionMode
 		wantTUI bool
@@ -35,7 +35,7 @@ func TestSessionConversationInterruptRoutesByMode(t *testing.T) {
 				Service:  chatsvc.New(chatsvc.Options{Sessions: reportDeliveryStore{rec: domain.SessionRecord{ID: "ao-1", Mode: tc.mode}}}),
 				sessions: sessions,
 			}
-			err := svc.Interrupt(context.Background(), "ao-1")
+			err := svc.StopTurn(context.Background(), "ao-1")
 			if tc.wantTUI {
 				if err != nil || sessions.interrupted != "ao-1" {
 					t.Fatalf("TUI interrupt = %v, routed to %q", err, sessions.interrupted)
@@ -47,7 +47,7 @@ func TestSessionConversationInterruptRoutesByMode(t *testing.T) {
 	}
 }
 
-func TestSessionConversationInterruptReportsTUIRefusals(t *testing.T) {
+func TestSessionStopTurnReportsTUIRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code string
@@ -57,13 +57,14 @@ func TestSessionConversationInterruptReportsTUIRefusals(t *testing.T) {
 		{sessionmanager.ErrInterruptUnsupported, "SESSION_INTERRUPT_UNAVAILABLE"},
 		{sessionmanager.ErrTurnStopPending, "SESSION_TURN_STOP_PENDING"},
 		{sessionmanager.ErrOperationInProgress, "SESSION_OPERATION_IN_PROGRESS"},
+		{sessionmanager.ErrComposerBusy, "SESSION_COMPOSER_BUSY"},
 	} {
 		sessions := &fakeSessionLifecycle{interruptErr: tc.err}
 		svc := sessionConversationService{
 			Service:  chatsvc.New(chatsvc.Options{Sessions: reportDeliveryStore{rec: domain.SessionRecord{ID: "ao-1", Mode: domain.SessionModeTUI}}}),
 			sessions: sessions,
 		}
-		err := svc.Interrupt(context.Background(), "ao-1")
+		err := svc.StopTurn(context.Background(), "ao-1")
 		var api *apierr.Error
 		if !errors.As(err, &api) || api.Code != tc.code {
 			t.Fatalf("TUI refusal = %v, want %s", err, tc.code)

@@ -671,6 +671,7 @@ type fakeRuntime struct {
 	outputErr          error
 	interruptErr       error
 	interrupts         []string
+	inputs             []string
 	onInterrupt        func(ports.RuntimeHandle)
 	// aliveByHandle maps a RuntimeHandle.ID to its liveness; missing = false.
 	aliveByHandle           map[string]bool
@@ -692,6 +693,11 @@ func (r *fakeRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) e
 		r.onInterrupt(handle)
 	}
 	return r.interruptErr
+}
+
+func (r *fakeRuntime) SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error {
+	r.inputs = append(r.inputs, input)
+	return r.Interrupt(ctx, handle)
 }
 
 type fakePreviewLifecycle struct {
@@ -896,6 +902,8 @@ func (r *fakeRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeH
 }
 
 type fakeAgent struct{}
+
+func (fakeAgent) InterruptKey() string { return "\x03" }
 
 func (fakeAgent) GetConfigSpec(context.Context) (ports.ConfigSpec, error) {
 	return ports.ConfigSpec{}, nil

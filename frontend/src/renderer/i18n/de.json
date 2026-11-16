@@ -940,6 +940,7 @@
 	"inspector.sessionControls": "Sitzungssteuerung",
 	"inspector.currentTurn": "Aktueller Durchgang",
 	"inspector.stopTurn": "Durchgang stoppen",
+	"inspector.stopRequested": "Stopp angefordert",
 	"inspector.stoppingTurn": "Wird gestoppt…",
 	"inspector.conflict": "Konflikt",
 	"inspector.files": "Dateien",

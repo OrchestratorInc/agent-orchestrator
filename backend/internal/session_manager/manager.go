@@ -5523,8 +5523,8 @@ var (
 	// ErrNoActiveTurn means StopTUITurn found no turn to stop. Ctrl+C on an
 	// idle agent prompt arms "press again to exit", so it is refused.
 	ErrNoActiveTurn = errors.New("session: no active turn")
-	// ErrInterruptUnsupported means the session's runtime cannot deliver an
-	// interrupt.
+	// ErrInterruptUnsupported means the harness has no declared turn interrupt
+	// key or its runtime cannot send it.
 	ErrInterruptUnsupported = errors.New("session: interrupt unsupported")
 	// ErrTurnStopPending means StopTUITurn already interrupted this turn and
 	// the session has not reported a new state since. A second Ctrl+C could
@@ -5579,6 +5579,15 @@ func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		return ErrInterruptUnsupported
 	}
+	if rec.Activity.State == domain.ActivityActive {
+		busy, releaseInput := m.composerBusyCheck()(ctx, rec)
+		if busy {
+			return ErrComposerBusy
+		}
+		if releaseInput != nil {
+			defer releaseInput()
+		}
+	}
 	turn := tuiTurnOf(rec)
 	m.turnStopsMu.Lock()
 	if rec.Activity.State != domain.ActivityActive {
@@ -5590,7 +5599,19 @@ func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
 		m.turnStopsMu.Unlock()
 		return ErrTurnStopPending
 	}
-	interrupter, ok := m.runtime.(runtimeInterrupter)
+	if m.agents == nil {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	agent, found := m.agents.Agent(rec.Harness)
+	interrupt, supported := agent.(ports.TurnInterruptKey)
+	if !found || !supported || interrupt.InterruptKey() == "" {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	input, ok := m.runtime.(interface {
+		SendInput(context.Context, ports.RuntimeHandle, string) error
+	})
 	if !ok || rec.Metadata.RuntimeHandleID == "" {
 		m.turnStopsMu.Unlock()
 		return ErrInterruptUnsupported
@@ -5600,7 +5621,7 @@ func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
 	}
 	m.turnStops[id] = turn
 	m.turnStopsMu.Unlock()
-	if err := interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}); err != nil {
+	if err := input.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, interrupt.InterruptKey()); err != nil {
 		// Nothing reached the agent, so a retry for this turn is allowed.
 		m.turnStopsMu.Lock()
 		if stopped, ok := m.turnStops[id]; ok && stopped.same(turn) {

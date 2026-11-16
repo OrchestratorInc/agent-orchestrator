@@ -940,6 +940,7 @@
 	"inspector.sessionControls": "세션 제어",
 	"inspector.currentTurn": "현재 턴",
 	"inspector.stopTurn": "턴 중지",
+	"inspector.stopRequested": "중지 요청됨",
 	"inspector.stoppingTurn": "중지 중…",
 	"inspector.conflict": "충돌",
 	"inspector.files": "파일",

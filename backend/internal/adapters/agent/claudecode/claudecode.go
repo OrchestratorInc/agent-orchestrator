@@ -62,6 +62,8 @@ func New() *Plugin {
 // accepted. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
+func (*Plugin) InterruptKey() string { return "\x03" }
+
 // EmitsSemanticMessageAcceptance reports that UserPromptSubmit includes the
 // accepted prompt, allowing AO delivery ids to be correlated semantically.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }

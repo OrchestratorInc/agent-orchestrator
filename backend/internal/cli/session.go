@@ -887,7 +887,7 @@ func (c *commandContext) interruptSession(ctx context.Context, cmd *cobra.Comman
 			return err
 		}
 	}
-	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/conversation/interrupt", struct{}{}, nil); err != nil {
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/stop-turn", struct{}{}, nil); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(cmd.OutOrStdout(), "interrupt requested for session %s\n", id)

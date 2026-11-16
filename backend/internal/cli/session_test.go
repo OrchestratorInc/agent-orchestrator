@@ -87,7 +87,7 @@ func sessionCommandServer(t *testing.T) (*httptest.Server, *sessionRequestLog) {
 			_, _ = io.WriteString(w, `{"ok":true,"cleaned":["demo-old","demo-orch"],"skipped":[]}`)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/kill":
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","freed":true}`)
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/conversation/interrupt":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/stop-turn":
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/restore":
 			_, _ = io.WriteString(w, `{"ok":true,"sessionId":"demo-1","session":`+sessionJSON("demo-1", "demo", "worker", "idle", false)+`}`)
@@ -501,7 +501,7 @@ func TestSessionInterrupt_SuccessWithProjectScope(t *testing.T) {
 	if out != "interrupt requested for session demo-1\n" {
 		t.Fatalf("unexpected interrupt output: %q", out)
 	}
-	want := []string{"GET /api/v1/sessions/demo-1", "POST /api/v1/sessions/demo-1/conversation/interrupt"}
+	want := []string{"GET /api/v1/sessions/demo-1", "POST /api/v1/sessions/demo-1/stop-turn"}
 	if got := log.all(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests = %#v, want %#v", got, want)
 	}

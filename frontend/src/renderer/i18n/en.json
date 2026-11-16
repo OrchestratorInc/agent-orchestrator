@@ -936,6 +936,7 @@
 	"inspector.sessionControls": "Session controls",
 	"inspector.currentTurn": "Current turn",
 	"inspector.stopTurn": "Stop turn",
+	"inspector.stopRequested": "Stop requested",
 	"inspector.stoppingTurn": "Stopping…",
 	"inspector.conflict": "Conflict",
 	"inspector.files": "Files",
