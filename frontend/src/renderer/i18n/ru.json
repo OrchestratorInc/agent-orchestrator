@@ -4800,6 +4800,8 @@
 	"automations.cloud.runAsUnknown": "владельца",
 	"automations.cloud.branch": "Ветка",
 	"automations.cloud.manual": "Запустить сейчас",
+	"automations.cloud.sessionEnded": "Сессия завершена",
+	"automations.cloud.viewSession": "Просмотреть сессию",
 	"automations.cloud.runNow": "Запустить сейчас",
 	"automations.cloud.runNow.running": "Уже выполняется",
 	"automations.cloud.runNow.aria": "Запустить {{name}} сейчас",

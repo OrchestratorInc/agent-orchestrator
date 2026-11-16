@@ -4586,6 +4586,8 @@
 	"automations.cloud.runAsUnknown": "소유자",
 	"automations.cloud.branch": "브랜치",
 	"automations.cloud.manual": "지금 실행",
+	"automations.cloud.sessionEnded": "세션 종료됨",
+	"automations.cloud.viewSession": "세션 보기",
 	"automations.cloud.runNow": "지금 실행",
 	"automations.cloud.runNow.running": "이미 실행 중",
 	"automations.cloud.runNow.aria": "{{name}} 지금 실행",

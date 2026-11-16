@@ -4697,6 +4697,8 @@
 	"automations.cloud.runAsUnknown": "o proprietário",
 	"automations.cloud.branch": "Branch",
 	"automations.cloud.manual": "Executar agora",
+	"automations.cloud.sessionEnded": "Sessão encerrada",
+	"automations.cloud.viewSession": "Ver sessão",
 	"automations.cloud.runNow": "Executar agora",
 	"automations.cloud.runNow.running": "Já em execução",
 	"automations.cloud.runNow.aria": "Executar {{name}} agora",

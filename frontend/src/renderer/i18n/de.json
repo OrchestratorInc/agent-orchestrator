@@ -4586,6 +4586,8 @@
 	"automations.cloud.runAsUnknown": "dem Eigentümer",
 	"automations.cloud.branch": "Branch",
 	"automations.cloud.manual": "Jetzt ausführen",
+	"automations.cloud.sessionEnded": "Sitzung beendet",
+	"automations.cloud.viewSession": "Sitzung ansehen",
 	"automations.cloud.runNow": "Jetzt ausführen",
 	"automations.cloud.runNow.running": "Läuft bereits",
 	"automations.cloud.runNow.aria": "{{name}} jetzt ausführen",

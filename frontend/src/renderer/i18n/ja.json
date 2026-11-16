@@ -4586,6 +4586,8 @@
 	"automations.cloud.runAsUnknown": "所有者",
 	"automations.cloud.branch": "ブランチ",
 	"automations.cloud.manual": "今すぐ実行",
+	"automations.cloud.sessionEnded": "セッション終了",
+	"automations.cloud.viewSession": "セッションを表示",
 	"automations.cloud.runNow": "今すぐ実行",
 	"automations.cloud.runNow.running": "すでに実行中",
 	"automations.cloud.runNow.aria": "{{name}} を今すぐ実行",

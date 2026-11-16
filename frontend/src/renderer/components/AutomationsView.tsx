@@ -81,6 +81,7 @@ import {
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { agentLabel } from "../lib/agent-options";
+import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { CloudCpError } from "../lib/cloud-cp";
 import { useUiStore } from "../stores/ui-store";
 import {
@@ -185,6 +186,9 @@ export function AutomationsView() {
 	const { t } = useTranslation();
 	const query = useAutomations();
 	const workspaces = useWorkspaceQuery().data ?? [];
+	// A cloud run's session ends when the run settles (ao-control-plane#122);
+	// one deleted mid-run reads terminated before its run settles.
+	const endedSessionIds = useMemo(() => new Set(workspaces.flatMap((workspace) => (workspace.sessions ?? []).filter((session) => session.isTerminated).map((session) => session.id))), [workspaces]);
 	const harnesses = useAgentReadinessQuery().data?.agents ?? [];
 	const create = useCreateAutomation();
 	const update = useUpdateAutomation();
@@ -330,7 +334,7 @@ export function AutomationsView() {
 							{visibleAutomations.length > 0 ? (
 								<div className="divide-y divide-border">
 									{visibleAutomations.map((entry) => entry.cloud ? (
-										<CloudAutomationRow key={entry.key} item={entry.cloud} userId={cloud.userId} projectName={projectName(entry.projectId)} busy={updateCloud.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setCloudEditTarget(entry.cloud ?? null)} onDelete={() => setDeleteTarget(entry)} onError={setActionError} onToggle={(enabled) => updateCloud.mutateAsync({ id: entry.cloud!.id, body: { enabled } })} />
+										<CloudAutomationRow key={entry.key} item={entry.cloud} userId={cloud.userId} endedSessionIds={endedSessionIds} projectName={projectName(entry.projectId)} busy={updateCloud.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setCloudEditTarget(entry.cloud ?? null)} onDelete={() => setDeleteTarget(entry)} onError={setActionError} onToggle={(enabled) => updateCloud.mutateAsync({ id: entry.cloud!.id, body: { enabled } })} />
 									) : entry.local ? (
 										<AutomationRow key={entry.key} item={entry.local} projectName={projectName(entry.projectId)} busy={update.isPending} expanded={expanded === entry.key} onExpand={() => setExpanded(expanded === entry.key ? null : entry.key)} onEdit={() => setEditTarget(entry.local ?? null)} onDelete={() => setDeleteTarget(entry)} onToggle={async (enabled) => { setActionError(null); try { await update.mutateAsync({ id: entry.local!.id, body: { enabled } }); } catch (error) { setActionError(error instanceof Error ? error.message : t("automations.updateError")); } }} />
 									) : null)}
@@ -495,7 +499,7 @@ function AutomationRow({ item, projectName, busy, expanded, onExpand, onEdit, on
  * An automation that runs in AO Cloud: the whole organization sees it and may
  * run it now; only the person it runs as, its creator and admins change it.
  */
-function CloudAutomationRow({ item, userId, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; userId?: string; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<unknown>; onError: (message: string | null) => void }) {
+function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, expanded, onExpand, onEdit, onDelete, onToggle, onError }: { item: CloudAutomation; userId?: string; endedSessionIds: ReadonlySet<string>; projectName: string; busy: boolean; expanded: boolean; onExpand: () => void; onEdit: () => void; onDelete: () => void; onToggle: (enabled: boolean) => Promise<unknown>; onError: (message: string | null) => void }) {
 	const runs = useCloudAutomationRuns(expanded ? item.id : null);
 	const runNow = useRunCloudAutomationNow();
 	const subscribe = useSubscribeCloudAutomation();
@@ -601,7 +605,10 @@ function CloudAutomationRow({ item, userId, projectName, busy, expanded, onExpan
 					<h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium"><History className="size-3.5 text-muted-foreground" aria-hidden="true" />{t("automations.runs.title")}</h3>
 					{runs.isLoading ? <p role="status" className="text-xs text-muted-foreground">{t("automations.runs.loading")}</p> : runs.error ? <p role="alert" className="text-xs text-destructive">{cloudAutomationErrorMessage(runs.error, t)}</p> : runs.data?.length ? <div className="divide-y divide-border">{runs.data.map((run) => {
 						const runError = cloudRunErrorMessage(run, t);
-						return <div key={run.id} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium">{t(`automations.runStatus.${run.status}`, { defaultValue: run.status })}</span><span className="ml-3 text-caption tabular-nums text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.trigger === "manual" ? <span className="ml-3 text-caption text-muted-foreground">{t("automations.cloud.manual")}</span> : null}{runError ? <p className="mt-1 text-xs text-destructive">{runError}</p> : null}</div>{run.sessionId ? <Button variant="secondary" size="sm" onClick={() => void navigate({ to: "/sessions/$sessionId", params: { sessionId: run.sessionId! } })}>{t("automations.runs.openSession")}</Button> : null}</div>;
+						const sessionId = run.sessionId;
+						// A settled run's session has ended: still readable (and restorable), never live.
+						const sessionEnded = Boolean(sessionId) && (!isCloudRunInFlight(run) || endedSessionIds.has(sessionId!));
+						return <div key={run.id} data-testid="automation-run" data-session={sessionId} className="flex items-center justify-between gap-3 py-2 text-xs"><div><span className="font-medium">{t(`automations.runStatus.${run.status}`, { defaultValue: run.status })}</span><span className="ml-3 text-caption tabular-nums text-muted-foreground">{displayTime(run.scheduledFor, i18n.resolvedLanguage)}</span>{run.trigger === "manual" ? <span className="ml-3 text-caption text-muted-foreground">{t("automations.cloud.manual")}</span> : null}{sessionEnded ? <span className="ml-3 text-caption text-muted-foreground">{t("automations.cloud.sessionEnded")}</span> : null}{runError ? <p className="mt-1 text-xs text-destructive">{runError}</p> : null}</div>{sessionId ? <Button variant="secondary" size="sm" onClick={() => void navigate(sessionNavigateTarget(item.projectId, sessionId))}>{t(sessionEnded ? "automations.cloud.viewSession" : "automations.runs.openSession")}</Button> : null}</div>;
 					})}</div> : <p className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Clock3 className="size-3.5" aria-hidden="true" />{t("automations.runs.empty")}</p>}
 				</div>
 			</motion.div> : null}

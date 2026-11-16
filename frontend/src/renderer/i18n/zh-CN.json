@@ -4568,6 +4568,8 @@
 	"automations.cloud.runAsUnknown": "其所有者",
 	"automations.cloud.branch": "分支",
 	"automations.cloud.manual": "立即运行",
+	"automations.cloud.sessionEnded": "会话已结束",
+	"automations.cloud.viewSession": "查看会话",
 	"automations.cloud.runNow": "立即运行",
 	"automations.cloud.runNow.running": "已在运行",
 	"automations.cloud.runNow.aria": "立即运行 {{name}}",

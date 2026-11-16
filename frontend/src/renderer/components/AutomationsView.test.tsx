@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 	updateCloud: vi.fn(),
 	cloudUserId: "u1",
 	cloudRuns: [] as Array<Record<string, unknown>>,
+	navigate: vi.fn(),
 	providerConnections: undefined as Array<{ provider: string; validationState: string }> | undefined,
 }));
 
@@ -44,7 +45,7 @@ vi.mock("../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/platform")>(),
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "authorized", freshness: "fresh" }, effectiveReadiness: "ready", usageCount: 3, lastUsedAt: null };
 const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
@@ -1101,6 +1102,31 @@ describe("automation starters", () => {
 			const details = document.getElementById("automation-history-cloud-c1")!;
 			expect(within(details).getByText("Turned off after 5 failed runs in a row.")).toBeInTheDocument();
 			expect(within(details).getByText("Codex")).toBeInTheDocument();
+		});
+
+		it("shows a settled run's session as ended and viewable, never as running", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.navigate.mockReset();
+			const run = (id: string, status: string, sessionId: string) => ({ id, automationId: "c1", scheduledFor: "2026-11-15T07:00:00Z", trigger: "schedule", status, attemptCount: 1, sessionId, createdAt: "2026-11-15T07:00:00Z" });
+			mocks.cloudRuns = [run("r3", "running", "s-live"), run("r2", "running", "s-deleted"), run("r1", "completed", "s-done")];
+			// The control plane ends a run's session when the run settles; one deleted mid-run reads terminated before the run settles.
+			mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "cloud-1", name: "Cloud app", kind: "cloud", cloudOrgId: "org-1", sessions: [
+				{ id: "s-live", isTerminated: false }, { id: "s-deleted", isTerminated: true }, { id: "s-done", isTerminated: true },
+			] }];
+			mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: mocks.cloudRuns[0] }];
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Show run history for Nightly debt" }));
+			const history = document.getElementById("automation-history-cloud-c1")!;
+			const entry = (sessionId: string) => within(history).getAllByTestId("automation-run").find((element) => element.dataset.session === sessionId)!;
+			expect(within(entry("s-live")).getByRole("button", { name: "Open session" })).toBeInTheDocument();
+			expect(within(entry("s-live")).queryByText("Session ended")).toBeNull();
+			for (const ended of ["s-deleted", "s-done"]) {
+				expect(within(entry(ended)).getByText("Session ended")).toBeInTheDocument();
+				expect(within(entry(ended)).queryByRole("button", { name: "Open session" })).toBeNull();
+			}
+			await user.click(within(entry("s-done")).getByRole("button", { name: "View session" }));
+			expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "cloud-1", sessionId: "s-done" } });
 		});
 
 		it("saves only what an edit changed, and nothing when it changed nothing", async () => {
