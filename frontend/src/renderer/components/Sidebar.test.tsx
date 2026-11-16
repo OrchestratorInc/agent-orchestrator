@@ -126,6 +126,9 @@ vi.mock("@dnd-kit/core", async (importOriginal) => {
 });
 
 vi.mock("../lib/rename-session", () => ({ renameSession: renameSessionMock }));
+const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
+
 vi.mock("../lib/spawn-orchestrator", () => ({
 	spawnOrchestrator: spawnMock,
 	resumeOrchestrator: resumeOrchestratorMock,
@@ -890,15 +893,17 @@ describe("Sidebar", () => {
 		expect(screen.getByTestId("sidebar-projects-scroller")).not.toContainElement(screen.getByText("Projects"));
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
 		const user = userEvent.setup();
+		spawnMock.mockResolvedValue("proj-1-orch-new");
 		renderSidebar({ workspaces: [{ ...workspace, orchestratorAgent: undefined }] });
 
 		await user.click(screen.getByRole("button", { name: "Spawn Project One orchestrator" }));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-1", "sidebar"));
+		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1");
+		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	// The sidebar owns its own openOrchestrator, separate from

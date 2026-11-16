@@ -92,6 +92,7 @@ import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConv
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
+import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
@@ -1733,9 +1734,8 @@ const ProjectItem = memo(function ProjectItem({
 		}
 		// A guest cannot start an orchestrator in someone else's project.
 		if (workspace.shared) return;
-		// A cloud project has no local orchestrator-agent config, so the settings
-		// fallback below would dead-end it. Spawn the orchestrator as a cloud
-		// session in its own sandbox instead.
+		// A cloud project has no local orchestrator-agent config. Spawn the
+		// orchestrator as a cloud session in its own sandbox instead.
 		if (workspace.kind === "cloud") {
 			setIsSpawning(true);
 			try {
@@ -1750,12 +1750,10 @@ const ProjectItem = memo(function ProjectItem({
 			}
 			return;
 		}
-		if (!hasConfiguredOrchestratorAgent(workspace)) {
-					selection.goSettings(workspace.id, workspace.cloudOrgId);
-			return;
-		}
 		setIsSpawning(true);
 		try {
+			// A project that lost its orchestrator agent starts on the ranked default.
+			if (!hasConfiguredOrchestratorAgent(workspace)) await fillMissingProjectRoleAgents(queryClient, workspace.id);
 			const sessionId = await spawnOrchestrator(workspace.id, "sidebar");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			selection.goSession(workspace.id, sessionId);

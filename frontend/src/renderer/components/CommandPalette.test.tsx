@@ -122,6 +122,9 @@ function notifyCtxChange() {
 	for (const listener of ctx.listeners) listener();
 }
 
+const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
+
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateMock,
 	useParams: () => {
@@ -1010,18 +1013,19 @@ describe("CommandPalette actions", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
 		ctx.params = { projectId: "proj-2" };
 		ctx.workspaces[1].orchestratorAgent = undefined;
+		spawnMock.mockResolvedValue("proj-2-orch-new");
 		renderPalette();
 		act(() => useUiStore.getState().setCommandPaletteOpen(true));
 		await screen.findByPlaceholderText(/search sessions/i);
 		fireEvent.click(screen.getByText(rowTitle("Open orchestrator")));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-2" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
-		await waitFor(() => expect(paletteInput()).toBeNull());
+		await waitFor(() => expect(spawnMock).toHaveBeenCalledWith("proj-2", "command_palette"));
+		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-2");
+		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("navigates and closes when selecting a project", async () => {

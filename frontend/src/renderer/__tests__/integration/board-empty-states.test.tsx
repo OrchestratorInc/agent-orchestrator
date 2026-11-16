@@ -29,6 +29,9 @@ const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipbo
 	paramsMock: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 }));
 
+const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
+
 vi.mock("../../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../../lib/platform")>(),
 }));
@@ -526,7 +529,7 @@ describe("project board with no sessions", () => {
 		expect(spawnOrchestratorMock).toHaveBeenNthCalledWith(2, "proj-1", "board", false, "tui");
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
 		const unconfiguredProject = { ...project, orchestratorAgent: undefined };
 		respondWith([unconfiguredProject], []);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
@@ -535,9 +538,10 @@ describe("project board with no sessions", () => {
 		const [spawnButton] = screen.getAllByRole("button", { name: "Spawn orchestrator agent" });
 		await userEvent.click(spawnButton);
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnOrchestratorMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledWith("proj-1", "board", false, undefined));
+		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", undefined);
+		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnOrchestratorMock.mock.invocationCallOrder[0]);
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("shows the project creation startup error after navigating to the project board", async () => {

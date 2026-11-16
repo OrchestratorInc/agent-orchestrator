@@ -73,6 +73,7 @@ import { revealSessionSearchMatch } from "../lib/session-search-reveal";
 import { usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
+import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
 import { useShell } from "../lib/shell-context";
 import { sessionUiKey } from "../lib/hosts";
 import { beginModalHandoff } from "../lib/modal-handoff";
@@ -914,13 +915,9 @@ export const CommandPalette = memo(function CommandPalette() {
 				if (isCurrentRun()) closePalette();
 				return;
 			}
-			if (!hasConfiguredOrchestratorAgent(workspace)) {
-				if (workspace) {
-					navigateToTarget({ to: "/projects/$projectId/settings", params: { projectId } });
-					closePalette();
-				}
-				return;
-			}
+			if (!workspace) return;
+			// A project that lost its orchestrator agent starts on the ranked default.
+			if (!hasConfiguredOrchestratorAgent(workspace)) await fillMissingProjectRoleAgents(queryClient, projectId);
 			const sessionId = await spawnOrchestrator(projectId, "command_palette");
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			navigateToTarget(sessionRoute(projectId, sessionId));

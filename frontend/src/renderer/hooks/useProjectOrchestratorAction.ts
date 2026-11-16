@@ -16,6 +16,7 @@ import { addRendererExceptionStep, captureRendererException } from "../lib/telem
 import { useUiStore } from "../stores/ui-store";
 import { useCanResumeAgent } from "./useCanResumeAgent";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
+import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useConnectedHosts } from "./useHostConnection";
@@ -97,6 +98,11 @@ export function useProjectOrchestratorAction({
 			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
+			// A project that lost its orchestrator agent starts on the ranked
+			// default instead of sending the user to settings first.
+			if (!orchestrator && project && project.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
+				await fillMissingProjectRoleAgents(queryClient, projectId, hostId);
+			}
 			const openedSessionId = hostId
 				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
 				: resumableOrchestrator
@@ -134,15 +140,11 @@ export function useProjectOrchestratorAction({
 			source: "orchestrator-open", operation: "open_orchestrator",
 			surface: sessionId ? "session_detail" : "project_board", project_id: projectId,
 		});
-		if (hostId && projectId && !orchestrator && project && !hasConfiguredOrchestratorAgent(project)) {
-			useUiStore.getState().openProjectSettings(projectId, hostId);
-		} else if (resumableOrchestrator) {
+		if (resumableOrchestrator) {
 			mutation.mutate(mode);
 		} else if (orchestrator) {
 			void navigate(sessionNavigateTarget(projectId, orchestrator.id, hostId));
-		} else if (project?.kind !== CLOUD_PROJECT_KIND && !hasConfiguredOrchestratorAgent(project)) {
-			if (project) useUiStore.getState().openProjectSettings(projectId, hostId);
-		} else {
+		} else if (project) {
 			mutation.mutate(mode);
 		}
 	};

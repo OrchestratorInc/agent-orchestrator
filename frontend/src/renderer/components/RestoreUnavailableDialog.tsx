@@ -1,10 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Loader2 } from "@/components/app-icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWorkspaceScope } from "../hooks/useWorkspaceQuery";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
+import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
 import { useUiStore } from "../stores/ui-store";
 import { hasConfiguredOrchestratorAgent, isOrchestratorSession } from "../types/workspace";
 import type { WorkspaceSession } from "../types/workspace";
@@ -27,6 +29,7 @@ type RestoreUnavailableDialogProps = {
 
 export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, onRecreated }: RestoreUnavailableDialogProps) {
 	const { t } = useTranslation();
+	const queryClient = useQueryClient();
 	const workspaceQuery = useWorkspaceScope(session.workspaceId, undefined, hostId);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | undefined>();
@@ -37,17 +40,17 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 
 	const recreate = async () => {
 		if (checkingProject) return;
-		if (!hasOrchestratorAgent) {
+		// Cloud sessions keep their agents in Cloud project settings.
+		if (!hasOrchestratorAgent && session.cloud?.orgId) {
 			onOpenChange(false);
-			useUiStore.getState().openProjectSettings(
-				session.workspaceId,
-				session.cloud?.orgId ? { cloudOrgId: session.cloud.orgId } : hostId,
-			);
+			useUiStore.getState().openProjectSettings(session.workspaceId, { cloudOrgId: session.cloud.orgId });
 			return;
 		}
 		setBusy(true);
 		setError(undefined);
 		try {
+			// A project that lost its orchestrator agent starts on the ranked default.
+			if (!hasOrchestratorAgent) await fillMissingProjectRoleAgents(queryClient, session.workspaceId, hostId);
 			const id = hostId
 				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true, "restore_dialog")
 				: await spawnOrchestrator(session.workspaceId, "restore_dialog", true);
@@ -93,7 +96,7 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 								{busy ? <Loader2 className="size-icon-base animate-spin" aria-hidden="true" /> : null}
 								{checkingProject
 									? t("restoreUnavailable.checkingProject")
-									: hasOrchestratorAgent
+									: hasOrchestratorAgent || !session.cloud?.orgId
 										? t("restoreUnavailable.createOrchestrator")
 										: t("restoreUnavailable.configureOrchestrator")}
 							</Button>

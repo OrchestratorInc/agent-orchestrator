@@ -29,6 +29,9 @@ const { locationMock, navigateMock, onKilledMock, paramsMock, postMock, spawnMoc
 	useWorkspaceQueryMock: vi.fn(),
 }));
 
+const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
+
 vi.mock("@tanstack/react-router", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
 	return {
@@ -535,7 +538,8 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		expect(screen.queryByRole("button", { name: "Archive session" })).not.toBeInTheDocument();
 	});
 
-	it("opens project settings instead of spawning when no orchestrator agent is configured", async () => {
+	it("fills a missing orchestrator agent and starts the orchestrator instead of opening settings", async () => {
+		spawnMock.mockResolvedValue("orch-new");
 		useWorkspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -560,9 +564,10 @@ describe("SessionTopbarActions orchestrator actions", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
 
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "project", projectId: "proj-1" });
-		expect(navigateMock).not.toHaveBeenCalled();
-		expect(spawnMock).not.toHaveBeenCalled();
+		await waitFor(() => expect(spawnMock).toHaveBeenCalled());
+		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", undefined);
+		expect(fillRoleAgentsMock.mock.invocationCallOrder[0]).toBeLessThan(spawnMock.mock.invocationCallOrder[0]);
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("opens the project orchestrator from the open-orchestrator shortcut", () => {
