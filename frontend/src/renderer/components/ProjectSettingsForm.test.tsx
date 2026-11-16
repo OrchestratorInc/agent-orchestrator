@@ -1377,7 +1377,8 @@ describe("ProjectSettingsForm", () => {
 			config,
 		});
 
-		renderSettings("proj-1", undefined, "agents");
+		// The shell has loaded the project's sessions by the time settings open.
+		renderSettings("proj-1", [], "agents");
 
 		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code"));
 		expect(screen.getByRole("button", { name: "Worker agent" })).toHaveTextContent(workerLabel);
@@ -1391,6 +1392,50 @@ describe("ProjectSettingsForm", () => {
 			}),
 		})));
 		// Filling the empty role is not an orchestrator change: nothing is replaced.
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("fills a missing orchestrator role with the running orchestrator's agent", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "",
+			defaultBranch: "main",
+			config: { worker: { agent: "claude-code" } },
+		});
+
+		renderSettings("proj-1", [
+			{
+				id: "proj-1",
+				name: "Project One",
+				path: "/repo/project-one",
+				sessions: [
+					{
+						id: "proj-1-orchestrator",
+						workspaceId: "proj-1",
+						workspaceName: "Project One",
+						title: "Orchestrator",
+						provider: "codex",
+						kind: "orchestrator",
+						branch: "ao/proj-1-orchestrator",
+						status: "working",
+						createdAt: "2026-07-03T00:00:00Z",
+						updatedAt: "2026-07-03T00:00:00Z",
+						prs: [],
+					},
+				],
+			},
+		], "agents");
+
+		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Codex"));
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({
+				config: expect.objectContaining({ orchestrator: expect.objectContaining({ agent: "codex" }) }),
+			}),
+		})));
+		// The running orchestrator already uses that agent, so it is not replaced.
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
