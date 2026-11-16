@@ -27,17 +27,16 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 	if err != nil {
 		return err
 	}
+	defer func() { _ = rows.Close() }()
 	existing := map[string]string{}
 	for rows.Next() {
 		var name, text string
 		if err := rows.Scan(&name, &text); err != nil {
-			_ = rows.Close()
 			return err
 		}
 		existing[name] = text
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return err
 	}
 	if err := rows.Close(); err != nil {
@@ -92,7 +91,7 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 	table := columns[0].table
 	literal := "'" + strings.ReplaceAll(table, "'", "''") + "'"
-	var old, fresh []string
+	old, fresh := make([]string, 0, len(columns)), make([]string, 0, len(columns))
 	for _, column := range columns {
 		predicate := legacyTimestampPredicate(column.column)
 		old = append(old, strings.ReplaceAll(predicate, quoteIdentifier(column.column), "OLD."+quoteIdentifier(column.column)))
