@@ -317,6 +317,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					setAgentTurn: async () => undefined,
 					selectTab: async ({ viewId, tabId }: { viewId: string; tabId: string }) => ({
 						viewId,
 						activeTabId: tabId,
@@ -1325,6 +1326,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						activeTabId: "t1",
 						tabs: [{ id: "t1", url: "", title: "", active: true }],
 					}),
+					setAgentTurn: async () => undefined,
 					selectTab: async ({ viewId, tabId }: { viewId: string; tabId: string }) => ({
 						viewId,
 						activeTabId: tabId,
